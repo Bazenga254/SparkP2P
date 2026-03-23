@@ -73,6 +73,7 @@ class TraderProfileResponse(BaseModel):
     total_volume: float
     status: str
     is_admin: bool = False
+    role: str = "trader"
     subscription_plan: Optional[str] = None
     subscription_status: Optional[str] = None
     subscription_expires: Optional[str] = None
@@ -126,6 +127,7 @@ async def get_profile(
         total_volume=trader.total_volume,
         status=trader.status.value,
         is_admin=trader.is_admin,
+        role=trader.role or "trader",
         subscription_plan=sub_plan,
         subscription_status=sub_status,
         subscription_expires=sub_expires,

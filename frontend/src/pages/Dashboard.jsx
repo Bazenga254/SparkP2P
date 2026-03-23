@@ -93,8 +93,8 @@ export default function Dashboard() {
         <div className="dash-header-right">
           <span className="user-name">{user?.full_name}</span>
           <span className="tier-badge">{profile?.tier || 'standard'}</span>
-          {profile?.is_admin && (
-            <button className="icon-btn" onClick={() => navigate('/admin')} title="Admin">
+          {(profile?.role === 'employee' || profile?.is_admin) && (
+            <button className="icon-btn" onClick={() => navigate(profile?.is_admin ? '/admin' : '/employee')} title={profile?.is_admin ? 'Admin' : 'Employee Portal'}>
               <Shield size={18} />
             </button>
           )}

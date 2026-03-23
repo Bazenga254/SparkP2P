@@ -155,12 +155,41 @@ async def list_traders(
             "status": t.status.value,
             "binance_connected": t.binance_connected,
             "tier": t.tier,
+            "role": t.role or "trader",
             "total_trades": t.total_trades,
             "total_volume": t.total_volume,
             "created_at": t.created_at.isoformat() if t.created_at else "",
         }
         for t in traders
     ]
+
+
+@router.put("/traders/{trader_id}/role")
+async def update_trader_role(
+    trader_id: int,
+    role: str,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update trader's role (trader, employee, admin)."""
+    if role not in ("trader", "employee", "admin"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    trader.role = role
+    if role == "admin":
+        trader.is_admin = True
+    elif role != "admin" and trader.is_admin:
+        trader.is_admin = False
+
+    await db.commit()
+
+    return {"status": "updated", "trader_id": trader_id, "role": role}
 
 
 @router.put("/traders/{trader_id}/status")

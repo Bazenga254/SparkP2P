@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import api from '../services/api';
 import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminAnalytics, getAdminOnlineTraders } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -102,6 +103,15 @@ export default function Admin() {
   const handleTierChange = async (traderId, newTier) => {
     await updateTraderTier(traderId, newTier);
     loadData();
+  };
+
+  const handleRoleChange = async (traderId, newRole) => {
+    try {
+      await api.put(`/admin/traders/${traderId}/role?role=${newRole}`);
+      loadData();
+    } catch (err) {
+      console.error('Failed to update role:', err);
+    }
   };
 
   const pageTitles = {
@@ -528,6 +538,7 @@ export default function Admin() {
                       <th>Trades</th>
                       <th>Volume</th>
                       <th>Tier</th>
+                      <th>Role</th>
                       <th>Status</th>
                       <th>Actions</th>
                     </tr>
@@ -550,6 +561,13 @@ export default function Admin() {
                             <option value="standard">Standard</option>
                             <option value="silver">Silver</option>
                             <option value="gold">Gold</option>
+                          </select>
+                        </td>
+                        <td>
+                          <select className="adm-select" value={t.role || 'trader'} onChange={(e) => handleRoleChange(t.id, e.target.value)}>
+                            <option value="trader">Trader</option>
+                            <option value="employee">Employee</option>
+                            <option value="admin">Admin</option>
                           </select>
                         </td>
                         <td>
