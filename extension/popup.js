@@ -1,11 +1,5 @@
 const API_BASE = 'https://sparkp2p.com/api';
 
-// Key Binance cookies to capture
-const BINANCE_COOKIE_NAMES = [
-  'p20t', 'bnc-uuid', 'logined', 'cr00', 'r20t', 'r30t',
-  'BNC_FV_KEY', 's9r1', 'csrftoken', 'lang',
-];
-
 // DOM elements
 const loginView = document.getElementById('login-view');
 const mainView = document.getElementById('main-view');
@@ -25,7 +19,6 @@ async function init() {
     showLoginView();
   }
 
-  // Load auto-sync setting
   const { auto_sync } = await chrome.storage.local.get('auto_sync');
   document.getElementById('auto-sync').checked = auto_sync !== false;
 }
@@ -87,20 +80,23 @@ async function syncCookies() {
   syncMsg.innerHTML = '';
 
   try {
-    // Get ALL cookies using multiple methods
+    // Capture ALL cookies from Binance — not just a filtered list
     const cookieMap = {};
 
-    // Method 1: URL-based (most reliable)
+    // Get from all Binance URLs
     const urls = [
       'https://www.binance.com',
       'https://binance.com',
       'https://p2p.binance.com',
       'https://c2c.binance.com',
+      'https://accounts.binance.com',
     ];
+
     for (const url of urls) {
       try {
         const cookies = await chrome.cookies.getAll({ url });
         for (const cookie of cookies) {
+          // Capture EVERY cookie, not just specific ones
           if (!cookieMap[cookie.name]) {
             cookieMap[cookie.name] = cookie.value;
           }
@@ -108,8 +104,8 @@ async function syncCookies() {
       } catch (e) { /* ignore */ }
     }
 
-    // Method 2: Domain-based fallback
-    const domains = ['.binance.com', 'binance.com', 'www.binance.com'];
+    // Also domain-based
+    const domains = ['.binance.com', 'binance.com'];
     for (const domain of domains) {
       try {
         const cookies = await chrome.cookies.getAll({ domain });
@@ -121,42 +117,28 @@ async function syncCookies() {
       } catch (e) { /* ignore */ }
     }
 
-    // Filter to only the cookies we need
-    const filteredCookies = {};
-    for (const name of BINANCE_COOKIE_NAMES) {
-      if (cookieMap[name]) {
-        filteredCookies[name] = cookieMap[name];
-      }
-    }
-
-    // Debug info
     const totalFound = Object.keys(cookieMap).length;
-    const relevantFound = Object.keys(filteredCookies).length;
-    const hasP20t = !!filteredCookies['p20t'];
+    const hasP20t = !!cookieMap['p20t'];
 
-    console.log(`[SparkP2P] Total cookies: ${totalFound}, Relevant: ${relevantFound}, p20t: ${hasP20t}`);
-    console.log('[SparkP2P] Found keys:', Object.keys(filteredCookies).join(', '));
+    console.log(`[SparkP2P] Captured ${totalFound} cookies, p20t: ${hasP20t}`);
 
-    // Check we have the critical cookie
     if (!hasP20t) {
-      showMsg(syncMsg, `Session not found (${totalFound} total cookies, ${relevantFound} relevant). Make sure you're logged into Binance and try again.`, 'error');
+      showMsg(syncMsg, `No Binance session found (${totalFound} cookies captured). Please login to Binance first.`, 'error');
       btn.disabled = false;
       btn.textContent = 'Sync Binance Cookies';
       return;
     }
 
-    // Extract csrf token and bnc-uuid
-    const csrfToken = filteredCookies['csrftoken'] || cookieMap['csrftoken'] || '';
-    const bncUuid = filteredCookies['bnc-uuid'] || cookieMap['bnc-uuid'] || '';
+    // Extract csrf token and bnc-uuid (sent separately)
+    const csrfToken = cookieMap['csrftoken'] || '';
+    const bncUuid = cookieMap['bnc-uuid'] || '';
 
-    // Build cookies to send (without csrftoken, sent separately)
-    const cookiesToSend = { ...filteredCookies };
-    delete cookiesToSend['csrftoken'];
+    // Send ALL cookies to SparkP2P — let the backend use what it needs
+    const cookiesToSend = { ...cookieMap };
+    delete cookiesToSend['csrftoken']; // sent separately
 
-    // Get SparkP2P token
     const { sparkp2p_token } = await chrome.storage.local.get('sparkp2p_token');
 
-    // Send to SparkP2P
     const res = await fetch(`${API_BASE}/traders/connect-binance`, {
       method: 'POST',
       headers: {
@@ -178,10 +160,14 @@ async function syncCookies() {
       const now = new Date().toISOString();
       await chrome.storage.local.set({ last_sync: now });
 
+      let msg = `Connected! (${totalFound} cookies synced)`;
+      if (data.binance_name) {
+        msg = `Connected as: ${data.binance_name}`;
+      }
       if (data.name_match === false && data.binance_name) {
-        showMsg(syncMsg, `Connected! Name mismatch: ${data.binance_name} vs ${data.registered_name}. Update in Settings.`, 'error');
+        showMsg(syncMsg, `${msg} — Name mismatch with ${data.registered_name}. Update in Settings.`, 'error');
       } else {
-        showMsg(syncMsg, `Connected! ${data.binance_name ? 'Name: ' + data.binance_name : ''}`, 'success');
+        showMsg(syncMsg, msg, 'success');
       }
 
       updateStatus(true, now);
@@ -241,7 +227,6 @@ async function checkStatus() {
 // ── Auto-sync toggle ─────────────────────────────────
 document.getElementById('auto-sync').addEventListener('change', async (e) => {
   await chrome.storage.local.set({ auto_sync: e.target.checked });
-  // Notify background script
   chrome.runtime.sendMessage({ type: 'auto_sync_changed', enabled: e.target.checked });
 });
 
@@ -255,28 +240,20 @@ document.getElementById('logout-btn').addEventListener('click', async () => {
 function updateStatus(connected, syncTime) {
   statusDot.className = `status-dot ${connected ? 'green' : 'red'}`;
   statusLabel.textContent = connected ? 'Binance Connected' : 'Binance Disconnected';
-
-  if (syncTime) {
-    updateSyncTime(syncTime);
-  }
+  if (syncTime) updateSyncTime(syncTime);
 }
 
 function updateSyncTime(isoTime) {
   const date = new Date(isoTime);
   const mins = Math.round((Date.now() - date.getTime()) / 60000);
-  if (mins < 1) {
-    lastSyncEl.textContent = 'Synced just now';
-  } else if (mins < 60) {
-    lastSyncEl.textContent = `Synced ${mins}m ago`;
-  } else {
-    lastSyncEl.textContent = `Synced ${Math.round(mins / 60)}h ago`;
-  }
+  if (mins < 1) lastSyncEl.textContent = 'Synced just now';
+  else if (mins < 60) lastSyncEl.textContent = `Synced ${mins}m ago`;
+  else lastSyncEl.textContent = `Synced ${Math.round(mins / 60)}h ago`;
 }
 
 function showMsg(el, text, type) {
   el.innerHTML = `<div class="msg ${type}">${text}</div>`;
-  setTimeout(() => { el.innerHTML = ''; }, 5000);
+  setTimeout(() => { el.innerHTML = ''; }, 8000);
 }
 
-// Start
 init();

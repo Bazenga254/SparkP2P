@@ -55,14 +55,23 @@ class BinanceOrderPoller:
             for trader in traders:
                 try:
                     await self._poll_trader(trader, db)
+                    # Reset fail counter on success
+                    if hasattr(trader, '_poll_failures'):
+                        trader._poll_failures = 0
                 except BinanceSessionExpired:
+                    # Track consecutive failures before disconnecting
+                    if not hasattr(trader, '_poll_failures'):
+                        trader._poll_failures = 0
+                    trader._poll_failures += 1
                     logger.warning(
-                        f"Session expired for trader {trader.id} ({trader.full_name}). "
-                        f"Marking as disconnected."
+                        f"Session error for trader {trader.id} ({trader.full_name}). "
+                        f"Failure {trader._poll_failures}/5"
                     )
-                    trader.binance_connected = False
-                    await db.commit()
-                    # TODO: Send notification to trader
+                    # Only disconnect after 5 consecutive failures (50 seconds)
+                    if trader._poll_failures >= 5:
+                        logger.warning(f"Marking trader {trader.id} as disconnected after 5 failures")
+                        trader.binance_connected = False
+                        await db.commit()
                 except Exception as e:
                     logger.error(f"Error polling trader {trader.id}: {e}")
 

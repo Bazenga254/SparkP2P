@@ -54,9 +54,9 @@ export default function Dashboard() {
     return () => { clearTimeout(timer); clearInterval(interval); };
   }, []);
 
-  // Redirect to onboarding if not complete
+  // Redirect to onboarding if not complete (only for traders, not admin/employees)
   useEffect(() => {
-    if (profile && profile.onboarding_complete === false) {
+    if (profile && profile.onboarding_complete === false && profile.role === 'trader') {
       navigate('/onboarding');
     }
   }, [profile]);
