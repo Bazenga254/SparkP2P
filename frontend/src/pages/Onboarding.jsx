@@ -94,6 +94,22 @@ export default function Onboarding() {
     loadProfile();
   }, []);
 
+  // Auto-poll profile on Binance step to detect extension sync
+  useEffect(() => {
+    if (currentStep === 1 && profile && !profile.binance_connected) {
+      const interval = setInterval(async () => {
+        try {
+          const res = await getProfile();
+          setProfile(res.data);
+          if (res.data.binance_connected) {
+            clearInterval(interval);
+          }
+        } catch {}
+      }, 3000); // Check every 3 seconds
+      return () => clearInterval(interval);
+    }
+  }, [currentStep, profile?.binance_connected]);
+
   const loadProfile = async () => {
     try {
       const res = await getProfile();
@@ -528,20 +544,47 @@ export default function Onboarding() {
 
               {verifyMethod === 'fund_password' && (
                 <div style={{ marginTop: 16 }}>
+                  <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                    <strong style={{ color: '#f59e0b', fontSize: 14 }}>How to find your Fund Password:</strong>
+                    <ol style={{ fontSize: 12, color: '#9ca3af', marginTop: 8, paddingLeft: 18, lineHeight: 1.8 }}>
+                      <li>Open <strong style={{ color: '#e4e4e7' }}>Binance App</strong> or website</li>
+                      <li>Go to <strong style={{ color: '#e4e4e7' }}>Profile → Security</strong></li>
+                      <li>Look for <strong style={{ color: '#e4e4e7' }}>Fund Password</strong> (also called Trade Password)</li>
+                      <li>If not set up, click <strong style={{ color: '#e4e4e7' }}>Create Fund Password</strong> and set a 6-digit PIN</li>
+                      <li>Enter that same PIN below</li>
+                    </ol>
+                    <p style={{ fontSize: 11, color: '#6b7280', marginTop: 8 }}>This is the PIN Binance asks when you release crypto. Not your login password.</p>
+                  </div>
                   <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Fund Password</label>
                   <input
                     type="password"
-                    placeholder="Enter your Binance fund password"
+                    placeholder="Enter your 6-digit fund password"
                     value={fundPassword}
                     onChange={(e) => setFundPassword(e.target.value)}
                     className="onb-input"
+                    maxLength={6}
                   />
-                  <p style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>This is the PIN you use when releasing crypto on Binance. It's stored encrypted.</p>
+                  <p style={{ fontSize: 11, color: '#10b981', marginTop: 4 }}>🔒 Stored securely with encryption. Never shared with anyone.</p>
                 </div>
               )}
 
               {verifyMethod === 'totp' && (
                 <div style={{ marginTop: 16 }}>
+                  <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                    <strong style={{ color: '#f59e0b', fontSize: 14 }}>How to get your TOTP Secret Key:</strong>
+                    <ol style={{ fontSize: 12, color: '#9ca3af', marginTop: 8, paddingLeft: 18, lineHeight: 1.8 }}>
+                      <li>Open <strong style={{ color: '#e4e4e7' }}>Binance App</strong> → <strong style={{ color: '#e4e4e7' }}>Profile → Security</strong></li>
+                      <li>Click <strong style={{ color: '#e4e4e7' }}>Google Authenticator → Manage</strong></li>
+                      <li>Click <strong style={{ color: '#e4e4e7' }}>Change Authenticator</strong> or <strong style={{ color: '#e4e4e7' }}>Reset</strong></li>
+                      <li>Binance will show a <strong style={{ color: '#e4e4e7' }}>QR code</strong> and a text key below it</li>
+                      <li>Copy the <strong style={{ color: '#e4e4e7' }}>text key</strong> (looks like: JBSWY3DPEHPK3PXP)</li>
+                      <li>Scan the QR code with Google Authenticator as normal</li>
+                      <li>Paste the text key below</li>
+                    </ol>
+                    <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, padding: 10, marginTop: 10 }}>
+                      <p style={{ fontSize: 11, color: '#ef4444' }}>⚠️ If you already set up Google Authenticator and didn't save the key, you'll need to reset it on Binance to see the key again. Consider using Fund Password instead — it's simpler.</p>
+                    </div>
+                  </div>
                   <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>TOTP Secret Key</label>
                   <input
                     type="password"
@@ -550,15 +593,24 @@ export default function Onboarding() {
                     onChange={(e) => setTotpSecret(e.target.value)}
                     className="onb-input"
                   />
-                  <p style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>The secret key from when you set up Google Authenticator on Binance.</p>
+                  <p style={{ fontSize: 11, color: '#10b981', marginTop: 4 }}>🔒 Stored securely with encryption. Never shared with anyone.</p>
                 </div>
               )}
 
               {verifyMethod === 'manual' && (
-                <div style={{ marginTop: 16, padding: 12, background: 'rgba(245, 158, 11, 0.1)', borderRadius: 8 }}>
-                  <p style={{ fontSize: 12, color: '#f59e0b' }}>
-                    With email/SMS/passkey verification, auto-release is disabled. You'll need to manually release crypto on Binance for each trade. The platform will still handle payment matching and settlement.
-                  </p>
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 16 }}>
+                    <strong style={{ color: '#f59e0b', fontSize: 14 }}>What this means:</strong>
+                    <ul style={{ fontSize: 12, color: '#9ca3af', marginTop: 8, paddingLeft: 18, lineHeight: 1.8 }}>
+                      <li><strong style={{ color: '#e4e4e7' }}>Auto-release will be disabled</strong> — you'll need to manually release crypto on Binance</li>
+                      <li>You'll get a <strong style={{ color: '#e4e4e7' }}>notification</strong> when a payment is verified</li>
+                      <li>Just open Binance and click <strong style={{ color: '#e4e4e7' }}>Release</strong> on the order</li>
+                      <li>Payment matching, settlement, and profit tracking still work automatically</li>
+                    </ul>
+                    <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 8, padding: 10, marginTop: 10 }}>
+                      <p style={{ fontSize: 11, color: '#3b82f6' }}>💡 <strong>Tip:</strong> For full automation, consider switching to Fund Password. Go to Binance → Security → Create Fund Password.</p>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

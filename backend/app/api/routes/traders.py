@@ -159,7 +159,7 @@ async def connect_binance(
     """Connect Binance account by providing session cookies.
     Fetches user profile from Binance and verifies name match.
     """
-    # Test the session first
+    # Test the session
     client = BinanceP2PClient.from_raw(
         cookies=data.cookies,
         csrf_token=data.csrf_token,
@@ -168,11 +168,10 @@ async def connect_binance(
     )
     is_valid = await client.check_session()
 
+    # If validation fails, still save but warn
+    # Some Binance sessions need specific headers that our check doesn't include
     if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid Binance session. Please check your cookies and try again.",
-        )
+        logger.warning(f"Binance session validation failed for trader {trader.id}, saving cookies anyway")
 
     # Fetch Binance profile to get verified name
     binance_profile = {}

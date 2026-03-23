@@ -198,6 +198,10 @@ async function syncCookies() {
 document.getElementById('check-btn').addEventListener('click', checkStatus);
 
 async function checkStatus() {
+  const btn = document.getElementById('check-btn');
+  btn.disabled = true;
+  btn.textContent = 'Checking...';
+
   try {
     const { sparkp2p_token } = await chrome.storage.local.get('sparkp2p_token');
     const res = await fetch(`${API_BASE}/traders/me`, {
@@ -206,19 +210,32 @@ async function checkStatus() {
 
     if (!res.ok) {
       updateStatus(false);
+      showMsg(syncMsg, 'Could not reach SparkP2P. Check your connection.', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Check Status';
       return;
     }
 
     const data = await res.json();
     updateStatus(data.binance_connected);
 
+    if (data.binance_connected) {
+      showMsg(syncMsg, `Connected as: ${data.full_name}${data.binance_username ? ' (' + data.binance_username + ')' : ''}`, 'success');
+    } else {
+      showMsg(syncMsg, 'Binance not connected. Click "Sync Binance Cookies" while logged into Binance.', 'error');
+    }
+
     const { last_sync } = await chrome.storage.local.get('last_sync');
     if (last_sync) {
       updateSyncTime(last_sync);
     }
-  } catch {
+  } catch (err) {
     updateStatus(false);
+    showMsg(syncMsg, 'Connection check failed: ' + err.message, 'error');
   }
+
+  btn.disabled = false;
+  btn.textContent = 'Check Status';
 }
 
 // ── Auto-sync toggle ─────────────────────────────────
