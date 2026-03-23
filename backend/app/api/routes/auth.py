@@ -73,6 +73,11 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class EmployeeLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -186,3 +191,44 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         trader_id=trader.id,
         full_name=trader.full_name,
     )
+
+
+@router.post("/employee/login")
+async def employee_login(data: EmployeeLoginRequest, db: AsyncSession = Depends(get_db)):
+    """Login as an employee (support staff)."""
+    result = await db.execute(
+        select(Trader).where(Trader.email == data.email)
+    )
+    employee = result.scalar_one_or_none()
+
+    if not employee or not verify_password(data.password, employee.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    if employee.role not in ("employee", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized as employee",
+        )
+
+    if employee.status == TraderStatus.SUSPENDED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account suspended",
+        )
+
+    token = create_access_token({
+        "sub": str(employee.id),
+        "email": employee.email,
+        "role": employee.role,
+    })
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "trader_id": employee.id,
+        "full_name": employee.full_name,
+        "role": employee.role,
+    }

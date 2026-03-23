@@ -61,6 +61,18 @@ async def get_admin_trader(
     return trader
 
 
+async def get_employee_or_admin(
+    trader: Trader = Depends(get_current_trader),
+) -> Trader:
+    """Ensure current user is an employee or admin."""
+    if trader.role not in ("employee", "admin") and not trader.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Employee or admin access required",
+        )
+    return trader
+
+
 async def check_subscription(trader: Trader, db: AsyncSession) -> bool:
     """Check if trader has active subscription."""
     from app.models.subscription import Subscription, SubscriptionStatus

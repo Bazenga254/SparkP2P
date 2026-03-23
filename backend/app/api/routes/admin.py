@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import create_access_token
-from app.models import Trader, TraderStatus, Order, OrderStatus, Payment, PaymentDirection, PaymentStatus
+from app.models import Trader, TraderStatus, Order, OrderStatus, Payment, PaymentDirection, PaymentStatus, ChatMessage
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
-from app.api.deps import get_admin_trader
+from app.api.deps import get_admin_trader, get_employee_or_admin
 
 logger = logging.getLogger(__name__)
 
@@ -467,3 +467,172 @@ async def admin_online_traders(
         }
         for t in traders
     ]
+
+
+# ==================== DISPUTE MANAGEMENT (Employee + Admin) ====================
+
+
+class ResolveDisputeRequest(BaseModel):
+    resolution: str
+    action: str  # "refund", "release", "cancel"
+
+
+@router.put("/disputes/{order_id}/assign")
+async def assign_dispute(
+    order_id: int,
+    employee: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Assign a dispute to the current employee."""
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.status != OrderStatus.DISPUTED:
+        raise HTTPException(status_code=400, detail="Order is not in disputed status")
+
+    # Store assignment in fraud_check_result JSON
+    existing = order.fraud_check_result or {}
+    existing["assigned_to"] = employee.id
+    existing["assigned_name"] = employee.full_name
+    existing["assigned_at"] = datetime.now(timezone.utc).isoformat()
+    order.fraud_check_result = existing
+
+    await db.commit()
+
+    return {"status": "assigned", "order_id": order_id, "assigned_to": employee.full_name}
+
+
+@router.put("/disputes/{order_id}/resolve")
+async def resolve_dispute(
+    order_id: int,
+    data: ResolveDisputeRequest,
+    employee: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve a dispute with a resolution note and action."""
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order.status != OrderStatus.DISPUTED:
+        raise HTTPException(status_code=400, detail="Order is not in disputed status")
+
+    if data.action not in ("refund", "release", "cancel"):
+        raise HTTPException(status_code=400, detail="Invalid action. Use: refund, release, cancel")
+
+    # Update order status based on action
+    if data.action == "release":
+        order.status = OrderStatus.COMPLETED
+    elif data.action == "refund":
+        order.status = OrderStatus.CANCELLED
+    elif data.action == "cancel":
+        order.status = OrderStatus.CANCELLED
+
+    # Store resolution details
+    existing = order.fraud_check_result or {}
+    existing["resolution"] = data.resolution
+    existing["resolution_action"] = data.action
+    existing["resolved_by"] = employee.id
+    existing["resolved_by_name"] = employee.full_name
+    existing["resolved_at"] = datetime.now(timezone.utc).isoformat()
+    order.fraud_check_result = existing
+
+    await db.commit()
+
+    return {
+        "status": "resolved",
+        "order_id": order_id,
+        "action": data.action,
+        "new_status": order.status.value,
+    }
+
+
+@router.get("/disputes/{order_id}/details")
+async def get_dispute_details(
+    order_id: int,
+    employee: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get full dispute details including order info, trader info, payments, and chat history."""
+    # Get order
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Get trader
+    result = await db.execute(select(Trader).where(Trader.id == order.trader_id))
+    trader = result.scalar_one_or_none()
+
+    # Get payments
+    result = await db.execute(
+        select(Payment).where(Payment.order_id == order_id).order_by(Payment.created_at.desc())
+    )
+    payments = result.scalars().all()
+
+    # Get chat messages
+    result = await db.execute(
+        select(ChatMessage, Trader.full_name.label("sender_name"))
+        .join(Trader, ChatMessage.sender_id == Trader.id)
+        .where(ChatMessage.order_id == order_id)
+        .order_by(ChatMessage.created_at.asc())
+    )
+    chat_rows = result.all()
+
+    return {
+        "order": {
+            "id": order.id,
+            "binance_order_number": order.binance_order_number,
+            "side": order.side.value,
+            "crypto_amount": order.crypto_amount,
+            "crypto_currency": order.crypto_currency,
+            "fiat_amount": order.fiat_amount,
+            "exchange_rate": order.exchange_rate,
+            "status": order.status.value,
+            "risk_score": order.risk_score,
+            "counterparty_name": order.counterparty_name,
+            "counterparty_phone": order.counterparty_phone,
+            "created_at": order.created_at.isoformat() if order.created_at else "",
+            "assigned_to": (order.fraud_check_result or {}).get("assigned_name"),
+            "resolution": (order.fraud_check_result or {}).get("resolution"),
+            "resolution_action": (order.fraud_check_result or {}).get("resolution_action"),
+        },
+        "trader": {
+            "id": trader.id,
+            "full_name": trader.full_name,
+            "email": trader.email,
+            "phone": trader.phone,
+            "trust_score": trader.trust_score,
+            "total_trades": trader.total_trades,
+        } if trader else None,
+        "payments": [
+            {
+                "id": p.id,
+                "amount": p.amount,
+                "phone": p.phone,
+                "sender_name": p.sender_name,
+                "mpesa_transaction_id": p.mpesa_transaction_id,
+                "status": p.status.value if p.status else "unknown",
+                "direction": p.direction.value if p.direction else "unknown",
+                "created_at": p.created_at.isoformat() if p.created_at else "",
+            }
+            for p in payments
+        ],
+        "chat": [
+            {
+                "id": msg.id,
+                "sender_id": msg.sender_id,
+                "sender_name": sender_name,
+                "sender_role": msg.sender_role,
+                "message": msg.message,
+                "created_at": msg.created_at.isoformat() if msg.created_at else "",
+            }
+            for msg, sender_name in chat_rows
+        ],
+    }

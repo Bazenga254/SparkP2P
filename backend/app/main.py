@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions
+from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat
 from app.services.binance.poller import order_poller
 
 
@@ -44,6 +44,7 @@ app.include_router(orders.router, prefix="/api/orders", tags=["Orders"])
 app.include_router(mpesa.router, prefix="/api/payment", tags=["M-Pesa"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 app.include_router(subscriptions.router, prefix="/api/subscriptions", tags=["Subscriptions"])
+app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 
 
 @app.get("/health")

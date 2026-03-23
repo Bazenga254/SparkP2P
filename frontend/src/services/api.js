@@ -55,4 +55,12 @@ export const getAdminTransactions = (period = 'today', limit = 50) =>
 export const getAdminAnalytics = () => api.get('/admin/analytics');
 export const getAdminOnlineTraders = () => api.get('/admin/online-traders');
 
+// Employee
+export const employeeLogin = (email, password) => api.post('/auth/employee/login', { email, password });
+export const getDisputeDetails = (orderId) => api.get(`/admin/disputes/${orderId}/details`);
+export const resolveDispute = (orderId, data) => api.put(`/admin/disputes/${orderId}/resolve`, data);
+export const assignDispute = (orderId) => api.put(`/admin/disputes/${orderId}/assign`);
+export const sendChatMessage = (data) => api.post('/chat/send', data);
+export const getChatHistory = (orderId) => api.get(`/chat/history/${orderId}`);
+
 export default api;

@@ -2072,15 +2072,21 @@ body {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
-  animation: adm-pulse 2s infinite;
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981, 0 0 12px #10b981, 0 0 24px rgba(16, 185, 129, 0.6);
+  animation: adm-glow 1.5s ease-in-out infinite;
   flex-shrink: 0;
 }
 
-@keyframes adm-pulse {
-  0%, 100% { box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
-  50% { box-shadow: 0 0 16px rgba(16, 185, 129, 0.8); }
+@keyframes adm-glow {
+  0%, 100% {
+    box-shadow: 0 0 6px #10b981, 0 0 12px #10b981, 0 0 24px rgba(16, 185, 129, 0.4);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 10px #10b981, 0 0 20px #10b981, 0 0 40px rgba(16, 185, 129, 0.7), 0 0 60px rgba(16, 185, 129, 0.3);
+    transform: scale(1.15);
+  }
 }
 
 /* Chart container */
@@ -2884,3 +2890,756 @@ body {
 .name-verify-action p { font-size: 12px; color: var(--text-dim); margin-bottom: 10px; line-height: 1.5; }
 .name-update-btn { background: var(--accent); color: #000; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; width: 100%; }
 .name-update-btn:hover { opacity: 0.9; }
+
+/* ==================== EMPLOYEE PORTAL ==================== */
+
+/* Employee Login */
+.emp-login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 20px;
+  background: var(--bg);
+}
+.emp-login-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 40px;
+  width: 100%;
+  max-width: 400px;
+}
+.emp-login-card h1 {
+  font-size: 24px;
+  color: var(--accent);
+  text-align: center;
+  margin-top: 8px;
+}
+.emp-login-sub {
+  color: var(--text-dim);
+  text-align: center;
+  margin-bottom: 24px;
+  font-size: 14px;
+}
+.emp-login-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Employee Layout */
+.emp-layout {
+  display: flex;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+/* Employee Sidebar */
+.emp-sidebar {
+  width: 250px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 100;
+  transition: transform 0.3s;
+}
+.emp-sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.emp-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.emp-logo-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 18px;
+}
+.emp-logo-text {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+}
+.emp-role-badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent);
+  padding: 3px 8px;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Employee Nav */
+.emp-nav {
+  flex: 1;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.emp-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  width: 100%;
+  text-align: left;
+}
+.emp-nav-item:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+.emp-nav-item.active { background: rgba(245, 158, 11, 0.12); color: var(--accent); }
+.emp-nav-badge {
+  margin-left: auto;
+  background: #ef4444;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* Employee Sidebar Footer */
+.emp-sidebar-footer {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+}
+.emp-user-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.emp-user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+}
+.emp-user-meta {
+  display: flex;
+  flex-direction: column;
+}
+.emp-user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.emp-user-role {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.emp-logout-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: none;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.emp-logout-btn:hover { background: rgba(239, 68, 68, 0.2); }
+
+/* Employee Overlay (mobile) */
+.emp-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 90;
+}
+
+/* Employee Main */
+.emp-main {
+  flex: 1;
+  margin-left: 250px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Employee Topbar */
+.emp-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.emp-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.emp-page-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+.emp-hamburger {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+}
+.emp-hamburger span {
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: var(--text);
+  border-radius: 2px;
+}
+.emp-back-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+}
+.emp-back-btn:hover { color: var(--text); }
+.emp-topbar-right { display: flex; align-items: center; gap: 8px; }
+.emp-refresh-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+.emp-refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Employee Content */
+.emp-content {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+/* Employee Greeting */
+.emp-greeting {
+  margin-bottom: 20px;
+}
+.emp-greeting h2 {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.emp-greeting p {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+/* Employee Stat Grid */
+.emp-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+.emp-stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.emp-stat-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.emp-stat-info {
+  display: flex;
+  flex-direction: column;
+}
+.emp-stat-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.emp-stat-value {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Employee Card */
+.emp-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.emp-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.emp-card-header h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.emp-card-count {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.emp-link-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+}
+.emp-link-btn:hover { text-decoration: underline; }
+.emp-empty {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 30px 20px;
+  font-size: 14px;
+}
+
+/* Employee Table */
+.emp-table-wrap {
+  overflow-x: auto;
+}
+.emp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.emp-table th {
+  text-align: left;
+  padding: 10px 16px;
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.emp-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  white-space: nowrap;
+}
+.emp-table tr:hover td { background: rgba(255,255,255,0.02); }
+.emp-table .mono { font-family: 'SF Mono', monospace; font-size: 12px; }
+
+/* Employee Badges */
+.emp-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  text-transform: uppercase;
+}
+.emp-badge.green { background: rgba(16,185,129,0.15); color: #10b981; }
+.emp-badge.red { background: rgba(239,68,68,0.15); color: #ef4444; }
+.emp-badge.yellow { background: rgba(245,158,11,0.15); color: #f59e0b; }
+.emp-badge.dim { background: rgba(255,255,255,0.06); color: var(--text-dim); }
+
+/* Employee Dispute List */
+.emp-dispute-list { padding: 0; }
+.emp-dispute-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.emp-dispute-row:hover { background: rgba(255,255,255,0.03); }
+.emp-dispute-row:last-child { border-bottom: none; }
+.emp-dispute-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.emp-dispute-id {
+  font-size: 13px;
+  font-weight: 600;
+  font-family: 'SF Mono', monospace;
+}
+.emp-dispute-amount {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.emp-dispute-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.emp-dispute-time {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.emp-dispute-arrow {
+  color: var(--text-dim);
+}
+.emp-action-btn {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--accent);
+  border: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.emp-action-btn:hover { background: rgba(245, 158, 11, 0.25); }
+
+/* Employee Detail Layout */
+.emp-detail-layout {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 20px;
+  align-items: start;
+}
+.emp-detail-left {
+  display: flex;
+  flex-direction: column;
+}
+.emp-detail-right {
+  position: sticky;
+  top: 80px;
+}
+
+/* Employee Detail Grid */
+.emp-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+.emp-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.emp-detail-item:nth-child(odd) {
+  border-right: 1px solid rgba(255,255,255,0.04);
+}
+.emp-detail-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.emp-detail-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Employee Actions Section */
+.emp-actions-section {
+  padding: 20px;
+}
+.emp-assign-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 16px;
+  transition: background 0.2s;
+}
+.emp-assign-btn:hover { background: rgba(59, 130, 246, 0.25); }
+.emp-assigned-note {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: rgba(59, 130, 246, 0.08);
+  border-radius: 8px;
+}
+.emp-assigned-note strong { color: var(--blue); }
+.emp-resolution-input {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  margin-bottom: 12px;
+}
+.emp-resolution-input:focus { outline: none; border-color: var(--accent); }
+.emp-action-buttons {
+  display: flex;
+  gap: 10px;
+}
+.emp-resolve-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: none;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.emp-resolve-btn:hover { opacity: 0.85; }
+.emp-resolve-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.emp-resolve-btn.release { background: #10b981; color: #fff; }
+.emp-resolve-btn.refund { background: #f59e0b; color: #000; }
+.emp-resolve-btn.cancel { background: #ef4444; color: #fff; }
+.emp-resolution-text {
+  padding: 16px 20px;
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+/* ==================== EMPLOYEE CHAT ==================== */
+.emp-chat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 130px);
+  max-height: 700px;
+}
+.emp-chat-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.emp-chat-header h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.emp-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.emp-chat-empty {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: auto;
+}
+
+/* Chat Bubbles */
+.emp-chat-bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  position: relative;
+}
+.emp-chat-bubble.incoming {
+  align-self: flex-start;
+  background: rgba(255,255,255,0.06);
+  border-bottom-left-radius: 4px;
+}
+.emp-chat-bubble.outgoing {
+  align-self: flex-end;
+  background: rgba(245, 158, 11, 0.15);
+  border-bottom-right-radius: 4px;
+}
+.emp-chat-bubble-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.emp-chat-sender {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.emp-chat-role-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.emp-chat-role-badge.employee {
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+}
+.emp-chat-role-badge.trader {
+  background: rgba(107, 114, 128, 0.2);
+  color: #9ca3af;
+}
+.emp-chat-role-badge.admin {
+  background: rgba(139, 92, 246, 0.2);
+  color: #8b5cf6;
+}
+.emp-chat-text {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.emp-chat-time {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  display: block;
+}
+.emp-chat-bubble.outgoing .emp-chat-time { text-align: right; }
+
+/* Chat Input */
+.emp-chat-input {
+  display: flex;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+}
+.emp-chat-input input {
+  flex: 1;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+}
+.emp-chat-input input:focus { outline: none; border-color: var(--accent); }
+.emp-chat-input button {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: #000;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.2s;
+}
+.emp-chat-input button:hover { opacity: 0.85; }
+.emp-chat-input button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ==================== EMPLOYEE RESPONSIVE ==================== */
+@media (max-width: 1024px) {
+  .emp-detail-layout {
+    grid-template-columns: 1fr;
+  }
+  .emp-detail-right {
+    position: static;
+  }
+  .emp-chat-card {
+    height: 500px;
+  }
+}
+@media (max-width: 768px) {
+  .emp-sidebar {
+    transform: translateX(-100%);
+  }
+  .emp-sidebar.open {
+    transform: translateX(0);
+  }
+  .emp-main {
+    margin-left: 0;
+  }
+  .emp-hamburger {
+    display: flex;
+  }
+  .emp-content {
+    padding: 16px;
+  }
+  .emp-stat-grid {
+    grid-template-columns: 1fr;
+  }
+  .emp-action-buttons {
+    flex-direction: column;
+  }
+  .emp-detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .emp-detail-item:nth-child(odd) {
+    border-right: none;
+  }
+}

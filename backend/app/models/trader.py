@@ -61,6 +61,7 @@ class Trader(Base):
     # Status
     status = Column(Enum(TraderStatus), default=TraderStatus.PENDING)
     is_admin = Column(Boolean, default=False)
+    role = Column(String(20), default="trader")  # trader, employee, admin
 
     # Stats
     total_trades = Column(Integer, default=0)
