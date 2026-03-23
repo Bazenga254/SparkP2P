@@ -28,6 +28,7 @@ export const sendVerificationCode = (email) => api.post('/auth/send-verification
 export const getProfile = () => api.get('/traders/me');
 export const connectBinance = (data) => api.post('/traders/connect-binance', data);
 export const updateSettlement = (data) => api.put('/traders/settlement', data);
+export const updateVerification = (data) => api.put('/traders/verification', data);
 export const updateTradingConfig = (data) => api.put('/traders/trading-config', data);
 export const getWallet = () => api.get('/traders/wallet');
 export const requestWithdrawal = () => api.post('/traders/wallet/withdraw');

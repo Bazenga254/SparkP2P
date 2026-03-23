@@ -5,6 +5,7 @@ import {
   getProfile,
   connectBinance,
   updateSettlement,
+  updateVerification,
   initiateSubscription,
   getSubscriptionStatus,
 } from '../services/api';
@@ -21,6 +22,10 @@ import {
   Zap,
   Crown,
   PartyPopper,
+  Shield,
+  Key,
+  Lock,
+  Smartphone,
 } from 'lucide-react';
 
 const BANK_PAYBILLS = {
@@ -37,6 +42,7 @@ const BANK_PAYBILLS = {
 const STEPS = [
   { key: 'extension', title: 'Install Extension', icon: Puzzle },
   { key: 'binance', title: 'Connect Binance', icon: Link2 },
+  { key: 'verification', title: 'Verification', icon: Shield },
   { key: 'settlement', title: 'Settlement', icon: Banknote },
   { key: 'subscribe', title: 'Subscribe', icon: CreditCard },
 ];
@@ -60,6 +66,10 @@ export default function Onboarding() {
   const [binanceLoading, setBinanceLoading] = useState(false);
   const [binanceMsg, setBinanceMsg] = useState(null);
   const [nameVerification, setNameVerification] = useState(null);
+
+  // Verification step
+  const [verifyMethod, setVerifyMethod] = useState('fund_password');
+  const [fundPassword, setFundPassword] = useState('');
 
   // Settlement step
   const [settlementMethod, setSettlementMethod] = useState('mpesa');
@@ -478,8 +488,111 @@ export default function Onboarding() {
           </div>
         )}
 
-        {/* Step 3: Settlement */}
+        {/* Step 3: Verification */}
         {currentStep === 2 && (
+          <div className="onb-step-content">
+            <div className="onb-step-header">
+              <Shield size={28} className="onb-step-icon" />
+              <div>
+                <h2>Release Verification</h2>
+                <p>How do you verify releases on Binance?</p>
+              </div>
+            </div>
+
+            <div className="onb-card">
+              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
+                When releasing crypto on Binance P2P, a verification step is required. Choose your method so we can automate it.
+              </p>
+
+              {[
+                { value: 'fund_password', icon: Lock, title: 'Fund Password', desc: 'Your Binance trade/fund password (4-6 digit PIN)', recommended: true },
+                { value: 'totp', icon: Smartphone, title: 'Google Authenticator (TOTP)', desc: 'Auto-generate 2FA codes. Requires your TOTP secret key.' },
+                { value: 'manual', icon: Key, title: 'Email/SMS/Passkey', desc: 'Requires manual confirmation. Auto-release will be disabled.' },
+              ].map((option) => (
+                <div
+                  key={option.value}
+                  className={`onb-verify-option ${verifyMethod === option.value ? 'selected' : ''}`}
+                  onClick={() => setVerifyMethod(option.value)}
+                >
+                  <div className="onb-verify-option-left">
+                    <option.icon size={20} />
+                    <div>
+                      <strong>{option.title}</strong>
+                      {option.recommended && <span className="onb-verify-badge">Recommended</span>}
+                      <p>{option.desc}</p>
+                    </div>
+                  </div>
+                  <div className={`onb-verify-radio ${verifyMethod === option.value ? 'checked' : ''}`} />
+                </div>
+              ))}
+
+              {verifyMethod === 'fund_password' && (
+                <div style={{ marginTop: 16 }}>
+                  <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Fund Password</label>
+                  <input
+                    type="password"
+                    placeholder="Enter your Binance fund password"
+                    value={fundPassword}
+                    onChange={(e) => setFundPassword(e.target.value)}
+                    className="onb-input"
+                  />
+                  <p style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>This is the PIN you use when releasing crypto on Binance. It's stored encrypted.</p>
+                </div>
+              )}
+
+              {verifyMethod === 'totp' && (
+                <div style={{ marginTop: 16 }}>
+                  <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>TOTP Secret Key</label>
+                  <input
+                    type="password"
+                    placeholder="e.g. JBSWY3DPEHPK3PXP"
+                    value={totpSecret}
+                    onChange={(e) => setTotpSecret(e.target.value)}
+                    className="onb-input"
+                  />
+                  <p style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>The secret key from when you set up Google Authenticator on Binance.</p>
+                </div>
+              )}
+
+              {verifyMethod === 'manual' && (
+                <div style={{ marginTop: 16, padding: 12, background: 'rgba(245, 158, 11, 0.1)', borderRadius: 8 }}>
+                  <p style={{ fontSize: 12, color: '#f59e0b' }}>
+                    With email/SMS/passkey verification, auto-release is disabled. You'll need to manually release crypto on Binance for each trade. The platform will still handle payment matching and settlement.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="onb-actions">
+              <button className="onb-btn-primary" onClick={async () => {
+                if (verifyMethod === 'fund_password' && !fundPassword) {
+                  return;
+                }
+                if (verifyMethod === 'totp' && !totpSecret) {
+                  return;
+                }
+                try {
+                  await updateVerification({
+                    verify_method: verifyMethod,
+                    totp_secret: verifyMethod === 'totp' ? totpSecret : null,
+                    fund_password: verifyMethod === 'fund_password' ? fundPassword : null,
+                  });
+                  setCurrentStep(3);
+                } catch (err) {
+                  console.error('Verification save failed:', err);
+                }
+              }}>
+                Next <ChevronRight size={16} />
+              </button>
+              <button className="onb-btn-text" onClick={() => setCurrentStep(3)}>
+                Skip for now
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 4: Settlement */}
+        {currentStep === 3 && (
           <div className="onb-step-content">
             <div className="onb-step-header">
               <Banknote size={28} className="onb-step-icon" />
@@ -619,7 +732,7 @@ export default function Onboarding() {
               </button>
               <button
                 className="onb-btn-primary"
-                onClick={() => setCurrentStep(3)}
+                onClick={() => setCurrentStep(4)}
                 disabled={!canAdvanceStep3}
               >
                 Next
@@ -629,8 +742,8 @@ export default function Onboarding() {
           </div>
         )}
 
-        {/* Step 4: Subscribe */}
-        {currentStep === 3 && (
+        {/* Step 5: Subscribe */}
+        {currentStep === 4 && (
           <div className="onb-step-content">
             <div className="onb-step-header">
               <CreditCard size={28} className="onb-step-icon" />

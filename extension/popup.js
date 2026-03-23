@@ -87,38 +87,71 @@ async function syncCookies() {
   syncMsg.innerHTML = '';
 
   try {
-    // Get all binance.com cookies
-    const allCookies = await chrome.cookies.getAll({ domain: '.binance.com' });
+    // Get ALL cookies using multiple methods
     const cookieMap = {};
 
-    for (const cookie of allCookies) {
-      if (BINANCE_COOKIE_NAMES.includes(cookie.name)) {
-        cookieMap[cookie.name] = cookie.value;
+    // Method 1: URL-based (most reliable)
+    const urls = [
+      'https://www.binance.com',
+      'https://binance.com',
+      'https://p2p.binance.com',
+      'https://c2c.binance.com',
+    ];
+    for (const url of urls) {
+      try {
+        const cookies = await chrome.cookies.getAll({ url });
+        for (const cookie of cookies) {
+          if (!cookieMap[cookie.name]) {
+            cookieMap[cookie.name] = cookie.value;
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    // Method 2: Domain-based fallback
+    const domains = ['.binance.com', 'binance.com', 'www.binance.com'];
+    for (const domain of domains) {
+      try {
+        const cookies = await chrome.cookies.getAll({ domain });
+        for (const cookie of cookies) {
+          if (!cookieMap[cookie.name]) {
+            cookieMap[cookie.name] = cookie.value;
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    // Filter to only the cookies we need
+    const filteredCookies = {};
+    for (const name of BINANCE_COOKIE_NAMES) {
+      if (cookieMap[name]) {
+        filteredCookies[name] = cookieMap[name];
       }
     }
 
-    // Also check c2c.binance.com
-    const c2cCookies = await chrome.cookies.getAll({ domain: 'c2c.binance.com' });
-    for (const cookie of c2cCookies) {
-      if (BINANCE_COOKIE_NAMES.includes(cookie.name) && !cookieMap[cookie.name]) {
-        cookieMap[cookie.name] = cookie.value;
-      }
-    }
+    // Debug info
+    const totalFound = Object.keys(cookieMap).length;
+    const relevantFound = Object.keys(filteredCookies).length;
+    const hasP20t = !!filteredCookies['p20t'];
+
+    console.log(`[SparkP2P] Total cookies: ${totalFound}, Relevant: ${relevantFound}, p20t: ${hasP20t}`);
+    console.log('[SparkP2P] Found keys:', Object.keys(filteredCookies).join(', '));
 
     // Check we have the critical cookie
-    if (!cookieMap['p20t']) {
-      showMsg(syncMsg, 'Binance session not found. Please login to Binance P2P first.', 'error');
+    if (!hasP20t) {
+      showMsg(syncMsg, `Session not found (${totalFound} total cookies, ${relevantFound} relevant). Make sure you're logged into Binance and try again.`, 'error');
       btn.disabled = false;
       btn.textContent = 'Sync Binance Cookies';
       return;
     }
 
     // Extract csrf token and bnc-uuid
-    const csrfToken = cookieMap['csrftoken'] || '';
-    const bncUuid = cookieMap['bnc-uuid'] || '';
+    const csrfToken = filteredCookies['csrftoken'] || cookieMap['csrftoken'] || '';
+    const bncUuid = filteredCookies['bnc-uuid'] || cookieMap['bnc-uuid'] || '';
 
-    // Remove csrftoken from cookies object (sent separately)
-    delete cookieMap['csrftoken'];
+    // Build cookies to send (without csrftoken, sent separately)
+    const cookiesToSend = { ...filteredCookies };
+    delete cookiesToSend['csrftoken'];
 
     // Get SparkP2P token
     const { sparkp2p_token } = await chrome.storage.local.get('sparkp2p_token');
@@ -131,7 +164,7 @@ async function syncCookies() {
         'Authorization': `Bearer ${sparkp2p_token}`,
       },
       body: JSON.stringify({
-        cookies: cookieMap,
+        cookies: cookiesToSend,
         csrf_token: csrfToken,
         bnc_uuid: bncUuid,
       }),

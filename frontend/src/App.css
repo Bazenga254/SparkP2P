@@ -4205,3 +4205,17 @@ body {
   .onb-ext-info { flex-direction: column; }
   .onb-step-header { flex-direction: column; }
 }
+
+/* Verification step */
+.onb-verify-option { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; cursor: pointer; transition: all 0.2s; }
+.onb-verify-option:hover { border-color: #555; }
+.onb-verify-option.selected { border-color: var(--accent); background: rgba(245, 158, 11, 0.05); }
+.onb-verify-option-left { display: flex; align-items: flex-start; gap: 12px; }
+.onb-verify-option-left svg { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+.onb-verify-option-left strong { display: block; font-size: 14px; color: var(--text); }
+.onb-verify-option-left p { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.onb-verify-badge { display: inline-block; background: var(--accent); color: #000; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 10px; margin-left: 8px; vertical-align: middle; }
+.onb-verify-radio { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border); flex-shrink: 0; }
+.onb-verify-radio.checked { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--bg); }
+.onb-input { width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 14px; }
+.onb-input:focus { outline: none; border-color: var(--accent); }

@@ -28,6 +28,12 @@ class BinanceConnectRequest(BaseModel):
     totp_secret: Optional[str] = None
 
 
+class VerificationConfigRequest(BaseModel):
+    verify_method: str  # totp, fund_password, manual, none
+    totp_secret: Optional[str] = None
+    fund_password: Optional[str] = None
+
+
 class SettlementConfigRequest(BaseModel):
     method: SettlementMethod
     phone: Optional[str] = None          # For M-Pesa
@@ -228,6 +234,28 @@ async def update_name_from_binance(
         "status": "updated",
         "full_name": trader.full_name,
     }
+
+
+@router.put("/verification")
+async def update_verification(
+    data: VerificationConfigRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Configure how releases are verified on Binance."""
+    if data.verify_method not in ("totp", "fund_password", "manual", "none"):
+        raise HTTPException(status_code=400, detail="Invalid verification method")
+
+    trader.binance_verify_method = data.verify_method
+
+    if data.verify_method == "totp" and data.totp_secret:
+        trader.binance_2fa_secret = encrypt_data(data.totp_secret)
+    elif data.verify_method == "fund_password" and data.fund_password:
+        trader.binance_fund_password = encrypt_data(data.fund_password)
+
+    await db.commit()
+
+    return {"status": "updated", "verify_method": data.verify_method}
 
 
 @router.put("/settlement")

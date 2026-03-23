@@ -38,6 +38,8 @@ class Trader(Base):
     binance_uid = Column(String(100), nullable=True)
     binance_username = Column(String(100), nullable=True)
     binance_connected = Column(Boolean, default=False)
+    binance_fund_password = Column(String(512), nullable=True)  # Encrypted
+    binance_verify_method = Column(String(20), default="none")  # none, totp, fund_password, manual
 
     # Settlement config
     settlement_method = Column(Enum(SettlementMethod), default=SettlementMethod.MPESA)

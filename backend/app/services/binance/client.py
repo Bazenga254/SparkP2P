@@ -27,11 +27,15 @@ class BinanceP2PClient:
         csrf_token: str,
         bnc_uuid: str = "",
         totp_secret: Optional[str] = None,
+        fund_password: Optional[str] = None,
+        verify_method: str = "none",
     ):
         self.cookies = cookies
         self.csrf_token = csrf_token
         self.bnc_uuid = bnc_uuid
         self.totp_secret = totp_secret
+        self.fund_password = fund_password
+        self.verify_method = verify_method
         self.headers = {
             "Csrftoken": csrf_token,
             "Clienttype": "web",
@@ -57,7 +61,11 @@ class BinanceP2PClient:
         totp_secret = None
         if trader.binance_2fa_secret:
             totp_secret = decrypt_data(trader.binance_2fa_secret)
-        return cls(cookies, csrf_token, bnc_uuid, totp_secret)
+        fund_password = None
+        if trader.binance_fund_password:
+            fund_password = decrypt_data(trader.binance_fund_password)
+        verify_method = trader.binance_verify_method or "none"
+        return cls(cookies, csrf_token, bnc_uuid, totp_secret, fund_password, verify_method)
 
     @classmethod
     def from_raw(cls, cookies: dict, csrf_token: str, bnc_uuid: str = "", totp_secret: str = None):
@@ -123,19 +131,37 @@ class BinanceP2PClient:
         """
         Release crypto to buyer (sell side).
         This is the core auto-release function.
-        Endpoint: /bapi/c2c/v2/private/c2c/order-match/confirm-order
+        Handles different verification methods:
+        - totp: Google Authenticator 2FA code
+        - fund_password: Binance fund/trade password
+        - manual: Cannot auto-release, skip
+        - none: Try without verification
         """
+        if self.verify_method == "manual":
+            logger.info(f"Manual verification required for order {order_number} — skipping auto-release")
+            raise BinanceAPIError("Manual verification required — cannot auto-release")
+
         payload = {"orderNumber": order_number}
 
-        # Add 2FA if required
-        code = self._get_2fa_code()
-        if code:
-            payload["emailVerifyCode"] = ""
-            payload["mobileVerifyCode"] = ""
-            payload["googleVerifyCode"] = code
+        # Add verification based on method
+        if self.verify_method == "totp" and self.totp_secret:
+            code = self._get_2fa_code()
+            if code:
+                payload["emailVerifyCode"] = ""
+                payload["mobileVerifyCode"] = ""
+                payload["googleVerifyCode"] = code
+
+        elif self.verify_method == "fund_password" and self.fund_password:
+            payload["fundPassword"] = self.fund_password
+
+        # Also try TOTP as fallback if available
+        elif self.totp_secret:
+            code = self._get_2fa_code()
+            if code:
+                payload["googleVerifyCode"] = code
 
         result = await self._request("/c2c/order-match/confirm-order", payload)
-        logger.info(f"Released order {order_number}: code={result.get('code')}")
+        logger.info(f"Released order {order_number}: code={result.get('code')}, method={self.verify_method}")
         return result
 
     async def mark_as_paid(self, order_number: str) -> dict:
@@ -232,12 +258,20 @@ class BinanceP2PClient:
     async def check_session(self) -> bool:
         """Check if the current session is still valid."""
         try:
+            # Try payment methods first (most reliable)
+            result = await self._request("/c2c/pay-method/user-paymethods", {})
+            if result.get("code") == "000000":
+                return True
+            # Fallback to order list
             result = await self._request("/c2c/order-match/order-list", {
                 "page": 1, "rows": 1, "tradeType": "SELL", "orderStatusList": [1]
             })
             return result.get("code") == "000000"
-        except (BinanceSessionExpired, BinanceAPIError, Exception) as e:
+        except (BinanceSessionExpired, BinanceAPIError) as e:
             logger.warning(f"Session check failed: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Session check error: {type(e).__name__}: {e}")
             return False
 
 
