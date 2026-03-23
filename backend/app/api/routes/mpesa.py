@@ -185,9 +185,13 @@ async def _trigger_auto_release(order: Order, db: AsyncSession):
 
         logger.info(f"Auto-released order {order.binance_order_number}")
 
-        # Trigger settlement if not using batch mode
-        if not trader.batch_settlement_enabled:
-            settlement = SettlementEngine(db)
+        # Trigger settlement
+        settlement = SettlementEngine(db)
+        if trader.batch_settlement_enabled:
+            # Check if balance hit threshold → auto-withdraw
+            await settlement.auto_settle_if_threshold(trader.id)
+        else:
+            # Settle immediately
             await settlement.settle_order(order)
 
     except Exception as e:

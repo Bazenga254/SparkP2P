@@ -29,6 +29,7 @@ B2C_FEES = [
 ]
 
 B2B_FEE = 50  # Approximate flat fee for B2B
+PLATFORM_SETTLEMENT_MARKUP = 25  # KES 25 markup on every withdrawal (our profit)
 
 
 def estimate_b2c_fee(amount: float) -> int:
@@ -37,6 +38,17 @@ def estimate_b2c_fee(amount: float) -> int:
         if amount <= threshold:
             return fee
     return 40
+
+
+def get_total_settlement_fee(trader, amount: float) -> tuple:
+    """Calculate total settlement fee: Safaricom fee + platform markup.
+    Returns (safaricom_fee, platform_markup, total_fee)
+    """
+    if trader.settlement_method == SettlementMethod.MPESA:
+        safaricom_fee = estimate_b2c_fee(amount)
+    else:
+        safaricom_fee = B2B_FEE
+    return safaricom_fee, PLATFORM_SETTLEMENT_MARKUP, safaricom_fee + PLATFORM_SETTLEMENT_MARKUP
 
 
 class SettlementEngine:
@@ -85,7 +97,13 @@ class SettlementEngine:
         return success
 
     async def batch_settle(self, trader_id: int, simulate: bool = False) -> bool:
-        """Settle accumulated balance to trader in one transaction."""
+        """Settle accumulated balance to trader in one transaction.
+
+        Fee breakdown:
+        - Safaricom fee (B2C ~KES 25 or B2B ~KES 50) — goes to Safaricom
+        - Platform markup (KES 25) — our profit per withdrawal
+        - Total deducted from trader = safaricom_fee + platform_markup
+        """
         trader = await self._get_trader(trader_id)
         if not trader:
             return False
@@ -94,9 +112,17 @@ class SettlementEngine:
         if not wallet or wallet.balance <= 0:
             return False
 
+        # Check threshold — don't withdraw below trader's configured threshold
+        if trader.batch_threshold and wallet.balance < trader.batch_threshold:
+            logger.info(
+                f"Trader {trader.id} balance KES {wallet.balance} below threshold "
+                f"KES {trader.batch_threshold} — skipping withdrawal"
+            )
+            return False
+
         amount = wallet.balance
-        settlement_fee = self._estimate_settlement_fee(trader, amount)
-        net_amount = amount - settlement_fee
+        safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, amount)
+        net_amount = amount - total_fee
 
         if net_amount <= 0:
             return False
@@ -104,35 +130,71 @@ class SettlementEngine:
         success = await self._send_payment(trader, net_amount, simulate=simulate)
 
         if success:
-            # Deduct from wallet
+            # Deduct full amount from wallet
             wallet.balance -= amount
             wallet.total_withdrawn += net_amount
+            wallet.total_fees_paid += total_fee
 
+            # Record withdrawal
             txn = WalletTransaction(
                 trader_id=trader_id,
                 wallet_id=wallet.id,
                 transaction_type=TransactionType.WITHDRAWAL,
-                amount=-amount,
+                amount=-net_amount,
                 balance_after=wallet.balance,
-                description=f"Batch settlement: KES {net_amount}",
+                description=f"Withdrawal: KES {net_amount} to {trader.settlement_method.value}",
             )
             self.db.add(txn)
 
-            # Record settlement fee
-            fee_txn = WalletTransaction(
+            # Record Safaricom fee
+            self.db.add(WalletTransaction(
                 trader_id=trader_id,
                 wallet_id=wallet.id,
                 transaction_type=TransactionType.SETTLEMENT_FEE,
-                amount=-settlement_fee,
+                amount=-safaricom_fee,
                 balance_after=wallet.balance,
-                description=f"Settlement fee",
-            )
-            self.db.add(fee_txn)
+                description=f"Safaricom fee: KES {safaricom_fee}",
+            ))
+
+            # Record platform markup (our revenue)
+            self.db.add(WalletTransaction(
+                trader_id=trader_id,
+                wallet_id=wallet.id,
+                transaction_type=TransactionType.PLATFORM_FEE,
+                amount=-platform_markup,
+                balance_after=wallet.balance,
+                description=f"Service fee: KES {platform_markup}",
+            ))
 
             await self.db.commit()
-            logger.info(f"Batch settled KES {net_amount} to trader {trader.full_name}")
+            logger.info(
+                f"Settled KES {net_amount} to {trader.full_name} "
+                f"(safaricom: {safaricom_fee}, markup: {platform_markup})"
+            )
 
         return success
+
+    async def auto_settle_if_threshold(self, trader_id: int) -> bool:
+        """Auto-settle if trader's balance exceeds their threshold.
+        Called after each trade completes.
+        """
+        trader = await self._get_trader(trader_id)
+        if not trader or not trader.batch_settlement_enabled:
+            return False
+
+        wallet = await self._get_wallet(trader_id)
+        if not wallet:
+            return False
+
+        threshold = trader.batch_threshold or 50000  # Default KES 50,000
+        if wallet.balance >= threshold:
+            logger.info(
+                f"Trader {trader.id} balance KES {wallet.balance} >= threshold "
+                f"KES {threshold} — auto-settling"
+            )
+            return await self.batch_settle(trader_id)
+
+        return False
 
     async def _send_payment(
         self, trader: Trader, amount: float, order: Optional[Order] = None,
@@ -322,10 +384,9 @@ class SettlementEngine:
         return settings.PLATFORM_FEE_PER_TRADE
 
     def _estimate_settlement_fee(self, trader: Trader, amount: float) -> float:
-        """Estimate the M-Pesa fee for settlement."""
-        if trader.settlement_method == SettlementMethod.MPESA:
-            return estimate_b2c_fee(amount)
-        return B2B_FEE
+        """Estimate total settlement fee (Safaricom + platform markup)."""
+        _, _, total = get_total_settlement_fee(trader, amount)
+        return total
 
     async def _get_trader(self, trader_id: int) -> Optional[Trader]:
         result = await self.db.execute(
