@@ -1,10 +1,13 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.config import settings
+from app.core.security import create_access_token
 from app.models import Trader, TraderStatus, Order, OrderStatus, Payment
 from app.models.wallet import Wallet
 from app.api.deps import get_admin_trader
@@ -12,6 +15,48 @@ from app.api.deps import get_admin_trader
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class AdminLoginRequest(BaseModel):
+    password: str
+
+
+@router.post("/login")
+async def admin_login(data: AdminLoginRequest, db: AsyncSession = Depends(get_db)):
+    """Login as admin with master password. Creates admin account if needed."""
+    if data.password != settings.ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+
+    # Find or create admin account
+    result = await db.execute(
+        select(Trader).where(Trader.is_admin == True)
+    )
+    admin = result.scalar_one_or_none()
+
+    if not admin:
+        # Create admin account
+        from app.core.security import hash_password
+        admin = Trader(
+            email="admin@sparkp2p.com",
+            phone="0000000000",
+            full_name="SparkP2P Admin",
+            password_hash=hash_password(data.password),
+            is_admin=True,
+            status=TraderStatus.ACTIVE,
+        )
+        db.add(admin)
+        await db.commit()
+        await db.refresh(admin)
+
+    token = create_access_token({"sub": str(admin.id), "email": admin.email})
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "trader_id": admin.id,
+        "full_name": admin.full_name,
+        "is_admin": True,
+    }
 
 
 @router.get("/dashboard")

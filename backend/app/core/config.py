@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     PLATFORM_FEE_PER_TRADE: int = 15  # KES per trade
     MAX_AUTO_RELEASE_AMOUNT: int = 500000  # KES - flag above this
 
+    # Admin
+    ADMIN_PASSWORD: str = "SparkAdmin2026"
+
     # Encryption key for storing sensitive data (Binance cookies, 2FA secrets)
     ENCRYPTION_KEY: str = "change-this-encryption-key"
 
