@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminAnalytics, getAdminOnlineTraders } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi } from 'lucide-react';
 
 const sidebarSections = [
   {
     label: 'OVERVIEW',
     items: [
       { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+      { key: 'transactions', icon: ArrowRightLeft, label: 'Transactions' },
     ],
   },
   {
@@ -28,6 +29,13 @@ const sidebarSections = [
   },
 ];
 
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
 export default function Admin() {
   const { logout } = useAuth();
   const navigate = useNavigate();
@@ -35,6 +43,10 @@ export default function Admin() {
   const [traders, setTraders] = useState([]);
   const [disputes, setDisputes] = useState([]);
   const [unmatched, setUnmatched] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
+  const [onlineTraders, setOnlineTraders] = useState([]);
+  const [transactions, setTransactions] = useState({ total: 0, transactions: [] });
+  const [txPeriod, setTxPeriod] = useState('today');
   const [activeTab, setActiveTab] = useState('dashboard');
   const [refreshing, setRefreshing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -42,27 +54,45 @@ export default function Admin() {
   const loadData = async () => {
     setRefreshing(true);
     try {
-      const [dashRes, tradersRes, disputesRes, unmatchedRes] = await Promise.all([
+      const [dashRes, tradersRes, disputesRes, unmatchedRes, analyticsRes, onlineRes] = await Promise.all([
         getAdminDashboard(),
         getAdminTraders(),
         getDisputedOrders(),
         getUnmatchedPayments(),
+        getAdminAnalytics(),
+        getAdminOnlineTraders(),
       ]);
       setDashboard(dashRes.data);
       setTraders(tradersRes.data);
       setDisputes(disputesRes.data);
       setUnmatched(unmatchedRes.data);
+      setAnalytics(analyticsRes.data);
+      setOnlineTraders(onlineRes.data);
     } catch (err) {
       console.error('Admin load error:', err);
     }
     setRefreshing(false);
   };
 
+  const loadTransactions = async (period) => {
+    try {
+      const res = await getAdminTransactions(period, 50);
+      setTransactions(res.data);
+    } catch (err) {
+      console.error('Transactions load error:', err);
+    }
+  };
+
   useEffect(() => {
     loadData();
+    loadTransactions(txPeriod);
     const interval = setInterval(loadData, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    loadTransactions(txPeriod);
+  }, [txPeriod]);
 
   const handleStatusChange = async (traderId, newStatus) => {
     await updateTraderStatus(traderId, newStatus);
@@ -79,9 +109,17 @@ export default function Admin() {
     traders: 'All Traders',
     disputes: 'Disputes',
     unmatched: 'Unmatched Payments',
+    transactions: 'Transactions',
     revenue: 'Revenue',
     settings: 'Settings',
   };
+
+  const fmtKES = (v) => `KES ${(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+  // Compute max volume for chart scaling
+  const maxVolume = analytics?.monthly_volumes?.length
+    ? Math.max(...analytics.monthly_volumes.map((m) => m.total_volume), 1)
+    : 1;
 
   return (
     <div className="adm-layout">
@@ -138,16 +176,48 @@ export default function Admin() {
             <h1 className="adm-page-title">{pageTitles[activeTab] || 'Dashboard'}</h1>
           </div>
           <div className="adm-topbar-right">
-            <button className="adm-refresh-btn" onClick={loadData} disabled={refreshing}>
+            <button className="adm-refresh-btn" onClick={() => { loadData(); loadTransactions(txPeriod); }} disabled={refreshing}>
               <RefreshCw size={16} className={refreshing ? 'spinning' : ''} />
             </button>
           </div>
         </header>
 
         <div className="adm-content">
-          {/* Dashboard stats - always visible on dashboard tab */}
+          {/* ==================== DASHBOARD ==================== */}
           {activeTab === 'dashboard' && dashboard && (
             <>
+              {/* Row 1: Greeting + Online Traders */}
+              <div className="adm-two-col" style={{ marginBottom: 16 }}>
+                <div className="adm-greeting-card">
+                  <div>
+                    <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>
+                      {getGreeting()}, Admin!
+                    </h2>
+                    <p style={{ color: 'var(--text-dim)', fontSize: 13.5 }}>
+                      Today's platform earnings
+                    </p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--green)' }}>
+                      {fmtKES(analytics?.revenue?.today || dashboard.today.revenue)}
+                    </div>
+                    <p style={{ color: 'var(--text-dim)', fontSize: 12 }}>fees collected</p>
+                  </div>
+                </div>
+                <div className="adm-greeting-card" style={{ flex: '0 0 auto', minWidth: 200 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span className="adm-online-badge" />
+                    <div>
+                      <div style={{ fontSize: 28, fontWeight: 700 }}>
+                        {analytics?.online_traders ?? 0}
+                      </div>
+                      <p style={{ color: 'var(--text-dim)', fontSize: 12.5 }}>Online Traders</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 2: 4 stat cards */}
               <div className="adm-stat-grid">
                 <div className="adm-stat-card" style={{ '--card-accent': '#10b981' }}>
                   <div className="adm-stat-info">
@@ -170,7 +240,7 @@ export default function Admin() {
                 <div className="adm-stat-card" style={{ '--card-accent': '#f59e0b' }}>
                   <div className="adm-stat-info">
                     <span className="adm-stat-label">Today's Revenue</span>
-                    <span className="adm-stat-value">KES {dashboard.today.revenue.toLocaleString()}</span>
+                    <span className="adm-stat-value">{fmtKES(dashboard.today.revenue)}</span>
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>
                     <TrendingUp size={22} />
@@ -179,7 +249,7 @@ export default function Admin() {
                 <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4' }}>
                   <div className="adm-stat-info">
                     <span className="adm-stat-label">Platform Float</span>
-                    <span className="adm-stat-value">KES {dashboard.platform.total_float.toLocaleString()}</span>
+                    <span className="adm-stat-value">{fmtKES(dashboard.platform.total_float)}</span>
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4' }}>
                     <Banknote size={22} />
@@ -187,7 +257,8 @@ export default function Admin() {
                 </div>
               </div>
 
-              <div className="adm-stat-grid" style={{ marginTop: '16px' }}>
+              {/* Row 3: 4 more stat cards */}
+              <div className="adm-stat-grid" style={{ marginTop: 16 }}>
                 <div className="adm-stat-card" style={{ '--card-accent': '#8b5cf6' }}>
                   <div className="adm-stat-info">
                     <span className="adm-stat-label">Today's Orders</span>
@@ -209,7 +280,7 @@ export default function Admin() {
                 <div className="adm-stat-card" style={{ '--card-accent': '#3b82f6' }}>
                   <div className="adm-stat-info">
                     <span className="adm-stat-label">Today's Volume</span>
-                    <span className="adm-stat-value">KES {dashboard.today.volume.toLocaleString()}</span>
+                    <span className="adm-stat-value">{fmtKES(dashboard.today.volume)}</span>
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
                     <Activity size={22} />
@@ -230,10 +301,216 @@ export default function Admin() {
                   </div>
                 </div>
               </div>
+
+              {/* Row 4: Chart + Profit Breakdown */}
+              <div className="adm-two-col" style={{ marginTop: 16 }}>
+                {/* Monthly Volumes Chart */}
+                <div className="adm-card" style={{ flex: '3 1 0' }}>
+                  <div className="adm-card-header">
+                    <h3>Monthly Volumes</h3>
+                    <span className="adm-card-count">Last 6 months</span>
+                  </div>
+                  <div className="adm-chart-container">
+                    {analytics?.monthly_volumes?.length > 0 ? (
+                      analytics.monthly_volumes.map((m, i) => (
+                        <div key={i} className="adm-chart-col">
+                          <div className="adm-chart-bars">
+                            <div
+                              className="adm-chart-bar buy"
+                              style={{ height: `${(m.buy_volume / maxVolume) * 140}px` }}
+                              title={`Buy: ${fmtKES(m.buy_volume)}`}
+                            />
+                            <div
+                              className="adm-chart-bar sell"
+                              style={{ height: `${(m.sell_volume / maxVolume) * 140}px` }}
+                              title={`Sell: ${fmtKES(m.sell_volume)}`}
+                            />
+                          </div>
+                          <span className="adm-chart-label">{m.month.split(' ')[0]}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="adm-empty" style={{ padding: '40px 0' }}>No volume data yet</p>
+                    )}
+                  </div>
+                  {analytics?.monthly_volumes?.length > 0 && (
+                    <div style={{ display: 'flex', gap: 16, padding: '0 20px 14px', fontSize: 12, color: 'var(--text-dim)' }}>
+                      <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: 'var(--blue)', marginRight: 5 }} />Buy</span>
+                      <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: 'var(--green)', marginRight: 5 }} />Sell</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Profit Breakdown */}
+                <div className="adm-profit-card" style={{ flex: '2 1 0' }}>
+                  <div className="adm-card-header">
+                    <h3>Platform Profit</h3>
+                    <DollarSign size={16} style={{ color: 'var(--accent)' }} />
+                  </div>
+                  <div style={{ padding: 20 }}>
+                    <div className="adm-profit-total">
+                      {fmtKES(analytics?.platform_profit)}
+                    </div>
+                    <p style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 20 }}>all-time fees collected</p>
+
+                    <div className="adm-profit-rows">
+                      <div className="adm-profit-row">
+                        <span>Today</span>
+                        <span className="adm-profit-val">{fmtKES(analytics?.revenue?.today)}</span>
+                      </div>
+                      <div className="adm-profit-row">
+                        <span>This Week</span>
+                        <span className="adm-profit-val">{fmtKES(analytics?.revenue?.week)}</span>
+                      </div>
+                      <div className="adm-profit-row">
+                        <span>This Month</span>
+                        <span className="adm-profit-val">{fmtKES(analytics?.revenue?.month)}</span>
+                      </div>
+                      <div className="adm-profit-row">
+                        <span>This Year</span>
+                        <span className="adm-profit-val">{fmtKES(analytics?.revenue?.year)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 5: Recent Transactions + Top Traders */}
+              <div className="adm-two-col" style={{ marginTop: 16 }}>
+                {/* Recent Transactions */}
+                <div className="adm-card" style={{ flex: '3 1 0' }}>
+                  <div className="adm-card-header">
+                    <h3>Recent Transactions</h3>
+                    <span className="adm-card-count">{transactions.total} total</span>
+                  </div>
+                  <div className="adm-table-wrap">
+                    <table className="adm-table">
+                      <thead>
+                        <tr>
+                          <th>Type</th>
+                          <th>Amount</th>
+                          <th>Trader</th>
+                          <th>Status</th>
+                          <th>Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {transactions.transactions.slice(0, 10).map((tx) => (
+                          <tr key={tx.id}>
+                            <td>
+                              <span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>
+                                {tx.direction === 'inbound' ? 'IN' : 'OUT'}
+                              </span>
+                            </td>
+                            <td>{fmtKES(tx.amount)}</td>
+                            <td>{tx.trader_name}</td>
+                            <td>
+                              <span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>
+                                {tx.status}
+                              </span>
+                            </td>
+                            <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '-'}</td>
+                          </tr>
+                        ))}
+                        {transactions.transactions.length === 0 && (
+                          <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 30 }}>No transactions today</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Top Traders */}
+                <div className="adm-top-traders" style={{ flex: '2 1 0' }}>
+                  <div className="adm-card-header">
+                    <h3>Top Traders</h3>
+                    <span className="adm-card-count">by volume</span>
+                  </div>
+                  <div style={{ padding: '12px 0' }}>
+                    {analytics?.top_traders?.length > 0 ? analytics.top_traders.map((t, i) => (
+                      <div key={i} className="adm-top-trader-row">
+                        <div className="adm-top-trader-rank">#{i + 1}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</div>
+                          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>{t.trades} trades</div>
+                        </div>
+                        <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--green)', whiteSpace: 'nowrap' }}>
+                          {fmtKES(t.volume)}
+                        </div>
+                      </div>
+                    )) : (
+                      <p className="adm-empty">No traders yet</p>
+                    )}
+                  </div>
+                </div>
+              </div>
             </>
           )}
 
-          {/* Traders Table */}
+          {/* ==================== TRANSACTIONS ==================== */}
+          {activeTab === 'transactions' && (
+            <div className="adm-card">
+              <div className="adm-card-header">
+                <h3>All Transactions</h3>
+                <div className="adm-period-filter">
+                  {['today', 'week', 'month', 'year', 'all'].map((p) => (
+                    <button
+                      key={p}
+                      className={`adm-period-btn ${txPeriod === p ? 'active' : ''}`}
+                      onClick={() => setTxPeriod(p)}
+                    >
+                      {p.charAt(0).toUpperCase() + p.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="adm-table-wrap">
+                <table className="adm-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Direction</th>
+                      <th>Type</th>
+                      <th>Amount</th>
+                      <th>Trader</th>
+                      <th>Phone</th>
+                      <th>Status</th>
+                      <th>M-Pesa ID</th>
+                      <th>Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {transactions.transactions.map((tx) => (
+                      <tr key={tx.id}>
+                        <td className="mono">{tx.id}</td>
+                        <td>
+                          <span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>
+                            {tx.direction === 'inbound' ? 'Inbound' : 'Outbound'}
+                          </span>
+                        </td>
+                        <td>{tx.transaction_type}</td>
+                        <td>{fmtKES(tx.amount)}</td>
+                        <td>{tx.trader_name}</td>
+                        <td>{tx.phone || '-'}</td>
+                        <td>
+                          <span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>
+                            {tx.status}
+                          </span>
+                        </td>
+                        <td className="mono">{tx.mpesa_transaction_id || '-'}</td>
+                        <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '-'}</td>
+                      </tr>
+                    ))}
+                    {transactions.transactions.length === 0 && (
+                      <tr><td colSpan={9} className="adm-empty">No transactions for this period</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== TRADERS ==================== */}
           {activeTab === 'traders' && (
             <div className="adm-card">
               <div className="adm-card-header">
@@ -296,7 +573,7 @@ export default function Admin() {
             </div>
           )}
 
-          {/* Disputes Table */}
+          {/* ==================== DISPUTES ==================== */}
           {activeTab === 'disputes' && (
             <div className="adm-card">
               <div className="adm-card-header">
@@ -336,7 +613,7 @@ export default function Admin() {
             </div>
           )}
 
-          {/* Unmatched Payments Table */}
+          {/* ==================== UNMATCHED ==================== */}
           {activeTab === 'unmatched' && (
             <div className="adm-card">
               <div className="adm-card-header">
@@ -377,17 +654,89 @@ export default function Admin() {
             </div>
           )}
 
-          {/* Revenue placeholder */}
+          {/* ==================== REVENUE ==================== */}
           {activeTab === 'revenue' && (
-            <div className="adm-card">
-              <div className="adm-card-header">
-                <h3>Revenue Overview</h3>
+            <>
+              {/* Revenue summary cards */}
+              <div className="adm-stat-grid" style={{ marginBottom: 16 }}>
+                <div className="adm-stat-card" style={{ '--card-accent': '#10b981' }}>
+                  <div className="adm-stat-info">
+                    <span className="adm-stat-label">Today's Revenue</span>
+                    <span className="adm-stat-value">{fmtKES(analytics?.revenue?.today)}</span>
+                  </div>
+                  <div className="adm-stat-icon" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
+                    <DollarSign size={22} />
+                  </div>
+                </div>
+                <div className="adm-stat-card" style={{ '--card-accent': '#3b82f6' }}>
+                  <div className="adm-stat-info">
+                    <span className="adm-stat-label">Weekly Revenue</span>
+                    <span className="adm-stat-value">{fmtKES(analytics?.revenue?.week)}</span>
+                  </div>
+                  <div className="adm-stat-icon" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
+                    <TrendingUp size={22} />
+                  </div>
+                </div>
+                <div className="adm-stat-card" style={{ '--card-accent': '#f59e0b' }}>
+                  <div className="adm-stat-info">
+                    <span className="adm-stat-label">Monthly Revenue</span>
+                    <span className="adm-stat-value">{fmtKES(analytics?.revenue?.month)}</span>
+                  </div>
+                  <div className="adm-stat-icon" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>
+                    <TrendingUp size={22} />
+                  </div>
+                </div>
+                <div className="adm-stat-card" style={{ '--card-accent': '#8b5cf6' }}>
+                  <div className="adm-stat-info">
+                    <span className="adm-stat-label">All-Time Profit</span>
+                    <span className="adm-stat-value">{fmtKES(analytics?.platform_profit)}</span>
+                  </div>
+                  <div className="adm-stat-icon" style={{ background: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }}>
+                    <DollarSign size={22} />
+                  </div>
+                </div>
               </div>
-              <p className="adm-empty">Revenue analytics coming soon.</p>
-            </div>
+
+              {/* Monthly breakdown table */}
+              <div className="adm-card">
+                <div className="adm-card-header">
+                  <h3>Monthly Breakdown</h3>
+                </div>
+                {analytics?.monthly_volumes?.length > 0 ? (
+                  <div className="adm-table-wrap">
+                    <table className="adm-table">
+                      <thead>
+                        <tr>
+                          <th>Month</th>
+                          <th>Buy Volume</th>
+                          <th>Sell Volume</th>
+                          <th>Total Volume</th>
+                          <th>Trades</th>
+                          <th>Profit</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...analytics.monthly_volumes].reverse().map((m, i) => (
+                          <tr key={i}>
+                            <td style={{ fontWeight: 600 }}>{m.month}</td>
+                            <td style={{ color: 'var(--blue)' }}>{fmtKES(m.buy_volume)}</td>
+                            <td style={{ color: 'var(--green)' }}>{fmtKES(m.sell_volume)}</td>
+                            <td>{fmtKES(m.total_volume)}</td>
+                            <td>{m.trades}</td>
+                            <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmtKES(m.profit)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="adm-empty">No revenue data yet</p>
+                )}
+              </div>
+            </>
           )}
 
-          {/* Settings placeholder */}
+          {/* ==================== SETTINGS ==================== */}
           {activeTab === 'settings' && (
             <div className="adm-card">
               <div className="adm-card-header">

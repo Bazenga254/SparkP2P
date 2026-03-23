@@ -1,15 +1,16 @@
 import logging
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case, extract
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import create_access_token
-from app.models import Trader, TraderStatus, Order, OrderStatus, Payment
-from app.models.wallet import Wallet
+from app.models import Trader, TraderStatus, Order, OrderStatus, Payment, PaymentDirection, PaymentStatus
+from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.api.deps import get_admin_trader
 
 logger = logging.getLogger(__name__)
@@ -258,4 +259,211 @@ async def list_unmatched_payments(
             "created_at": p.created_at.isoformat() if p.created_at else "",
         }
         for p in payments
+    ]
+
+
+def _get_period_start(period: str):
+    """Return the start datetime for a given period filter."""
+    now = datetime.now(timezone.utc)
+    if period == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "week":
+        return now - timedelta(days=7)
+    elif period == "month":
+        return now - timedelta(days=30)
+    elif period == "year":
+        return now - timedelta(days=365)
+    else:
+        return None
+
+
+@router.get("/transactions")
+async def admin_transactions(
+    period: str = "today",
+    limit: int = Query(default=50, le=200),
+    offset: int = 0,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all payments (inbound C2B + outbound B2C/B2B) with date filters."""
+    start = _get_period_start(period)
+
+    query = (
+        select(Payment, Trader.full_name.label("trader_name"))
+        .join(Trader, Payment.trader_id == Trader.id, isouter=True)
+    )
+    if start:
+        query = query.where(Payment.created_at >= start)
+
+    query = query.order_by(Payment.created_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(query)
+    rows = result.all()
+
+    # Count total for pagination
+    count_query = select(func.count(Payment.id))
+    if start:
+        count_query = count_query.where(Payment.created_at >= start)
+    total = (await db.execute(count_query)).scalar()
+
+    return {
+        "total": total,
+        "transactions": [
+            {
+                "id": p.id,
+                "trader_name": trader_name or "Unknown",
+                "direction": p.direction.value if p.direction else "unknown",
+                "transaction_type": p.transaction_type or "unknown",
+                "amount": p.amount,
+                "phone": p.phone,
+                "status": p.status.value if p.status else "unknown",
+                "mpesa_transaction_id": p.mpesa_transaction_id,
+                "created_at": p.created_at.isoformat() if p.created_at else "",
+            }
+            for p, trader_name in rows
+        ],
+    }
+
+
+@router.get("/analytics")
+async def admin_analytics(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Comprehensive platform analytics."""
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = now - timedelta(days=7)
+    month_start = now - timedelta(days=30)
+    year_start = now - timedelta(days=365)
+
+    async def _revenue_for_period(start):
+        """Sum platform_fee + settlement_fee for orders in a period."""
+        q = select(
+            func.coalesce(func.sum(Order.platform_fee), 0),
+            func.coalesce(func.sum(Order.settlement_fee), 0),
+        ).where(Order.created_at >= start)
+        r = await db.execute(q)
+        pf, sf = r.one()
+        return float(pf) + float(sf)
+
+    today_revenue = await _revenue_for_period(today_start)
+    week_revenue = await _revenue_for_period(week_start)
+    month_revenue = await _revenue_for_period(month_start)
+    year_revenue = await _revenue_for_period(year_start)
+
+    # Total platform profit (all time)
+    r = await db.execute(
+        select(
+            func.coalesce(func.sum(Order.platform_fee), 0),
+            func.coalesce(func.sum(Order.settlement_fee), 0),
+        )
+    )
+    total_pf, total_sf = r.one()
+    platform_profit = float(total_pf) + float(total_sf)
+
+    # Monthly volumes - last 6 months
+    six_months_ago = now - timedelta(days=180)
+    monthly_q = (
+        select(
+            extract("year", Order.created_at).label("yr"),
+            extract("month", Order.created_at).label("mo"),
+            func.sum(case((Order.side == "sell", Order.fiat_amount), else_=0)).label("sell_volume"),
+            func.sum(case((Order.side == "buy", Order.fiat_amount), else_=0)).label("buy_volume"),
+            func.sum(Order.fiat_amount).label("total_volume"),
+            func.sum(Order.platform_fee + Order.settlement_fee).label("profit"),
+            func.count(Order.id).label("trades"),
+        )
+        .where(Order.created_at >= six_months_ago)
+        .group_by("yr", "mo")
+        .order_by("yr", "mo")
+    )
+    r = await db.execute(monthly_q)
+    monthly_rows = r.all()
+
+    month_names = [
+        "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    monthly_volumes = [
+        {
+            "month": f"{month_names[int(row.mo)]} {int(row.yr)}",
+            "buy_volume": float(row.buy_volume or 0),
+            "sell_volume": float(row.sell_volume or 0),
+            "total_volume": float(row.total_volume or 0),
+            "profit": float(row.profit or 0),
+            "trades": row.trades,
+        }
+        for row in monthly_rows
+    ]
+
+    # Online traders (binance_connected + active)
+    r = await db.execute(
+        select(func.count(Trader.id)).where(
+            Trader.binance_connected == True,
+            Trader.status == TraderStatus.ACTIVE,
+        )
+    )
+    online_traders = r.scalar()
+
+    # Top 5 traders by volume
+    top_q = (
+        select(
+            Trader.full_name,
+            Trader.total_trades,
+            Trader.total_volume,
+        )
+        .where(Trader.is_admin == False)
+        .order_by(Trader.total_volume.desc())
+        .limit(5)
+    )
+    r = await db.execute(top_q)
+    top_traders = [
+        {
+            "name": row.full_name,
+            "trades": row.total_trades,
+            "volume": float(row.total_volume),
+        }
+        for row in r.all()
+    ]
+
+    return {
+        "platform_profit": platform_profit,
+        "revenue": {
+            "today": today_revenue,
+            "week": week_revenue,
+            "month": month_revenue,
+            "year": year_revenue,
+        },
+        "monthly_volumes": monthly_volumes,
+        "online_traders": online_traders,
+        "top_traders": top_traders,
+    }
+
+
+@router.get("/online-traders")
+async def admin_online_traders(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return traders where binance_connected=True and status=active."""
+    result = await db.execute(
+        select(Trader).where(
+            Trader.binance_connected == True,
+            Trader.status == TraderStatus.ACTIVE,
+        ).order_by(Trader.total_volume.desc())
+    )
+    traders = result.scalars().all()
+
+    return [
+        {
+            "id": t.id,
+            "full_name": t.full_name,
+            "email": t.email,
+            "phone": t.phone,
+            "total_trades": t.total_trades,
+            "total_volume": float(t.total_volume),
+            "binance_uid": t.binance_uid,
+            "updated_at": t.updated_at.isoformat() if t.updated_at else "",
+        }
+        for t in traders
     ]

@@ -44,5 +44,9 @@ export const updateTraderStatus = (id, status) => api.put(`/admin/traders/${id}/
 export const updateTraderTier = (id, tier) => api.put(`/admin/traders/${id}/tier?tier=${tier}`);
 export const getDisputedOrders = () => api.get('/admin/orders/disputed');
 export const getUnmatchedPayments = () => api.get('/admin/payments/unmatched');
+export const getAdminTransactions = (period = 'today', limit = 50) =>
+  api.get(`/admin/transactions?period=${period}&limit=${limit}`);
+export const getAdminAnalytics = () => api.get('/admin/analytics');
+export const getAdminOnlineTraders = () => api.get('/admin/online-traders');
 
 export default api;
