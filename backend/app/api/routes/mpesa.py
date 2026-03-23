@@ -282,6 +282,15 @@ async def stk_push_callback(request: Request, db: AsyncSession = Depends(get_db)
 
                 await db.commit()
                 logger.info(f"Subscription {sub.id} activated via STK callback")
+
+                # Send activation email
+                if trader:
+                    from app.services.email import send_subscription_activated
+                    send_subscription_activated(
+                        trader.email, trader.full_name,
+                        sub.plan.value,
+                        sub.expires_at.strftime("%B %d, %Y") if sub.expires_at else "30 days",
+                    )
             else:
                 sub.status = SubscriptionStatus.EXPIRED
                 await db.commit()

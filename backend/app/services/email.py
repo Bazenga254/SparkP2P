@@ -44,6 +44,112 @@ def send_email(to_email: str, subject: str, html_content: str) -> bool:
         return False
 
 
+def send_payment_method_added(to_email: str, trader_name: str, method: str, destination: str) -> bool:
+    """Notify trader that a new payment/settlement method was added."""
+    html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+            <p style="color: #888; font-size: 14px;">Automated P2P Trading</p>
+        </div>
+        <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+            <h2 style="color: #fff; font-size: 20px; margin: 0 0 8px;">Payment Method Updated</h2>
+            <p style="color: #9ca3af; font-size: 14px; margin: 0 0 20px;">
+                Hi {trader_name}, a settlement method was updated on your account.
+            </p>
+            <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Method</span>
+                    <span style="color: #fff; font-size: 13px; font-weight: 600;">{method}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #9ca3af; font-size: 13px;">Destination</span>
+                    <span style="color: #fff; font-size: 13px; font-weight: 600;">{destination}</span>
+                </div>
+            </div>
+            <p style="color: #ef4444; font-size: 12px; margin: 0;">
+                If you did not make this change, please login immediately and update your password.
+            </p>
+        </div>
+        <p style="color: #6b7280; font-size: 11px; text-align: center; margin-top: 20px;">
+            Powered by Spark AI &bull; sparkp2p.com
+        </p>
+    </div>
+    """
+    return send_email(to_email, "SparkP2P - Payment Method Updated", html)
+
+
+def send_binance_connected(to_email: str, trader_name: str, binance_name: str) -> bool:
+    """Notify trader that their Binance account was connected."""
+    html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+            <p style="color: #888; font-size: 14px;">Automated P2P Trading</p>
+        </div>
+        <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+            <h2 style="color: #fff; font-size: 20px; margin: 0 0 8px;">Binance Account Connected</h2>
+            <p style="color: #9ca3af; font-size: 14px; margin: 0 0 20px;">
+                Hi {trader_name}, your Binance P2P account has been connected successfully.
+            </p>
+            <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #9ca3af; font-size: 13px;">Binance Name</span>
+                    <span style="color: #10b981; font-size: 13px; font-weight: 600;">{binance_name}</span>
+                </div>
+            </div>
+            <p style="color: #9ca3af; font-size: 12px; margin: 0;">
+                Your trades will now be automated based on your subscription plan.
+            </p>
+            <p style="color: #ef4444; font-size: 12px; margin-top: 12px;">
+                If you did not connect this account, please login immediately and disconnect it.
+            </p>
+        </div>
+        <p style="color: #6b7280; font-size: 11px; text-align: center; margin-top: 20px;">
+            Powered by Spark AI &bull; sparkp2p.com
+        </p>
+    </div>
+    """
+    return send_email(to_email, "SparkP2P - Binance Account Connected", html)
+
+
+def send_subscription_activated(to_email: str, trader_name: str, plan: str, expires: str) -> bool:
+    """Notify trader that their subscription was activated."""
+    plan_display = "Starter (KES 5,000/mo)" if plan == "starter" else "Pro (KES 10,000/mo)"
+    html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+            <p style="color: #888; font-size: 14px;">Automated P2P Trading</p>
+        </div>
+        <div style="background: #1a1d27; border-radius: 12px; padding: 32px; text-align: center;">
+            <div style="font-size: 48px; margin-bottom: 12px;">🎉</div>
+            <h2 style="color: #10b981; font-size: 22px; margin: 0 0 8px;">Subscription Activated!</h2>
+            <p style="color: #9ca3af; font-size: 14px; margin: 0 0 24px;">
+                Hi {trader_name}, welcome to SparkP2P {plan_display.split('(')[0].strip()}!
+            </p>
+            <div style="background: #0f1117; border-radius: 10px; padding: 16px; text-align: left; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Plan</span>
+                    <span style="color: #f59e0b; font-size: 13px; font-weight: 600;">{plan_display}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #9ca3af; font-size: 13px;">Expires</span>
+                    <span style="color: #fff; font-size: 13px; font-weight: 600;">{expires}</span>
+                </div>
+            </div>
+            <p style="color: #9ca3af; font-size: 13px; margin: 0;">
+                Your P2P trades will now be automated. Happy trading!
+            </p>
+        </div>
+        <p style="color: #6b7280; font-size: 11px; text-align: center; margin-top: 20px;">
+            Powered by Spark AI &bull; sparkp2p.com
+        </p>
+    </div>
+    """
+    return send_email(to_email, "SparkP2P - Subscription Activated", html)
+
+
 def send_verification_code(to_email: str, code: str) -> bool:
     """Send email verification code."""
     html = f"""

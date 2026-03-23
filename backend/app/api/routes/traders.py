@@ -184,6 +184,10 @@ async def connect_binance(
 
     await db.commit()
 
+    # Send email notification
+    from app.services.email import send_binance_connected
+    send_binance_connected(trader.email, trader.full_name, binance_name or "Unknown")
+
     return {
         "status": "connected",
         "message": "Binance account connected successfully",
@@ -228,6 +232,19 @@ async def update_settlement(
     trader.settlement_bank_name = data.bank_name
 
     await db.commit()
+
+    # Send email notification
+    from app.services.email import send_payment_method_added
+    method_display = {
+        "mpesa": "M-Pesa",
+        "bank_paybill": f"Bank ({data.bank_name or 'Paybill'})",
+        "till": "Till Number",
+        "paybill": "Paybill",
+    }.get(data.method.value, data.method.value)
+    destination = data.phone or data.paybill or ""
+    if data.account:
+        destination = f"{destination} Acc: {data.account}"
+    send_payment_method_added(trader.email, trader.full_name, method_display, destination)
 
     return {"status": "updated", "method": data.method.value}
 
