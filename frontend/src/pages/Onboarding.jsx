@@ -329,14 +329,21 @@ export default function Onboarding() {
                 </div>
               </div>
               <a
-                href="https://chrome.google.com/webstore/detail/sparkp2p/placeholder"
-                target="_blank"
-                rel="noopener noreferrer"
+                href="/sparkp2p-extension.zip"
+                download
                 className="onb-btn-secondary"
               >
                 <Download size={16} />
-                Install from Chrome Web Store
+                Download Extension (ZIP)
               </a>
+              <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 10, lineHeight: 1.6 }}>
+                <strong>How to install:</strong><br />
+                1. Download and unzip the file<br />
+                2. Open Chrome → type <code style={{ background: '#1a1d27', padding: '2px 6px', borderRadius: 4 }}>chrome://extensions</code><br />
+                3. Enable <strong>Developer Mode</strong> (top right toggle)<br />
+                4. Click <strong>Load Unpacked</strong> → select the unzipped folder<br />
+                5. SparkP2P icon appears in your toolbar
+              </div>
             </div>
 
             <div className="onb-actions">
