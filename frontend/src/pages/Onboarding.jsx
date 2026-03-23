@@ -523,7 +523,6 @@ export default function Onboarding() {
               {[
                 { value: 'fund_password', icon: Lock, title: 'Fund Password', desc: 'Your Binance trade/fund password (4-6 digit PIN)', recommended: true },
                 { value: 'totp', icon: Smartphone, title: 'Google Authenticator (TOTP)', desc: 'Auto-generate 2FA codes. Requires your TOTP secret key.' },
-                { value: 'manual', icon: Key, title: 'Email/SMS/Passkey', desc: 'Requires manual confirmation. Auto-release will be disabled.' },
               ].map((option) => (
                 <div
                   key={option.value}
@@ -565,6 +564,9 @@ export default function Onboarding() {
                     maxLength={6}
                   />
                   <p style={{ fontSize: 11, color: '#10b981', marginTop: 4 }}>🔒 Stored securely with encryption. Never shared with anyone.</p>
+                  <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, padding: 10, marginTop: 10 }}>
+                    <p style={{ fontSize: 11, color: '#ef4444' }}>⚠️ <strong>Important:</strong> Make sure this is the exact PIN you enter when releasing crypto on Binance. If incorrect, auto-release will be disabled until you update it and your payments will delay.</p>
+                  </div>
                 </div>
               )}
 
@@ -597,22 +599,6 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {verifyMethod === 'manual' && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 16 }}>
-                    <strong style={{ color: '#f59e0b', fontSize: 14 }}>What this means:</strong>
-                    <ul style={{ fontSize: 12, color: '#9ca3af', marginTop: 8, paddingLeft: 18, lineHeight: 1.8 }}>
-                      <li><strong style={{ color: '#e4e4e7' }}>Auto-release will be disabled</strong> — you'll need to manually release crypto on Binance</li>
-                      <li>You'll get a <strong style={{ color: '#e4e4e7' }}>notification</strong> when a payment is verified</li>
-                      <li>Just open Binance and click <strong style={{ color: '#e4e4e7' }}>Release</strong> on the order</li>
-                      <li>Payment matching, settlement, and profit tracking still work automatically</li>
-                    </ul>
-                    <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 8, padding: 10, marginTop: 10 }}>
-                      <p style={{ fontSize: 11, color: '#3b82f6' }}>💡 <strong>Tip:</strong> For full automation, consider switching to Fund Password. Go to Binance → Security → Create Fund Password.</p>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
 
             <div className="onb-actions">

@@ -256,8 +256,11 @@ async def update_trader_tier(
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update trader's pricing tier."""
-    if tier not in ("standard", "silver", "gold"):
+    """Update trader's subscription tier. Creates/updates subscription accordingly."""
+    from app.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
+    from datetime import timedelta
+
+    if tier not in ("standard", "starter", "pro"):
         raise HTTPException(status_code=400, detail="Invalid tier")
 
     result = await db.execute(select(Trader).where(Trader.id == trader_id))
@@ -267,6 +270,58 @@ async def update_trader_tier(
         raise HTTPException(status_code=404, detail="Trader not found")
 
     trader.tier = tier
+
+    if tier in ("starter", "pro"):
+        # Check for existing active subscription
+        sub_result = await db.execute(
+            select(Subscription).where(
+                Subscription.trader_id == trader_id,
+                Subscription.status == SubscriptionStatus.ACTIVE,
+            )
+        )
+        existing_sub = sub_result.scalar_one_or_none()
+
+        now = datetime.now(timezone.utc)
+
+        if existing_sub:
+            # Update existing subscription
+            existing_sub.plan = SubscriptionPlan(tier)
+            existing_sub.amount = 5000 if tier == "starter" else 10000
+            # Extend expiry if not set or already expired
+            if not existing_sub.expires_at or existing_sub.expires_at < now:
+                existing_sub.started_at = now
+                existing_sub.expires_at = now + timedelta(days=30)
+        else:
+            # Create new subscription (admin-granted)
+            sub = Subscription(
+                trader_id=trader_id,
+                plan=SubscriptionPlan(tier),
+                status=SubscriptionStatus.ACTIVE,
+                amount=5000 if tier == "starter" else 10000,
+                started_at=now,
+                expires_at=now + timedelta(days=30),
+                mpesa_transaction_id="ADMIN_GRANT",
+            )
+            db.add(sub)
+
+        # Send notification email
+        from app.services.email import send_subscription_activated
+        send_subscription_activated(
+            trader.email, trader.full_name, tier,
+            (now + timedelta(days=30)).strftime("%B %d, %Y"),
+        )
+    else:
+        # Downgrade to free — expire any active subscription
+        sub_result = await db.execute(
+            select(Subscription).where(
+                Subscription.trader_id == trader_id,
+                Subscription.status == SubscriptionStatus.ACTIVE,
+            )
+        )
+        existing_sub = sub_result.scalar_one_or_none()
+        if existing_sub:
+            existing_sub.status = SubscriptionStatus.EXPIRED
+
     await db.commit()
 
     return {"status": "updated", "trader_id": trader_id, "tier": tier}
