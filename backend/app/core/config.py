@@ -4,7 +4,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     # App
-    APP_NAME: str = "AutoP2P"
+    APP_NAME: str = "SparkP2P"
     DEBUG: bool = False
 
     # Database
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
 
     # Platform
-    PLATFORM_NAME: str = "AutoP2P"
+    PLATFORM_NAME: str = "SparkP2P"
     PLATFORM_FEE_PER_TRADE: int = 15  # KES per trade
     MAX_AUTO_RELEASE_AMOUNT: int = 500000  # KES - flag above this
 

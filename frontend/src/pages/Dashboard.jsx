@@ -84,7 +84,8 @@ export default function Dashboard() {
     <div className="dashboard">
       <header className="dash-header">
         <div className="dash-header-left">
-          <h1>AutoP2P</h1>
+          <img src="/logo.png" alt="SparkP2P" className="header-logo" />
+          <h1>SparkP2P</h1>
           <span className={`status-badge ${profile?.binance_connected ? 'connected' : 'disconnected'}`}>
             {profile?.binance_connected ? 'Binance Connected' : 'Binance Disconnected'}
           </span>

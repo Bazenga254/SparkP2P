@@ -56,7 +56,7 @@ export default function Admin() {
           <button className="icon-btn" onClick={() => navigate('/dashboard')} title="Back to Dashboard">
             <ArrowLeft size={18} />
           </button>
-          <h1>AutoP2P Admin</h1>
+          <h1>SparkP2P Admin</h1>
         </div>
         <div className="dash-header-right">
           <button className="icon-btn" onClick={loadData} disabled={refreshing}>
