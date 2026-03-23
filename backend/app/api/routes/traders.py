@@ -73,16 +73,40 @@ class TraderProfileResponse(BaseModel):
     total_volume: float
     status: str
     is_admin: bool = False
+    subscription_plan: Optional[str] = None
+    subscription_status: Optional[str] = None
+    subscription_expires: Optional[str] = None
 
 
 # ── Routes ────────────────────────────────────────────────────────
 
 @router.get("/me", response_model=TraderProfileResponse)
-async def get_profile(trader: Trader = Depends(get_current_trader)):
+async def get_profile(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
     """Get current trader's profile."""
+    from app.models.subscription import Subscription, SubscriptionStatus
+
     destination = trader.settlement_phone or trader.settlement_paybill or ""
     if trader.settlement_account:
         destination = f"{destination} Acc: {trader.settlement_account}"
+
+    # Get active subscription info
+    sub_plan = None
+    sub_status = None
+    sub_expires = None
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.trader_id == trader.id,
+            Subscription.status == SubscriptionStatus.ACTIVE,
+        ).order_by(Subscription.expires_at.desc())
+    )
+    sub = result.scalar_one_or_none()
+    if sub and sub.is_active:
+        sub_plan = sub.plan.value
+        sub_status = sub.status.value
+        sub_expires = sub.expires_at.isoformat() if sub.expires_at else None
 
     return TraderProfileResponse(
         id=trader.id,
@@ -102,6 +126,9 @@ async def get_profile(trader: Trader = Depends(get_current_trader)):
         total_volume=trader.total_volume,
         status=trader.status.value,
         is_admin=trader.is_admin,
+        subscription_plan=sub_plan,
+        subscription_status=sub_status,
+        subscription_expires=sub_expires,
     )
 
 

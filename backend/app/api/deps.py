@@ -59,3 +59,18 @@ async def get_admin_trader(
             detail="Admin access required",
         )
     return trader
+
+
+async def check_subscription(trader: Trader, db: AsyncSession) -> bool:
+    """Check if trader has active subscription."""
+    from app.models.subscription import Subscription, SubscriptionStatus
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.trader_id == trader.id,
+            Subscription.status == SubscriptionStatus.ACTIVE,
+        ).order_by(Subscription.expires_at.desc())
+    )
+    sub = result.scalar_one_or_none()
+    if sub and sub.is_active:
+        return True
+    return False

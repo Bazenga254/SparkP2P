@@ -68,6 +68,18 @@ class BinanceOrderPoller:
 
     async def _poll_trader(self, trader: Trader, db: AsyncSession):
         """Poll both sell and buy orders for a single trader."""
+        # Check subscription
+        from app.models.subscription import Subscription, SubscriptionStatus
+        sub_result = await db.execute(
+            select(Subscription).where(
+                Subscription.trader_id == trader.id,
+                Subscription.status == SubscriptionStatus.ACTIVE,
+            ).order_by(Subscription.expires_at.desc())
+        )
+        sub = sub_result.scalar_one_or_none()
+        if not sub or not sub.is_active:
+            return  # No active subscription, skip automation
+
         client = BinanceP2PClient.from_trader(trader)
 
         # Poll sell orders (buyer pays us)

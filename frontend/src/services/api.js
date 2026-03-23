@@ -37,6 +37,11 @@ export const getOrders = (params = {}) => api.get('/orders', { params });
 export const getOrderStats = () => api.get('/orders/stats');
 export const createOrder = (data) => api.post('/orders', data);
 
+// Subscriptions
+export const initiateSubscription = (plan, phone) => api.post('/subscriptions/initiate', { plan, phone });
+export const getSubscriptionStatus = () => api.get('/subscriptions/status');
+export const renewSubscription = (plan, phone) => api.post('/subscriptions/renew', { plan, phone });
+
 // Admin
 export const getAdminDashboard = () => api.get('/admin/dashboard');
 export const getAdminTraders = (params = {}) => api.get('/admin/traders', { params });

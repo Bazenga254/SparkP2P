@@ -239,8 +239,54 @@ async def b2b_timeout(request: Request):
 # ── STK Push Callback ─────────────────────────────────────────────
 
 @router.post("/stkpush/callback")
-async def stk_push_callback(request: Request):
-    """STK Push result callback (for future use)."""
+async def stk_push_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    """STK Push result callback. Routes subscription payments to subscription handler."""
     data = await request.json()
     logger.info(f"STK Push Callback: {data}")
+
+    body = data.get("Body", {}).get("stkCallback", {})
+    result_code = body.get("ResultCode")
+    checkout_id = body.get("CheckoutRequestID", "")
+
+    if checkout_id:
+        # Check if this is a subscription payment
+        from app.models.subscription import Subscription, SubscriptionStatus
+        from datetime import datetime, timedelta, timezone as tz
+        result = await db.execute(
+            select(Subscription).where(Subscription.mpesa_checkout_id == checkout_id)
+        )
+        sub = result.scalar_one_or_none()
+        if sub:
+            if result_code == 0:
+                now = datetime.now(tz.utc)
+                sub.status = SubscriptionStatus.ACTIVE
+                sub.started_at = now
+                sub.expires_at = now + timedelta(days=30)
+
+                # Extract receipt number
+                metadata = body.get("CallbackMetadata", {}).get("Item", [])
+                for item in metadata:
+                    if item.get("Name") == "MpesaReceiptNumber":
+                        sub.mpesa_transaction_id = item.get("Value")
+                        break
+
+                # Update trader tier
+                trader_result = await db.execute(
+                    select(Trader).where(Trader.id == sub.trader_id)
+                )
+                trader = trader_result.scalar_one_or_none()
+                if trader:
+                    from app.models.subscription import SubscriptionPlan
+                    tier_map = {"starter": "standard", "pro": "pro"}
+                    trader.tier = tier_map.get(sub.plan.value, "standard")
+
+                await db.commit()
+                logger.info(f"Subscription {sub.id} activated via STK callback")
+            else:
+                sub.status = SubscriptionStatus.EXPIRED
+                await db.commit()
+                logger.warning(f"Subscription {sub.id} payment failed via STK callback: code={result_code}")
+
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
