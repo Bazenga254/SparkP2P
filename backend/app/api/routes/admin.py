@@ -164,6 +164,43 @@ async def list_traders(
     ]
 
 
+@router.post("/employees/create")
+async def create_employee(
+    full_name: str,
+    email: str,
+    password: str,
+    phone: str = "0000000000",
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin creates an employee account manually."""
+    from app.core.security import hash_password
+
+    # Check if email already exists
+    result = await db.execute(select(Trader).where(Trader.email == email))
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    employee = Trader(
+        email=email,
+        phone=phone,
+        full_name=full_name,
+        password_hash=hash_password(password),
+        role="employee",
+        is_admin=False,
+        status=TraderStatus.ACTIVE,
+    )
+    db.add(employee)
+    await db.commit()
+
+    return {
+        "status": "created",
+        "employee_id": employee.id,
+        "email": email,
+        "full_name": full_name,
+    }
+
+
 @router.put("/traders/{trader_id}/role")
 async def update_trader_role(
     trader_id: int,

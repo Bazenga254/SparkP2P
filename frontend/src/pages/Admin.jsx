@@ -756,11 +756,55 @@ export default function Admin() {
 
           {/* ==================== SETTINGS ==================== */}
           {activeTab === 'settings' && (
-            <div className="adm-card">
-              <div className="adm-card-header">
-                <h3>Platform Settings</h3>
+            <div>
+              {/* Create Employee */}
+              <div className="adm-card" style={{ marginBottom: 20 }}>
+                <div className="adm-card-header">
+                  <h3>Create Employee Account</h3>
+                </div>
+                <form onSubmit={async (e) => {
+                  e.preventDefault();
+                  const fd = new FormData(e.target);
+                  try {
+                    const res = await api.post(
+                      `/admin/employees/create?full_name=${encodeURIComponent(fd.get('name'))}&email=${encodeURIComponent(fd.get('email'))}&password=${encodeURIComponent(fd.get('password'))}&phone=${encodeURIComponent(fd.get('phone') || '0000000000')}`
+                    );
+                    alert(`Employee created! Email: ${res.data.email}`);
+                    e.target.reset();
+                    loadData();
+                  } catch (err) {
+                    alert(err.response?.data?.detail || 'Failed to create employee');
+                  }
+                }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Full Name</label>
+                      <input name="name" type="text" required placeholder="John Doe" className="adm-input" />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Email</label>
+                      <input name="email" type="email" required placeholder="employee@sparkp2p.com" className="adm-input" />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Phone (optional)</label>
+                      <input name="phone" type="tel" placeholder="0712345678" className="adm-input" />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Password</label>
+                      <input name="password" type="text" required placeholder="Temporary password" className="adm-input" />
+                    </div>
+                  </div>
+                  <button type="submit" className="adm-btn-primary">Create Employee</button>
+                </form>
               </div>
-              <p className="adm-empty">Settings panel coming soon.</p>
+
+              {/* Other Settings */}
+              <div className="adm-card">
+                <div className="adm-card-header">
+                  <h3>Platform Settings</h3>
+                </div>
+                <p className="adm-empty">More settings coming soon.</p>
+              </div>
             </div>
           )}
         </div>

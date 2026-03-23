@@ -3643,3 +3643,9 @@ body {
     border-right: none;
   }
 }
+
+/* Admin form inputs */
+.adm-input { width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 14px; }
+.adm-input:focus { outline: none; border-color: var(--accent); }
+.adm-btn-primary { background: var(--accent); color: #000; border: none; padding: 10px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.adm-btn-primary:hover { opacity: 0.9; }

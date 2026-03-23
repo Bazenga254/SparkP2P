@@ -73,11 +73,18 @@ export default function Login() {
           })
         : await login(form.email, form.password);
 
+      const role = res.data.role || 'trader';
       loginUser(res.data.access_token, {
         id: res.data.trader_id,
         full_name: res.data.full_name,
+        role,
       });
-      navigate('/dashboard');
+      // Redirect based on role
+      if (role === 'employee') {
+        navigate('/employee');
+      } else {
+        navigate('/dashboard');
+      }
     } catch (err) {
       const detail = err.response?.data?.detail;
       if (Array.isArray(detail)) {

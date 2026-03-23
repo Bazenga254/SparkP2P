@@ -83,6 +83,7 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     trader_id: int
     full_name: str
+    role: str = "trader"
 
 
 @router.post("/send-verification")
@@ -161,6 +162,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         access_token=token,
         trader_id=trader.id,
         full_name=trader.full_name,
+        role=trader.role or "trader",
     )
 
 
@@ -190,6 +192,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         access_token=token,
         trader_id=trader.id,
         full_name=trader.full_name,
+        role=trader.role or "trader",
     )
 
 
