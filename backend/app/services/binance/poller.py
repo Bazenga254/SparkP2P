@@ -175,8 +175,9 @@ class BinanceOrderPoller:
         db.add(order)
         await db.commit()
 
-        # Auto-pay if enabled and within limits
-        if trader.auto_pay_enabled and amount <= trader.max_single_trade:
+        # Auto-pay if enabled, within limits, AND trader is on Pro tier
+        # Starter tier only gets sell-side automation
+        if trader.auto_pay_enabled and amount <= trader.max_single_trade and trader.tier == "pro":
             settlement = SettlementEngine(db)
             success = await settlement.pay_buy_side_seller(order, trader)
 

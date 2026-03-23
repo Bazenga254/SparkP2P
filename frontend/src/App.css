@@ -1030,6 +1030,11 @@ body {
   gap: 24px;
   align-items: start;
 }
+.land-pricing-grid.two-tier {
+  grid-template-columns: repeat(2, 1fr);
+  max-width: 800px;
+  margin: 0 auto;
+}
 
 .land-price-card {
   background: var(--surface);
@@ -1125,15 +1130,27 @@ body {
 }
 
 .land-price-features li::before {
-  content: '';
+  content: '✓';
   position: absolute;
   left: 0;
-  top: 5px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: rgba(16, 185, 129, 0.15);
-  border: 2px solid var(--green);
+  top: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--green);
+}
+.land-price-features li.excluded {
+  color: #555;
+  text-decoration: line-through;
+}
+.land-price-features li.excluded::before {
+  content: '✗';
+  color: #555;
+}
+.land-price-desc {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 20px;
+  line-height: 1.5;
 }
 
 .land-price-btn {
@@ -1247,6 +1264,7 @@ body {
   .land-steps { flex-direction: column; }
   .land-step-line { width: 2px; height: 30px; margin: 0; }
   .land-pricing-grid { grid-template-columns: 1fr; max-width: 400px; margin: 0 auto; }
+  .land-pricing-grid.two-tier { max-width: 400px; }
   .land-price-card.featured { transform: none; }
   .land-price-card.featured:hover { transform: translateY(-4px); }
   .land-section-header h2 { font-size: 30px; }

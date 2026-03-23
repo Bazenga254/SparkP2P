@@ -163,55 +163,54 @@ export default function Landing() {
         <div className="land-section-inner">
           <div className="land-section-header">
             <span className="land-section-tag">Pricing</span>
-            <h2>Simple, Per-Trade<br /><span className="land-highlight">Pricing</span></h2>
-            <p className="land-section-desc">No monthly fees. You only pay when you trade.</p>
+            <h2>Simple, Monthly<br /><span className="land-highlight">Subscription</span></h2>
+            <p className="land-section-desc">Choose the plan that fits your trading style. No per-trade fees.</p>
           </div>
-          <div className="land-pricing-grid">
+          <div className="land-pricing-grid two-tier">
             <div className="land-price-card">
-              <div className="land-price-tier">Standard</div>
+              <div className="land-price-tier">Starter</div>
               <div className="land-price-amount">
                 <span className="land-price-currency">KES</span>
-                <span className="land-price-number">15</span>
-                <span className="land-price-per">/trade</span>
+                <span className="land-price-number">5,000</span>
+                <span className="land-price-per">/month</span>
               </div>
+              <p className="land-price-desc">Perfect for sellers who want to automate crypto releases</p>
               <ul className="land-price-features">
-                <li>Up to 50 trades/day</li>
-                <li>Auto-release on sell orders</li>
-                <li>Basic dashboard & analytics</li>
-                <li>Email support</li>
+                <li className="included">Sell-side automation</li>
+                <li className="included">Auto-release on payment verification</li>
+                <li className="included">M-Pesa payment matching</li>
+                <li className="included">Real-time profit tracking</li>
+                <li className="included">Unlimited sell trades</li>
+                <li className="included">Dashboard & analytics</li>
+                <li className="included">Email support</li>
+                <li className="excluded">Buy-side automation</li>
+                <li className="excluded">Auto-pay sellers</li>
+                <li className="excluded">AI fraud detection</li>
               </ul>
               <Link to="/login" className="land-price-btn">Get Started</Link>
             </div>
             <div className="land-price-card featured">
-              <div className="land-price-popular">Most Popular</div>
-              <div className="land-price-tier">Silver</div>
+              <div className="land-price-popular">Recommended</div>
+              <div className="land-price-tier">Pro</div>
               <div className="land-price-amount">
                 <span className="land-price-currency">KES</span>
-                <span className="land-price-number">10</span>
-                <span className="land-price-per">/trade</span>
+                <span className="land-price-number">10,000</span>
+                <span className="land-price-per">/month</span>
               </div>
+              <p className="land-price-desc">Full automation for serious P2P merchants running both sides</p>
               <ul className="land-price-features">
-                <li>Up to 200 trades/day</li>
-                <li>Buy & sell automation</li>
-                <li>AI fraud detection</li>
-                <li>Priority support</li>
+                <li className="included">Everything in Starter</li>
+                <li className="included">Buy-side automation</li>
+                <li className="included">Auto-pay sellers via M-Pesa/Bank</li>
+                <li className="included">AI fraud detection</li>
+                <li className="included">Dynamic spread monitoring</li>
+                <li className="included">Unlimited buy & sell trades</li>
+                <li className="included">Binance chat bot</li>
+                <li className="included">Priority support</li>
+                <li className="included">Multi-payment method support</li>
+                <li className="included">Advanced analytics</li>
               </ul>
               <Link to="/login" className="land-price-btn featured">Get Started</Link>
-            </div>
-            <div className="land-price-card">
-              <div className="land-price-tier">Gold</div>
-              <div className="land-price-amount">
-                <span className="land-price-currency">KES</span>
-                <span className="land-price-number">5</span>
-                <span className="land-price-per">/trade</span>
-              </div>
-              <ul className="land-price-features">
-                <li>Unlimited trades</li>
-                <li>Dynamic pricing engine</li>
-                <li>Dedicated account manager</li>
-                <li>Custom integrations</li>
-              </ul>
-              <Link to="/login" className="land-price-btn">Get Started</Link>
             </div>
           </div>
         </div>

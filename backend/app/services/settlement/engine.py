@@ -310,9 +310,16 @@ class SettlementEngine:
             return False
 
     def _get_platform_fee(self, trader: Trader) -> float:
-        """Get platform fee based on trader tier."""
-        fees = {"standard": 15, "silver": 10, "gold": 5}
-        return fees.get(trader.tier, settings.PLATFORM_FEE_PER_TRADE)
+        """Get platform fee based on trader tier.
+        Monthly subscription model:
+        - starter (KES 5,000/mo): sell-side only, no per-trade fee
+        - pro (KES 10,000/mo): buy + sell, no per-trade fee
+        Per-trade fees are 0 for subscribed users.
+        """
+        if trader.tier in ("starter", "pro"):
+            return 0
+        # Unsubscribed/default users pay per-trade fee
+        return settings.PLATFORM_FEE_PER_TRADE
 
     def _estimate_settlement_fee(self, trader: Trader, amount: float) -> float:
         """Estimate the M-Pesa fee for settlement."""
