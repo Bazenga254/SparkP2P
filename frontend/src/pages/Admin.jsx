@@ -558,9 +558,9 @@ export default function Admin() {
                         <td>KES {t.total_volume.toLocaleString()}</td>
                         <td>
                           <select className="adm-select" value={t.tier} onChange={(e) => handleTierChange(t.id, e.target.value)}>
-                            <option value="standard">Standard</option>
-                            <option value="silver">Silver</option>
-                            <option value="gold">Gold</option>
+                            <option value="standard">Free</option>
+                            <option value="starter">Starter</option>
+                            <option value="pro">Pro</option>
                           </select>
                         </td>
                         <td>

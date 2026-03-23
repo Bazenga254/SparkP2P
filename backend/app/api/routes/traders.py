@@ -77,6 +77,7 @@ class TraderProfileResponse(BaseModel):
     subscription_plan: Optional[str] = None
     subscription_status: Optional[str] = None
     subscription_expires: Optional[str] = None
+    onboarding_complete: bool = False
 
 
 # ── Routes ────────────────────────────────────────────────────────
@@ -109,6 +110,14 @@ async def get_profile(
         sub_status = sub.status.value
         sub_expires = sub.expires_at.isoformat() if sub.expires_at else None
 
+    # Compute onboarding status
+    onboarding_complete = (
+        trader.binance_connected
+        and trader.settlement_method is not None
+        and sub is not None
+        and sub.is_active
+    )
+
     return TraderProfileResponse(
         id=trader.id,
         email=trader.email,
@@ -131,6 +140,7 @@ async def get_profile(
         subscription_plan=sub_plan,
         subscription_status=sub_status,
         subscription_expires=sub_expires,
+        onboarding_complete=bool(onboarding_complete),
     )
 
 

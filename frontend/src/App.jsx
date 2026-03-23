@@ -8,6 +8,7 @@ import AdminLogin from './pages/AdminLogin';
 import Employee from './pages/Employee';
 import EmployeeLogin from './pages/EmployeeLogin';
 import Subscribe from './pages/Subscribe';
+import Onboarding from './pages/Onboarding';
 import './App.css';
 
 function ProtectedRoute({ children }) {
@@ -28,6 +29,7 @@ function App() {
           <Route path="/admin/login" element={<AdminLogin />} />
           <Route path="/admin" element={<ProtectedRoute><Admin /></ProtectedRoute>} />
           <Route path="/subscribe" element={<ProtectedRoute><Subscribe /></ProtectedRoute>} />
+          <Route path="/onboarding" element={<ProtectedRoute><Onboarding /></ProtectedRoute>} />
           <Route path="/employee/login" element={<EmployeeLogin />} />
           <Route path="/employee" element={<ProtectedRoute><Employee /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/dashboard" />} />

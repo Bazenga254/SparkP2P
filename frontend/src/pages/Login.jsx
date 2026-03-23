@@ -115,6 +115,7 @@ export default function Login() {
       </div>
 
       <div className="login-right">
+        <Link to="/" className="login-back-home">Back to Homepage</Link>
         <div className="login-right-inner">
           <h1>{isRegister ? 'Create Account' : 'Welcome to SparkP2P'}</h1>
           <p className="login-right-sub">

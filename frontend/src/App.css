@@ -1413,6 +1413,7 @@ body {
   align-items: center;
   justify-content: center;
   padding: 40px;
+  position: relative;
 }
 
 .login-right-inner {
@@ -3649,3 +3650,558 @@ body {
 .adm-input:focus { outline: none; border-color: var(--accent); }
 .adm-btn-primary { background: var(--accent); color: #000; border: none; padding: 10px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
 .adm-btn-primary:hover { opacity: 0.9; }
+
+/* Back to homepage link */
+.login-back-home {
+  position: absolute;
+  top: 16px;
+  right: 24px;
+  font-size: 13px;
+  color: #f59e0b;
+  text-decoration: none;
+  z-index: 10;
+}
+.login-back-home:hover { text-decoration: underline; }
+
+/* ═══════════════════════════════════════════════════════════════
+   Onboarding Wizard (onb- prefix)
+   ═══════════════════════════════════════════════════════════════ */
+
+.onb-container {
+  max-width: 700px;
+  margin: 0 auto;
+  padding: 40px 20px 60px;
+  min-height: 100vh;
+}
+
+.onb-header {
+  text-align: center;
+  margin-bottom: 36px;
+}
+
+.onb-logo {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.onb-header h1 {
+  font-size: 26px;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.onb-header p {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+/* Progress bar */
+.onb-progress {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+  margin-bottom: 36px;
+  position: relative;
+}
+
+.onb-progress-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  flex: 1;
+  max-width: 160px;
+}
+
+.onb-step {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.25s;
+  position: relative;
+  z-index: 2;
+}
+
+.onb-step.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #000;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.2);
+}
+
+.onb-step.complete {
+  border-color: var(--green);
+  background: var(--green);
+  color: #fff;
+}
+
+.onb-step-label {
+  font-size: 11px;
+  margin-top: 6px;
+  color: var(--text-dim);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.onb-step-label.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.onb-step-label.complete {
+  color: var(--green);
+}
+
+.onb-step-line {
+  position: absolute;
+  top: 20px;
+  left: calc(50% + 24px);
+  width: calc(100% - 48px);
+  height: 2px;
+  background: var(--border);
+  z-index: 1;
+}
+
+.onb-step-line.complete {
+  background: var(--green);
+}
+
+/* Content area */
+.onb-content {
+  animation: onbFadeIn 0.3s ease;
+}
+
+@keyframes onbFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.onb-step-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.onb-step-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.onb-step-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.onb-step-header h2 {
+  font-size: 20px;
+  margin-bottom: 4px;
+}
+
+.onb-step-header p {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+/* Cards */
+.onb-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.onb-success-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  border-color: var(--green);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.onb-success-icon {
+  color: var(--green);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.onb-success-card h3 {
+  color: var(--green);
+  margin-bottom: 4px;
+}
+
+.onb-warning-card {
+  border-color: var(--accent);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.onb-warning-card h4 {
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+/* Extension info */
+.onb-ext-info {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.onb-ext-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  background: rgba(245, 158, 11, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.onb-ext-info h3 {
+  margin-bottom: 6px;
+}
+
+.onb-ext-info p {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Forms */
+.onb-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.onb-form label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
+  margin-bottom: -4px;
+}
+
+.onb-form input,
+.onb-form textarea,
+.onb-form select {
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.onb-form input:focus,
+.onb-form textarea:focus,
+.onb-form select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.onb-help-text {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+/* Buttons */
+.onb-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.onb-btn-primary:hover { opacity: 0.9; }
+.onb-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.onb-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.2s;
+}
+
+.onb-btn-secondary:hover { background: rgba(245, 158, 11, 0.1); }
+
+.onb-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.onb-btn-ghost:hover { border-color: var(--text-dim); }
+
+.onb-btn-link {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 8px 0;
+}
+
+.onb-btn-link:hover { color: var(--text); }
+
+/* Actions row */
+.onb-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+/* Messages */
+.onb-msg {
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.onb-msg.success {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--green);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.onb-msg.error {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.onb-msg.info {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--blue);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.onb-msg.warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* Plan cards */
+.onb-plan-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.onb-plan-card {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  cursor: pointer;
+  transition: border-color 0.25s, transform 0.15s;
+  text-align: center;
+  position: relative;
+}
+
+.onb-plan-card:hover {
+  border-color: var(--text-dim);
+  transform: translateY(-2px);
+}
+
+.onb-plan-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
+}
+
+.onb-plan-card.pro {
+  background: linear-gradient(135deg, var(--surface) 0%, rgba(245, 158, 11, 0.06) 100%);
+}
+
+.onb-plan-badge {
+  position: absolute;
+  top: -10px;
+  right: 16px;
+  background: var(--accent);
+  color: #000;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.onb-plan-icon {
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.onb-plan-card h3 {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.onb-plan-price {
+  margin-bottom: 16px;
+}
+
+.onb-price-amount {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.onb-price-period {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.onb-plan-features {
+  list-style: none;
+  text-align: left;
+  margin-bottom: 16px;
+}
+
+.onb-plan-features li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+  color: var(--text-dim);
+}
+
+.onb-plan-features li svg {
+  color: var(--green);
+  flex-shrink: 0;
+}
+
+.onb-plan-select {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--border);
+  color: var(--text-dim);
+  transition: all 0.2s;
+}
+
+.onb-plan-card.selected .onb-plan-select {
+  background: var(--accent);
+  color: #000;
+}
+
+/* Payment card */
+.onb-pay-card {
+  margin-top: 4px;
+}
+
+.onb-pay-card h3 {
+  margin-bottom: 4px;
+}
+
+.onb-pay-summary {
+  color: var(--text-dim);
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.onb-pay-btn {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.onb-polling-hint {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+/* Completion screen */
+.onb-completion {
+  text-align: center;
+  padding: 80px 20px;
+}
+
+.onb-completion-icon {
+  font-size: 64px;
+  margin-bottom: 20px;
+}
+
+.onb-completion h1 {
+  font-size: 32px;
+  color: var(--green);
+  margin-bottom: 12px;
+}
+
+.onb-completion p {
+  color: var(--text-dim);
+  font-size: 16px;
+  margin-bottom: 32px;
+  line-height: 1.6;
+}
+
+.onb-note {
+  color: var(--accent);
+}
+
+.onb-completion .onb-btn-primary {
+  font-size: 16px;
+  padding: 14px 32px;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .onb-container { padding: 24px 16px 40px; }
+  .onb-plan-cards { grid-template-columns: 1fr; }
+  .onb-step { width: 34px; height: 34px; }
+  .onb-step-label { font-size: 10px; }
+  .onb-ext-info { flex-direction: column; }
+  .onb-step-header { flex-direction: column; }
+}

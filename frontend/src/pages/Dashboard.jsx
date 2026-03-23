@@ -54,6 +54,13 @@ export default function Dashboard() {
     return () => { clearTimeout(timer); clearInterval(interval); };
   }, []);
 
+  // Redirect to onboarding if not complete
+  useEffect(() => {
+    if (profile && profile.onboarding_complete === false) {
+      navigate('/onboarding');
+    }
+  }, [profile]);
+
   const handleWithdraw = async () => {
     if (!wallet || wallet.balance <= 0) return;
     if (!confirm(`Withdraw KES ${wallet.balance.toLocaleString()} to your account?`)) return;
