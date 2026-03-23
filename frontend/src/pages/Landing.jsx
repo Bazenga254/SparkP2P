@@ -27,7 +27,7 @@ export default function Landing() {
             Stop manually releasing crypto and verifying payments. SparkP2P handles everything — powered by Spark AI.
           </p>
           <div className="land-hero-actions">
-            <Link to="/login" className="land-cta-primary">Get Started Free</Link>
+            <Link to="/login" className="land-cta-primary">Get Started</Link>
             <a href="#how-it-works" className="land-cta-secondary">See How It Works</a>
           </div>
         </div>

@@ -22,6 +22,7 @@ api.interceptors.response.use(
 // Auth
 export const login = (email, password) => api.post('/auth/login', { email, password });
 export const register = (data) => api.post('/auth/register', data);
+export const sendVerificationCode = (email) => api.post('/auth/send-verification', { email });
 
 // Trader
 export const getProfile = () => api.get('/traders/me');
