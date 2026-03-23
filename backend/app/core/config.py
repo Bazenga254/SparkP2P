@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     PLATFORM_FEE_PER_TRADE: int = 15  # KES per trade
     MAX_AUTO_RELEASE_AMOUNT: int = 500000  # KES - flag above this
 
+    # Brevo Email
+    BREVO_API_KEY: str = ""
+    BREVO_FROM_EMAIL: str = "noreply@sparkp2p.com"
+    BREVO_FROM_NAME: str = "SparkP2P"
+
     # Admin
     ADMIN_PASSWORD: str = "SparkAdmin2026"
 

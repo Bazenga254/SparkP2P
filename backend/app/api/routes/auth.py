@@ -97,13 +97,14 @@ async def send_verification_code(data: SendVerificationRequest, db: AsyncSession
     code = str(random.randint(100000, 999999))
     _verification_codes[data.email] = code
 
-    # TODO: Send email via SMTP/Zoho/SendGrid
-    # For now, log it (in production, send actual email)
-    logger.info(f"Verification code for {data.email}: {code}")
+    # Send via Brevo
+    from app.services.email import send_verification_code
+    sent = send_verification_code(data.email, code)
 
-    # For development/testing, also return the code
-    # Remove this in production!
-    return {"message": f"Verification code sent to {data.email}", "dev_code": code}
+    if not sent:
+        logger.warning(f"Email send failed for {data.email}, code: {code}")
+
+    return {"message": f"Verification code sent to {data.email}"}
 
 
 @router.post("/register", response_model=TokenResponse)
