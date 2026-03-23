@@ -163,6 +163,38 @@ class BinanceP2PClient:
         result = await self._request("/c2c/chat/retrieve-message", payload)
         return result.get("data", [])
 
+    # ── User Profile ──────────────────────────────────────────────
+
+    async def get_user_profile(self) -> dict:
+        """Fetch user's verified name and details from payment methods.
+        Returns: {name, nickname, uid, payment_methods}
+        """
+        result = await self._request(
+            "/c2c/pay-method/user-paymethods", {}
+        )
+        payment_methods = result.get("data", [])
+
+        # Extract verified name from payment method fields
+        verified_name = None
+        phone = None
+        for pm in payment_methods:
+            fields = pm.get("fields", [])
+            for f in fields:
+                field_name = (f.get("fieldName") or "").lower()
+                field_value = f.get("fieldValue", "")
+                if field_name in ("account name", "full name", "name") and field_value:
+                    if not verified_name:
+                        verified_name = field_value
+                if field_name in ("phone number", "mobile number") and field_value:
+                    if not phone:
+                        phone = field_value
+
+        return {
+            "verified_name": verified_name,
+            "phone": phone,
+            "payment_methods_count": len(payment_methods),
+        }
+
     # ── Ad Management ─────────────────────────────────────────────
 
     async def get_my_ads(self) -> list:

@@ -21,7 +21,7 @@ export default function Landing() {
       {/* Hero */}
       <section className="land-hero">
         <div className="land-hero-content">
-          <div className="land-hero-badge">Trusted by Kenyan P2P Merchants</div>
+          <div className="land-hero-badge">Trusted by P2P Traders</div>
           <h1>Automate Your<br /><span className="land-highlight">Binance P2P Trading</span></h1>
           <p className="land-hero-sub">
             Stop manually releasing crypto and verifying payments. SparkP2P handles everything — powered by Spark AI.

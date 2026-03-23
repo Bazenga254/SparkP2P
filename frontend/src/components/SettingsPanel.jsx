@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { connectBinance, updateSettlement, updateTradingConfig } from '../services/api';
+import api from '../services/api';
 
 const BANK_PAYBILLS = {
   KCB: '522522',
@@ -21,6 +22,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [cookies, setCookies] = useState('');
   const [csrfToken, setCsrfToken] = useState('');
   const [totpSecret, setTotpSecret] = useState('');
+  const [nameVerification, setNameVerification] = useState(null); // {binance_name, registered_name, name_match}
 
   // Settlement
   const [settlementMethod, setSettlementMethod] = useState(profile?.settlement_method || 'mpesa');
@@ -48,12 +50,19 @@ export default function SettingsPanel({ profile, onUpdate }) {
     setLoading(true);
     try {
       const cookieObj = JSON.parse(cookies);
-      await connectBinance({
+      const res = await connectBinance({
         cookies: cookieObj,
         csrf_token: csrfToken,
         totp_secret: totpSecret || null,
       });
-      showMsg('Binance connected successfully!');
+      setNameVerification(res.data);
+      if (res.data.name_match) {
+        showMsg('Binance connected! Name verified successfully.');
+      } else if (res.data.binance_name) {
+        showMsg('Binance connected! Name mismatch detected — please review.');
+      } else {
+        showMsg('Binance connected successfully!');
+      }
       onUpdate();
     } catch (err) {
       showMsg(err.response?.data?.detail || 'Failed to connect Binance');
@@ -158,6 +167,56 @@ export default function SettingsPanel({ profile, onUpdate }) {
               {loading ? 'Connecting...' : 'Connect Binance'}
             </button>
           </form>
+
+          {/* Name Verification Result */}
+          {nameVerification && nameVerification.binance_name && (
+            <div className={`name-verify-box ${nameVerification.name_match ? 'match' : 'mismatch'}`}>
+              <h4>{nameVerification.name_match ? '✓ Name Verified' : '⚠ Name Mismatch'}</h4>
+              <div className="name-verify-row">
+                <span>Registered Name:</span>
+                <strong>{nameVerification.registered_name}</strong>
+              </div>
+              <div className="name-verify-row">
+                <span>Binance Name:</span>
+                <strong>{nameVerification.binance_name}</strong>
+              </div>
+              {nameVerification.name_match ? (
+                <p className="name-verify-ok">Your name matches your Binance account. You're all set!</p>
+              ) : (
+                <div className="name-verify-action">
+                  <p>Your registered name doesn't match your Binance account name. This may cause issues with P2P payment verification.</p>
+                  <button
+                    className="name-update-btn"
+                    onClick={async () => {
+                      try {
+                        await api.post('/traders/update-name');
+                        setNameVerification({ ...nameVerification, name_match: true, registered_name: nameVerification.binance_name });
+                        showMsg(`Name updated to: ${nameVerification.binance_name}`);
+                        onUpdate();
+                      } catch (err) {
+                        showMsg('Failed to update name');
+                      }
+                    }}
+                  >
+                    Update to: {nameVerification.binance_name}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Connected status */}
+          {profile?.binance_connected && !nameVerification && (
+            <div className="name-verify-box match">
+              <h4>✓ Binance Connected</h4>
+              {profile.binance_username && (
+                <div className="name-verify-row">
+                  <span>Binance Name:</span>
+                  <strong>{profile.binance_username}</strong>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

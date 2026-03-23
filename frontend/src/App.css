@@ -1337,6 +1337,21 @@ body {
   line-height: 1.6;
 }
 
+.login-left-illustration {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 0;
+}
+.login-left-illustration img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.35;
+}
+
 .login-left-footer {
   z-index: 2;
   position: relative;
@@ -2855,3 +2870,17 @@ body {
   .login-field-row { grid-template-columns: 1fr; }
   .password-rules { grid-template-columns: 1fr; }
 }
+
+/* Name Verification */
+.name-verify-box { margin-top: 20px; padding: 16px; border-radius: 10px; }
+.name-verify-box.match { background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); }
+.name-verify-box.mismatch { background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); }
+.name-verify-box h4 { font-size: 15px; margin-bottom: 10px; }
+.name-verify-box.match h4 { color: var(--green); }
+.name-verify-box.mismatch h4 { color: var(--accent); }
+.name-verify-row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+.name-verify-row span { color: var(--text-dim); }
+.name-verify-ok { font-size: 12px; color: var(--green); margin-top: 8px; }
+.name-verify-action p { font-size: 12px; color: var(--text-dim); margin-bottom: 10px; line-height: 1.5; }
+.name-update-btn { background: var(--accent); color: #000; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; width: 100%; }
+.name-update-btn:hover { opacity: 0.9; }

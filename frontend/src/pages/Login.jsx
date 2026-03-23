@@ -101,11 +101,8 @@ export default function Login() {
           <h2>Automate Your<br />Binance P2P Trading</h2>
           <p>Payments verified. Crypto released. All on autopilot.</p>
         </div>
-        <div className="login-left-decor">
-          <div className="login-decor-circle login-decor-c1"></div>
-          <div className="login-decor-circle login-decor-c2"></div>
-          <div className="login-decor-circle login-decor-c3"></div>
-          <div className="login-decor-grid"></div>
+        <div className="login-left-illustration">
+          <img src="/trading-illustration.png" alt="P2P Trading" />
         </div>
         <div className="login-left-footer">Powered by Spark AI</div>
       </div>

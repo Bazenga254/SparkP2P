@@ -138,7 +138,9 @@ async def connect_binance(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Connect Binance account by providing session cookies."""
+    """Connect Binance account by providing session cookies.
+    Fetches user profile from Binance and verifies name match.
+    """
     # Test the session first
     client = BinanceP2PClient.from_raw(
         cookies=data.cookies,
@@ -154,6 +156,21 @@ async def connect_binance(
             detail="Invalid Binance session. Please check your cookies and try again.",
         )
 
+    # Fetch Binance profile to get verified name
+    binance_profile = {}
+    try:
+        binance_profile = await client.get_user_profile()
+    except Exception as e:
+        logger.warning(f"Could not fetch Binance profile: {e}")
+
+    binance_name = binance_profile.get("verified_name", "")
+
+    # Check if name matches
+    name_match = False
+    if binance_name:
+        # Compare case-insensitive
+        name_match = trader.full_name.strip().upper() == binance_name.strip().upper()
+
     # Encrypt and store credentials
     trader.binance_cookies = encrypt_data(json.dumps(data.cookies))
     trader.binance_csrf_token = encrypt_data(data.csrf_token)
@@ -162,10 +179,39 @@ async def connect_binance(
     if data.totp_secret:
         trader.binance_2fa_secret = encrypt_data(data.totp_secret)
     trader.binance_connected = True
+    if binance_name:
+        trader.binance_username = binance_name
 
     await db.commit()
 
-    return {"status": "connected", "message": "Binance account connected successfully"}
+    return {
+        "status": "connected",
+        "message": "Binance account connected successfully",
+        "binance_name": binance_name,
+        "registered_name": trader.full_name,
+        "name_match": name_match,
+    }
+
+
+@router.post("/update-name")
+async def update_name_from_binance(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update trader's name to match their Binance verified name."""
+    if not trader.binance_username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No Binance name found. Connect Binance first.",
+        )
+
+    trader.full_name = trader.binance_username
+    await db.commit()
+
+    return {
+        "status": "updated",
+        "full_name": trader.full_name,
+    }
 
 
 @router.put("/settlement")
