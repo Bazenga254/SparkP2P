@@ -1,47 +1,58 @@
 const API_BASE = 'https://sparkp2p.com/api';
 
-// DOM elements
+// DOM references
 const loginView = document.getElementById('login-view');
 const mainView = document.getElementById('main-view');
-const statusDot = document.getElementById('status-dot');
-const statusLabel = document.getElementById('status-label');
-const lastSyncEl = document.getElementById('last-sync');
-const syncMsg = document.getElementById('sync-msg');
+const noBinanceWarning = document.getElementById('no-binance-warning');
+const pollerTitle = document.getElementById('poller-title');
+const pollerSubtitle = document.getElementById('poller-subtitle');
+const pollerToggleBtn = document.getElementById('poller-toggle-btn');
+const binanceDot = document.getElementById('binance-dot');
+const binanceStatus = document.getElementById('binance-status');
+const vpsDot = document.getElementById('vps-dot');
+const vpsStatus = document.getElementById('vps-status');
+const ordersCount = document.getElementById('orders-count');
+const actionsCount = document.getElementById('actions-count');
+const lastPollTime = document.getElementById('last-poll-time');
+const actionMsg = document.getElementById('action-msg');
 const loginMsg = document.getElementById('login-msg');
 
-// ── Init ──────────────────────────────────────────────
+// ── Init ──────────────────────────────────────────────────
+
 async function init() {
   const { sparkp2p_token } = await chrome.storage.local.get('sparkp2p_token');
   if (sparkp2p_token) {
     showMainView();
-    checkStatus();
+    refreshStatus();
   } else {
     showLoginView();
   }
-
-  const { auto_sync } = await chrome.storage.local.get('auto_sync');
-  document.getElementById('auto-sync').checked = auto_sync !== false;
 }
 
 function showLoginView() {
-  loginView.style.display = 'block';
-  mainView.style.display = 'none';
+  loginView.classList.remove('hidden');
+  mainView.classList.add('hidden');
 }
 
 function showMainView() {
-  loginView.style.display = 'none';
-  mainView.style.display = 'block';
+  loginView.classList.add('hidden');
+  mainView.classList.remove('hidden');
 }
 
-// ── Login ─────────────────────────────────────────────
+// ── Login ─────────────────────────────────────────────────
+
 document.getElementById('login-btn').addEventListener('click', async () => {
-  const email = document.getElementById('email').value;
+  const email = document.getElementById('email').value.trim();
   const password = document.getElementById('password').value;
 
   if (!email || !password) {
     showMsg(loginMsg, 'Enter email and password', 'error');
     return;
   }
+
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true;
+  btn.textContent = 'Logging in...';
 
   try {
     const res = await fetch(`${API_BASE}/auth/login`, {
@@ -54,6 +65,8 @@ document.getElementById('login-btn').addEventListener('click', async () => {
 
     if (!res.ok) {
       showMsg(loginMsg, data.detail || 'Login failed', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Login to SparkP2P';
       return;
     }
 
@@ -63,361 +76,179 @@ document.getElementById('login-btn').addEventListener('click', async () => {
     });
 
     showMainView();
-    checkStatus();
-    showMsg(syncMsg, `Welcome, ${data.full_name}!`, 'success');
+    refreshStatus();
+    showMsg(actionMsg, `Welcome, ${data.full_name}!`, 'success');
   } catch (err) {
-    showMsg(loginMsg, 'Connection failed', 'error');
+    showMsg(loginMsg, 'Connection failed: ' + err.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Login to SparkP2P';
+});
+
+// ── Poller toggle ─────────────────────────────────────────
+
+pollerToggleBtn.addEventListener('click', async () => {
+  const { poller_running } = await chrome.storage.local.get('poller_running');
+
+  if (poller_running) {
+    // Stop
+    chrome.runtime.sendMessage({ type: 'STOP_POLLER' }, (resp) => {
+      updatePollerUI(false);
+      showMsg(actionMsg, 'Poller stopped', 'error');
+    });
+  } else {
+    // Start
+    chrome.runtime.sendMessage({ type: 'START_POLLER' }, (resp) => {
+      if (resp?.started) {
+        updatePollerUI(true);
+        showMsg(actionMsg, 'Poller started — monitoring Binance orders', 'success');
+      } else {
+        showMsg(actionMsg, 'Could not start poller. Make sure you are logged in.', 'error');
+      }
+    });
   }
 });
 
-// ── Sync Binance Cookies ─────────────────────────────
-document.getElementById('sync-btn').addEventListener('click', syncCookies);
+function updatePollerUI(running) {
+  if (running) {
+    pollerTitle.textContent = 'Poller: Running';
+    pollerSubtitle.textContent = 'Polling Binance every ~10 seconds';
+    pollerToggleBtn.textContent = 'Stop';
+    pollerToggleBtn.className = 'poller-btn btn-stop';
+  } else {
+    pollerTitle.textContent = 'Poller: Stopped';
+    pollerSubtitle.textContent = 'Not polling Binance';
+    pollerToggleBtn.textContent = 'Start';
+    pollerToggleBtn.className = 'poller-btn btn-success';
+  }
+}
 
-async function syncCookies() {
+// ── Refresh status ────────────────────────────────────────
+
+document.getElementById('check-btn').addEventListener('click', refreshStatus);
+
+async function refreshStatus() {
+  try {
+    // Get status from background
+    chrome.runtime.sendMessage({ type: 'GET_STATUS' }, async (status) => {
+      if (!status) {
+        updatePollerUI(false);
+        return;
+      }
+
+      // Poller state
+      updatePollerUI(status.poller_running);
+
+      // Binance tab
+      if (status.binance_tab_found) {
+        binanceDot.className = 'dot green';
+        binanceStatus.textContent = 'Active';
+        noBinanceWarning.classList.add('hidden');
+      } else {
+        binanceDot.className = 'dot red';
+        binanceStatus.textContent = 'No Tab';
+        noBinanceWarning.classList.remove('hidden');
+      }
+
+      // Stats
+      ordersCount.textContent = status.stats?.orders_tracked || 0;
+      actionsCount.textContent = status.stats?.actions_executed || 0;
+      document.getElementById('stat-polls').textContent = status.stats?.polls || 0;
+      document.getElementById('stat-errors').textContent = status.stats?.errors || 0;
+      document.getElementById('stat-last-error').textContent = status.stats?.last_error || 'None';
+
+      // Last poll time
+      if (status.last_poll) {
+        lastPollTime.textContent = formatTimeAgo(status.last_poll);
+      }
+    });
+
+    // Check VPS connection
+    const { sparkp2p_token } = await chrome.storage.local.get('sparkp2p_token');
+    if (sparkp2p_token) {
+      try {
+        const res = await fetch(`${API_BASE}/traders/me`, {
+          headers: { 'Authorization': `Bearer ${sparkp2p_token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          vpsDot.className = 'dot green';
+          vpsStatus.textContent = data.full_name ? 'Connected' : 'OK';
+        } else {
+          vpsDot.className = 'dot red';
+          vpsStatus.textContent = 'Auth Error';
+        }
+      } catch (e) {
+        vpsDot.className = 'dot red';
+        vpsStatus.textContent = 'Offline';
+      }
+    }
+  } catch (err) {
+    console.error('[SparkP2P Popup] Status refresh error:', err);
+  }
+}
+
+// ── Open Binance tab ──────────────────────────────────────
+
+document.getElementById('open-binance-btn').addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'OPEN_BINANCE_TAB' });
+  showMsg(actionMsg, 'Opening Binance P2P...', 'success');
+  // Re-check after a moment
+  setTimeout(refreshStatus, 2000);
+});
+
+// ── Sync cookies ──────────────────────────────────────────
+
+document.getElementById('sync-btn').addEventListener('click', async () => {
   const btn = document.getElementById('sync-btn');
   btn.disabled = true;
   btn.textContent = 'Syncing...';
-  syncMsg.innerHTML = '';
 
-  try {
-    // Step 0: Use scripting.executeScript to run code directly in the Binance page
-    // This bypasses CSP and content script isolation issues
-    let contentCsrf = '';
-    let contentUuid = '';
-    let contentCookies = '';
-    try {
-      const tabs = await chrome.tabs.query({ url: '*://*.binance.com/*' });
-      if (tabs.length > 0) {
-        const tab = tabs[0];
-        console.log(`[SparkP2P] Found Binance tab: ${tab.url}`);
-
-        // Execute script directly in the page to get cookies
-        const cookieResult = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: () => document.cookie,
-        });
-        contentCookies = cookieResult?.[0]?.result || '';
-        console.log(`[SparkP2P] Page cookies: ${contentCookies.length} chars`);
-
-        // Execute script to find csrftoken — it's generated by Binance JS
-        // and stored in their app state or set via XHR interceptor
-        const csrfResult = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          world: 'MAIN',  // Run in the page's JS context, not isolated world
-          func: () => {
-            // In MAIN world, we can access page globals
-            try {
-              // 1. Check window.__SPARKP2P__ (our injected interceptor)
-              if (window.__SPARKP2P__ && window.__SPARKP2P__.csrf) {
-                return { csrf: window.__SPARKP2P__.csrf, source: 'interceptor' };
-              }
-
-              // 2. Check Binance's internal state/config objects
-              // Binance stores csrf in various places
-              if (window.__csrfToken) return { csrf: window.__csrfToken, source: 'window.__csrfToken' };
-              if (window.csrfToken) return { csrf: window.csrfToken, source: 'window.csrfToken' };
-
-              // 3. Search for it in Binance's bundled code output
-              // The token is usually a 32-char hex string
-              const docCookies = document.cookie;
-
-              // 4. Try to extract from any XHR that's been made
-              // Look at performance entries for csrftoken in request headers
-              const entries = performance.getEntriesByType('resource');
-
-              // 5. Last resort: make a lightweight API call and intercept our own headers
-              // Create a temporary XHR to capture the token
-              return new Promise((resolve) => {
-                const xhr = new XMLHttpRequest();
-                const origSet = xhr.setRequestHeader.bind(xhr);
-                let foundCsrf = '';
-
-                xhr.setRequestHeader = function(name, value) {
-                  if (name.toLowerCase() === 'csrftoken') {
-                    foundCsrf = value;
-                  }
-                  return origSet(name, value);
-                };
-
-                xhr.onloadend = () => {
-                  resolve({ csrf: foundCsrf, source: foundCsrf ? 'xhr_intercept' : 'not_found' });
-                };
-                xhr.onerror = () => {
-                  resolve({ csrf: foundCsrf, source: foundCsrf ? 'xhr_intercept' : 'error' });
-                };
-
-                // Trigger a lightweight Binance request
-                xhr.open('POST', 'https://c2c.binance.com/bapi/c2c/v2/friendly/c2c/portal/config');
-                xhr.setRequestHeader('Content-Type', 'application/json');
-                xhr.withCredentials = true;
-                xhr.send('{}');
-
-                // Timeout
-                setTimeout(() => resolve({ csrf: foundCsrf, source: 'timeout' }), 3000);
-              });
-            } catch (e) {
-              return { csrf: '', source: 'error: ' + e.message };
-            }
-          },
-        });
-        const csrfData = csrfResult?.[0]?.result || {};
-        contentCsrf = csrfData.csrf || '';
-        console.log(`[SparkP2P] CSRF from ${csrfData.source}: ${contentCsrf ? contentCsrf.substring(0, 10) + '...' : 'EMPTY'}`);
-
-        // Get bnc-uuid from cookies
-        const uuidResult = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: () => {
-            const cookies = document.cookie.split(';').reduce((acc, c) => {
-              const [k, ...v] = c.trim().split('=');
-              acc[k.trim()] = v.join('=');
-              return acc;
-            }, {});
-            return cookies['bnc-uuid'] || '';
-          },
-        });
-        contentUuid = uuidResult?.[0]?.result || '';
-        console.log(`[SparkP2P] UUID: ${contentUuid ? contentUuid.substring(0, 10) + '...' : 'EMPTY'}`);
-
-      } else {
-        console.log('[SparkP2P] No Binance tab found');
-        showMsg(syncMsg, 'Please open Binance P2P in a tab first, then try again.', 'error');
-        btn.disabled = false;
-        btn.textContent = 'Sync Binance Cookies';
-        return;
-      }
-    } catch (e) {
-      console.log('[SparkP2P] Script execution error:', e.message);
-    }
-    // Capture ALL cookies from Binance including httpOnly (chrome.cookies API can!)
-    const cookieMap = {};
-
-    // FIRST: Specifically search for csrftoken on all domains
-    // chrome.cookies.getAll CAN read httpOnly cookies
-    const csrfSearchDomains = ['.binance.com', 'www.binance.com', 'c2c.binance.com', 'p2p.binance.com', 'accounts.binance.com'];
-    for (const domain of csrfSearchDomains) {
-      try {
-        const csrfCookies = await chrome.cookies.getAll({ domain, name: 'csrftoken' });
-        if (csrfCookies.length > 0) {
-          cookieMap['csrftoken'] = csrfCookies[0].value;
-          console.log(`[SparkP2P] Found csrftoken on ${domain}: ${csrfCookies[0].value.substring(0, 10)}... (httpOnly: ${csrfCookies[0].httpOnly})`);
-          break;
-        }
-      } catch (e) {}
-    }
-
-    // Also search by URL
-    if (!cookieMap['csrftoken']) {
-      for (const url of ['https://www.binance.com', 'https://c2c.binance.com', 'https://p2p.binance.com']) {
-        try {
-          const csrfCookies = await chrome.cookies.getAll({ url, name: 'csrftoken' });
-          if (csrfCookies.length > 0) {
-            cookieMap['csrftoken'] = csrfCookies[0].value;
-            console.log(`[SparkP2P] Found csrftoken via URL ${url}: ${csrfCookies[0].value.substring(0, 10)}...`);
-            break;
-          }
-        } catch (e) {}
-      }
-    }
-
-    console.log(`[SparkP2P] csrftoken after explicit search: ${cookieMap['csrftoken'] ? 'FOUND' : 'NOT FOUND'}`);
-
-    // Get ALL cookies from all Binance URLs
-    const urls = [
-      'https://www.binance.com',
-      'https://binance.com',
-      'https://p2p.binance.com',
-      'https://c2c.binance.com',
-      'https://accounts.binance.com',
-    ];
-
-    for (const url of urls) {
-      try {
-        const cookies = await chrome.cookies.getAll({ url });
-        for (const cookie of cookies) {
-          // Capture EVERY cookie, not just specific ones
-          if (!cookieMap[cookie.name]) {
-            cookieMap[cookie.name] = cookie.value;
-          }
-        }
-      } catch (e) { /* ignore */ }
-    }
-
-    // Also domain-based
-    const domains = ['.binance.com', 'binance.com'];
-    for (const domain of domains) {
-      try {
-        const cookies = await chrome.cookies.getAll({ domain });
-        for (const cookie of cookies) {
-          if (!cookieMap[cookie.name]) {
-            cookieMap[cookie.name] = cookie.value;
-          }
-        }
-      } catch (e) { /* ignore */ }
-    }
-
-    // Merge cookies from page's document.cookie (includes cookies not visible to extension API)
-    if (contentCookies) {
-      contentCookies.split(';').forEach(c => {
-        const [name, ...rest] = c.trim().split('=');
-        const val = rest.join('=');
-        if (name && val) {
-          // Page cookies override extension API cookies (more complete)
-          cookieMap[name.trim()] = val;
-        }
-      });
-    }
-
-    // Add bnc-uuid from page if we got it
-    if (contentUuid && !cookieMap['bnc-uuid']) {
-      cookieMap['bnc-uuid'] = contentUuid;
-    }
-
-    // Add csrftoken from page if found
-    if (contentCsrf && !cookieMap['csrftoken']) {
-      cookieMap['csrftoken'] = contentCsrf;
-    }
-
-    const totalFound = Object.keys(cookieMap).length;
-    const hasP20t = !!cookieMap['p20t'];
-
-    console.log(`[SparkP2P] Total captured: ${totalFound} cookies, p20t: ${hasP20t}, csrf: ${!!cookieMap['csrftoken']}`);
-
-    if (!hasP20t) {
-      showMsg(syncMsg, `No Binance session found (${totalFound} cookies captured). Please login to Binance first.`, 'error');
-      btn.disabled = false;
-      btn.textContent = 'Sync Binance Cookies';
-      return;
-    }
-
-    // Priority for csrf/uuid: content script (page interceptor) > cookies
-    const csrfToken = contentCsrf || cookieMap['csrftoken'] || '';
-    const bncUuid = contentUuid || cookieMap['bnc-uuid'] || '';
-
-    console.log(`[SparkP2P] CSRF: ${csrfToken ? csrfToken.substring(0, 10) + '...' : 'MISSING'}`);
-    console.log(`[SparkP2P] BNC-UUID: ${bncUuid ? bncUuid.substring(0, 10) + '...' : 'MISSING'}`);
-
-    // Send ALL cookies to SparkP2P — let the backend use what it needs
-    const cookiesToSend = { ...cookieMap };
-    delete cookiesToSend['csrftoken']; // sent separately
-
-    const { sparkp2p_token } = await chrome.storage.local.get('sparkp2p_token');
-
-    const res = await fetch(`${API_BASE}/traders/connect-binance`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${sparkp2p_token}`,
-      },
-      body: JSON.stringify({
-        cookies: cookiesToSend,
-        csrf_token: csrfToken,
-        bnc_uuid: bncUuid,
-      }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      showMsg(syncMsg, data.detail || 'Sync failed', 'error');
+  chrome.runtime.sendMessage({ type: 'FORCE_SYNC' }, (resp) => {
+    if (resp?.done) {
+      showMsg(actionMsg, 'Cookies synced to VPS', 'success');
     } else {
-      const now = new Date().toISOString();
-      await chrome.storage.local.set({ last_sync: now });
-
-      let msg = `Connected! (${totalFound} cookies synced)`;
-      if (data.binance_name) {
-        msg = `Connected as: ${data.binance_name}`;
-      }
-      if (data.name_match === false && data.binance_name) {
-        showMsg(syncMsg, `${msg} — Name mismatch with ${data.registered_name}. Update in Settings.`, 'error');
-      } else {
-        showMsg(syncMsg, msg, 'success');
-      }
-
-      updateStatus(true, now);
+      showMsg(actionMsg, 'Sync failed', 'error');
     }
-  } catch (err) {
-    showMsg(syncMsg, 'Failed to sync: ' + err.message, 'error');
-  }
-
-  btn.disabled = false;
-  btn.textContent = 'Sync Binance Cookies';
-}
-
-// ── Check Status ─────────────────────────────────────
-document.getElementById('check-btn').addEventListener('click', checkStatus);
-
-async function checkStatus() {
-  const btn = document.getElementById('check-btn');
-  btn.disabled = true;
-  btn.textContent = 'Checking...';
-
-  try {
-    const { sparkp2p_token } = await chrome.storage.local.get('sparkp2p_token');
-    const res = await fetch(`${API_BASE}/traders/me`, {
-      headers: { 'Authorization': `Bearer ${sparkp2p_token}` },
-    });
-
-    if (!res.ok) {
-      updateStatus(false);
-      showMsg(syncMsg, 'Could not reach SparkP2P. Check your connection.', 'error');
-      btn.disabled = false;
-      btn.textContent = 'Check Status';
-      return;
-    }
-
-    const data = await res.json();
-    updateStatus(data.binance_connected);
-
-    if (data.binance_connected) {
-      showMsg(syncMsg, `Connected as: ${data.full_name}${data.binance_username ? ' (' + data.binance_username + ')' : ''}`, 'success');
-    } else {
-      showMsg(syncMsg, 'Binance not connected. Click "Sync Binance Cookies" while logged into Binance.', 'error');
-    }
-
-    const { last_sync } = await chrome.storage.local.get('last_sync');
-    if (last_sync) {
-      updateSyncTime(last_sync);
-    }
-  } catch (err) {
-    updateStatus(false);
-    showMsg(syncMsg, 'Connection check failed: ' + err.message, 'error');
-  }
-
-  btn.disabled = false;
-  btn.textContent = 'Check Status';
-}
-
-// ── Auto-sync toggle ─────────────────────────────────
-document.getElementById('auto-sync').addEventListener('change', async (e) => {
-  await chrome.storage.local.set({ auto_sync: e.target.checked });
-  chrome.runtime.sendMessage({ type: 'auto_sync_changed', enabled: e.target.checked });
+    btn.disabled = false;
+    btn.textContent = 'Sync Cookies to VPS';
+  });
 });
 
-// ── Logout ───────────────────────────────────────────
+// ── Logout ────────────────────────────────────────────────
+
 document.getElementById('logout-btn').addEventListener('click', async () => {
-  await chrome.storage.local.remove(['sparkp2p_token', 'sparkp2p_user', 'last_sync']);
+  // Stop poller first
+  chrome.runtime.sendMessage({ type: 'STOP_POLLER' });
+  await chrome.storage.local.remove([
+    'sparkp2p_token', 'sparkp2p_user', 'last_sync',
+    'poller_running', 'last_poll', 'last_heartbeat', 'poll_stats',
+  ]);
   showLoginView();
 });
 
-// ── Helpers ──────────────────────────────────────────
-function updateStatus(connected, syncTime) {
-  statusDot.className = `status-dot ${connected ? 'green' : 'red'}`;
-  statusLabel.textContent = connected ? 'Binance Connected' : 'Binance Disconnected';
-  if (syncTime) updateSyncTime(syncTime);
-}
+// ── Helpers ───────────────────────────────────────────────
 
-function updateSyncTime(isoTime) {
+function formatTimeAgo(isoTime) {
   const date = new Date(isoTime);
-  const mins = Math.round((Date.now() - date.getTime()) / 60000);
-  if (mins < 1) lastSyncEl.textContent = 'Synced just now';
-  else if (mins < 60) lastSyncEl.textContent = `Synced ${mins}m ago`;
-  else lastSyncEl.textContent = `Synced ${Math.round(mins / 60)}h ago`;
+  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
+
+  if (seconds < 10) return 'Just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  return `${Math.round(seconds / 3600)}h ago`;
 }
 
 function showMsg(el, text, type) {
   el.innerHTML = `<div class="msg ${type}">${text}</div>`;
-  setTimeout(() => { el.innerHTML = ''; }, 8000);
+  setTimeout(() => { el.innerHTML = ''; }, 6000);
 }
+
+// ── Auto-refresh every 5 seconds while popup is open ─────
+
+setInterval(refreshStatus, 5000);
+
+// ── Init ─────────────────────────────────────────────────
 
 init();

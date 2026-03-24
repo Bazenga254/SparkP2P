@@ -4,24 +4,29 @@
   <meta charset="UTF-8">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { width: 360px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e4e4e7; }
+    body { width: 380px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e4e4e7; }
 
     .header { display: flex; align-items: center; gap: 10px; padding: 16px; border-bottom: 1px solid #2a2d3a; }
     .header img { width: 32px; height: 32px; border-radius: 8px; }
     .header h1 { font-size: 16px; color: #f59e0b; }
     .header span { font-size: 11px; color: #9ca3af; }
+    .header .version { font-size: 10px; color: #6b7280; margin-left: auto; }
 
-    .section { padding: 16px; }
-    .section + .section { border-top: 1px solid #2a2d3a; }
+    .section { padding: 14px 16px; }
+    .section + .section { border-top: 1px solid #1e2130; }
 
-    /* Status */
-    .status-row { display: flex; align-items: center; justify-content: space-between; }
-    .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
-    .status-dot.green { background: #10b981; box-shadow: 0 0 6px #10b981; }
-    .status-dot.red { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
-    .status-dot.yellow { background: #f59e0b; }
-    .status-text { font-size: 13px; display: flex; align-items: center; }
-    .last-sync { font-size: 11px; color: #6b7280; }
+    /* Status indicators */
+    .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .status-card { background: #1a1d27; border-radius: 8px; padding: 10px 12px; }
+    .status-card .label { font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .status-card .value { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+    .status-card.wide { grid-column: span 2; }
+
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+    .dot.green { background: #10b981; box-shadow: 0 0 6px #10b981; }
+    .dot.red { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+    .dot.yellow { background: #f59e0b; box-shadow: 0 0 4px #f59e0b; }
+    .dot.gray { background: #6b7280; }
 
     /* Login form */
     .login-section label { display: block; font-size: 12px; color: #9ca3af; margin-bottom: 4px; }
@@ -29,29 +34,43 @@
     .login-section input:focus { outline: none; border-color: #f59e0b; }
 
     /* Buttons */
-    .btn { width: 100%; padding: 10px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .btn { width: 100%; padding: 10px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
+    .btn:active { opacity: 0.8; }
     .btn-primary { background: #f59e0b; color: #000; }
     .btn-primary:hover { opacity: 0.9; }
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-secondary { background: #1a1d27; color: #e4e4e7; border: 1px solid #2a2d3a; margin-top: 8px; }
     .btn-secondary:hover { border-color: #f59e0b; }
     .btn-danger { background: transparent; color: #ef4444; border: 1px solid #ef4444; margin-top: 8px; }
+    .btn-success { background: #10b981; color: #fff; }
+    .btn-stop { background: #ef4444; color: #fff; }
 
-    /* Toggle */
-    .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
-    .toggle-row label { font-size: 12px; color: #9ca3af; }
-    .toggle { position: relative; width: 40px; height: 22px; }
-    .toggle input { opacity: 0; width: 0; height: 0; }
-    .toggle .slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #2a2d3a; border-radius: 22px; cursor: pointer; transition: 0.2s; }
-    .toggle .slider:before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #6b7280; border-radius: 50%; transition: 0.2s; }
-    .toggle input:checked + .slider { background: #f59e0b; }
-    .toggle input:checked + .slider:before { transform: translateX(18px); background: #000; }
+    /* Poller toggle */
+    .poller-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .poller-row .poller-label { flex: 1; }
+    .poller-row .poller-label .title { font-size: 14px; font-weight: 600; }
+    .poller-row .poller-label .subtitle { font-size: 11px; color: #6b7280; }
+    .poller-btn { padding: 8px 20px; border-radius: 8px; border: none; font-size: 12px; font-weight: 700; cursor: pointer; min-width: 80px; }
+
+    /* Warning banner */
+    .warning-banner { background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 8px; padding: 10px 12px; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .warning-banner .icon { font-size: 16px; flex-shrink: 0; }
+    .warning-banner .text { font-size: 12px; color: #f59e0b; }
+    .warning-banner .btn { width: auto; padding: 6px 14px; font-size: 11px; margin: 0; margin-left: auto; flex-shrink: 0; }
+
+    /* Stats row */
+    .stats-row { display: flex; justify-content: space-between; padding: 6px 0; }
+    .stats-row .label { font-size: 12px; color: #9ca3af; }
+    .stats-row .value { font-size: 12px; font-weight: 600; }
 
     .msg { font-size: 12px; padding: 8px; border-radius: 6px; margin-top: 8px; }
     .msg.success { background: rgba(16, 185, 129, 0.15); color: #10b981; }
     .msg.error { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
 
     .footer { padding: 12px 16px; text-align: center; font-size: 10px; color: #6b7280; border-top: 1px solid #2a2d3a; }
+    .footer a { color: #f59e0b; text-decoration: none; }
+
+    .hidden { display: none !important; }
   </style>
 </head>
 <body>
@@ -59,12 +78,13 @@
     <img src="icon48.png" alt="SparkP2P">
     <div>
       <h1>SparkP2P</h1>
-      <span>Binance P2P Automation</span>
+      <span>Trading Engine</span>
     </div>
+    <span class="version">v2.0</span>
   </div>
 
-  <!-- Not logged in -->
-  <div id="login-view" class="section login-section" style="display:none;">
+  <!-- Login view -->
+  <div id="login-view" class="section login-section hidden">
     <label>SparkP2P Email</label>
     <input type="email" id="email" placeholder="you@example.com">
     <label>Password</label>
@@ -73,37 +93,81 @@
     <div id="login-msg"></div>
   </div>
 
-  <!-- Logged in -->
-  <div id="main-view" style="display:none;">
+  <!-- Main view -->
+  <div id="main-view" class="hidden">
+
+    <!-- Binance tab warning -->
+    <div id="no-binance-warning" class="section hidden">
+      <div class="warning-banner">
+        <span class="icon">!</span>
+        <span class="text">No Binance tab detected. Open Binance P2P to enable trading.</span>
+        <button class="btn btn-primary" id="open-binance-btn">Open</button>
+      </div>
+    </div>
+
+    <!-- Poller control -->
     <div class="section">
-      <div class="status-row">
-        <div class="status-text">
-          <span class="status-dot" id="status-dot"></span>
-          <span id="status-label">Checking...</span>
+      <div class="poller-row">
+        <div class="poller-label">
+          <div class="title" id="poller-title">Poller: Stopped</div>
+          <div class="subtitle" id="poller-subtitle">Not polling Binance</div>
         </div>
-        <span class="last-sync" id="last-sync"></span>
+        <button class="poller-btn btn-success" id="poller-toggle-btn">Start</button>
       </div>
     </div>
 
+    <!-- Status cards -->
     <div class="section">
-      <button class="btn btn-primary" id="sync-btn">Sync Binance Cookies</button>
-      <button class="btn btn-secondary" id="check-btn">Check Status</button>
-      <div class="toggle-row">
-        <label>Auto-sync when cookies change</label>
-        <label class="toggle">
-          <input type="checkbox" id="auto-sync" checked>
-          <span class="slider"></span>
-        </label>
+      <div class="status-grid">
+        <div class="status-card">
+          <div class="label">Binance Tab</div>
+          <div class="value"><span class="dot gray" id="binance-dot"></span> <span id="binance-status">Checking...</span></div>
+        </div>
+        <div class="status-card">
+          <div class="label">VPS Connection</div>
+          <div class="value"><span class="dot gray" id="vps-dot"></span> <span id="vps-status">Checking...</span></div>
+        </div>
+        <div class="status-card">
+          <div class="label">Orders Tracked</div>
+          <div class="value" id="orders-count">0</div>
+        </div>
+        <div class="status-card">
+          <div class="label">Actions Today</div>
+          <div class="value" id="actions-count">0</div>
+        </div>
+        <div class="status-card wide">
+          <div class="label">Last Poll</div>
+          <div class="value" id="last-poll-time">Never</div>
+        </div>
       </div>
-      <div id="sync-msg"></div>
     </div>
 
+    <!-- Stats -->
     <div class="section">
-      <button class="btn btn-danger" id="logout-btn">Logout from SparkP2P</button>
+      <div class="stats-row">
+        <span class="label">Total Polls</span>
+        <span class="value" id="stat-polls">0</span>
+      </div>
+      <div class="stats-row">
+        <span class="label">Errors</span>
+        <span class="value" id="stat-errors">0</span>
+      </div>
+      <div class="stats-row">
+        <span class="label">Last Error</span>
+        <span class="value" id="stat-last-error" style="color: #ef4444;">None</span>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="section">
+      <button class="btn btn-secondary" id="sync-btn">Sync Cookies to VPS</button>
+      <button class="btn btn-secondary" id="check-btn">Refresh Status</button>
+      <button class="btn btn-danger" id="logout-btn">Logout</button>
+      <div id="action-msg"></div>
     </div>
   </div>
 
-  <div class="footer">SparkP2P v1.0 &bull; Powered by Spark AI</div>
+  <div class="footer">SparkP2P v2.0 &bull; <a href="https://sparkp2p.com/dashboard" target="_blank">Dashboard</a></div>
 
   <script src="popup.js"></script>
 </body>

@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.services.matching.engine import MatchingEngine
-from app.services.binance.client import BinanceP2PClient
 from app.services.settlement.engine import SettlementEngine
 from app.models import Order, OrderStatus, Trader
 
@@ -157,45 +156,38 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
 
 
 async def _trigger_auto_release(order: Order, db: AsyncSession):
-    """Trigger auto-release on Binance after payment is confirmed."""
+    """
+    Mark order as PAYMENT_RECEIVED so the Chrome extension picks it up
+    and releases crypto on Binance (from the user's browser = correct IP).
+
+    The old approach called Binance from the VPS, which caused IP mismatch
+    issues. Now the extension polls /api/ext/pending-actions or gets the
+    action back from /api/ext/report-orders and executes the release.
+    """
     try:
-        # Get trader
         result = await db.execute(
             select(Trader).where(Trader.id == order.trader_id)
         )
         trader = result.scalar_one_or_none()
 
-        if not trader or not trader.binance_connected or not trader.auto_release_enabled:
+        if not trader or not trader.auto_release_enabled:
             logger.info(f"Auto-release skipped for order {order.binance_order_number}")
             return
 
-        # Create Binance client from trader's stored session
-        binance = BinanceP2PClient.from_trader(trader)
+        # Mark as payment_received — the extension will see this and release
+        # (order.status was already set to PAYMENT_RECEIVED by the matching engine,
+        #  but we confirm it here for clarity)
+        if order.status != OrderStatus.PAYMENT_RECEIVED:
+            order.status = OrderStatus.PAYMENT_RECEIVED
+            await db.commit()
 
-        # Release the crypto
-        order.status = OrderStatus.RELEASING
-        await db.commit()
-
-        release_result = await binance.release_order(order.binance_order_number)
-
-        order.status = OrderStatus.RELEASED
-        from datetime import datetime, timezone
-        order.released_at = datetime.now(timezone.utc)
-        await db.commit()
-
-        logger.info(f"Auto-released order {order.binance_order_number}")
-
-        # Trigger settlement
-        settlement = SettlementEngine(db)
-        if trader.batch_settlement_enabled:
-            # Check if balance hit threshold → auto-withdraw
-            await settlement.auto_settle_if_threshold(trader.id)
-        else:
-            # Settle immediately
-            await settlement.settle_order(order)
+        logger.info(
+            f"Payment confirmed for order {order.binance_order_number} — "
+            f"waiting for extension to release"
+        )
 
     except Exception as e:
-        logger.error(f"Auto-release failed for order {order.binance_order_number}: {e}")
+        logger.error(f"Auto-release setup failed for order {order.binance_order_number}: {e}")
         order.status = OrderStatus.DISPUTED
         await db.commit()
 
