@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat
 from app.services.binance.poller import order_poller
+from app.services.binance.health import session_monitor
 
 
 @asynccontextmanager
@@ -16,10 +17,14 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Start Binance order poller in background
     poller_task = asyncio.create_task(order_poller.start())
+    # Start session health monitor (keepalive pings every 5 min)
+    monitor_task = asyncio.create_task(session_monitor.start())
     yield
     # Shutdown
     order_poller.stop()
     poller_task.cancel()
+    session_monitor.stop()
+    monitor_task.cancel()
 
 
 app = FastAPI(

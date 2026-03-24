@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+import random
 from typing import Optional
 
 import httpx
@@ -80,12 +82,25 @@ class BinanceP2PClient:
 
     async def _request(self, endpoint: str, payload: dict = None) -> dict:
         """Make authenticated POST request to Binance C2C API."""
+        # Human-like delay: 0.5 to 2 seconds between requests
+        await asyncio.sleep(random.uniform(0.5, 2.0))
+
         url = f"{self.BASE_URL}{endpoint}"
+        # Slightly randomize Accept-Language to mimic real browser variation
+        headers = {**self.headers}
+        lang_variants = [
+            "en-GB,en-US;q=0.9,en;q=0.8",
+            "en-US,en;q=0.9",
+            "en-GB,en;q=0.9,en-US;q=0.8",
+            "en-US,en-GB;q=0.9,en;q=0.8",
+        ]
+        headers["Accept-Language"] = random.choice(lang_variants)
+
         async with httpx.AsyncClient(cookies=self.cookies, timeout=30.0) as client:
             response = await client.post(
                 url,
                 json=payload or {},
-                headers=self.headers,
+                headers=headers,
             )
 
             logger.debug(f"Binance API {endpoint}: status={response.status_code}")

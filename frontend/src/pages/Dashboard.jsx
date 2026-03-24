@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions } from '../services/api';
+import { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -16,6 +16,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('overview');
   const [refreshing, setRefreshing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
+  const [sessionHealth, setSessionHealth] = useState(null);
 
   const loadData = async () => {
     if (!localStorage.getItem('token')) return;
@@ -27,12 +28,14 @@ export default function Dashboard() {
         getOrderStats(),
         getOrders({ limit: 20 }),
         getWalletTransactions(20),
+        getSessionHealth(),
       ]);
       if (results[0].status === 'fulfilled') setProfile(results[0].value.data);
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
       if (results[3].status === 'fulfilled') setOrders(results[3].value.data);
       if (results[4].status === 'fulfilled') setTransactions(results[4].value.data);
+      if (results[5].status === 'fulfilled') setSessionHealth(results[5].value.data);
     } catch (err) {
       console.error('Failed to load data:', err);
     }
@@ -96,6 +99,21 @@ export default function Dashboard() {
           <span className={`status-badge ${profile?.binance_connected ? 'connected' : 'disconnected'}`}>
             {profile?.binance_connected ? 'Binance Connected' : 'Binance Disconnected'}
           </span>
+          {profile?.binance_connected && sessionHealth && (
+            <span
+              className="session-health-dot"
+              title={`Session health: ${sessionHealth.score}/100${sessionHealth.last_check ? ', Last checked: ' + new Date(sessionHealth.last_check).toLocaleTimeString() : ''}`}
+              style={{
+                display: 'inline-block',
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                marginLeft: 6,
+                backgroundColor: sessionHealth.score >= 80 ? '#10b981' : sessionHealth.score >= 50 ? '#f59e0b' : '#ef4444',
+                boxShadow: `0 0 6px ${sessionHealth.score >= 80 ? '#10b981' : sessionHealth.score >= 50 ? '#f59e0b' : '#ef4444'}`,
+              }}
+            />
+          )}
         </div>
         <div className="dash-header-right">
           <span className="user-name">{user?.full_name}</span>

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -34,7 +35,9 @@ class BinanceOrderPoller:
             except Exception as e:
                 logger.error(f"Poller error: {e}")
 
-            await asyncio.sleep(self.poll_interval)
+            # Add random jitter to polling interval (8-15 seconds instead of fixed 10)
+            jitter = random.uniform(0.7, 1.5)
+            await asyncio.sleep(self.poll_interval * jitter)
 
     def stop(self):
         """Stop the polling loop."""

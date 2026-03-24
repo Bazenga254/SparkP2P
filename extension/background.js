@@ -108,14 +108,32 @@ async function autoSync() {
 // Periodic sync every 15 minutes to keep connection alive
 chrome.alarms.create('sparkp2p-periodic-sync', { periodInMinutes: 15 });
 
+// Keepalive: ping Binance every 10 minutes to keep session cookies alive
+chrome.alarms.create('binance-keepalive', { periodInMinutes: 10 });
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== 'sparkp2p-periodic-sync') return;
+  if (alarm.name === 'sparkp2p-periodic-sync') {
+    const { sparkp2p_token, auto_sync } = await chrome.storage.local.get(['sparkp2p_token', 'auto_sync']);
+    if (!sparkp2p_token || auto_sync === false) return;
 
-  const { sparkp2p_token, auto_sync } = await chrome.storage.local.get(['sparkp2p_token', 'auto_sync']);
-  if (!sparkp2p_token || auto_sync === false) return;
+    console.log('[SparkP2P] Periodic sync...');
+    autoSync();
+  }
 
-  console.log('[SparkP2P] Periodic sync...');
-  autoSync();
+  if (alarm.name === 'binance-keepalive') {
+    const { auto_sync } = await chrome.storage.local.get('auto_sync');
+    if (auto_sync === false) return;
+
+    // Simple fetch to Binance to keep cookies alive
+    try {
+      await fetch('https://www.binance.com/bapi/accounts/v1/public/authcenter/auth', {
+        credentials: 'include',
+      });
+      console.log('[SparkP2P] Keepalive ping sent');
+    } catch (e) {
+      console.log('[SparkP2P] Keepalive failed:', e.message);
+    }
+  }
 });
 
 // Listen for messages from popup

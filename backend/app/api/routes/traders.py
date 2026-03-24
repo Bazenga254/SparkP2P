@@ -312,6 +312,22 @@ async def update_trading_config(
     return {"status": "updated"}
 
 
+@router.get("/session-health")
+async def get_session_health(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Get current session health status from the background monitor."""
+    from app.services.binance.health import session_monitor
+    health = session_monitor.get_health(trader.id)
+    return {
+        "score": health.get("score", 0),
+        "status": health.get("status", "unknown"),
+        "last_success": health.get("last_success"),
+        "last_check": health.get("last_check"),
+        "consecutive_failures": health.get("consecutive_failures", 0),
+    }
+
+
 @router.get("/wallet", response_model=WalletResponse)
 async def get_wallet(
     trader: Trader = Depends(get_current_trader),
