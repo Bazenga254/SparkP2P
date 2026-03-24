@@ -107,19 +107,21 @@ class MpesaClient:
         occasion: str = "",
     ) -> dict:
         """Send money from Paybill to M-Pesa number (B2C)."""
+        import uuid
         payload = {
+            "OriginatorConversationID": str(uuid.uuid4()),
             "InitiatorName": self.initiator_name,
             "SecurityCredential": self.security_credential,
             "CommandID": "BusinessPayment",
             "Amount": str(int(amount)),
             "PartyA": self.shortcode,
             "PartyB": self._format_phone(phone),
-            "Remarks": remarks[:100],  # Max 100 chars
+            "Remarks": remarks[:100],
             "QueueTimeOutURL": f"{self.callback_base}/api/payment/b2c/timeout",
             "ResultURL": f"{self.callback_base}/api/payment/b2c/result",
             "Occasion": occasion[:100],
         }
-        result = await self._make_request("/mpesa/b2c/v3/paymentrequest", payload)
+        result = await self._make_request("/mpesa/b2c/v1/paymentrequest", payload)
         logger.info(f"B2C sent: {amount} to {phone} - {result}")
         return result
 
