@@ -170,9 +170,21 @@ async function syncCookies() {
       return;
     }
 
-    // Extract csrf token and bnc-uuid (sent separately)
-    const csrfToken = cookieMap['csrftoken'] || '';
-    const bncUuid = cookieMap['bnc-uuid'] || '';
+    // Get csrftoken and bnc-uuid from background's webRequest capture (most reliable)
+    let bgHeaders = {};
+    try {
+      bgHeaders = await chrome.runtime.sendMessage({ type: 'get_captured_headers' });
+    } catch (e) { /* ignore */ }
+
+    // Also check stored values
+    const stored = await chrome.storage.local.get(['captured_csrf', 'captured_bnc_uuid']);
+
+    // Priority: background capture > stored > content script > cookies
+    const csrfToken = bgHeaders?.csrf || stored.captured_csrf || contentHeaders['csrftoken'] || cookieMap['csrftoken'] || '';
+    const bncUuid = bgHeaders?.bnc_uuid || stored.captured_bnc_uuid || contentHeaders['bnc-uuid'] || cookieMap['bnc-uuid'] || '';
+
+    console.log(`[SparkP2P] CSRF: ${csrfToken ? csrfToken.substring(0, 10) + '...' : 'MISSING'}`);
+    console.log(`[SparkP2P] BNC-UUID: ${bncUuid ? bncUuid.substring(0, 10) + '...' : 'MISSING'}`);
 
     // Send ALL cookies to SparkP2P — let the backend use what it needs
     const cookiesToSend = { ...cookieMap };
