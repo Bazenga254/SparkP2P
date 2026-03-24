@@ -201,15 +201,21 @@ async def connect_binance(
         trader.binance_bnc_uuid = encrypt_data(data.bnc_uuid)
     if data.totp_secret:
         trader.binance_2fa_secret = encrypt_data(data.totp_secret)
+    # Only send email on FIRST connection, not every cookie sync
+    was_already_connected = trader.binance_connected
     trader.binance_connected = True
     if binance_name:
         trader.binance_username = binance_name
 
     await db.commit()
 
-    # Send email notification
-    from app.services.email import send_binance_connected
-    send_binance_connected(trader.email, trader.full_name, binance_name or "Unknown")
+    # Send email only on first connection
+    if not was_already_connected:
+        try:
+            from app.services.email import send_binance_connected
+            send_binance_connected(trader.email, trader.full_name, binance_name or "Unknown")
+        except Exception:
+            pass
 
     return {
         "status": "connected",
