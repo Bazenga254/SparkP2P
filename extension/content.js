@@ -50,10 +50,9 @@
   // ── Binance API caller ─────────────────────────────────────────
 
   async function makeBinanceRequest(endpoint, payload) {
-    // Use the CURRENT page's origin to avoid CORS issues
-    // p2p.binance.com and c2c.binance.com both serve the same C2C API
-    const baseUrl = window.location.origin;
-    const url = `${baseUrl}/bapi/c2c/v2/private${endpoint}`;
+    // Always use c2c.binance.com for the API — it's the only domain that serves it
+    // CORS is handled because we use credentials: 'include' and Binance allows it
+    const url = `https://c2c.binance.com/bapi/c2c/v2/private${endpoint}`;
 
     const resp = await fetch(url, {
       method: 'POST',

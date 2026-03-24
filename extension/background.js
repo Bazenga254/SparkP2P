@@ -436,12 +436,12 @@ async function findBinanceTab() {
     const tabs = await chrome.tabs.query({ url: 'https://*.binance.com/*' });
     if (tabs.length === 0) return null;
 
-    // Prefer P2P page, fall back to any Binance tab
+    // Prefer c2c.binance.com (API works on same-origin), then p2p, then any
+    const c2cTab = tabs.find(t => t.url && t.url.includes('c2c.binance.com'));
     const p2pTab = tabs.find(t => t.url && (
-      t.url.includes('/p2p') || t.url.includes('/c2c') ||
-      t.url.includes('/fiat/order')
+      t.url.includes('/p2p') || t.url.includes('/fiat/order')
     ));
-    const tab = p2pTab || tabs[0];
+    const tab = c2cTab || p2pTab || tabs[0];
 
     // Check if content script is alive
     try {
@@ -664,7 +664,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'OPEN_BINANCE_TAB') {
-    chrome.tabs.create({ url: 'https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES' });
+    chrome.tabs.create({ url: 'https://c2c.binance.com/en/trade/all-payments/USDT?fiat=KES' });
     sendResponse({ opened: true });
     return false;
   }
