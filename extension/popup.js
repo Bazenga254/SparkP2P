@@ -168,10 +168,40 @@ async function syncCookies() {
     } catch (e) {
       console.log('[SparkP2P] Script execution error:', e.message);
     }
-    // Capture ALL cookies from Binance — not just a filtered list
+    // Capture ALL cookies from Binance including httpOnly (chrome.cookies API can!)
     const cookieMap = {};
 
-    // Get from all Binance URLs
+    // FIRST: Specifically search for csrftoken on all domains
+    // chrome.cookies.getAll CAN read httpOnly cookies
+    const csrfSearchDomains = ['.binance.com', 'www.binance.com', 'c2c.binance.com', 'p2p.binance.com', 'accounts.binance.com'];
+    for (const domain of csrfSearchDomains) {
+      try {
+        const csrfCookies = await chrome.cookies.getAll({ domain, name: 'csrftoken' });
+        if (csrfCookies.length > 0) {
+          cookieMap['csrftoken'] = csrfCookies[0].value;
+          console.log(`[SparkP2P] Found csrftoken on ${domain}: ${csrfCookies[0].value.substring(0, 10)}... (httpOnly: ${csrfCookies[0].httpOnly})`);
+          break;
+        }
+      } catch (e) {}
+    }
+
+    // Also search by URL
+    if (!cookieMap['csrftoken']) {
+      for (const url of ['https://www.binance.com', 'https://c2c.binance.com', 'https://p2p.binance.com']) {
+        try {
+          const csrfCookies = await chrome.cookies.getAll({ url, name: 'csrftoken' });
+          if (csrfCookies.length > 0) {
+            cookieMap['csrftoken'] = csrfCookies[0].value;
+            console.log(`[SparkP2P] Found csrftoken via URL ${url}: ${csrfCookies[0].value.substring(0, 10)}...`);
+            break;
+          }
+        } catch (e) {}
+      }
+    }
+
+    console.log(`[SparkP2P] csrftoken after explicit search: ${cookieMap['csrftoken'] ? 'FOUND' : 'NOT FOUND'}`);
+
+    // Get ALL cookies from all Binance URLs
     const urls = [
       'https://www.binance.com',
       'https://binance.com',
