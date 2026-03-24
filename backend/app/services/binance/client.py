@@ -96,7 +96,12 @@ class BinanceP2PClient:
         ]
         headers["Accept-Language"] = random.choice(lang_variants)
 
-        async with httpx.AsyncClient(cookies=self.cookies, timeout=30.0) as client:
+        # Build cookie header string directly — httpx domain-based cookies
+        # don't always work with Binance's c2c subdomain
+        cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+        headers["Cookie"] = cookie_str
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 url,
                 json=payload or {},

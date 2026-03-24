@@ -80,6 +80,27 @@ async function syncCookies() {
   syncMsg.innerHTML = '';
 
   try {
+    // Step 0: Try to capture headers from content script on active Binance tab
+    let contentHeaders = {};
+    let contentCookies = '';
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, url: '*://*.binance.com/*' });
+      if (tab) {
+        // First trigger a request so the content script can capture fresh headers
+        const triggerResult = await chrome.tabs.sendMessage(tab.id, { type: 'TRIGGER_CAPTURE' });
+        console.log('[SparkP2P] Trigger result:', triggerResult);
+
+        // Wait a moment then get captured headers
+        await new Promise(r => setTimeout(r, 1000));
+        const captured = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CAPTURED_HEADERS' });
+        contentHeaders = captured?.headers || {};
+        contentCookies = captured?.documentCookies || '';
+        console.log('[SparkP2P] Content script headers:', Object.keys(contentHeaders));
+        console.log('[SparkP2P] Content script cookies length:', contentCookies.length);
+      }
+    } catch (e) {
+      console.log('[SparkP2P] Content script not available:', e.message);
+    }
     // Capture ALL cookies from Binance — not just a filtered list
     const cookieMap = {};
 
@@ -117,10 +138,30 @@ async function syncCookies() {
       } catch (e) { /* ignore */ }
     }
 
+    // Merge cookies from document.cookie (content script)
+    if (contentCookies) {
+      contentCookies.split(';').forEach(c => {
+        const [name, ...rest] = c.trim().split('=');
+        if (name && rest.length > 0 && !cookieMap[name]) {
+          cookieMap[name] = rest.join('=');
+        }
+      });
+    }
+
+    // Extract csrftoken from content script headers (the REAL one the browser sends)
+    if (contentHeaders['csrftoken'] && !cookieMap['csrftoken']) {
+      cookieMap['csrftoken'] = contentHeaders['csrftoken'];
+    }
+
+    // Extract bnc-uuid from content script headers
+    if (contentHeaders['bnc-uuid'] && !cookieMap['bnc-uuid']) {
+      cookieMap['bnc-uuid'] = contentHeaders['bnc-uuid'];
+    }
+
     const totalFound = Object.keys(cookieMap).length;
     const hasP20t = !!cookieMap['p20t'];
 
-    console.log(`[SparkP2P] Captured ${totalFound} cookies, p20t: ${hasP20t}`);
+    console.log(`[SparkP2P] Total captured: ${totalFound} cookies, p20t: ${hasP20t}, csrf: ${!!cookieMap['csrftoken']}`);
 
     if (!hasP20t) {
       showMsg(syncMsg, `No Binance session found (${totalFound} cookies captured). Please login to Binance first.`, 'error');
