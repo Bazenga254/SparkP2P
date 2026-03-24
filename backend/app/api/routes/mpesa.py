@@ -151,11 +151,69 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
             await _credit_wallet_for_sell(order, amount, db)
             # Payment matched — trigger auto-release
             await _trigger_auto_release(order, db)
+    elif bill_ref.startswith("DEP-"):
+        # This is a wallet deposit (manual Paybill payment)
+        # Extract trader ID from account reference: DEP-{trader_id}
+        try:
+            trader_id = int(bill_ref.split("-")[1])
+            await _credit_wallet_deposit(trader_id, amount, txn_id, phone, sender_name, db)
+        except (ValueError, IndexError):
+            logger.error(f"Invalid deposit reference: {bill_ref}")
     else:
         # Not a P2P payment — forward to existing website handler if needed
         logger.info(f"Non-P2P payment received: ref={bill_ref}, amount={amount}")
 
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+async def _credit_wallet_deposit(
+    trader_id: int, amount: float, mpesa_txn_id: str,
+    phone: str, sender_name: str, db: AsyncSession,
+):
+    """Credit trader's wallet when they deposit via Paybill (DEP-{id})."""
+    from app.models import Trader
+    from app.models.wallet import Wallet, WalletTransaction, TransactionType
+
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        logger.error(f"Deposit: trader {trader_id} not found")
+        return
+
+    # Get or create wallet
+    result = await db.execute(select(Wallet).where(Wallet.trader_id == trader_id))
+    wallet = result.scalar_one_or_none()
+    if not wallet:
+        wallet = Wallet(trader_id=trader_id, balance=0, reserved=0)
+        db.add(wallet)
+        await db.flush()
+
+    # Credit wallet
+    wallet.balance += amount
+    wallet.total_earned += amount
+
+    # Record transaction
+    txn = WalletTransaction(
+        trader_id=trader_id,
+        wallet_id=wallet.id,
+        transaction_type=TransactionType.DEPOSIT,
+        amount=amount,
+        balance_after=wallet.balance,
+        description=f"Paybill deposit from {sender_name or phone}",
+        mpesa_receipt=mpesa_txn_id,
+        status="completed",
+    )
+    db.add(txn)
+    await db.commit()
+
+    logger.info(f"Deposit credited: KES {amount} to trader {trader_id} (ref: {mpesa_txn_id})")
+
+    # Send email notification
+    try:
+        from app.services.email import send_deposit_received
+        send_deposit_received(trader.email, trader.full_name, amount, wallet.balance)
+    except Exception as e:
+        logger.error(f"Failed to send deposit email: {e}")
 
 
 async def _credit_wallet_for_sell(order: Order, amount: float, db: AsyncSession):

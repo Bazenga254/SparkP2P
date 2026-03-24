@@ -661,10 +661,33 @@ export default function Dashboard() {
               <X size={20} />
             </button>
 
-            <h2 style={{ color: '#fff', fontSize: 20, marginBottom: 4 }}>Deposit via M-Pesa</h2>
-            <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 24 }}>
-              Funds will be added to your SparkP2P wallet for auto-pay buy orders.
+            <h2 style={{ color: '#fff', fontSize: 20, marginBottom: 4 }}>Deposit Funds</h2>
+            <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 20 }}>
+              Add funds to your SparkP2P wallet for auto-pay buy orders.
             </p>
+
+            {/* Manual Paybill Deposit Info */}
+            <div style={{
+              background: 'var(--bg, #0f1117)', borderRadius: 10, padding: 16,
+              marginBottom: 20, border: '1px solid var(--border, #2a2d3a)',
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#10b981', marginBottom: 10 }}>
+                Option 1: Pay via M-Pesa Paybill (Manual)
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px', fontSize: 13 }}>
+                <span style={{ color: '#9ca3af' }}>Paybill Number</span>
+                <span style={{ color: '#fff', fontWeight: 600 }}>4041355</span>
+                <span style={{ color: '#9ca3af' }}>Account Number</span>
+                <span style={{ color: '#f59e0b', fontWeight: 600 }}>DEP-{profile?.id || '...'}</span>
+              </div>
+              <p style={{ fontSize: 11, color: '#6b7280', marginTop: 8, marginBottom: 0 }}>
+                Send any amount from M-Pesa, bank app, or agent. Your wallet will be credited automatically.
+              </p>
+            </div>
+
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#10b981', marginBottom: 10 }}>
+              Option 2: Instant Deposit via STK Push
+            </div>
 
             {depositStatus !== 'success' && (
               <>
