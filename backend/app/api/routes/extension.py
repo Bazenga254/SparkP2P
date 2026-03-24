@@ -266,6 +266,7 @@ async def heartbeat(
 
 
 class BinanceAccountData(BaseModel):
+    balances: list = []
     completed_orders: list = []
     active_ads: list = []
     payment_methods: list = []
@@ -284,7 +285,8 @@ async def report_account_data(
     # Store as JSON in trader's record (or a separate table)
     # For now, store in a simple cache approach
     cache_data = {
-        "completed_orders": data.completed_orders[:20],  # Last 20
+        "balances": data.balances,
+        "completed_orders": data.completed_orders[:20],
         "active_ads": data.active_ads,
         "payment_methods": data.payment_methods,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -327,7 +329,7 @@ async def get_account_data(
     if os.path.exists(cache_file):
         with open(cache_file) as f:
             return json.load(f)
-    return {"completed_orders": [], "active_ads": [], "payment_methods": [], "updated_at": None}
+    return {"balances": [], "completed_orders": [], "active_ads": [], "payment_methods": [], "updated_at": None}
 
 
 # ── Internal helpers ──────────────────────────────────────────────

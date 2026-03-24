@@ -311,8 +311,36 @@ export default function Dashboard() {
             </div>
 
             {/* Binance Account Data */}
-            {binanceData && (binanceData.active_ads?.length > 0 || binanceData.completed_orders?.length > 0) && (
+            {binanceData && (binanceData.balances?.length > 0 || binanceData.active_ads?.length > 0 || binanceData.completed_orders?.length > 0) && (
               <>
+                {/* Binance Wallet Balance */}
+                {binanceData.balances?.length > 0 && (
+                  <div className="card">
+                    <div className="card-header">
+                      <Wallet size={20} />
+                      <h3>Binance Wallet</h3>
+                      <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
+                        Synced: {binanceData.updated_at ? new Date(binanceData.updated_at).toLocaleTimeString() : '-'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '12px 0' }}>
+                      {binanceData.balances.map((b, i) => (
+                        <div key={i} style={{
+                          background: 'var(--bg)', borderRadius: 10, padding: '14px 20px',
+                          minWidth: 150, flex: '1 1 150px',
+                          border: '1px solid var(--border)',
+                        }}>
+                          <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>{b.asset}</div>
+                          <div style={{ fontSize: 22, fontWeight: 700, color: '#f59e0b' }}>{b.total?.toFixed(4)}</div>
+                          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                            Free: {b.free?.toFixed(4)} | Locked: {b.locked?.toFixed(4)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Active Ads */}
                 {binanceData.active_ads?.length > 0 && (
                   <div className="card">

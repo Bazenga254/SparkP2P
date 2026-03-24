@@ -283,6 +283,13 @@ async function executeSendMessage(orderNumber, message, tabId, token) {
 // ═══════════════════════════════════════════════════════════
 
 async function reportAccountData(tabId, token) {
+  // Get wallet balance (spot + funding)
+  const balanceResp = await sendToBinanceTab(tabId, {
+    type: 'BINANCE_REQUEST_CUSTOM',
+    url: 'https://www.binance.com/bapi/asset/v2/private/asset-service/wallet/balance',
+    payload: { needBtcValuation: false },
+  });
+
   // Get completed orders (last 20)
   const completedResp = await sendToBinanceTab(tabId, {
     type: 'BINANCE_REQUEST',
@@ -318,10 +325,28 @@ async function reportAccountData(tabId, token) {
   const activeAds = adsResp.success ? (adsResp.data?.data || []) : [];
   const paymentMethods = pmResp.success ? (pmResp.data?.data || []) : [];
 
+  // Parse balances
+  const balances = [];
+  if (balanceResp.success && balanceResp.data?.data) {
+    for (const wallet of balanceResp.data.data) {
+      const bal = parseFloat(wallet.balance || 0);
+      if (bal > 0) {
+        balances.push({
+          asset: wallet.asset,
+          free: parseFloat(wallet.free || 0),
+          locked: parseFloat(wallet.locked || 0),
+          total: bal,
+          walletName: wallet.walletName || '',
+        });
+      }
+    }
+  }
+
   // Send to VPS
   await fetchVPS('/ext/report-account-data', {
     method: 'POST',
     body: JSON.stringify({
+      balances,
       completed_orders: completedOrders.map(o => ({
         orderNumber: o.orderNumber,
         tradeType: o.tradeType,

@@ -26,6 +26,14 @@
       return true; // async response
     }
 
+    // Custom URL Binance request (for non-C2C endpoints like wallet balance)
+    if (msg.type === 'BINANCE_REQUEST_CUSTOM') {
+      makeCustomRequest(msg.url, msg.payload)
+        .then(data => sendResponse({ success: true, data }))
+        .catch(err => sendResponse({ success: false, error: err.message }));
+      return true;
+    }
+
     // Ping — check if content script is alive
     if (msg.type === 'PING') {
       sendResponse({ alive: true, url: window.location.href });
@@ -67,6 +75,16 @@
     }
 
     return data;
+  }
+
+  async function makeCustomRequest(url, payload) {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+      credentials: 'include',
+    });
+    return await resp.json();
   }
 
   // ── Notify background that content script is ready ─────────────
