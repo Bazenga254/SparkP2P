@@ -47,6 +47,9 @@ class BinanceOrderData(BaseModel):
     buyerNickname: Optional[str] = None
     sellerNickname: Optional[str] = None
     orderStatus: Optional[int] = None  # 1=pending, 2=buyer paid, 3=releasing
+    sellerPaymentMethod: Optional[str] = None  # mpesa, bank
+    sellerPaymentPhone: Optional[str] = None  # seller's M-Pesa number
+    sellerPaymentAccount: Optional[str] = None  # seller's account number
 
 
 class ReportOrdersRequest(BaseModel):
@@ -231,21 +234,19 @@ async def get_pending_actions(
                 "order_number": order.binance_order_number,
             })
 
-    # Buy side: pending orders that need auto-pay (pro tier only)
-    if trader.auto_pay_enabled and trader.tier == "pro":
-        result = await db.execute(
-            select(Order).where(
-                Order.trader_id == trader.id,
-                Order.side == OrderSide.BUY,
-                Order.status == OrderStatus.PENDING,
-            )
+    # Buy side: orders where VPS already sent B2C payment, extension needs to mark as paid
+    result = await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.side == OrderSide.BUY,
+            Order.status == OrderStatus.PAYMENT_SENT,
         )
-        for order in result.scalars().all():
-            if order.fiat_amount <= trader.max_single_trade:
-                actions.append({
-                    "action": "pay",
-                    "order_number": order.binance_order_number,
-                })
+    )
+    for order in result.scalars().all():
+        actions.append({
+            "action": "mark_as_paid",
+            "order_number": order.binance_order_number,
+        })
 
     return {"actions": actions}
 
@@ -405,9 +406,16 @@ async def _process_reported_buy_order(
     """
     Process a buy-side order reported by the extension.
     Creates the order in DB if new.
-    If auto-pay is enabled (pro tier), triggers M-Pesa payment from VPS
-    and tells extension to mark as paid.
+    If auto-pay is enabled:
+      1. Check trader's wallet balance
+      2. Reserve the amount (deduct from balance, add to reserved)
+      3. Send B2C payment to seller from platform Paybill
+      4. Tell extension to mark as paid on Binance
+    If insufficient balance, send notification and skip.
     """
+    from app.services.mpesa.client import mpesa_client
+    from app.services.email import send_insufficient_balance, send_seller_paid
+
     order_number = order_data.orderNumber
 
     # Check if we already track this order
@@ -417,9 +425,9 @@ async def _process_reported_buy_order(
     existing = result.scalar_one_or_none()
 
     if existing:
-        # If we already sent payment but haven't told extension to mark as paid
+        # If we already sent payment, tell extension to mark as paid
         if existing.status == OrderStatus.PAYMENT_SENT:
-            return {"action": "pay", "order_number": order_number}
+            return {"action": "mark_as_paid", "order_number": order_number}
         return None
 
     # Create new order
@@ -438,18 +446,126 @@ async def _process_reported_buy_order(
         fiat_amount=amount,
         exchange_rate=rate,
         counterparty_name=order_data.sellerNickname,
+        seller_payment_method=order_data.sellerPaymentMethod,
+        seller_payment_destination=order_data.sellerPaymentPhone or order_data.sellerPaymentAccount,
     )
     db.add(order)
-    await db.commit()
+    await db.flush()
 
     logger.info(f"New buy order tracked: {order_number} for trader {trader.full_name}")
 
     # Auto-pay if enabled, within limits, AND trader is on Pro tier
-    if trader.auto_pay_enabled and amount <= trader.max_single_trade and trader.tier == "pro":
-        # NOTE: For buy-side, we need order detail (seller payment info)
-        # which the extension will need to fetch separately.
-        # For now, just tell extension to get order detail.
-        # The VPS handles M-Pesa payment via _trigger_auto_release flow.
-        pass
+    if not (trader.auto_pay_enabled and amount <= trader.max_single_trade and trader.tier == "pro"):
+        await db.commit()
+        return None
 
-    return None
+    # Check wallet balance
+    wallet_result = await db.execute(
+        select(Wallet).where(Wallet.trader_id == trader.id)
+    )
+    wallet = wallet_result.scalar_one_or_none()
+
+    if not wallet or wallet.balance < amount:
+        # Insufficient balance
+        current_balance = wallet.balance if wallet else 0
+        logger.warning(
+            f"Insufficient balance for buy order {order_number}: "
+            f"need KES {amount}, have KES {current_balance}"
+        )
+        order.status = OrderStatus.PENDING
+        await db.commit()
+
+        # Send notification
+        send_insufficient_balance(trader.email, trader.full_name, amount, current_balance)
+        return None
+
+    # Reserve the funds (deduct from balance, add to reserved)
+    wallet.balance -= amount
+    wallet.reserved += amount
+
+    # Record reservation transaction
+    reserve_txn = WalletTransaction(
+        trader_id=trader.id,
+        wallet_id=wallet.id,
+        order_id=order.id,
+        transaction_type=TransactionType.BUY_RESERVE,
+        amount=-amount,
+        balance_after=wallet.balance,
+        description=f"Reserved for buy order {order_number}",
+    )
+    db.add(reserve_txn)
+    await db.flush()
+
+    # Send B2C payment to seller from platform Paybill
+    seller_phone = order_data.sellerNickname  # This may need parsing from order details
+    # The extension should provide seller payment info; for now check order fields
+    seller_dest = None
+    if order.seller_payment_destination:
+        seller_dest = order.seller_payment_destination
+    elif order.counterparty_phone:
+        seller_dest = order.counterparty_phone
+
+    if not seller_dest:
+        # Cannot auto-pay without seller payment info
+        # Tell extension to fetch order details including seller payment method
+        logger.warning(f"No seller payment info for buy order {order_number}, requesting details")
+        await db.commit()
+        return {"action": "get_order_details", "order_number": order_number}
+
+    try:
+        b2c_result = await mpesa_client.send_b2c(
+            phone=seller_dest,
+            amount=amount,
+            remarks=f"P2P buy {order_number}",
+            occasion=f"SparkP2P-{order_number}",
+        )
+        logger.info(f"B2C sent for buy order {order_number}: {b2c_result}")
+
+        # Mark order as payment sent
+        order.status = OrderStatus.PAYMENT_SENT
+        order.payment_sent_at = datetime.now(timezone.utc)
+
+        # Deduct from reserved
+        wallet.reserved -= amount
+
+        # Record debit transaction
+        debit_txn = WalletTransaction(
+            trader_id=trader.id,
+            wallet_id=wallet.id,
+            order_id=order.id,
+            transaction_type=TransactionType.BUY_DEBIT,
+            amount=-amount,
+            balance_after=wallet.balance,
+            description=f"Payment sent to seller for order {order_number}",
+        )
+        db.add(debit_txn)
+        await db.commit()
+
+        # Send email notification
+        send_seller_paid(
+            trader.email, trader.full_name, amount,
+            order_data.sellerNickname or "Unknown", order_number,
+        )
+
+        # Tell extension to mark as paid on Binance
+        return {"action": "mark_as_paid", "order_number": order_number}
+
+    except Exception as e:
+        logger.error(f"B2C payment failed for buy order {order_number}: {e}")
+        # Release reserved funds back to balance
+        wallet.balance += amount
+        wallet.reserved -= amount
+
+        release_txn = WalletTransaction(
+            trader_id=trader.id,
+            wallet_id=wallet.id,
+            order_id=order.id,
+            transaction_type=TransactionType.BUY_RELEASE,
+            amount=amount,
+            balance_after=wallet.balance,
+            description=f"Funds released - B2C failed for order {order_number}",
+        )
+        db.add(release_txn)
+        order.status = OrderStatus.PENDING
+        await db.commit()
+        return None

@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.services.matching.engine import MatchingEngine
 from app.services.settlement.engine import SettlementEngine
 from app.models import Order, OrderStatus, Trader
+from app.models.wallet import Wallet, WalletTransaction, TransactionType
 
 from sqlalchemy import select
 
@@ -134,7 +135,7 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
 
     # Route based on account reference prefix
     if bill_ref.startswith("P2P-"):
-        # This is a P2P trade payment
+        # This is a P2P trade payment (sell side — buyer pays us)
         engine = MatchingEngine(db)
         order = await engine.match_c2b_payment(
             amount=amount,
@@ -146,6 +147,8 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
         )
 
         if order:
+            # Credit the trader's wallet with the sell amount
+            await _credit_wallet_for_sell(order, amount, db)
             # Payment matched — trigger auto-release
             await _trigger_auto_release(order, db)
     else:
@@ -153,6 +156,66 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
         logger.info(f"Non-P2P payment received: ref={bill_ref}, amount={amount}")
 
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+async def _credit_wallet_for_sell(order: Order, amount: float, db: AsyncSession):
+    """
+    Credit the trader's wallet when a sell order payment is received (C2B).
+    The buyer paid KES to our Paybill — we credit the trader's wallet.
+    """
+    try:
+        result = await db.execute(
+            select(Wallet).where(Wallet.trader_id == order.trader_id)
+        )
+        wallet = result.scalar_one_or_none()
+
+        if not wallet:
+            wallet = Wallet(trader_id=order.trader_id)
+            db.add(wallet)
+            await db.flush()
+
+        # Deduct platform fee
+        from app.core.config import settings
+        platform_fee = settings.PLATFORM_FEE_PER_TRADE
+        net_amount = amount - platform_fee
+
+        wallet.balance += net_amount
+        wallet.total_earned += net_amount
+        wallet.total_fees_paid += platform_fee
+
+        # Record credit transaction
+        credit_txn = WalletTransaction(
+            trader_id=order.trader_id,
+            wallet_id=wallet.id,
+            order_id=order.id,
+            transaction_type=TransactionType.SELL_CREDIT,
+            amount=net_amount,
+            balance_after=wallet.balance,
+            description=f"Sell order {order.binance_order_number} - KES {amount:,.0f} received (fee: {platform_fee})",
+        )
+        db.add(credit_txn)
+
+        # Record fee transaction
+        if platform_fee > 0:
+            fee_txn = WalletTransaction(
+                trader_id=order.trader_id,
+                wallet_id=wallet.id,
+                order_id=order.id,
+                transaction_type=TransactionType.PLATFORM_FEE,
+                amount=-platform_fee,
+                balance_after=wallet.balance,
+                description=f"Platform fee for order {order.binance_order_number}",
+            )
+            db.add(fee_txn)
+
+        await db.flush()
+        logger.info(
+            f"Wallet credited KES {net_amount} for sell order {order.binance_order_number}, "
+            f"trader {order.trader_id}, new balance: {wallet.balance}"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to credit wallet for sell order {order.binance_order_number}: {e}")
 
 
 async def _trigger_auto_release(order: Order, db: AsyncSession):

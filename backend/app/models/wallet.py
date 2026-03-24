@@ -8,8 +8,11 @@ from app.core.database import Base
 
 
 class TransactionType(str, enum.Enum):
+    DEPOSIT = "deposit"               # Trader deposits via M-Pesa STK Push
     SELL_CREDIT = "sell_credit"       # Money in from sell side
     BUY_DEBIT = "buy_debit"          # Money out for buy side
+    BUY_RESERVE = "buy_reserve"      # Funds reserved for pending buy order
+    BUY_RELEASE = "buy_release"      # Reserved funds released (order cancelled/expired)
     WITHDRAWAL = "withdrawal"         # Trader withdraws
     PLATFORM_FEE = "platform_fee"     # Fee deducted
     SETTLEMENT_FEE = "settlement_fee" # B2C/B2B fee
@@ -50,5 +53,10 @@ class WalletTransaction(Base):
     amount = Column(Float, nullable=False)  # Positive = credit, negative = debit
     balance_after = Column(Float, nullable=False)
     description = Column(String(255), nullable=True)
+
+    # M-Pesa tracking (for deposits)
+    mpesa_checkout_id = Column(String(100), nullable=True, index=True)
+    mpesa_receipt = Column(String(50), nullable=True)
+    status = Column(String(20), default="completed")  # pending, completed, failed
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

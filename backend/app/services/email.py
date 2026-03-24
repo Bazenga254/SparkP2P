@@ -150,6 +150,115 @@ def send_subscription_activated(to_email: str, trader_name: str, plan: str, expi
     return send_email(to_email, "SparkP2P - Subscription Activated", html)
 
 
+def send_deposit_received(to_email: str, trader_name: str, amount: float, new_balance: float) -> bool:
+    """Notify trader that a deposit was received."""
+    html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+            <p style="color: #888; font-size: 14px;">Automated P2P Trading</p>
+        </div>
+        <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+            <h2 style="color: #10b981; font-size: 20px; margin: 0 0 8px;">Deposit Received</h2>
+            <p style="color: #9ca3af; font-size: 14px; margin: 0 0 20px;">
+                Hi {trader_name}, your deposit has been credited to your SparkP2P wallet.
+            </p>
+            <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Amount Deposited</span>
+                    <span style="color: #10b981; font-size: 13px; font-weight: 600;">KES {amount:,.0f}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #9ca3af; font-size: 13px;">New Balance</span>
+                    <span style="color: #f59e0b; font-size: 13px; font-weight: 600;">KES {new_balance:,.0f}</span>
+                </div>
+            </div>
+            <p style="color: #9ca3af; font-size: 12px; margin: 0;">
+                Your wallet is ready for buy-side auto-pay orders.
+            </p>
+        </div>
+        <p style="color: #6b7280; font-size: 11px; text-align: center; margin-top: 20px;">
+            Powered by Spark AI &bull; sparkp2p.com
+        </p>
+    </div>
+    """
+    return send_email(to_email, "SparkP2P - Deposit Received", html)
+
+
+def send_insufficient_balance(to_email: str, trader_name: str, order_amount: float, current_balance: float) -> bool:
+    """Notify trader of insufficient balance for a buy order."""
+    html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+            <p style="color: #888; font-size: 14px;">Automated P2P Trading</p>
+        </div>
+        <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+            <h2 style="color: #ef4444; font-size: 20px; margin: 0 0 8px;">Insufficient Balance</h2>
+            <p style="color: #9ca3af; font-size: 14px; margin: 0 0 20px;">
+                Hi {trader_name}, a buy order could not be processed due to insufficient wallet balance.
+            </p>
+            <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Order Amount</span>
+                    <span style="color: #ef4444; font-size: 13px; font-weight: 600;">KES {order_amount:,.0f}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #9ca3af; font-size: 13px;">Your Balance</span>
+                    <span style="color: #f59e0b; font-size: 13px; font-weight: 600;">KES {current_balance:,.0f}</span>
+                </div>
+            </div>
+            <p style="color: #f59e0b; font-size: 13px; margin: 0; font-weight: 600;">
+                Please deposit more funds to continue auto-paying buy orders.
+            </p>
+        </div>
+        <p style="color: #6b7280; font-size: 11px; text-align: center; margin-top: 20px;">
+            Powered by Spark AI &bull; sparkp2p.com
+        </p>
+    </div>
+    """
+    return send_email(to_email, "SparkP2P - Insufficient Balance for Buy Order", html)
+
+
+def send_seller_paid(to_email: str, trader_name: str, amount: float, seller_name: str, order_number: str) -> bool:
+    """Notify trader that payment was sent to seller for a buy order."""
+    html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+            <p style="color: #888; font-size: 14px;">Automated P2P Trading</p>
+        </div>
+        <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+            <h2 style="color: #10b981; font-size: 20px; margin: 0 0 8px;">Payment Sent to Seller</h2>
+            <p style="color: #9ca3af; font-size: 14px; margin: 0 0 20px;">
+                Hi {trader_name}, we've sent payment to the seller for your buy order.
+            </p>
+            <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Amount Paid</span>
+                    <span style="color: #10b981; font-size: 13px; font-weight: 600;">KES {amount:,.0f}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Seller</span>
+                    <span style="color: #fff; font-size: 13px; font-weight: 600;">{seller_name}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #9ca3af; font-size: 13px;">Order</span>
+                    <span style="color: #fff; font-size: 13px; font-weight: 600;">{order_number}</span>
+                </div>
+            </div>
+            <p style="color: #9ca3af; font-size: 12px; margin: 0;">
+                The order has been marked as paid on Binance. Waiting for seller to release crypto.
+            </p>
+        </div>
+        <p style="color: #6b7280; font-size: 11px; text-align: center; margin-top: 20px;">
+            Powered by Spark AI &bull; sparkp2p.com
+        </p>
+    </div>
+    """
+    return send_email(to_email, f"SparkP2P - Payment Sent for Order {order_number}", html)
+
+
 def send_verification_code(to_email: str, code: str) -> bool:
     """Send email verification code."""
     html = f"""

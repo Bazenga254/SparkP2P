@@ -165,6 +165,7 @@ class MpesaClient:
         amount: float,
         account_reference: str,
         description: str = "Payment",
+        callback_url: str = None,
     ) -> dict:
         """Initiate STK push to customer's phone."""
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -181,7 +182,7 @@ class MpesaClient:
             "PartyA": self._format_phone(phone),
             "PartyB": self.shortcode,
             "PhoneNumber": self._format_phone(phone),
-            "CallBackURL": f"{self.callback_base}/api/payment/stkpush/callback",
+            "CallBackURL": callback_url or f"{self.callback_base}/api/payment/stkpush/callback",
             "AccountReference": account_reference,
             "TransactionDesc": description[:20],
         }

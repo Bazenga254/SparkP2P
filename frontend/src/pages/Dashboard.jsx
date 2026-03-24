@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth, getBinanceAccountData } from '../services/api';
+import { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth, getBinanceAccountData, initiateDeposit, getDepositHistory, checkDepositStatus } from '../services/api';
 import { useNavigate } from 'react-router-dom';
-import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield } from 'lucide-react';
+import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 
 export default function Dashboard() {
@@ -18,6 +18,14 @@ export default function Dashboard() {
   const [withdrawing, setWithdrawing] = useState(false);
   const [sessionHealth, setSessionHealth] = useState(null);
   const [binanceData, setBinanceData] = useState(null);
+  const [showDepositModal, setShowDepositModal] = useState(false);
+  const [depositAmount, setDepositAmount] = useState('');
+  const [depositPhone, setDepositPhone] = useState('');
+  const [depositLoading, setDepositLoading] = useState(false);
+  const [depositStatus, setDepositStatus] = useState(null); // null, 'pending', 'success', 'failed'
+  const [depositMessage, setDepositMessage] = useState('');
+  const [depositHistory, setDepositHistory] = useState([]);
+  const depositPollRef = useRef(null);
 
   const loadData = async () => {
     if (!localStorage.getItem('token')) return;
@@ -80,6 +88,84 @@ export default function Dashboard() {
     }
     setWithdrawing(false);
   };
+
+  const handleDeposit = async () => {
+    const amt = parseFloat(depositAmount);
+    if (!amt || amt < 100 || amt > 500000) {
+      setDepositMessage('Amount must be between KES 100 and KES 500,000');
+      return;
+    }
+    if (!depositPhone || depositPhone.length < 9) {
+      setDepositMessage('Please enter a valid M-Pesa phone number');
+      return;
+    }
+
+    setDepositLoading(true);
+    setDepositMessage('');
+    setDepositStatus(null);
+
+    try {
+      const res = await initiateDeposit(amt, depositPhone);
+      const checkoutId = res.data.checkout_request_id;
+      setDepositStatus('pending');
+      setDepositMessage('STK Push sent. Enter your M-Pesa PIN on your phone...');
+
+      // Poll for status
+      let attempts = 0;
+      depositPollRef.current = setInterval(async () => {
+        attempts++;
+        try {
+          const statusRes = await checkDepositStatus(checkoutId);
+          if (statusRes.data.status === 'completed') {
+            clearInterval(depositPollRef.current);
+            setDepositStatus('success');
+            setDepositMessage(`Deposit successful! New balance: KES ${statusRes.data.balance_after?.toLocaleString()}`);
+            setDepositLoading(false);
+            loadData(); // Refresh wallet
+          } else if (statusRes.data.status === 'failed') {
+            clearInterval(depositPollRef.current);
+            setDepositStatus('failed');
+            setDepositMessage('Deposit failed. Please try again.');
+            setDepositLoading(false);
+          }
+        } catch (e) {
+          // Ignore poll errors
+        }
+        if (attempts >= 30) {
+          // Stop polling after ~60 seconds
+          clearInterval(depositPollRef.current);
+          setDepositStatus('failed');
+          setDepositMessage('Timed out waiting for payment confirmation. Check your M-Pesa and try again.');
+          setDepositLoading(false);
+        }
+      }, 2000);
+    } catch (err) {
+      setDepositStatus('failed');
+      setDepositMessage(err.response?.data?.detail || 'Failed to initiate deposit');
+      setDepositLoading(false);
+    }
+  };
+
+  const closeDepositModal = () => {
+    if (depositPollRef.current) clearInterval(depositPollRef.current);
+    setShowDepositModal(false);
+    setDepositAmount('');
+    setDepositStatus(null);
+    setDepositMessage('');
+    setDepositLoading(false);
+  };
+
+  // Pre-fill phone from profile
+  useEffect(() => {
+    if (profile?.phone) setDepositPhone(profile.phone);
+  }, [profile]);
+
+  // Load deposit history when transactions tab is opened
+  useEffect(() => {
+    if (activeTab === 'transactions') {
+      getDepositHistory(20).then(res => setDepositHistory(res.data)).catch(() => {});
+    }
+  }, [activeTab]);
 
   const getStatusColor = (status) => {
     const colors = {
@@ -179,17 +265,36 @@ export default function Dashboard() {
                   <span>Wallet Balance</span>
                 </div>
                 <div className="wallet-mini-amount">KES {wallet?.balance?.toLocaleString() || '0'}</div>
+                {wallet?.reserved > 0 && (
+                  <div className="wallet-reserved" style={{ fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>
+                    Reserved: KES {wallet.reserved.toLocaleString()}
+                  </div>
+                )}
                 <div className="wallet-mini-stats">
                   <span>Earned: KES {wallet?.total_earned?.toLocaleString() || '0'}</span>
                   <span>Fees: KES {wallet?.total_fees_paid?.toLocaleString() || '0'}</span>
                 </div>
-                <button
-                  className="withdraw-btn-mini"
-                  onClick={handleWithdraw}
-                  disabled={withdrawing || !wallet || wallet.balance <= 0}
-                >
-                  {withdrawing ? 'Processing...' : 'Withdraw'}
-                </button>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <button
+                    className="deposit-btn-mini"
+                    onClick={() => setShowDepositModal(true)}
+                    style={{
+                      flex: 1, padding: '8px 0', borderRadius: 8, border: 'none',
+                      background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff',
+                      fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                    }}
+                  >
+                    <Plus size={14} /> Deposit
+                  </button>
+                  <button
+                    className="withdraw-btn-mini"
+                    onClick={handleWithdraw}
+                    disabled={withdrawing || !wallet || wallet.balance <= 0}
+                  >
+                    {withdrawing ? 'Processing...' : 'Withdraw'}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -451,37 +556,217 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'transactions' && (
-          <div className="card">
-            <h3>Wallet Transactions</h3>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Amount</th>
-                  <th>Balance After</th>
-                  <th>Description</th>
-                  <th>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {transactions.map((txn) => (
-                  <tr key={txn.id}>
-                    <td>{txn.type.replace('_', ' ')}</td>
-                    <td className={txn.amount >= 0 ? 'positive' : 'negative'}>
-                      {txn.amount >= 0 ? '+' : ''}{txn.amount.toLocaleString()}
-                    </td>
-                    <td>KES {txn.balance_after.toLocaleString()}</td>
-                    <td>{txn.description}</td>
-                    <td>{new Date(txn.created_at).toLocaleString()}</td>
+          <>
+            {/* Deposit History */}
+            <div className="card" style={{ marginBottom: 20 }}>
+              <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <h3>Deposit History</h3>
+                <button
+                  onClick={() => setShowDepositModal(true)}
+                  style={{
+                    padding: '6px 16px', borderRadius: 8, border: 'none',
+                    background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff',
+                    fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 4,
+                  }}
+                >
+                  <Plus size={14} /> New Deposit
+                </button>
+              </div>
+              {depositHistory.length > 0 ? (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Amount</th>
+                      <th>Status</th>
+                      <th>Receipt</th>
+                      <th>Balance After</th>
+                      <th>Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {depositHistory.map((dep) => (
+                      <tr key={dep.id}>
+                        <td className="positive">+KES {dep.amount.toLocaleString()}</td>
+                        <td style={{
+                          color: dep.status === 'completed' ? '#10b981' : dep.status === 'failed' ? '#ef4444' : '#f59e0b',
+                        }}>
+                          {dep.status}
+                        </td>
+                        <td className="mono">{dep.mpesa_receipt || '-'}</td>
+                        <td>KES {dep.balance_after?.toLocaleString() || '-'}</td>
+                        <td>{new Date(dep.created_at).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="empty-msg">No deposits yet. Deposit funds to enable auto-pay for buy orders.</p>
+              )}
+            </div>
+
+            {/* All Wallet Transactions */}
+            <div className="card">
+              <h3>All Wallet Transactions</h3>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Amount</th>
+                    <th>Balance After</th>
+                    <th>Description</th>
+                    <th>Time</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {transactions.map((txn) => (
+                    <tr key={txn.id}>
+                      <td>{txn.type.replace(/_/g, ' ')}</td>
+                      <td className={txn.amount >= 0 ? 'positive' : 'negative'}>
+                        {txn.amount >= 0 ? '+' : ''}{txn.amount.toLocaleString()}
+                      </td>
+                      <td>KES {txn.balance_after.toLocaleString()}</td>
+                      <td>{txn.description}</td>
+                      <td>{new Date(txn.created_at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
 
         {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} />}
       </main>
+
+      {/* Deposit Modal */}
+      {showDepositModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000, padding: 16,
+        }}>
+          <div style={{
+            background: 'var(--card-bg, #1a1d27)', borderRadius: 16, padding: 32,
+            width: '100%', maxWidth: 420, position: 'relative',
+            border: '1px solid var(--border, #2a2d3a)',
+          }}>
+            <button
+              onClick={closeDepositModal}
+              style={{
+                position: 'absolute', top: 12, right: 12, background: 'none',
+                border: 'none', color: '#9ca3af', cursor: 'pointer',
+              }}
+            >
+              <X size={20} />
+            </button>
+
+            <h2 style={{ color: '#fff', fontSize: 20, marginBottom: 4 }}>Deposit via M-Pesa</h2>
+            <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 24 }}>
+              Funds will be added to your SparkP2P wallet for auto-pay buy orders.
+            </p>
+
+            {depositStatus !== 'success' && (
+              <>
+                <label style={{ color: '#9ca3af', fontSize: 13, display: 'block', marginBottom: 6 }}>
+                  Amount (KES)
+                </label>
+                <input
+                  type="number"
+                  value={depositAmount}
+                  onChange={(e) => setDepositAmount(e.target.value)}
+                  placeholder="e.g. 10000"
+                  min="100"
+                  max="500000"
+                  disabled={depositLoading}
+                  style={{
+                    width: '100%', padding: '12px 14px', borderRadius: 10,
+                    border: '1px solid var(--border, #2a2d3a)',
+                    background: 'var(--bg, #0f1117)', color: '#fff', fontSize: 16,
+                    marginBottom: 16, boxSizing: 'border-box',
+                  }}
+                />
+
+                <label style={{ color: '#9ca3af', fontSize: 13, display: 'block', marginBottom: 6 }}>
+                  M-Pesa Phone Number
+                </label>
+                <input
+                  type="tel"
+                  value={depositPhone}
+                  onChange={(e) => setDepositPhone(e.target.value)}
+                  placeholder="0712345678"
+                  disabled={depositLoading}
+                  style={{
+                    width: '100%', padding: '12px 14px', borderRadius: 10,
+                    border: '1px solid var(--border, #2a2d3a)',
+                    background: 'var(--bg, #0f1117)', color: '#fff', fontSize: 16,
+                    marginBottom: 20, boxSizing: 'border-box',
+                  }}
+                />
+
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                  {[1000, 5000, 10000, 50000].map((amt) => (
+                    <button
+                      key={amt}
+                      onClick={() => setDepositAmount(String(amt))}
+                      disabled={depositLoading}
+                      style={{
+                        flex: 1, padding: '8px 0', borderRadius: 8,
+                        border: depositAmount === String(amt) ? '2px solid #10b981' : '1px solid var(--border, #2a2d3a)',
+                        background: depositAmount === String(amt) ? 'rgba(16,185,129,0.1)' : 'var(--bg, #0f1117)',
+                        color: '#fff', fontSize: 12, cursor: 'pointer',
+                      }}
+                    >
+                      {(amt / 1000)}K
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  onClick={handleDeposit}
+                  disabled={depositLoading}
+                  style={{
+                    width: '100%', padding: '14px 0', borderRadius: 10, border: 'none',
+                    background: depositLoading
+                      ? '#374151'
+                      : 'linear-gradient(135deg, #10b981, #059669)',
+                    color: '#fff', fontWeight: 600, fontSize: 15, cursor: depositLoading ? 'default' : 'pointer',
+                  }}
+                >
+                  {depositLoading ? 'Waiting for M-Pesa...' : 'Deposit via M-Pesa'}
+                </button>
+              </>
+            )}
+
+            {depositMessage && (
+              <div style={{
+                marginTop: 16, padding: 14, borderRadius: 10,
+                background: depositStatus === 'success'
+                  ? 'rgba(16,185,129,0.1)' : depositStatus === 'failed'
+                    ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)',
+                border: `1px solid ${depositStatus === 'success' ? '#10b981' : depositStatus === 'failed' ? '#ef4444' : '#f59e0b'}`,
+                color: depositStatus === 'success' ? '#10b981' : depositStatus === 'failed' ? '#ef4444' : '#f59e0b',
+                fontSize: 13, textAlign: 'center',
+              }}>
+                {depositMessage}
+              </div>
+            )}
+
+            {depositStatus === 'success' && (
+              <button
+                onClick={closeDepositModal}
+                style={{
+                  width: '100%', padding: '14px 0', borderRadius: 10, border: 'none',
+                  background: 'linear-gradient(135deg, #10b981, #059669)',
+                  color: '#fff', fontWeight: 600, fontSize: 15, cursor: 'pointer', marginTop: 16,
+                }}
+              >
+                Done
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
