@@ -156,6 +156,15 @@ async function pollCycle() {
       poll_stats: stats,
     });
 
+    // Every 5th poll, also fetch and report account data (completed orders, ads)
+    if (stats.polls % 5 === 0) {
+      try {
+        await reportAccountData(tabId, token);
+      } catch (e) {
+        console.log('[SparkP2P] Account data report error:', e.message);
+      }
+    }
+
   } catch (err) {
     stats.errors++;
     stats.last_error = err.message;
@@ -267,6 +276,84 @@ async function executeSendMessage(orderNumber, message, tabId, token) {
   if (success) {
     console.log(`[SparkP2P] Sent message for order ${orderNumber}`);
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ACCOUNT DATA — fetch completed orders, ads, payment methods
+// ═══════════════════════════════════════════════════════════
+
+async function reportAccountData(tabId, token) {
+  // Get completed orders (last 20)
+  const completedResp = await sendToBinanceTab(tabId, {
+    type: 'BINANCE_REQUEST',
+    endpoint: '/c2c/order-match/order-list',
+    payload: { page: 1, rows: 20, tradeType: 'SELL', orderStatusList: [4, 5] }, // 4=completed, 5=cancelled
+  });
+
+  const buyCompletedResp = await sendToBinanceTab(tabId, {
+    type: 'BINANCE_REQUEST',
+    endpoint: '/c2c/order-match/order-list',
+    payload: { page: 1, rows: 20, tradeType: 'BUY', orderStatusList: [4, 5] },
+  });
+
+  // Get active ads
+  const adsResp = await sendToBinanceTab(tabId, {
+    type: 'BINANCE_REQUEST',
+    endpoint: '/c2c/adv/search',
+    payload: { page: 1, rows: 20 },
+  });
+
+  // Get payment methods
+  const pmResp = await sendToBinanceTab(tabId, {
+    type: 'BINANCE_REQUEST',
+    endpoint: '/c2c/pay-method/user-paymethods',
+    payload: {},
+  });
+
+  const completedOrders = [
+    ...(completedResp.success ? (completedResp.data?.data || []) : []),
+    ...(buyCompletedResp.success ? (buyCompletedResp.data?.data || []) : []),
+  ].sort((a, b) => (b.createTime || 0) - (a.createTime || 0)).slice(0, 20);
+
+  const activeAds = adsResp.success ? (adsResp.data?.data || []) : [];
+  const paymentMethods = pmResp.success ? (pmResp.data?.data || []) : [];
+
+  // Send to VPS
+  await fetchVPS('/ext/report-account-data', {
+    method: 'POST',
+    body: JSON.stringify({
+      completed_orders: completedOrders.map(o => ({
+        orderNumber: o.orderNumber,
+        tradeType: o.tradeType,
+        totalPrice: parseFloat(o.totalPrice || 0),
+        amount: parseFloat(o.amount || 0),
+        price: parseFloat(o.price || 0),
+        asset: o.asset || 'USDT',
+        fiat: o.fiat || 'KES',
+        counterparty: o.buyerNickname || o.sellerNickname || '',
+        status: o.orderStatus,
+        createTime: o.createTime,
+      })),
+      active_ads: activeAds.map(a => ({
+        advNo: a.advNo,
+        tradeType: a.tradeType,
+        asset: a.asset,
+        fiat: a.fiatUnit,
+        price: parseFloat(a.price || 0),
+        amount: parseFloat(a.surplusAmount || a.tradableQuantity || 0),
+        minLimit: parseFloat(a.minSingleTransAmount || 0),
+        maxLimit: parseFloat(a.maxSingleTransAmount || 0),
+        status: a.advStatus,
+      })),
+      payment_methods: paymentMethods.map(pm => ({
+        id: pm.id,
+        type: pm.identifier,
+        name: (pm.fields || []).find(f => f.fieldName?.toLowerCase().includes('name'))?.fieldValue || '',
+      })),
+    }),
+  }, token);
+
+  console.log(`[SparkP2P] Reported account data: ${completedOrders.length} orders, ${activeAds.length} ads, ${paymentMethods.length} payment methods`);
 }
 
 // ═══════════════════════════════════════════════════════════

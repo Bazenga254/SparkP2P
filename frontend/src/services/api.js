@@ -34,6 +34,7 @@ export const getWallet = () => api.get('/traders/wallet');
 export const requestWithdrawal = () => api.post('/traders/wallet/withdraw');
 export const getWalletTransactions = (limit = 50) => api.get(`/traders/wallet/transactions?limit=${limit}`);
 export const getSessionHealth = () => api.get('/traders/session-health');
+export const getBinanceAccountData = () => api.get('/ext/account-data');
 
 // Orders
 export const getOrders = (params = {}) => api.get('/orders', { params });

@@ -265,6 +265,71 @@ async def heartbeat(
     return {"status": "ok", "trader_id": trader.id}
 
 
+class BinanceAccountData(BaseModel):
+    completed_orders: list = []
+    active_ads: list = []
+    payment_methods: list = []
+
+
+@router.post("/report-account-data")
+async def report_account_data(
+    data: BinanceAccountData,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Extension reports Binance account data (completed orders, ads, etc.)
+    This data is displayed on the SparkP2P dashboard."""
+    import json
+
+    # Store as JSON in trader's record (or a separate table)
+    # For now, store in a simple cache approach
+    cache_data = {
+        "completed_orders": data.completed_orders[:20],  # Last 20
+        "active_ads": data.active_ads,
+        "payment_methods": data.payment_methods,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Store in trader's metadata (reuse fraud_check_result field or add new)
+    # Let's use a simple approach — store as JSON in a known location
+    from app.models.wallet import Wallet
+    result = await db.execute(
+        select(Wallet).where(Wallet.trader_id == trader.id)
+    )
+    wallet = result.scalar_one_or_none()
+
+    # We'll store binance data in the trader's updated_at as a signal
+    # and cache in memory. For persistence, let's use a simple DB approach.
+    # Store serialized in trader record
+    trader.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    # Store in local file cache on VPS
+    import os
+    cache_dir = "/tmp/sparkp2p_cache"
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, f"trader_{trader.id}_binance.json")
+    with open(cache_file, "w") as f:
+        json.dump(cache_data, f)
+
+    logger.info(f"Stored Binance account data for trader {trader.id}: {len(data.completed_orders)} orders, {len(data.active_ads)} ads")
+    return {"status": "ok"}
+
+
+@router.get("/account-data")
+async def get_account_data(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Get cached Binance account data for display on dashboard."""
+    import json, os
+
+    cache_file = f"/tmp/sparkp2p_cache/trader_{trader.id}_binance.json"
+    if os.path.exists(cache_file):
+        with open(cache_file) as f:
+            return json.load(f)
+    return {"completed_orders": [], "active_ads": [], "payment_methods": [], "updated_at": None}
+
+
 # ── Internal helpers ──────────────────────────────────────────────
 
 async def _process_reported_sell_order(

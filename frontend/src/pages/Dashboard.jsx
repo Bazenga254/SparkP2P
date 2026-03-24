@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth } from '../services/api';
+import { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth, getBinanceAccountData } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -17,6 +17,7 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
   const [sessionHealth, setSessionHealth] = useState(null);
+  const [binanceData, setBinanceData] = useState(null);
 
   const loadData = async () => {
     if (!localStorage.getItem('token')) return;
@@ -29,6 +30,7 @@ export default function Dashboard() {
         getOrders({ limit: 20 }),
         getWalletTransactions(20),
         getSessionHealth(),
+        getBinanceAccountData(),
       ]);
       if (results[0].status === 'fulfilled') setProfile(results[0].value.data);
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
@@ -36,6 +38,7 @@ export default function Dashboard() {
       if (results[3].status === 'fulfilled') setOrders(results[3].value.data);
       if (results[4].status === 'fulfilled') setTransactions(results[4].value.data);
       if (results[5].status === 'fulfilled') setSessionHealth(results[5].value.data);
+      if (results[6].status === 'fulfilled') setBinanceData(results[6].value.data);
     } catch (err) {
       console.error('Failed to load data:', err);
     }
@@ -306,6 +309,82 @@ export default function Dashboard() {
                 {orders.length === 0 && <p className="empty-msg">No orders yet</p>}
               </div>
             </div>
+
+            {/* Binance Account Data */}
+            {binanceData && (binanceData.active_ads?.length > 0 || binanceData.completed_orders?.length > 0) && (
+              <>
+                {/* Active Ads */}
+                {binanceData.active_ads?.length > 0 && (
+                  <div className="card">
+                    <div className="card-header">
+                      <TrendingUp size={20} />
+                      <h3>Your Active Ads on Binance</h3>
+                    </div>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Type</th>
+                          <th>Asset</th>
+                          <th>Price</th>
+                          <th>Available</th>
+                          <th>Limits</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {binanceData.active_ads.map((ad, i) => (
+                          <tr key={i}>
+                            <td className={ad.tradeType === 'SELL' ? 'sell' : 'buy'}>{ad.tradeType}</td>
+                            <td>{ad.asset}</td>
+                            <td>KES {ad.price?.toLocaleString()}</td>
+                            <td>{ad.amount?.toFixed(2)} {ad.asset}</td>
+                            <td>KES {ad.minLimit?.toLocaleString()} - {ad.maxLimit?.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Binance Order History */}
+                {binanceData.completed_orders?.length > 0 && (
+                  <div className="card">
+                    <div className="card-header">
+                      <Clock size={20} />
+                      <h3>Binance Order History</h3>
+                      <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
+                        Last synced: {binanceData.updated_at ? new Date(binanceData.updated_at).toLocaleTimeString() : 'Never'}
+                      </span>
+                    </div>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Type</th>
+                          <th>Amount</th>
+                          <th>Crypto</th>
+                          <th>Rate</th>
+                          <th>Counterparty</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {binanceData.completed_orders.map((o, i) => (
+                          <tr key={i}>
+                            <td className={o.tradeType === 'SELL' ? 'sell' : 'buy'}>{o.tradeType}</td>
+                            <td>KES {o.totalPrice?.toLocaleString()}</td>
+                            <td>{o.amount?.toFixed(2)} {o.asset}</td>
+                            <td>KES {o.price?.toFixed(2)}</td>
+                            <td>{o.counterparty || '-'}</td>
+                            <td style={{ color: o.status === 4 ? '#10b981' : '#f59e0b' }}>
+                              {o.status === 4 ? 'Completed' : o.status === 5 ? 'Cancelled' : 'Other'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
 
