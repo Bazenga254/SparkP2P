@@ -202,10 +202,10 @@ class SettlementEngine:
     ) -> bool:
         """Send payment to trader via their preferred settlement method."""
         try:
-            remarks = f"Payment from {trader.full_name}"
-            occasion = f"AutoP2P Settlement"
+            remarks = f"SparkP2P withdrawal for {trader.full_name}"
+            occasion = f"SparkP2P-{trader.id}"
             if order:
-                occasion = f"Order {order.binance_order_number}"
+                occasion = f"SparkP2P-Order-{order.binance_order_number}"
 
             # Simulation mode for testing
             if simulate:
