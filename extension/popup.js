@@ -80,26 +80,37 @@ async function syncCookies() {
   syncMsg.innerHTML = '';
 
   try {
-    // Step 0: Try to capture headers from content script on active Binance tab
-    let contentHeaders = {};
+    // Step 0: Get data from content script on Binance tab
+    let contentCsrf = '';
+    let contentUuid = '';
     let contentCookies = '';
     try {
-      const [tab] = await chrome.tabs.query({ active: true, url: '*://*.binance.com/*' });
-      if (tab) {
-        // First trigger a request so the content script can capture fresh headers
-        const triggerResult = await chrome.tabs.sendMessage(tab.id, { type: 'TRIGGER_CAPTURE' });
-        console.log('[SparkP2P] Trigger result:', triggerResult);
+      // Find any Binance tab
+      const tabs = await chrome.tabs.query({ url: '*://*.binance.com/*' });
+      if (tabs.length > 0) {
+        const tab = tabs[0];
 
-        // Wait a moment then get captured headers
-        await new Promise(r => setTimeout(r, 1000));
-        const captured = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CAPTURED_HEADERS' });
-        contentHeaders = captured?.headers || {};
-        contentCookies = captured?.documentCookies || '';
-        console.log('[SparkP2P] Content script headers:', Object.keys(contentHeaders));
-        console.log('[SparkP2P] Content script cookies length:', contentCookies.length);
+        // Trigger a Binance API call to force header capture
+        try {
+          await chrome.tabs.sendMessage(tab.id, { type: 'TRIGGER_BINANCE_REQUEST' });
+          await new Promise(r => setTimeout(r, 2000)); // Wait for request to complete
+        } catch (e) {}
+
+        // Get captured data
+        try {
+          const data = await chrome.tabs.sendMessage(tab.id, { type: 'GET_BINANCE_DATA' });
+          contentCsrf = data?.csrf || '';
+          contentUuid = data?.uuid || '';
+          contentCookies = data?.cookies || '';
+          console.log(`[SparkP2P] Content: csrf=${contentCsrf ? 'YES' : 'no'}, uuid=${contentUuid ? 'YES' : 'no'}, cookies=${contentCookies.length} chars`);
+        } catch (e) {
+          console.log('[SparkP2P] Content script read failed:', e.message);
+        }
+      } else {
+        console.log('[SparkP2P] No Binance tab found — open Binance first');
       }
     } catch (e) {
-      console.log('[SparkP2P] Content script not available:', e.message);
+      console.log('[SparkP2P] Content script error:', e.message);
     }
     // Capture ALL cookies from Binance — not just a filtered list
     const cookieMap = {};
@@ -170,18 +181,9 @@ async function syncCookies() {
       return;
     }
 
-    // Get csrftoken and bnc-uuid from background's webRequest capture (most reliable)
-    let bgHeaders = {};
-    try {
-      bgHeaders = await chrome.runtime.sendMessage({ type: 'get_captured_headers' });
-    } catch (e) { /* ignore */ }
-
-    // Also check stored values
-    const stored = await chrome.storage.local.get(['captured_csrf', 'captured_bnc_uuid']);
-
-    // Priority: background capture > stored > content script > cookies
-    const csrfToken = bgHeaders?.csrf || stored.captured_csrf || contentHeaders['csrftoken'] || cookieMap['csrftoken'] || '';
-    const bncUuid = bgHeaders?.bnc_uuid || stored.captured_bnc_uuid || contentHeaders['bnc-uuid'] || cookieMap['bnc-uuid'] || '';
+    // Priority for csrf/uuid: content script (page interceptor) > cookies
+    const csrfToken = contentCsrf || cookieMap['csrftoken'] || '';
+    const bncUuid = contentUuid || cookieMap['bnc-uuid'] || '';
 
     console.log(`[SparkP2P] CSRF: ${csrfToken ? csrfToken.substring(0, 10) + '...' : 'MISSING'}`);
     console.log(`[SparkP2P] BNC-UUID: ${bncUuid ? bncUuid.substring(0, 10) + '...' : 'MISSING'}`);
