@@ -222,14 +222,9 @@ async function syncCookies() {
       cookieMap['bnc-uuid'] = contentUuid;
     }
 
-    // Extract csrftoken from content script headers (the REAL one the browser sends)
-    if (contentHeaders['csrftoken'] && !cookieMap['csrftoken']) {
-      cookieMap['csrftoken'] = contentHeaders['csrftoken'];
-    }
-
-    // Extract bnc-uuid from content script headers
-    if (contentHeaders['bnc-uuid'] && !cookieMap['bnc-uuid']) {
-      cookieMap['bnc-uuid'] = contentHeaders['bnc-uuid'];
+    // Add csrftoken from page if found
+    if (contentCsrf && !cookieMap['csrftoken']) {
+      cookieMap['csrftoken'] = contentCsrf;
     }
 
     const totalFound = Object.keys(cookieMap).length;
