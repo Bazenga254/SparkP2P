@@ -80,37 +80,93 @@ async function syncCookies() {
   syncMsg.innerHTML = '';
 
   try {
-    // Step 0: Get data from content script on Binance tab
+    // Step 0: Use scripting.executeScript to run code directly in the Binance page
+    // This bypasses CSP and content script isolation issues
     let contentCsrf = '';
     let contentUuid = '';
     let contentCookies = '';
     try {
-      // Find any Binance tab
       const tabs = await chrome.tabs.query({ url: '*://*.binance.com/*' });
       if (tabs.length > 0) {
         const tab = tabs[0];
+        console.log(`[SparkP2P] Found Binance tab: ${tab.url}`);
 
-        // Trigger a Binance API call to force header capture
-        try {
-          await chrome.tabs.sendMessage(tab.id, { type: 'TRIGGER_BINANCE_REQUEST' });
-          await new Promise(r => setTimeout(r, 2000)); // Wait for request to complete
-        } catch (e) {}
+        // Execute script directly in the page to get cookies
+        const cookieResult = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => document.cookie,
+        });
+        contentCookies = cookieResult?.[0]?.result || '';
+        console.log(`[SparkP2P] Page cookies: ${contentCookies.length} chars`);
 
-        // Get captured data
-        try {
-          const data = await chrome.tabs.sendMessage(tab.id, { type: 'GET_BINANCE_DATA' });
-          contentCsrf = data?.csrf || '';
-          contentUuid = data?.uuid || '';
-          contentCookies = data?.cookies || '';
-          console.log(`[SparkP2P] Content: csrf=${contentCsrf ? 'YES' : 'no'}, uuid=${contentUuid ? 'YES' : 'no'}, cookies=${contentCookies.length} chars`);
-        } catch (e) {
-          console.log('[SparkP2P] Content script read failed:', e.message);
-        }
+        // Execute script to find csrftoken from Binance's JS globals
+        const csrfResult = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            // Try multiple sources for csrftoken
+            // 1. Check if it's in a cookie
+            const cookies = document.cookie.split(';').reduce((acc, c) => {
+              const [k, ...v] = c.trim().split('=');
+              acc[k] = v.join('=');
+              return acc;
+            }, {});
+            if (cookies.csrftoken) return { csrf: cookies.csrftoken, source: 'cookie' };
+
+            // 2. Check localStorage
+            const ls = localStorage.getItem('csrftoken');
+            if (ls) return { csrf: ls, source: 'localStorage' };
+
+            // 3. Check sessionStorage
+            const ss = sessionStorage.getItem('csrftoken');
+            if (ss) return { csrf: ss, source: 'sessionStorage' };
+
+            // 4. Check meta tags
+            const meta = document.querySelector('meta[name="csrf-token"], meta[name="csrftoken"]');
+            if (meta) return { csrf: meta.content, source: 'meta' };
+
+            // 5. Search window object for anything csrf-related
+            try {
+              // Binance stores it in their app state
+              const scripts = document.querySelectorAll('script');
+              for (const s of scripts) {
+                if (s.textContent.includes('csrftoken')) {
+                  const match = s.textContent.match(/csrftoken['":\s]+['"]([a-f0-9]{32,})['"]/);
+                  if (match) return { csrf: match[1], source: 'script' };
+                }
+              }
+            } catch (e) {}
+
+            return { csrf: '', source: 'not_found' };
+          },
+        });
+        const csrfData = csrfResult?.[0]?.result || {};
+        contentCsrf = csrfData.csrf || '';
+        console.log(`[SparkP2P] CSRF from ${csrfData.source}: ${contentCsrf ? contentCsrf.substring(0, 10) + '...' : 'EMPTY'}`);
+
+        // Get bnc-uuid from cookies
+        const uuidResult = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            const cookies = document.cookie.split(';').reduce((acc, c) => {
+              const [k, ...v] = c.trim().split('=');
+              acc[k.trim()] = v.join('=');
+              return acc;
+            }, {});
+            return cookies['bnc-uuid'] || '';
+          },
+        });
+        contentUuid = uuidResult?.[0]?.result || '';
+        console.log(`[SparkP2P] UUID: ${contentUuid ? contentUuid.substring(0, 10) + '...' : 'EMPTY'}`);
+
       } else {
-        console.log('[SparkP2P] No Binance tab found — open Binance first');
+        console.log('[SparkP2P] No Binance tab found');
+        showMsg(syncMsg, 'Please open Binance P2P in a tab first, then try again.', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Sync Binance Cookies';
+        return;
       }
     } catch (e) {
-      console.log('[SparkP2P] Content script error:', e.message);
+      console.log('[SparkP2P] Script execution error:', e.message);
     }
     // Capture ALL cookies from Binance — not just a filtered list
     const cookieMap = {};
@@ -149,14 +205,21 @@ async function syncCookies() {
       } catch (e) { /* ignore */ }
     }
 
-    // Merge cookies from document.cookie (content script)
+    // Merge cookies from page's document.cookie (includes cookies not visible to extension API)
     if (contentCookies) {
       contentCookies.split(';').forEach(c => {
         const [name, ...rest] = c.trim().split('=');
-        if (name && rest.length > 0 && !cookieMap[name]) {
-          cookieMap[name] = rest.join('=');
+        const val = rest.join('=');
+        if (name && val) {
+          // Page cookies override extension API cookies (more complete)
+          cookieMap[name.trim()] = val;
         }
       });
+    }
+
+    // Add bnc-uuid from page if we got it
+    if (contentUuid && !cookieMap['bnc-uuid']) {
+      cookieMap['bnc-uuid'] = contentUuid;
     }
 
     // Extract csrftoken from content script headers (the REAL one the browser sends)
