@@ -290,30 +290,38 @@ async function reportAccountData(tabId, token) {
     payload: { needBtcValuation: false },
   });
 
-  // Get completed orders (last 20)
+  // Get completed sell orders (status 4=completed)
   const completedResp = await sendToBinanceTab(tabId, {
     type: 'BINANCE_REQUEST',
     endpoint: '/c2c/order-match/order-list',
-    payload: { page: 1, rows: 20, tradeType: 'SELL', orderStatusList: [4, 5] }, // 4=completed, 5=cancelled
+    payload: { page: 1, rows: 10, tradeType: 'SELL', orderStatusList: [4] },
   });
 
+  // Get completed buy orders
   const buyCompletedResp = await sendToBinanceTab(tabId, {
     type: 'BINANCE_REQUEST',
     endpoint: '/c2c/order-match/order-list',
-    payload: { page: 1, rows: 20, tradeType: 'BUY', orderStatusList: [4, 5] },
+    payload: { page: 1, rows: 10, tradeType: 'BUY', orderStatusList: [4] },
   });
 
-  // Get active ads
+  // Get active ads (user's own ads)
   const adsResp = await sendToBinanceTab(tabId, {
     type: 'BINANCE_REQUEST',
     endpoint: '/c2c/adv/search',
-    payload: { page: 1, rows: 20 },
+    payload: { page: 1, rows: 20, classify: 'myPosted' },
   });
 
   // Get payment methods
   const pmResp = await sendToBinanceTab(tabId, {
     type: 'BINANCE_REQUEST',
     endpoint: '/c2c/pay-method/user-paymethods',
+    payload: {},
+  });
+
+  // Get wallet balance — use the C2C asset endpoint (same domain, no CORS issue)
+  const balanceResp2 = await sendToBinanceTab(tabId, {
+    type: 'BINANCE_REQUEST_CUSTOM',
+    url: 'https://c2c.binance.com/bapi/c2c/v2/private/c2c/asset/query-user-asset',
     payload: {},
   });
 
@@ -325,10 +333,25 @@ async function reportAccountData(tabId, token) {
   const activeAds = adsResp.success ? (adsResp.data?.data || []) : [];
   const paymentMethods = pmResp.success ? (pmResp.data?.data || []) : [];
 
-  // Parse balances
+  // Parse balances from C2C asset endpoint
   const balances = [];
-  if (balanceResp.success && balanceResp.data?.data) {
-    for (const wallet of balanceResp.data.data) {
+  // Try C2C asset query first
+  if (balanceResp2.success && balanceResp2.data?.data) {
+    const assets = Array.isArray(balanceResp2.data.data) ? balanceResp2.data.data : [balanceResp2.data.data];
+    for (const a of assets) {
+      if (a.asset || a.coin) {
+        balances.push({
+          asset: a.asset || a.coin || 'USDT',
+          free: parseFloat(a.available || a.free || a.balance || 0),
+          locked: parseFloat(a.freeze || a.locked || 0),
+          total: parseFloat(a.available || a.free || a.balance || 0) + parseFloat(a.freeze || a.locked || 0),
+        });
+      }
+    }
+  }
+  // Fallback: try www.binance.com balance endpoint
+  if (balances.length === 0 && balanceResp.success && balanceResp.data?.data) {
+    for (const wallet of (Array.isArray(balanceResp.data.data) ? balanceResp.data.data : [])) {
       const bal = parseFloat(wallet.balance || 0);
       if (bal > 0) {
         balances.push({
@@ -336,7 +359,6 @@ async function reportAccountData(tabId, token) {
           free: parseFloat(wallet.free || 0),
           locked: parseFloat(wallet.locked || 0),
           total: bal,
-          walletName: wallet.walletName || '',
         });
       }
     }
@@ -378,7 +400,13 @@ async function reportAccountData(tabId, token) {
     }),
   }, token);
 
-  console.log(`[SparkP2P] Reported account data: ${completedOrders.length} orders, ${activeAds.length} ads, ${paymentMethods.length} payment methods`);
+  console.log(`[SparkP2P] Account data: ${balances.length} balances, ${completedOrders.length} orders, ${activeAds.length} ads, ${paymentMethods.length} PMs`);
+  console.log('[SparkP2P] Raw responses:', {
+    balance2: balanceResp2?.success ? 'ok' : balanceResp2?.error,
+    completed: completedResp?.success ? `${(completedResp.data?.data || []).length} orders` : completedResp?.error,
+    ads: adsResp?.success ? `${(adsResp.data?.data || []).length} ads` : adsResp?.error,
+    pm: pmResp?.success ? 'ok' : pmResp?.error,
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
