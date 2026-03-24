@@ -208,12 +208,18 @@ async def _credit_wallet_deposit(
 
     logger.info(f"Deposit credited: KES {amount} to trader {trader_id} (ref: {mpesa_txn_id})")
 
-    # Send email notification
+    # Send email + SMS notifications
     try:
         from app.services.email import send_deposit_received
         send_deposit_received(trader.email, trader.full_name, amount, wallet.balance)
     except Exception as e:
         logger.error(f"Failed to send deposit email: {e}")
+
+    try:
+        from app.services.sms import sms_deposit_received
+        sms_deposit_received(trader.phone, amount, wallet.balance)
+    except Exception as e:
+        logger.error(f"Failed to send deposit SMS: {e}")
 
 
 async def _credit_wallet_for_sell(order: Order, amount: float, db: AsyncSession):

@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     BREVO_FROM_EMAIL: str = "noreply@sparkp2p.com"
     BREVO_FROM_NAME: str = "SparkP2P"
 
+    # Advanta SMS
+    ADVANTA_API_KEY: str = ""
+    ADVANTA_PARTNER_ID: str = ""
+    ADVANTA_SHORTCODE: str = "SparkAI"
+
     # Admin
     ADMIN_PASSWORD: str = "SparkAdmin2026"
 
