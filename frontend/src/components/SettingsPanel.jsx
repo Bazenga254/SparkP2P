@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { connectBinance, updateSettlement, updateTradingConfig } from '../services/api';
+import { updateSettlement, updateTradingConfig } from '../services/api';
 import api from '../services/api';
+import RemoteBrowser from './RemoteBrowser';
 
 // Request OTP for settlement change
 const requestSettlementOTP = () => api.post('/traders/settlement/request-otp');
@@ -22,10 +23,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [message, setMessage] = useState('');
 
   // Binance
-  const [cookies, setCookies] = useState('');
-  const [csrfToken, setCsrfToken] = useState('');
-  const [totpSecret, setTotpSecret] = useState('');
-  const [nameVerification, setNameVerification] = useState(null); // {binance_name, registered_name, name_match}
+  const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
 
   // Settlement
   const [settlementMethod, setSettlementMethod] = useState(profile?.settlement_method || 'mpesa');
@@ -53,29 +51,8 @@ export default function SettingsPanel({ profile, onUpdate }) {
     setTimeout(() => setMessage(''), 3000);
   };
 
-  const handleConnectBinance = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const cookieObj = JSON.parse(cookies);
-      const res = await connectBinance({
-        cookies: cookieObj,
-        csrf_token: csrfToken,
-        totp_secret: totpSecret || null,
-      });
-      setNameVerification(res.data);
-      if (res.data.name_match) {
-        showMsg('Binance connected! Name verified successfully.');
-      } else if (res.data.binance_name) {
-        showMsg('Binance connected! Name mismatch detected — please review.');
-      } else {
-        showMsg('Binance connected successfully!');
-      }
-      onUpdate();
-    } catch (err) {
-      showMsg(err.response?.data?.detail || 'Failed to connect Binance');
-    }
-    setLoading(false);
+  const handleConnectBinance = () => {
+    setShowRemoteBrowser(true);
   };
 
   const handleRequestOTP = async () => {
@@ -166,89 +143,67 @@ export default function SettingsPanel({ profile, onUpdate }) {
       {activeSection === 'binance' && (
         <div className="card">
           <h3>Connect Binance</h3>
-          <p className="help-text">
-            Open Binance P2P in Chrome → DevTools (F12) → Network tab →
-            perform any action → copy cookies and csrftoken from request headers.
-          </p>
-          <form onSubmit={handleConnectBinance}>
-            <label>Cookies (JSON format)</label>
-            <textarea
-              rows={5}
-              placeholder='{"p20t": "...", "csrftoken": "...", ...}'
-              value={cookies}
-              onChange={(e) => setCookies(e.target.value)}
-              required
-            />
-            <label>CSRF Token</label>
-            <input
-              type="text"
-              placeholder="csrftoken value"
-              value={csrfToken}
-              onChange={(e) => setCsrfToken(e.target.value)}
-              required
-            />
-            <label>2FA Secret (optional - for auto-release)</label>
-            <input
-              type="password"
-              placeholder="TOTP secret from Google Authenticator setup"
-              value={totpSecret}
-              onChange={(e) => setTotpSecret(e.target.value)}
-            />
-            <button type="submit" disabled={loading}>
-              {loading ? 'Connecting...' : 'Connect Binance'}
-            </button>
-          </form>
 
-          {/* Name Verification Result */}
-          {nameVerification && nameVerification.binance_name && (
-            <div className={`name-verify-box ${nameVerification.name_match ? 'match' : 'mismatch'}`}>
-              <h4>{nameVerification.name_match ? '✓ Name Verified' : '⚠ Name Mismatch'}</h4>
-              <div className="name-verify-row">
-                <span>Registered Name:</span>
-                <strong>{nameVerification.registered_name}</strong>
-              </div>
-              <div className="name-verify-row">
-                <span>Binance Name:</span>
-                <strong>{nameVerification.binance_name}</strong>
-              </div>
-              {nameVerification.name_match ? (
-                <p className="name-verify-ok">Your name matches your Binance account. You're all set!</p>
-              ) : (
-                <div className="name-verify-action">
-                  <p>Your registered name doesn't match your Binance account name. This may cause issues with P2P payment verification.</p>
-                  <button
-                    className="name-update-btn"
-                    onClick={async () => {
-                      try {
-                        await api.post('/traders/update-name');
-                        setNameVerification({ ...nameVerification, name_match: true, registered_name: nameVerification.binance_name });
-                        showMsg(`Name updated to: ${nameVerification.binance_name}`);
-                        onUpdate();
-                      } catch (err) {
-                        showMsg('Failed to update name');
-                      }
-                    }}
-                  >
-                    Update to: {nameVerification.binance_name}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Connected status */}
-          {profile?.binance_connected && !nameVerification && (
+          {profile?.binance_connected ? (
             <div className="name-verify-box match">
-              <h4>✓ Binance Connected</h4>
+              <h4>Binance Connected</h4>
               {profile.binance_username && (
                 <div className="name-verify-row">
                   <span>Binance Name:</span>
                   <strong>{profile.binance_username}</strong>
                 </div>
               )}
+              <p style={{ fontSize: 13, color: '#9ca3af', marginTop: 8 }}>
+                Your Binance session is saved. The bot can trade on your behalf 24/7.
+              </p>
+              <button
+                onClick={handleConnectBinance}
+                style={{
+                  marginTop: 12, padding: '10px 20px', borderRadius: 8,
+                  border: '1px solid #f59e0b', background: 'transparent',
+                  color: '#f59e0b', cursor: 'pointer', fontSize: 13,
+                }}
+              >
+                Re-connect (if session expired)
+              </button>
+            </div>
+          ) : (
+            <div style={{
+              textAlign: 'center', padding: '30px 20px',
+              background: 'var(--bg)', borderRadius: 12,
+              border: '1px dashed var(--border)',
+            }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>&#128279;</div>
+              <h4 style={{ color: '#fff', marginBottom: 8 }}>Link Your Binance Account</h4>
+              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20, maxWidth: 400, margin: '0 auto 20px' }}>
+                A secure browser will open where you log into Binance directly.
+                Once logged in, the bot takes over and trades for you 24/7.
+                No passwords are stored — only session cookies.
+              </p>
+              <button
+                onClick={handleConnectBinance}
+                style={{
+                  padding: '14px 32px', borderRadius: 10, border: 'none',
+                  background: '#f59e0b', color: '#000', fontWeight: 700,
+                  cursor: 'pointer', fontSize: 15,
+                }}
+              >
+                Connect Binance
+              </button>
             </div>
           )}
         </div>
+      )}
+
+      {/* Remote Browser Modal */}
+      {showRemoteBrowser && (
+        <RemoteBrowser
+          onConnected={() => {
+            showMsg('Binance connected! Bot session saved.');
+            onUpdate();
+          }}
+          onClose={() => setShowRemoteBrowser(false)}
+        />
       )}
 
       {activeSection === 'settlement' && (
