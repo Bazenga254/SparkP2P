@@ -67,6 +67,7 @@ function createMainWindow() {
   });
 
   mainWindow.webContents.on('did-finish-load', () => {
+    // Grab token
     mainWindow.webContents.executeJavaScript('localStorage.getItem("token")')
       .then((t) => {
         if (t && t !== token) {
@@ -75,7 +76,35 @@ function createMainWindow() {
         }
       })
       .catch(() => {});
+
+    // Inject desktop flag so dashboard uses native Binance login
+    mainWindow.webContents.executeJavaScript(`
+      window.sparkp2p = {
+        isDesktop: true,
+        connectBinance: () => {
+          const { ipcRenderer } = require('electron');
+          ipcRenderer.invoke('connect-binance');
+        },
+      };
+      console.log('[SparkP2P Desktop] Bridge injected');
+    `).catch(() => {
+      // If require fails due to context isolation, use postMessage instead
+      mainWindow.webContents.executeJavaScript(`
+        window.sparkp2p = { isDesktop: true };
+        console.log('[SparkP2P Desktop] Flag injected');
+      `).catch(() => {});
+    });
   });
+
+  // Intercept WebSocket connections to login-stream — block them and open Chrome instead
+  mainWindow.webContents.session.webRequest.onBeforeRequest(
+    { urls: ['wss://sparkp2p.com/api/browser/login-stream*', 'ws://*/api/browser/login-stream*'] },
+    (details, callback) => {
+      console.log('[SparkP2P] Intercepted remote browser — opening Chrome instead');
+      callback({ cancel: true });
+      openBinanceLogin();
+    }
+  );
 }
 
 // ═══════════════════════════════════════════════════════════
