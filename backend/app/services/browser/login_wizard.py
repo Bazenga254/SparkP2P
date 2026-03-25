@@ -84,43 +84,30 @@ class LoginWizardSession:
             return {"step": "error", "message": f"Failed to launch browser: {e}"}
 
     async def submit_email(self, email: str) -> dict:
-        """Type email and click Continue."""
+        """Type email and click Continue.
+        Binance flow: Email → Continue → CAPTCHA → Password → 2FA
+        After Continue, a CAPTCHA usually appears before the password field.
+        """
         try:
-            # Find and fill email input
-            email_input = self.page.locator('input[name="email"], input[type="text"], input[placeholder*="Email"], input[placeholder*="Phone"]').first
+            # Binance uses name="username" for the email/phone input
+            email_input = self.page.locator('input[name="username"]')
+            if await email_input.count() == 0:
+                # Fallback selectors
+                email_input = self.page.locator('input[type="text"]').first
+            else:
+                email_input = email_input.first
+
             await email_input.click()
             await email_input.fill("")
             await email_input.type(email, delay=30)
             await asyncio.sleep(0.5)
 
-            # Click Continue
-            continue_btn = self.page.locator('button:has-text("Continue"), button:has-text("Next")').first
-            await continue_btn.click()
-            await asyncio.sleep(2)
+            # Click Continue using get_by_role (more reliable than has-text)
+            await self.page.get_by_role("button", name="Continue", exact=True).click()
+            await asyncio.sleep(4)
 
-            # Check what happened — password field or error?
-            page_content = await self.page.content()
-
-            # Check for password field
-            password_visible = await self.page.locator('input[type="password"]').count()
-            if password_visible > 0:
-                self.step = "password"
-                return {"step": "password", "message": "Enter your Binance password"}
-
-            # Check for error message
-            error_el = await self.page.locator('.error-message, [class*="error"], [class*="Error"]').count()
-            if error_el > 0:
-                error_text = await self.page.locator('.error-message, [class*="error"], [class*="Error"]').first.text_content()
-                return {"step": "email", "message": f"Error: {error_text}. Try again."}
-
-            # Maybe CAPTCHA appeared
-            screenshot = await self._take_screenshot()
-            self.step = "captcha_or_password"
-            return {
-                "step": "check",
-                "message": "Processing... If you see a CAPTCHA below, please wait.",
-                "screenshot": screenshot,
-            }
+            # Detect what appeared next
+            return await self._detect_next_step()
 
         except Exception as e:
             logger.error(f"Submit email failed: {e}")
@@ -128,18 +115,28 @@ class LoginWizardSession:
             return {"step": "email", "message": f"Error: {e}", "screenshot": screenshot}
 
     async def submit_password(self, password: str) -> dict:
-        """Type password and click Login."""
+        """Type password and click Log In."""
         try:
+            # Wait for password field to be visible
             pw_input = self.page.locator('input[type="password"]').first
+            await pw_input.wait_for(state="visible", timeout=10000)
             await pw_input.click()
             await pw_input.fill("")
             await pw_input.type(password, delay=30)
             await asyncio.sleep(0.5)
 
-            # Click Login button
-            login_btn = self.page.locator('button:has-text("Log In"), button:has-text("Login"), button[type="submit"]').first
-            await login_btn.click()
-            await asyncio.sleep(3)
+            # Click Log In using get_by_role
+            try:
+                await self.page.get_by_role("button", name="Log In").click()
+            except Exception:
+                # Fallback: try submit button
+                try:
+                    await self.page.locator('button[type="submit"]').first.click()
+                except Exception:
+                    # Last resort: press Enter
+                    await self.page.keyboard.press("Enter")
+
+            await asyncio.sleep(4)
 
             # Check what happened next
             return await self._detect_next_step()

@@ -79,19 +79,52 @@ export default function RemoteBrowser({ onConnected, onClose }) {
     await callApi('/login/2fa', { code: code2fa.trim() });
   };
 
-  const handleCaptchaDrag = async (e) => {
-    if (!imgRef.current) return;
-    const rect = imgRef.current.getBoundingClientRect();
-    const scaleX = 1280 / rect.width;
-    const scaleY = 800 / rect.height;
-    const x = Math.round((e.clientX - rect.left) * scaleX);
-    const y = Math.round((e.clientY - rect.top) * scaleY);
+  // Drag state for CAPTCHA slider
+  const [dragStart, setDragStart] = useState(null);
+  const [sliderOffset, setSliderOffset] = useState(0);
 
-    // For slider: drag from click position to the right
+  const getScaledCoords = (e) => {
+    if (!imgRef.current) return { x: 0, y: 0 };
+    const rect = imgRef.current.getBoundingClientRect();
+    return {
+      x: Math.round((e.clientX - rect.left) * (1280 / rect.width)),
+      y: Math.round((e.clientY - rect.top) * (800 / rect.height)),
+    };
+  };
+
+  const handleCaptchaMouseDown = (e) => {
+    e.preventDefault();
+    const coords = getScaledCoords(e);
+    setDragStart(coords);
+    setSliderOffset(0);
+  };
+
+  const handleCaptchaMouseMove = (e) => {
+    if (!dragStart) return;
+    const coords = getScaledCoords(e);
+    setSliderOffset(coords.x - dragStart.x);
+  };
+
+  const handleCaptchaMouseUp = async (e) => {
+    if (!dragStart) return;
+    const coords = getScaledCoords(e);
+    const endX = coords.x;
+
+    setLoading(true);
     await callApi('/login/captcha/drag', {
-      start_x: x, start_y: y,
-      end_x: x + 200, end_y: y,
+      start_x: dragStart.x,
+      start_y: dragStart.y,
+      end_x: endX,
+      end_y: dragStart.y,
     });
+    setDragStart(null);
+    setSliderOffset(0);
+    setLoading(false);
+  };
+
+  const handleCaptchaClick = async (e) => {
+    const coords = getScaledCoords(e);
+    await callApi('/login/captcha/click', { x: coords.x, y: coords.y });
   };
 
   const handleSave = async () => {
@@ -248,26 +281,33 @@ export default function RemoteBrowser({ onConnected, onClose }) {
         {step === 'captcha' && (
           <div>
             <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 12 }}>
-              Click on the CAPTCHA puzzle below to solve it. If it's a slider, click on the slider button.
+              Drag the puzzle slider to solve the CAPTCHA, or click on it.
             </p>
             {screenshot && (
               <img
                 ref={imgRef}
                 src={`data:image/jpeg;base64,${screenshot}`}
-                onClick={handleCaptchaDrag}
+                onMouseDown={handleCaptchaMouseDown}
+                onMouseMove={handleCaptchaMouseMove}
+                onMouseUp={handleCaptchaMouseUp}
+                onMouseLeave={() => { if (dragStart) { setDragStart(null); setSliderOffset(0); } }}
+                onClick={handleCaptchaClick}
+                draggable={false}
                 style={{
-                  width: '100%', borderRadius: 8, cursor: 'pointer',
+                  width: '100%', borderRadius: 8,
+                  cursor: dragStart ? 'grabbing' : 'grab',
                   border: '1px solid #374151',
+                  userSelect: 'none',
                 }}
                 alt="CAPTCHA"
               />
             )}
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              <button onClick={handleRefreshScreenshot} style={{
+              <button onClick={handleRefreshScreenshot} disabled={loading} style={{
                 flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #374151',
                 background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13,
               }}>
-                Refresh Screenshot
+                {loading ? 'Processing...' : 'Refresh Screenshot'}
               </button>
             </div>
           </div>
