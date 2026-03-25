@@ -192,7 +192,7 @@ async def _credit_wallet_deposit(
     wallet.balance += amount
     wallet.total_earned += amount
 
-    # Record transaction
+    # Record wallet transaction
     txn = WalletTransaction(
         trader_id=trader_id,
         wallet_id=wallet.id,
@@ -204,6 +204,22 @@ async def _credit_wallet_deposit(
         status="completed",
     )
     db.add(txn)
+
+    # Also create Payment record for admin transaction visibility
+    from app.models import Payment, PaymentDirection, PaymentStatus
+    payment = Payment(
+        trader_id=trader_id,
+        direction=PaymentDirection.INBOUND,
+        transaction_type="C2B",
+        amount=amount,
+        phone=phone,
+        sender_name=sender_name or "",
+        bill_ref_number=f"DEP-{trader_id}",
+        mpesa_transaction_id=mpesa_txn_id,
+        status=PaymentStatus.COMPLETED,
+    )
+    db.add(payment)
+
     await db.commit()
 
     logger.info(f"Deposit credited: KES {amount} to trader {trader_id} (ref: {mpesa_txn_id})")
