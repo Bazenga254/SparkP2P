@@ -225,7 +225,9 @@ async def connect_binance(
         trader.binance_cookies_full = encrypt_data(json.dumps(data.cookies_full))
         logger.info(f"Stored {len(data.cookies_full)} full cookies for trader {trader.id}")
 
-    trader.binance_connected = True
+    # NOTE: binance_connected is ONLY set to True by the login wizard
+    # (/api/browser/login/save) after a verified Binance login.
+    # The extension cookie sync just stores cookies but doesn't mark as connected.
     if binance_name:
         trader.binance_username = binance_name
 
@@ -233,8 +235,8 @@ async def connect_binance(
 
     cookie_count = len(data.cookies_full) if data.cookies_full else len(data.cookies)
     return {
-        "status": "connected",
-        "message": "Binance account connected successfully",
+        "status": "cookies_stored",
+        "message": "Cookies stored. Use Connect Binance to verify login.",
         "binance_name": binance_name,
         "registered_name": trader.full_name,
         "name_match": name_match,

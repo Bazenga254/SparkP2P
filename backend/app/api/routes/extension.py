@@ -258,9 +258,8 @@ async def heartbeat(
 ):
     """
     Extension sends heartbeat every 30 seconds.
-    Updates binance_connected and last_seen.
+    Updates last_seen timestamp.
     """
-    trader.binance_connected = True
     trader.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return {"status": "ok", "trader_id": trader.id}

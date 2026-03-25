@@ -87,11 +87,9 @@ class SessionHealthMonitor:
                 # Increase score (max 100)
                 health["score"] = min(100, health["score"] + 5)
 
-                # Reconnect if was disconnected
-                if not trader.binance_connected:
-                    trader.binance_connected = True
-                    await db.commit()
-                    logger.info(f"Trader {trader.id} session recovered")
+                # Log session health check success
+                if trader.binance_connected:
+                    logger.debug(f"Trader {trader.id} session healthy")
             else:
                 await self._handle_failure(trader, health, db, "Session check returned false")
 
