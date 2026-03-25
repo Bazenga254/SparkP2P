@@ -272,16 +272,20 @@ class SettlementEngine:
                 logger.error(f"Unknown settlement method: {trader.settlement_method}")
                 return False
 
-            # Save outbound payment record
+            # Save outbound payment record with full details
+            phone = trader.settlement_phone or trader.phone
             payment = Payment(
                 order_id=order.id if order else None,
                 trader_id=trader.id,
                 direction=PaymentDirection.OUTBOUND,
                 transaction_type=trader.settlement_method.value,
                 amount=amount,
-                destination=trader.settlement_phone or trader.settlement_paybill,
+                phone=phone,
+                sender_name=trader.full_name,
+                destination=phone if trader.settlement_method == SettlementMethod.MPESA else (trader.settlement_paybill or ""),
                 destination_type=trader.settlement_method.value,
                 remarks=remarks,
+                mpesa_transaction_id=result.get("ConversationID") or result.get("OriginatorConversationID") or "",
                 status=PaymentStatus.COMPLETED,
                 raw_callback=result,
             )

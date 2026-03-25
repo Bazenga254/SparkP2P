@@ -1,5 +1,6 @@
 import re
 import random
+from typing import Optional
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -18,6 +19,7 @@ router = APIRouter()
 
 # In-memory store for email verification codes (use Redis in production)
 _verification_codes: dict[str, str] = {}
+_login_otp_codes: dict[str, str] = {}  # email -> OTP for login 2FA
 
 
 class RegisterRequest(BaseModel):
@@ -27,6 +29,8 @@ class RegisterRequest(BaseModel):
     phone: str
     password: str
     email_code: str  # Verification code
+    security_question: str  # Cannot be changed after registration
+    security_answer: str  # Hashed before storing
 
     @field_validator("first_name", "last_name")
     @classmethod
@@ -71,6 +75,7 @@ class SendVerificationRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+    otp_code: Optional[str] = None  # Step 2: OTP verification
 
 
 class EmployeeLoginRequest(BaseModel):
@@ -143,6 +148,8 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         phone=data.phone,
         full_name=full_name,
         password_hash=hash_password(data.password),
+        security_question=data.security_question.strip(),
+        security_answer_hash=hash_password(data.security_answer.strip().lower()),
         status=TraderStatus.PENDING,
     )
     db.add(trader)
@@ -166,9 +173,12 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login")
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
-    """Login and get access token."""
+    """Two-step login with SMS OTP.
+    Step 1: Send email + password → returns otp_required=true, sends SMS OTP
+    Step 2: Send email + password + otp_code → returns access_token
+    """
     result = await db.execute(
         select(Trader).where(Trader.email == data.email)
     )
@@ -186,14 +196,51 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
             detail="Account suspended",
         )
 
-    token = create_access_token({"sub": str(trader.id), "email": trader.email})
+    # Step 2: Verify OTP
+    if data.otp_code:
+        stored_otp = _login_otp_codes.get(data.email)
+        if not stored_otp or stored_otp != data.otp_code:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired OTP code",
+            )
 
-    return TokenResponse(
-        access_token=token,
-        trader_id=trader.id,
-        full_name=trader.full_name,
-        role=trader.role or "trader",
-    )
+        # OTP valid — issue token
+        _login_otp_codes.pop(data.email, None)
+        token = create_access_token({"sub": str(trader.id), "email": trader.email})
+
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "trader_id": trader.id,
+            "full_name": trader.full_name,
+            "role": trader.role or "trader",
+            "otp_required": False,
+        }
+
+    # Step 1: Password valid → send OTP to phone
+    otp_code = str(random.randint(100000, 999999))
+    _login_otp_codes[data.email] = otp_code
+
+    # Send OTP via SMS
+    try:
+        from app.services.sms import sms_verification_code
+        sms_verification_code(trader.phone, otp_code)
+    except Exception as e:
+        logger.warning(f"SMS OTP send failed for {trader.email}: {e}")
+
+    # Also send via email as fallback
+    try:
+        from app.services.email import send_verification_code
+        send_verification_code(trader.email, otp_code)
+    except Exception:
+        pass
+
+    return {
+        "otp_required": True,
+        "message": f"OTP sent to {trader.phone[-4:].rjust(len(trader.phone), '*')}",
+        "phone_hint": f"***{trader.phone[-4:]}",
+    }
 
 
 @router.post("/employee/login")

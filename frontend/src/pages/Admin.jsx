@@ -75,9 +75,11 @@ export default function Admin() {
     setRefreshing(false);
   };
 
-  const loadTransactions = async (period) => {
+  const [txnSearch, setTxnSearch] = useState('');
+
+  const loadTransactions = async (period, search) => {
     try {
-      const res = await getAdminTransactions(period, 50);
+      const res = await getAdminTransactions(period, 50, search);
       setTransactions(res.data);
     } catch (err) {
       console.error('Transactions load error:', err);
@@ -474,6 +476,41 @@ export default function Admin() {
                   ))}
                 </div>
               </div>
+              {/* Search bar */}
+              <div style={{ padding: '12px 0', display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  placeholder="Search by M-Pesa code, phone, name..."
+                  value={txnSearch}
+                  onChange={(e) => setTxnSearch(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && loadTransactions(txPeriod, txnSearch)}
+                  style={{
+                    flex: 1, padding: '10px 14px', borderRadius: 8,
+                    border: '1px solid var(--border)', background: 'var(--bg)',
+                    color: '#fff', fontSize: 13,
+                  }}
+                />
+                <button
+                  onClick={() => loadTransactions(txPeriod, txnSearch)}
+                  style={{
+                    padding: '10px 20px', borderRadius: 8, border: 'none',
+                    background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                  }}
+                >
+                  Search
+                </button>
+                {txnSearch && (
+                  <button
+                    onClick={() => { setTxnSearch(''); loadTransactions(txPeriod, ''); }}
+                    style={{
+                      padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)',
+                      background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer',
+                    }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
               <div className="adm-table-wrap">
                 <table className="adm-table">
                   <thead>
@@ -483,9 +520,11 @@ export default function Admin() {
                       <th>Type</th>
                       <th>Amount</th>
                       <th>Trader</th>
+                      <th>Recipient/Sender</th>
                       <th>Phone</th>
+                      <th>M-Pesa Code</th>
+                      <th>Reference</th>
                       <th>Status</th>
-                      <th>M-Pesa ID</th>
                       <th>Time</th>
                     </tr>
                   </thead>
@@ -495,24 +534,28 @@ export default function Admin() {
                         <td className="mono">{tx.id}</td>
                         <td>
                           <span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>
-                            {tx.direction === 'inbound' ? 'Inbound' : 'Outbound'}
+                            {tx.direction === 'inbound' ? 'IN' : 'OUT'}
                           </span>
                         </td>
                         <td>{tx.transaction_type}</td>
-                        <td>{fmtKES(tx.amount)}</td>
+                        <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>
+                          {tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}
+                        </td>
                         <td>{tx.trader_name}</td>
-                        <td>{tx.phone || '-'}</td>
+                        <td>{tx.sender_name !== '-' ? tx.sender_name : tx.destination !== '-' ? tx.destination : '-'}</td>
+                        <td className="mono">{tx.phone !== '-' ? tx.phone : tx.trader_phone}</td>
+                        <td className="mono" style={{ color: '#f59e0b' }}>{tx.mpesa_transaction_id}</td>
+                        <td className="mono">{tx.bill_ref_number}</td>
                         <td>
                           <span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>
                             {tx.status}
                           </span>
                         </td>
-                        <td className="mono">{tx.mpesa_transaction_id || '-'}</td>
                         <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '-'}</td>
                       </tr>
                     ))}
                     {transactions.transactions.length === 0 && (
-                      <tr><td colSpan={9} className="adm-empty">No transactions for this period</td></tr>
+                      <tr><td colSpan={11} className="adm-empty">No transactions found</td></tr>
                     )}
                   </tbody>
                 </table>

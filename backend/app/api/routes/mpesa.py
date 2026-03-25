@@ -322,10 +322,55 @@ async def _trigger_auto_release(order: Order, db: AsyncSession):
 # ── B2C Callbacks ─────────────────────────────────────────────────
 
 @router.post("/b2c/result")
-async def b2c_result(request: Request):
-    """B2C result callback — payment to trader's M-Pesa completed."""
+async def b2c_result(request: Request, db: AsyncSession = Depends(get_db)):
+    """B2C result callback — payment to trader's M-Pesa completed.
+    Safaricom sends the actual M-Pesa receipt code here.
+    """
     data = await request.json()
     logger.info(f"B2C Result: {data}")
+
+    try:
+        result = data.get("Result", {})
+        conversation_id = result.get("ConversationID", "")
+        result_code = result.get("ResultCode")
+        result_desc = result.get("ResultDesc", "")
+
+        # Extract receipt and details from ResultParameters
+        params = {}
+        for item in (result.get("ResultParameters", {}).get("ResultParameter", [])):
+            params[item.get("Key", "")] = item.get("Value", "")
+
+        mpesa_receipt = params.get("TransactionReceipt", "")
+        receiver_name = params.get("ReceiverPartyPublicName", "")
+        amount = params.get("TransactionAmount", "")
+
+        logger.info(f"B2C Receipt: {mpesa_receipt}, Amount: {amount}, Receiver: {receiver_name}, Code: {result_code}")
+
+        # Find and update the payment record by ConversationID
+        if conversation_id and mpesa_receipt:
+            stmt = select(Payment).where(
+                Payment.mpesa_transaction_id == conversation_id
+            )
+            r = await db.execute(stmt)
+            payment = r.scalar_one_or_none()
+
+            if payment:
+                payment.mpesa_transaction_id = mpesa_receipt  # Replace ConversationID with actual receipt
+                if receiver_name:
+                    payment.sender_name = receiver_name  # Store receiver name
+                if result_code == 0:
+                    payment.status = PaymentStatus.COMPLETED
+                else:
+                    payment.status = PaymentStatus.FAILED
+                    payment.remarks = (payment.remarks or "") + f" | B2C failed: {result_desc}"
+                await db.commit()
+                logger.info(f"Updated payment with receipt {mpesa_receipt}")
+            else:
+                logger.warning(f"No payment found for ConversationID {conversation_id}")
+
+    except Exception as e:
+        logger.error(f"B2C result processing error: {e}")
+
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 

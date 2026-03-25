@@ -15,12 +15,16 @@ export default function Login() {
   const [isRegister, setIsRegister] = useState(false);
   const [form, setForm] = useState({
     first_name: '', last_name: '', email: '', phone: '', password: '', confirm_password: '', email_code: '',
+    security_question: '', security_answer: '',
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [otpRequired, setOtpRequired] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [phoneHint, setPhoneHint] = useState('');
   const { loginUser } = useAuth();
   const navigate = useNavigate();
 
@@ -62,28 +66,40 @@ export default function Login() {
 
     setLoading(true);
     try {
-      const res = isRegister
-        ? await register({
-            first_name: form.first_name,
-            last_name: form.last_name,
-            email: form.email,
-            phone: form.phone,
-            password: form.password,
-            email_code: form.email_code,
-          })
-        : await login(form.email, form.password);
-
-      const role = res.data.role || 'trader';
-      loginUser(res.data.access_token, {
-        id: res.data.trader_id,
-        full_name: res.data.full_name,
-        role,
-      });
-      // Redirect based on role
-      if (role === 'employee') {
-        navigate('/employee');
+      if (isRegister) {
+        if (!form.security_question || !form.security_answer) {
+          setError('Please select a security question and provide an answer');
+          setLoading(false);
+          return;
+        }
+        const res = await register({
+          first_name: form.first_name,
+          last_name: form.last_name,
+          email: form.email,
+          phone: form.phone,
+          password: form.password,
+          email_code: form.email_code,
+          security_question: form.security_question,
+          security_answer: form.security_answer,
+        });
+        const role = res.data.role || 'trader';
+        loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
+        navigate(role === 'employee' ? '/employee' : '/dashboard');
       } else {
-        navigate('/dashboard');
+        // Login with optional OTP
+        const res = await login(form.email, form.password, otpRequired ? otpCode : undefined);
+
+        if (res.data.otp_required) {
+          // Step 1: OTP sent to phone
+          setOtpRequired(true);
+          setPhoneHint(res.data.phone_hint || '');
+          setError('');
+        } else {
+          // Step 2: OTP verified, got token
+          const role = res.data.role || 'trader';
+          loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
+          navigate(role === 'employee' ? '/employee' : '/dashboard');
+        }
       }
     } catch (err) {
       const detail = err.response?.data?.detail;
@@ -249,14 +265,79 @@ export default function Login() {
                     <span className="login-field-error">Passwords do not match</span>
                   )}
                 </div>
+
+                {/* Security Question */}
+                <div className="login-field">
+                  <label>Security Question</label>
+                  <select
+                    value={form.security_question}
+                    onChange={(e) => updateForm('security_question', e.target.value)}
+                    required
+                    style={{
+                      width: '100%', padding: '12px 14px', borderRadius: 10,
+                      border: '1px solid #d1d5db', background: '#fff', color: '#111',
+                      fontSize: 14, appearance: 'auto',
+                    }}
+                  >
+                    <option value="">Select a security question</option>
+                    <option value="What is your mother's maiden name?">What is your mother's maiden name?</option>
+                    <option value="What was the name of your first pet?">What was the name of your first pet?</option>
+                    <option value="What city were you born in?">What city were you born in?</option>
+                    <option value="What is the name of your primary school?">What is the name of your primary school?</option>
+                    <option value="What was your childhood nickname?">What was your childhood nickname?</option>
+                  </select>
+                  <span className="login-field-hint" style={{ color: '#ef4444' }}>
+                    This cannot be changed after registration. Choose carefully.
+                  </span>
+                </div>
+
+                <div className="login-field">
+                  <label>Security Answer</label>
+                  <input
+                    type="text"
+                    placeholder="Your answer (case-insensitive)"
+                    value={form.security_answer}
+                    onChange={(e) => updateForm('security_answer', e.target.value)}
+                    required
+                  />
+                  <span className="login-field-hint">
+                    You'll need this to change your payment method. Remember it.
+                  </span>
+                </div>
               </>
+            )}
+
+            {/* Login OTP Step */}
+            {!isRegister && otpRequired && (
+              <div className="login-field">
+                <label>Verification Code</label>
+                <input
+                  type="text"
+                  placeholder="Enter 6-digit OTP"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  maxLength={6}
+                  autoFocus
+                  required
+                />
+                <span className="login-field-hint">
+                  Code sent to {phoneHint} and your email
+                </span>
+              </div>
             )}
 
             {error && <div className="login-error">{error}</div>}
 
             <button type="submit" className="login-submit" disabled={loading}>
-              {loading ? 'Please wait...' : isRegister ? 'Create Account' : 'Sign In'}
+              {loading ? 'Please wait...' : isRegister ? 'Create Account' : otpRequired ? 'Verify & Sign In' : 'Sign In'}
             </button>
+
+            {!isRegister && otpRequired && (
+              <p style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginTop: 8, cursor: 'pointer' }}
+                onClick={() => { setOtpRequired(false); setOtpCode(''); setError(''); }}>
+                Didn't receive code? <span style={{ color: '#f59e0b' }}>Try again</span>
+              </p>
+            )}
           </form>
 
           <p className="login-toggle" onClick={() => { setIsRegister(!isRegister); setError(''); setCodeSent(false); }}>

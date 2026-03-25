@@ -86,7 +86,20 @@ async def admin_dashboard(
             func.coalesce(func.sum(Order.platform_fee), 0),
         ).where(func.date(Order.created_at) == today)
     )
-    today_orders, today_volume, today_revenue = result.one()
+    today_orders, today_volume, today_order_revenue = result.one()
+
+    # Today's wallet fees (settlement markup)
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    result = await db.execute(
+        select(
+            func.coalesce(func.sum(func.abs(WalletTransaction.amount)), 0),
+        ).where(
+            WalletTransaction.created_at >= today_start,
+            WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE,
+        )
+    )
+    today_wallet_fees = float(result.scalar() or 0)
+    today_revenue = float(today_order_revenue) + today_wallet_fees
 
     # Completed orders today
     result = await db.execute(
@@ -361,10 +374,14 @@ async def list_unmatched_payments(
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """List payments that couldn't be matched to an order."""
+    """List INBOUND payments that couldn't be matched to an order.
+    Excludes outbound (withdrawals, B2C settlements)."""
     result = await db.execute(
         select(Payment)
-        .where(Payment.order_id.is_(None))
+        .where(
+            Payment.order_id.is_(None),
+            Payment.direction == PaymentDirection.INBOUND,
+        )
         .order_by(Payment.created_at.desc())
     )
     payments = result.scalars().all()
@@ -401,29 +418,53 @@ def _get_period_start(period: str):
 @router.get("/transactions")
 async def admin_transactions(
     period: str = "today",
+    search: str = None,
     limit: int = Query(default=50, le=200),
     offset: int = 0,
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all payments (inbound C2B + outbound B2C/B2B) with date filters."""
+    """List all payments with date filters and search.
+    Search by: M-Pesa code, phone number, trader name, or sender name.
+    """
     start = _get_period_start(period)
 
     query = (
-        select(Payment, Trader.full_name.label("trader_name"))
+        select(Payment, Trader.full_name.label("trader_name"), Trader.phone.label("trader_phone"))
         .join(Trader, Payment.trader_id == Trader.id, isouter=True)
     )
     if start:
         query = query.where(Payment.created_at >= start)
 
+    # Search filter
+    if search and search.strip():
+        s = f"%{search.strip()}%"
+        query = query.where(
+            (Payment.mpesa_transaction_id.ilike(s)) |
+            (Payment.phone.ilike(s)) |
+            (Payment.sender_name.ilike(s)) |
+            (Payment.destination.ilike(s)) |
+            (Trader.full_name.ilike(s)) |
+            (Trader.phone.ilike(s))
+        )
+
     query = query.order_by(Payment.created_at.desc()).limit(limit).offset(offset)
     result = await db.execute(query)
     rows = result.all()
 
-    # Count total for pagination
+    # Count total
     count_query = select(func.count(Payment.id))
     if start:
         count_query = count_query.where(Payment.created_at >= start)
+    if search and search.strip():
+        s = f"%{search.strip()}%"
+        count_query = count_query.join(Trader, Payment.trader_id == Trader.id, isouter=True).where(
+            (Payment.mpesa_transaction_id.ilike(s)) |
+            (Payment.phone.ilike(s)) |
+            (Payment.sender_name.ilike(s)) |
+            (Payment.destination.ilike(s)) |
+            (Trader.full_name.ilike(s))
+        )
     total = (await db.execute(count_query)).scalar()
 
     return {
@@ -432,15 +473,21 @@ async def admin_transactions(
             {
                 "id": p.id,
                 "trader_name": trader_name or "Unknown",
+                "trader_phone": trader_phone or "-",
                 "direction": p.direction.value if p.direction else "unknown",
                 "transaction_type": p.transaction_type or "unknown",
                 "amount": p.amount,
-                "phone": p.phone,
+                "phone": p.phone or "-",
+                "sender_name": p.sender_name or "-",
+                "destination": p.destination or "-",
+                "destination_type": p.destination_type or "-",
+                "remarks": p.remarks or "-",
+                "bill_ref_number": p.bill_ref_number or "-",
                 "status": p.status.value if p.status else "unknown",
-                "mpesa_transaction_id": p.mpesa_transaction_id,
+                "mpesa_transaction_id": p.mpesa_transaction_id or "-",
                 "created_at": p.created_at.isoformat() if p.created_at else "",
             }
-            for p, trader_name in rows
+            for p, trader_name, trader_phone in rows
         ],
     }
 
@@ -458,14 +505,29 @@ async def admin_analytics(
     year_start = now - timedelta(days=365)
 
     async def _revenue_for_period(start):
-        """Sum platform_fee + settlement_fee for orders in a period."""
-        q = select(
+        """Sum ALL platform revenue for a period:
+        1. Order fees (platform_fee + settlement_fee from orders)
+        2. Wallet fees (PLATFORM_FEE transactions = settlement markup KES 25)
+        """
+        # From orders
+        q1 = select(
             func.coalesce(func.sum(Order.platform_fee), 0),
             func.coalesce(func.sum(Order.settlement_fee), 0),
         ).where(Order.created_at >= start)
-        r = await db.execute(q)
-        pf, sf = r.one()
-        return float(pf) + float(sf)
+        r1 = await db.execute(q1)
+        order_pf, order_sf = r1.one()
+
+        # From wallet transactions (settlement markup = PLATFORM_FEE type)
+        q2 = select(
+            func.coalesce(func.sum(func.abs(WalletTransaction.amount)), 0),
+        ).where(
+            WalletTransaction.created_at >= start,
+            WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE,
+        )
+        r2 = await db.execute(q2)
+        wallet_fees = float(r2.scalar() or 0)
+
+        return float(order_pf) + float(order_sf) + wallet_fees
 
     today_revenue = await _revenue_for_period(today_start)
     week_revenue = await _revenue_for_period(week_start)
@@ -480,7 +542,16 @@ async def admin_analytics(
         )
     )
     total_pf, total_sf = r.one()
-    platform_profit = float(total_pf) + float(total_sf)
+
+    # Add wallet platform fees (all time)
+    r_wf = await db.execute(
+        select(
+            func.coalesce(func.sum(func.abs(WalletTransaction.amount)), 0),
+        ).where(WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE)
+    )
+    total_wallet_fees = float(r_wf.scalar() or 0)
+
+    platform_profit = float(total_pf) + float(total_sf) + total_wallet_fees
 
     # Monthly volumes - last 6 months
     six_months_ago = now - timedelta(days=180)

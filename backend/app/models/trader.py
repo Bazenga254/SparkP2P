@@ -41,12 +41,17 @@ class Trader(Base):
     binance_fund_password = Column(String(512), nullable=True)  # Encrypted
     binance_verify_method = Column(String(20), default="none")  # none, totp, fund_password, manual
 
+    # Security question (set during registration, cannot be changed)
+    security_question = Column(String(255), nullable=True)
+    security_answer_hash = Column(String(255), nullable=True)
+
     # Settlement config
     settlement_method = Column(Enum(SettlementMethod), default=SettlementMethod.MPESA)
     settlement_phone = Column(String(20), nullable=True)  # For M-Pesa B2C
     settlement_paybill = Column(String(20), nullable=True)  # For B2B
     settlement_account = Column(String(100), nullable=True)  # Account number for B2B
     settlement_bank_name = Column(String(100), nullable=True)
+    settlement_changed_at = Column(DateTime(timezone=True), nullable=True)  # 48hr cooldown tracking
 
     # Trading config
     auto_release_enabled = Column(Boolean, default=True)

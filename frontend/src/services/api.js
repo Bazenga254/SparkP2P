@@ -20,7 +20,7 @@ api.interceptors.response.use(
 );
 
 // Auth
-export const login = (email, password) => api.post('/auth/login', { email, password });
+export const login = (email, password, otp_code) => api.post('/auth/login', { email, password, otp_code });
 export const register = (data) => api.post('/auth/register', data);
 export const sendVerificationCode = (email) => api.post('/auth/send-verification', { email });
 
@@ -56,8 +56,8 @@ export const updateTraderStatus = (id, status) => api.put(`/admin/traders/${id}/
 export const updateTraderTier = (id, tier) => api.put(`/admin/traders/${id}/tier?tier=${tier}`);
 export const getDisputedOrders = () => api.get('/admin/orders/disputed');
 export const getUnmatchedPayments = () => api.get('/admin/payments/unmatched');
-export const getAdminTransactions = (period = 'today', limit = 50) =>
-  api.get(`/admin/transactions?period=${period}&limit=${limit}`);
+export const getAdminTransactions = (period = 'today', limit = 50, search = '') =>
+  api.get(`/admin/transactions?period=${period}&limit=${limit}${search ? '&search=' + encodeURIComponent(search) : ''}`);
 export const getAdminAnalytics = () => api.get('/admin/analytics');
 export const getAdminOnlineTraders = () => api.get('/admin/online-traders');
 

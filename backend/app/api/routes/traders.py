@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -42,6 +43,13 @@ class SettlementConfigRequest(BaseModel):
     paybill: Optional[str] = None        # For bank/paybill/till
     account: Optional[str] = None        # Account number
     bank_name: Optional[str] = None
+    otp_code: Optional[str] = None       # Required for security verification
+    security_answer: Optional[str] = None  # Required for security verification
+
+
+class RequestSettlementOTP(BaseModel):
+    """Request OTP before changing settlement method."""
+    pass
 
 
 class TradingConfigRequest(BaseModel):
@@ -91,6 +99,8 @@ class TraderProfileResponse(BaseModel):
     subscription_status: Optional[str] = None
     subscription_expires: Optional[str] = None
     onboarding_complete: bool = False
+    security_question: Optional[str] = None
+    settlement_cooldown_until: Optional[str] = None  # ISO datetime when cooldown ends
 
 
 # ── Routes ────────────────────────────────────────────────────────
@@ -153,6 +163,13 @@ async def get_profile(
         subscription_status=sub_status,
         subscription_expires=sub_expires,
         onboarding_complete=bool(onboarding_complete),
+        security_question=trader.security_question,
+        settlement_cooldown_until=(
+            (trader.settlement_changed_at + timedelta(hours=48)).isoformat()
+            if trader.settlement_changed_at and
+               (trader.settlement_changed_at + timedelta(hours=48)) > datetime.now(timezone.utc)
+            else None
+        ),
     )
 
 
@@ -259,18 +276,77 @@ async def update_verification(
     return {"status": "updated", "verify_method": data.verify_method}
 
 
+@router.post("/settlement/request-otp")
+async def request_settlement_otp(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Send OTP to trader's phone before allowing settlement change."""
+    import random
+    from app.api.routes.auth import _login_otp_codes
+
+    otp_code = str(random.randint(100000, 999999))
+    _login_otp_codes[f"settle_{trader.email}"] = otp_code
+
+    # Send via SMS
+    try:
+        from app.services.sms import sms_verification_code
+        sms_verification_code(trader.phone, otp_code)
+    except Exception:
+        pass
+
+    # Send via email as fallback
+    try:
+        from app.services.email import send_verification_code
+        send_verification_code(trader.email, otp_code)
+    except Exception:
+        pass
+
+    return {
+        "message": f"OTP sent to ***{trader.phone[-4:]}",
+        "security_question": trader.security_question or "What is your mother's maiden name?",
+    }
+
+
 @router.put("/settlement")
 async def update_settlement(
     data: SettlementConfigRequest,
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update settlement configuration."""
+    """Update settlement configuration.
+    Requires OTP + security answer for verification.
+    New method has 48-hour cooldown before it can be used.
+    """
+    from app.api.routes.auth import _login_otp_codes
+    from app.core.security import verify_password
+    from datetime import datetime, timezone
+
+    # Verify OTP
+    if not data.otp_code:
+        raise HTTPException(status_code=400, detail="OTP code is required to change payment method")
+
+    stored_otp = _login_otp_codes.get(f"settle_{trader.email}")
+    if not stored_otp or stored_otp != data.otp_code:
+        raise HTTPException(status_code=401, detail="Invalid or expired OTP code")
+
+    # Verify security answer
+    if not data.security_answer:
+        raise HTTPException(status_code=400, detail="Security answer is required")
+
+    if trader.security_answer_hash:
+        if not verify_password(data.security_answer.strip().lower(), trader.security_answer_hash):
+            raise HTTPException(status_code=401, detail="Incorrect security answer")
+
+    # Clear OTP
+    _login_otp_codes.pop(f"settle_{trader.email}", None)
+
+    # Update settlement method
     trader.settlement_method = data.method
     trader.settlement_phone = data.phone
     trader.settlement_paybill = data.paybill
     trader.settlement_account = data.account
     trader.settlement_bank_name = data.bank_name
+    trader.settlement_changed_at = datetime.now(timezone.utc)  # Start 48hr cooldown
 
     await db.commit()
 
@@ -287,7 +363,12 @@ async def update_settlement(
         destination = f"{destination} Acc: {data.account}"
     send_payment_method_added(trader.email, trader.full_name, method_display, destination)
 
-    return {"status": "updated", "method": data.method.value}
+    return {
+        "status": "updated",
+        "method": data.method.value,
+        "cooldown_until": (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(),
+        "message": "Payment method updated. Due to security reasons, this method will be active for withdrawals after 48 hours.",
+    }
 
 
 @router.put("/trading-config")
@@ -365,8 +446,21 @@ async def request_withdrawal(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Request withdrawal of wallet balance."""
+    """Request withdrawal of wallet balance.
+    Checks 48-hour cooldown on new payment methods.
+    """
     from app.services.settlement.engine import SettlementEngine
+    from datetime import datetime, timezone
+
+    # Check 48-hour cooldown
+    if trader.settlement_changed_at:
+        cooldown_end = trader.settlement_changed_at + timedelta(hours=48)
+        if datetime.now(timezone.utc) < cooldown_end:
+            hours_left = int((cooldown_end - datetime.now(timezone.utc)).total_seconds() / 3600)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Your payment method was recently changed. For security, withdrawals are available in {hours_left} hours.",
+            )
 
     result = await db.execute(
         select(Wallet).where(Wallet.trader_id == trader.id)
@@ -379,8 +473,23 @@ async def request_withdrawal(
             detail="No funds available for withdrawal",
         )
 
+    # Calculate fees
+    from app.services.settlement.engine import get_total_settlement_fee
+    safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, wallet.balance)
+    net_amount = wallet.balance - total_fee
+
+    if net_amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Balance too low to cover fees (KES {total_fee})",
+        )
+
     engine = SettlementEngine(db)
+    # Force withdraw — bypass batch threshold for manual withdrawals
+    original_threshold = trader.batch_threshold
+    trader.batch_threshold = 0  # Temporarily disable threshold
     success = await engine.batch_settle(trader.id)
+    trader.batch_threshold = original_threshold  # Restore
 
     if not success:
         raise HTTPException(
@@ -388,7 +497,7 @@ async def request_withdrawal(
             detail="Withdrawal failed. Please try again.",
         )
 
-    return {"status": "success", "message": f"KES {wallet.balance} sent to your account"}
+    return {"status": "success", "message": f"KES {net_amount} sent to your account (fee: KES {total_fee})"}
 
 
 @router.post("/wallet/withdraw/simulate")
