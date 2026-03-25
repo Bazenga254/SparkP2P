@@ -25,6 +25,9 @@ let pollerRunning = false;
 let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 
+// Captured data from Binance page's own network requests
+let capturedData = { balances: [], ads: [], paymentMethods: [], nickname: '', uid: '' };
+
 // ═══════════════════════════════════════════════════════════
 // ELECTRON APP
 // ═══════════════════════════════════════════════════════════
@@ -165,7 +168,8 @@ async function connectBinance() {
         binancePage = page;
         console.log('[SparkP2P] P2P page ready:', page.url());
 
-        // No second tab needed — all API calls go through p2p page
+        // Intercept Binance's own network responses to capture account data
+        setupNetworkCapture(page);
       }
 
       // Test: can Puppeteer's page.evaluate make Binance API calls?
@@ -352,67 +356,88 @@ async function execAction(action) {
   } catch (e) { stats.errors++; }
 }
 
+function setupNetworkCapture(page) {
+  // Listen to ALL network responses from Binance pages
+  // When Binance's own JS fetches data, we capture the responses
+  page.on('response', async (response) => {
+    const url = response.url();
+    try {
+      if (url.includes('/asset/query-user-asset') || url.includes('/asset-service/wallet/balance')) {
+        const data = await response.json();
+        if (data?.code === '000000' && data.data) {
+          const arr = Array.isArray(data.data) ? data.data : [data.data];
+          capturedData.balances = arr.filter(a => a.asset || a.coin).map(a => ({
+            asset: a.asset || a.coin || 'USDT',
+            free: parseFloat(a.available || a.free || a.balance || 0),
+            locked: parseFloat(a.freeze || a.locked || 0),
+            total: parseFloat(a.available || a.free || a.balance || 0) + parseFloat(a.freeze || a.locked || 0),
+          }));
+          console.log(`[SparkP2P] Captured ${capturedData.balances.length} balances from network`);
+        }
+      }
+      if (url.includes('/adv/search') || url.includes('/adv/list')) {
+        const data = await response.json();
+        if (data?.code === '000000' && data.data) {
+          capturedData.ads = (Array.isArray(data.data) ? data.data : []).map(a => ({
+            advNo: a.advNo, tradeType: a.tradeType, asset: a.asset, fiat: a.fiatUnit,
+            price: parseFloat(a.price || 0), amount: parseFloat(a.surplusAmount || a.tradableQuantity || 0),
+            minLimit: parseFloat(a.minSingleTransAmount || 0), maxLimit: parseFloat(a.maxSingleTransAmount || 0),
+          }));
+          console.log(`[SparkP2P] Captured ${capturedData.ads.length} ads from network`);
+        }
+      }
+      if (url.includes('/pay-method/user-paymethods')) {
+        const data = await response.json();
+        if (data?.code === '000000' && data.data) {
+          capturedData.paymentMethods = data.data.map(p => ({
+            id: p.id, type: p.identifier,
+            name: (p.fields || []).find(f => (f.fieldName || '').toLowerCase().includes('name'))?.fieldValue || '',
+          }));
+          console.log(`[SparkP2P] Captured ${capturedData.paymentMethods.length} payment methods from network`);
+        }
+      }
+      if (url.includes('/user/profile') || url.includes('/user-info')) {
+        const data = await response.json();
+        if (data?.data) {
+          capturedData.nickname = data.data.nickName || data.data.nickname || '';
+          capturedData.uid = data.data.userId || data.data.uid || '';
+          if (capturedData.nickname) console.log(`[SparkP2P] Captured user: ${capturedData.nickname}`);
+        }
+      }
+    } catch (e) {
+      // Response not JSON or already consumed — ignore
+    }
+  });
+  console.log('[SparkP2P] Network capture enabled — listening for Binance data');
+}
+
+async function triggerPageRefresh() {
+  // Navigate to pages that trigger Binance to fetch account data
+  if (!binancePage || binancePage.isClosed()) return;
+  try {
+    // Reload the P2P page — Binance's JS will fetch balance, ads, etc.
+    await binancePage.reload({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 3000));
+  } catch (e) {}
+}
+
 async function reportAccountData() {
   if (!binancePage || binancePage.isClosed()) return;
 
-  // All calls from p2p.binance.com using absolute URLs to c2c API
-  // (relative URLs for order-list work, but other endpoints need the full c2c domain)
+  // Completed orders — these work via relative URL
   const cs = await binanceFetch('/c2c/order-match/order-list', { page: 1, rows: 20, tradeType: 'SELL', orderStatusList: [4] });
   const cb = await binanceFetch('/c2c/order-match/order-list', { page: 1, rows: 20, tradeType: 'BUY', orderStatusList: [4] });
 
-  // For balance, ads, PMs — try fetching from c2c.binance.com with credentials
-  // These are cross-origin from p2p but Binance may allow them
-  let bal = null, ads = null, pm = null;
-  try {
-    const accountData = await binancePage.evaluate(async () => {
-      const results = { balance: null, ads: null, pm: null };
-      try {
-        // Try C2C balance
-        const bResp = await fetch('https://c2c.binance.com/bapi/c2c/v2/private/c2c/asset/query-user-asset', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: '{}', credentials: 'include',
-        });
-        results.balance = await bResp.json();
-      } catch (e) {}
-      try {
-        const aResp = await fetch('https://c2c.binance.com/bapi/c2c/v2/private/c2c/adv/search', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ page: 1, rows: 20 }), credentials: 'include',
-        });
-        results.ads = await aResp.json();
-      } catch (e) {}
-      try {
-        const pResp = await fetch('https://c2c.binance.com/bapi/c2c/v2/private/c2c/pay-method/user-paymethods', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: '{}', credentials: 'include',
-        });
-        results.pm = await pResp.json();
-      } catch (e) {}
-      return results;
-    });
-    bal = accountData?.balance;
-    ads = accountData?.ads;
-    pm = accountData?.pm;
-  } catch (e) {
-    console.error('[SparkP2P] Account data fetch error:', e.message?.substring(0, 80));
+  // Trigger page refresh every 10th poll to capture fresh data
+  if (stats.polls % 10 === 0) {
+    await triggerPageRefresh();
   }
 
-  if (stats.polls <= 10) {
-    console.log('[SparkP2P] RAW balance:', JSON.stringify(bal).substring(0, 300));
-    console.log('[SparkP2P] RAW completed sell:', JSON.stringify(cs).substring(0, 300));
-    console.log('[SparkP2P] RAW ads:', JSON.stringify(ads).substring(0, 200));
-    console.log('[SparkP2P] RAW PMs:', JSON.stringify(pm).substring(0, 200));
-  }
-
-  const balances = [];
-  if (bal?.code === '000000' && bal.data) {
-    for (const a of (Array.isArray(bal.data) ? bal.data : [bal.data])) {
-      if (a.asset || a.coin) balances.push({ asset: a.asset || a.coin || 'USDT', free: parseFloat(a.available || a.free || 0), locked: parseFloat(a.freeze || a.locked || 0), total: parseFloat(a.available || a.free || 0) + parseFloat(a.freeze || a.locked || 0) });
-    }
-  }
+  // Use captured data from network interception
+  const balances = capturedData.balances;
   const completed = [...((cs?.code === '000000' ? cs.data : []) || []), ...((cb?.code === '000000' ? cb.data : []) || [])].sort((a, b) => (b.createTime || 0) - (a.createTime || 0)).slice(0, 20).map(o => ({ orderNumber: o.orderNumber, tradeType: o.tradeType, totalPrice: parseFloat(o.totalPrice || 0), amount: parseFloat(o.amount || 0), price: parseFloat(o.price || 0), asset: o.asset || 'USDT', fiat: o.fiat || 'KES', counterparty: o.buyerNickname || o.sellerNickname || '', status: o.orderStatus, createTime: o.createTime }));
-  const activeAds = (ads?.code === '000000' ? ads.data : []).map(a => ({ advNo: a.advNo, tradeType: a.tradeType, asset: a.asset, fiat: a.fiatUnit, price: parseFloat(a.price || 0), amount: parseFloat(a.surplusAmount || 0) }));
-  const pms = (pm?.code === '000000' ? pm.data : []).map(p => ({ id: p.id, type: p.identifier, name: (p.fields || []).find(f => (f.fieldName || '').toLowerCase().includes('name'))?.fieldValue || '' }));
+  const activeAds = capturedData.ads;
+  const pms = capturedData.paymentMethods;
 
   await fetch(`${API_BASE}/ext/report-account-data`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ balances, completed_orders: completed, active_ads: activeAds, payment_methods: pms }) });
   console.log(`[SparkP2P] Account: ${balances.length} bal, ${completed.length} orders, ${activeAds.length} ads, ${pms.length} PMs`);
