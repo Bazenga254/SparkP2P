@@ -1,306 +1,403 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useRef } from 'react';
+import api from '../services/api';
 
-const WS_BASE = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const API_HOST = window.location.host;
+const STEPS = {
+  idle: { title: 'Connect Binance', color: '#6b7280' },
+  starting: { title: 'Launching browser...', color: '#f59e0b' },
+  email: { title: 'Step 1: Enter Email', color: '#3b82f6' },
+  password: { title: 'Step 2: Enter Password', color: '#3b82f6' },
+  captcha: { title: 'Step 3: Solve CAPTCHA', color: '#f59e0b' },
+  '2fa': { title: 'Step 4: Verification Code', color: '#8b5cf6' },
+  logged_in: { title: 'Login Successful!', color: '#10b981' },
+  saving: { title: 'Saving session...', color: '#f59e0b' },
+  done: { title: 'Binance Connected!', color: '#10b981' },
+  error: { title: 'Error', color: '#ef4444' },
+};
 
 export default function RemoteBrowser({ onConnected, onClose }) {
-  const [status, setStatus] = useState('connecting'); // connecting, active, logged_in, saved, error
-  const [message, setMessage] = useState('Launching browser...');
-  const [url, setUrl] = useState('');
-  const canvasRef = useRef(null);
-  const wsRef = useRef(null);
-  const imgRef = useRef(new Image());
-  const scaleRef = useRef({ x: 1, y: 1 });
+  const [step, setStep] = useState('idle');
+  const [message, setMessage] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [code2fa, setCode2fa] = useState('');
+  const [faType, setFaType] = useState('');
+  const [screenshot, setScreenshot] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [cookieCount, setCookieCount] = useState(0);
+  const imgRef = useRef(null);
 
-  // Get token
-  const token = localStorage.getItem('token');
+  const callApi = async (endpoint, body = {}) => {
+    setLoading(true);
+    try {
+      const res = await api.post(`/browser${endpoint}`, body);
+      const data = res.data;
 
-  const connectWs = useCallback(() => {
-    const ws = new WebSocket(`${WS_BASE}//${API_HOST}/api/browser/login-stream?token=${token}`);
-    wsRef.current = ws;
+      if (data.screenshot) setScreenshot(data.screenshot);
+      if (data.step) setStep(data.step);
+      if (data.message) setMessage(data.message);
+      if (data.fa_type) setFaType(data.fa_type);
+      if (data.cookie_count) setCookieCount(data.cookie_count);
 
-    ws.onopen = () => {
-      setStatus('active');
-      setMessage('Browser ready — log into Binance below');
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-
-        if (msg.type === 'screenshot' && msg.data) {
-          const img = imgRef.current;
-          img.onload = () => {
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0);
-
-            // Calculate scale for mouse events
-            const rect = canvas.getBoundingClientRect();
-            scaleRef.current = {
-              x: img.width / rect.width,
-              y: img.height / rect.height,
-            };
-          };
-          img.src = `data:image/jpeg;base64,${msg.data}`;
-
-          if (msg.url) setUrl(msg.url);
-          if (msg.logged_in && status !== 'logged_in' && status !== 'saved') {
-            setStatus('logged_in');
-            setMessage('Login detected! Click "Save & Start Bot" to activate.');
-          }
-        }
-
-        if (msg.type === 'status') {
-          if (msg.logged_in) {
-            setStatus('logged_in');
-            setMessage(msg.message || 'Logged in!');
-          }
-        }
-
-        if (msg.type === 'session_saved') {
-          setStatus('saved');
-          setMessage(`${msg.message} (${msg.cookie_count} cookies)`);
-          if (onConnected) onConnected();
-        }
-
-        if (msg.type === 'error') {
-          setMessage(msg.message);
-        }
-      } catch (e) {
-        console.error('WS parse error:', e);
-      }
-    };
-
-    ws.onerror = () => {
-      setStatus('error');
-      setMessage('Connection error. Please try again.');
-    };
-
-    ws.onclose = () => {
-      if (status !== 'saved') {
-        setStatus('error');
-        setMessage('Browser session ended.');
-      }
-    };
-  }, [token, status, onConnected]);
-
-  useEffect(() => {
-    connectWs();
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Send message to WebSocket
-  const send = (msg) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
+      return data;
+    } catch (err) {
+      const detail = err.response?.data?.detail || err.message;
+      setMessage(detail);
+      setStep('error');
+      return null;
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Get canvas coordinates scaled to browser viewport
-  const getCoords = (e) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: Math.round((e.clientX - rect.left) * scaleRef.current.x),
-      y: Math.round((e.clientY - rect.top) * scaleRef.current.y),
-    };
-  };
-
-  // Mouse handlers
-  const handleClick = (e) => {
-    const { x, y } = getCoords(e);
-    send({ type: 'click', x, y });
-  };
-
-  const handleMouseDown = (e) => {
-    const { x, y } = getCoords(e);
-    send({ type: 'mousedown', x, y });
-  };
-
-  const handleMouseMove = (e) => {
-    // Only send during drag (button pressed)
-    if (e.buttons === 1) {
-      const { x, y } = getCoords(e);
-      send({ type: 'mousemove', x, y });
+  const handleStart = async () => {
+    setStep('starting');
+    setMessage('Launching secure browser...');
+    setScreenshot(null);
+    const data = await callApi('/login/start');
+    if (data) {
+      setStep(data.step);
+      setMessage(data.message);
     }
   };
 
-  const handleMouseUp = () => {
-    send({ type: 'mouseup' });
-  };
-
-  const handleWheel = (e) => {
+  const handleSubmitEmail = async (e) => {
     e.preventDefault();
-    const { x, y } = getCoords(e);
-    send({ type: 'scroll', x, y, deltaX: e.deltaX, deltaY: e.deltaY });
+    if (!email.trim()) return;
+    await callApi('/login/email', { email: email.trim() });
   };
 
-  // Keyboard handler
-  const handleKeyDown = (e) => {
+  const handleSubmitPassword = async (e) => {
     e.preventDefault();
-    const specialKeys = ['Enter', 'Tab', 'Backspace', 'Delete', 'Escape',
-      'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
-
-    if (specialKeys.includes(e.key)) {
-      send({ type: 'key', key: e.key });
-    } else if (e.key.length === 1) {
-      send({ type: 'type', text: e.key });
-    }
+    if (!password) return;
+    await callApi('/login/password', { password });
+    setPassword('');  // Clear password immediately
   };
 
-  const handleSaveSession = () => {
-    send({ type: 'save_session' });
+  const handleSubmit2FA = async (e) => {
+    e.preventDefault();
+    if (!code2fa.trim()) return;
+    await callApi('/login/2fa', { code: code2fa.trim() });
+  };
+
+  const handleCaptchaDrag = async (e) => {
+    if (!imgRef.current) return;
+    const rect = imgRef.current.getBoundingClientRect();
+    const scaleX = 1280 / rect.width;
+    const scaleY = 800 / rect.height;
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+
+    // For slider: drag from click position to the right
+    await callApi('/login/captcha/drag', {
+      start_x: x, start_y: y,
+      end_x: x + 200, end_y: y,
+    });
+  };
+
+  const handleSave = async () => {
+    setStep('saving');
     setMessage('Saving session...');
+    const data = await callApi('/login/save');
+    if (data) {
+      setStep('done');
+      setCookieCount(data.cookie_count || 0);
+      if (onConnected) onConnected();
+    }
   };
 
-  const handleClose = () => {
-    send({ type: 'close' });
-    if (wsRef.current) wsRef.current.close();
+  const handleCancel = async () => {
+    try { await api.post('/browser/login/cancel'); } catch (_) {}
     if (onClose) onClose();
   };
 
-  const statusColor = {
-    connecting: '#f59e0b',
-    active: '#3b82f6',
-    logged_in: '#10b981',
-    saved: '#10b981',
-    error: '#ef4444',
-  }[status];
+  const handleRefreshScreenshot = async () => {
+    try {
+      const res = await api.get('/browser/login/screenshot');
+      if (res.data.screenshot) setScreenshot(res.data.screenshot);
+    } catch (_) {}
+  };
+
+  const stepInfo = STEPS[step] || STEPS.idle;
 
   return (
     <div style={{
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-      background: 'rgba(0,0,0,0.85)', zIndex: 9999,
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      padding: '20px 20px 10px',
+      background: 'rgba(0,0,0,0.9)', zIndex: 9999,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}>
-      {/* Header bar */}
       <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        width: '100%', maxWidth: 1320, marginBottom: 12,
+        background: '#1a1a2e', borderRadius: 16, width: '100%', maxWidth: 480,
+        padding: 32, position: 'relative', maxHeight: '90vh', overflowY: 'auto',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 10, height: 10, borderRadius: '50%',
+              background: stepInfo.color,
+              boxShadow: `0 0 8px ${stepInfo.color}`,
+            }} />
+            <h3 style={{ margin: 0, color: '#fff', fontSize: 18 }}>{stepInfo.title}</h3>
+          </div>
+          <button onClick={handleCancel} style={{
+            background: 'transparent', border: 'none', color: '#6b7280',
+            fontSize: 20, cursor: 'pointer', padding: '4px 8px',
+          }}>✕</button>
+        </div>
+
+        {message && (
           <div style={{
-            width: 10, height: 10, borderRadius: '50%',
-            background: statusColor, boxShadow: `0 0 8px ${statusColor}`,
-          }} />
-          <span style={{ color: '#fff', fontSize: 14, fontWeight: 600 }}>
+            padding: '10px 14px', borderRadius: 8, marginBottom: 16,
+            background: step === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)',
+            border: `1px solid ${step === 'error' ? '#ef4444' : '#3b82f6'}`,
+            color: step === 'error' ? '#ef4444' : '#93c5fd',
+            fontSize: 13,
+          }}>
             {message}
-          </span>
-        </div>
-
-        <div style={{ display: 'flex', gap: 10 }}>
-          {status === 'logged_in' && (
-            <button
-              onClick={handleSaveSession}
-              style={{
-                padding: '8px 20px', borderRadius: 8, border: 'none',
-                background: '#10b981', color: '#fff', fontWeight: 600,
-                cursor: 'pointer', fontSize: 13,
-              }}
-            >
-              Save & Start Bot
-            </button>
-          )}
-          <button
-            onClick={handleClose}
-            style={{
-              padding: '8px 20px', borderRadius: 8,
-              border: '1px solid #4b5563', background: 'transparent',
-              color: '#9ca3af', cursor: 'pointer', fontSize: 13,
-            }}
-          >
-            {status === 'saved' ? 'Done' : 'Cancel'}
-          </button>
-        </div>
-      </div>
-
-      {/* URL bar */}
-      <div style={{
-        width: '100%', maxWidth: 1320, padding: '6px 14px',
-        background: '#1f2937', borderRadius: '8px 8px 0 0',
-        fontSize: 12, color: '#6b7280', fontFamily: 'monospace',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>
-        {url || 'Loading...'}
-      </div>
-
-      {/* Browser canvas */}
-      <div style={{
-        width: '100%', maxWidth: 1320, flex: 1,
-        overflow: 'hidden', background: '#111',
-        borderRadius: '0 0 8px 8px', position: 'relative',
-      }}>
-        <canvas
-          ref={canvasRef}
-          tabIndex={0}
-          onClick={handleClick}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onWheel={handleWheel}
-          onKeyDown={handleKeyDown}
-          style={{
-            width: '100%', height: '100%',
-            objectFit: 'contain', cursor: 'default',
-            outline: 'none',
-          }}
-        />
-
-        {status === 'connecting' && (
-          <div style={{
-            position: 'absolute', inset: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 16,
-          }}>
-            Launching browser...
           </div>
         )}
 
-        {status === 'saved' && (
-          <div style={{
-            position: 'absolute', inset: 0,
-            display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(0,0,0,0.8)',
-          }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>&#10003;</div>
-            <div style={{ color: '#10b981', fontSize: 20, fontWeight: 700 }}>
+        {/* Step: idle — start button */}
+        {step === 'idle' && (
+          <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <p style={{ color: '#9ca3af', fontSize: 14, marginBottom: 20 }}>
+              Log into your Binance account securely. Your credentials go directly to Binance — they are never stored.
+            </p>
+            <button onClick={handleStart} disabled={loading} style={{
+              padding: '14px 40px', borderRadius: 10, border: 'none',
+              background: '#f59e0b', color: '#000', fontWeight: 700,
+              fontSize: 15, cursor: 'pointer', opacity: loading ? 0.6 : 1,
+            }}>
+              {loading ? 'Launching...' : 'Start Login'}
+            </button>
+          </div>
+        )}
+
+        {step === 'starting' && (
+          <div style={{ textAlign: 'center', padding: '30px 0', color: '#9ca3af' }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>&#9203;</div>
+            Opening Binance login page...
+          </div>
+        )}
+
+        {/* Step: email */}
+        {step === 'email' && (
+          <form onSubmit={handleSubmitEmail}>
+            <label style={{ display: 'block', color: '#9ca3af', fontSize: 13, marginBottom: 6 }}>
+              Binance Email or Phone
+            </label>
+            <input
+              type="text"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="your@email.com"
+              autoFocus
+              style={{
+                width: '100%', padding: '12px 14px', borderRadius: 8,
+                border: '1px solid #374151', background: '#0f172a',
+                color: '#fff', fontSize: 15, marginBottom: 16,
+                boxSizing: 'border-box',
+              }}
+            />
+            <button type="submit" disabled={loading || !email.trim()} style={{
+              width: '100%', padding: '12px', borderRadius: 8, border: 'none',
+              background: '#f59e0b', color: '#000', fontWeight: 600,
+              fontSize: 14, cursor: 'pointer', opacity: loading ? 0.6 : 1,
+            }}>
+              {loading ? 'Submitting...' : 'Continue'}
+            </button>
+          </form>
+        )}
+
+        {/* Step: password */}
+        {(step === 'password' || step === 'check') && (
+          <form onSubmit={handleSubmitPassword}>
+            <div style={{ color: '#9ca3af', fontSize: 13, marginBottom: 6 }}>
+              Email: <strong style={{ color: '#fff' }}>{email}</strong>
+            </div>
+            <label style={{ display: 'block', color: '#9ca3af', fontSize: 13, marginBottom: 6, marginTop: 12 }}>
+              Password
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Your Binance password"
+              autoFocus
+              style={{
+                width: '100%', padding: '12px 14px', borderRadius: 8,
+                border: '1px solid #374151', background: '#0f172a',
+                color: '#fff', fontSize: 15, marginBottom: 16,
+                boxSizing: 'border-box',
+              }}
+            />
+            <button type="submit" disabled={loading || !password} style={{
+              width: '100%', padding: '12px', borderRadius: 8, border: 'none',
+              background: '#f59e0b', color: '#000', fontWeight: 600,
+              fontSize: 14, cursor: 'pointer', opacity: loading ? 0.6 : 1,
+            }}>
+              {loading ? 'Logging in...' : 'Log In'}
+            </button>
+            <p style={{ fontSize: 11, color: '#4b5563', marginTop: 10, textAlign: 'center' }}>
+              Your password is sent directly to Binance and is never stored.
+            </p>
+          </form>
+        )}
+
+        {/* Step: captcha */}
+        {step === 'captcha' && (
+          <div>
+            <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 12 }}>
+              Click on the CAPTCHA puzzle below to solve it. If it's a slider, click on the slider button.
+            </p>
+            {screenshot && (
+              <img
+                ref={imgRef}
+                src={`data:image/jpeg;base64,${screenshot}`}
+                onClick={handleCaptchaDrag}
+                style={{
+                  width: '100%', borderRadius: 8, cursor: 'pointer',
+                  border: '1px solid #374151',
+                }}
+                alt="CAPTCHA"
+              />
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={handleRefreshScreenshot} style={{
+                flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #374151',
+                background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13,
+              }}>
+                Refresh Screenshot
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step: 2FA */}
+        {step === '2fa' && (
+          <form onSubmit={handleSubmit2FA}>
+            <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 12 }}>
+              {faType === 'authenticator' && 'Enter the 6-digit code from your Authenticator app.'}
+              {faType === 'sms' && 'Enter the verification code sent to your phone.'}
+              {faType === 'email' && 'Enter the verification code sent to your email.'}
+              {!faType && 'Enter your verification code.'}
+            </p>
+            {screenshot && (
+              <img
+                src={`data:image/jpeg;base64,${screenshot}`}
+                style={{
+                  width: '100%', borderRadius: 8, marginBottom: 12,
+                  border: '1px solid #374151',
+                }}
+                alt="2FA prompt"
+              />
+            )}
+            <input
+              type="text"
+              value={code2fa}
+              onChange={(e) => setCode2fa(e.target.value)}
+              placeholder="Enter 6-digit code"
+              maxLength={6}
+              autoFocus
+              style={{
+                width: '100%', padding: '14px', borderRadius: 8,
+                border: '1px solid #374151', background: '#0f172a',
+                color: '#fff', fontSize: 24, textAlign: 'center',
+                letterSpacing: '0.5em', marginBottom: 16,
+                boxSizing: 'border-box',
+              }}
+            />
+            <button type="submit" disabled={loading || code2fa.length < 6} style={{
+              width: '100%', padding: '12px', borderRadius: 8, border: 'none',
+              background: '#8b5cf6', color: '#fff', fontWeight: 600,
+              fontSize: 14, cursor: 'pointer', opacity: loading ? 0.6 : 1,
+            }}>
+              {loading ? 'Verifying...' : 'Verify'}
+            </button>
+          </form>
+        )}
+
+        {/* Step: logged_in — save button */}
+        {step === 'logged_in' && (
+          <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <div style={{ fontSize: 48, marginBottom: 12, color: '#10b981' }}>&#10003;</div>
+            <p style={{ color: '#d1d5db', fontSize: 15, marginBottom: 4 }}>
+              Successfully logged into Binance!
+            </p>
+            <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 24 }}>
+              {cookieCount > 0 ? `${cookieCount} session cookies captured.` : 'Session ready to save.'}
+            </p>
+            <button onClick={handleSave} disabled={loading} style={{
+              width: '100%', padding: '14px', borderRadius: 10, border: 'none',
+              background: '#10b981', color: '#fff', fontWeight: 700,
+              fontSize: 15, cursor: 'pointer', opacity: loading ? 0.6 : 1,
+            }}>
+              {loading ? 'Saving...' : 'Save & Activate Bot'}
+            </button>
+          </div>
+        )}
+
+        {/* Step: done */}
+        {step === 'done' && (
+          <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <div style={{ fontSize: 48, marginBottom: 12, color: '#10b981' }}>&#10003;</div>
+            <p style={{ color: '#10b981', fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
               Binance Connected!
-            </div>
-            <div style={{ color: '#9ca3af', fontSize: 14, marginTop: 8 }}>
-              Your bot session has been saved. Trading automation is ready.
-            </div>
-            <button
-              onClick={handleClose}
-              style={{
-                marginTop: 20, padding: '10px 30px', borderRadius: 8,
-                border: 'none', background: '#10b981', color: '#fff',
-                fontWeight: 600, cursor: 'pointer', fontSize: 14,
-              }}
-            >
-              Close
+            </p>
+            <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 24 }}>
+              {cookieCount} cookies saved. Your trading bot is ready to run 24/7.
+            </p>
+            <button onClick={handleCancel} style={{
+              width: '100%', padding: '14px', borderRadius: 10, border: 'none',
+              background: '#10b981', color: '#fff', fontWeight: 600,
+              fontSize: 14, cursor: 'pointer',
+            }}>
+              Done
             </button>
           </div>
         )}
-      </div>
 
-      {/* Help text */}
-      <div style={{
-        maxWidth: 1320, width: '100%', marginTop: 8,
-        fontSize: 12, color: '#6b7280', textAlign: 'center',
-      }}>
-        Click and type directly in the browser above. Drag to solve CAPTCHA puzzles.
-        {status === 'active' && ' Log into your Binance account to connect.'}
+        {/* Step: unknown — show screenshot */}
+        {step === 'unknown' && screenshot && (
+          <div>
+            <p style={{ color: '#f59e0b', fontSize: 13, marginBottom: 12 }}>
+              Unexpected page. See screenshot below:
+            </p>
+            <img
+              src={`data:image/jpeg;base64,${screenshot}`}
+              style={{ width: '100%', borderRadius: 8, border: '1px solid #374151' }}
+              alt="Page screenshot"
+            />
+            <button onClick={handleRefreshScreenshot} style={{
+              marginTop: 12, width: '100%', padding: '10px', borderRadius: 8,
+              border: '1px solid #374151', background: 'transparent',
+              color: '#9ca3af', cursor: 'pointer', fontSize: 13,
+            }}>
+              Refresh
+            </button>
+          </div>
+        )}
+
+        {/* Error — retry */}
+        {step === 'error' && (
+          <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <button onClick={handleStart} style={{
+              padding: '12px 30px', borderRadius: 8, border: 'none',
+              background: '#f59e0b', color: '#000', fontWeight: 600,
+              cursor: 'pointer', fontSize: 14,
+            }}>
+              Try Again
+            </button>
+          </div>
+        )}
+
+        {/* Loading indicator */}
+        {step === 'saving' && (
+          <div style={{ textAlign: 'center', padding: '30px 0', color: '#9ca3af' }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>&#9203;</div>
+            Saving your session...
+          </div>
+        )}
       </div>
     </div>
   );

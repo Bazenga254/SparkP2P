@@ -1,29 +1,34 @@
 """
-Browser Automation API — Playwright session management + remote login.
+Browser Automation API — Playwright login wizard + bot management.
 
-Two modes:
-  1. Remote Login: Live browser stream via WebSocket — trader logs into
-     Binance manually through the dashboard, bot saves session and takes over.
-  2. Bot Mode: Headless polling using saved session cookies.
+Login wizard: Step-by-step automated login via REST API.
+  1. POST /login/start → launches browser, goes to Binance login
+  2. POST /login/email → types email, clicks continue
+  3. POST /login/password → types password, clicks login
+  4. POST /login/captcha → forwards CAPTCHA solution
+  5. POST /login/2fa → enters 2FA code
+  6. POST /login/save → saves session cookies to DB
+  7. GET  /login/screenshot → get current page screenshot
+
+Bot mode: Headless trading using saved cookies via httpx.
 """
 
-import asyncio
 import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db, async_session
-from app.core.security import decrypt_data, encrypt_data, decode_access_token
+from app.core.database import get_db
+from app.core.security import encrypt_data
 from app.models import Trader
 from app.api.deps import get_current_trader
 from app.services.browser.engine import browser_engine
-from app.services.browser.remote_session import (
-    RemoteBrowserSession, get_remote_session, set_remote_session, remove_remote_session,
+from app.services.browser.login_wizard import (
+    LoginWizardSession, get_wizard, set_wizard, remove_wizard,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,318 +37,235 @@ router = APIRouter()
 
 
 # ═══════════════════════════════════════════════════════════
-# REMOTE LOGIN — WebSocket live browser stream
+# LOGIN WIZARD — step-by-step Binance login
 # ═══════════════════════════════════════════════════════════
 
-@router.websocket("/login-stream")
-async def login_stream(
-    websocket: WebSocket,
-    token: str = Query(default=None),
+class EmailInput(BaseModel):
+    email: str
+
+class PasswordInput(BaseModel):
+    password: str
+
+class CaptchaClickInput(BaseModel):
+    x: int
+    y: int
+
+class CaptchaDragInput(BaseModel):
+    start_x: int
+    start_y: int
+    end_x: int
+    end_y: int
+
+class TwoFAInput(BaseModel):
+    code: str
+
+
+@router.post("/login/start")
+async def login_start(trader: Trader = Depends(get_current_trader)):
+    """Step 0: Launch browser and navigate to Binance login page."""
+    # Clean up any existing session
+    await remove_wizard(trader.id)
+
+    session = LoginWizardSession(trader.id)
+    result = await session.start()
+
+    if result.get("step") == "error":
+        await session.stop()
+        raise HTTPException(status_code=500, detail=result["message"])
+
+    set_wizard(trader.id, session)
+    return result
+
+
+@router.post("/login/email")
+async def login_email(
+    data: EmailInput,
+    trader: Trader = Depends(get_current_trader),
 ):
-    """
-    WebSocket endpoint for live browser login.
+    """Step 1: Submit email/phone number."""
+    session = get_wizard(trader.id)
+    if not session:
+        raise HTTPException(status_code=400, detail="No active login session. Call /login/start first.")
+    return await session.submit_email(data.email)
 
-    Client connects with ?token=JWT
-    Server streams screenshots, client sends mouse/keyboard events.
 
-    Client → Server messages (JSON):
-      {"type": "click", "x": 100, "y": 200}
-      {"type": "type", "text": "hello"}
-      {"type": "key", "key": "Enter"}
-      {"type": "mousedown", "x": 100, "y": 200}
-      {"type": "mousemove", "x": 150, "y": 200}
-      {"type": "mouseup"}
-      {"type": "scroll", "x": 640, "y": 400, "deltaY": -300}
-      {"type": "save_session"}
+@router.post("/login/password")
+async def login_password(
+    data: PasswordInput,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Step 2: Submit password."""
+    session = get_wizard(trader.id)
+    if not session:
+        raise HTTPException(status_code=400, detail="No active login session.")
+    return await session.submit_password(data.password)
 
-    Server → Client messages (JSON):
-      {"type": "screenshot", "data": "<base64 jpeg>", "url": "..."}
-      {"type": "status", "logged_in": true, "url": "..."}
-      {"type": "session_saved", "cookie_count": 27}
-      {"type": "error", "message": "..."}
-    """
-    # Authenticate via token query param
-    if not token:
-        await websocket.close(code=4001, reason="Missing token")
-        return
 
-    try:
-        payload = decode_access_token(token)
-        trader_id = int(payload["sub"])
-    except Exception:
-        await websocket.close(code=4001, reason="Invalid token")
-        return
+@router.post("/login/captcha/click")
+async def login_captcha_click(
+    data: CaptchaClickInput,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Step 3a: Click on CAPTCHA element."""
+    session = get_wizard(trader.id)
+    if not session:
+        raise HTTPException(status_code=400, detail="No active login session.")
+    return await session.solve_captcha_click(data.x, data.y)
 
-    await websocket.accept()
-    logger.info(f"Remote login WebSocket connected for trader {trader_id}")
 
-    # Start remote browser session
-    session = RemoteBrowserSession(trader_id)
-    started = await session.start()
+@router.post("/login/captcha/drag")
+async def login_captcha_drag(
+    data: CaptchaDragInput,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Step 3b: Drag CAPTCHA slider."""
+    session = get_wizard(trader.id)
+    if not session:
+        raise HTTPException(status_code=400, detail="No active login session.")
+    return await session.solve_captcha_drag(data.start_x, data.start_y, data.end_x, data.end_y)
 
-    if not started:
-        await websocket.send_json({"type": "error", "message": "Failed to launch browser"})
-        await websocket.close()
-        return
 
-    set_remote_session(trader_id, session)
+@router.post("/login/2fa")
+async def login_2fa(
+    data: TwoFAInput,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Step 4: Submit 2FA verification code."""
+    session = get_wizard(trader.id)
+    if not session:
+        raise HTTPException(status_code=400, detail="No active login session.")
+    return await session.submit_2fa(data.code)
 
-    # Send initial screenshot
-    screenshot = await session.take_screenshot()
-    url = await session.get_current_url()
-    await websocket.send_json({"type": "screenshot", "data": screenshot, "url": url})
 
-    # Start streaming loop and input handler concurrently
-    try:
-        # Background task: stream screenshots
-        async def stream_screenshots():
-            while session.running:
-                await asyncio.sleep(0.5)  # ~2 fps
-                try:
-                    screenshot = await session.take_screenshot()
-                    if screenshot:
-                        url = await session.get_current_url()
-                        logged_in = await session.check_login_status()
-                        await websocket.send_json({
-                            "type": "screenshot",
-                            "data": screenshot,
-                            "url": url,
-                            "logged_in": logged_in,
-                        })
+@router.get("/login/screenshot")
+async def login_screenshot(trader: Trader = Depends(get_current_trader)):
+    """Get current page screenshot (for debugging or CAPTCHA view)."""
+    session = get_wizard(trader.id)
+    if not session:
+        raise HTTPException(status_code=400, detail="No active login session.")
+    return await session.get_screenshot()
 
-                        # Auto-notify when login detected
-                        if logged_in and not session.streaming:
-                            session.streaming = True  # flag to send only once
-                            await websocket.send_json({
-                                "type": "status",
-                                "logged_in": True,
-                                "url": url,
-                                "message": "Login detected! Click 'Save & Start Bot' to activate.",
-                            })
-                except Exception as e:
-                    if "close" in str(e).lower():
-                        break
-                    logger.warning(f"Screenshot stream error: {e}")
 
-        stream_task = asyncio.create_task(stream_screenshots())
+@router.post("/login/save")
+async def login_save(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save session cookies to database and close browser."""
+    session = get_wizard(trader.id)
+    if not session:
+        raise HTTPException(status_code=400, detail="No active login session.")
 
-        # Main loop: handle user input
-        while True:
-            try:
-                raw = await asyncio.wait_for(websocket.receive_text(), timeout=300)
-                msg = json.loads(raw)
-            except asyncio.TimeoutError:
-                # 5 min timeout — close session
-                await websocket.send_json({"type": "error", "message": "Session timed out"})
-                break
-            except WebSocketDisconnect:
-                break
-            except Exception:
-                break
+    result = await session.save_session()
 
-            msg_type = msg.get("type", "")
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "Failed to save session"))
 
-            if msg_type == "click":
-                await session.click(msg["x"], msg["y"])
+    cookies = result["cookies"]
+    cookie_dict = result["cookie_dict"]
 
-            elif msg_type == "dblclick":
-                await session.click(msg["x"], msg["y"])
-                await asyncio.sleep(0.05)
-                await session.click(msg["x"], msg["y"])
+    # Save to DB
+    trader.binance_cookies_full = encrypt_data(json.dumps(cookies))
+    trader.binance_cookies = encrypt_data(json.dumps(cookie_dict))
 
-            elif msg_type == "type":
-                await session.type_text(msg["text"])
+    csrf = cookie_dict.get("csrftoken", "")
+    if csrf:
+        trader.binance_csrf_token = encrypt_data(csrf)
 
-            elif msg_type == "key":
-                await session.press_key(msg["key"])
+    bnc_uuid = cookie_dict.get("bnc-uuid", "")
+    if bnc_uuid:
+        trader.binance_bnc_uuid = encrypt_data(bnc_uuid)
 
-            elif msg_type == "mousedown":
-                await session.mouse_down(msg["x"], msg["y"])
+    trader.binance_connected = True
+    await db.commit()
 
-            elif msg_type == "mousemove":
-                await session.mouse_move(msg["x"], msg["y"])
+    # Close browser — we don't need it anymore
+    await remove_wizard(trader.id)
 
-            elif msg_type == "mouseup":
-                await session.mouse_up()
+    logger.info(f"Login wizard complete for trader {trader.id}: {len(cookies)} cookies saved")
 
-            elif msg_type == "scroll":
-                await session.scroll(
-                    msg.get("x", 0), msg.get("y", 0),
-                    msg.get("deltaX", 0), msg.get("deltaY", 0),
-                )
+    return {
+        "status": "connected",
+        "message": f"Binance connected! {len(cookies)} cookies saved. Bot ready.",
+        "cookie_count": len(cookies),
+    }
 
-            elif msg_type == "save_session":
-                # Save session and store in DB
-                session_data = await session.save_session()
-                if session_data and session_data.get("cookies"):
-                    cookies = session_data["cookies"]
 
-                    # Save to DB
-                    async with async_session() as db:
-                        result = await db.execute(
-                            select(Trader).where(Trader.id == trader_id)
-                        )
-                        trader = result.scalar_one_or_none()
-                        if trader:
-                            # Save full cookies (Playwright format)
-                            trader.binance_cookies_full = encrypt_data(json.dumps(cookies))
-
-                            # Also save legacy {name: value} format
-                            cookie_dict = {c["name"]: c["value"] for c in cookies}
-                            trader.binance_cookies = encrypt_data(json.dumps(cookie_dict))
-
-                            # Save csrf token if found
-                            csrf = cookie_dict.get("csrftoken", "")
-                            if csrf:
-                                trader.binance_csrf_token = encrypt_data(csrf)
-
-                            bnc_uuid = cookie_dict.get("bnc-uuid", "")
-                            if bnc_uuid:
-                                trader.binance_bnc_uuid = encrypt_data(bnc_uuid)
-
-                            trader.binance_connected = True
-                            await db.commit()
-
-                            logger.info(
-                                f"Session saved for trader {trader_id}: "
-                                f"{len(cookies)} cookies stored"
-                            )
-
-                    await websocket.send_json({
-                        "type": "session_saved",
-                        "cookie_count": len(cookies),
-                        "message": f"Session saved! {len(cookies)} cookies stored. Bot is ready.",
-                    })
-                else:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "No session data to save. Please log in first.",
-                    })
-
-            elif msg_type == "close":
-                break
-
-            # Send fresh screenshot after each interaction
-            await asyncio.sleep(0.3)
-
-        # Cleanup
-        stream_task.cancel()
-
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for trader {trader_id}")
-    except Exception as e:
-        logger.error(f"WebSocket error for trader {trader_id}: {e}")
-    finally:
-        await remove_remote_session(trader_id)
-        logger.info(f"Remote login session ended for trader {trader_id}")
+@router.post("/login/cancel")
+async def login_cancel(trader: Trader = Depends(get_current_trader)):
+    """Cancel and close the login session."""
+    await remove_wizard(trader.id)
+    return {"status": "cancelled"}
 
 
 # ═══════════════════════════════════════════════════════════
-# BOT MODE — headless session management
+# BOT MODE — headless session management (uses saved cookies)
 # ═══════════════════════════════════════════════════════════
 
 class StartSessionRequest(BaseModel):
     trader_id: Optional[int] = None
 
 
-@router.post("/start")
-async def start_browser_session(
+@router.post("/bot/start")
+async def start_bot(
     data: StartSessionRequest = None,
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Start a headless Playwright bot session using saved cookies."""
+    """Start headless bot using saved cookies (no browser UI needed)."""
     target_id = trader.id
     if data and data.trader_id and trader.role in ("admin", "employee"):
         target_id = data.trader_id
 
     result = await db.execute(select(Trader).where(Trader.id == target_id))
-    target_trader = result.scalar_one_or_none()
-    if not target_trader:
-        raise HTTPException(status_code=404, detail="Trader not found")
+    target = result.scalar_one_or_none()
+    if not target or not target.binance_cookies:
+        raise HTTPException(status_code=400, detail="No Binance session. Connect Binance first.")
 
-    if not target_trader.binance_cookies:
-        raise HTTPException(
-            status_code=400,
-            detail="No Binance session. Use 'Connect Binance' to log in first.",
-        )
-
-    cookies_dict = json.loads(decrypt_data(target_trader.binance_cookies))
+    from app.core.security import decrypt_data
+    cookies = json.loads(decrypt_data(target.binance_cookies))
     cookies_full = None
-    if target_trader.binance_cookies_full:
-        cookies_full = json.loads(decrypt_data(target_trader.binance_cookies_full))
-
-    cookie_count = len(cookies_full) if cookies_full else len(cookies_dict)
+    if target.binance_cookies_full:
+        cookies_full = json.loads(decrypt_data(target.binance_cookies_full))
 
     success = await browser_engine.start_session(
         trader_id=target_id,
-        trader_name=target_trader.full_name,
-        cookies=cookies_dict,
+        trader_name=target.full_name,
+        cookies=cookies,
         cookies_full=cookies_full,
     )
 
     if success:
-        return {
-            "status": "started",
-            "trader_id": target_id,
-            "cookies_loaded": cookie_count,
-            "message": f"Bot started for {target_trader.full_name}",
-        }
+        return {"status": "started", "trader_id": target_id}
     else:
-        session = browser_engine.get_session(target_id)
-        error = session.last_error if session else "Unknown error"
-        raise HTTPException(status_code=500, detail=f"Failed to start: {error}")
+        raise HTTPException(status_code=500, detail="Failed to start bot")
 
 
-@router.post("/stop")
-async def stop_browser_session(
+@router.post("/bot/stop")
+async def stop_bot(
     data: StartSessionRequest = None,
     trader: Trader = Depends(get_current_trader),
 ):
-    """Stop a headless bot session."""
+    """Stop headless bot."""
     target_id = trader.id
     if data and data.trader_id and trader.role in ("admin", "employee"):
         target_id = data.trader_id
-
     await browser_engine.stop_session(target_id)
     return {"status": "stopped", "trader_id": target_id}
 
 
-@router.get("/status")
-async def get_browser_status(trader: Trader = Depends(get_current_trader)):
-    """Get status of trader's bot session."""
+@router.get("/bot/status")
+async def bot_status(trader: Trader = Depends(get_current_trader)):
+    """Get bot status."""
     session = browser_engine.get_session(trader.id)
     if not session:
         return {"running": False, "trader_id": trader.id}
     return session.get_status()
 
 
-@router.get("/status/all")
-async def get_all_browser_status(trader: Trader = Depends(get_current_trader)):
-    """Get status of all bot sessions (admin only)."""
+@router.get("/bot/status/all")
+async def all_bot_status(trader: Trader = Depends(get_current_trader)):
+    """Get all bot sessions (admin only)."""
     if trader.role not in ("admin", "employee"):
         raise HTTPException(status_code=403, detail="Admin only")
     return {"sessions": browser_engine.get_all_status()}
-
-
-@router.post("/poll/{trader_id}")
-async def poll_trader_orders(
-    trader_id: int,
-    trader: Trader = Depends(get_current_trader),
-    db: AsyncSession = Depends(get_db),
-):
-    """Manually trigger a poll for a trader's orders (admin/debug)."""
-    if trader.role not in ("admin", "employee"):
-        raise HTTPException(status_code=403, detail="Admin only")
-
-    session = browser_engine.get_session(trader_id)
-    if not session or not session.running:
-        raise HTTPException(status_code=400, detail="No active session")
-
-    orders = await session.get_pending_orders()
-    return {
-        "trader_id": trader_id,
-        "sell_orders": len(orders.get("sell", [])),
-        "buy_orders": len(orders.get("buy", [])),
-        "orders": orders,
-    }
