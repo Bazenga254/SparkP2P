@@ -72,8 +72,10 @@ class RemoteBrowserSession:
 
             self.playwright = await async_playwright().start()
 
-            # Launch in VISIBLE mode (not headless) — Google OAuth requires this
+            # Launch REAL Chrome (not Playwright Chromium) in visible mode
+            # Google OAuth blocks Playwright's Chromium but allows real Chrome
             self.browser = await self.playwright.chromium.launch(
+                channel="chrome",
                 headless=False,
                 args=STEALTH_ARGS + [f"--display={display}"],
             )
