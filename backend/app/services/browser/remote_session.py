@@ -16,6 +16,8 @@ import asyncio
 import base64
 import json
 import logging
+import subprocess
+import os
 from datetime import datetime, timezone
 from typing import Optional, Dict
 
@@ -36,6 +38,9 @@ BINANCE_LOGIN_URL = "https://accounts.binance.com/en/login"
 class RemoteBrowserSession:
     """A live browser session that streams to the user's dashboard."""
 
+    # Class-level Xvfb display counter
+    _next_display = 99
+
     def __init__(self, trader_id: int):
         self.trader_id = trader_id
         self.playwright = None
@@ -45,15 +50,32 @@ class RemoteBrowserSession:
         self.running = False
         self.logged_in = False
         self.streaming = False
+        self.xvfb_process = None
+        self.display_num = None
 
     async def start(self):
-        """Launch browser and navigate to Binance login."""
+        """Launch browser on virtual display (Xvfb) so Google OAuth works."""
         try:
+            # Start a virtual display for this session
+            RemoteBrowserSession._next_display += 1
+            self.display_num = RemoteBrowserSession._next_display
+            display = f":{self.display_num}"
+
+            self.xvfb_process = subprocess.Popen(
+                ["Xvfb", display, "-screen", "0", "1280x800x24", "-ac"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            await asyncio.sleep(0.5)
+
+            # Set DISPLAY for Playwright to use the virtual screen
+            os.environ["DISPLAY"] = display
+
             self.playwright = await async_playwright().start()
 
+            # Launch in VISIBLE mode (not headless) — Google OAuth requires this
             self.browser = await self.playwright.chromium.launch(
-                headless=True,
-                args=STEALTH_ARGS,
+                headless=False,
+                args=STEALTH_ARGS + [f"--display={display}"],
             )
 
             self.context = await self.browser.new_context(
@@ -248,7 +270,7 @@ class RemoteBrowserSession:
         return self.page.url
 
     async def stop(self):
-        """Close the browser session."""
+        """Close the browser session and virtual display."""
         self.running = False
         self.streaming = False
         try:
@@ -260,6 +282,19 @@ class RemoteBrowserSession:
                 await self.playwright.stop()
         except Exception as e:
             logger.warning(f"Error closing remote session: {e}")
+
+        # Kill Xvfb virtual display
+        if self.xvfb_process:
+            try:
+                self.xvfb_process.terminate()
+                self.xvfb_process.wait(timeout=5)
+            except Exception:
+                try:
+                    self.xvfb_process.kill()
+                except Exception:
+                    pass
+            self.xvfb_process = None
+
         logger.info(f"Remote browser session stopped for trader {self.trader_id}")
 
 
