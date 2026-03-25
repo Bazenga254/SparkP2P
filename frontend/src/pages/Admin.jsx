@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminAnalytics, getAdminOnlineTraders } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy } from 'lucide-react';
 
 const sidebarSections = [
   {
@@ -51,6 +51,86 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [refreshing, setRefreshing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [editingTemplate, setEditingTemplate] = useState(null);
+  const [editBody, setEditBody] = useState('');
+  const [editSubject, setEditSubject] = useState('');
+  const [templateSaving, setTemplateSaving] = useState(false);
+  const [templateMsg, setTemplateMsg] = useState('');
+  const [expandedTemplates, setExpandedTemplates] = useState({});
+
+  const loadTemplates = async () => {
+    try {
+      const res = await getMessageTemplates();
+      setTemplates(res.data);
+    } catch (err) {
+      console.error('Templates load error:', err);
+    }
+  };
+
+  const handleEditTemplate = (tpl) => {
+    setEditingTemplate(tpl.key);
+    setEditBody(tpl.body);
+    setEditSubject(tpl.subject || '');
+    setTemplateMsg('');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingTemplate(null);
+    setEditBody('');
+    setEditSubject('');
+    setTemplateMsg('');
+  };
+
+  const handleSaveTemplate = async (key) => {
+    setTemplateSaving(true);
+    try {
+      await updateMessageTemplate(key, { body: editBody, subject: editSubject || null });
+      setTemplateMsg('Template saved!');
+      setEditingTemplate(null);
+      loadTemplates();
+    } catch (err) {
+      setTemplateMsg(err.response?.data?.detail || 'Failed to save');
+    }
+    setTemplateSaving(false);
+    setTimeout(() => setTemplateMsg(''), 3000);
+  };
+
+  const handleSeedTemplates = async (force = false) => {
+    if (force && !confirm('Reset ALL templates to defaults? This will overwrite your edits.')) return;
+    try {
+      await seedMessageTemplates();
+      setTemplateMsg('Templates seeded!');
+      loadTemplates();
+    } catch (err) {
+      setTemplateMsg('Seed failed');
+    }
+    setTimeout(() => setTemplateMsg(''), 3000);
+  };
+
+  const insertVariable = (varName) => {
+    setEditBody((prev) => prev + `{${varName}}`);
+  };
+
+  const toggleTemplateExpand = (key) => {
+    setExpandedTemplates((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const getPreviewText = (body, variables) => {
+    const sampleData = {
+      amount: '5,000', balance: '12,500', crypto_amount: '45.50',
+      currency: 'USDT', fiat_amount: '6,000', code: '482931',
+      plan: 'Starter', expires: 'April 25, 2026', trader_name: 'John Doe',
+    };
+    let preview = body;
+    try {
+      const vars = JSON.parse(variables || '[]');
+      vars.forEach((v) => {
+        preview = preview.replace(new RegExp(`\\{${v}\\}`, 'g'), sampleData[v] || `[${v}]`);
+      });
+    } catch {}
+    return preview;
+  };
 
   const loadData = async () => {
     setRefreshing(true);
@@ -89,6 +169,7 @@ export default function Admin() {
   useEffect(() => {
     loadData();
     loadTransactions(txPeriod);
+    loadTemplates();
     const interval = setInterval(loadData, 30000);
     return () => clearInterval(interval);
   }, []);
@@ -876,12 +957,207 @@ export default function Admin() {
                 </form>
               </div>
 
-              {/* Other Settings */}
+              {/* Message Templates */}
               <div className="adm-card">
-                <div className="adm-card-header">
-                  <h3>Platform Settings</h3>
+                <div className="adm-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <MessageSquare size={18} /> Message Templates
+                  </h3>
+                  <button
+                    className="adm-btn-secondary"
+                    onClick={() => handleSeedTemplates(false)}
+                    style={{ fontSize: 12, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <RotateCcw size={14} /> Seed Defaults
+                  </button>
                 </div>
-                <p className="adm-empty">More settings coming soon.</p>
+
+                {templateMsg && (
+                  <div style={{
+                    padding: '8px 14px', margin: '0 16px 12px', borderRadius: 6,
+                    background: templateMsg.includes('fail') || templateMsg.includes('Failed') ? '#3b1218' : '#12261e',
+                    color: templateMsg.includes('fail') || templateMsg.includes('Failed') ? '#f87171' : '#4ade80',
+                    fontSize: 13,
+                  }}>
+                    {templateMsg}
+                  </div>
+                )}
+
+                {/* Group by channel */}
+                {['sms', 'email'].map((channel) => {
+                  const channelTemplates = templates.filter((t) => t.channel === channel);
+                  if (channelTemplates.length === 0) return null;
+                  return (
+                    <div key={channel} style={{ marginBottom: 16, padding: '0 16px 16px' }}>
+                      <h4 style={{
+                        textTransform: 'uppercase', fontSize: 11, letterSpacing: 1.5,
+                        color: '#9ca3af', marginBottom: 10, paddingBottom: 6,
+                        borderBottom: '1px solid rgba(255,255,255,0.06)',
+                      }}>
+                        {channel} Templates ({channelTemplates.length})
+                      </h4>
+
+                      {channelTemplates.map((tpl) => {
+                        const isEditing = editingTemplate === tpl.key;
+                        const isExpanded = expandedTemplates[tpl.key];
+                        const vars = (() => { try { return JSON.parse(tpl.variables || '[]'); } catch { return []; } })();
+
+                        return (
+                          <div key={tpl.key} style={{
+                            background: 'rgba(255,255,255,0.03)', borderRadius: 8,
+                            marginBottom: 8, border: '1px solid rgba(255,255,255,0.06)',
+                            overflow: 'hidden',
+                          }}>
+                            {/* Template header */}
+                            <div
+                              style={{
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                padding: '10px 14px', cursor: 'pointer',
+                              }}
+                              onClick={() => toggleTemplateExpand(tpl.key)}
+                            >
+                              <div>
+                                <span style={{ fontWeight: 600, fontSize: 14 }}>{tpl.name}</span>
+                                <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 8 }}>{tpl.key}</span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                {!isEditing && (
+                                  <button
+                                    className="adm-btn-secondary"
+                                    style={{ fontSize: 11, padding: '3px 8px' }}
+                                    onClick={(e) => { e.stopPropagation(); handleEditTemplate(tpl); }}
+                                  >
+                                    Edit
+                                  </button>
+                                )}
+                                {isExpanded ? <ChevronUp size={16} color="#6b7280" /> : <ChevronDown size={16} color="#6b7280" />}
+                              </div>
+                            </div>
+
+                            {/* Collapsed: show truncated body */}
+                            {!isExpanded && !isEditing && (
+                              <div style={{ padding: '0 14px 10px', fontSize: 12, color: '#9ca3af', lineHeight: 1.4 }}>
+                                {tpl.body.length > 100 ? tpl.body.slice(0, 100) + '...' : tpl.body}
+                              </div>
+                            )}
+
+                            {/* Expanded: show full body + preview */}
+                            {isExpanded && !isEditing && (
+                              <div style={{ padding: '0 14px 14px' }}>
+                                <div style={{
+                                  background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '10px 12px',
+                                  fontSize: 13, color: '#e5e7eb', lineHeight: 1.5, fontFamily: 'monospace',
+                                  marginBottom: 8,
+                                }}>
+                                  {tpl.body}
+                                </div>
+                                {vars.length > 0 && (
+                                  <div style={{ marginBottom: 8 }}>
+                                    <span style={{ fontSize: 11, color: '#6b7280' }}>Variables: </span>
+                                    {vars.map((v) => (
+                                      <span key={v} style={{
+                                        display: 'inline-block', fontSize: 11, padding: '2px 6px',
+                                        borderRadius: 4, background: 'rgba(99,102,241,0.15)', color: '#818cf8',
+                                        marginRight: 4, marginBottom: 2,
+                                      }}>
+                                        {'{' + v + '}'}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Preview:</div>
+                                <div style={{
+                                  background: 'rgba(34,197,94,0.08)', borderRadius: 6, padding: '8px 12px',
+                                  fontSize: 12, color: '#86efac', lineHeight: 1.4, borderLeft: '3px solid #22c55e',
+                                }}>
+                                  {getPreviewText(tpl.body, tpl.variables)}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Editing mode */}
+                            {isEditing && (
+                              <div style={{ padding: '0 14px 14px' }}>
+                                {tpl.channel === 'email' && (
+                                  <div style={{ marginBottom: 8 }}>
+                                    <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Subject</label>
+                                    <input
+                                      className="adm-input"
+                                      value={editSubject}
+                                      onChange={(e) => setEditSubject(e.target.value)}
+                                      placeholder="Email subject line"
+                                    />
+                                  </div>
+                                )}
+                                <div style={{ marginBottom: 8 }}>
+                                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Body</label>
+                                  <textarea
+                                    className="adm-input"
+                                    value={editBody}
+                                    onChange={(e) => setEditBody(e.target.value)}
+                                    rows={4}
+                                    style={{ width: '100%', resize: 'vertical', fontFamily: 'monospace', fontSize: 13, lineHeight: 1.5 }}
+                                  />
+                                </div>
+                                {vars.length > 0 && (
+                                  <div style={{ marginBottom: 10 }}>
+                                    <span style={{ fontSize: 11, color: '#6b7280' }}>Insert variable: </span>
+                                    {vars.map((v) => (
+                                      <button
+                                        key={v}
+                                        type="button"
+                                        onClick={() => insertVariable(v)}
+                                        style={{
+                                          display: 'inline-block', fontSize: 11, padding: '2px 8px',
+                                          borderRadius: 4, background: 'rgba(99,102,241,0.2)', color: '#a5b4fc',
+                                          border: '1px solid rgba(99,102,241,0.3)', cursor: 'pointer',
+                                          marginRight: 4, marginBottom: 2,
+                                        }}
+                                      >
+                                        {'{' + v + '}'}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Preview:</div>
+                                <div style={{
+                                  background: 'rgba(34,197,94,0.08)', borderRadius: 6, padding: '8px 12px',
+                                  fontSize: 12, color: '#86efac', lineHeight: 1.4, marginBottom: 12,
+                                  borderLeft: '3px solid #22c55e',
+                                }}>
+                                  {getPreviewText(editBody, tpl.variables)}
+                                </div>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                  <button
+                                    className="adm-btn-primary"
+                                    onClick={() => handleSaveTemplate(tpl.key)}
+                                    disabled={templateSaving}
+                                    style={{ fontSize: 12, padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 4 }}
+                                  >
+                                    <Save size={14} /> {templateSaving ? 'Saving...' : 'Save'}
+                                  </button>
+                                  <button
+                                    className="adm-btn-secondary"
+                                    onClick={handleCancelEdit}
+                                    style={{ fontSize: 12, padding: '6px 14px' }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+
+                {templates.length === 0 && (
+                  <p className="adm-empty" style={{ padding: '0 16px 16px' }}>
+                    No templates found. Click "Seed Defaults" to create them.
+                  </p>
+                )}
               </div>
             </div>
           )}

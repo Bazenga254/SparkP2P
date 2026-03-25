@@ -62,6 +62,11 @@ export const getAdminTransactions = (period = 'today', limit = 50, search = '') 
 export const getAdminAnalytics = () => api.get('/admin/analytics');
 export const getAdminOnlineTraders = () => api.get('/admin/online-traders');
 
+// Message Templates
+export const getMessageTemplates = () => api.get('/admin/templates');
+export const updateMessageTemplate = (key, data) => api.put(`/admin/templates/${key}`, data);
+export const seedMessageTemplates = () => api.post('/admin/templates/seed');
+
 // Employee
 export const employeeLogin = (email, password) => api.post('/auth/employee/login', { email, password });
 export const getDisputeDetails = (orderId) => api.get(`/admin/disputes/${orderId}/details`);

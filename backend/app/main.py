@@ -8,12 +8,14 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension
 from app.services.binance.poller import order_poller
+from app.services.message_templates import seed_default_templates
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     await init_db()
+    await seed_default_templates()
     # Start housekeeping poller (no longer polls Binance directly;
     # the Chrome extension handles all Binance API calls)
     poller_task = asyncio.create_task(order_poller.start())

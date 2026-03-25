@@ -11,7 +11,9 @@ from app.core.config import settings
 from app.core.security import create_access_token
 from app.models import Trader, TraderStatus, Order, OrderStatus, Payment, PaymentDirection, PaymentStatus, ChatMessage
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
+from app.models.message_template import MessageTemplate
 from app.api.deps import get_admin_trader, get_employee_or_admin
+from app.services.message_templates import seed_default_templates, refresh_template_cache
 
 logger = logging.getLogger(__name__)
 
@@ -866,3 +868,76 @@ async def get_dispute_details(
             for msg, sender_name in chat_rows
         ],
     }
+
+
+# ==================== MESSAGE TEMPLATES ====================
+
+
+class UpdateTemplateRequest(BaseModel):
+    body: str
+    subject: str | None = None
+
+
+@router.get("/templates")
+async def list_templates(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all message templates."""
+    result = await db.execute(
+        select(MessageTemplate).order_by(MessageTemplate.channel, MessageTemplate.key)
+    )
+    templates = result.scalars().all()
+
+    return [
+        {
+            "id": t.id,
+            "key": t.key,
+            "name": t.name,
+            "channel": t.channel,
+            "subject": t.subject,
+            "body": t.body,
+            "variables": t.variables,
+            "updated_at": t.updated_at.isoformat() if t.updated_at else "",
+        }
+        for t in templates
+    ]
+
+
+@router.put("/templates/{template_key}")
+async def update_template(
+    template_key: str,
+    data: UpdateTemplateRequest,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a message template's body (and subject for email)."""
+    result = await db.execute(
+        select(MessageTemplate).where(MessageTemplate.key == template_key)
+    )
+    template = result.scalar_one_or_none()
+
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    template.body = data.body
+    if data.subject is not None and template.channel == "email":
+        template.subject = data.subject
+    template.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+
+    # Refresh the in-memory cache so SMS service picks up changes immediately
+    await refresh_template_cache()
+
+    return {"status": "updated", "key": template_key}
+
+
+@router.post("/templates/seed")
+async def seed_templates(
+    force: bool = Query(default=False),
+    admin: Trader = Depends(get_admin_trader),
+):
+    """Seed default message templates. Use force=true to reset all to defaults."""
+    await seed_default_templates(force=force)
+    return {"status": "seeded", "force": force}

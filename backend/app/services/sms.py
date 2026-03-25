@@ -5,6 +5,7 @@ import logging
 import urllib.request
 
 from app.core.config import settings
+from app.services.message_templates import get_cached_template
 
 logger = logging.getLogger(__name__)
 
@@ -137,69 +138,101 @@ def normalize_phone(phone: str) -> str:
 
 def sms_deposit_received(phone: str, amount: float, balance: float) -> bool:
     """Notify trader of successful deposit."""
-    msg = (
-        f"SparkP2P: KES {amount:,.0f} deposited to your wallet. "
-        f"New balance: KES {balance:,.0f}. "
-        f"Happy trading!"
-    )
+    tpl = get_cached_template("sms_deposit_received")
+    if tpl:
+        msg = tpl.format(amount=f"{amount:,.0f}", balance=f"{balance:,.0f}")
+    else:
+        msg = (
+            f"SparkP2P: KES {amount:,.0f} deposited to your wallet. "
+            f"New balance: KES {balance:,.0f}. "
+            f"Happy trading!"
+        )
     return send_otp_sms(phone, msg)
 
 
 def sms_withdrawal_sent(phone: str, amount: float, balance: float) -> bool:
     """Notify trader of withdrawal."""
-    msg = (
-        f"SparkP2P: KES {amount:,.0f} sent to your M-Pesa. "
-        f"Remaining balance: KES {balance:,.0f}."
-    )
+    tpl = get_cached_template("sms_withdrawal_sent")
+    if tpl:
+        msg = tpl.format(amount=f"{amount:,.0f}", balance=f"{balance:,.0f}")
+    else:
+        msg = (
+            f"SparkP2P: KES {amount:,.0f} sent to your M-Pesa. "
+            f"Remaining balance: KES {balance:,.0f}."
+        )
     return send_otp_sms(phone, msg)
 
 
 def sms_sell_order_completed(phone: str, crypto_amount: float, fiat_amount: float, currency: str = "USDT") -> bool:
     """Notify trader that a sell order was completed."""
-    msg = (
-        f"SparkP2P: Sell order completed. {crypto_amount:.2f} {currency} released. "
-        f"KES {fiat_amount:,.0f} credited to wallet."
-    )
+    tpl = get_cached_template("sms_sell_order_completed")
+    if tpl:
+        msg = tpl.format(crypto_amount=f"{crypto_amount:.2f}", currency=currency, fiat_amount=f"{fiat_amount:,.0f}")
+    else:
+        msg = (
+            f"SparkP2P: Sell order completed. {crypto_amount:.2f} {currency} released. "
+            f"KES {fiat_amount:,.0f} credited to wallet."
+        )
     return send_otp_sms(phone, msg)
 
 
 def sms_buy_order_completed(phone: str, crypto_amount: float, fiat_amount: float, currency: str = "USDT") -> bool:
     """Notify trader that a buy order was completed."""
-    msg = (
-        f"SparkP2P: Buy order completed. KES {fiat_amount:,.0f} paid to seller. "
-        f"{crypto_amount:.2f} {currency} received."
-    )
+    tpl = get_cached_template("sms_buy_order_completed")
+    if tpl:
+        msg = tpl.format(crypto_amount=f"{crypto_amount:.2f}", currency=currency, fiat_amount=f"{fiat_amount:,.0f}")
+    else:
+        msg = (
+            f"SparkP2P: Buy order completed. KES {fiat_amount:,.0f} paid to seller. "
+            f"{crypto_amount:.2f} {currency} received."
+        )
     return send_otp_sms(phone, msg)
 
 
 def sms_insufficient_balance(phone: str, order_amount: float, balance: float) -> bool:
     """Warn trader of insufficient balance for buy order."""
-    msg = (
-        f"SparkP2P: Buy order for KES {order_amount:,.0f} could not be processed. "
-        f"Balance: KES {balance:,.0f}. Deposit more funds at sparkp2p.com"
-    )
+    tpl = get_cached_template("sms_insufficient_balance")
+    if tpl:
+        msg = tpl.format(amount=f"{order_amount:,.0f}", balance=f"{balance:,.0f}")
+    else:
+        msg = (
+            f"SparkP2P: Buy order for KES {order_amount:,.0f} could not be processed. "
+            f"Balance: KES {balance:,.0f}. Deposit more funds at sparkp2p.com"
+        )
     return send_otp_sms(phone, msg)
 
 
 def sms_session_disconnected(phone: str) -> bool:
     """Alert trader that Binance session disconnected."""
-    msg = (
-        "SparkP2P: Your Binance session disconnected. "
-        "Auto-trading paused. Open Chrome with Binance to reconnect."
-    )
+    tpl = get_cached_template("sms_session_disconnected")
+    if tpl:
+        msg = tpl
+    else:
+        msg = (
+            "SparkP2P: Your Binance session disconnected. "
+            "Auto-trading paused. Open Chrome with Binance to reconnect."
+        )
     return send_sms(phone, msg)
 
 
 def sms_subscription_activated(phone: str, plan: str, expires: str) -> bool:
     """Notify trader of subscription activation."""
-    msg = (
-        f"SparkP2P: {plan.title()} plan activated! "
-        f"Expires {expires}. Start trading at sparkp2p.com"
-    )
+    tpl = get_cached_template("sms_subscription_activated")
+    if tpl:
+        msg = tpl.format(plan=plan.title(), expires=expires)
+    else:
+        msg = (
+            f"SparkP2P: {plan.title()} plan activated! "
+            f"Expires {expires}. Start trading at sparkp2p.com"
+        )
     return send_sms(phone, msg)
 
 
 def sms_verification_code(phone: str, code: str) -> bool:
     """Send verification code via SMS."""
-    msg = f"SparkP2P verification code: {code}. Valid for 10 minutes."
+    tpl = get_cached_template("sms_verification_code")
+    if tpl:
+        msg = tpl.format(code=code)
+    else:
+        msg = f"SparkP2P verification code: {code}. Valid for 10 minutes."
     return send_otp_sms(phone, msg)
