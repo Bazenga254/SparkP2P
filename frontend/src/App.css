@@ -171,6 +171,31 @@ body {
 .status-badge.connected { background: rgba(16, 185, 129, 0.15); color: var(--green); }
 .status-badge.disconnected { background: rgba(239, 68, 68, 0.15); color: var(--red); }
 
+.session-health-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.session-health-dot.healthy {
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981;
+  animation: pulse-green 1.5s ease-in-out infinite;
+}
+
+.session-health-dot.unhealthy {
+  background: #ef4444;
+  box-shadow: 0 0 4px #ef4444;
+}
+
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px #10b981; }
+  50% { opacity: 0.5; box-shadow: 0 0 12px #10b981; }
+}
+
 .icon-btn {
   background: var(--surface);
   border: 1px solid var(--border);
