@@ -13,7 +13,7 @@ export default function RemoteBrowser({ onConnected, onClose }) {
   const scaleRef = useRef({ x: 1, y: 1 });
 
   // Get token
-  const token = localStorage.getItem('sparkp2p_token');
+  const token = localStorage.getItem('token');
 
   const connectWs = useCallback(() => {
     const ws = new WebSocket(`${WS_BASE}//${API_HOST}/api/browser/login-stream?token=${token}`);
