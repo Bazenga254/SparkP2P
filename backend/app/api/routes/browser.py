@@ -13,22 +13,26 @@ Login wizard: Step-by-step automated login via REST API.
 Bot mode: Headless trading using saved cookies via httpx.
 """
 
+import asyncio
 import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.security import encrypt_data
+from app.core.database import get_db, async_session
+from app.core.security import encrypt_data, decode_access_token
 from app.models import Trader
 from app.api.deps import get_current_trader
 from app.services.browser.engine import browser_engine
 from app.services.browser.login_wizard import (
     LoginWizardSession, get_wizard, set_wizard, remove_wizard,
+)
+from app.services.browser.remote_session import (
+    RemoteBrowserSession, get_remote_session, set_remote_session, remove_remote_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,7 +41,124 @@ router = APIRouter()
 
 
 # ═══════════════════════════════════════════════════════════
-# LOGIN WIZARD — step-by-step Binance login
+# LIVE BROWSER — WebSocket stream for Binance login
+# ═══════════════════════════════════════════════════════════
+
+@router.websocket("/login-stream")
+async def login_stream(websocket: WebSocket, token: str = Query(default=None)):
+    """Live browser stream. User logs into Binance directly."""
+    if not token:
+        await websocket.close(code=4001, reason="Missing token")
+        return
+    try:
+        payload = decode_access_token(token)
+        trader_id = int(payload["sub"])
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+
+    await websocket.accept()
+    logger.info(f"Live browser WebSocket for trader {trader_id}")
+
+    # Clean up any prior session
+    await remove_remote_session(trader_id)
+
+    session = RemoteBrowserSession(trader_id)
+    started = await session.start()
+    if not started:
+        await websocket.send_json({"type": "error", "message": "Failed to launch browser"})
+        await websocket.close()
+        return
+    set_remote_session(trader_id, session)
+
+    # Send initial screenshot
+    ss = await session.take_screenshot()
+    url = await session.get_current_url()
+    await websocket.send_json({"type": "screenshot", "data": ss, "url": url})
+
+    try:
+        async def stream():
+            while session.running:
+                await asyncio.sleep(0.4)
+                try:
+                    ss = await session.take_screenshot()
+                    if ss:
+                        url = await session.get_current_url()
+                        logged_in = await session.check_login_status()
+                        await websocket.send_json({
+                            "type": "screenshot", "data": ss, "url": url, "logged_in": logged_in,
+                        })
+                except Exception as e:
+                    if "close" in str(e).lower():
+                        break
+
+        stream_task = asyncio.create_task(stream())
+
+        while True:
+            try:
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=300)
+                msg = json.loads(raw)
+            except (asyncio.TimeoutError, WebSocketDisconnect):
+                break
+            except Exception:
+                break
+
+            t = msg.get("type", "")
+            if t == "click":
+                await session.click(msg["x"], msg["y"])
+            elif t == "type":
+                await session.type_text(msg["text"])
+            elif t == "key":
+                await session.press_key(msg["key"])
+            elif t == "mousedown":
+                await session.mouse_down(msg["x"], msg["y"])
+            elif t == "mousemove":
+                await session.mouse_move(msg["x"], msg["y"])
+            elif t == "mouseup":
+                await session.mouse_up()
+            elif t == "scroll":
+                await session.scroll(0, 0, msg.get("deltaX", 0), msg.get("deltaY", 0))
+            elif t == "save_session":
+                data = await session.save_session()
+                if data and data.get("cookies"):
+                    cookies = data["cookies"]
+                    async with async_session() as db:
+                        result = await db.execute(select(Trader).where(Trader.id == trader_id))
+                        trader = result.scalar_one_or_none()
+                        if trader:
+                            trader.binance_cookies_full = encrypt_data(json.dumps(cookies))
+                            cookie_dict = {c["name"]: c["value"] for c in cookies}
+                            trader.binance_cookies = encrypt_data(json.dumps(cookie_dict))
+                            csrf = cookie_dict.get("csrftoken", "")
+                            if csrf:
+                                trader.binance_csrf_token = encrypt_data(csrf)
+                            bnc_uuid = cookie_dict.get("bnc-uuid", "")
+                            if bnc_uuid:
+                                trader.binance_bnc_uuid = encrypt_data(bnc_uuid)
+                            trader.binance_connected = True
+                            await db.commit()
+                    await websocket.send_json({
+                        "type": "session_saved", "cookie_count": len(cookies),
+                        "message": f"Session saved! {len(cookies)} cookies.",
+                    })
+                else:
+                    await websocket.send_json({"type": "error", "message": "Not logged in yet"})
+            elif t == "close":
+                break
+
+            await asyncio.sleep(0.2)
+
+        stream_task.cancel()
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"WS error for trader {trader_id}: {e}")
+    finally:
+        await remove_remote_session(trader_id)
+
+
+# ═══════════════════════════════════════════════════════════
+# LOGIN WIZARD — step-by-step Binance login (kept as fallback)
 # ═══════════════════════════════════════════════════════════
 
 class EmailInput(BaseModel):
