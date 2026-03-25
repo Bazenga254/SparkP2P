@@ -2,7 +2,7 @@
   "name": "sparkp2p",
   "version": "1.0.0",
   "description": "SparkP2P — Automated Binance P2P Trading",
-  "main": "main.js",
+  "main": "app.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win",
@@ -11,8 +11,8 @@
   "author": "SparkP2P",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^35.0.0",
-    "electron-builder": "^26.0.0"
+    "electron": "^33.4.11",
+    "electron-builder": "^26.8.1"
   },
   "build": {
     "appId": "com.sparkp2p.desktop",
@@ -27,5 +27,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }
+  },
+  "dependencies": {
+    "chrome-remote-interface": "^0.34.0"
   }
 }

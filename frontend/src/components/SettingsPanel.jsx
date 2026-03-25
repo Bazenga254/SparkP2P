@@ -52,6 +52,13 @@ export default function SettingsPanel({ profile, onUpdate }) {
   };
 
   const handleConnectBinance = () => {
+    // If running in Electron desktop app, use real Chrome browser
+    if (window.sparkp2p?.isDesktop) {
+      window.sparkp2p.connectBinance();
+      showMsg('Opening Chrome browser for Binance login...');
+      return;
+    }
+    // Web fallback: use remote browser stream
     setShowRemoteBrowser(true);
   };
 
