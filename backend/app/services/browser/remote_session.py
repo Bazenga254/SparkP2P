@@ -88,6 +88,9 @@ class RemoteBrowserSession:
             self.page = await self.context.new_page()
             self.running = True
 
+            # Handle popups (Google OAuth, etc.) — switch to new page
+            self.context.on("page", self._on_popup)
+
             # Navigate to Binance login
             await self.page.goto(BINANCE_LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(1)
@@ -98,6 +101,20 @@ class RemoteBrowserSession:
         except Exception as e:
             logger.error(f"Failed to start remote session for trader {self.trader_id}: {e}")
             return False
+
+    def _on_popup(self, page):
+        """Handle popup windows (Google OAuth, etc.) — switch to the new page."""
+        logger.info(f"Popup opened for trader {self.trader_id}: {page.url}")
+        self.page = page
+        # When popup closes, switch back to the original page
+        page.on("close", lambda: self._on_popup_close())
+
+    def _on_popup_close(self):
+        """Switch back to main page when popup closes."""
+        pages = self.context.pages if self.context else []
+        if pages:
+            self.page = pages[0]
+            logger.info(f"Popup closed, switched back to main page for trader {self.trader_id}")
 
     async def take_screenshot(self) -> str:
         """Take a screenshot and return as base64 JPEG."""
