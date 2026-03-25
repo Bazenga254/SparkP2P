@@ -42,7 +42,7 @@ B2C_FEES = [
 ]
 
 B2B_FEE = 50  # Approximate flat fee for B2B
-PLATFORM_SETTLEMENT_MARKUP = 25  # KES 25 markup on every withdrawal (our profit)
+PLATFORM_WITHDRAWAL_FEE = 50  # KES 50 fixed fee on manual withdrawals
 
 
 def estimate_b2c_fee(amount: float) -> int:
@@ -53,15 +53,28 @@ def estimate_b2c_fee(amount: float) -> int:
     return 40
 
 
-def get_total_settlement_fee(trader, amount: float) -> tuple:
-    """Calculate total settlement fee: Safaricom fee + platform markup.
-    Returns (safaricom_fee, platform_markup, total_fee)
+def get_total_settlement_fee(trader, amount: float, is_manual_withdrawal: bool = True) -> tuple:
+    """Calculate total settlement fee.
+
+    Manual withdrawal (trader cashing out):
+        Safaricom fee + KES 50 platform fee = trader pays
+
+    Automated trading (bot paying sellers):
+        SparkP2P covers Safaricom fee = FREE for trader
+
+    Returns (safaricom_fee, platform_fee, total_fee)
     """
     if trader.settlement_method == SettlementMethod.MPESA:
         safaricom_fee = estimate_b2c_fee(amount)
     else:
         safaricom_fee = B2B_FEE
-    return safaricom_fee, PLATFORM_SETTLEMENT_MARKUP, safaricom_fee + PLATFORM_SETTLEMENT_MARKUP
+
+    if is_manual_withdrawal:
+        # Manual: trader pays Safaricom + KES 50
+        return safaricom_fee, PLATFORM_WITHDRAWAL_FEE, safaricom_fee + PLATFORM_WITHDRAWAL_FEE
+    else:
+        # Automated: SparkP2P covers everything, trader pays nothing
+        return 0, 0, 0
 
 
 class SettlementEngine:

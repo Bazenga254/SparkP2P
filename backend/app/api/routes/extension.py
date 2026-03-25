@@ -547,45 +547,11 @@ async def _process_reported_buy_order(
     db.add(reserve_txn)
     await db.flush()
 
-    # For orders >= KES 50,000, SparkP2P covers the B2C fee (platform absorbs it)
-    # For orders < KES 50,000, deduct Safaricom B2C fee from buyer's wallet
-    b2c_fee_covered_by_platform = amount >= 50_000
-    if not b2c_fee_covered_by_platform:
-        # Estimate Safaricom B2C fee (tiered):
-        # KES 0-999: ~KES 11, KES 1000-1499: ~KES 15, KES 1500-2499: ~KES 22,
-        # KES 2500-3499: ~KES 33, KES 3500-4999: ~KES 55, KES 5000-9999: ~KES 77,
-        # KES 10000-14999: ~KES 112, KES 15000-19999: ~KES 197,
-        # KES 20000-34999: ~KES 220, KES 35000-49999: ~KES 250
-        if amount < 1000: b2c_fee = 11
-        elif amount < 1500: b2c_fee = 15
-        elif amount < 2500: b2c_fee = 22
-        elif amount < 3500: b2c_fee = 33
-        elif amount < 5000: b2c_fee = 55
-        elif amount < 10000: b2c_fee = 77
-        elif amount < 15000: b2c_fee = 112
-        elif amount < 20000: b2c_fee = 197
-        elif amount < 35000: b2c_fee = 220
-        else: b2c_fee = 250
+    # Automated trading: SparkP2P covers ALL Safaricom B2C fees
+    # The trader pays NOTHING for bot-executed buy orders
+    # This is the core value of the subscription
 
-        # Deduct fee from buyer wallet
-        if wallet.balance >= b2c_fee:
-            wallet.balance -= b2c_fee
-            fee_txn = WalletTransaction(
-                trader_id=trader.id,
-                wallet_id=wallet.id,
-                order_id=order.id,
-                transaction_type=TransactionType.SETTLEMENT_FEE,
-                amount=-b2c_fee,
-                balance_after=wallet.balance,
-                description=f"Safaricom B2C fee for order {order_number}",
-            )
-            db.add(fee_txn)
-            await db.flush()
-            logger.info(f"B2C fee KES {b2c_fee} deducted from buyer wallet for order {order_number}")
-        else:
-            logger.warning(f"Buyer wallet cannot cover B2C fee KES {b2c_fee} for order {order_number}, proceeding anyway")
-    else:
-        logger.info(f"Order {order_number} >= KES 50K: SparkP2P covers B2C fee")
+    logger.info(f"Buy order {order_number}: SparkP2P covers B2C fee (automated trading = free for trader)")
 
     try:
         b2c_result = await mpesa_client.send_b2c(
