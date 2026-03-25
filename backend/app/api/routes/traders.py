@@ -25,7 +25,8 @@ router = APIRouter()
 # ── Schemas ───────────────────────────────────────────────────────
 
 class BinanceConnectRequest(BaseModel):
-    cookies: dict  # Browser cookies as JSON
+    cookies: dict  # Browser cookies as {name: value} (legacy)
+    cookies_full: Optional[list] = None  # Full cookie objects [{name, value, domain, path, secure, httpOnly, sameSite}, ...]
     csrf_token: str
     bnc_uuid: Optional[str] = None
     totp_secret: Optional[str] = None
@@ -218,18 +219,26 @@ async def connect_binance(
         trader.binance_bnc_uuid = encrypt_data(data.bnc_uuid)
     if data.totp_secret:
         trader.binance_2fa_secret = encrypt_data(data.totp_secret)
+
+    # Store full cookie objects for Playwright (with domain, path, secure, httpOnly, sameSite)
+    if data.cookies_full:
+        trader.binance_cookies_full = encrypt_data(json.dumps(data.cookies_full))
+        logger.info(f"Stored {len(data.cookies_full)} full cookies for trader {trader.id}")
+
     trader.binance_connected = True
     if binance_name:
         trader.binance_username = binance_name
 
     await db.commit()
 
+    cookie_count = len(data.cookies_full) if data.cookies_full else len(data.cookies)
     return {
         "status": "connected",
         "message": "Binance account connected successfully",
         "binance_name": binance_name,
         "registered_name": trader.full_name,
         "name_match": name_match,
+        "cookies_received": cookie_count,
     }
 
 

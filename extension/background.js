@@ -548,7 +548,11 @@ async function syncCookiesToVPS() {
     const token = await getToken();
     if (!token) return;
 
-    const cookieMap = {};
+    // Collect ALL cookies with FULL attributes (domain, path, secure, httpOnly, sameSite)
+    // Playwright needs these to properly set cookies in the browser context
+    const cookieMap = {};      // name -> value (legacy format)
+    const fullCookies = {};    // name -> full cookie object (for Playwright)
+
     const urls = [
       'https://www.binance.com',
       'https://binance.com',
@@ -561,8 +565,18 @@ async function syncCookiesToVPS() {
       try {
         const cookies = await chrome.cookies.getAll({ url });
         for (const cookie of cookies) {
-          if (!cookieMap[cookie.name]) {
+          if (!fullCookies[cookie.name]) {
             cookieMap[cookie.name] = cookie.value;
+            fullCookies[cookie.name] = {
+              name: cookie.name,
+              value: cookie.value,
+              domain: cookie.domain,
+              path: cookie.path,
+              secure: cookie.secure,
+              httpOnly: cookie.httpOnly,
+              sameSite: cookie.sameSite || 'no_restriction',
+              expirationDate: cookie.expirationDate || null,
+            };
           }
         }
       } catch (e) { /* ignore */ }
@@ -572,25 +586,43 @@ async function syncCookiesToVPS() {
       try {
         const cookies = await chrome.cookies.getAll({ domain });
         for (const cookie of cookies) {
-          if (!cookieMap[cookie.name]) {
+          if (!fullCookies[cookie.name]) {
             cookieMap[cookie.name] = cookie.value;
+            fullCookies[cookie.name] = {
+              name: cookie.name,
+              value: cookie.value,
+              domain: cookie.domain,
+              path: cookie.path,
+              secure: cookie.secure,
+              httpOnly: cookie.httpOnly,
+              sameSite: cookie.sameSite || 'no_restriction',
+              expirationDate: cookie.expirationDate || null,
+            };
           }
         }
       } catch (e) { /* ignore */ }
     }
+
+    const totalCookies = Object.keys(fullCookies).length;
+    console.log(`[SparkP2P] Captured ${totalCookies} cookies from Binance`);
 
     if (!cookieMap['p20t']) return;
 
     const csrfToken = cookieMap['csrftoken'] || '';
     const bncUuid = cookieMap['bnc-uuid'] || '';
 
+    // Legacy format (name:value) — keep for backward compat
     const cookiesToSend = { ...cookieMap };
     delete cookiesToSend['csrftoken'];
+
+    // Full format (array of complete cookie objects) — for Playwright
+    const fullCookieArray = Object.values(fullCookies);
 
     const res = await fetchVPS('/traders/connect-binance', {
       method: 'POST',
       body: JSON.stringify({
         cookies: cookiesToSend,
+        cookies_full: fullCookieArray,
         csrf_token: csrfToken,
         bnc_uuid: bncUuid,
       }),
@@ -598,7 +630,7 @@ async function syncCookiesToVPS() {
 
     if (res.ok) {
       await chrome.storage.local.set({ last_sync: new Date().toISOString() });
-      console.log('[SparkP2P] Cookie sync successful');
+      console.log(`[SparkP2P] Cookie sync successful — ${totalCookies} cookies sent`);
     }
   } catch (err) {
     console.error('[SparkP2P] Cookie sync error:', err.message);

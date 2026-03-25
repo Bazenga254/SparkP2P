@@ -31,7 +31,8 @@ class Trader(Base):
     password_hash = Column(String(255), nullable=False)
 
     # Binance connection (encrypted)
-    binance_cookies = Column(Text, nullable=True)  # Encrypted JSON
+    binance_cookies = Column(Text, nullable=True)  # Encrypted JSON {name: value}
+    binance_cookies_full = Column(Text, nullable=True)  # Encrypted JSON [{name, value, domain, path, secure, httpOnly, sameSite}, ...] for Playwright
     binance_csrf_token = Column(String(512), nullable=True)  # Encrypted
     binance_2fa_secret = Column(String(512), nullable=True)  # Encrypted
     binance_bnc_uuid = Column(String(512), nullable=True)  # Encrypted

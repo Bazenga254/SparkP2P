@@ -145,18 +145,66 @@ class BinanceBrowserSession:
             logger.warning(f"Failed to save state for trader {self.trader_id}: {e}")
         return None
 
-    async def login_with_cookies(self, cookie_dict: dict) -> bool:
-        """Login to Binance using cookies from the Chrome extension."""
+    async def login_with_cookies(self, cookie_dict: dict, cookies_full: list = None) -> bool:
+        """Login to Binance using cookies from the Chrome extension.
+
+        Args:
+            cookie_dict: Legacy {name: value} cookies (fallback)
+            cookies_full: Full cookie objects from extension [{name, value, domain, path, secure, httpOnly, sameSite}, ...]
+        """
         try:
-            # Convert dict cookies to Playwright format
             pw_cookies = []
-            for name, value in cookie_dict.items():
-                pw_cookies.append({
-                    "name": name,
-                    "value": value,
-                    "domain": ".binance.com",
-                    "path": "/",
-                })
+
+            if cookies_full:
+                # Use full cookie objects — preserves all attributes
+                for c in cookies_full:
+                    # Map Chrome extension sameSite values to Playwright values
+                    same_site = c.get("sameSite", "no_restriction")
+                    if same_site == "no_restriction":
+                        same_site = "None"
+                    elif same_site == "lax":
+                        same_site = "Lax"
+                    elif same_site == "strict":
+                        same_site = "Strict"
+                    else:
+                        same_site = "None"
+
+                    pw_cookie = {
+                        "name": c["name"],
+                        "value": c["value"],
+                        "domain": c.get("domain", ".binance.com"),
+                        "path": c.get("path", "/"),
+                    }
+                    # Playwright requires secure=True when sameSite=None
+                    if same_site == "None":
+                        pw_cookie["secure"] = True
+                        pw_cookie["sameSite"] = "None"
+                    else:
+                        pw_cookie["secure"] = c.get("secure", False)
+                        pw_cookie["sameSite"] = same_site
+
+                    if c.get("httpOnly"):
+                        pw_cookie["httpOnly"] = True
+
+                    # Convert expirationDate (Unix seconds) to expires (Unix seconds)
+                    if c.get("expirationDate"):
+                        pw_cookie["expires"] = c["expirationDate"]
+
+                    pw_cookies.append(pw_cookie)
+
+                logger.info(f"Trader {self.trader_id}: loading {len(pw_cookies)} full cookies into Playwright")
+            else:
+                # Fallback: legacy {name: value} format
+                for name, value in cookie_dict.items():
+                    pw_cookies.append({
+                        "name": name,
+                        "value": value,
+                        "domain": ".binance.com",
+                        "path": "/",
+                        "secure": True,
+                        "sameSite": "None",
+                    })
+                logger.info(f"Trader {self.trader_id}: loading {len(pw_cookies)} legacy cookies into Playwright")
 
             await self.context.add_cookies(pw_cookies)
 
@@ -399,7 +447,7 @@ class BrowserAutomationEngine:
         self.sessions: Dict[int, BinanceBrowserSession] = {}
         self.running = False
 
-    async def start_session(self, trader_id: int, trader_name: str, cookies: dict) -> bool:
+    async def start_session(self, trader_id: int, trader_name: str, cookies: dict, cookies_full: list = None) -> bool:
         """Start a browser session for a trader."""
         if trader_id in self.sessions and self.sessions[trader_id].running:
             logger.info(f"Session already running for trader {trader_id}")
@@ -409,8 +457,8 @@ class BrowserAutomationEngine:
         success = await session.start()
 
         if success:
-            # Login with cookies
-            logged_in = await session.login_with_cookies(cookies)
+            # Login with cookies (prefer full cookies for Playwright)
+            logged_in = await session.login_with_cookies(cookies, cookies_full=cookies_full)
             if logged_in:
                 self.sessions[trader_id] = session
                 # Navigate to Binance P2P
