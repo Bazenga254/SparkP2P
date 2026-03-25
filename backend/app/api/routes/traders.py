@@ -284,20 +284,23 @@ async def request_settlement_otp(
     import random
     from app.api.routes.auth import _login_otp_codes
 
+    # Block if still in 48hr cooldown
+    if trader.settlement_changed_at:
+        cooldown_end = trader.settlement_changed_at + timedelta(hours=48)
+        if datetime.now(timezone.utc) < cooldown_end:
+            hours_left = int((cooldown_end - datetime.now(timezone.utc)).total_seconds() / 3600)
+            raise HTTPException(
+                status_code=400,
+                detail=f"You cannot change your payment method again for {hours_left} hours.",
+            )
+
     otp_code = str(random.randint(100000, 999999))
     _login_otp_codes[f"settle_{trader.email}"] = otp_code
 
-    # Send via SMS
+    # Send via SMS only (not email)
     try:
         from app.services.sms import sms_verification_code
         sms_verification_code(trader.phone, otp_code)
-    except Exception:
-        pass
-
-    # Send via email as fallback
-    try:
-        from app.services.email import send_verification_code
-        send_verification_code(trader.email, otp_code)
     except Exception:
         pass
 
@@ -340,13 +343,24 @@ async def update_settlement(
     # Clear OTP
     _login_otp_codes.pop(f"settle_{trader.email}", None)
 
-    # Update settlement method
-    trader.settlement_method = data.method
-    trader.settlement_phone = data.phone
-    trader.settlement_paybill = data.paybill
-    trader.settlement_account = data.account
-    trader.settlement_bank_name = data.bank_name
-    trader.settlement_changed_at = datetime.now(timezone.utc)  # Start 48hr cooldown
+    # Save as PENDING — don't replace the active method yet
+    # Active method continues to work during 48hr cooldown
+    trader.pending_settlement_method = data.method.value
+    trader.pending_settlement_phone = data.phone
+    trader.pending_settlement_paybill = data.paybill
+    trader.pending_settlement_account = data.account
+    trader.pending_settlement_bank_name = data.bank_name
+    trader.settlement_changed_at = datetime.now(timezone.utc)
+
+    # If this is the FIRST time setting settlement (no active method), activate immediately
+    if not trader.settlement_phone and not trader.settlement_paybill:
+        trader.settlement_method = data.method
+        trader.settlement_phone = data.phone
+        trader.settlement_paybill = data.paybill
+        trader.settlement_account = data.account
+        trader.settlement_bank_name = data.bank_name
+        trader.pending_settlement_method = None
+        trader.settlement_changed_at = None
 
     await db.commit()
 
@@ -363,12 +377,19 @@ async def update_settlement(
         destination = f"{destination} Acc: {data.account}"
     send_payment_method_added(trader.email, trader.full_name, method_display, destination)
 
-    return {
-        "status": "updated",
-        "method": data.method.value,
-        "cooldown_until": (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(),
-        "message": "Payment method updated. Due to security reasons, this method will be active for withdrawals after 48 hours.",
-    }
+    if trader.pending_settlement_method:
+        return {
+            "status": "pending",
+            "method": data.method.value,
+            "cooldown_until": (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(),
+            "message": "New payment method saved. Your current method will remain active for 48 hours. You'll receive an email when the new method is ready.",
+        }
+    else:
+        return {
+            "status": "updated",
+            "method": data.method.value,
+            "message": "Payment method set successfully.",
+        }
 
 
 @router.put("/trading-config")

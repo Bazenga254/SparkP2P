@@ -52,6 +52,7 @@ export default function Admin() {
   const [refreshing, setRefreshing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [templates, setTemplates] = useState([]);
+  const [showTemplates, setShowTemplates] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [editBody, setEditBody] = useState('');
   const [editSubject, setEditSubject] = useState('');
@@ -959,18 +960,32 @@ export default function Admin() {
 
               {/* Message Templates */}
               <div className="adm-card">
-                <div className="adm-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div
+                  className="adm-card-header"
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+                  onClick={() => setShowTemplates(!showTemplates)}
+                >
                   <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <MessageSquare size={18} /> Message Templates
+                    <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 400 }}>
+                      ({templates.length})
+                    </span>
+                    <span style={{ fontSize: 14, color: '#6b7280', transition: 'transform 0.2s', transform: showTemplates ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                      ▼
+                    </span>
                   </h3>
-                  <button
-                    className="adm-btn-secondary"
-                    onClick={() => handleSeedTemplates(false)}
-                    style={{ fontSize: 12, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <RotateCcw size={14} /> Seed Defaults
-                  </button>
+                  {showTemplates && (
+                    <button
+                      className="adm-btn-secondary"
+                      onClick={(e) => { e.stopPropagation(); handleSeedTemplates(false); }}
+                      style={{ fontSize: 12, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <RotateCcw size={14} /> Seed Defaults
+                    </button>
+                  )}
                 </div>
+
+                {showTemplates && (<>
 
                 {templateMsg && (
                   <div style={{
@@ -1158,6 +1173,7 @@ export default function Admin() {
                     No templates found. Click "Seed Defaults" to create them.
                   </p>
                 )}
+                </>)}
               </div>
             </div>
           )}

@@ -54,6 +54,7 @@ class BinanceOrderPoller:
         async with async_session() as db:
             await self._check_stale_orders(db)
             await self._check_trader_heartbeats(db)
+            await self._activate_pending_settlements(db)
             await self._check_settlement_thresholds(db)
 
     async def _check_stale_orders(self, db: AsyncSession):
@@ -106,6 +107,80 @@ class BinanceOrderPoller:
             )
 
         if stale_traders:
+            await db.commit()
+
+    async def _activate_pending_settlements(self, db: AsyncSession):
+        """
+        Activate pending settlement methods after 48hr cooldown.
+        Sends email notification when activated.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+
+        result = await db.execute(
+            select(Trader).where(
+                Trader.pending_settlement_method.isnot(None),
+                Trader.settlement_changed_at <= cutoff,
+            )
+        )
+        traders = result.scalars().all()
+
+        for trader in traders:
+            try:
+                # Activate the pending method
+                from app.models import SettlementMethod
+                trader.settlement_method = SettlementMethod(trader.pending_settlement_method)
+                trader.settlement_phone = trader.pending_settlement_phone
+                trader.settlement_paybill = trader.pending_settlement_paybill
+                trader.settlement_account = trader.pending_settlement_account
+                trader.settlement_bank_name = trader.pending_settlement_bank_name
+
+                # Clear pending
+                trader.pending_settlement_method = None
+                trader.pending_settlement_phone = None
+                trader.pending_settlement_paybill = None
+                trader.pending_settlement_account = None
+                trader.pending_settlement_bank_name = None
+                trader.settlement_changed_at = None
+
+                logger.info(f"Activated pending settlement for trader {trader.id} ({trader.full_name})")
+
+                # Send email notification
+                try:
+                    from app.services.email import send_email
+                    send_email(
+                        trader.email,
+                        "SparkP2P - New Payment Method Activated",
+                        f"""
+                        <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+                            <div style="text-align: center; margin-bottom: 30px;">
+                                <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+                            </div>
+                            <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+                                <h2 style="color: #10b981; font-size: 20px; margin: 0 0 12px;">New Payment Method Active</h2>
+                                <p style="color: #9ca3af; font-size: 14px;">
+                                    Hi {trader.full_name}, your new payment method is now active and ready for withdrawals.
+                                </p>
+                                <p style="color: #fff; font-size: 14px; margin-top: 12px;">
+                                    You can now withdraw funds using your updated payment method.
+                                </p>
+                            </div>
+                        </div>
+                        """,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send activation email to {trader.email}: {e}")
+
+                # Send SMS
+                try:
+                    from app.services.sms import send_otp_sms
+                    send_otp_sms(trader.phone, "SparkP2P: Your new payment method is now active. You can now withdraw funds using it.")
+                except Exception:
+                    pass
+
+            except Exception as e:
+                logger.error(f"Failed to activate pending settlement for trader {trader.id}: {e}")
+
+        if traders:
             await db.commit()
 
     async def _check_settlement_thresholds(self, db: AsyncSession):

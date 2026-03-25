@@ -45,13 +45,20 @@ class Trader(Base):
     security_question = Column(String(255), nullable=True)
     security_answer_hash = Column(String(255), nullable=True)
 
-    # Settlement config
+    # Settlement config (active — used for actual withdrawals)
     settlement_method = Column(Enum(SettlementMethod), default=SettlementMethod.MPESA)
-    settlement_phone = Column(String(20), nullable=True)  # For M-Pesa B2C
-    settlement_paybill = Column(String(20), nullable=True)  # For B2B
-    settlement_account = Column(String(100), nullable=True)  # Account number for B2B
+    settlement_phone = Column(String(20), nullable=True)
+    settlement_paybill = Column(String(20), nullable=True)
+    settlement_account = Column(String(100), nullable=True)
     settlement_bank_name = Column(String(100), nullable=True)
-    settlement_changed_at = Column(DateTime(timezone=True), nullable=True)  # 48hr cooldown tracking
+
+    # Pending settlement (waiting 48hr cooldown before becoming active)
+    pending_settlement_method = Column(String(50), nullable=True)
+    pending_settlement_phone = Column(String(20), nullable=True)
+    pending_settlement_paybill = Column(String(20), nullable=True)
+    pending_settlement_account = Column(String(100), nullable=True)
+    pending_settlement_bank_name = Column(String(100), nullable=True)
+    settlement_changed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Trading config
     auto_release_enabled = Column(Boolean, default=True)

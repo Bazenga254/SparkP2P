@@ -284,13 +284,18 @@ export default function SettingsPanel({ profile, onUpdate }) {
 
           {!showChangeForm ? (
             <button
-              onClick={() => setShowChangeForm(true)}
+              onClick={() => !profile?.settlement_cooldown_until && setShowChangeForm(true)}
+              disabled={!!profile?.settlement_cooldown_until}
               style={{
                 padding: '10px 20px', borderRadius: 8, border: '1px solid var(--border)',
-                background: 'transparent', color: '#f59e0b', cursor: 'pointer', fontSize: 13,
+                background: 'transparent',
+                color: profile?.settlement_cooldown_until ? '#6b7280' : '#f59e0b',
+                cursor: profile?.settlement_cooldown_until ? 'not-allowed' : 'pointer',
+                fontSize: 13,
+                opacity: profile?.settlement_cooldown_until ? 0.6 : 1,
               }}
             >
-              Change Payment Method
+              {profile?.settlement_cooldown_until ? 'Change Blocked (48hr cooldown)' : 'Change Payment Method'}
             </button>
           ) : (
             <>
@@ -375,16 +380,26 @@ export default function SettingsPanel({ profile, onUpdate }) {
                     </>
                   )}
 
-                  <div style={{ marginTop: 16, padding: 16, background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)' }}>
-                    <label style={{ fontSize: 13, color: '#f59e0b' }}>Verification Code (OTP)</label>
-                    <input type="text" placeholder="Enter 6-digit code" value={settlementOtp}
-                      onChange={(e) => setSettlementOtp(e.target.value)} maxLength={6} required />
+                  <div style={{ marginTop: 16, padding: 16, background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 13, color: '#f59e0b', marginBottom: 6, fontWeight: 600 }}>Verification Code (OTP)</label>
+                      <input type="text" placeholder="Enter 6-digit code" value={settlementOtp}
+                        onChange={(e) => setSettlementOtp(e.target.value)} maxLength={6} required
+                        style={{ width: '100%', boxSizing: 'border-box' }} />
+                      <span style={{ fontSize: 11, color: '#6b7280', marginTop: 4, display: 'block' }}>Check your phone and email for the code</span>
+                    </div>
 
-                    <label style={{ fontSize: 13, color: '#f59e0b', marginTop: 12 }}>
-                      Security Question: {securityQuestion || profile?.security_question || 'Not set'}
-                    </label>
-                    <input type="text" placeholder="Your security answer" value={securityAnswer}
-                      onChange={(e) => setSecurityAnswer(e.target.value)} required />
+                    <div>
+                      <label style={{ display: 'block', fontSize: 13, color: '#f59e0b', marginBottom: 6, fontWeight: 600 }}>
+                        Security Question
+                      </label>
+                      <p style={{ fontSize: 13, color: '#9ca3af', margin: '0 0 6px', fontStyle: 'italic' }}>
+                        {securityQuestion || profile?.security_question || 'Not set'}
+                      </p>
+                      <input type="text" placeholder="Your security answer" value={securityAnswer}
+                        onChange={(e) => setSecurityAnswer(e.target.value)} required
+                        style={{ width: '100%', boxSizing: 'border-box' }} />
+                    </div>
                   </div>
 
                   <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
