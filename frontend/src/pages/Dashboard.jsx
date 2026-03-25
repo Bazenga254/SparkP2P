@@ -257,12 +257,19 @@ export default function Dashboard() {
           <span className={`status-badge ${profile?.binance_connected ? 'connected' : 'disconnected'}`}>
             {profile?.binance_connected ? 'Binance Connected' : 'Binance Disconnected'}
           </span>
-          {profile?.binance_connected && (
-            <span
-              className={`session-health-dot ${!sessionHealth || sessionHealth.score >= 50 ? 'healthy' : 'unhealthy'}`}
-              title={sessionHealth ? `Session health: ${sessionHealth.score}/100` : 'Connected'}
-            />
-          )}
+          <span
+            style={{
+              display: 'inline-block',
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              marginLeft: 6,
+              backgroundColor: profile?.binance_connected ? '#10b981' : '#ef4444',
+              boxShadow: profile?.binance_connected ? '0 0 6px #10b981' : '0 0 4px #ef4444',
+              animation: profile?.binance_connected ? 'pulse-green 1.5s ease-in-out infinite' : 'none',
+            }}
+            title={profile?.binance_connected ? 'Binance Connected' : 'Disconnected'}
+          />
         </div>
         <div className="dash-header-right">
           <span className="user-name">{user?.full_name}</span>
