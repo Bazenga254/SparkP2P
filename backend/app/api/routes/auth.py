@@ -243,6 +243,34 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.post("/extension/login")
+async def extension_login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+    """Login from Chrome extension — skips OTP.
+    The extension already has Binance cookies which is stronger auth.
+    """
+    result = await db.execute(
+        select(Trader).where(Trader.email == data.email)
+    )
+    trader = result.scalar_one_or_none()
+
+    if not trader or not verify_password(data.password, trader.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if trader.status == TraderStatus.SUSPENDED:
+        raise HTTPException(status_code=403, detail="Account suspended")
+
+    token = create_access_token({"sub": str(trader.id), "email": trader.email})
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "trader_id": trader.id,
+        "full_name": trader.full_name,
+        "role": trader.role or "trader",
+        "otp_required": False,
+    }
+
+
 @router.post("/employee/login")
 async def employee_login(data: EmployeeLoginRequest, db: AsyncSession = Depends(get_db)):
     """Login as an employee (support staff)."""

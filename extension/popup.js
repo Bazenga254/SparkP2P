@@ -55,7 +55,7 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   btn.textContent = 'Logging in...';
 
   try {
-    const res = await fetch(`${API_BASE}/auth/login`, {
+    const res = await fetch(`${API_BASE}/auth/extension/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
