@@ -16,16 +16,29 @@ from app.services.mpesa.client import mpesa_client
 logger = logging.getLogger(__name__)
 
 
-# B2C fee schedule (approximate)
+# B2C fee schedule — Business Bouquet Tariff (registered users)
+# Based on actual Safaricom tariff signed by Spark Freelance Solutions
 B2C_FEES = [
+    (49, 0),
     (100, 0),
-    (1500, 15),
-    (5000, 23),
-    (10000, 25),
-    (15000, 27),
-    (25000, 30),
-    (50000, 35),
-    (150000, 40),
+    (500, 4),
+    (1000, 9),
+    (1500, 14),
+    (2500, 19),
+    (3500, 24),
+    (5000, 33),
+    (7500, 40),
+    (10000, 46),
+    (15000, 55),
+    (20000, 60),
+    (25000, 65),
+    (30000, 70),
+    (35000, 80),
+    (40000, 96),
+    (45000, 100),
+    (50000, 105),
+    (70000, 105),
+    (150000, 105),
 ]
 
 B2B_FEE = 50  # Approximate flat fee for B2B

@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { connectBinance, updateSettlement, updateTradingConfig } from '../services/api';
 import api from '../services/api';
 
+// Request OTP for settlement change
+const requestSettlementOTP = () => api.post('/traders/settlement/request-otp');
+
 const BANK_PAYBILLS = {
   KCB: '522522',
   Equity: '247247',
@@ -28,6 +31,11 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [settlementMethod, setSettlementMethod] = useState(profile?.settlement_method || 'mpesa');
   const [settlementPhone, setSettlementPhone] = useState('');
   const [selectedBank, setSelectedBank] = useState('');
+  const [showChangeForm, setShowChangeForm] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [settlementOtp, setSettlementOtp] = useState('');
+  const [securityAnswer, setSecurityAnswer] = useState('');
+  const [securityQuestion, setSecurityQuestion] = useState('');
   const [bankAccount, setBankAccount] = useState('');
   const [customPaybill, setCustomPaybill] = useState('');
   const [paybillAccount, setPaybillAccount] = useState('');
@@ -70,11 +78,30 @@ export default function SettingsPanel({ profile, onUpdate }) {
     setLoading(false);
   };
 
-  const handleSaveSettlement = async (e) => {
-    e.preventDefault();
+  const handleRequestOTP = async () => {
     setLoading(true);
     try {
-      const data = { method: settlementMethod };
+      const res = await requestSettlementOTP();
+      setOtpSent(true);
+      setSecurityQuestion(res.data.security_question || '');
+      showMsg(res.data.message || 'OTP sent');
+    } catch (err) {
+      showMsg(err.response?.data?.detail || 'Failed to send OTP');
+    }
+    setLoading(false);
+  };
+
+  const handleSaveSettlement = async (e) => {
+    e.preventDefault();
+    if (!settlementOtp) { showMsg('Enter the OTP code sent to your phone'); return; }
+    if (!securityAnswer) { showMsg('Enter your security answer'); return; }
+    setLoading(true);
+    try {
+      const data = {
+        method: settlementMethod,
+        otp_code: settlementOtp,
+        security_answer: securityAnswer,
+      };
       if (settlementMethod === 'mpesa') {
         data.phone = settlementPhone;
       } else if (settlementMethod === 'bank_paybill') {
@@ -87,11 +114,15 @@ export default function SettingsPanel({ profile, onUpdate }) {
         data.paybill = customPaybill;
         data.account = paybillAccount;
       }
-      await updateSettlement(data);
-      showMsg('Settlement settings saved!');
+      const res = await updateSettlement(data);
+      showMsg(res.data.message || 'Settlement method updated! 48-hour cooldown applies.');
+      setShowChangeForm(false);
+      setOtpSent(false);
+      setSettlementOtp('');
+      setSecurityAnswer('');
       onUpdate();
     } catch (err) {
-      showMsg('Failed to save settlement settings');
+      showMsg(err.response?.data?.detail || 'Failed to save settlement settings');
     }
     setLoading(false);
   };
@@ -224,85 +255,156 @@ export default function SettingsPanel({ profile, onUpdate }) {
         <div className="card">
           <h3>Settlement Method</h3>
           <p className="help-text">How you want to receive your funds after trades.</p>
-          <form onSubmit={handleSaveSettlement}>
-            <label>Method</label>
-            <select value={settlementMethod} onChange={(e) => setSettlementMethod(e.target.value)}>
-              <option value="mpesa">M-Pesa (B2C)</option>
-              <option value="bank_paybill">Bank Account (via Bank Paybill)</option>
-              <option value="till">Till Number (Buy Goods)</option>
-              <option value="paybill">My Own Paybill</option>
-            </select>
 
-            {settlementMethod === 'mpesa' && (
-              <>
-                <label>M-Pesa Phone Number</label>
-                <input
-                  type="tel"
-                  placeholder="0712345678"
-                  value={settlementPhone}
-                  onChange={(e) => setSettlementPhone(e.target.value)}
-                  required
-                />
-              </>
+          {/* Current Settlement Display */}
+          <div style={{ background: 'var(--bg)', borderRadius: 10, padding: 16, marginBottom: 16, border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 8 }}>Current Method</div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: '#10b981' }}>
+              {profile?.settlement_method === 'mpesa' ? 'M-Pesa' :
+               profile?.settlement_method === 'bank_paybill' ? 'Bank Account' :
+               profile?.settlement_method === 'till' ? 'Till Number' :
+               profile?.settlement_method === 'paybill' ? 'Paybill' : 'Not set'}
+            </div>
+            <div style={{ fontSize: 13, color: '#fff', marginTop: 4 }}>
+              {profile?.settlement_destination
+                ? profile.settlement_destination.replace(/^(.*)(.{4})$/, (_, start, end) => '*'.repeat(start.length) + end)
+                : 'No destination configured'}
+            </div>
+            {profile?.settlement_cooldown_until && (
+              <div style={{
+                marginTop: 10, padding: 10, borderRadius: 8,
+                background: 'rgba(245,158,11,0.1)', border: '1px solid #f59e0b',
+                fontSize: 12, color: '#f59e0b',
+              }}>
+                Due to security reasons, this payment method will be active for withdrawals after{' '}
+                {new Date(profile.settlement_cooldown_until).toLocaleString()}.
+              </div>
             )}
+          </div>
 
-            {settlementMethod === 'bank_paybill' && (
-              <>
-                <label>Bank</label>
-                <select value={selectedBank} onChange={(e) => setSelectedBank(e.target.value)} required>
-                  <option value="">Select Bank</option>
-                  {Object.keys(BANK_PAYBILLS).map((bank) => (
-                    <option key={bank} value={bank}>{bank} ({BANK_PAYBILLS[bank]})</option>
-                  ))}
-                </select>
-                <label>Account Number</label>
-                <input
-                  type="text"
-                  placeholder="Your bank account number"
-                  value={bankAccount}
-                  onChange={(e) => setBankAccount(e.target.value)}
-                  required
-                />
-              </>
-            )}
-
-            {settlementMethod === 'till' && (
-              <>
-                <label>Till Number</label>
-                <input
-                  type="text"
-                  placeholder="Your Till number"
-                  value={customPaybill}
-                  onChange={(e) => setCustomPaybill(e.target.value)}
-                  required
-                />
-              </>
-            )}
-
-            {settlementMethod === 'paybill' && (
-              <>
-                <label>Paybill Number</label>
-                <input
-                  type="text"
-                  placeholder="Your Paybill shortcode"
-                  value={customPaybill}
-                  onChange={(e) => setCustomPaybill(e.target.value)}
-                  required
-                />
-                <label>Account Number</label>
-                <input
-                  type="text"
-                  placeholder="Account number"
-                  value={paybillAccount}
-                  onChange={(e) => setPaybillAccount(e.target.value)}
-                />
-              </>
-            )}
-
-            <button type="submit" disabled={loading}>
-              {loading ? 'Saving...' : 'Save Settlement Settings'}
+          {!showChangeForm ? (
+            <button
+              onClick={() => setShowChangeForm(true)}
+              style={{
+                padding: '10px 20px', borderRadius: 8, border: '1px solid var(--border)',
+                background: 'transparent', color: '#f59e0b', cursor: 'pointer', fontSize: 13,
+              }}
+            >
+              Change Payment Method
             </button>
-          </form>
+          ) : (
+            <>
+              {/* Step 1: Request OTP */}
+              {!otpSent ? (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{
+                    padding: 14, borderRadius: 8, background: 'rgba(245,158,11,0.1)',
+                    border: '1px solid #f59e0b', marginBottom: 16, fontSize: 13, color: '#f59e0b',
+                  }}>
+                    For security, changing your payment method requires phone OTP verification and your security answer.
+                    The new method will have a 48-hour cooldown before it can be used for withdrawals.
+                  </div>
+                  <button
+                    onClick={handleRequestOTP}
+                    disabled={loading}
+                    style={{
+                      padding: '12px 24px', borderRadius: 8, border: 'none',
+                      background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer',
+                    }}
+                  >
+                    {loading ? 'Sending OTP...' : 'Send Verification Code'}
+                  </button>
+                  <button
+                    onClick={() => setShowChangeForm(false)}
+                    style={{
+                      marginLeft: 10, padding: '12px 24px', borderRadius: 8,
+                      border: '1px solid var(--border)', background: 'transparent',
+                      color: '#9ca3af', cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                /* Step 2: OTP + Security Answer + New Method */
+                <form onSubmit={handleSaveSettlement} style={{ marginTop: 16 }}>
+                  <label>New Method</label>
+                  <select value={settlementMethod} onChange={(e) => setSettlementMethod(e.target.value)}>
+                    <option value="mpesa">M-Pesa (B2C)</option>
+                    <option value="bank_paybill">Bank Account (via Bank Paybill)</option>
+                    <option value="till">Till Number (Buy Goods)</option>
+                    <option value="paybill">My Own Paybill</option>
+                  </select>
+
+                  {settlementMethod === 'mpesa' && (
+                    <>
+                      <label>M-Pesa Phone Number</label>
+                      <input type="tel" placeholder="0712345678" value={settlementPhone}
+                        onChange={(e) => setSettlementPhone(e.target.value)} required />
+                    </>
+                  )}
+                  {settlementMethod === 'bank_paybill' && (
+                    <>
+                      <label>Bank</label>
+                      <select value={selectedBank} onChange={(e) => setSelectedBank(e.target.value)} required>
+                        <option value="">Select Bank</option>
+                        {Object.keys(BANK_PAYBILLS).map((bank) => (
+                          <option key={bank} value={bank}>{bank} ({BANK_PAYBILLS[bank]})</option>
+                        ))}
+                      </select>
+                      <label>Account Number</label>
+                      <input type="text" placeholder="Your bank account number" value={bankAccount}
+                        onChange={(e) => setBankAccount(e.target.value)} required />
+                    </>
+                  )}
+                  {settlementMethod === 'till' && (
+                    <>
+                      <label>Till Number</label>
+                      <input type="text" placeholder="Your Till number" value={customPaybill}
+                        onChange={(e) => setCustomPaybill(e.target.value)} required />
+                    </>
+                  )}
+                  {settlementMethod === 'paybill' && (
+                    <>
+                      <label>Paybill Number</label>
+                      <input type="text" placeholder="Your Paybill shortcode" value={customPaybill}
+                        onChange={(e) => setCustomPaybill(e.target.value)} required />
+                      <label>Account Number</label>
+                      <input type="text" placeholder="Account number" value={paybillAccount}
+                        onChange={(e) => setPaybillAccount(e.target.value)} />
+                    </>
+                  )}
+
+                  <div style={{ marginTop: 16, padding: 16, background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)' }}>
+                    <label style={{ fontSize: 13, color: '#f59e0b' }}>Verification Code (OTP)</label>
+                    <input type="text" placeholder="Enter 6-digit code" value={settlementOtp}
+                      onChange={(e) => setSettlementOtp(e.target.value)} maxLength={6} required />
+
+                    <label style={{ fontSize: 13, color: '#f59e0b', marginTop: 12 }}>
+                      Security Question: {securityQuestion || profile?.security_question || 'Not set'}
+                    </label>
+                    <input type="text" placeholder="Your security answer" value={securityAnswer}
+                      onChange={(e) => setSecurityAnswer(e.target.value)} required />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+                    <button type="submit" disabled={loading}>
+                      {loading ? 'Saving...' : 'Update Payment Method'}
+                    </button>
+                    <button type="button"
+                      onClick={() => { setShowChangeForm(false); setOtpSent(false); setSettlementOtp(''); setSecurityAnswer(''); }}
+                      style={{
+                        padding: '10px 20px', borderRadius: 8, border: '1px solid var(--border)',
+                        background: 'transparent', color: '#9ca3af', cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
+            </>
+          )}
         </div>
       )}
 

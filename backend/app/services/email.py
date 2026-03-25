@@ -286,3 +286,83 @@ def send_verification_code(to_email: str, code: str) -> bool:
     </div>
     """
     return send_email(to_email, "SparkP2P - Verify Your Email", html)
+
+
+def send_internal_transfer_sent(to_email: str, trader_name: str, amount: float, recipient_name: str, new_balance: float) -> bool:
+    """Notify sender that an internal transfer was sent."""
+    html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+            <p style="color: #888; font-size: 14px;">Automated P2P Trading</p>
+        </div>
+        <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+            <h2 style="color: #3b82f6; font-size: 20px; margin: 0 0 8px;">Transfer Sent</h2>
+            <p style="color: #9ca3af; font-size: 14px; margin: 0 0 20px;">
+                Hi {trader_name}, your internal transfer has been completed.
+            </p>
+            <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Amount Sent</span>
+                    <span style="color: #ef4444; font-size: 13px; font-weight: 600;">-KES {amount:,.0f}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Recipient</span>
+                    <span style="color: #fff; font-size: 13px; font-weight: 600;">{recipient_name}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Transaction Fee</span>
+                    <span style="color: #10b981; font-size: 13px; font-weight: 600;">FREE</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #9ca3af; font-size: 13px;">New Balance</span>
+                    <span style="color: #f59e0b; font-size: 13px; font-weight: 600;">KES {new_balance:,.0f}</span>
+                </div>
+            </div>
+        </div>
+        <p style="color: #6b7280; font-size: 11px; text-align: center; margin-top: 20px;">
+            Powered by Spark AI &bull; sparkp2p.com
+        </p>
+    </div>
+    """
+    return send_email(to_email, "SparkP2P - Transfer Sent", html)
+
+
+def send_internal_transfer_received(to_email: str, trader_name: str, amount: float, sender_name: str, new_balance: float) -> bool:
+    """Notify recipient that an internal transfer was received."""
+    html = f"""
+    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+            <p style="color: #888; font-size: 14px;">Automated P2P Trading</p>
+        </div>
+        <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+            <h2 style="color: #10b981; font-size: 20px; margin: 0 0 8px;">Transfer Received</h2>
+            <p style="color: #9ca3af; font-size: 14px; margin: 0 0 20px;">
+                Hi {trader_name}, you've received an internal transfer on SparkP2P.
+            </p>
+            <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Amount Received</span>
+                    <span style="color: #10b981; font-size: 13px; font-weight: 600;">+KES {amount:,.0f}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">From</span>
+                    <span style="color: #fff; font-size: 13px; font-weight: 600;">{sender_name}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 13px;">Transaction Fee</span>
+                    <span style="color: #10b981; font-size: 13px; font-weight: 600;">FREE</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #9ca3af; font-size: 13px;">New Balance</span>
+                    <span style="color: #f59e0b; font-size: 13px; font-weight: 600;">KES {new_balance:,.0f}</span>
+                </div>
+            </div>
+        </div>
+        <p style="color: #6b7280; font-size: 11px; text-align: center; margin-top: 20px;">
+            Powered by Spark AI &bull; sparkp2p.com
+        </p>
+    </div>
+    """
+    return send_email(to_email, "SparkP2P - Transfer Received", html)

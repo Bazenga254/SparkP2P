@@ -17,6 +17,8 @@ class TransactionType(str, enum.Enum):
     PLATFORM_FEE = "platform_fee"     # Fee deducted
     SETTLEMENT_FEE = "settlement_fee" # B2C/B2B fee
     ADJUSTMENT = "adjustment"         # Manual adjustment by admin
+    INTERNAL_TRANSFER_OUT = "internal_transfer_out"  # Sent to another SparkP2P user
+    INTERNAL_TRANSFER_IN = "internal_transfer_in"    # Received from another SparkP2P user
 
 
 class Wallet(Base):

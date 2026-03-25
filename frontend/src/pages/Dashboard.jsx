@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth, getBinanceAccountData, initiateDeposit, getDepositHistory, checkDepositStatus } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth, getBinanceAccountData, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -26,6 +26,12 @@ export default function Dashboard() {
   const [depositMessage, setDepositMessage] = useState('');
   const [depositHistory, setDepositHistory] = useState([]);
   const depositPollRef = useRef(null);
+  const [showSendModal, setShowSendModal] = useState(false);
+  const [sendRecipient, setSendRecipient] = useState('');
+  const [sendAmount, setSendAmount] = useState('');
+  const [sendLoading, setSendLoading] = useState(false);
+  const [sendMessage, setSendMessage] = useState('');
+  const [sendStatus, setSendStatus] = useState(null); // null, 'success', 'error'
 
   const loadData = async () => {
     if (!localStorage.getItem('token')) return;
@@ -77,11 +83,38 @@ export default function Dashboard() {
 
   const handleWithdraw = async () => {
     if (!wallet || wallet.balance <= 0) return;
-    if (!confirm(`Withdraw KES ${wallet.balance.toLocaleString()} to your account?`)) return;
+
+    // Get fee preview first
+    try {
+      const preview = await api.get('/traders/wallet/withdraw/preview');
+      const p = preview.data;
+
+      if (!p.can_withdraw) {
+        if (p.cooldown_active) {
+          alert(`Your payment method was recently changed. Withdrawals available in ${p.cooldown_hours} hours.`);
+        } else {
+          alert('Cannot withdraw at this time.');
+        }
+        return;
+      }
+
+      const confirmed = confirm(
+        `Withdraw from SparkP2P wallet\n\n` +
+        `Balance: KES ${p.balance.toLocaleString()}\n` +
+        `Transaction fee: KES ${p.transaction_fee.toLocaleString()}\n` +
+        `You receive: KES ${p.you_receive.toLocaleString()}\n\n` +
+        `Proceed?`
+      );
+      if (!confirmed) return;
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Could not check withdrawal');
+      return;
+    }
 
     setWithdrawing(true);
     try {
-      await requestWithdrawal();
+      const res = await requestWithdrawal();
+      alert(res.data.message || 'Withdrawal sent!');
       await loadData();
     } catch (err) {
       alert(err.response?.data?.detail || 'Withdrawal failed');
@@ -153,6 +186,42 @@ export default function Dashboard() {
     setDepositStatus(null);
     setDepositMessage('');
     setDepositLoading(false);
+  };
+
+  const handleSend = async () => {
+    const amt = parseFloat(sendAmount);
+    if (!amt || amt < 10) {
+      setSendMessage('Minimum transfer is KES 10');
+      setSendStatus('error');
+      return;
+    }
+    if (!sendRecipient || sendRecipient.trim().length < 5) {
+      setSendMessage('Enter a valid phone number or email');
+      setSendStatus('error');
+      return;
+    }
+    setSendLoading(true);
+    setSendMessage('');
+    setSendStatus(null);
+    try {
+      const res = await internalTransfer(sendRecipient.trim(), amt);
+      setSendStatus('success');
+      setSendMessage(res.data.message || 'Transfer successful!');
+      loadData();
+    } catch (err) {
+      setSendStatus('error');
+      setSendMessage(err.response?.data?.detail || 'Transfer failed');
+    }
+    setSendLoading(false);
+  };
+
+  const closeSendModal = () => {
+    setShowSendModal(false);
+    setSendRecipient('');
+    setSendAmount('');
+    setSendMessage('');
+    setSendStatus(null);
+    setSendLoading(false);
   };
 
   // Pre-fill phone from profile
@@ -286,6 +355,17 @@ export default function Dashboard() {
                     }}
                   >
                     <Plus size={14} /> Deposit
+                  </button>
+                  <button
+                    onClick={() => setShowSendModal(true)}
+                    style={{
+                      flex: 1, padding: '8px 0', borderRadius: 8, border: 'none',
+                      background: 'linear-gradient(135deg, #3b82f6, #2563eb)', color: '#fff',
+                      fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                    }}
+                  >
+                    <ArrowUpCircle size={14} /> Send
                   </button>
                   <button
                     className="withdraw-btn-mini"
@@ -778,6 +858,149 @@ export default function Dashboard() {
             {depositStatus === 'success' && (
               <button
                 onClick={closeDepositModal}
+                style={{
+                  width: '100%', padding: '14px 0', borderRadius: 10, border: 'none',
+                  background: 'linear-gradient(135deg, #10b981, #059669)',
+                  color: '#fff', fontWeight: 600, fontSize: 15, cursor: 'pointer', marginTop: 16,
+                }}
+              >
+                Done
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Send Money Modal */}
+      {showSendModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000, padding: 16,
+        }}>
+          <div style={{
+            background: 'var(--card-bg, #1a1d27)', borderRadius: 16, padding: 32,
+            width: '100%', maxWidth: 420, position: 'relative',
+            border: '1px solid var(--border, #2a2d3a)',
+          }}>
+            <button
+              onClick={closeSendModal}
+              style={{
+                position: 'absolute', top: 12, right: 12, background: 'none',
+                border: 'none', color: '#9ca3af', cursor: 'pointer',
+              }}
+            >
+              <X size={20} />
+            </button>
+
+            <h2 style={{ color: '#fff', fontSize: 20, marginBottom: 4 }}>Send to SparkP2P User</h2>
+            <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 8 }}>
+              Transfer funds instantly to another SparkP2P trader.
+            </p>
+            <div style={{
+              display: 'inline-block', padding: '4px 12px', borderRadius: 20,
+              background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981',
+              color: '#10b981', fontSize: 12, fontWeight: 600, marginBottom: 20,
+            }}>
+              FREE - no transaction fees
+            </div>
+
+            {sendStatus !== 'success' && (
+              <>
+                <label style={{ color: '#9ca3af', fontSize: 13, display: 'block', marginBottom: 6 }}>
+                  Recipient Phone or Email
+                </label>
+                <input
+                  type="text"
+                  value={sendRecipient}
+                  onChange={(e) => setSendRecipient(e.target.value)}
+                  placeholder="0712345678 or user@email.com"
+                  disabled={sendLoading}
+                  style={{
+                    width: '100%', padding: '12px 14px', borderRadius: 10,
+                    border: '1px solid var(--border, #2a2d3a)',
+                    background: 'var(--bg, #0f1117)', color: '#fff', fontSize: 16,
+                    marginBottom: 16, boxSizing: 'border-box',
+                  }}
+                />
+
+                <label style={{ color: '#9ca3af', fontSize: 13, display: 'block', marginBottom: 6 }}>
+                  Amount (KES)
+                </label>
+                <input
+                  type="number"
+                  value={sendAmount}
+                  onChange={(e) => setSendAmount(e.target.value)}
+                  placeholder="e.g. 5000"
+                  min="10"
+                  max="500000"
+                  disabled={sendLoading}
+                  style={{
+                    width: '100%', padding: '12px 14px', borderRadius: 10,
+                    border: '1px solid var(--border, #2a2d3a)',
+                    background: 'var(--bg, #0f1117)', color: '#fff', fontSize: 16,
+                    marginBottom: 16, boxSizing: 'border-box',
+                  }}
+                />
+
+                <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                  {[500, 1000, 5000, 10000].map((amt) => (
+                    <button
+                      key={amt}
+                      onClick={() => setSendAmount(String(amt))}
+                      disabled={sendLoading}
+                      style={{
+                        flex: 1, padding: '8px 0', borderRadius: 8,
+                        border: sendAmount === String(amt) ? '2px solid #3b82f6' : '1px solid var(--border, #2a2d3a)',
+                        background: sendAmount === String(amt) ? 'rgba(59,130,246,0.1)' : 'var(--bg, #0f1117)',
+                        color: '#fff', fontSize: 12, cursor: 'pointer',
+                      }}
+                    >
+                      {amt >= 1000 ? `${amt / 1000}K` : amt}
+                    </button>
+                  ))}
+                </div>
+
+                {wallet && (
+                  <div style={{
+                    fontSize: 12, color: '#9ca3af', marginBottom: 16, textAlign: 'center',
+                  }}>
+                    Available balance: <span style={{ color: '#f59e0b', fontWeight: 600 }}>KES {wallet.balance?.toLocaleString()}</span>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleSend}
+                  disabled={sendLoading}
+                  style={{
+                    width: '100%', padding: '14px 0', borderRadius: 10, border: 'none',
+                    background: sendLoading
+                      ? '#374151'
+                      : 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                    color: '#fff', fontWeight: 600, fontSize: 15, cursor: sendLoading ? 'default' : 'pointer',
+                  }}
+                >
+                  {sendLoading ? 'Sending...' : 'Send Money'}
+                </button>
+              </>
+            )}
+
+            {sendMessage && (
+              <div style={{
+                marginTop: 16, padding: 14, borderRadius: 10,
+                background: sendStatus === 'success'
+                  ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                border: `1px solid ${sendStatus === 'success' ? '#10b981' : '#ef4444'}`,
+                color: sendStatus === 'success' ? '#10b981' : '#ef4444',
+                fontSize: 13, textAlign: 'center',
+              }}>
+                {sendMessage}
+              </div>
+            )}
+
+            {sendStatus === 'success' && (
+              <button
+                onClick={closeSendModal}
                 style={{
                   width: '100%', padding: '14px 0', borderRadius: 10, border: 'none',
                   background: 'linear-gradient(135deg, #10b981, #059669)',

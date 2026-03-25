@@ -122,6 +122,18 @@ async def admin_dashboard(
     )
     total_float = result.scalar()
 
+    # Internal transfers today
+    result = await db.execute(
+        select(
+            func.count(WalletTransaction.id),
+            func.coalesce(func.sum(WalletTransaction.amount), 0),
+        ).where(
+            WalletTransaction.created_at >= today_start,
+            WalletTransaction.transaction_type == TransactionType.INTERNAL_TRANSFER_IN,
+        )
+    )
+    internal_count, internal_volume = result.one()
+
     return {
         "traders": {
             "total": total_traders,
@@ -138,6 +150,10 @@ async def admin_dashboard(
         },
         "platform": {
             "total_float": float(total_float),
+        },
+        "internal_transfers": {
+            "today_count": internal_count,
+            "today_volume": float(internal_volume),
         },
     }
 
@@ -618,6 +634,22 @@ async def admin_analytics(
         for row in r.all()
     ]
 
+    # Internal transfer stats
+    async def _internal_transfers_for_period(start):
+        q = select(
+            func.count(WalletTransaction.id),
+            func.coalesce(func.sum(WalletTransaction.amount), 0),
+        ).where(
+            WalletTransaction.created_at >= start,
+            WalletTransaction.transaction_type == TransactionType.INTERNAL_TRANSFER_IN,
+        )
+        r = await db.execute(q)
+        cnt, vol = r.one()
+        return int(cnt), float(vol)
+
+    it_today_count, it_today_vol = await _internal_transfers_for_period(today_start)
+    it_month_count, it_month_vol = await _internal_transfers_for_period(month_start)
+
     return {
         "platform_profit": platform_profit,
         "revenue": {
@@ -629,6 +661,12 @@ async def admin_analytics(
         "monthly_volumes": monthly_volumes,
         "online_traders": online_traders,
         "top_traders": top_traders,
+        "internal_transfers": {
+            "today_count": it_today_count,
+            "today_volume": it_today_vol,
+            "month_count": it_month_count,
+            "month_volume": it_month_vol,
+        },
     }
 
 

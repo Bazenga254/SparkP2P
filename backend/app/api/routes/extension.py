@@ -479,6 +479,57 @@ async def _process_reported_buy_order(
         send_insufficient_balance(trader.email, trader.full_name, amount, current_balance)
         return None
 
+    # Determine seller destination
+    seller_dest = None
+    if order.seller_payment_destination:
+        seller_dest = order.seller_payment_destination
+    elif order.counterparty_phone:
+        seller_dest = order.counterparty_phone
+
+    if not seller_dest:
+        # Cannot auto-pay without seller payment info
+        logger.warning(f"No seller payment info for buy order {order_number}, requesting details")
+        await db.commit()
+        return {"action": "get_order_details", "order_number": order_number}
+
+    # ── Check if seller is on SparkP2P (internal transfer = FREE) ──
+    from app.services.internal_transfer import find_trader_by_phone, transfer_between_wallets
+
+    seller_trader = await find_trader_by_phone(db, seller_dest)
+
+    if seller_trader and seller_trader.id != trader.id:
+        # Seller is on SparkP2P! Do an internal wallet-to-wallet transfer (FREE)
+        logger.info(
+            f"Buy order {order_number}: seller {seller_dest} is SparkP2P trader "
+            f"#{seller_trader.id} ({seller_trader.full_name}). Using internal transfer (FREE)."
+        )
+        try:
+            await transfer_between_wallets(
+                db=db,
+                from_trader_id=trader.id,
+                to_trader_id=seller_trader.id,
+                amount=amount,
+                description=f"Buy order {order_number} - internal transfer to seller {seller_trader.full_name}",
+                order_id=order.id,
+            )
+
+            # Mark order as payment sent
+            order.status = OrderStatus.PAYMENT_SENT
+            order.payment_sent_at = datetime.now(timezone.utc)
+            await db.commit()
+
+            logger.info(f"Internal transfer completed for buy order {order_number}: KES {amount:,.0f} FREE")
+
+            # Tell extension to mark as paid on Binance
+            return {"action": "mark_as_paid", "order_number": order_number}
+
+        except Exception as e:
+            logger.error(f"Internal transfer failed for buy order {order_number}: {e}")
+            order.status = OrderStatus.PENDING
+            await db.commit()
+            return None
+
+    # ── Seller is NOT on SparkP2P — use B2C ──
     # Reserve the funds (deduct from balance, add to reserved)
     wallet.balance -= amount
     wallet.reserved += amount
@@ -496,21 +547,45 @@ async def _process_reported_buy_order(
     db.add(reserve_txn)
     await db.flush()
 
-    # Send B2C payment to seller from platform Paybill
-    seller_phone = order_data.sellerNickname  # This may need parsing from order details
-    # The extension should provide seller payment info; for now check order fields
-    seller_dest = None
-    if order.seller_payment_destination:
-        seller_dest = order.seller_payment_destination
-    elif order.counterparty_phone:
-        seller_dest = order.counterparty_phone
+    # For orders >= KES 50,000, SparkP2P covers the B2C fee (platform absorbs it)
+    # For orders < KES 50,000, deduct Safaricom B2C fee from buyer's wallet
+    b2c_fee_covered_by_platform = amount >= 50_000
+    if not b2c_fee_covered_by_platform:
+        # Estimate Safaricom B2C fee (tiered):
+        # KES 0-999: ~KES 11, KES 1000-1499: ~KES 15, KES 1500-2499: ~KES 22,
+        # KES 2500-3499: ~KES 33, KES 3500-4999: ~KES 55, KES 5000-9999: ~KES 77,
+        # KES 10000-14999: ~KES 112, KES 15000-19999: ~KES 197,
+        # KES 20000-34999: ~KES 220, KES 35000-49999: ~KES 250
+        if amount < 1000: b2c_fee = 11
+        elif amount < 1500: b2c_fee = 15
+        elif amount < 2500: b2c_fee = 22
+        elif amount < 3500: b2c_fee = 33
+        elif amount < 5000: b2c_fee = 55
+        elif amount < 10000: b2c_fee = 77
+        elif amount < 15000: b2c_fee = 112
+        elif amount < 20000: b2c_fee = 197
+        elif amount < 35000: b2c_fee = 220
+        else: b2c_fee = 250
 
-    if not seller_dest:
-        # Cannot auto-pay without seller payment info
-        # Tell extension to fetch order details including seller payment method
-        logger.warning(f"No seller payment info for buy order {order_number}, requesting details")
-        await db.commit()
-        return {"action": "get_order_details", "order_number": order_number}
+        # Deduct fee from buyer wallet
+        if wallet.balance >= b2c_fee:
+            wallet.balance -= b2c_fee
+            fee_txn = WalletTransaction(
+                trader_id=trader.id,
+                wallet_id=wallet.id,
+                order_id=order.id,
+                transaction_type=TransactionType.SETTLEMENT_FEE,
+                amount=-b2c_fee,
+                balance_after=wallet.balance,
+                description=f"Safaricom B2C fee for order {order_number}",
+            )
+            db.add(fee_txn)
+            await db.flush()
+            logger.info(f"B2C fee KES {b2c_fee} deducted from buyer wallet for order {order_number}")
+        else:
+            logger.warning(f"Buyer wallet cannot cover B2C fee KES {b2c_fee} for order {order_number}, proceeding anyway")
+    else:
+        logger.info(f"Order {order_number} >= KES 50K: SparkP2P covers B2C fee")
 
     try:
         b2c_result = await mpesa_client.send_b2c(

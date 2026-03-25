@@ -3,7 +3,7 @@ import api from '../services/api';
 import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminAnalytics, getAdminOnlineTraders } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat } from 'lucide-react';
 
 const sidebarSections = [
   {
@@ -313,6 +313,41 @@ export default function Admin() {
                   </div>
                 </div>
               </div>
+
+              {/* Row 2b: Internal Transfers */}
+              {dashboard.internal_transfers && (dashboard.internal_transfers.today_count > 0 || (analytics?.internal_transfers?.month_count || 0) > 0) && (
+                <div className="adm-stat-grid" style={{ marginTop: 16 }}>
+                  <div className="adm-stat-card" style={{ '--card-accent': '#8b5cf6' }}>
+                    <div className="adm-stat-info">
+                      <span className="adm-stat-label">Internal Transfers Today</span>
+                      <span className="adm-stat-value">{dashboard.internal_transfers.today_count}</span>
+                    </div>
+                    <div className="adm-stat-icon" style={{ background: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }}>
+                      <Repeat size={22} />
+                    </div>
+                  </div>
+                  <div className="adm-stat-card" style={{ '--card-accent': '#10b981' }}>
+                    <div className="adm-stat-info">
+                      <span className="adm-stat-label">Internal Volume Today</span>
+                      <span className="adm-stat-value">{fmtKES(dashboard.internal_transfers.today_volume)}</span>
+                    </div>
+                    <div className="adm-stat-icon" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
+                      <DollarSign size={22} />
+                    </div>
+                  </div>
+                  <div className="adm-stat-card" style={{ '--card-accent': '#3b82f6' }}>
+                    <div className="adm-stat-info">
+                      <span className="adm-stat-label">Fees Saved (est.)</span>
+                      <span className="adm-stat-value" style={{ color: '#10b981' }}>
+                        {fmtKES((dashboard.internal_transfers.today_count || 0) * 77)}
+                      </span>
+                    </div>
+                    <div className="adm-stat-icon" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
+                      <TrendingUp size={22} />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Row 4: Chart + Profit Breakdown */}
               <div className="adm-two-col" style={{ marginTop: 16 }}>

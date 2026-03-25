@@ -412,6 +412,73 @@ async def get_session_health(
     }
 
 
+class InternalTransferRequest(BaseModel):
+    recipient: str  # Phone number or email of the recipient
+    amount: float
+
+
+@router.post("/wallet/transfer")
+async def internal_transfer(
+    data: InternalTransferRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send money to another SparkP2P user. FREE - no transaction fees."""
+    from app.services.internal_transfer import find_trader_by_phone, transfer_between_wallets
+
+    if data.amount < 10:
+        raise HTTPException(status_code=400, detail="Minimum transfer amount is KES 10")
+    if data.amount > 500_000:
+        raise HTTPException(status_code=400, detail="Maximum transfer amount is KES 500,000")
+
+    recipient = data.recipient.strip()
+    if not recipient:
+        raise HTTPException(status_code=400, detail="Recipient phone or email is required")
+
+    # Look up recipient by email or phone
+    recipient_trader = None
+    if "@" in recipient:
+        result = await db.execute(
+            select(Trader).where(Trader.email == recipient)
+        )
+        recipient_trader = result.scalar_one_or_none()
+    else:
+        recipient_trader = await find_trader_by_phone(db, recipient)
+
+    if not recipient_trader:
+        raise HTTPException(status_code=404, detail="Recipient not found on SparkP2P")
+
+    if recipient_trader.id == trader.id:
+        raise HTTPException(status_code=400, detail="You cannot send money to yourself")
+
+    try:
+        await transfer_between_wallets(
+            db=db,
+            from_trader_id=trader.id,
+            to_trader_id=recipient_trader.id,
+            amount=data.amount,
+            description=f"Manual transfer to {recipient_trader.full_name}",
+        )
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Get updated sender wallet
+    result = await db.execute(
+        select(Wallet).where(Wallet.trader_id == trader.id)
+    )
+    updated_wallet = result.scalar_one_or_none()
+
+    return {
+        "status": "success",
+        "message": f"KES {data.amount:,.0f} sent to {recipient_trader.full_name}",
+        "amount": data.amount,
+        "recipient_name": recipient_trader.full_name,
+        "fee": 0,
+        "new_balance": updated_wallet.balance if updated_wallet else 0,
+    }
+
+
 @router.get("/wallet", response_model=WalletResponse)
 async def get_wallet(
     trader: Trader = Depends(get_current_trader),
@@ -497,7 +564,49 @@ async def request_withdrawal(
             detail="Withdrawal failed. Please try again.",
         )
 
-    return {"status": "success", "message": f"KES {net_amount} sent to your account (fee: KES {total_fee})"}
+    return {
+        "status": "success",
+        "message": f"KES {net_amount:,.0f} sent to your M-Pesa",
+        "amount_sent": net_amount,
+        "transaction_fee": total_fee,
+        "wallet_deducted": wallet.balance + total_fee,
+    }
+
+
+@router.get("/wallet/withdraw/preview")
+async def preview_withdrawal(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Preview withdrawal fees before confirming."""
+    from app.services.settlement.engine import get_total_settlement_fee
+
+    result = await db.execute(select(Wallet).where(Wallet.trader_id == trader.id))
+    wallet = result.scalar_one_or_none()
+
+    if not wallet or wallet.balance <= 0:
+        return {"can_withdraw": False, "reason": "No funds available"}
+
+    safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, wallet.balance)
+    net_amount = wallet.balance - total_fee
+
+    # Check cooldown
+    cooldown_active = False
+    cooldown_hours = 0
+    if trader.settlement_changed_at:
+        cooldown_end = trader.settlement_changed_at + timedelta(hours=48)
+        if datetime.now(timezone.utc) < cooldown_end:
+            cooldown_active = True
+            cooldown_hours = int((cooldown_end - datetime.now(timezone.utc)).total_seconds() / 3600)
+
+    return {
+        "can_withdraw": net_amount > 0 and not cooldown_active,
+        "balance": wallet.balance,
+        "transaction_fee": total_fee,
+        "you_receive": max(net_amount, 0),
+        "cooldown_active": cooldown_active,
+        "cooldown_hours": cooldown_hours,
+    }
 
 
 @router.post("/wallet/withdraw/simulate")

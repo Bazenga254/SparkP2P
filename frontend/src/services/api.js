@@ -38,6 +38,7 @@ export const getBinanceAccountData = () => api.get('/ext/account-data');
 export const initiateDeposit = (amount, phone) => api.post('/traders/deposit', { amount, phone });
 export const getDepositHistory = (limit = 50) => api.get(`/traders/deposit/history?limit=${limit}`);
 export const checkDepositStatus = (checkoutId) => api.get(`/traders/deposit/status/${checkoutId}`);
+export const internalTransfer = (recipient, amount) => api.post('/traders/wallet/transfer', { recipient, amount });
 
 // Orders
 export const getOrders = (params = {}) => api.get('/orders', { params });
