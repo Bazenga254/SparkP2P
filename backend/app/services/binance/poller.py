@@ -30,6 +30,7 @@ class BinanceOrderPoller:
     def __init__(self, poll_interval: int = 30):
         self.poll_interval = poll_interval  # seconds
         self.running = False
+        self._daily_fee_last_run: str = ""  # YYYY-MM-DD of last daily fee run
 
     async def start(self):
         """Start the housekeeping loop."""
@@ -56,6 +57,31 @@ class BinanceOrderPoller:
             await self._check_trader_heartbeats(db)
             await self._activate_pending_settlements(db)
             await self._check_settlement_thresholds(db)
+            await self._run_daily_volume_fee(db)
+
+    async def _run_daily_volume_fee(self, db: AsyncSession):
+        """
+        Run daily volume fee calculation once per day, after midnight UTC.
+        Deducts 0.05% of each trader's daily trading volume from their wallet.
+        """
+        now = datetime.now(timezone.utc)
+        # Only run after midnight (hour 0) and before 1am, and only once per day
+        if now.hour != 0:
+            return
+
+        today_str = now.strftime("%Y-%m-%d")
+        if self._daily_fee_last_run == today_str:
+            return  # Already ran today
+
+        try:
+            from app.services.daily_fee import calculate_and_deduct_daily_fees
+            # Calculate fees for the PREVIOUS day's volume
+            logger.info("Running daily volume fee calculation...")
+            await calculate_and_deduct_daily_fees(db)
+            self._daily_fee_last_run = today_str
+            logger.info("Daily volume fee calculation completed")
+        except Exception as e:
+            logger.error(f"Daily volume fee calculation failed: {e}")
 
     async def _check_stale_orders(self, db: AsyncSession):
         """

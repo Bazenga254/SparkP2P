@@ -201,6 +201,9 @@ async def get_order_stats(
     total_fees_today = float(result.scalar() or 0)
     net_profit = gross_profit - total_fees_today
 
+    # Calculate estimated daily volume fee (0.05% of today's volume)
+    today_volume_fee = round(float(today_volume) * 0.0005, 2)
+
     return {
         "today": {
             "total_trades": today_count,
@@ -219,6 +222,7 @@ async def get_order_stats(
             "gross_profit": round(gross_profit, 2),
             "total_fees": round(total_fees_today, 2),
             "net_profit": round(net_profit, 2),
+            "today_volume_fee": today_volume_fee,
         },
         "all_time": {
             "total_trades": trader.total_trades,

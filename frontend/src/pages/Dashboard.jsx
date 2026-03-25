@@ -402,6 +402,13 @@ export default function Dashboard() {
               </div>
             </div>
 
+            {/* Order Minimums Info */}
+            <div className="card" style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, color: '#9ca3af', marginBottom: 0 }}>
+              <span><Shield size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />Buy order minimum: <strong style={{ color: '#f59e0b' }}>KES 100,000</strong></span>
+              <span><Shield size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />Sell order minimum: <strong style={{ color: '#10b981' }}>KES 1,000</strong></span>
+              <span>Volume fee: <strong style={{ color: '#9ca3af' }}>0.05%/day</strong></span>
+            </div>
+
             {/* Row 3: Buy/Sell Breakdown + Profit */}
             <div className="overview-grid-mid">
               {/* Buying Summary */}
@@ -460,6 +467,10 @@ export default function Dashboard() {
                   <div className="profit-row fee-row">
                     <span>Fees</span>
                     <span>-KES {(stats?.today?.total_fees || 0).toLocaleString()}</span>
+                  </div>
+                  <div className="profit-row fee-row">
+                    <span>Volume Fee (0.05%)</span>
+                    <span>-KES {(stats?.today?.today_volume_fee || 0).toLocaleString()}</span>
                   </div>
                 </div>
               </div>

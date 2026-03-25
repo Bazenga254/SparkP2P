@@ -97,7 +97,10 @@ async def admin_dashboard(
             func.coalesce(func.sum(func.abs(WalletTransaction.amount)), 0),
         ).where(
             WalletTransaction.created_at >= today_start,
-            WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE,
+            WalletTransaction.transaction_type.in_([
+                TransactionType.PLATFORM_FEE,
+                TransactionType.DAILY_VOLUME_FEE,
+            ]),
         )
     )
     today_wallet_fees = float(result.scalar() or 0)
@@ -535,12 +538,15 @@ async def admin_analytics(
         r1 = await db.execute(q1)
         order_pf, order_sf = r1.one()
 
-        # From wallet transactions (settlement markup = PLATFORM_FEE type)
+        # From wallet transactions (settlement markup = PLATFORM_FEE + DAILY_VOLUME_FEE)
         q2 = select(
             func.coalesce(func.sum(func.abs(WalletTransaction.amount)), 0),
         ).where(
             WalletTransaction.created_at >= start,
-            WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE,
+            WalletTransaction.transaction_type.in_([
+                TransactionType.PLATFORM_FEE,
+                TransactionType.DAILY_VOLUME_FEE,
+            ]),
         )
         r2 = await db.execute(q2)
         wallet_fees = float(r2.scalar() or 0)
@@ -561,11 +567,16 @@ async def admin_analytics(
     )
     total_pf, total_sf = r.one()
 
-    # Add wallet platform fees (all time)
+    # Add wallet platform fees (all time) — includes daily volume fees
     r_wf = await db.execute(
         select(
             func.coalesce(func.sum(func.abs(WalletTransaction.amount)), 0),
-        ).where(WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE)
+        ).where(
+            WalletTransaction.transaction_type.in_([
+                TransactionType.PLATFORM_FEE,
+                TransactionType.DAILY_VOLUME_FEE,
+            ])
+        )
     )
     total_wallet_fees = float(r_wf.scalar() or 0)
 

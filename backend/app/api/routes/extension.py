@@ -347,6 +347,13 @@ async def _process_reported_sell_order(
     """
     order_number = order_data.orderNumber
 
+    # Enforce sell order minimum: KES 1,000
+    if order_data.totalPrice < 1000:
+        logger.warning(
+            f"Sell order {order_number} below minimum (KES {order_data.totalPrice:,.0f} < KES 1,000). Skipping."
+        )
+        return None
+
     # Check if we already track this order
     result = await db.execute(
         select(Order).where(Order.binance_order_number == order_number)
@@ -417,6 +424,13 @@ async def _process_reported_buy_order(
     from app.services.email import send_insufficient_balance, send_seller_paid
 
     order_number = order_data.orderNumber
+
+    # Enforce buy order minimum: KES 100,000
+    if order_data.totalPrice < 100000:
+        logger.warning(
+            f"Buy order {order_number} below minimum (KES {order_data.totalPrice:,.0f} < KES 100,000). Skipping."
+        )
+        return None
 
     # Check if we already track this order
     result = await db.execute(
