@@ -364,10 +364,148 @@ async function pollCycle() {
         method: 'POST', headers: { 'Authorization': `Bearer ${token}` },
       }).catch(() => {});
     }
+
+    // Every 5th poll, fetch full account data (balances, history, ads)
+    if (stats.polls % 5 === 0) {
+      try { await reportAccountData(); } catch (e) {
+        console.log('[SparkP2P] Account data report error:', e.message);
+      }
+    }
   } catch (err) {
     stats.errors++;
     console.error('[SparkP2P] Poll error:', err.message);
   }
+}
+
+async function reportAccountData() {
+  if (!binanceView || !token) return;
+
+  // Fetch USDT balance (C2C P2P wallet)
+  const balanceResp = await binanceView.webContents.executeJavaScript(`
+    fetch('https://c2c.binance.com/bapi/c2c/v2/private/c2c/asset/query-user-asset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      credentials: 'include',
+    }).then(r => r.json()).catch(e => ({ error: e.message }))
+  `);
+
+  // Fetch spot/funding wallet balances
+  const spotResp = await binanceView.webContents.executeJavaScript(`
+    fetch('https://www.binance.com/bapi/asset/v2/private/asset-service/wallet/balance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ needBtcValuation: false }),
+      credentials: 'include',
+    }).then(r => r.json()).catch(e => ({ error: e.message }))
+  `);
+
+  // Completed sell orders
+  const completedSell = await binanceView.webContents.executeJavaScript(`
+    fetch('https://c2c.binance.com/bapi/c2c/v2/private/c2c/order-match/order-list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page: 1, rows: 20, tradeType: 'SELL', orderStatusList: [4] }),
+      credentials: 'include',
+    }).then(r => r.json()).catch(e => ({ error: e.message }))
+  `);
+
+  // Completed buy orders
+  const completedBuy = await binanceView.webContents.executeJavaScript(`
+    fetch('https://c2c.binance.com/bapi/c2c/v2/private/c2c/order-match/order-list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page: 1, rows: 20, tradeType: 'BUY', orderStatusList: [4] }),
+      credentials: 'include',
+    }).then(r => r.json()).catch(e => ({ error: e.message }))
+  `);
+
+  // Active ads
+  const adsResp = await binanceView.webContents.executeJavaScript(`
+    fetch('https://c2c.binance.com/bapi/c2c/v2/private/c2c/adv/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page: 1, rows: 20 }),
+      credentials: 'include',
+    }).then(r => r.json()).catch(e => ({ error: e.message }))
+  `);
+
+  // Payment methods
+  const pmResp = await binanceView.webContents.executeJavaScript(`
+    fetch('https://c2c.binance.com/bapi/c2c/v2/private/c2c/pay-method/user-paymethods', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      credentials: 'include',
+    }).then(r => r.json()).catch(e => ({ error: e.message }))
+  `);
+
+  // Parse balances
+  const balances = [];
+  if (balanceResp?.code === '000000' && balanceResp.data) {
+    const assets = Array.isArray(balanceResp.data) ? balanceResp.data : [balanceResp.data];
+    for (const a of assets) {
+      if (a.asset || a.coin) {
+        balances.push({
+          asset: a.asset || a.coin || 'USDT',
+          free: parseFloat(a.available || a.free || a.balance || 0),
+          locked: parseFloat(a.freeze || a.locked || 0),
+          total: parseFloat(a.available || a.free || a.balance || 0) + parseFloat(a.freeze || a.locked || 0),
+        });
+      }
+    }
+  }
+  // Spot/funding fallback
+  if (balances.length === 0 && spotResp?.data) {
+    for (const w of (Array.isArray(spotResp.data) ? spotResp.data : [])) {
+      const bal = parseFloat(w.balance || 0);
+      if (bal > 0) {
+        balances.push({ asset: w.asset, free: parseFloat(w.free || 0), locked: parseFloat(w.locked || 0), total: bal });
+      }
+    }
+  }
+
+  // Parse completed orders
+  const completedOrders = [
+    ...((completedSell?.code === '000000' ? completedSell.data : []) || []),
+    ...((completedBuy?.code === '000000' ? completedBuy.data : []) || []),
+  ].sort((a, b) => (b.createTime || 0) - (a.createTime || 0)).slice(0, 20).map(o => ({
+    orderNumber: o.orderNumber,
+    tradeType: o.tradeType,
+    totalPrice: parseFloat(o.totalPrice || 0),
+    amount: parseFloat(o.amount || 0),
+    price: parseFloat(o.price || 0),
+    asset: o.asset || 'USDT',
+    fiat: o.fiat || 'KES',
+    counterparty: o.buyerNickname || o.sellerNickname || '',
+    status: o.orderStatus,
+    createTime: o.createTime,
+  }));
+
+  // Parse ads
+  const activeAds = (adsResp?.code === '000000' ? adsResp.data : []).map(a => ({
+    advNo: a.advNo, tradeType: a.tradeType, asset: a.asset, fiat: a.fiatUnit,
+    price: parseFloat(a.price || 0),
+    amount: parseFloat(a.surplusAmount || a.tradableQuantity || 0),
+    minLimit: parseFloat(a.minSingleTransAmount || 0),
+    maxLimit: parseFloat(a.maxSingleTransAmount || 0),
+    status: a.advStatus,
+  }));
+
+  // Parse payment methods
+  const paymentMethods = (pmResp?.code === '000000' ? pmResp.data : []).map(pm => ({
+    id: pm.id, type: pm.identifier,
+    name: (pm.fields || []).find(f => (f.fieldName || '').toLowerCase().includes('name'))?.fieldValue || '',
+  }));
+
+  // Send to VPS
+  await fetch(`${API_BASE}/ext/report-account-data`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({ balances, completed_orders: completedOrders, active_ads: activeAds, payment_methods: paymentMethods }),
+  });
+
+  console.log(`[SparkP2P] Account data: ${balances.length} balances, ${completedOrders.length} orders, ${activeAds.length} ads, ${paymentMethods.length} PMs`);
 }
 
 async function executeAction(action) {
