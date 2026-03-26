@@ -14,22 +14,18 @@ console.error = (...a) => { fs.appendFileSync(logFile, `[${new Date().toISOStrin
 const API_BASE = 'https://sparkp2p.com/api';
 const DASHBOARD_URL = 'https://sparkp2p.com/dashboard';
 const CDP_PORT = 9222;
-const POLL_INTERVAL = 10000;
+const POLL_INTERVAL = 15000; // 15 seconds
 
 let mainWindow = null;
 let tray = null;
 let token = null;
-let browser = null;  // Puppeteer browser instance
-let binancePage = null;  // p2p.binance.com tab for order polling
+let browser = null;
 let pollerRunning = false;
 let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 
-// Captured data from Binance page's own network requests
-let capturedData = { balances: [], ads: [], paymentMethods: [], nickname: '', uid: '' };
-
 // ═══════════════════════════════════════════════════════════
-// ELECTRON APP
+// ELECTRON
 // ═══════════════════════════════════════════════════════════
 
 app.whenReady().then(() => { createMainWindow(); createTray(); });
@@ -50,6 +46,7 @@ function createMainWindow() {
       .then((t) => { if (t) { token = t; console.log('[SparkP2P] Token captured'); tryAutoStart(); } }).catch(() => {});
   });
 
+  // Intercept WebSocket remote browser — open Chrome instead
   mainWindow.webContents.session.webRequest.onBeforeRequest(
     { urls: ['wss://sparkp2p.com/api/browser/login-stream*', 'ws://*/api/browser/login-stream*'] },
     (_, cb) => { cb({ cancel: true }); connectBinance(); }
@@ -72,12 +69,9 @@ function createTray() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// CHROME + PUPPETEER (GoLogin approach)
-//
-// 1. Launch user's real Chrome with --remote-debugging-port
-// 2. Connect Puppeteer via WebSocket (like GoLogin does)
-// 3. page.evaluate() runs in REAL page context with cookies
-// 4. No CDP restrictions — full browser access
+// CHROME — Launch once, keep open forever.
+// User logs in once. Session stays alive.
+// Bot reads the page like a human — no API hacking.
 // ═══════════════════════════════════════════════════════════
 
 function findChrome() {
@@ -89,224 +83,264 @@ function findChrome() {
   return null;
 }
 
-async function launchChrome() {
+async function launchChrome(url) {
   const chrome = findChrome();
   if (!chrome) { console.error('Chrome not found'); return false; }
-
   execFile(chrome, [
     `--remote-debugging-port=${CDP_PORT}`,
     '--no-first-run', '--no-default-browser-check',
     '--user-data-dir=' + path.join(app.getPath('userData'), 'chrome-binance'),
-    'https://accounts.binance.com/en/login',
+    url || 'https://accounts.binance.com/en/login',
   ]);
   console.log('[SparkP2P] Chrome launched');
-  await new Promise(r => setTimeout(r, 5000));
+  await new Promise(r => setTimeout(r, 4000));
   return true;
 }
 
 async function connectPuppeteer() {
   try {
-    browser = await puppeteer.connect({
-      browserURL: `http://127.0.0.1:${CDP_PORT}`,
-      defaultViewport: null,
-    });
-    console.log('[SparkP2P] Puppeteer connected to Chrome');
+    browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${CDP_PORT}`, defaultViewport: null });
+    console.log('[SparkP2P] Puppeteer connected');
     return true;
-  } catch (e) {
-    console.error('[SparkP2P] Puppeteer connect failed:', e.message);
-    return false;
-  }
+  } catch (e) { return false; }
 }
 
-async function findBinancePage() {
+async function getPage(urlMatch) {
   if (!browser) return null;
   const pages = await browser.pages();
-  // Prefer p2p.binance.com (new domain) or c2c.binance.com
-  return pages.find(p => p.url().includes('p2p.binance.com'))
-    || pages.find(p => p.url().includes('c2c.binance.com'))
-    || pages.find(p => p.url().includes('binance.com') && !p.url().includes('accounts.google'));
+  if (urlMatch) return pages.find(p => p.url().includes(urlMatch));
+  return pages.find(p => p.url().includes('binance.com') && !p.url().includes('accounts.google')) || pages[0];
 }
 
 async function isLoggedIn() {
-  const page = await findBinancePage();
+  const page = await getPage('binance.com');
   if (!page) return false;
   try {
-    const cookies = await page.cookies('https://www.binance.com', 'https://c2c.binance.com');
-    return cookies.some(c => c.name === 'p20t') || cookies.some(c => c.name === 'logined');
+    // Check if we see a logged-in indicator (user avatar, menu, etc.)
+    const url = page.url();
+    if (url.includes('login') || url.includes('accounts.binance.com')) return false;
+    // Check for user menu (logged in users see their profile icon)
+    const loggedIn = await page.evaluate(() => {
+      return !!(document.querySelector('[data-testid="user-avatar"]') ||
+               document.querySelector('.user-avatar') ||
+               document.querySelector('[class*="AccountButton"]') ||
+               document.querySelector('[aria-label="User Center"]') ||
+               document.querySelector('#header_user_avatar') ||
+               document.cookie.includes('logined'));
+    }).catch(() => false);
+    return loggedIn;
   } catch (e) { return false; }
 }
 
 // ═══════════════════════════════════════════════════════════
-// CONNECT BINANCE — Launch Chrome, wait for login, start bot
+// CONNECT BINANCE — Open Chrome, wait for login, start bot
 // ═══════════════════════════════════════════════════════════
 
 async function connectBinance() {
-  // Launch Chrome if not running
   if (!browser) {
-    const launched = await launchChrome();
-    if (!launched) return;
-    const connected = await connectPuppeteer();
-    if (!connected) return;
+    await launchChrome('https://accounts.binance.com/en/login');
+    await connectPuppeteer();
+    if (!browser) return;
   }
 
-  console.log('[SparkP2P] Waiting for Binance login...');
+  console.log('[SparkP2P] Waiting for login...');
 
   let attempts = 0;
   const check = setInterval(async () => {
     attempts++;
-    if (attempts > 150) { clearInterval(check); return; }
+    if (attempts > 300) { clearInterval(check); return; } // 10 min timeout
 
     if (await isLoggedIn()) {
       clearInterval(check);
-      console.log('[SparkP2P] Binance login detected!');
+      console.log('[SparkP2P] Login detected!');
 
-      // Navigate to P2P page for order polling
-      const page = await findBinancePage();
+      // Navigate to P2P orders page
+      const page = await getPage();
       if (page) {
-        await page.goto('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES', { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+        await page.goto('https://p2p.binance.com/en/fiatOrder', { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
         await new Promise(r => setTimeout(r, 3000));
-        binancePage = page;
-        console.log('[SparkP2P] P2P page ready:', page.url());
-
-        // Intercept Binance's own network responses to capture account data
-        setupNetworkCapture(page);
       }
-
-      // Open wallet page in a second tab to capture balance
-      try {
-        const walletPage = await browser.newPage();
-        setupNetworkCapture(walletPage);
-        await walletPage.goto('https://www.binance.com/en/my/wallet/account/overview', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 5000));
-        // Close wallet tab after capturing data — don't keep it open
-        await walletPage.close().catch(() => {});
-        console.log('[SparkP2P] Wallet page visited for balance capture');
-      } catch (e) {
-        console.log('[SparkP2P] Wallet page error:', e.message?.substring(0, 60));
-      }
-
-      // Test: can Puppeteer's page.evaluate make Binance API calls?
-      await testBinanceFetch();
 
       // Sync cookies to VPS
       await syncCookies();
 
-      // Start bot
+      // Start the bot
       startPoller();
 
       if (mainWindow) {
         mainWindow.show();
         mainWindow.webContents.executeJavaScript(
-          'alert("Binance connected! Bot started. Keep Chrome open (minimize it).")'
+          'alert("Binance connected! Bot is running. Keep Chrome open (you can minimize it).")'
         );
       }
     }
   }, 2000);
 }
 
-async function testBinanceFetch() {
-  if (!binancePage) return;
-  try {
-    const result = await binancePage.evaluate(async () => {
-      const resp = await fetch('/bapi/c2c/v2/private/c2c/order-match/order-list', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Clienttype': 'web', 'C2ctype': 'c2c_web' },
-        body: JSON.stringify({ page: 1, rows: 1, tradeType: 'SELL', orderStatusList: [1] }),
-        credentials: 'include',
-      });
-      return await resp.json();
-    });
-    console.log('[SparkP2P] TEST FETCH:', JSON.stringify(result).substring(0, 200));
-  } catch (e) {
-    console.error('[SparkP2P] TEST FETCH ERROR:', e.message);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// AUTO-START — reconnect if Chrome already running
-// ═══════════════════════════════════════════════════════════
-
 async function tryAutoStart() {
   if (!token || browser) return;
-
-  // Try connecting to existing Chrome first
   try {
-    const connected = await connectPuppeteer();
-    if (connected && await isLoggedIn()) {
-      binancePage = await findBinancePage();
-      if (binancePage) {
-        console.log('[SparkP2P] Auto-connected to existing Chrome');
+    if (await connectPuppeteer()) {
+      if (await isLoggedIn()) {
+        console.log('[SparkP2P] Auto-connected to existing Chrome session');
         startPoller();
         return;
       }
     }
   } catch (e) {}
-
-  // No Chrome running — launch it automatically
   console.log('[SparkP2P] No active session — launching Chrome...');
   await connectBinance();
 }
 
 // ═══════════════════════════════════════════════════════════
-// BINANCE API — page.evaluate() runs in REAL page context
-// ═══════════════════════════════════════════════════════════
-
-async function binanceFetch(endpoint, payload) {
-  if (!binancePage || binancePage.isClosed()) {
-    binancePage = await findBinancePage();
-    if (!binancePage) return null;
-  }
-  try {
-    return await binancePage.evaluate(async (ep, pl) => {
-      // Use relative URL so it works on both c2c.binance.com and p2p.binance.com
-      const resp = await fetch('/bapi/c2c/v2/private' + ep, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Clienttype': 'web', 'C2ctype': 'c2c_web' },
-        body: JSON.stringify(pl),
-        credentials: 'include',
-      });
-      return await resp.json();
-    }, endpoint, payload);
-  } catch (e) {
-    // Context destroyed (page navigated) — refind page
-    if (e.message.includes('context') || e.message.includes('destroyed') || e.message.includes('closed')) {
-      binancePage = await findBinancePage();
-    }
-    console.error(`[SparkP2P] API error ${endpoint}: ${e.message.substring(0, 80)}`);
-    return null;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// COOKIE SYNC TO VPS
+// COOKIE SYNC (just for VPS to mark as connected)
 // ═══════════════════════════════════════════════════════════
 
 async function syncCookies() {
-  if (!token || !binancePage) return;
+  if (!token || !browser) return;
   try {
-    const cookies = await binancePage.cookies('https://www.binance.com', 'https://c2c.binance.com', 'https://accounts.binance.com');
+    const page = await getPage();
+    if (!page) return;
+    const cookies = await page.cookies('https://www.binance.com', 'https://p2p.binance.com', 'https://c2c.binance.com');
     const dict = {}, full = [];
     for (const c of cookies) {
       dict[c.name] = c.value;
-      full.push({ name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite || 'None', expirationDate: c.expires > 0 ? c.expires : null });
+      full.push({ name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure, httpOnly: c.httpOnly });
     }
     await fetch(`${API_BASE}/traders/connect-binance`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ cookies: dict, cookies_full: full, csrf_token: dict.csrftoken || '', bnc_uuid: dict['bnc-uuid'] || '' }),
     });
-    console.log(`[SparkP2P] ${cookies.length} cookies synced to VPS`);
-  } catch (e) { console.error('[SparkP2P] Sync error:', e.message); }
+    console.log(`[SparkP2P] ${cookies.length} cookies synced`);
+  } catch (e) {}
 }
 
 // ═══════════════════════════════════════════════════════════
-// TRADING POLLER
+// PAGE READER — Read data from Binance pages like a human
+// Navigate → Wait → Read DOM → Report to VPS
+// ═══════════════════════════════════════════════════════════
+
+async function navigateTo(url) {
+  const page = await getPage();
+  if (!page) return null;
+  try {
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
+    await new Promise(r => setTimeout(r, 2000));
+    return page;
+  } catch (e) {
+    console.error('[SparkP2P] Navigate error:', e.message?.substring(0, 60));
+    return page; // Return page anyway, it may have partially loaded
+  }
+}
+
+async function readOrders() {
+  // Navigate to P2P orders page and read pending orders from DOM
+  const page = await navigateTo('https://p2p.binance.com/en/fiatOrder');
+  if (!page) return { sell: [], buy: [] };
+
+  try {
+    const orders = await page.evaluate(() => {
+      const results = { sell: [], buy: [] };
+      // Look for order cards/rows on the page
+      const orderElements = document.querySelectorAll('[class*="order-item"], [class*="OrderItem"], tr[class*="order"], [data-testid*="order"]');
+
+      orderElements.forEach(el => {
+        const text = el.textContent || '';
+        const order = {
+          orderNumber: (text.match(/(\d{18,})/)?.[1] || ''),
+          tradeType: text.toLowerCase().includes('sell') ? 'SELL' : 'BUY',
+          totalPrice: parseFloat((text.match(/KES\s*([\d,]+\.?\d*)/i)?.[1] || '0').replace(/,/g, '')),
+          amount: parseFloat(text.match(/([\d.]+)\s*USDT/)?.[1] || '0'),
+          asset: 'USDT',
+          status: text.toLowerCase().includes('release') ? 'PENDING_RELEASE' :
+                  text.toLowerCase().includes('paid') ? 'PAID' :
+                  text.toLowerCase().includes('pending') ? 'PENDING' : 'ACTIVE',
+        };
+        if (order.orderNumber) {
+          if (order.tradeType === 'SELL') results.sell.push(order);
+          else results.buy.push(order);
+        }
+      });
+
+      return results;
+    });
+
+    return orders;
+  } catch (e) {
+    console.error('[SparkP2P] Read orders error:', e.message?.substring(0, 60));
+    return { sell: [], buy: [] };
+  }
+}
+
+async function readBalance() {
+  // Navigate to wallet overview and read balance from page
+  const page = await navigateTo('https://www.binance.com/en/my/wallet/account/overview');
+  if (!page) return [];
+
+  try {
+    await new Promise(r => setTimeout(r, 3000)); // Wait for balances to load
+
+    const balances = await page.evaluate(() => {
+      const results = [];
+      // Read balance amounts from the wallet page
+      const text = document.body.innerText;
+
+      // Look for USDT balance specifically
+      const usdtMatch = text.match(/USDT[^]*?([\d.]+)/);
+      if (usdtMatch) {
+        results.push({ asset: 'USDT', free: parseFloat(usdtMatch[1]), locked: 0, total: parseFloat(usdtMatch[1]) });
+      }
+
+      // Also try to read "Estimated Balance"
+      const estMatch = text.match(/Estimated Balance[^]*?([\d.]+)\s*USDT/);
+      if (estMatch && results.length === 0) {
+        results.push({ asset: 'USDT', free: parseFloat(estMatch[1]), locked: 0, total: parseFloat(estMatch[1]) });
+      }
+
+      return results;
+    });
+
+    return balances;
+  } catch (e) {
+    console.error('[SparkP2P] Read balance error:', e.message?.substring(0, 60));
+    return [];
+  }
+}
+
+async function readAccountData() {
+  // Read username, ads, payment methods from the P2P page
+  const page = await navigateTo('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES');
+  if (!page) return { nickname: '', ads: [], pms: [] };
+
+  try {
+    await new Promise(r => setTimeout(r, 2000));
+
+    const data = await page.evaluate(() => {
+      const text = document.body.innerText;
+      const result = { nickname: '', ads: [], pms: [] };
+
+      // Try to find user nickname from header/menu
+      const avatarEl = document.querySelector('[data-testid="user-avatar"], .user-avatar, [class*="AccountButton"]');
+      if (avatarEl) result.nickname = avatarEl.textContent?.trim() || '';
+
+      return result;
+    });
+
+    return data;
+  } catch (e) {
+    return { nickname: '', ads: [], pms: [] };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// TRADING POLLER — Reads pages, reports to VPS, takes actions
 // ═══════════════════════════════════════════════════════════
 
 function startPoller() {
   if (pollerRunning) return;
   pollerRunning = true;
-  console.log('[SparkP2P] Poller started');
+  console.log('[SparkP2P] Bot started');
   pollCycle();
   pollTimer = setInterval(pollCycle, POLL_INTERVAL);
 }
@@ -317,139 +351,178 @@ function stopPoller() {
 }
 
 async function pollCycle() {
-  if (!pollerRunning || !token) return;
-
-  // Re-find binance page if context was destroyed
-  if (!binancePage || binancePage.isClosed()) {
-    binancePage = await findBinancePage();
-    if (!binancePage) { console.log('[SparkP2P] No Binance page found'); return; }
-    console.log('[SparkP2P] Reconnected to:', binancePage.url());
-  }
+  if (!pollerRunning || !token || !browser) return;
 
   try {
-    const sell = await binanceFetch('/c2c/order-match/order-list', { page: 1, rows: 20, tradeType: 'SELL', orderStatusList: [1, 2, 3] });
-    const buy = await binanceFetch('/c2c/order-match/order-list', { page: 1, rows: 20, tradeType: 'BUY', orderStatusList: [1, 2, 3] });
+    // Read orders from the P2P orders page
+    const orders = await readOrders();
+    stats.orders = orders.sell.length + orders.buy.length;
 
-    const sellData = sell?.code === '000000' ? (sell.data || []) : [];
-    const buyData = buy?.code === '000000' ? (buy.data || []) : [];
-    stats.orders = sellData.length + buyData.length;
+    console.log(`[SparkP2P] Orders: ${orders.sell.length} sell, ${orders.buy.length} buy`);
 
-    if (stats.polls < 3) console.log(`[SparkP2P] Orders: ${sellData.length} sell, ${buyData.length} buy`);
-
+    // Report to VPS
     const res = await fetch(`${API_BASE}/ext/report-orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ sell_orders: sellData.map(norm), buy_orders: buyData.map(norm) }),
+      body: JSON.stringify({
+        sell_orders: orders.sell.map(norm),
+        buy_orders: orders.buy.map(norm),
+      }),
     });
+
     if (res.ok) {
       const { actions } = await res.json();
       for (const a of (actions || [])) await execAction(a);
     }
 
     stats.polls++;
-    if (stats.polls % 3 === 0) fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
-    if (stats.polls % 5 === 0) reportAccountData().catch(() => {});
 
-  } catch (e) { stats.errors++; console.error('[SparkP2P] Poll error:', e.message); }
+    // Heartbeat
+    if (stats.polls % 3 === 0) {
+      fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
+    }
+
+    // Account data every 10th poll (navigates to wallet page)
+    if (stats.polls % 10 === 0) {
+      await reportAccountData();
+    }
+
+  } catch (e) {
+    stats.errors++;
+    console.error('[SparkP2P] Poll error:', e.message);
+  }
 }
 
 async function execAction(action) {
   const { action: type, order_number } = action;
+  console.log(`[SparkP2P] Executing: ${type} for order ${order_number}`);
+
   try {
+    // Navigate to the specific order page
+    const page = await navigateTo(`https://p2p.binance.com/en/fiatOrder?orderNumber=${order_number}`);
+    if (!page) return;
+
     if (type === 'release') {
-      const r = await binanceFetch('/c2c/order-match/confirm-order', { orderNumber: order_number });
-      await fetch(`${API_BASE}/ext/report-release`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ order_number, success: r?.code === '000000', error: r?.error }) });
+      // Click the Release button on the order page
+      const clicked = await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button')).find(b =>
+          b.textContent.toLowerCase().includes('release') || b.textContent.toLowerCase().includes('confirm')
+        );
+        if (btn) { btn.click(); return true; }
+        return false;
+      });
+
+      // May need to confirm in a dialog
+      if (clicked) {
+        await new Promise(r => setTimeout(r, 2000));
+        await page.evaluate(() => {
+          const confirmBtn = Array.from(document.querySelectorAll('button')).find(b =>
+            b.textContent.toLowerCase().includes('confirm') || b.textContent.toLowerCase().includes('release')
+          );
+          if (confirmBtn) confirmBtn.click();
+        });
+      }
+
+      await fetch(`${API_BASE}/ext/report-release`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number, success: clicked, error: clicked ? null : 'Release button not found' }),
+      });
+      if (clicked) stats.actions++;
+
     } else if (type === 'pay' || type === 'mark_as_paid') {
-      const r = await binanceFetch('/c2c/order-match/buyer-confirm-pay', { orderNumber: order_number });
-      await fetch(`${API_BASE}/ext/report-payment-sent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ order_number, success: r?.code === '000000', error: r?.error }) });
+      // Click the "Payment Done" / "Transferred" button
+      const clicked = await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button')).find(b =>
+          b.textContent.toLowerCase().includes('payment') ||
+          b.textContent.toLowerCase().includes('transferred') ||
+          b.textContent.toLowerCase().includes('paid')
+        );
+        if (btn) { btn.click(); return true; }
+        return false;
+      });
+
+      if (clicked) {
+        await new Promise(r => setTimeout(r, 2000));
+        await page.evaluate(() => {
+          const confirmBtn = Array.from(document.querySelectorAll('button')).find(b =>
+            b.textContent.toLowerCase().includes('confirm')
+          );
+          if (confirmBtn) confirmBtn.click();
+        });
+      }
+
+      await fetch(`${API_BASE}/ext/report-payment-sent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number, success: clicked }),
+      });
+      if (clicked) stats.actions++;
+
     } else if (type === 'send_message') {
-      await binanceFetch('/c2c/chat/send-message', { orderNumber: order_number, message: action.message || '', msgType: 1 });
+      // Type in the chat input
+      const chatInput = await page.$('textarea, input[placeholder*="message"], input[placeholder*="Message"]');
+      if (chatInput) {
+        await chatInput.type(action.message || '', { delay: 30 });
+        await page.keyboard.press('Enter');
+      }
     }
-    stats.actions++;
-  } catch (e) { stats.errors++; }
+  } catch (e) {
+    stats.errors++;
+    console.error(`[SparkP2P] Action ${type} error:`, e.message?.substring(0, 60));
+  }
 }
-
-function setupNetworkCapture(page) {
-  // Listen to ALL network responses from Binance pages
-  // When Binance's own JS fetches data, we capture the responses
-  page.on('response', async (response) => {
-    const url = response.url();
-    try {
-      if (url.includes('/asset/query-user-asset') || url.includes('/asset-service/wallet/balance') || url.includes('/asset/getUserAsset') || url.includes('/capital/config/getall') || url.includes('/asset/get-user-asset')) {
-        const data = await response.json();
-        if (data?.code === '000000' && data.data) {
-          const arr = Array.isArray(data.data) ? data.data : [data.data];
-          capturedData.balances = arr.filter(a => a.asset || a.coin).map(a => ({
-            asset: a.asset || a.coin || 'USDT',
-            free: parseFloat(a.available || a.free || a.balance || 0),
-            locked: parseFloat(a.freeze || a.locked || 0),
-            total: parseFloat(a.available || a.free || a.balance || 0) + parseFloat(a.freeze || a.locked || 0),
-          }));
-          console.log(`[SparkP2P] Captured ${capturedData.balances.length} balances from network`);
-        }
-      }
-      if (url.includes('/adv/search') || url.includes('/adv/list')) {
-        const data = await response.json();
-        if (data?.code === '000000' && data.data) {
-          capturedData.ads = (Array.isArray(data.data) ? data.data : []).map(a => ({
-            advNo: a.advNo, tradeType: a.tradeType, asset: a.asset, fiat: a.fiatUnit,
-            price: parseFloat(a.price || 0), amount: parseFloat(a.surplusAmount || a.tradableQuantity || 0),
-            minLimit: parseFloat(a.minSingleTransAmount || 0), maxLimit: parseFloat(a.maxSingleTransAmount || 0),
-          }));
-          console.log(`[SparkP2P] Captured ${capturedData.ads.length} ads from network`);
-        }
-      }
-      if (url.includes('/pay-method/user-paymethods')) {
-        const data = await response.json();
-        if (data?.code === '000000' && data.data) {
-          capturedData.paymentMethods = data.data.map(p => ({
-            id: p.id, type: p.identifier,
-            name: (p.fields || []).find(f => (f.fieldName || '').toLowerCase().includes('name'))?.fieldValue || '',
-          }));
-          console.log(`[SparkP2P] Captured ${capturedData.paymentMethods.length} payment methods from network`);
-        }
-      }
-      if (url.includes('/user/profile') || url.includes('/user-info') || url.includes('/account/user-info') || url.includes('/friendly/account/info')) {
-        const data = await response.json();
-        if (data?.data) {
-          const nick = data.data.nickName || data.data.nickname || data.data.userName || '';
-          const uid = data.data.userId || data.data.uid || '';
-          // Only capture if it looks like the user's own profile (has uid)
-          if (nick && uid) {
-            capturedData.nickname = nick;
-            capturedData.uid = uid;
-            console.log(`[SparkP2P] Captured user: ${nick} (uid: ${uid})`);
-          }
-        }
-      }
-    } catch (e) {
-      // Response not JSON or already consumed — ignore
-    }
-  });
-  console.log('[SparkP2P] Network capture enabled — listening for Binance data');
-}
-
-// NO page refresh — it kills the session and logs the user out
 
 async function reportAccountData() {
-  if (!binancePage || binancePage.isClosed()) return;
+  try {
+    // Read balance from wallet page
+    const balances = await readBalance();
 
-  // Completed orders — these work via relative URL
-  const cs = await binanceFetch('/c2c/order-match/order-list', { page: 1, rows: 20, tradeType: 'SELL', orderStatusList: [4] });
-  const cb = await binanceFetch('/c2c/order-match/order-list', { page: 1, rows: 20, tradeType: 'BUY', orderStatusList: [4] });
+    // Navigate back to P2P orders for completed orders
+    const page = await navigateTo('https://p2p.binance.com/en/fiatOrder?tab=completed');
+    let completed = [];
+    if (page) {
+      await new Promise(r => setTimeout(r, 2000));
+      completed = await page.evaluate(() => {
+        const orders = [];
+        const rows = document.querySelectorAll('[class*="order-item"], [class*="OrderItem"], tr[class*="order"]');
+        rows.forEach(el => {
+          const text = el.textContent || '';
+          orders.push({
+            orderNumber: text.match(/(\d{18,})/)?.[1] || '',
+            tradeType: text.toLowerCase().includes('sell') ? 'SELL' : 'BUY',
+            totalPrice: parseFloat((text.match(/KES\s*([\d,]+\.?\d*)/i)?.[1] || '0').replace(/,/g, '')),
+            amount: parseFloat(text.match(/([\d.]+)\s*USDT/)?.[1] || '0'),
+            asset: 'USDT', fiat: 'KES',
+          });
+        });
+        return orders.filter(o => o.orderNumber);
+      }).catch(() => []);
+    }
 
-  // Use captured data from network interception (no page refresh — it kills the session)
-  const balances = capturedData.balances;
-  const completed = [...((cs?.code === '000000' ? cs.data : []) || []), ...((cb?.code === '000000' ? cb.data : []) || [])].sort((a, b) => (b.createTime || 0) - (a.createTime || 0)).slice(0, 20).map(o => ({ orderNumber: o.orderNumber, tradeType: o.tradeType, totalPrice: parseFloat(o.totalPrice || 0), amount: parseFloat(o.amount || 0), price: parseFloat(o.price || 0), asset: o.asset || 'USDT', fiat: o.fiat || 'KES', counterparty: o.buyerNickname || o.sellerNickname || '', status: o.orderStatus, createTime: o.createTime }));
-  const activeAds = capturedData.ads;
-  const pms = capturedData.paymentMethods;
+    await fetch(`${API_BASE}/ext/report-account-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ balances, completed_orders: completed, active_ads: [], payment_methods: [] }),
+    });
 
-  await fetch(`${API_BASE}/ext/report-account-data`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ balances, completed_orders: completed, active_ads: activeAds, payment_methods: pms }) });
-  console.log(`[SparkP2P] Account: ${balances.length} bal, ${completed.length} orders, ${activeAds.length} ads, ${pms.length} PMs`);
+    console.log(`[SparkP2P] Account: ${balances.length} bal, ${completed.length} orders`);
+
+    // Navigate back to active orders page for next poll
+    await navigateTo('https://p2p.binance.com/en/fiatOrder');
+
+  } catch (e) {
+    console.error('[SparkP2P] Account data error:', e.message?.substring(0, 60));
+  }
 }
 
 function norm(o) {
-  return { orderNumber: o.orderNumber || '', advNo: o.advNo || null, tradeType: o.tradeType || '', totalPrice: parseFloat(o.totalPrice || 0), amount: parseFloat(o.amount || 0), price: parseFloat(o.price || 0), asset: o.asset || 'USDT', buyerNickname: o.buyerNickname || null, sellerNickname: o.sellerNickname || null, orderStatus: o.orderStatus || null };
+  return {
+    orderNumber: o.orderNumber || '', tradeType: o.tradeType || '',
+    totalPrice: o.totalPrice || 0, amount: o.amount || 0,
+    price: o.totalPrice && o.amount ? o.totalPrice / o.amount : 0,
+    asset: o.asset || 'USDT', orderStatus: o.status || null,
+  };
 }
 
 // IPC
