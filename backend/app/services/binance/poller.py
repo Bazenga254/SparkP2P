@@ -57,7 +57,8 @@ class BinanceOrderPoller:
             await self._check_trader_heartbeats(db)
             await self._activate_pending_settlements(db)
             await self._check_settlement_thresholds(db)
-            await self._run_daily_volume_fee(db)
+            # Volume fee removed — revenue from subscriptions + settlement fees only
+            # await self._run_daily_volume_fee(db)
 
     async def _run_daily_volume_fee(self, db: AsyncSession):
         """
