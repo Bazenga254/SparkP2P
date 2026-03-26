@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('sparkp2p', {
   connectBinance: () => ipcRenderer.invoke('connect-binance'),
   setToken: (token) => ipcRenderer.invoke('set-token', token),
   setPin: (pin) => ipcRenderer.invoke('set-pin', pin),
+  setClaudeKey: (key) => ipcRenderer.invoke('set-claude-key', key),
   getBotStatus: () => ipcRenderer.invoke('get-bot-status'),
   takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
+  runAIScan: () => ipcRenderer.invoke('run-ai-scan'),
 });

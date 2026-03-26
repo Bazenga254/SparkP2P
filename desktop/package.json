@@ -29,6 +29,7 @@
     }
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
     "chrome-remote-interface": "^0.34.0",
     "puppeteer-core": "^24.40.0"
   }

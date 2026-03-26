@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const puppeteer = require('puppeteer-core');
+const aiScanner = require('./ai-scanner');
 
 // Logging
 const logFile = path.join(__dirname, 'sparkp2p.log');
@@ -24,6 +25,7 @@ let pollerRunning = false;
 let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 let traderPin = null; // Binance security PIN — stored in memory only
+let claudeApiKey = null; // Claude AI API key for smart scanning
 
 // ═══════════════════════════════════════════════════════════
 // ELECTRON
@@ -383,9 +385,9 @@ async function pollCycle() {
       fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
     }
 
-    // Account data every 10th poll (navigates to wallet page)
-    if (stats.polls % 10 === 0) {
-      await reportAccountData();
+    // AI scan every 10th poll — visits wallet, profile, ads pages
+    if (stats.polls % 10 === 0 && claudeApiKey) {
+      await aiScan();
     }
 
   } catch (e) {
@@ -662,6 +664,55 @@ async function execAction(action) {
   }
 }
 
+async function aiScan() {
+  const page = await getPage();
+  if (!page) return;
+
+  try {
+    console.log('[SparkP2P] Starting AI scan...');
+    const scanData = await aiScanner.fullScan(page);
+
+    // Format and send to VPS
+    const balances = (scanData.wallet?.balances || []).map(b => ({
+      asset: b.asset, free: b.available || b.total || 0, locked: b.locked || 0, total: b.total || 0,
+    }));
+
+    const activeAds = (scanData.ads?.ads || []).map(a => ({
+      tradeType: a.type, asset: a.asset || 'USDT', fiat: a.currency || 'KES',
+      price: a.price || 0, amount: a.available_amount || 0,
+      minLimit: a.min_limit || 0, maxLimit: a.max_limit || 0,
+      status: a.status, paymentMethods: a.payment_methods || [],
+    }));
+
+    const pendingOrders = (scanData.orders?.pending_orders || []).map(o => ({
+      orderNumber: o.order_number, tradeType: o.type, totalPrice: o.amount_fiat || 0,
+      amount: o.amount_crypto || 0, price: o.price || 0, asset: o.asset || 'USDT',
+      counterparty: o.counterparty || '', status: o.status,
+    }));
+
+    await fetch(`${API_BASE}/ext/report-account-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        balances,
+        active_ads: activeAds,
+        completed_orders: [],
+        payment_methods: [],
+        nickname: scanData.profile?.nickname || '',
+        scan_data: scanData, // Full scan data for dashboard
+      }),
+    });
+
+    console.log(`[SparkP2P] AI scan: ${balances.length} bal, ${activeAds.length} ads, ${pendingOrders.length} orders, user: ${scanData.profile?.nickname || 'unknown'}`);
+
+    // Navigate back to orders page for polling
+    await page.goto('https://p2p.binance.com/en/fiatOrder', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+
+  } catch (e) {
+    console.error('[SparkP2P] AI scan error:', e.message?.substring(0, 80));
+  }
+}
+
 async function reportAccountData() {
   try {
     // Read balance from wallet page
@@ -718,5 +769,7 @@ function norm(o) {
 ipcMain.handle('connect-binance', () => { connectBinance(); return { opened: true }; });
 ipcMain.handle('set-token', (_, t) => { token = t; return { ok: true }; });
 ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] PIN configured'); return { ok: true }; });
-ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin }));
+ipcMain.handle('set-claude-key', (_, key) => { claudeApiKey = key; aiScanner.initAI(key); console.log('[SparkP2P] Claude AI configured'); return { ok: true }; });
+ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasAI: !!claudeApiKey }));
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
+ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
