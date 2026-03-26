@@ -346,8 +346,8 @@ async function navigateTo(url) {
 }
 
 async function readOrders() {
-  // Navigate to P2P orders page and read pending orders from DOM
-  const page = await navigateTo('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES');
+  // Read orders from current page — DON'T navigate (avoids refreshing)
+  const page = await getPage();
   if (!page) return { sell: [], buy: [] };
 
   try {
@@ -493,10 +493,8 @@ async function pollCycle() {
       fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
     }
 
-    // AI scan every 4th poll (~60 seconds) — gives pages time to load
-    if (stats.polls % 4 === 0 && aiApiKey) {
-      await aiScan();
-    }
+    // AI scan disabled during polling — runs only once on login (initialScan)
+    // to avoid navigating away from the P2P page and breaking order reading
 
   } catch (e) {
     stats.errors++;
