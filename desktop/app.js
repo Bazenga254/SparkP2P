@@ -25,7 +25,7 @@ let pollerRunning = false;
 let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 let traderPin = null; // Binance security PIN — stored in memory only
-let claudeApiKey = null; // Claude AI API key for smart scanning
+let aiApiKey = null; // GPT-4o API key for smart scanning
 
 // ═══════════════════════════════════════════════════════════
 // ELECTRON
@@ -386,7 +386,7 @@ async function pollCycle() {
     }
 
     // AI scan every 10th poll — visits wallet, profile, ads pages
-    if (stats.polls % 10 === 0 && claudeApiKey) {
+    if (stats.polls % 10 === 0 && aiApiKey) {
       await aiScan();
     }
 
@@ -769,7 +769,7 @@ function norm(o) {
 ipcMain.handle('connect-binance', () => { connectBinance(); return { opened: true }; });
 ipcMain.handle('set-token', (_, t) => { token = t; return { ok: true }; });
 ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] PIN configured'); return { ok: true }; });
-ipcMain.handle('set-claude-key', (_, key) => { claudeApiKey = key; aiScanner.initAI(key); console.log('[SparkP2P] Claude AI configured'); return { ok: true }; });
-ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasAI: !!claudeApiKey }));
+ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; aiScanner.initAI(key); console.log('[SparkP2P] GPT-4o configured'); return { ok: true }; });
+ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasAI: !!aiApiKey }));
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
 ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
