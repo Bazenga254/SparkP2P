@@ -505,18 +505,18 @@ export default function Dashboard() {
             </div>
 
             {/* Binance Account Data */}
-            {binanceData && (binanceData.balances?.length > 0 || binanceData.active_ads?.length > 0 || binanceData.completed_orders?.length > 0) && (
+            {binanceData && (binanceData.balances?.length > 0 || binanceData.active_ads?.length > 0 || binanceData.completed_orders?.length > 0 || binanceData.updated_at) && (
               <>
                 {/* Binance Wallet Balance */}
-                {binanceData.balances?.length > 0 && (
-                  <div className="card">
-                    <div className="card-header">
-                      <Wallet size={20} />
-                      <h3>Binance Wallet</h3>
-                      <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
-                        Synced: {binanceData.updated_at ? new Date(binanceData.updated_at).toLocaleTimeString() : '-'}
-                      </span>
-                    </div>
+                <div className="card">
+                  <div className="card-header">
+                    <Wallet size={20} />
+                    <h3>Binance Wallet</h3>
+                    <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
+                      Synced: {binanceData.updated_at ? new Date(binanceData.updated_at).toLocaleTimeString() : 'Scanning...'}
+                    </span>
+                  </div>
+                  {binanceData.balances?.length > 0 ? (
                     <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '12px 0' }}>
                       {binanceData.balances.map((b, i) => (
                         <div key={i} style={{
@@ -532,8 +532,12 @@ export default function Dashboard() {
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
+                  ) : (
+                    <div style={{ padding: '20px 0', textAlign: 'center', color: '#6b7280', fontSize: 13 }}>
+                      Waiting for AI scan to read your Binance balance...
+                    </div>
+                  )}
+                </div>
 
                 {/* Active Ads */}
                 {binanceData.active_ads?.length > 0 && (

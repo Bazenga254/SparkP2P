@@ -1,3 +1,5 @@
 node_modules/
 dist/
 chrome-binance/
+.env
+sparkp2p.log

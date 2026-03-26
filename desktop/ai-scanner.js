@@ -46,8 +46,8 @@ async function analyzeScreenshot(screenshotBuffer, prompt) {
 }
 
 async function scanWallet(page) {
-  await page.goto('https://www.binance.com/en/my/wallet/account/overview', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
-  await new Promise(r => setTimeout(r, 4000));
+  await page.goto('https://www.binance.com/en/my/wallet/funding', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 5000));
   const screenshot = await page.screenshot({ type: 'jpeg', quality: 80 });
   const data = await analyzeScreenshot(screenshot, `
     Look at this Binance wallet page. Extract:

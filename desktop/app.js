@@ -25,13 +25,23 @@ let pollerRunning = false;
 let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 let traderPin = null; // Binance security PIN — stored in memory only
-let aiApiKey = null; // GPT-4o API key for smart scanning
+// Load .env file for API keys
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
+      const [key, ...val] = line.split('=');
+      if (key && val.length) process.env[key.trim()] = val.join('=').trim();
+    });
+  }
+} catch (e) {}
+let aiApiKey = process.env.OPENAI_API_KEY || null;
 
 // ═══════════════════════════════════════════════════════════
 // ELECTRON
 // ═══════════════════════════════════════════════════════════
 
-app.whenReady().then(() => { createMainWindow(); createTray(); });
+app.whenReady().then(() => { createMainWindow(); createTray(); aiScanner.initAI(aiApiKey); });
 app.on('window-all-closed', (e) => e.preventDefault());
 app.on('before-quit', () => { stopPoller(); if (tray) tray.destroy(); });
 
@@ -385,8 +395,8 @@ async function pollCycle() {
       fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
     }
 
-    // AI scan every 10th poll — visits wallet, profile, ads pages
-    if (stats.polls % 10 === 0 && aiApiKey) {
+    // AI scan every 4th poll (~60 seconds) — gives pages time to load
+    if (stats.polls % 4 === 0 && aiApiKey) {
       await aiScan();
     }
 
@@ -698,10 +708,16 @@ async function aiScan() {
         active_ads: activeAds,
         completed_orders: [],
         payment_methods: [],
-        nickname: scanData.profile?.nickname || '',
-        scan_data: scanData, // Full scan data for dashboard
       }),
     });
+
+    // Also update trader nickname if found
+    if (scanData.profile?.nickname) {
+      await fetch(`${API_BASE}/ext/heartbeat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      }).catch(() => {});
+    }
 
     console.log(`[SparkP2P] AI scan: ${balances.length} bal, ${activeAds.length} ads, ${pendingOrders.length} orders, user: ${scanData.profile?.nickname || 'unknown'}`);
 
