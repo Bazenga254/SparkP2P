@@ -23,6 +23,7 @@ let browser = null;
 let pollerRunning = false;
 let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
+let traderPin = null; // Binance security PIN — stored in memory only
 
 // ═══════════════════════════════════════════════════════════
 // ELECTRON
@@ -393,83 +394,271 @@ async function pollCycle() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════
+// SCREENSHOT — Capture page and send to VPS
+// ═══════════════════════════════════════════════════════════
+
+async function takeScreenshot(reason) {
+  const page = await getPage();
+  if (!page) return null;
+  try {
+    const buffer = await page.screenshot({ type: 'jpeg', quality: 70, fullPage: false });
+    const base64 = buffer.toString('base64');
+    console.log(`[SparkP2P] Screenshot taken: ${reason} (${Math.round(buffer.length / 1024)}KB)`);
+
+    // Send to VPS for monitoring
+    if (token) {
+      await fetch(`${API_BASE}/ext/screenshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ screenshot: base64, reason, url: page.url(), timestamp: new Date().toISOString() }),
+      }).catch(() => {});
+    }
+    return base64;
+  } catch (e) {
+    console.error('[SparkP2P] Screenshot error:', e.message?.substring(0, 60));
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// PIN/PASSKEY ENTRY — Auto-enter security code when Binance asks
+// ═══════════════════════════════════════════════════════════
+
+async function handleSecurityVerification(page) {
+  // After clicking release/confirm, Binance may ask for:
+  // 1. Passkey/PIN (6-digit code)
+  // 2. Google Authenticator code
+  // 3. Email/SMS verification
+  // 4. Security password
+
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Check what Binance is asking for
+  const verification = await page.evaluate(() => {
+    const text = document.body.innerText.toLowerCase();
+    const html = document.body.innerHTML.toLowerCase();
+
+    // Check for PIN/password input
+    const pinInputs = document.querySelectorAll('input[type="password"], input[type="tel"], input[maxlength="6"], input[maxlength="1"]');
+    const hasVerification = pinInputs.length > 0;
+
+    let type = 'none';
+    if (text.includes('security verification') || text.includes('verify')) type = 'verification';
+    if (text.includes('passkey') || text.includes('pass key')) type = 'passkey';
+    if (text.includes('authenticator') || text.includes('google auth')) type = 'authenticator';
+    if (text.includes('email verification') || text.includes('email code')) type = 'email';
+    if (text.includes('sms') || text.includes('phone verification')) type = 'sms';
+    if (text.includes('fund password') || text.includes('trading password')) type = 'fund_password';
+    if (pinInputs.length === 6 || (pinInputs.length > 0 && pinInputs[0].maxLength == 1)) type = 'pin_digits';
+    if (pinInputs.length === 1 && pinInputs[0].type === 'password') type = 'password';
+
+    return { hasVerification, type, inputCount: pinInputs.length };
+  });
+
+  if (!verification.hasVerification) {
+    console.log('[SparkP2P] No security verification needed');
+    return true;
+  }
+
+  console.log(`[SparkP2P] Security verification: ${verification.type} (${verification.inputCount} inputs)`);
+
+  // Take screenshot of verification dialog
+  await takeScreenshot(`Security verification: ${verification.type}`);
+
+  // Auto-enter PIN if we have it
+  if (!traderPin) {
+    console.log('[SparkP2P] No PIN configured — cannot auto-verify. Screenshot sent to dashboard.');
+    return false;
+  }
+
+  try {
+    if (verification.type === 'pin_digits') {
+      // Multiple single-digit inputs (e.g., 6 boxes)
+      const inputs = await page.$$('input[maxlength="1"]');
+      for (let i = 0; i < Math.min(inputs.length, traderPin.length); i++) {
+        await inputs[i].type(traderPin[i], { delay: 50 });
+      }
+      console.log('[SparkP2P] PIN digits entered');
+
+    } else if (verification.type === 'password' || verification.type === 'fund_password') {
+      // Single password input
+      const input = await page.$('input[type="password"]');
+      if (input) {
+        await input.click();
+        await input.type(traderPin, { delay: 30 });
+        console.log('[SparkP2P] Password entered');
+      }
+
+    } else if (verification.type === 'authenticator') {
+      // Google Authenticator — need TOTP code, not PIN
+      // TODO: Generate TOTP from secret if available
+      console.log('[SparkP2P] Authenticator required — cannot auto-generate code');
+      await takeScreenshot('Authenticator code required');
+      return false;
+
+    } else {
+      // Generic: try typing the PIN into whatever input is focused
+      await page.keyboard.type(traderPin, { delay: 50 });
+      console.log('[SparkP2P] PIN typed into active input');
+    }
+
+    // Click confirm/submit button
+    await new Promise(r => setTimeout(r, 500));
+    await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll('button')).find(b => {
+        const t = b.textContent.toLowerCase();
+        return t.includes('confirm') || t.includes('submit') || t.includes('verify') || t.includes('next');
+      });
+      if (btn) btn.click();
+    });
+
+    await new Promise(r => setTimeout(r, 3000));
+
+    // Check if verification succeeded (dialog closed)
+    const stillVisible = await page.evaluate(() => {
+      const inputs = document.querySelectorAll('input[type="password"], input[maxlength="6"], input[maxlength="1"]');
+      return inputs.length > 0;
+    });
+
+    if (!stillVisible) {
+      console.log('[SparkP2P] Security verification passed!');
+      await takeScreenshot('Verification passed');
+      return true;
+    } else {
+      console.log('[SparkP2P] Verification may have failed — inputs still visible');
+      await takeScreenshot('Verification may have failed');
+      return false;
+    }
+
+  } catch (e) {
+    console.error('[SparkP2P] PIN entry error:', e.message?.substring(0, 60));
+    return false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// CLICK HELPER — Find and click buttons by text
+// ═══════════════════════════════════════════════════════════
+
+async function clickButton(page, ...textOptions) {
+  const clicked = await page.evaluate((options) => {
+    for (const text of options) {
+      const btn = Array.from(document.querySelectorAll('button, a[role="button"], [class*="btn"]')).find(b => {
+        const t = (b.textContent || '').toLowerCase().trim();
+        return t.includes(text.toLowerCase());
+      });
+      if (btn) { btn.click(); return text; }
+    }
+    return null;
+  }, textOptions);
+
+  if (clicked) console.log(`[SparkP2P] Clicked: "${clicked}"`);
+  return !!clicked;
+}
+
+// ═══════════════════════════════════════════════════════════
+// ACTION EXECUTION — Full automation with PIN + screenshots
+// ═══════════════════════════════════════════════════════════
+
 async function execAction(action) {
   const { action: type, order_number } = action;
   console.log(`[SparkP2P] Executing: ${type} for order ${order_number}`);
 
   try {
-    // Navigate to the specific order page
+    // Navigate to the specific order
     const page = await navigateTo(`https://p2p.binance.com/en/fiatOrder?orderNumber=${order_number}`);
     if (!page) return;
+    await takeScreenshot(`Before ${type}: order ${order_number}`);
 
     if (type === 'release') {
-      // Click the Release button on the order page
-      const clicked = await page.evaluate(() => {
-        const btn = Array.from(document.querySelectorAll('button')).find(b =>
-          b.textContent.toLowerCase().includes('release') || b.textContent.toLowerCase().includes('confirm')
-        );
-        if (btn) { btn.click(); return true; }
-        return false;
-      });
-
-      // May need to confirm in a dialog
-      if (clicked) {
-        await new Promise(r => setTimeout(r, 2000));
-        await page.evaluate(() => {
-          const confirmBtn = Array.from(document.querySelectorAll('button')).find(b =>
-            b.textContent.toLowerCase().includes('confirm') || b.textContent.toLowerCase().includes('release')
-          );
-          if (confirmBtn) confirmBtn.click();
-        });
+      // Step 1: Click "Release" / "Confirm Release" button
+      let clicked = await clickButton(page, 'release', 'confirm release');
+      if (!clicked) {
+        // Try looking for the button in a different way
+        clicked = await clickButton(page, 'release crypto', 'release usdt');
       }
 
-      await fetch(`${API_BASE}/ext/report-release`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ order_number, success: clicked, error: clicked ? null : 'Release button not found' }),
-      });
-      if (clicked) stats.actions++;
+      if (clicked) {
+        await new Promise(r => setTimeout(r, 2000));
+
+        // Step 2: Confirm in dialog (Binance shows "Are you sure?")
+        await clickButton(page, 'confirm', 'yes', 'release');
+        await new Promise(r => setTimeout(r, 2000));
+
+        // Step 3: Handle security verification (PIN/passkey)
+        const verified = await handleSecurityVerification(page);
+
+        await takeScreenshot(`After release: order ${order_number}`);
+
+        await fetch(`${API_BASE}/ext/report-release`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ order_number, success: verified, error: verified ? null : 'Verification failed' }),
+        });
+        if (verified) stats.actions++;
+      } else {
+        console.log('[SparkP2P] Release button not found');
+        await takeScreenshot(`Release button not found: ${order_number}`);
+        await fetch(`${API_BASE}/ext/report-release`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ order_number, success: false, error: 'Release button not found' }),
+        });
+      }
 
     } else if (type === 'pay' || type === 'mark_as_paid') {
-      // Click the "Payment Done" / "Transferred" button
-      const clicked = await page.evaluate(() => {
-        const btn = Array.from(document.querySelectorAll('button')).find(b =>
-          b.textContent.toLowerCase().includes('payment') ||
-          b.textContent.toLowerCase().includes('transferred') ||
-          b.textContent.toLowerCase().includes('paid')
-        );
-        if (btn) { btn.click(); return true; }
-        return false;
-      });
+      // Step 1: Click "Payment Done" / "Transferred, notify seller"
+      let clicked = await clickButton(page, 'transferred', 'payment done', 'i have paid', 'mark as paid', 'notify seller');
 
       if (clicked) {
         await new Promise(r => setTimeout(r, 2000));
-        await page.evaluate(() => {
-          const confirmBtn = Array.from(document.querySelectorAll('button')).find(b =>
-            b.textContent.toLowerCase().includes('confirm')
-          );
-          if (confirmBtn) confirmBtn.click();
-        });
-      }
 
-      await fetch(`${API_BASE}/ext/report-payment-sent`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ order_number, success: clicked }),
-      });
-      if (clicked) stats.actions++;
+        // Step 2: Confirm dialog
+        await clickButton(page, 'confirm', 'yes');
+        await new Promise(r => setTimeout(r, 2000));
+
+        // Step 3: Handle verification
+        const verified = await handleSecurityVerification(page);
+
+        await takeScreenshot(`After payment confirm: order ${order_number}`);
+
+        await fetch(`${API_BASE}/ext/report-payment-sent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ order_number, success: verified }),
+        });
+        if (verified) stats.actions++;
+      } else {
+        console.log('[SparkP2P] Payment button not found');
+        await takeScreenshot(`Payment button not found: ${order_number}`);
+      }
 
     } else if (type === 'send_message') {
-      // Type in the chat input
-      const chatInput = await page.$('textarea, input[placeholder*="message"], input[placeholder*="Message"]');
+      // Find chat input and type message
+      const chatInput = await page.$('textarea, input[placeholder*="message" i], input[placeholder*="type" i], [contenteditable="true"]');
       if (chatInput) {
+        await chatInput.click();
         await chatInput.type(action.message || '', { delay: 30 });
         await page.keyboard.press('Enter');
+        console.log(`[SparkP2P] Message sent: ${(action.message || '').substring(0, 50)}`);
+      } else {
+        console.log('[SparkP2P] Chat input not found');
+        await takeScreenshot('Chat input not found');
       }
+
+    } else if (type === 'screenshot') {
+      // Just take a screenshot of current state
+      await takeScreenshot(action.reason || 'Manual screenshot request');
     }
+
+    // Navigate back to orders page for next poll
+    await navigateTo('https://p2p.binance.com/en/fiatOrder');
+
   } catch (e) {
     stats.errors++;
     console.error(`[SparkP2P] Action ${type} error:`, e.message?.substring(0, 60));
+    await takeScreenshot(`Error during ${type}: ${e.message?.substring(0, 40)}`);
   }
 }
 
@@ -528,3 +717,6 @@ function norm(o) {
 // IPC
 ipcMain.handle('connect-binance', () => { connectBinance(); return { opened: true }; });
 ipcMain.handle('set-token', (_, t) => { token = t; return { ok: true }; });
+ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] PIN configured'); return { ok: true }; });
+ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin }));
+ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
