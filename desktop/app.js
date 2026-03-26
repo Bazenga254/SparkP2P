@@ -172,6 +172,19 @@ async function connectBinance() {
         setupNetworkCapture(page);
       }
 
+      // Open wallet page in a second tab to capture balance
+      try {
+        const walletPage = await browser.newPage();
+        setupNetworkCapture(walletPage);
+        await walletPage.goto('https://www.binance.com/en/my/wallet/account/overview', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 5000));
+        // Close wallet tab after capturing data — don't keep it open
+        await walletPage.close().catch(() => {});
+        console.log('[SparkP2P] Wallet page visited for balance capture');
+      } catch (e) {
+        console.log('[SparkP2P] Wallet page error:', e.message?.substring(0, 60));
+      }
+
       // Test: can Puppeteer's page.evaluate make Binance API calls?
       await testBinanceFetch();
 
@@ -362,7 +375,7 @@ function setupNetworkCapture(page) {
   page.on('response', async (response) => {
     const url = response.url();
     try {
-      if (url.includes('/asset/query-user-asset') || url.includes('/asset-service/wallet/balance')) {
+      if (url.includes('/asset/query-user-asset') || url.includes('/asset-service/wallet/balance') || url.includes('/asset/getUserAsset') || url.includes('/capital/config/getall') || url.includes('/asset/get-user-asset')) {
         const data = await response.json();
         if (data?.code === '000000' && data.data) {
           const arr = Array.isArray(data.data) ? data.data : [data.data];
@@ -396,12 +409,17 @@ function setupNetworkCapture(page) {
           console.log(`[SparkP2P] Captured ${capturedData.paymentMethods.length} payment methods from network`);
         }
       }
-      if (url.includes('/user/profile') || url.includes('/user-info')) {
+      if (url.includes('/user/profile') || url.includes('/user-info') || url.includes('/account/user-info') || url.includes('/friendly/account/info')) {
         const data = await response.json();
         if (data?.data) {
-          capturedData.nickname = data.data.nickName || data.data.nickname || '';
-          capturedData.uid = data.data.userId || data.data.uid || '';
-          if (capturedData.nickname) console.log(`[SparkP2P] Captured user: ${capturedData.nickname}`);
+          const nick = data.data.nickName || data.data.nickname || data.data.userName || '';
+          const uid = data.data.userId || data.data.uid || '';
+          // Only capture if it looks like the user's own profile (has uid)
+          if (nick && uid) {
+            capturedData.nickname = nick;
+            capturedData.uid = uid;
+            console.log(`[SparkP2P] Captured user: ${nick} (uid: ${uid})`);
+          }
         }
       }
     } catch (e) {
@@ -411,15 +429,7 @@ function setupNetworkCapture(page) {
   console.log('[SparkP2P] Network capture enabled — listening for Binance data');
 }
 
-async function triggerPageRefresh() {
-  // Navigate to pages that trigger Binance to fetch account data
-  if (!binancePage || binancePage.isClosed()) return;
-  try {
-    // Reload the P2P page — Binance's JS will fetch balance, ads, etc.
-    await binancePage.reload({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 3000));
-  } catch (e) {}
-}
+// NO page refresh — it kills the session and logs the user out
 
 async function reportAccountData() {
   if (!binancePage || binancePage.isClosed()) return;
@@ -428,12 +438,7 @@ async function reportAccountData() {
   const cs = await binanceFetch('/c2c/order-match/order-list', { page: 1, rows: 20, tradeType: 'SELL', orderStatusList: [4] });
   const cb = await binanceFetch('/c2c/order-match/order-list', { page: 1, rows: 20, tradeType: 'BUY', orderStatusList: [4] });
 
-  // Trigger page refresh every 10th poll to capture fresh data
-  if (stats.polls % 10 === 0) {
-    await triggerPageRefresh();
-  }
-
-  // Use captured data from network interception
+  // Use captured data from network interception (no page refresh — it kills the session)
   const balances = capturedData.balances;
   const completed = [...((cs?.code === '000000' ? cs.data : []) || []), ...((cb?.code === '000000' ? cb.data : []) || [])].sort((a, b) => (b.createTime || 0) - (a.createTime || 0)).slice(0, 20).map(o => ({ orderNumber: o.orderNumber, tradeType: o.tradeType, totalPrice: parseFloat(o.totalPrice || 0), amount: parseFloat(o.amount || 0), price: parseFloat(o.price || 0), asset: o.asset || 'USDT', fiat: o.fiat || 'KES', counterparty: o.buyerNickname || o.sellerNickname || '', status: o.orderStatus, createTime: o.createTime }));
   const activeAds = capturedData.ads;
