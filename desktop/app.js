@@ -15,7 +15,7 @@ console.error = (...a) => { fs.appendFileSync(logFile, `[${new Date().toISOStrin
 const API_BASE = 'https://sparkp2p.com/api';
 const DASHBOARD_URL = 'https://sparkp2p.com/dashboard';
 const CDP_PORT = 9222;
-const POLL_INTERVAL = 15000; // 15 seconds
+const POLL_INTERVAL = 60000; // 60 seconds
 
 let mainWindow = null;
 let tray = null;
@@ -347,7 +347,7 @@ async function navigateTo(url) {
 
 async function readOrders() {
   // Navigate to P2P orders page and read pending orders from DOM
-  const page = await navigateTo('https://p2p.binance.com/en/fiatOrder');
+  const page = await navigateTo('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES');
   if (!page) return { sell: [], buy: [] };
 
   try {
@@ -677,7 +677,7 @@ async function execAction(action) {
 
   try {
     // Navigate to the specific order
-    const page = await navigateTo(`https://p2p.binance.com/en/fiatOrder?orderNumber=${order_number}`);
+    const page = await navigateTo(`https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES?orderNumber=${order_number}`);
     if (!page) return;
     await takeScreenshot(`Before ${type}: order ${order_number}`);
 
@@ -763,7 +763,7 @@ async function execAction(action) {
     }
 
     // Navigate back to orders page for next poll
-    await navigateTo('https://p2p.binance.com/en/fiatOrder');
+    await navigateTo('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES');
 
   } catch (e) {
     stats.errors++;
@@ -820,7 +820,7 @@ async function aiScan() {
     console.log(`[SparkP2P] AI scan: ${balances.length} bal, ${activeAds.length} ads, ${pendingOrders.length} orders, user: ${scanData.profile?.nickname || 'unknown'}`);
 
     // Navigate back to orders page for polling
-    await page.goto('https://p2p.binance.com/en/fiatOrder', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+    await page.goto('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
 
   } catch (e) {
     console.error('[SparkP2P] AI scan error:', e.message?.substring(0, 80));
@@ -833,7 +833,7 @@ async function reportAccountData() {
     const balances = await readBalance();
 
     // Navigate back to P2P orders for completed orders
-    const page = await navigateTo('https://p2p.binance.com/en/fiatOrder?tab=completed');
+    const page = await navigateTo('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES?tab=completed');
     let completed = [];
     if (page) {
       await new Promise(r => setTimeout(r, 2000));
@@ -863,7 +863,7 @@ async function reportAccountData() {
     console.log(`[SparkP2P] Account: ${balances.length} bal, ${completed.length} orders`);
 
     // Navigate back to active orders page for next poll
-    await navigateTo('https://p2p.binance.com/en/fiatOrder');
+    await navigateTo('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES');
 
   } catch (e) {
     console.error('[SparkP2P] Account data error:', e.message?.substring(0, 60));
