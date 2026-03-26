@@ -167,17 +167,13 @@ async function connectBinance() {
       clearInterval(check);
       console.log('[SparkP2P] Login detected!');
 
-      // Navigate to P2P orders page
-      const page = await getPage();
-      if (page) {
-        await page.goto('https://p2p.binance.com/en/fiatOrder', { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 3000));
-      }
-
-      // Sync cookies to VPS
+      // Sync cookies to VPS first
       await syncCookies();
 
-      // Start the bot
+      // Run initial scan: Profile → Funding → Spot → Upload → Go to P2P
+      await initialScan();
+
+      // Start the bot (polls orders from P2P page)
       startPoller();
 
       if (mainWindow) {
@@ -203,6 +199,108 @@ async function tryAutoStart() {
   } catch (e) {}
   console.log('[SparkP2P] No active session — launching Chrome...');
   await connectBinance();
+}
+
+// ═══════════════════════════════════════════════════════════
+// INITIAL SCAN — First thing after login:
+// 1. Profile page → get username
+// 2. Funding wallet → get funding USDT balance
+// 3. Spot wallet → get spot USDT balance
+// 4. Upload everything to VPS
+// 5. Navigate to P2P ads page and keep browser there
+// ═══════════════════════════════════════════════════════════
+
+async function initialScan() {
+  const page = await getPage();
+  if (!page) return;
+
+  console.log('[SparkP2P] === INITIAL SCAN START ===');
+
+  // Step 1: Profile — get username
+  console.log('[SparkP2P] Step 1: Reading profile...');
+  let profileData = null;
+  if (aiApiKey) {
+    profileData = await aiScanner.scanProfile(page);
+  }
+  const nickname = profileData?.nickname || '';
+  console.log(`[SparkP2P] Username: ${nickname || 'unknown'}`);
+
+  // Step 2: Funding wallet — get USDT balance
+  console.log('[SparkP2P] Step 2: Reading funding wallet...');
+  let fundingData = null;
+  if (aiApiKey) {
+    await page.goto('https://www.binance.com/en/my/wallet/funding', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 5000));
+    const ss1 = await page.screenshot({ type: 'jpeg', quality: 80 });
+    fundingData = await aiScanner.analyzeScreenshot(ss1, `
+      Look at this Binance Funding wallet page. Extract:
+      {
+        "funding_balances": [{ "asset": "string", "total": number, "available": number }],
+        "estimated_total_usd": number or null
+      }
+      List ALL visible crypto balances. If USDT shows 3.39, return {"asset":"USDT","total":3.39,"available":3.39}.
+    `);
+  }
+  console.log('[SparkP2P] Funding:', JSON.stringify(fundingData)?.substring(0, 200));
+
+  // Step 3: Spot wallet — get USDT balance
+  console.log('[SparkP2P] Step 3: Reading spot wallet...');
+  let spotData = null;
+  if (aiApiKey) {
+    await page.goto('https://www.binance.com/en/my/wallet/account/overview', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 5000));
+    const ss2 = await page.screenshot({ type: 'jpeg', quality: 80 });
+    spotData = await aiScanner.analyzeScreenshot(ss2, `
+      Look at this Binance Spot/Overview wallet page. Extract:
+      {
+        "spot_balances": [{ "asset": "string", "total": number, "available": number }],
+        "estimated_total_usd": number or null
+      }
+      List ALL visible crypto balances with their amounts.
+    `);
+  }
+  console.log('[SparkP2P] Spot:', JSON.stringify(spotData)?.substring(0, 200));
+
+  // Combine balances
+  const allBalances = [];
+  const seen = new Set();
+  for (const b of (fundingData?.funding_balances || [])) {
+    if (b.asset && !seen.has(b.asset + '_funding')) {
+      seen.add(b.asset + '_funding');
+      allBalances.push({ asset: b.asset, free: b.available || b.total || 0, locked: (b.total || 0) - (b.available || 0), total: b.total || 0, wallet: 'Funding' });
+    }
+  }
+  for (const b of (spotData?.spot_balances || [])) {
+    if (b.asset && !seen.has(b.asset + '_spot')) {
+      seen.add(b.asset + '_spot');
+      allBalances.push({ asset: b.asset, free: b.available || b.total || 0, locked: (b.total || 0) - (b.available || 0), total: b.total || 0, wallet: 'Spot' });
+    }
+  }
+
+  console.log(`[SparkP2P] Total balances found: ${allBalances.length}`);
+
+  // Step 4: Upload to VPS
+  if (token) {
+    await fetch(`${API_BASE}/ext/report-account-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        balances: allBalances,
+        active_ads: [],
+        completed_orders: [],
+        payment_methods: [],
+        nickname: nickname,
+      }),
+    }).catch(() => {});
+    console.log('[SparkP2P] Data uploaded to VPS');
+  }
+
+  // Step 5: Navigate to P2P ads/trade page — browser stays here
+  console.log('[SparkP2P] Step 5: Going to P2P page...');
+  await page.goto('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 3000));
+
+  console.log('[SparkP2P] === INITIAL SCAN COMPLETE ===');
 }
 
 // ═══════════════════════════════════════════════════════════

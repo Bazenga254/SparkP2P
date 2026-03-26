@@ -507,6 +507,13 @@ export default function Dashboard() {
             {/* Binance Account Data */}
             {binanceData && (binanceData.balances?.length > 0 || binanceData.active_ads?.length > 0 || binanceData.completed_orders?.length > 0 || binanceData.updated_at) && (
               <>
+                {/* Binance Username */}
+                {binanceData.nickname && (
+                  <div style={{ padding: '10px 0 4px', fontSize: 14, color: '#9ca3af' }}>
+                    Binance Account: <span style={{ color: '#f59e0b', fontWeight: 600 }}>{binanceData.nickname}</span>
+                  </div>
+                )}
+
                 {/* Binance Wallet Balance */}
                 <div className="card">
                   <div className="card-header">
@@ -524,10 +531,12 @@ export default function Dashboard() {
                           minWidth: 150, flex: '1 1 150px',
                           border: '1px solid var(--border)',
                         }}>
-                          <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>{b.asset}</div>
+                          <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>
+                            {b.asset} {b.wallet ? <span style={{ fontSize: 10, opacity: 0.6 }}>({b.wallet})</span> : ''}
+                          </div>
                           <div style={{ fontSize: 22, fontWeight: 700, color: '#f59e0b' }}>{b.total?.toFixed(4)}</div>
                           <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
-                            Free: {b.free?.toFixed(4)} | Locked: {b.locked?.toFixed(4)}
+                            Available: {b.free?.toFixed(4)} | Locked: {b.locked?.toFixed(4)}
                           </div>
                         </div>
                       ))}
