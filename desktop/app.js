@@ -488,10 +488,8 @@ async function pollCycle() {
 
     stats.polls++;
 
-    // Heartbeat
-    if (stats.polls % 3 === 0) {
-      fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
-    }
+    // Heartbeat every poll (60s) — keeps "Binance Connected" status alive
+    fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
 
     // AI scan disabled during polling — runs only once on login (initialScan)
     // to avoid navigating away from the P2P page and breaking order reading
