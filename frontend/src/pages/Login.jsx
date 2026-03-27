@@ -125,7 +125,7 @@ export default function Login() {
           <p>Payments verified. Crypto released. All on autopilot.</p>
         </div>
         <div className="login-left-illustration">
-          <img src="/trading-illustration.png" alt="P2P Trading" />
+          <img src="/trading-illustration.jpg" alt="P2P Trading" loading="eager" />
         </div>
         <div className="login-left-footer">Powered by Spark AI</div>
       </div>
