@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld('sparkp2p', {
   getBotStatus: () => ipcRenderer.invoke('get-bot-status'),
   takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
   runAIScan: () => ipcRenderer.invoke('run-ai-scan'),
+  restartApp: () => ipcRenderer.invoke('restart-app'),
 });

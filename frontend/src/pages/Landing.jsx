@@ -13,6 +13,7 @@ export default function Landing() {
           <div className="land-nav-links">
             <a href="#features">Features</a>
             <a href="#pricing">Pricing</a>
+            <a href="#download">Download</a>
             <Link to="/login" className="land-nav-login">Login</Link>
           </div>
         </div>
@@ -213,6 +214,43 @@ export default function Landing() {
               <Link to="/login" className="land-price-btn featured">Get Started</Link>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* Download Section */}
+      <section className="land-download" id="download">
+        <div className="land-section-inner">
+          <h2>Download SparkP2P</h2>
+          <p className="land-section-sub">Get the desktop app for automated P2P trading. Install once, trade forever.</p>
+          <div className="land-download-grid">
+            <div className="land-download-card">
+              <div className="land-download-icon">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 12l2-2m0 0l7-7 7 7m-9-5v12m-4 4h12"/></svg>
+              </div>
+              <h3>Windows</h3>
+              <p>Windows 10 / 11</p>
+              <a href="https://github.com/Bazenga254/SparkP2P/releases/latest/download/SparkP2P-Setup-1.0.0.exe" className="land-download-btn">Download .exe</a>
+            </div>
+            <div className="land-download-card">
+              <div className="land-download-icon">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z"/><path d="M12 8v8m-4-4h8"/></svg>
+              </div>
+              <h3>macOS</h3>
+              <p>Intel & Apple Silicon</p>
+              <span className="land-download-soon">Coming Soon</span>
+            </div>
+            <div className="land-download-card">
+              <div className="land-download-icon">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+              </div>
+              <h3>Linux</h3>
+              <p>Ubuntu / Debian</p>
+              <span className="land-download-soon">Coming Soon</span>
+            </div>
+          </div>
+          <p style={{ textAlign: 'center', color: '#6b7280', fontSize: 13, marginTop: 24 }}>
+            v1.0.0 &middot; Auto-updates enabled &middot; Requires Google Chrome installed
+          </p>
         </div>
       </section>
 

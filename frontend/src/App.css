@@ -1274,6 +1274,65 @@ body {
   margin-top: 12px;
 }
 
+/* Download Section */
+.land-download {
+  padding: 80px 32px;
+  background: var(--bg);
+}
+.land-download-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  max-width: 800px;
+  margin: 40px auto 0;
+}
+.land-download-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px 24px;
+  text-align: center;
+  transition: border-color 0.2s;
+}
+.land-download-card:hover {
+  border-color: var(--accent);
+}
+.land-download-icon {
+  color: var(--accent);
+  margin-bottom: 16px;
+}
+.land-download-card h3 {
+  font-size: 18px;
+  margin-bottom: 4px;
+}
+.land-download-card p {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 20px;
+}
+.land-download-btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #000;
+  padding: 10px 28px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  transition: opacity 0.2s;
+}
+.land-download-btn:hover {
+  opacity: 0.9;
+}
+.land-download-soon {
+  display: inline-block;
+  background: var(--border);
+  color: var(--text-dim);
+  padding: 10px 28px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
 /* Landing Responsive */
 @media (max-width: 900px) {
   .land-hero {
@@ -1286,6 +1345,7 @@ body {
   .land-hero-sub { margin: 0 auto 28px; }
   .land-hero-actions { justify-content: center; flex-wrap: wrap; }
   .land-features-grid { grid-template-columns: 1fr; max-width: 420px; margin: 0 auto; }
+  .land-download-grid { grid-template-columns: 1fr; max-width: 320px; }
   .land-steps { flex-direction: column; }
   .land-step-line { width: 2px; height: 30px; margin: 0; }
   .land-pricing-grid { grid-template-columns: 1fr; max-width: 400px; margin: 0 auto; }

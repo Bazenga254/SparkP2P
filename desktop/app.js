@@ -1,9 +1,10 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const puppeteer = require('puppeteer-core');
 const aiScanner = require('./ai-scanner');
+const { autoUpdater } = require('electron-updater');
 
 // Logging
 const logFile = path.join(__dirname, 'sparkp2p.log');
@@ -41,7 +42,40 @@ let aiApiKey = process.env.OPENAI_API_KEY || null;
 // ELECTRON
 // ═══════════════════════════════════════════════════════════
 
-app.whenReady().then(() => { createMainWindow(); createTray(); aiScanner.initAI(aiApiKey); });
+app.whenReady().then(() => {
+  createMainWindow();
+  createTray();
+  aiScanner.initAI(aiApiKey);
+  checkForUpdates();
+});
+
+// ═══════════════════════════════════════════════════════════
+// AUTO-UPDATE — checks GitHub Releases for new versions
+// ═══════════════════════════════════════════════════════════
+
+function checkForUpdates() {
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-available', (info) => {
+    console.log(`[SparkP2P] Update available: v${info.version}`);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log(`[SparkP2P] Update downloaded: v${info.version}`);
+    if (mainWindow) {
+      mainWindow.webContents.executeJavaScript(
+        `if(confirm("SparkP2P v${info.version} is ready. Restart now to update?")) { window.sparkp2p?.restartApp?.() }`
+      );
+    }
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.log('[SparkP2P] Update check:', err.message?.substring(0, 60));
+  });
+
+  autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+}
 app.on('window-all-closed', (e) => e.preventDefault());
 app.on('before-quit', () => { stopPoller(); if (tray) tray.destroy(); });
 
@@ -167,21 +201,18 @@ async function connectBinance() {
       clearInterval(check);
       console.log('[SparkP2P] Login detected!');
 
-      // Sync cookies to VPS first
-      await syncCookies();
-
-      // Run initial scan: Profile → Funding → Spot → Upload → Go to P2P
-      await initialScan();
-
-      // Start the bot (polls orders from P2P page)
-      startPoller();
-
+      // Show alert IMMEDIATELY so user knows it worked
       if (mainWindow) {
         mainWindow.show();
         mainWindow.webContents.executeJavaScript(
           'alert("Binance connected! Bot is running. Keep Chrome open (you can minimize it).")'
         );
       }
+
+      // Then do the rest in background
+      await syncCookies();
+      await initialScan();
+      startPoller();
     }
   }, 2000);
 }
@@ -883,3 +914,4 @@ ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; aiScanner.initAI(key)
 ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasAI: !!aiApiKey }));
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
 ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
+ipcMain.handle('restart-app', () => { autoUpdater.quitAndInstall(); });
