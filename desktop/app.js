@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -6,9 +6,11 @@ const puppeteer = require('puppeteer-core');
 const aiScanner = require('./ai-scanner');
 const { autoUpdater } = require('electron-updater');
 
-// Logging
-const logFile = path.join(__dirname, 'sparkp2p.log');
-fs.writeFileSync(logFile, '');
+// Logging — use app data folder when packaged, __dirname when dev
+const logDir = app.isPackaged ? path.join(process.env.APPDATA || process.env.HOME, 'sparkp2p') : __dirname;
+try { fs.mkdirSync(logDir, { recursive: true }); } catch (e) {}
+const logFile = path.join(logDir, 'sparkp2p.log');
+try { fs.writeFileSync(logFile, ''); } catch (e) {}
 const _log = console.log, _err = console.error;
 console.log = (...a) => { fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${a.join(' ')}\n`); _log(...a); };
 console.error = (...a) => { fs.appendFileSync(logFile, `[${new Date().toISOString()}] ERR: ${a.join(' ')}\n`); _err(...a); };
@@ -26,9 +28,11 @@ let pollerRunning = false;
 let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 let traderPin = null; // Binance security PIN — stored in memory only
-// Load .env file for API keys
+// Load .env file for API keys — check app data folder and app directory
 try {
-  const envPath = path.join(__dirname, '.env');
+  const envPath = app.isPackaged
+    ? path.join(process.env.APPDATA || process.env.HOME, 'sparkp2p', '.env')
+    : path.join(__dirname, '.env');
   if (fs.existsSync(envPath)) {
     fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
       const [key, ...val] = line.split('=');
@@ -217,20 +221,48 @@ async function connectBinance() {
   }, 2000);
 }
 
+let lastActiveTime = Date.now();
+const INACTIVITY_TIMEOUT = 6 * 60 * 60 * 1000; // 6 hours
+
 async function tryAutoStart() {
-  if (!token || browser) return;
+  if (!token) return; // Don't do anything until user logs into SparkP2P
+  if (browser) return; // Already connected
+
+  // Only try to reconnect to existing Chrome — don't launch new one
   try {
     if (await connectPuppeteer()) {
       if (await isLoggedIn()) {
         console.log('[SparkP2P] Auto-connected to existing Chrome session');
+        lastActiveTime = Date.now();
         startPoller();
         return;
       }
     }
   } catch (e) {}
-  console.log('[SparkP2P] No active session — launching Chrome...');
-  await connectBinance();
+  // Don't auto-launch Chrome — wait for user to click "Connect Binance"
+  console.log('[SparkP2P] No active Binance session. Click Connect Binance to start.');
 }
+
+function checkInactivityTimeout() {
+  if (!pollerRunning) return;
+  const elapsed = Date.now() - lastActiveTime;
+  if (elapsed > INACTIVITY_TIMEOUT) {
+    console.log('[SparkP2P] 6 hours inactive — logging out for security');
+    stopPoller();
+    if (browser) {
+      browser.close().catch(() => {});
+      browser = null;
+    }
+    if (mainWindow) {
+      mainWindow.webContents.executeJavaScript(
+        'alert("Binance session expired after 6 hours of inactivity. Please reconnect.")'
+      );
+    }
+  }
+}
+
+// Check inactivity every 5 minutes
+setInterval(checkInactivityTimeout, 5 * 60 * 1000);
 
 // ═══════════════════════════════════════════════════════════
 // INITIAL SCAN — First thing after login:
@@ -518,6 +550,7 @@ async function pollCycle() {
     }
 
     stats.polls++;
+    lastActiveTime = Date.now(); // Reset inactivity timer
 
     // Heartbeat every poll (60s) — keeps "Binance Connected" status alive
     fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
