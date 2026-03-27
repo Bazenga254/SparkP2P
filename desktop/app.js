@@ -92,10 +92,21 @@ function createMainWindow() {
   mainWindow.loadURL(DASHBOARD_URL);
   mainWindow.on('close', (e) => { if (!app.isQuitting) { e.preventDefault(); mainWindow.hide(); } });
 
-  mainWindow.webContents.on('did-finish-load', () => {
+  // Capture token on every page load and navigation
+  const captureToken = () => {
     mainWindow.webContents.executeJavaScript('localStorage.getItem("token")')
-      .then((t) => { if (t) { token = t; console.log('[SparkP2P] Token captured'); tryAutoStart(); } }).catch(() => {});
-  });
+      .then((t) => {
+        if (t && t !== token) {
+          token = t;
+          console.log('[SparkP2P] Token captured');
+          tryAutoStart();
+        }
+      }).catch(() => {});
+  };
+  mainWindow.webContents.on('did-finish-load', captureToken);
+  mainWindow.webContents.on('did-navigate-in-page', captureToken);
+  // Also poll for token every 5 seconds (catches SPA login)
+  setInterval(captureToken, 5000);
 
   // Intercept WebSocket remote browser — open Chrome instead
   mainWindow.webContents.session.webRequest.onBeforeRequest(
@@ -188,7 +199,12 @@ async function isLoggedIn() {
 // ═══════════════════════════════════════════════════════════
 
 async function connectBinance() {
-  if (!browser) {
+  // Check if we already have a Binance page open
+  let existingPage = browser ? await getPage('binance.com') : null;
+
+  if (!existingPage) {
+    // No Binance page — launch Chrome fresh
+    if (browser) { try { await browser.disconnect(); } catch(e) {} browser = null; }
     await launchChrome('https://accounts.binance.com/en/login');
     await connectPuppeteer();
     if (!browser) return;
@@ -205,7 +221,7 @@ async function connectBinance() {
       clearInterval(check);
       console.log('[SparkP2P] Login detected!');
 
-      // Show alert IMMEDIATELY so user knows it worked
+      // Show alert IMMEDIATELY
       if (mainWindow) {
         mainWindow.show();
         mainWindow.webContents.executeJavaScript(
@@ -213,10 +229,19 @@ async function connectBinance() {
         );
       }
 
-      // Then do the rest in background
+      // Send heartbeat immediately so dashboard shows "Connected"
+      if (token) {
+        fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
+      }
+
+      // Sync cookies to mark as connected on VPS
       await syncCookies();
-      await initialScan();
+
+      // Start poller FIRST (so heartbeats keep going)
       startPoller();
+
+      // Then do the initial scan in background (takes time, won't block heartbeats)
+      initialScan().catch(e => console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)));
     }
   }, 2000);
 }

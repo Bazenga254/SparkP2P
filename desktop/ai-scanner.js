@@ -104,7 +104,7 @@ async function scanOrders(page) {
 }
 
 async function scanProfile(page) {
-  await page.goto('https://p2p.binance.com/en/advertiserDetail', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+  await page.goto('https://www.binance.com/en/my/dashboard', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
   await new Promise(r => setTimeout(r, 3000));
   const screenshot = await page.screenshot({ type: 'jpeg', quality: 80 });
   const data = await analyzeScreenshot(screenshot, `
