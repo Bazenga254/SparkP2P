@@ -73,8 +73,7 @@ export default function Login() {
           return;
         }
         const res = await register({
-          first_name: form.first_name,
-          last_name: form.last_name,
+          full_name: form.full_name,
           email: form.email,
           phone: form.phone,
           password: form.password,
@@ -143,30 +142,19 @@ export default function Login() {
               <>
                 {/* Name disclaimer */}
                 <div className="login-disclaimer">
-                  Your first and last name must match your Binance account name exactly. This is required for P2P payment verification.
+                  Enter your full name exactly as it appears on your Binance KYC. This is shown to buyers during P2P payment verification.
                 </div>
 
-                <div className="login-field-row">
-                  <div className="login-field">
-                    <label>First Name</label>
-                    <input
-                      type="text"
-                      placeholder="John"
-                      value={form.first_name}
-                      onChange={(e) => updateForm('first_name', e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="login-field">
-                    <label>Last Name</label>
-                    <input
-                      type="text"
-                      placeholder="Doe"
-                      value={form.last_name}
-                      onChange={(e) => updateForm('last_name', e.target.value)}
-                      required
-                    />
-                  </div>
+                <div className="login-field">
+                  <label>Full Name (as on Binance KYC)</label>
+                  <input
+                    type="text"
+                    placeholder="BONITO CHELUGET SAMOEI"
+                    value={form.full_name}
+                    onChange={(e) => updateForm('full_name', e.target.value.toUpperCase())}
+                    required
+                    style={{ textTransform: 'uppercase' }}
+                  />
                 </div>
 
                 <div className="login-field">
@@ -321,7 +309,7 @@ export default function Login() {
                   required
                 />
                 <span className="login-field-hint">
-                  Code sent to {phoneHint} and your email
+                  Code sent to {phoneHint}
                 </span>
               </div>
             )}

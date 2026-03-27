@@ -23,8 +23,9 @@ _login_otp_codes: dict[str, str] = {}  # email -> OTP for login 2FA
 
 
 class RegisterRequest(BaseModel):
-    first_name: str
-    last_name: str
+    full_name: str = ""
+    first_name: str = ""  # Legacy — kept for backward compat
+    last_name: str = ""   # Legacy — kept for backward compat
     email: EmailStr
     phone: str
     password: str
@@ -32,15 +33,13 @@ class RegisterRequest(BaseModel):
     security_question: str  # Cannot be changed after registration
     security_answer: str  # Hashed before storing
 
-    @field_validator("first_name", "last_name")
+    @field_validator("full_name")
     @classmethod
-    def validate_name(cls, v):
+    def validate_full_name(cls, v):
         v = v.strip()
-        if len(v) < 2:
-            raise ValueError("Name must be at least 2 characters")
-        if not v.replace(" ", "").replace("-", "").isalpha():
-            raise ValueError("Name must contain only letters")
-        return v
+        if v and len(v) < 3:
+            raise ValueError("Full name must be at least 3 characters")
+        return v.upper()
 
     @field_validator("phone")
     @classmethod
@@ -141,7 +140,9 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
             detail="Email or phone already registered",
         )
 
-    full_name = f"{data.first_name.strip()} {data.last_name.strip()}"
+    # Use full_name if provided, otherwise combine first + last (legacy)
+    full_name = data.full_name.strip() if data.full_name else f"{data.first_name.strip()} {data.last_name.strip()}"
+    full_name = full_name.upper()
 
     trader = Trader(
         email=data.email,
@@ -229,12 +230,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         logger.warning(f"SMS OTP send failed for {trader.email}: {e}")
 
-    # Also send via email as fallback
-    try:
-        from app.services.email import send_verification_code
-        send_verification_code(trader.email, otp_code)
-    except Exception:
-        pass
+    # OTP sent to phone only — no email fallback
 
     return {
         "otp_required": True,
