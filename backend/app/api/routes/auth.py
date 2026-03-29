@@ -1,12 +1,16 @@
 import re
 import random
+import secrets
 from typing import Optional
+from urllib.parse import urlencode
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+import httpx
 
 from app.core.database import get_db
 from app.core.security import hash_password, verify_password, create_access_token
@@ -306,3 +310,116 @@ async def employee_login(data: EmployeeLoginRequest, db: AsyncSession = Depends(
         "full_name": employee.full_name,
         "role": employee.role,
     }
+
+
+# ═══════════════════════════════════════════════════════════
+# GOOGLE OAUTH
+# ═══════════════════════════════════════════════════════════
+
+import os
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = "https://sparkp2p.com/api/auth/google/callback"
+
+_google_states: dict[str, bool] = {}
+
+
+@router.get("/google")
+async def google_login():
+    """Redirect user to Google OAuth consent screen."""
+    state = secrets.token_urlsafe(32)
+    _google_states[state] = True
+
+    params = urlencode({
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "state": state,
+        "prompt": "select_account",
+    })
+    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
+
+
+@router.get("/google/callback")
+async def google_callback(code: str = None, state: str = None, error: str = None, db: AsyncSession = Depends(get_db)):
+    """Google redirects here after login. Exchange code for user info, login or register."""
+    if error:
+        return RedirectResponse(f"/login?error={error}")
+
+    if not code or not state or state not in _google_states:
+        return RedirectResponse("/login?error=invalid_state")
+
+    _google_states.pop(state, None)
+
+    # Exchange code for tokens
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post("https://oauth2.googleapis.com/token", data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        })
+
+    if token_resp.status_code != 200:
+        logger.error(f"Google token exchange failed: {token_resp.text}")
+        return RedirectResponse("/login?error=token_exchange_failed")
+
+    tokens = token_resp.json()
+    access_token = tokens.get("access_token")
+
+    # Get user info from Google
+    async with httpx.AsyncClient() as client:
+        user_resp = await client.get("https://www.googleapis.com/oauth2/v2/userinfo", headers={
+            "Authorization": f"Bearer {access_token}",
+        })
+
+    if user_resp.status_code != 200:
+        return RedirectResponse("/login?error=user_info_failed")
+
+    google_user = user_resp.json()
+    email = google_user.get("email", "").lower()
+    name = google_user.get("name", "")
+
+    if not email:
+        return RedirectResponse("/login?error=no_email")
+
+    # Check if user exists
+    result = await db.execute(select(Trader).where(Trader.email == email))
+    trader = result.scalar_one_or_none()
+
+    if not trader:
+        # Auto-register with Google account
+        trader = Trader(
+            email=email,
+            full_name=name.upper(),
+            phone="",
+            password_hash=hash_password(secrets.token_urlsafe(32)),  # random password
+            status=TraderStatus.ACTIVE,
+            google_id=google_user.get("id", ""),
+        )
+        db.add(trader)
+        await db.flush()
+
+        # Create wallet
+        wallet = Wallet(trader_id=trader.id, balance=0.0)
+        db.add(wallet)
+        await db.commit()
+        await db.refresh(trader)
+        logger.info(f"New Google user registered: {email} as {name}")
+    else:
+        # Update google_id if not set
+        if not trader.google_id:
+            trader.google_id = google_user.get("id", "")
+            await db.commit()
+
+    # Create JWT token
+    token = create_access_token({"sub": str(trader.id), "email": trader.email})
+
+    # Check if profile is incomplete (Google users need phone + KYC name)
+    needs_profile = not trader.phone or trader.phone == ""
+
+    # Redirect with token — frontend handles profile completion
+    return RedirectResponse(f"/login?google_token={token}&name={trader.full_name}&id={trader.id}&role={trader.role or 'trader'}&needs_profile={'1' if needs_profile else '0'}")

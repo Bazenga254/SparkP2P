@@ -40,7 +40,7 @@ const BANK_PAYBILLS = {
 };
 
 const STEPS = [
-  { key: 'extension', title: 'Install Extension', icon: Puzzle },
+  { key: 'extension', title: 'Install App', icon: Download },
   { key: 'binance', title: 'Connect Binance', icon: Link2 },
   { key: 'verification', title: 'Verification', icon: Shield },
   { key: 'settlement', title: 'Settlement', icon: Banknote },
@@ -333,42 +333,41 @@ export default function Onboarding() {
         {currentStep === 0 && (
           <div className="onb-step-content">
             <div className="onb-step-header">
-              <Puzzle size={28} className="onb-step-icon" />
+              <Download size={28} className="onb-step-icon" />
               <div>
-                <h2>Install SparkP2P Extension</h2>
-                <p>Install our Chrome extension for seamless Binance integration</p>
+                <h2>Download SparkP2P Desktop App</h2>
+                <p>Install our desktop app to automate your Binance P2P trading</p>
               </div>
             </div>
 
             <div className="onb-card">
               <div className="onb-ext-info">
                 <div className="onb-ext-icon">
-                  <Download size={32} />
+                  <Zap size={32} />
                 </div>
                 <div>
-                  <h3>SparkP2P Chrome Extension</h3>
+                  <h3>SparkP2P for Windows</h3>
                   <p>
-                    The extension automatically syncs your Binance session, so you
-                    never have to manually copy cookies. It runs in the background
-                    and keeps your connection alive.
+                    The desktop app connects to your Chrome browser, logs into Binance,
+                    and trades automatically 24/7.
                   </p>
                 </div>
               </div>
               <a
-                href="/sparkp2p-extension.zip"
+                href="https://sparkp2p.com/SparkP2P-Setup.exe"
                 download
                 className="onb-btn-secondary"
               >
                 <Download size={16} />
-                Download Extension (ZIP)
+                Download for Windows
               </a>
               <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 10, lineHeight: 1.6 }}>
                 <strong>How to install:</strong><br />
-                1. Download and unzip the file<br />
-                2. Open Chrome → type <code style={{ background: '#1a1d27', padding: '2px 6px', borderRadius: 4 }}>chrome://extensions</code><br />
-                3. Enable <strong>Developer Mode</strong> (top right toggle)<br />
-                4. Click <strong>Load Unpacked</strong> → select the unzipped folder<br />
-                5. SparkP2P icon appears in your toolbar
+                1. Download and run SparkP2P-Setup.exe<br />
+                2. If Chrome blocks the download, click <strong>⋮ → Keep</strong><br />
+                3. Open SparkP2P and log in with your account<br />
+                4. Click <strong>Connect Binance</strong> — Chrome opens automatically<br />
+                5. Log into Binance — the bot takes over
               </div>
             </div>
 
@@ -378,7 +377,7 @@ export default function Onboarding() {
                 <ChevronRight size={18} />
               </button>
               <button className="onb-btn-link" onClick={handleSkipExtension}>
-                Skip for now (manual setup)
+                Skip for now
               </button>
             </div>
           </div>
@@ -407,51 +406,36 @@ export default function Onboarding() {
               </div>
             ) : (
               <>
-                {extensionInstalled && (
-                  <div className="onb-card">
-                    <h3>Option 1: Use Extension</h3>
-                    <p>
-                      Click the SparkP2P icon in your Chrome toolbar, then click
-                      <strong> Sync</strong> to automatically connect your Binance
-                      session.
-                    </p>
-                  </div>
-                )}
-
                 <div className="onb-card">
-                  <h3>{extensionInstalled ? 'Option 2: Manual Setup' : 'Manual Setup'}</h3>
-                  <p className="onb-help-text">
-                    Open Binance P2P in Chrome, open DevTools (F12), go to Network tab,
-                    perform any action, and copy the cookies and csrftoken from request headers.
-                  </p>
-                  <form onSubmit={handleConnectBinance} className="onb-form">
-                    <label>Cookies (JSON format)</label>
-                    <textarea
-                      rows={4}
-                      placeholder='{"p20t": "...", "csrftoken": "...", ...}'
-                      value={cookies}
-                      onChange={(e) => setCookies(e.target.value)}
-                      required
-                    />
-                    <label>CSRF Token</label>
-                    <input
-                      type="text"
-                      placeholder="csrftoken value"
-                      value={csrfToken}
-                      onChange={(e) => setCsrfToken(e.target.value)}
-                      required
-                    />
-                    <label>2FA Secret (optional)</label>
-                    <input
-                      type="password"
-                      placeholder="TOTP secret from authenticator setup"
-                      value={totpSecret}
-                      onChange={(e) => setTotpSecret(e.target.value)}
-                    />
-                    <button type="submit" className="onb-btn-primary" disabled={binanceLoading}>
-                      {binanceLoading ? 'Connecting...' : 'Connect Binance'}
-                    </button>
-                  </form>
+                  <div className="onb-ext-info">
+                    <div className="onb-ext-icon">
+                      <Zap size={32} />
+                    </div>
+                    <div>
+                      <h3>Connect via Desktop App</h3>
+                      <p>
+                        Open the SparkP2P desktop app, click <strong>Connect Binance</strong>,
+                        and log into your Binance account in the Chrome window that opens.
+                        The bot will detect your login and start automatically.
+                      </p>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12, lineHeight: 1.6 }}>
+                    <strong>Steps:</strong><br />
+                    1. Open SparkP2P desktop app<br />
+                    2. Go to <strong>Settings → Binance → Connect Binance</strong><br />
+                    3. Chrome opens — log into Binance (Google, email, etc.)<br />
+                    4. Bot detects login and starts trading automatically
+                  </div>
+                  <a
+                    href="https://sparkp2p.com/SparkP2P-Setup.exe"
+                    download
+                    className="onb-btn-secondary"
+                    style={{ marginTop: 16 }}
+                  >
+                    <Download size={16} />
+                    Download Desktop App
+                  </a>
                 </div>
 
                 {binanceMsg && (
@@ -668,10 +652,8 @@ export default function Onboarding() {
                     value={settlementMethod}
                     onChange={(e) => setSettlementMethod(e.target.value)}
                   >
-                    <option value="mpesa">M-Pesa (B2C)</option>
-                    <option value="bank_paybill">Bank Account (via Bank Paybill)</option>
-                    <option value="till">Till Number (Buy Goods)</option>
-                    <option value="paybill">My Own Paybill</option>
+                    <option value="mpesa">M-Pesa</option>
+                    <option value="bank_paybill">I&M Bank Account</option>
                   </select>
 
                   {settlementMethod === 'mpesa' && (
@@ -689,60 +671,17 @@ export default function Onboarding() {
 
                   {settlementMethod === 'bank_paybill' && (
                     <>
-                      <label>Bank</label>
-                      <select
-                        value={selectedBank}
-                        onChange={(e) => setSelectedBank(e.target.value)}
-                        required
-                      >
-                        <option value="">Select Bank</option>
-                        {Object.keys(BANK_PAYBILLS).map((bank) => (
-                          <option key={bank} value={bank}>
-                            {bank} ({BANK_PAYBILLS[bank]})
-                          </option>
-                        ))}
-                      </select>
-                      <label>Account Number</label>
+                      <label>I&M Bank Account Number</label>
                       <input
                         type="text"
-                        placeholder="Your bank account number"
+                        placeholder="Your I&M Bank account number"
                         value={bankAccount}
                         onChange={(e) => setBankAccount(e.target.value)}
                         required
                       />
-                    </>
-                  )}
-
-                  {settlementMethod === 'till' && (
-                    <>
-                      <label>Till Number</label>
-                      <input
-                        type="text"
-                        placeholder="Your Till number"
-                        value={customPaybill}
-                        onChange={(e) => setCustomPaybill(e.target.value)}
-                        required
-                      />
-                    </>
-                  )}
-
-                  {settlementMethod === 'paybill' && (
-                    <>
-                      <label>Paybill Number</label>
-                      <input
-                        type="text"
-                        placeholder="Your Paybill shortcode"
-                        value={customPaybill}
-                        onChange={(e) => setCustomPaybill(e.target.value)}
-                        required
-                      />
-                      <label>Account Number</label>
-                      <input
-                        type="text"
-                        placeholder="Account number"
-                        value={paybillAccount}
-                        onChange={(e) => setPaybillAccount(e.target.value)}
-                      />
+                      <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>
+                        Settlements are sent to your I&M account or M-Pesa for free. Fees: KES 10-50 depending on amount.
+                      </div>
                     </>
                   )}
 

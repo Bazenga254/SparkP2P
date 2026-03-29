@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { login, register, sendVerificationCode } from '../services/api';
 
@@ -25,8 +25,67 @@ export default function Login() {
   const [otpRequired, setOtpRequired] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [phoneHint, setPhoneHint] = useState('');
+  const [googleProfile, setGoogleProfile] = useState(null); // {token, name, id, role} — needs phone+KYC
+  const [profileForm, setProfileForm] = useState({ full_name: '', phone: '' });
+  const [savingProfile, setSavingProfile] = useState(false);
   const { loginUser } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  // Handle Google OAuth callback
+  useEffect(() => {
+    const googleToken = searchParams.get('google_token');
+    if (googleToken) {
+      const name = searchParams.get('name') || '';
+      const id = searchParams.get('id') || '';
+      const role = searchParams.get('role') || 'trader';
+      const needsProfile = searchParams.get('needs_profile') === '1';
+
+      if (needsProfile) {
+        // Show profile completion form
+        setGoogleProfile({ token: googleToken, name, id, role });
+        setProfileForm({ full_name: name.toUpperCase(), phone: '' });
+      } else {
+        loginUser(googleToken, { id, full_name: name, role });
+        navigate('/dashboard');
+      }
+    }
+    const googleError = searchParams.get('error');
+    if (googleError) {
+      setError(`Google login failed: ${googleError}`);
+    }
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleCompleteProfile = async (e) => {
+    e.preventDefault();
+    if (!profileForm.full_name || !profileForm.phone) {
+      setError('Full name and phone number are required');
+      return;
+    }
+    if (!/^(07|01|2547|2541)\d{7,8}$/.test(profileForm.phone.replace(/\s/g, ''))) {
+      setError('Enter a valid Kenyan phone number (e.g., 0712345678)');
+      return;
+    }
+    setSavingProfile(true);
+    setError('');
+    try {
+      const res = await fetch('/api/traders/complete-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${googleProfile.token}` },
+        body: JSON.stringify({ full_name: profileForm.full_name.toUpperCase(), phone: profileForm.phone }),
+      });
+      if (res.ok) {
+        loginUser(googleProfile.token, { id: googleProfile.id, full_name: profileForm.full_name, role: googleProfile.role });
+        navigate('/dashboard');
+      } else {
+        const data = await res.json();
+        setError(data.detail || 'Failed to save profile');
+      }
+    } catch (err) {
+      setError('Network error');
+    }
+    setSavingProfile(false);
+  };
 
   const updateForm = (field, value) => setForm({ ...form, [field]: value });
 
@@ -132,6 +191,52 @@ export default function Login() {
       <div className="login-right">
         <Link to="/" className="login-back-home">Back to Homepage</Link>
         <div className="login-right-inner">
+
+          {/* Google Profile Completion */}
+          {googleProfile ? (
+            <>
+              <h1>Complete Your Profile</h1>
+              <p className="login-right-sub">
+                Enter your details to finish setting up your account
+              </p>
+
+              {error && <div className="login-error">{error}</div>}
+
+              <form onSubmit={handleCompleteProfile}>
+                <div className="login-disclaimer">
+                  Enter your full name exactly as it appears on your Binance KYC. This is shown to buyers during P2P payment verification.
+                </div>
+
+                <div className="login-field">
+                  <label>Full Name (as on Binance KYC)</label>
+                  <input
+                    type="text"
+                    placeholder="JOE ANTONY WANDABWA"
+                    value={profileForm.full_name}
+                    onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value.toUpperCase() })}
+                    required
+                    style={{ textTransform: 'uppercase' }}
+                  />
+                </div>
+
+                <div className="login-field">
+                  <label>Phone Number (M-Pesa)</label>
+                  <input
+                    type="tel"
+                    placeholder="0712345678"
+                    value={profileForm.phone}
+                    onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                    required
+                  />
+                </div>
+
+                <button type="submit" disabled={savingProfile} className="login-submit-btn">
+                  {savingProfile ? 'Saving...' : 'Continue to Dashboard'}
+                </button>
+              </form>
+            </>
+          ) : (
+          <>
           <h1>{isRegister ? 'Create Account' : 'Welcome to SparkP2P'}</h1>
           <p className="login-right-sub">
             {isRegister ? 'Register to start automating your trades' : 'Sign in to your account'}
@@ -149,7 +254,7 @@ export default function Login() {
                   <label>Full Name (as on Binance KYC)</label>
                   <input
                     type="text"
-                    placeholder="BONITO CHELUGET SAMOEI"
+                    placeholder="JOE ANTONY WANDABWA"
                     value={form.full_name}
                     onChange={(e) => updateForm('full_name', e.target.value.toUpperCase())}
                     required
@@ -328,10 +433,27 @@ export default function Login() {
             )}
           </form>
 
+          <div className="login-divider">
+            <span>or</span>
+          </div>
+
+          <button
+            type="button"
+            className="login-google-btn"
+            onClick={() => {
+              window.location.href = `${import.meta.env.VITE_API_URL || ''}/api/auth/google`;
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+            {isRegister ? 'Sign up with Google' : 'Continue with Google'}
+          </button>
+
           <p className="login-toggle" onClick={() => { setIsRegister(!isRegister); setError(''); setCodeSent(false); }}>
             {isRegister ? 'Already have an account? ' : "Don't have an account? "}
             <span>{isRegister ? 'Sign in' : 'Register'}</span>
           </p>
+          </>
+          )}
         </div>
       </div>
     </div>

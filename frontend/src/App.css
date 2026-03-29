@@ -1607,6 +1607,45 @@ body {
   text-decoration: underline;
 }
 
+.login-divider {
+  display: flex;
+  align-items: center;
+  margin: 20px 0;
+  gap: 12px;
+}
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #ddd;
+}
+.login-divider span {
+  color: #999;
+  font-size: 13px;
+}
+
+.login-google-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+  color: #333;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+.login-google-btn:hover {
+  background: #f5f5f5;
+  border-color: #bbb;
+}
+
 /* Login Responsive */
 @media (max-width: 768px) {
   .login-split {

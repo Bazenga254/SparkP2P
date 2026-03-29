@@ -400,12 +400,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Order Minimums Info */}
-            <div className="card" style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, color: '#9ca3af', marginBottom: 0 }}>
-              <span><Shield size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />Buy order minimum: <strong style={{ color: '#f59e0b' }}>KES 100,000</strong></span>
-              <span><Shield size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />Sell order minimum: <strong style={{ color: '#10b981' }}>KES 1,000</strong></span>
-              <span>Settlement fee: <strong style={{ color: '#9ca3af' }}>KES 10-50</strong></span>
-            </div>
 
             {/* Row 3: Buy/Sell Breakdown + Profit */}
             <div className="overview-grid-mid">
@@ -423,6 +417,9 @@ export default function Dashboard() {
                   <div><span>Orders</span><span>{stats?.today?.buy_trades || 0}</span></div>
                   <div><span>Avg Rate</span><span>KES {stats?.today?.avg_buy_rate || '0.00'}</span></div>
                 </div>
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 8, fontSize: 12, color: '#9ca3af' }}>
+                  Minimum: <strong style={{ color: '#f59e0b' }}>KES 100,000</strong>
+                </div>
               </div>
 
               {/* Selling Summary */}
@@ -438,6 +435,9 @@ export default function Dashboard() {
                 <div className="buysell-detail">
                   <div><span>Orders</span><span>{stats?.today?.sell_trades || 0}</span></div>
                   <div><span>Avg Rate</span><span>KES {stats?.today?.avg_sell_rate || '0.00'}</span></div>
+                </div>
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 8, fontSize: 12, color: '#9ca3af' }}>
+                  Minimum: <strong style={{ color: '#10b981' }}>KES 1,000</strong>
                 </div>
               </div>
 

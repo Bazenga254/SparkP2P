@@ -32,6 +32,11 @@ class BinanceConnectRequest(BaseModel):
     totp_secret: Optional[str] = None
 
 
+class CompleteProfileRequest(BaseModel):
+    full_name: str
+    phone: str
+
+
 class VerificationConfigRequest(BaseModel):
     verify_method: str  # totp, fund_password, manual, none
     totp_secret: Optional[str] = None
@@ -105,6 +110,31 @@ class TraderProfileResponse(BaseModel):
 
 
 # ── Routes ────────────────────────────────────────────────────────
+
+@router.post("/complete-profile")
+async def complete_profile(
+    data: CompleteProfileRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Google OAuth users must complete their profile with phone + KYC name."""
+    if not data.full_name or len(data.full_name) < 3:
+        raise HTTPException(status_code=400, detail="Full name is required (minimum 3 characters)")
+    if not data.phone or len(data.phone) < 10:
+        raise HTTPException(status_code=400, detail="Valid phone number is required")
+
+    # Normalize phone
+    phone = data.phone.strip().replace(" ", "")
+    if phone.startswith("07") or phone.startswith("01"):
+        phone = "254" + phone[1:]
+
+    trader.full_name = data.full_name.upper()
+    trader.phone = phone
+    await db.commit()
+
+    logger.info(f"Profile completed for trader {trader.id}: {trader.full_name}, {trader.phone}")
+    return {"status": "ok", "full_name": trader.full_name, "phone": trader.phone}
+
 
 @router.get("/me", response_model=TraderProfileResponse)
 async def get_profile(
