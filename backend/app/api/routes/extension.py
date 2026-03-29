@@ -363,8 +363,16 @@ async def _process_reported_sell_order(
         # Already tracked — check if payment was received and needs release
         if existing.status == OrderStatus.PAYMENT_RECEIVED and trader.auto_release_enabled:
             existing.status = OrderStatus.RELEASING
+            # Include confirmation chat message if pending
+            chat_msg = existing.pending_chat_message
+            if chat_msg:
+                existing.pending_chat_message = None  # Clear after sending
             await db.commit()
-            return {"action": "release", "order_number": order_number}
+            return {
+                "action": "release",
+                "order_number": order_number,
+                "message": chat_msg,  # Bot sends this before clicking Release
+            }
         return None
 
     # Create new order
@@ -396,10 +404,12 @@ async def _process_reported_sell_order(
     # Tell extension to send payment instructions via chat
     paybill = settings.MPESA_SHORTCODE
     message = (
-        f"Hello! Please pay KES {amount:,.0f} to:\n"
-        f"Paybill: {paybill}\n"
-        f"Account: {account_ref}\n\n"
-        f"Your crypto will be released automatically after payment confirmation."
+        f"Hi! Please send KES {amount:,.0f} to:\n"
+        f"M-Pesa Paybill: {paybill}\n"
+        f"Account Number: {account_ref}\n"
+        f"Account Holder: {trader.full_name}\n\n"
+        f"You will receive a confirmation message once payment is received. "
+        f"Your crypto will be released automatically."
     )
     return {"action": "send_message", "order_number": order_number, "message": message}
 

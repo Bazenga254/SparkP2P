@@ -55,6 +55,9 @@ class Order(Base):
     seller_payment_destination = Column(String(100), nullable=True)  # Phone or account
     seller_payment_name = Column(String(255), nullable=True)
 
+    # Chat message to send before releasing (set by C2B callback)
+    pending_chat_message = Column(Text, nullable=True)
+
     # Status tracking
     status = Column(Enum(OrderStatus), default=OrderStatus.PENDING, index=True)
 

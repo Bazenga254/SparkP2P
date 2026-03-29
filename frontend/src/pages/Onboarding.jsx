@@ -76,6 +76,13 @@ export default function Onboarding() {
   const [settlementPhone, setSettlementPhone] = useState('');
   const [selectedBank, setSelectedBank] = useState('');
   const [bankAccount, setBankAccount] = useState('');
+  const [bankAccountName, setBankAccountName] = useState('');
+  const [nameVerified, setNameVerified] = useState(null); // null, true, false
+  const [mpesaVerifying, setMpesaVerifying] = useState(false);
+  const [mpesaName, setMpesaName] = useState(null); // { name, match }
+  const [mpesaVerifyMsg, setMpesaVerifyMsg] = useState('');
+  const [verifyAttempts, setVerifyAttempts] = useState(parseInt(localStorage.getItem('sparkp2p_verify_attempts') || '0'));
+  const [accountSuspended, setAccountSuspended] = useState(localStorage.getItem('sparkp2p_suspended') === 'true');
   const [customPaybill, setCustomPaybill] = useState('');
   const [paybillAccount, setPaybillAccount] = useState('');
   const [settlementLoading, setSettlementLoading] = useState(false);
@@ -624,7 +631,7 @@ export default function Onboarding() {
               </div>
             </div>
 
-            {profile?.settlement_method && settlementSaved ? (
+            {profile?.settlement_method && profile?.settlement_phone_verified && settlementSaved ? (
               <div className="onb-card onb-success-card">
                 <Check size={24} className="onb-success-icon" />
                 <div>
@@ -656,29 +663,170 @@ export default function Onboarding() {
                     <option value="bank_paybill">I&M Bank Account</option>
                   </select>
 
-                  {settlementMethod === 'mpesa' && (
+                  {accountSuspended && (
+                    <div style={{ padding: 16, background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', borderRadius: 10, color: '#ef4444', textAlign: 'center' }}>
+                      <strong>Account Suspended</strong>
+                      <p style={{ marginTop: 8, fontSize: 13 }}>
+                        Your account has been suspended due to 3 failed settlement verification attempts.
+                        Contact support at <strong>support@sparkp2p.com</strong> to resolve this.
+                      </p>
+                    </div>
+                  )}
+
+                  {!accountSuspended && settlementMethod === 'mpesa' && (
                     <>
+                      {verifyAttempts > 0 && verifyAttempts < 3 && (
+                        <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 8, fontSize: 13, color: '#ef4444', marginBottom: 8 }}>
+                          Warning: {3 - verifyAttempts} attempt{3 - verifyAttempts === 1 ? '' : 's'} remaining. Your account will be permanently suspended after 3 failed verifications.
+                        </div>
+                      )}
                       <label>M-Pesa Phone Number</label>
-                      <input
-                        type="tel"
-                        placeholder="0712345678"
-                        value={settlementPhone}
-                        onChange={(e) => setSettlementPhone(e.target.value)}
-                        required
-                      />
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                          type="tel"
+                          placeholder="0712345678"
+                          value={settlementPhone}
+                          onChange={(e) => { setSettlementPhone(e.target.value); setMpesaName(null); setMpesaVerifyMsg(''); }}
+                          required
+                          style={{ flex: 1 }}
+                        />
+                        <button
+                          type="button"
+                          className="onb-btn-secondary"
+                          style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}
+                          disabled={mpesaVerifying || !settlementPhone || settlementPhone.length < 10}
+                          onClick={async () => {
+                            setMpesaVerifying(true);
+                            setMpesaName(null);
+                            setMpesaVerifyMsg('Sending KES 1 to verify...');
+                            try {
+                              const token = localStorage.getItem('token');
+                              const res = await fetch('/api/traders/verify-phone', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                body: JSON.stringify({ phone: settlementPhone }),
+                              });
+                              if (!res.ok) { const d = await res.json(); setMpesaVerifyMsg(d.detail || 'Failed'); setMpesaVerifying(false); return; }
+                              setMpesaVerifyMsg('KES 1 sent. Waiting for M-Pesa confirmation...');
+
+                              // Poll for result every 3 seconds, up to 30 seconds
+                              let attempts = 0;
+                              const poll = setInterval(async () => {
+                                attempts++;
+                                if (attempts > 10) { clearInterval(poll); setMpesaVerifying(false); setMpesaVerifyMsg('Timeout — try again'); return; }
+                                const r = await fetch(`/api/traders/verify-phone/result?phone=${settlementPhone}`, {
+                                  headers: { 'Authorization': `Bearer ${token}` },
+                                });
+                                const d = await r.json();
+                                if (d.status === 'verified') {
+                                  clearInterval(poll);
+                                  setMpesaVerifying(false);
+                                  setMpesaName({ name: d.mpesa_name, match: d.name_match });
+                                  setMpesaVerifyMsg('');
+                                  if (!d.name_match) {
+                                    const newAttempts = verifyAttempts + 1;
+                                    setVerifyAttempts(newAttempts);
+                                    localStorage.setItem('sparkp2p_verify_attempts', String(newAttempts));
+                                    if (newAttempts >= 3) {
+                                      setAccountSuspended(true);
+                                      localStorage.setItem('sparkp2p_suspended', 'true');
+                                      // Notify backend to suspend account
+                                      fetch('/api/traders/suspend-self', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                        body: JSON.stringify({ reason: 'Settlement verification failed 3 times — name mismatch' }),
+                                      }).catch(() => {});
+                                    }
+                                  } else {
+                                    // Reset attempts on success
+                                    setVerifyAttempts(0);
+                                    localStorage.setItem('sparkp2p_verify_attempts', '0');
+                                  }
+                                }
+                              }, 3000);
+                            } catch (e) {
+                              setMpesaVerifyMsg('Error: ' + e.message);
+                              setMpesaVerifying(false);
+                            }
+                          }}
+                        >
+                          {mpesaVerifying ? 'Verifying...' : 'Verify'}
+                        </button>
+                      </div>
+
+                      {mpesaVerifyMsg && (
+                        <div style={{ fontSize: 12, color: '#f59e0b', marginTop: 4 }}>{mpesaVerifyMsg}</div>
+                      )}
+
+                      {mpesaName && mpesaName.match && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: 'rgba(16,185,129,0.1)', borderRadius: 8, fontSize: 13, color: '#10b981', marginTop: 8 }}>
+                          <Check size={16} />
+                          M-Pesa name: <strong>{mpesaName.name}</strong> — matches your account
+                        </div>
+                      )}
+                      {mpesaName && !mpesaName.match && (
+                        <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 8, fontSize: 13, color: '#ef4444', marginTop: 8 }}>
+                          <strong>Name mismatch!</strong> M-Pesa name: <strong>{mpesaName.name}</strong><br />
+                          Your registered name: <strong>{profile?.full_name}</strong>. Settlement phone must be registered under your name.
+                        </div>
+                      )}
+
+                      <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>
+                        We send KES 10 to verify the phone is registered under your name.
+                      </div>
                     </>
                   )}
 
-                  {settlementMethod === 'bank_paybill' && (
+                  {!accountSuspended && settlementMethod === 'bank_paybill' && (
                     <>
                       <label>I&M Bank Account Number</label>
                       <input
                         type="text"
                         placeholder="Your I&M Bank account number"
                         value={bankAccount}
-                        onChange={(e) => setBankAccount(e.target.value)}
+                        onChange={(e) => { setBankAccount(e.target.value); setNameVerified(null); }}
                         required
                       />
+
+                      <label>Account Holder Name (as on bank statement)</label>
+                      <input
+                        type="text"
+                        placeholder="BONITO CHELUGET SAMOEI"
+                        value={bankAccountName}
+                        onChange={(e) => {
+                          const val = e.target.value.toUpperCase();
+                          setBankAccountName(val);
+                          // Auto-compare with registered name
+                          if (val.length > 3 && profile?.full_name) {
+                            const registered = profile.full_name.toUpperCase().trim();
+                            const entered = val.trim();
+                            // Check if names match (allow partial — first+last name match)
+                            const regParts = registered.split(/\s+/);
+                            const entParts = entered.split(/\s+/);
+                            const matchCount = regParts.filter(p => entParts.includes(p)).length;
+                            setNameVerified(matchCount >= 2 || registered === entered);
+                          } else {
+                            setNameVerified(null);
+                          }
+                        }}
+                        required
+                        style={{ textTransform: 'uppercase' }}
+                      />
+
+                      {/* Name verification result */}
+                      {nameVerified === true && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: 'rgba(16,185,129,0.1)', borderRadius: 8, fontSize: 13, color: '#10b981', marginTop: 4 }}>
+                          <Check size={16} />
+                          Name matches your registered name: <strong>{profile?.full_name}</strong>
+                        </div>
+                      )}
+                      {nameVerified === false && (
+                        <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 8, fontSize: 13, color: '#ef4444', marginTop: 4 }}>
+                          <strong>Name mismatch!</strong> Your registered name is <strong>{profile?.full_name}</strong>.
+                          Bank account name must match your Binance KYC name for security.
+                        </div>
+                      )}
+
                       <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>
                         Settlements are sent to your I&M account or M-Pesa for free. Fees: KES 10-50 depending on amount.
                       </div>

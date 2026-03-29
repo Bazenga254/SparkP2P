@@ -768,12 +768,12 @@ async function execAction(action) {
 
     if (type === 'release') {
       // Step 0: Send confirmation message in chat before releasing
-      if (action.confirmation_message) {
-        console.log(`[SparkP2P] Sending confirmation: ${action.confirmation_message.substring(0, 60)}`);
+      if (action.message) {
+        console.log(`[SparkP2P] Sending confirmation: ${action.message.substring(0, 60)}`);
         const chatInput = await page.$('textarea, input[placeholder*="message" i], input[placeholder*="type" i], [contenteditable="true"]');
         if (chatInput) {
           await chatInput.click();
-          await chatInput.type(action.confirmation_message, { delay: 20 });
+          await chatInput.type(action.message, { delay: 20 });
           await page.keyboard.press('Enter');
           await new Promise(r => setTimeout(r, 1000));
           console.log('[SparkP2P] Confirmation message sent');

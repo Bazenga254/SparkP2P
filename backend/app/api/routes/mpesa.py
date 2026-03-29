@@ -149,6 +149,15 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
         if order:
             # Credit the trader's wallet with the sell amount
             await _credit_wallet_for_sell(order, amount, db)
+
+            # Store confirmation message for the bot to send before releasing
+            order.pending_chat_message = (
+                f"Payment of KES {amount:,.0f} received from {sender_name}. "
+                f"M-Pesa Receipt: {txn_id}. "
+                f"Releasing your crypto now..."
+            )
+            await db.commit()
+
             # Payment matched — trigger auto-release
             await _trigger_auto_release(order, db)
     elif bill_ref.startswith("DEP-"):
@@ -343,7 +352,8 @@ async def b2c_result(request: Request, db: AsyncSession = Depends(get_db)):
     Safaricom sends the actual M-Pesa receipt code here.
     """
     data = await request.json()
-    logger.info(f"B2C Result: {data}")
+    import json as _json
+    print(f"B2C RESULT RAW: {_json.dumps(data)[:500]}")
 
     try:
         result = data.get("Result", {})
@@ -360,7 +370,26 @@ async def b2c_result(request: Request, db: AsyncSession = Depends(get_db)):
         receiver_name = params.get("ReceiverPartyPublicName", "")
         amount = params.get("TransactionAmount", "")
 
-        logger.info(f"B2C Receipt: {mpesa_receipt}, Amount: {amount}, Receiver: {receiver_name}, Code: {result_code}")
+        receiver_phone = params.get("B2CRecipientIsRegisteredCustomer", "")
+        # ReceiverPartyPublicName format: "254712345678 - BONITO CHELUGET SAMOEI"
+        clean_name = receiver_name.split(" - ", 1)[1].strip() if " - " in receiver_name else receiver_name
+
+        logger.info(f"B2C Receipt: {mpesa_receipt}, Amount: {amount}, Receiver: {clean_name}, Code: {result_code}")
+
+        # Update phone verification if this was a verification B2C
+        try:
+            from app.api.routes.traders import _phone_verifications, update_phone_verification
+            print(f"B2C VERIFY: ConvID={conversation_id}, name={clean_name}, code={result_code}, pending={list(_phone_verifications.keys())}")
+            if result_code == 0:
+                for phone, v in list(_phone_verifications.items()):
+                    if v.get("conversation_id") == conversation_id:
+                        update_phone_verification(phone, clean_name or "UNKNOWN", "verified")
+                        logger.info(f"Phone verification updated: {phone} = {clean_name}")
+                        break
+                else:
+                    logger.warning(f"No matching verification found for ConvID {conversation_id}")
+        except Exception as ve:
+            logger.warning(f"Phone verification update error: {ve}")
 
         # Find and update the payment record by ConversationID
         if conversation_id and mpesa_receipt:
