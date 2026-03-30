@@ -158,6 +158,15 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
             )
             await db.commit()
 
+            # Notify trader
+            from app.api.routes.traders import add_notification
+            add_notification(
+                order.trader_id,
+                f"Payment Received: KES {amount:,.0f}",
+                f"From {sender_name}. Receipt: {txn_id}. Auto-releasing crypto...",
+                "payment"
+            )
+
             # Payment matched — trigger auto-release
             await _trigger_auto_release(order, db)
     elif bill_ref.startswith("DEP-"):

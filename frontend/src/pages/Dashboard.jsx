@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
 import { useNavigate } from 'react-router-dom';
-import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X } from 'lucide-react';
+import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 
 function SpreadCalculator() {
@@ -132,6 +132,9 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
   const [sessionHealth, setSessionHealth] = useState(null);
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [binanceData, setBinanceData] = useState(null);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [depositAmount, setDepositAmount] = useState('');
@@ -168,6 +171,15 @@ export default function Dashboard() {
       if (results[4].status === 'fulfilled') setTransactions(results[4].value.data);
       if (results[5].status === 'fulfilled') setSessionHealth(results[5].value.data);
       if (results[6].status === 'fulfilled') setBinanceData(results[6].value.data);
+
+      // Fetch notifications
+      try {
+        const notifRes = await api.get('/traders/notifications');
+        if (notifRes.data) {
+          setNotifications(notifRes.data);
+          setUnreadCount(notifRes.data.filter(n => !n.read).length);
+        }
+      } catch (e) {}
     } catch (err) {
       console.error('Failed to load data:', err);
     }
@@ -394,6 +406,34 @@ export default function Dashboard() {
               <Shield size={18} />
             </button>
           )}
+          <div style={{ position: 'relative' }}>
+            <button className="icon-btn" onClick={() => { setShowNotifications(!showNotifications); setUnreadCount(0); api.post('/traders/notifications/mark-read').catch(() => {}); }}>
+              <Bell size={18} />
+              {unreadCount > 0 && (
+                <span style={{ position: 'absolute', top: -2, right: -2, background: '#ef4444', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
+            </button>
+            {showNotifications && (
+              <div style={{ position: 'absolute', top: 36, right: 0, width: 320, maxHeight: 400, overflowY: 'auto', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.4)', zIndex: 100 }}>
+                <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 14 }}>Notifications</div>
+                {notifications.length === 0 ? (
+                  <div style={{ padding: 20, textAlign: 'center', color: '#6b7280', fontSize: 13 }}>No notifications yet</div>
+                ) : (
+                  notifications.slice(0, 20).map((n, i) => (
+                    <div key={i} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', fontSize: 13, opacity: n.read ? 0.6 : 1 }}>
+                      <div style={{ fontWeight: n.read ? 400 : 600, color: n.type === 'payment' ? '#10b981' : n.type === 'release' ? '#3b82f6' : '#e5e7eb' }}>
+                        {n.title}
+                      </div>
+                      <div style={{ color: '#9ca3af', fontSize: 12, marginTop: 2 }}>{n.message}</div>
+                      <div style={{ color: '#6b7280', fontSize: 11, marginTop: 4 }}>{n.time}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
           <button className="icon-btn" onClick={loadData} disabled={refreshing}>
             <RefreshCw size={18} className={refreshing ? 'spinning' : ''} />
           </button>
@@ -411,6 +451,15 @@ export default function Dashboard() {
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
+        {!profile?.binance_connected && (
+          <button
+            className="tab-btn"
+            style={{ color: '#f59e0b', fontWeight: 600 }}
+            onClick={() => setActiveTab('settings')}
+          >
+            Connect Binance
+          </button>
+        )}
       </nav>
 
       <main className="dash-content">

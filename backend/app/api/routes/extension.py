@@ -146,6 +146,26 @@ async def report_release(
 
         logger.info(f"Order {data.order_number} released via extension for trader {trader.full_name}")
 
+        # Notify trader
+        from app.api.routes.traders import add_notification
+        add_notification(
+            trader.id,
+            f"Crypto Released: {order.crypto_amount} {order.crypto_currency}",
+            f"Order {data.order_number} — KES {order.fiat_amount:,.0f} at rate {order.exchange_rate}",
+            "release"
+        )
+
+        # Send SMS notification
+        try:
+            from app.services.sms import send_sms
+            send_sms(
+                trader.phone,
+                f"SparkP2P: Order complete! {order.crypto_amount} {order.crypto_currency} released. "
+                f"KES {order.fiat_amount:,.0f} credited to your wallet. Ref: {data.order_number[-8:]}"
+            )
+        except Exception as e:
+            logger.warning(f"SMS notification failed: {e}")
+
         # Trigger settlement
         settlement = SettlementEngine(db)
         if trader.batch_settlement_enabled:

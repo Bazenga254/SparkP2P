@@ -112,6 +112,25 @@ class TraderProfileResponse(BaseModel):
 # In-memory store for phone verification results
 _phone_verifications: dict[str, dict] = {}
 
+# In-memory notification store (per trader)
+_notifications: dict[int, list] = {}
+
+
+def add_notification(trader_id: int, title: str, message: str, notif_type: str = "info"):
+    """Add a notification for a trader. Called from anywhere in the app."""
+    if trader_id not in _notifications:
+        _notifications[trader_id] = []
+    from datetime import datetime
+    _notifications[trader_id].insert(0, {
+        "title": title,
+        "message": message,
+        "type": notif_type,  # payment, release, order, settlement, info
+        "time": datetime.now().strftime("%I:%M %p, %b %d"),
+        "read": False,
+    })
+    # Keep only last 50
+    _notifications[trader_id] = _notifications[trader_id][:50]
+
 
 class VerifyPhoneRequest(BaseModel):
     phone: str
@@ -243,6 +262,20 @@ async def complete_profile(
 
     logger.info(f"Profile completed for trader {trader.id}: {trader.full_name}, {trader.phone}")
     return {"status": "ok", "full_name": trader.full_name, "phone": trader.phone}
+
+
+@router.get("/notifications")
+async def get_notifications(trader: Trader = Depends(get_current_trader)):
+    """Get trader's notifications."""
+    return _notifications.get(trader.id, [])
+
+
+@router.post("/notifications/mark-read")
+async def mark_notifications_read(trader: Trader = Depends(get_current_trader)):
+    """Mark all notifications as read."""
+    for n in _notifications.get(trader.id, []):
+        n["read"] = True
+    return {"status": "ok"}
 
 
 @router.get("/me", response_model=TraderProfileResponse)
