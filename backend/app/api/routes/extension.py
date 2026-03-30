@@ -318,6 +318,49 @@ async def report_account_data(
     return {"status": "ok"}
 
 
+class MarketPriceData(BaseModel):
+    buy_prices: list = []
+    sell_prices: list = []
+    best_buy: float = 0
+    best_sell: float = 0
+    spread: float = 0
+    total_ads_scanned: int = 0
+    timestamp: str = ""
+
+
+# In-memory market prices per trader
+_market_prices: dict[int, dict] = {}
+
+
+@router.post("/market-prices")
+async def report_market_prices(
+    data: MarketPriceData,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Desktop bot reports current market prices from P2P page."""
+    _market_prices[trader.id] = {
+        "buy_prices": data.buy_prices[:5],
+        "sell_prices": data.sell_prices[:5],
+        "best_buy": data.best_buy,
+        "best_sell": data.best_sell,
+        "spread": data.spread,
+        "total_ads_scanned": data.total_ads_scanned,
+        "timestamp": data.timestamp,
+    }
+    return {"status": "ok"}
+
+
+@router.get("/market-prices")
+async def get_market_prices(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Get current market prices for spread calculator."""
+    return _market_prices.get(trader.id, {
+        "best_buy": 0, "best_sell": 0, "spread": 0,
+        "buy_prices": [], "sell_prices": [],
+    })
+
+
 @router.get("/account-data")
 async def get_account_data(
     trader: Trader = Depends(get_current_trader),

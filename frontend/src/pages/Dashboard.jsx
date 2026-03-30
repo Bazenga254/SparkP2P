@@ -1,9 +1,124 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth, getBinanceAccountData, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
+
+function SpreadCalculator() {
+  const [buyPrice, setBuyPrice] = useState('');
+  const [sellPrice, setSellPrice] = useState('');
+  const [volume, setVolume] = useState('500000');
+  const [autoLoaded, setAutoLoaded] = useState(false);
+
+  useEffect(() => {
+    const fetchPrices = async () => {
+      try {
+        const res = await getMarketPrices();
+        const d = res.data;
+        if (d.best_buy > 0 && d.best_sell > 0) {
+          setBuyPrice(String(d.best_buy));
+          setSellPrice(String(d.best_sell));
+          setAutoLoaded(true);
+        }
+      } catch (e) {}
+    };
+    fetchPrices();
+    const interval = setInterval(fetchPrices, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const buy = parseFloat(buyPrice) || 0;
+  const sell = parseFloat(sellPrice) || 0;
+  const vol = parseFloat(volume) || 0;
+  const spread = sell - buy;
+  const spreadPct = buy > 0 ? ((spread / buy) * 100) : 0;
+  const usdtAmount = buy > 0 ? vol / buy : 0;
+  const profit = usdtAmount * spread;
+  const profitable = spread > 0;
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card-header">
+        <TrendingUp size={20} />
+        <h3>Spread Calculator</h3>
+        {autoLoaded && (
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10b981', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', animation: 'pulse-green 1.5s ease-in-out infinite' }} />
+            Live from Binance
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, padding: '12px 0' }}>
+        <div>
+          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Buy Price (KSh/USDT)</label>
+          <input
+            type="number" step="0.01" placeholder="130.23"
+            value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)}
+            style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}
+          />
+        </div>
+        <div>
+          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Sell Price (KSh/USDT)</label>
+          <input
+            type="number" step="0.01" placeholder="130.74"
+            value={sellPrice} onChange={(e) => setSellPrice(e.target.value)}
+            style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}
+          />
+        </div>
+        <div>
+          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Volume (KES)</label>
+          <input
+            type="number" step="1000" placeholder="500000"
+            value={volume} onChange={(e) => setVolume(e.target.value)}
+            style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}
+          />
+        </div>
+      </div>
+
+      {buy > 0 && sell > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 8 }}>
+          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: '#9ca3af' }}>Spread</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: profitable ? '#10b981' : '#ef4444' }}>
+              KSh {spread.toFixed(2)}
+            </div>
+            <div style={{ fontSize: 11, color: '#6b7280' }}>{spreadPct.toFixed(2)}% per USDT</div>
+          </div>
+          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: '#9ca3af' }}>USDT Traded</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#f59e0b' }}>
+              {usdtAmount.toFixed(2)}
+            </div>
+            <div style={{ fontSize: 11, color: '#6b7280' }}>at KSh {buy}</div>
+          </div>
+          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: '#9ca3af' }}>Profit per Trade</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: profitable ? '#10b981' : '#ef4444' }}>
+              KSh {profit.toFixed(0)}
+            </div>
+            <div style={{ fontSize: 11, color: '#6b7280' }}>{profitable ? 'profit' : 'loss'}</div>
+          </div>
+          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: '#9ca3af' }}>Daily (5 trades)</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: profitable ? '#10b981' : '#ef4444' }}>
+              KSh {(profit * 5).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+            <div style={{ fontSize: 11, color: '#6b7280' }}>
+              Monthly: KSh {(profit * 5 * 30).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!profitable && buy > 0 && sell > 0 && (
+        <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 8, fontSize: 12, color: '#ef4444' }}>
+          Negative spread — you would lose money. Sell price must be higher than buy price.
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const { user, logout } = useAuth();
@@ -469,6 +584,9 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
+
+            {/* Spread Calculator */}
+            <SpreadCalculator />
 
             {/* Row 4: Recent Orders */}
             <div className="card orders-card">

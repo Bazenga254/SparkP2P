@@ -580,12 +580,71 @@ async function pollCycle() {
     // Heartbeat every poll (60s) — keeps "Binance Connected" status alive
     fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
 
+    // Read market prices from P2P page for spread calculator
+    if (stats.polls % 3 === 0) {
+      try {
+        await readMarketPrices();
+      } catch (e) {}
+    }
+
     // AI scan disabled during polling — runs only once on login (initialScan)
     // to avoid navigating away from the P2P page and breaking order reading
 
   } catch (e) {
     stats.errors++;
     console.error('[SparkP2P] Poll error:', e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// MARKET PRICES — Read buy/sell prices from P2P page
+// ═══════════════════════════════════════════════════════════
+
+async function readMarketPrices() {
+  const page = await getPage();
+  if (!page || !token) return;
+
+  try {
+    const prices = await page.evaluate(() => {
+      const text = document.body.innerText;
+      // Find all KSh prices on the page
+      const priceMatches = text.match(/KSh\s*([\d,]+\.?\d*)/gi) || [];
+      const allPrices = priceMatches.map(m => parseFloat(m.replace(/KSh\s*/i, '').replace(/,/g, ''))).filter(p => p > 50 && p < 500);
+
+      // The P2P page shows "Buy" tab prices (sellers' ads) or "Sell" tab prices (buyers' ads)
+      // Try to detect which tab we're on
+      const buyTabActive = !!document.querySelector('[class*="active"][class*="buy"], [aria-selected="true"]:has(> *:contains("Buy"))');
+
+      return { prices: allPrices, buyTabActive };
+    });
+
+    if (prices.prices.length === 0) return;
+
+    // Sort prices - lowest first
+    const sorted = [...new Set(prices.prices)].sort((a, b) => a - b);
+    const bestBuyPrice = sorted[0]; // Lowest sell ad = best price to buy at
+    const bestSellPrice = sorted[sorted.length - 1]; // Highest buy ad = best price to sell at
+
+    // Send to VPS
+    await fetch(`${API_BASE}/ext/market-prices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        buy_prices: sorted.slice(0, 5),
+        sell_prices: sorted.slice(-5).reverse(),
+        best_buy: bestBuyPrice,
+        best_sell: bestSellPrice,
+        spread: bestSellPrice - bestBuyPrice,
+        total_ads_scanned: sorted.length,
+        timestamp: new Date().toISOString(),
+      }),
+    }).catch(() => {});
+
+    if (stats.polls <= 5) {
+      console.log(`[SparkP2P] Market prices: buy=${bestBuyPrice}, sell=${bestSellPrice}, spread=${(bestSellPrice - bestBuyPrice).toFixed(2)}, ${sorted.length} prices found`);
+    }
+  } catch (e) {
+    // Page not ready or navigating
   }
 }
 
