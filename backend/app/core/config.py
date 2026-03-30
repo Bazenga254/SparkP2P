@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     MPESA_ENV: str = "sandbox"  # sandbox or production
     MPESA_CALLBACK_BASE_URL: str = "https://yourdomain.com"
 
+    # I&M Bank Payment Gateway
+    IM_BANK_API_URL: str = ""  # e.g., https://api.imbank.com/KEPaymentGatewayService/1.0
+    IM_BANK_TOKEN_URL: str = ""  # e.g., https://api.imbank.com/KEOAuthTokenService/1.0/GetToken
+    IM_BANK_CHANNEL_ID: str = ""
+    IM_BANK_CLIENT_ID: str = ""
+    IM_BANK_CLIENT_SECRET: str = ""
+    IM_BANK_SENDER_ACCOUNT: str = ""  # SparkP2P's I&M Bank account number
+    IM_BANK_SENDER_NAME: str = "SparkP2P"
+    IM_BANK_RSA_PUBLIC_KEY: str = ""  # Base64 RSA 2048 public key from I&M
+
     # Binance
     BINANCE_DEFAULT_USER_AGENT: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
