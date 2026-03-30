@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
 import { useNavigate } from 'react-router-dom';
-import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell } from 'lucide-react';
+import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 
 function SpreadCalculator() {
@@ -135,6 +135,8 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [showPaybill, setShowPaybill] = useState(false);
+  const [copied, setCopied] = useState('');
   const [binanceData, setBinanceData] = useState(null);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [depositAmount, setDepositAmount] = useState('');
@@ -460,6 +462,61 @@ export default function Dashboard() {
             Connect Binance
           </button>
         )}
+        <div style={{ position: 'relative', marginLeft: 'auto' }}>
+          <button
+            className="tab-btn"
+            style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#10b981', fontWeight: 600, fontSize: 13 }}
+            onClick={() => setShowPaybill(!showPaybill)}
+          >
+            <CreditCard size={14} /> My Paybill
+          </button>
+          {showPaybill && (
+            <div style={{ position: 'absolute', top: 40, right: 0, width: 340, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.4)', zIndex: 100, padding: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Add to Binance Payment Method</div>
+              <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 12 }}>
+                Copy these details and add them as your M-Pesa Paybill payment method on Binance P2P.
+              </div>
+
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Account Name</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13 }}>{profile?.full_name || 'Loading...'}</span>
+                  <button onClick={() => { navigator.clipboard.writeText(profile?.full_name || ''); setCopied('name'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'name' ? '#10b981' : '#9ca3af', padding: 2 }}>
+                    <Copy size={14} />
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Account Number</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, fontFamily: 'monospace' }}>P2P-T{String(profile?.id || 0).padStart(4, '0')}</span>
+                  <button onClick={() => { navigator.clipboard.writeText(`P2P-T${String(profile?.id || 0).padStart(4, '0')}`); setCopied('account'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'account' ? '#10b981' : '#9ca3af', padding: 2 }}>
+                    <Copy size={14} />
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Paybill Number</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, fontFamily: 'monospace' }}>4041355</span>
+                  <button onClick={() => { navigator.clipboard.writeText('4041355'); setCopied('paybill'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'paybill' ? '#10b981' : '#9ca3af', padding: 2 }}>
+                    <Copy size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {copied && (
+                <div style={{ fontSize: 12, color: '#10b981', textAlign: 'center', marginBottom: 8 }}>Copied!</div>
+              )}
+
+              <div style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.5, padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+                On Binance: Go to P2P → Post Ad → Payment Method → M-Pesa Paybill → paste these details. The account name must match your Binance KYC exactly.
+              </div>
+            </div>
+          )}
+        </div>
       </nav>
 
       <main className="dash-content">

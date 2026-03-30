@@ -37,19 +37,20 @@ router = APIRouter()
 # ── Schemas ──────────────────────────────────────────────────────
 
 class BinanceOrderData(BaseModel):
-    orderNumber: str
+    orderNumber: str = ""
     advNo: Optional[str] = None
-    tradeType: str  # "SELL" or "BUY"
-    totalPrice: float  # fiat amount
-    amount: float  # crypto amount
-    price: float  # exchange rate
+    tradeType: str = "SELL"
+    totalPrice: float = 0
+    amount: float = 0
+    price: float = 0
     asset: str = "USDT"
     buyerNickname: Optional[str] = None
     sellerNickname: Optional[str] = None
     orderStatus: Optional[int] = None  # 1=pending, 2=buyer paid, 3=releasing
-    sellerPaymentMethod: Optional[str] = None  # mpesa, bank
-    sellerPaymentPhone: Optional[str] = None  # seller's M-Pesa number
-    sellerPaymentAccount: Optional[str] = None  # seller's account number
+    sellerPaymentMethod: Optional[str] = None
+    sellerPaymentPhone: Optional[str] = None
+    sellerPaymentAccount: Optional[str] = None
+    counterparty: Optional[str] = None
 
 
 class ReportOrdersRequest(BaseModel):
@@ -409,10 +410,10 @@ async def _process_reported_sell_order(
     """
     order_number = order_data.orderNumber
 
-    # Enforce sell order minimum: KES 1,000
-    if order_data.totalPrice < 1000:
+    # Enforce sell order minimum: KES 100 (lowered — GPT-4o sometimes misreads amounts)
+    if order_data.totalPrice < 100:
         logger.warning(
-            f"Sell order {order_number} below minimum (KES {order_data.totalPrice:,.0f} < KES 1,000). Skipping."
+            f"Sell order {order_number} below minimum (KES {order_data.totalPrice:,.0f} < KES 100). Skipping."
         )
         return None
 

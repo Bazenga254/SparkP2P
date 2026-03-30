@@ -18,7 +18,7 @@ console.error = (...a) => { fs.appendFileSync(logFile, `[${new Date().toISOStrin
 const API_BASE = 'https://sparkp2p.com/api';
 const DASHBOARD_URL = 'https://sparkp2p.com/dashboard';
 const CDP_PORT = 9222;
-const POLL_INTERVAL = 60000; // 60 seconds
+const POLL_INTERVAL = 120000; // 2 minutes
 
 let mainWindow = null;
 let tray = null;
@@ -433,42 +433,104 @@ async function navigateTo(url) {
   }
 }
 
-async function readOrders() {
-  // Read orders from current page — DON'T navigate (avoids refreshing)
-  const page = await getPage();
-  if (!page) return { sell: [], buy: [] };
+let _ordersTabOpen = false;
 
+async function readOrders() {
+  // Open a SECOND TAB to check orders — don't touch the main tab
+  if (!browser || _ordersTabOpen) return { sell: [], buy: [] };
+
+  _ordersTabOpen = true;
+  let ordersTab = null;
   try {
+    ordersTab = await browser.newPage();
+    await ordersTab.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 3000));
+    const page = ordersTab;
+
+    // Use GPT-4o to read the orders page if AI is available
+    if (aiApiKey) {
+      const screenshot = await page.screenshot({ type: 'jpeg', quality: 80 });
+      const aiResult = await aiScanner.analyzeScreenshot(screenshot, `
+        Look at this Binance P2P orders page. Extract ALL pending/active orders:
+        {
+          "orders": [{
+            "order_number": "string (long number like 12871954638757629952)",
+            "type": "SELL" or "BUY",
+            "amount_fiat": number (KES amount),
+            "amount_crypto": number (USDT amount),
+            "status": "Pending Payment" or "Paid" or "Appeal" or "Completed",
+            "counterparty": "string (username)"
+          }],
+          "has_orders": true/false
+        }
+        If the page shows "No records" or is empty, return {"orders":[],"has_orders":false}.
+      `);
+
+      if (aiResult?.orders?.length > 0) {
+        const sell = [], buy = [];
+        for (const o of aiResult.orders) {
+          const order = {
+            orderNumber: o.order_number || '',
+            tradeType: (o.type || '').toUpperCase() === 'BUY' ? 'BUY' : 'SELL',
+            totalPrice: o.amount_fiat || 0,
+            amount: o.amount_crypto || 0,
+            asset: 'USDT',
+            status: o.status || 'PENDING',
+            counterparty: o.counterparty || '',
+          };
+          if (order.orderNumber) {
+            if (order.tradeType === 'SELL') sell.push(order);
+            else buy.push(order);
+          }
+        }
+
+        // Close orders tab
+        if (ordersTab) await ordersTab.close().catch(() => {});
+
+        return { sell, buy };
+      }
+    }
+
+    // Fallback: DOM reading
     const orders = await page.evaluate(() => {
       const results = { sell: [], buy: [] };
-      // Look for order cards/rows on the page
-      const orderElements = document.querySelectorAll('[class*="order-item"], [class*="OrderItem"], tr[class*="order"], [data-testid*="order"]');
+      const text = document.body.innerText;
 
-      orderElements.forEach(el => {
-        const text = el.textContent || '';
+      // Check for "No records"
+      if (text.includes('No records') || text.includes('No data')) return results;
+
+      // Try to find order numbers and details
+      const orderNumbers = text.match(/\d{18,}/g) || [];
+      const kesAmounts = text.match(/[\d,]+\.?\d*\s*KES/gi) || [];
+      const usdtAmounts = text.match(/[\d.]+\s*USDT/gi) || [];
+
+      for (let i = 0; i < orderNumbers.length; i++) {
         const order = {
-          orderNumber: (text.match(/(\d{18,})/)?.[1] || ''),
+          orderNumber: orderNumbers[i],
           tradeType: text.toLowerCase().includes('sell') ? 'SELL' : 'BUY',
-          totalPrice: parseFloat((text.match(/KES\s*([\d,]+\.?\d*)/i)?.[1] || '0').replace(/,/g, '')),
-          amount: parseFloat(text.match(/([\d.]+)\s*USDT/)?.[1] || '0'),
+          totalPrice: kesAmounts[i] ? parseFloat(kesAmounts[i].replace(/[,KES\s]/gi, '')) : 0,
+          amount: usdtAmounts[i] ? parseFloat(usdtAmounts[i].replace(/[USDT\s]/gi, '')) : 0,
           asset: 'USDT',
-          status: text.toLowerCase().includes('release') ? 'PENDING_RELEASE' :
-                  text.toLowerCase().includes('paid') ? 'PAID' :
-                  text.toLowerCase().includes('pending') ? 'PENDING' : 'ACTIVE',
+          status: 'PENDING',
         };
-        if (order.orderNumber) {
-          if (order.tradeType === 'SELL') results.sell.push(order);
-          else results.buy.push(order);
-        }
-      });
+        if (order.tradeType === 'SELL') results.sell.push(order);
+        else results.buy.push(order);
+      }
 
       return results;
     });
 
+    // Navigate back to P2P trade page
+    await page.goto('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+
     return orders;
   } catch (e) {
     console.error('[SparkP2P] Read orders error:', e.message?.substring(0, 60));
+    if (ordersTab) await ordersTab.close().catch(() => {});
+    _ordersTabOpen = false;
     return { sell: [], buy: [] };
+  } finally {
+    _ordersTabOpen = false;
   }
 }
 
@@ -572,6 +634,16 @@ async function pollCycle() {
     if (res.ok) {
       const { actions } = await res.json();
       for (const a of (actions || [])) await execAction(a);
+    }
+
+    // AUTO-RELEASE: If any sell order has status "Paid" or "Payment Received",
+    // release immediately — don't wait for C2B callback (Safaricom is unreliable)
+    for (const order of orders.sell) {
+      const st = (order.status || '').toLowerCase();
+      if (st === 'paid' || st === 'payment received' || st.includes('paid')) {
+        console.log(`[SparkP2P] PAID order detected: ${order.orderNumber} — auto-releasing!`);
+        await execAction({ action: 'release', order_number: order.orderNumber, message: null });
+      }
     }
 
     stats.polls++;
@@ -1028,11 +1100,20 @@ async function reportAccountData() {
 }
 
 function norm(o) {
+  // Map status strings to Binance status codes
+  const statusMap = { 'pending': 1, 'pending payment': 1, 'paid': 2, 'appeal': 3, 'completed': 4 };
+  const statusCode = typeof o.status === 'number' ? o.status :
+    statusMap[(o.status || '').toLowerCase()] || 1;
+
   return {
-    orderNumber: o.orderNumber || '', tradeType: o.tradeType || '',
-    totalPrice: o.totalPrice || 0, amount: o.amount || 0,
-    price: o.totalPrice && o.amount ? o.totalPrice / o.amount : 0,
-    asset: o.asset || 'USDT', orderStatus: o.status || null,
+    orderNumber: o.orderNumber || '',
+    tradeType: o.tradeType || 'SELL',
+    totalPrice: o.totalPrice || 0,
+    amount: o.amount || 0,
+    price: o.totalPrice && o.amount ? o.totalPrice / o.amount : 130,
+    asset: o.asset || 'USDT',
+    orderStatus: statusCode,
+    buyerNickname: o.counterparty || null,
   };
 }
 
