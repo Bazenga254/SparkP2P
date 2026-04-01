@@ -72,7 +72,7 @@ class MpesaClient:
             "ValidationURL": f"{self.callback_base}/api/payment/c2b/validate",
         }
         result = await self._make_request(
-            "/mpesa/c2b/v1/registerurl", payload
+            "/mpesa/c2b/v2/registerurl", payload
         )
         logger.info(f"C2B URLs registered: {result}")
         return result
@@ -93,7 +93,7 @@ class MpesaClient:
             "Msisdn": phone,
             "BillRefNumber": account_reference,
         }
-        result = await self._make_request("/mpesa/c2b/v1/simulate", payload)
+        result = await self._make_request("/mpesa/c2b/v2/simulate", payload)
         logger.info(f"C2B Simulation: {result}")
         return result
 
