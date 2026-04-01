@@ -600,6 +600,112 @@ async def update_trading_config(
     return {"status": "updated"}
 
 
+# ── Profile, Security Question, Change Password ───────────────────
+
+_change_pw_otp_codes: dict[str, str] = {}  # email -> OTP for in-app password change
+
+
+class UpdateProfileRequest(BaseModel):
+    full_name: Optional[str] = None
+
+
+class SetSecurityQuestionRequest(BaseModel):
+    security_question: str
+    security_answer: str
+
+
+class ChangePasswordRequest(BaseModel):
+    otp_code: str
+    new_password: str
+
+
+@router.put("/profile")
+async def update_profile(
+    data: UpdateProfileRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update editable profile fields (full_name)."""
+    if data.full_name is not None:
+        name = data.full_name.strip().upper()
+        if len(name) < 3:
+            raise HTTPException(status_code=400, detail="Full name must be at least 3 characters")
+        trader.full_name = name
+    await db.commit()
+    return {"message": "Profile updated", "full_name": trader.full_name}
+
+
+@router.post("/security-question")
+async def set_security_question(
+    data: SetSecurityQuestionRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set security question — only allowed if not already set (permanent)."""
+    if trader.security_question:
+        raise HTTPException(
+            status_code=400,
+            detail="Security question is already set and cannot be changed",
+        )
+    from app.core.security import hash_password
+    trader.security_question = data.security_question.strip()
+    trader.security_answer_hash = hash_password(data.security_answer.strip().lower())
+    await db.commit()
+    return {"message": "Security question saved successfully"}
+
+
+@router.post("/change-password/request")
+async def request_change_password_otp(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Send OTP to trader's phone to authorize a password change."""
+    import random
+    otp_code = str(random.randint(100000, 999999))
+    _change_pw_otp_codes[trader.email] = otp_code
+    try:
+        from app.services.sms import sms_verification_code
+        sms_verification_code(trader.phone, otp_code)
+    except Exception as e:
+        logger.warning(f"Change-password OTP SMS failed for {trader.email}: {e}")
+    masked = f"***{trader.phone[-4:]}"
+    return {"message": f"OTP sent to {masked}", "phone_hint": masked}
+
+
+@router.post("/change-password")
+async def change_password(
+    data: ChangePasswordRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verify OTP and update password (must differ from current)."""
+    import re
+    stored = _change_pw_otp_codes.get(trader.email)
+    if not stored or stored != data.otp_code:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP code")
+
+    # Validate password strength
+    from app.core.security import hash_password, verify_password
+    pw = data.new_password
+    errors = []
+    if len(pw) < 8: errors.append("at least 8 characters")
+    if len(re.findall(r"[A-Z]", pw)) < 2: errors.append("2 uppercase letters")
+    if len(re.findall(r"[a-z]", pw)) < 2: errors.append("2 lowercase letters")
+    if len(re.findall(r"[0-9]", pw)) < 2: errors.append("2 numbers")
+    if len(re.findall(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>/?]", pw)) < 2: errors.append("2 special characters")
+    if errors:
+        raise HTTPException(status_code=400, detail=f"Password must contain: {', '.join(errors)}")
+
+    if verify_password(data.new_password, trader.password_hash):
+        raise HTTPException(status_code=400, detail="New password must be different from your current password")
+
+    trader.password_hash = hash_password(data.new_password)
+    trader.failed_login_attempts = 0
+    trader.locked_until = None
+    _change_pw_otp_codes.pop(trader.email, None)
+    await db.commit()
+    return {"message": "Password changed successfully"}
+
+
 @router.get("/session-health")
 async def get_session_health(
     trader: Trader = Depends(get_current_trader),

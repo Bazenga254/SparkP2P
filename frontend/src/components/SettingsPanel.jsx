@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { updateSettlement, updateTradingConfig } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword } from '../services/api';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
 
@@ -37,6 +37,30 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [bankAccount, setBankAccount] = useState('');
   const [customPaybill, setCustomPaybill] = useState('');
   const [paybillAccount, setPaybillAccount] = useState('');
+
+  // Security / Profile
+  const [editName, setEditName] = useState(profile?.full_name || '');
+  const [savingName, setSavingName] = useState(false);
+  // Security question (set once)
+  const [sqQuestion, setSqQuestion] = useState('');
+  const [sqAnswer, setSqAnswer] = useState('');
+  const [savingSq, setSavingSq] = useState(false);
+  // Change password
+  const [cpStep, setCpStep] = useState(0); // 0=idle, 1=otp-sent, 2=done
+  const [cpOtp, setCpOtp] = useState('');
+  const [cpNewPw, setCpNewPw] = useState('');
+  const [cpConfirm, setCpConfirm] = useState('');
+  const [cpPhoneHint, setCpPhoneHint] = useState('');
+  const [cpShowPw, setCpShowPw] = useState(false);
+  const [cpLoading, setCpLoading] = useState(false);
+
+  const PW_RULES = [
+    { label: 'At least 8 characters', test: (p) => p.length >= 8 },
+    { label: '2 uppercase letters', test: (p) => (p.match(/[A-Z]/g) || []).length >= 2 },
+    { label: '2 lowercase letters', test: (p) => (p.match(/[a-z]/g) || []).length >= 2 },
+    { label: '2 numbers', test: (p) => (p.match(/[0-9]/g) || []).length >= 2 },
+    { label: '2 special chars (!@#$%...)', test: (p) => (p.match(/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/g) || []).length >= 2 },
+  ];
 
   // Trading
   const [autoRelease, setAutoRelease] = useState(profile?.auto_release_enabled ?? true);
@@ -136,13 +160,13 @@ export default function SettingsPanel({ profile, onUpdate }) {
       {message && <div className="settings-msg">{message}</div>}
 
       <div className="settings-nav">
-        {['binance', 'settlement', 'trading'].map((s) => (
+        {[['binance', 'Binance'], ['settlement', 'Settlement'], ['trading', 'Trading'], ['security', 'Profile & Security']].map(([key, label]) => (
           <button
-            key={s}
-            className={activeSection === s ? 'active' : ''}
-            onClick={() => setActiveSection(s)}
+            key={key}
+            className={activeSection === key ? 'active' : ''}
+            onClick={() => setActiveSection(key)}
           >
-            {s.charAt(0).toUpperCase() + s.slice(1)}
+            {label}
           </button>
         ))}
       </div>
@@ -382,6 +406,228 @@ export default function SettingsPanel({ profile, onUpdate }) {
               )}
             </>
           )}
+        </div>
+      )}
+
+      {activeSection === 'security' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+          {/* ── Profile Details ─────────────────────────────── */}
+          <div className="card">
+            <h3 style={{ marginBottom: 4 }}>Profile Details</h3>
+            <p className="help-text" style={{ marginBottom: 16 }}>Update your display name as it appears on trades.</p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+              <div>
+                <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Email</label>
+                <div style={{ fontSize: 14, color: '#e5e7eb', padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                  {profile?.email || '—'}
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Phone</label>
+                <div style={{ fontSize: 14, color: '#e5e7eb', padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                  {profile?.phone ? `***${profile.phone.slice(-4)}` : '—'}
+                </div>
+              </div>
+            </div>
+
+            <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
+              Full Name <span style={{ fontSize: 11, color: '#6b7280' }}>(as on Binance KYC)</span>
+            </label>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value.toUpperCase())}
+                style={{ flex: 1, textTransform: 'uppercase' }}
+                placeholder="JOHN DOE MWANGI"
+              />
+              <button
+                onClick={async () => {
+                  if (!editName.trim() || editName.trim().length < 3) { showMsg('Name must be at least 3 characters'); return; }
+                  setSavingName(true);
+                  try {
+                    await updateProfile({ full_name: editName.trim() });
+                    showMsg('Name updated successfully');
+                    onUpdate();
+                  } catch (err) {
+                    showMsg(err.response?.data?.detail || 'Failed to update name');
+                  }
+                  setSavingName(false);
+                }}
+                disabled={savingName}
+                style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                {savingName ? 'Saving...' : 'Save Name'}
+              </button>
+            </div>
+          </div>
+
+          {/* ── Security Question ───────────────────────────── */}
+          <div className="card">
+            <h3 style={{ marginBottom: 4 }}>Security Question</h3>
+            <p className="help-text" style={{ marginBottom: 16 }}>
+              Used to verify your identity when changing payment methods. <strong style={{ color: '#ef4444' }}>Cannot be changed once set.</strong>
+            </p>
+
+            {profile?.security_question ? (
+              <div style={{ padding: 16, background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 18 }}>🔒</span>
+                  <span style={{ fontSize: 13, color: '#10b981', fontWeight: 600 }}>Security question is set</span>
+                </div>
+                <p style={{ fontSize: 13, color: '#9ca3af', margin: 0 }}>{profile.security_question}</p>
+                <p style={{ fontSize: 11, color: '#6b7280', margin: '8px 0 0' }}>Your answer is securely hashed and cannot be viewed.</p>
+              </div>
+            ) : (
+              <form onSubmit={async (e) => {
+                e.preventDefault();
+                if (!sqQuestion || !sqAnswer.trim()) { showMsg('Select a question and provide an answer'); return; }
+                setSavingSq(true);
+                try {
+                  await setSecurityQuestion({ security_question: sqQuestion, security_answer: sqAnswer.trim() });
+                  showMsg('Security question saved!');
+                  onUpdate();
+                } catch (err) {
+                  showMsg(err.response?.data?.detail || 'Failed to save security question');
+                }
+                setSavingSq(false);
+              }}>
+                <div style={{ padding: 12, borderRadius: 8, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', fontSize: 13, color: '#f59e0b', marginBottom: 16 }}>
+                  Choose carefully — this question cannot be changed after saving.
+                </div>
+                <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>Security Question</label>
+                <select value={sqQuestion} onChange={(e) => setSqQuestion(e.target.value)} required style={{ width: '100%', marginBottom: 14 }}>
+                  <option value="">Select a question</option>
+                  <option value="What is your mother's maiden name?">What is your mother's maiden name?</option>
+                  <option value="What was the name of your first pet?">What was the name of your first pet?</option>
+                  <option value="What city were you born in?">What city were you born in?</option>
+                  <option value="What is the name of your primary school?">What is the name of your primary school?</option>
+                  <option value="What was your childhood nickname?">What was your childhood nickname?</option>
+                </select>
+                <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>Your Answer</label>
+                <input
+                  type="text"
+                  placeholder="Answer (case-insensitive)"
+                  value={sqAnswer}
+                  onChange={(e) => setSqAnswer(e.target.value)}
+                  required
+                  style={{ marginBottom: 14 }}
+                />
+                <button type="submit" disabled={savingSq} style={{ padding: '12px 24px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer' }}>
+                  {savingSq ? 'Saving...' : 'Save Security Question'}
+                </button>
+              </form>
+            )}
+          </div>
+
+          {/* ── Change Password ──────────────────────────────── */}
+          <div className="card">
+            <h3 style={{ marginBottom: 4 }}>Change Password</h3>
+            <p className="help-text" style={{ marginBottom: 16 }}>
+              An OTP will be sent to your registered phone number to authorize the change.
+            </p>
+
+            {cpStep === 0 && (
+              <button
+                onClick={async () => {
+                  setCpLoading(true);
+                  try {
+                    const res = await requestChangePasswordOtp();
+                    setCpPhoneHint(res.data.phone_hint || '');
+                    setCpStep(1);
+                    showMsg(res.data.message || 'OTP sent to your phone');
+                  } catch (err) {
+                    showMsg(err.response?.data?.detail || 'Failed to send OTP');
+                  }
+                  setCpLoading(false);
+                }}
+                disabled={cpLoading}
+                style={{ padding: '12px 24px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#f59e0b', fontWeight: 600, cursor: 'pointer' }}
+              >
+                {cpLoading ? 'Sending OTP...' : 'Change Password'}
+              </button>
+            )}
+
+            {cpStep === 1 && (
+              <form onSubmit={async (e) => {
+                e.preventDefault();
+                const failed = PW_RULES.filter((r) => !r.test(cpNewPw));
+                if (failed.length > 0) { showMsg(`Password missing: ${failed.map((r) => r.label).join(', ')}`); return; }
+                if (cpNewPw !== cpConfirm) { showMsg('Passwords do not match'); return; }
+                setCpLoading(true);
+                try {
+                  await changePassword(cpOtp, cpNewPw);
+                  setCpStep(2);
+                  showMsg('Password changed successfully!');
+                  setCpOtp(''); setCpNewPw(''); setCpConfirm('');
+                } catch (err) {
+                  showMsg(err.response?.data?.detail || 'Failed to change password');
+                }
+                setCpLoading(false);
+              }}>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
+                    OTP Code <span style={{ color: '#6b7280' }}>(sent to {cpPhoneHint})</span>
+                  </label>
+                  <input type="text" placeholder="6-digit code" value={cpOtp} onChange={(e) => setCpOtp(e.target.value)} maxLength={6} autoFocus required />
+                </div>
+
+                <div style={{ marginBottom: 8 }}>
+                  <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>New Password</label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input type={cpShowPw ? 'text' : 'password'} placeholder="Create a strong password" value={cpNewPw} onChange={(e) => setCpNewPw(e.target.value)} required style={{ flex: 1 }} />
+                    <button type="button" onClick={() => setCpShowPw(!cpShowPw)} style={{ padding: '0 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      {cpShowPw ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                </div>
+
+                {cpNewPw && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginBottom: 12, padding: '10px 12px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                    {PW_RULES.map((rule, i) => (
+                      <span key={i} style={{ fontSize: 11, color: rule.test(cpNewPw) ? '#10b981' : '#6b7280' }}>
+                        {rule.test(cpNewPw) ? '✓' : '✗'} {rule.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>Confirm New Password</label>
+                  <input type="password" placeholder="Re-enter new password" value={cpConfirm} onChange={(e) => setCpConfirm(e.target.value)} required />
+                  {cpConfirm && cpNewPw !== cpConfirm && (
+                    <span style={{ fontSize: 12, color: '#ef4444', marginTop: 4, display: 'block' }}>Passwords do not match</span>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button type="submit" disabled={cpLoading || !cpOtp || !cpNewPw || cpNewPw !== cpConfirm} style={{ padding: '12px 24px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer' }}>
+                    {cpLoading ? 'Saving...' : 'Set New Password'}
+                  </button>
+                  <button type="button" onClick={() => { setCpStep(0); setCpOtp(''); setCpNewPw(''); setCpConfirm(''); }}
+                    style={{ padding: '12px 24px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', cursor: 'pointer' }}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {cpStep === 2 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 16, background: 'rgba(16,185,129,0.08)', borderRadius: 10, border: '1px solid #10b981' }}>
+                <span style={{ fontSize: 24 }}>✅</span>
+                <div>
+                  <div style={{ fontWeight: 600, color: '#10b981', fontSize: 14 }}>Password changed successfully</div>
+                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>Your new password is active.</div>
+                </div>
+                <button onClick={() => setCpStep(0)} style={{ marginLeft: 'auto', padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 12 }}>
+                  Change Again
+                </button>
+              </div>
+            )}
+          </div>
+
         </div>
       )}
 
