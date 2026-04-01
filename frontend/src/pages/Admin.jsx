@@ -879,7 +879,7 @@ export default function Admin() {
                   <>
                     {/* Hero card */}
                     <div className="adm-card" style={{ marginBottom: 16 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', padding: '20px 24px' }}>
                         {/* Avatar */}
                         <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg, #f59e0b, #ef4444)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
                           {initials}
@@ -930,7 +930,7 @@ export default function Admin() {
                       {/* Trader info grid */}
                       <div className="adm-card" style={{ flex: '1 1 0' }}>
                         <div className="adm-card-header"><h3>Account Info</h3></div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px', fontSize: 13, padding: '4px 0' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 24px', fontSize: 13, padding: '16px 20px 20px' }}>
                           {[
                             ['Email', t.email],
                             ['Phone', t.phone],
@@ -960,6 +960,7 @@ export default function Admin() {
                       {/* Wallet stats */}
                       <div className="adm-card" style={{ flex: '1 1 0' }}>
                         <div className="adm-card-header"><h3>Wallet</h3></div>
+                        <div style={{ padding: '16px 20px 0' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                           {[
                             ['Balance', w?.balance, '#10b981'],
@@ -967,15 +968,16 @@ export default function Admin() {
                             ['Total Earned', w?.total_earned, '#3b82f6'],
                             ['Withdrawn', w?.total_withdrawn, '#8b5cf6'],
                           ].map(([label, val, color]) => (
-                            <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{label}</div>
-                              <div style={{ fontSize: 16, fontWeight: 700, color: color || '#fff' }}>{w ? fmtKES(val ?? 0) : '—'}</div>
+                            <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
+                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{label}</div>
+                              <div style={{ fontSize: 18, fontWeight: 700, color: color || '#fff' }}>{w ? fmtKES(val ?? 0) : '—'}</div>
                             </div>
                           ))}
                         </div>
+                        </div>
 
                         {/* Reset Password */}
-                        <div style={{ marginTop: 16 }}>
+                        <div style={{ margin: '16px 20px 20px' }}>
                           <button
                             style={{ width: '100%', padding: '10px', borderRadius: 8, border: '1px solid #ef4444', background: 'rgba(239,68,68,0.1)', color: '#ef4444', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
                             disabled={resetPwLoading}
@@ -1000,7 +1002,8 @@ export default function Admin() {
                       <div className="adm-card-header">
                         <h3 style={{ color: '#f59e0b' }}>Resolve Unmatched Payment</h3>
                       </div>
-                      <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
+                      <div style={{ padding: '4px 20px 20px' }}>
+                      <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 14 }}>
                         Enter the M-Pesa reference and amount to verify with Safaricom and credit this trader's wallet.
                       </p>
                       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
@@ -1060,14 +1063,15 @@ export default function Admin() {
                         </button>
                       </div>
                       {resolveMsg.text && (
-                        <div style={{ fontSize: 13, padding: '8px 12px', borderRadius: 8,
+                        <div style={{ fontSize: 13, padding: '8px 12px', borderRadius: 8, marginTop: 4,
                           color: resolveMsg.type === 'success' ? '#10b981' : resolveMsg.type === 'error' ? '#ef4444' : '#f59e0b',
                           background: resolveMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : resolveMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)',
                         }}>
                           {resolveMsg.text}
                         </div>
                       )}
-                    </div>
+                      </div>{/* end padding wrapper */}
+                    </div>{/* end resolve card */}
 
                     {/* Recent Transactions */}
                     <div className="adm-card" style={{ marginBottom: 16 }}>
