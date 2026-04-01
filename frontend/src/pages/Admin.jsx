@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy } from 'lucide-react';
@@ -64,7 +64,10 @@ export default function Admin() {
   const [analytics, setAnalytics] = useState(null);
   const [onlineTraders, setOnlineTraders] = useState([]);
   const [transactions, setTransactions] = useState({ total: 0, transactions: [] });
+  const [orders, setOrders] = useState({ total: 0, orders: [] });
   const [txPeriod, setTxPeriod] = useState('today');
+  const [txType, setTxType] = useState('fiat'); // 'fiat' | 'crypto'
+  const [ordersSearch, setOrdersSearch] = useState('');
   const [activeTab, setActiveTab] = useState('dashboard');
   const [refreshing, setRefreshing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -190,9 +193,19 @@ export default function Admin() {
     }
   };
 
+  const loadOrders = async (period, search) => {
+    try {
+      const res = await getAdminOrders(period, 50, search);
+      setOrders(res.data);
+    } catch (err) {
+      console.error('Orders load error:', err);
+    }
+  };
+
   useEffect(() => {
     loadData();
     loadTransactions(txPeriod);
+    loadOrders(txPeriod);
     loadTemplates();
     const interval = setInterval(loadData, 30000);
 
@@ -211,6 +224,7 @@ export default function Admin() {
 
   useEffect(() => {
     loadTransactions(txPeriod);
+    loadOrders(txPeriod);
   }, [txPeriod]);
 
   const handleStatusChange = async (traderId, newStatus) => {
@@ -678,110 +692,147 @@ export default function Admin() {
           {activeTab === 'transactions' && (
             <div className="adm-card">
               <div className="adm-card-header">
-                <h3>All Transactions</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <h3>All Transactions</h3>
+                  {/* Type toggle */}
+                  <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
+                    {[['fiat', 'Fiat (M-Pesa)'], ['crypto', 'Crypto (Binance)']].map(([key, label]) => (
+                      <button key={key}
+                        onClick={() => setTxType(key)}
+                        style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                          background: txType === key ? '#f59e0b' : 'transparent',
+                          color: txType === key ? '#000' : '#9ca3af',
+                        }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* Period filter */}
                 <div className="adm-period-filter">
                   {['today', 'week', 'month', 'year', 'all'].map((p) => (
-                    <button
-                      key={p}
-                      className={`adm-period-btn ${txPeriod === p ? 'active' : ''}`}
-                      onClick={() => setTxPeriod(p)}
-                    >
+                    <button key={p} className={`adm-period-btn ${txPeriod === p ? 'active' : ''}`}
+                      onClick={() => setTxPeriod(p)}>
                       {p.charAt(0).toUpperCase() + p.slice(1)}
                     </button>
                   ))}
                 </div>
               </div>
-              {/* Search bar */}
-              <div style={{ padding: '12px 0', display: 'flex', gap: 8 }}>
-                <input
-                  type="text"
-                  placeholder="Search by M-Pesa code, phone, name..."
-                  value={txnSearch}
-                  onChange={(e) => setTxnSearch(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && loadTransactions(txPeriod, txnSearch)}
-                  style={{
-                    flex: 1, padding: '10px 14px', borderRadius: 8,
-                    border: '1px solid var(--border)', background: 'var(--bg)',
-                    color: '#fff', fontSize: 13,
-                  }}
-                />
-                <button
-                  onClick={() => loadTransactions(txPeriod, txnSearch)}
-                  style={{
-                    padding: '10px 20px', borderRadius: 8, border: 'none',
-                    background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer',
-                  }}
-                >
-                  Search
-                </button>
-                {txnSearch && (
-                  <button
-                    onClick={() => { setTxnSearch(''); loadTransactions(txPeriod, ''); }}
-                    style={{
-                      padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)',
-                      background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer',
-                    }}
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-              <div className="adm-table-wrap">
-                <table className="adm-table">
-                  <thead>
-                    <tr>
-                      <th>ID</th>
-                      <th>Direction</th>
-                      <th>Type</th>
-                      <th>Amount</th>
-                      <th>Trader</th>
-                      <th>Recipient/Sender</th>
-                      <th>Phone</th>
-                      <th>M-Pesa Code</th>
-                      <th>Reference</th>
-                      <th>Status</th>
-                      <th>Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {transactions.transactions.map((tx) => (
-                      <tr key={tx.id}>
-                        <td className="mono">{tx.id}</td>
-                        <td>
-                          <span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>
-                            {tx.direction === 'inbound' ? 'IN' : 'OUT'}
-                          </span>
-                        </td>
-                        <td>{tx.transaction_type}</td>
-                        <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>
-                          {tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}
-                        </td>
-                        <td>{tx.trader_name}</td>
-                        <td>{tx.sender_name !== '-' ? tx.sender_name : tx.destination !== '-' ? tx.destination : '-'}</td>
-                        <td className="mono">{
-                          (() => {
-                            const p = tx.phone !== '-' ? tx.phone : tx.trader_phone;
-                            // Safaricom hashes MSISDN in production (64-char hex) — show sender name instead
-                            if (p && p.length > 20) return tx.sender_name !== '-' ? tx.sender_name : 'Hidden';
-                            return p || '-';
-                          })()
-                        }</td>
-                        <td className="mono" style={{ color: '#f59e0b' }}>{tx.mpesa_transaction_id}</td>
-                        <td className="mono">{tx.bill_ref_number}</td>
-                        <td>
-                          <span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>
-                            {tx.status}
-                          </span>
-                        </td>
-                        <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '-'}</td>
-                      </tr>
-                    ))}
-                    {transactions.transactions.length === 0 && (
-                      <tr><td colSpan={11} className="adm-empty">No transactions found</td></tr>
+
+              {/* ---- FIAT (M-Pesa Payments) ---- */}
+              {txType === 'fiat' && (
+                <>
+                  <div style={{ padding: '12px 0', display: 'flex', gap: 8 }}>
+                    <input type="text" placeholder="Search by M-Pesa code, phone, name..."
+                      value={txnSearch} onChange={(e) => setTxnSearch(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && loadTransactions(txPeriod, txnSearch)}
+                      style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
+                    />
+                    <button onClick={() => loadTransactions(txPeriod, txnSearch)}
+                      style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                      Search
+                    </button>
+                    {txnSearch && (
+                      <button onClick={() => { setTxnSearch(''); loadTransactions(txPeriod, ''); }}
+                        style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
+                        Clear
+                      </button>
                     )}
-                  </tbody>
-                </table>
-              </div>
+                  </div>
+                  <div style={{ padding: '0 0 8px', fontSize: 12, color: '#6b7280' }}>{transactions.total} payment records</div>
+                  <div className="adm-table-wrap">
+                    <table className="adm-table">
+                      <thead>
+                        <tr>
+                          <th>ID</th><th>Direction</th><th>Type</th><th>Amount</th>
+                          <th>Trader</th><th>Recipient/Sender</th><th>Phone</th>
+                          <th>M-Pesa Code</th><th>Reference</th><th>Status</th><th>Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {transactions.transactions.map((tx) => (
+                          <tr key={tx.id}>
+                            <td className="mono">{tx.id}</td>
+                            <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
+                            <td>{tx.transaction_type}</td>
+                            <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>
+                              {tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}
+                            </td>
+                            <td>{tx.trader_name}</td>
+                            <td>{tx.sender_name !== '-' ? tx.sender_name : tx.destination !== '-' ? tx.destination : '-'}</td>
+                            <td className="mono">{(() => {
+                              const p = tx.phone !== '-' ? tx.phone : tx.trader_phone;
+                              if (p && p.length > 20) return tx.sender_name !== '-' ? tx.sender_name : 'Hidden';
+                              return p || '-';
+                            })()}</td>
+                            <td className="mono" style={{ color: '#f59e0b' }}>{tx.mpesa_transaction_id}</td>
+                            <td className="mono">{tx.bill_ref_number}</td>
+                            <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
+                            <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '-'}</td>
+                          </tr>
+                        ))}
+                        {transactions.transactions.length === 0 && (
+                          <tr><td colSpan={11} className="adm-empty">No fiat transactions found</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+
+              {/* ---- CRYPTO (Binance Orders) ---- */}
+              {txType === 'crypto' && (
+                <>
+                  <div style={{ padding: '12px 0', display: 'flex', gap: 8 }}>
+                    <input type="text" placeholder="Search by order #, trader, counterparty..."
+                      value={ordersSearch} onChange={(e) => setOrdersSearch(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && loadOrders(txPeriod, ordersSearch)}
+                      style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
+                    />
+                    <button onClick={() => loadOrders(txPeriod, ordersSearch)}
+                      style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                      Search
+                    </button>
+                    {ordersSearch && (
+                      <button onClick={() => { setOrdersSearch(''); loadOrders(txPeriod, ''); }}
+                        style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ padding: '0 0 8px', fontSize: 12, color: '#6b7280' }}>{orders.total} orders</div>
+                  <div className="adm-table-wrap">
+                    <table className="adm-table">
+                      <thead>
+                        <tr>
+                          <th>Order #</th><th>Side</th><th>Trader</th><th>Crypto</th>
+                          <th>Fiat Amount</th><th>Rate</th><th>Counterparty</th>
+                          <th>Fee</th><th>Status</th><th>Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {orders.orders.map((o) => (
+                          <tr key={o.id}>
+                            <td className="mono" style={{ fontSize: 11, color: '#f59e0b' }}>{o.binance_order_number || o.id}</td>
+                            <td><span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`}>{o.side}</span></td>
+                            <td>{o.trader_name}</td>
+                            <td style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset}</td>
+                            <td style={{ fontWeight: 600, color: '#10b981' }}>{fmtKES(o.fiat_amount)}</td>
+                            <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${o.price.toLocaleString()}/USDT` : '—'}</td>
+                            <td>{o.counterparty}</td>
+                            <td style={{ color: '#ef4444', fontSize: 12 }}>{o.platform_fee ? fmtKES(o.platform_fee) : '—'}</td>
+                            <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
+                            <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '-'}</td>
+                          </tr>
+                        ))}
+                        {orders.orders.length === 0 && (
+                          <tr><td colSpan={10} className="adm-empty">No crypto orders found</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </div>
           )}
 

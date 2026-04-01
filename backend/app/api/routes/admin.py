@@ -728,6 +728,71 @@ async def admin_transactions(
     }
 
 
+@router.get("/orders")
+async def admin_orders(
+    period: str = "today",
+    search: str = None,
+    limit: int = Query(default=50, le=200),
+    offset: int = 0,
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all Binance P2P orders with date filters and search."""
+    start = _get_period_start(period)
+
+    query = (
+        select(Order, Trader.full_name.label("trader_name"))
+        .join(Trader, Order.trader_id == Trader.id, isouter=True)
+    )
+    if start:
+        query = query.where(Order.created_at >= start)
+
+    if search and search.strip():
+        s = f"%{search.strip()}%"
+        query = query.where(
+            (Order.binance_order_number.ilike(s)) |
+            (Order.counterparty_name.ilike(s)) |
+            (Trader.full_name.ilike(s))
+        )
+
+    query = query.order_by(Order.created_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(query)
+    rows = result.all()
+
+    count_query = select(func.count(Order.id))
+    if start:
+        count_query = count_query.where(Order.created_at >= start)
+    if search and search.strip():
+        s = f"%{search.strip()}%"
+        count_query = count_query.join(Trader, Order.trader_id == Trader.id, isouter=True).where(
+            (Order.binance_order_number.ilike(s)) |
+            (Order.counterparty_name.ilike(s)) |
+            (Trader.full_name.ilike(s))
+        )
+    total = (await db.execute(count_query)).scalar()
+
+    return {
+        "total": total,
+        "orders": [
+            {
+                "id": o.id,
+                "trader_name": trader_name or "Unknown",
+                "binance_order_number": o.binance_order_number or "",
+                "side": o.side.value if hasattr(o.side, 'value') else str(o.side),
+                "status": o.status.value if hasattr(o.status, 'value') else str(o.status),
+                "fiat_amount": o.fiat_amount,
+                "crypto_amount": o.crypto_amount,
+                "asset": o.crypto_currency or "USDT",
+                "price": o.exchange_rate,
+                "counterparty": o.counterparty_name or "—",
+                "platform_fee": o.platform_fee or 0,
+                "created_at": o.created_at.isoformat() if o.created_at else "",
+            }
+            for o, trader_name in rows
+        ],
+    }
+
+
 @router.get("/analytics")
 async def admin_analytics(
     admin: Trader = Depends(get_admin_trader),
