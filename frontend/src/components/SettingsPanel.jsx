@@ -33,7 +33,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [otpSent, setOtpSent] = useState(false);
   const [settlementOtp, setSettlementOtp] = useState('');
   const [securityAnswer, setSecurityAnswer] = useState('');
-  const [securityQuestion, setSecurityQuestion] = useState('');
+  const [settleSQ, setSettleSQ] = useState('');
   const [bankAccount, setBankAccount] = useState('');
   const [customPaybill, setCustomPaybill] = useState('');
   const [paybillAccount, setPaybillAccount] = useState('');
@@ -127,7 +127,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
     try {
       const res = await requestSettlementOTP();
       setOtpSent(true);
-      setSecurityQuestion(res.data.security_question || '');
+      setSettleSQ(res.data.security_question || '');
       showMsg(res.data.message || 'OTP sent');
     } catch (err) {
       showMsg(err.response?.data?.detail || 'Failed to send OTP');
@@ -416,7 +416,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
                         Security Question
                       </label>
                       <p style={{ fontSize: 13, color: '#9ca3af', margin: '0 0 6px', fontStyle: 'italic' }}>
-                        {securityQuestion || profile?.security_question || 'Not set'}
+                        {settleSQ || profile?.security_question || 'Not set'}
                       </p>
                       <input type="text" placeholder="Your security answer" value={securityAnswer}
                         onChange={(e) => setSecurityAnswer(e.target.value)} required
