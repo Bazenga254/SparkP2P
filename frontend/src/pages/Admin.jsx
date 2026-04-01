@@ -373,6 +373,16 @@ export default function Admin() {
 
               {/* Row 3: 4 more stat cards */}
               <div className="adm-stat-grid" style={{ marginTop: 16 }}>
+                <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4' }}>
+                  <div className="adm-stat-info">
+                    <span className="adm-stat-label">Platform Float</span>
+                    <span className="adm-stat-value">{fmtKES(dashboard.platform.total_float)}</span>
+                    <span style={{ fontSize: 10, color: '#6b7280' }}>Total trader wallet balances</span>
+                  </div>
+                  <div className="adm-stat-icon" style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4' }}>
+                    <Banknote size={22} />
+                  </div>
+                </div>
                 <div className="adm-stat-card" style={{ '--card-accent': '#8b5cf6' }}>
                   <div className="adm-stat-info">
                     <span className="adm-stat-label">Today's Orders</span>
