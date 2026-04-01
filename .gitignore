@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 backend/venv/
 backend/.env
+backend/.env.local
 
 # Node
 frontend/node_modules/

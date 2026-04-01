@@ -1,3 +1,4 @@
+import os
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -77,7 +78,7 @@ class Settings(BaseSettings):
         return "https://sandbox.safaricom.co.ke"
 
     class Config:
-        env_file = ".env"
+        env_file = os.environ.get("ENV_FILE", ".env")
         case_sensitive = True
 
 
