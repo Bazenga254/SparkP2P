@@ -44,13 +44,18 @@ export default function Admin() {
   const [traders, setTraders] = useState([]);
   const [selectedTrader, setSelectedTrader] = useState(null);
   const [paybillBalance, setPaybillBalance] = useState(null);
-  const [traderDetail, setTraderDetail] = useState(null);
   const [resetPwLoading, setResetPwLoading] = useState(false);
   const [resetPwMsg, setResetPwMsg] = useState('');
   const [resolveRef, setResolveRef] = useState('');
   const [resolveAmount, setResolveAmount] = useState('');
   const [resolveLoading, setResolveLoading] = useState(false);
   const [resolveMsg, setResolveMsg] = useState({ text: '', type: '' });
+  // Full-page trader detail view
+  const [viewingTrader, setViewingTrader] = useState(null);
+  const [viewingTraderWallet, setViewingTraderWallet] = useState(null);
+  const [viewingTraderTx, setViewingTraderTx] = useState([]);
+  const [viewingTraderOrders, setViewingTraderOrders] = useState([]);
+  const [viewingTraderLoading, setViewingTraderLoading] = useState(false);
   const [disputes, setDisputes] = useState([]);
   const [unmatched, setUnmatched] = useState([]);
   const [analytics, setAnalytics] = useState(null);
@@ -224,6 +229,29 @@ export default function Admin() {
     }
   };
 
+  const openTraderPage = async (trader) => {
+    setViewingTrader({ ...trader });
+    setViewingTraderWallet(null);
+    setViewingTraderTx([]);
+    setViewingTraderOrders([]);
+    setViewingTraderLoading(true);
+    setResetPwMsg('');
+    setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
+    try {
+      const [detailRes, walletRes, txRes, ordersRes] = await Promise.all([
+        api.get(`/admin/traders/${trader.id}/detail`),
+        api.get(`/admin/traders/${trader.id}/wallet`),
+        api.get(`/admin/traders/${trader.id}/transactions?limit=20`),
+        api.get(`/admin/traders/${trader.id}/orders?limit=20`),
+      ]);
+      setViewingTrader(prev => ({ ...prev, ...(detailRes.data || {}) }));
+      setViewingTraderWallet(walletRes.data);
+      setViewingTraderTx(txRes.data || []);
+      setViewingTraderOrders(ordersRes.data || []);
+    } catch (e) { console.error('Trader detail load error:', e); }
+    setViewingTraderLoading(false);
+  };
+
   const pageTitles = {
     dashboard: 'Dashboard',
     traders: 'All Traders',
@@ -293,7 +321,9 @@ export default function Admin() {
             <button className="adm-hamburger" onClick={() => setSidebarOpen(!sidebarOpen)}>
               <span /><span /><span />
             </button>
-            <h1 className="adm-page-title">{pageTitles[activeTab] || 'Dashboard'}</h1>
+            <h1 className="adm-page-title">
+              {activeTab === 'traders' && viewingTrader ? viewingTrader.full_name : (pageTitles[activeTab] || 'Dashboard')}
+            </h1>
           </div>
           <div className="adm-topbar-right">
             <button className="adm-refresh-btn" onClick={() => { loadData(); loadTransactions(txPeriod); }} disabled={refreshing}>
@@ -751,7 +781,7 @@ export default function Admin() {
           )}
 
           {/* ==================== TRADERS ==================== */}
-          {activeTab === 'traders' && (
+          {activeTab === 'traders' && !viewingTrader && (
             <div className="adm-card">
               <div className="adm-card-header">
                 <h3>All Traders</h3>
@@ -776,15 +806,7 @@ export default function Admin() {
                   <tbody>
                     {traders.map((t) => (
                       <tr key={t.id}>
-                        <td><button style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline', padding: 0 }} onClick={async () => {
-                          setSelectedTrader(t);
-                          try {
-                            const res = await api.get(`/admin/traders/${t.id}/detail`);
-                            setTraderDetail(res.data);
-                          } catch (e) { setTraderDetail({}); }
-                          setResetPwMsg('');
-                          setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
-                        }}>{t.full_name}</button></td>
+                        <td><button style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline', padding: 0 }} onClick={() => openTraderPage(t)}>{t.full_name}</button></td>
                         <td>{t.email}</td>
                         <td>{t.phone}</td>
                         <td>
@@ -826,116 +848,220 @@ export default function Admin() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
 
-              {/* Trader Detail Modal */}
-              {selectedTrader && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setSelectedTrader(null)}>
-                  <div style={{ background: 'var(--surface)', borderRadius: 12, width: 500, maxHeight: '80vh', overflow: 'auto', padding: 24, border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                      <h3 style={{ margin: 0 }}>{selectedTrader.full_name}</h3>
-                      <button onClick={() => setSelectedTrader(null)} style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: 20, cursor: 'pointer' }}>✕</button>
-                    </div>
+          {/* ==================== TRADER DETAIL PAGE ==================== */}
+          {activeTab === 'traders' && viewingTrader && (() => {
+            const t = viewingTrader;
+            const w = viewingTraderWallet;
+            const initials = (t.full_name || '?').split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
+            const statusColor = t.status === 'active' ? '#10b981' : t.status === 'suspended' ? '#ef4444' : '#f59e0b';
+            const tierColor = t.tier === 'pro' ? '#8b5cf6' : t.tier === 'starter' ? '#3b82f6' : '#6b7280';
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 13, marginBottom: 16 }}>
-                      <div><span style={{ color: '#6b7280' }}>Email:</span> <strong>{selectedTrader.email}</strong></div>
-                      <div><span style={{ color: '#6b7280' }}>Phone:</span> <strong>{selectedTrader.phone}</strong></div>
-                      <div><span style={{ color: '#6b7280' }}>Role:</span> <strong>{selectedTrader.role}</strong></div>
-                      <div><span style={{ color: '#6b7280' }}>Status:</span> <strong>{selectedTrader.status}</strong></div>
-                      <div><span style={{ color: '#6b7280' }}>Tier:</span> <strong>{selectedTrader.tier}</strong></div>
-                      <div><span style={{ color: '#6b7280' }}>Binance:</span> <strong>{selectedTrader.binance_connected ? 'Connected' : 'No'}</strong></div>
-                      <div><span style={{ color: '#6b7280' }}>Trades:</span> <strong>{selectedTrader.total_trades}</strong></div>
-                      <div><span style={{ color: '#6b7280' }}>Volume:</span> <strong>KES {selectedTrader.total_volume?.toLocaleString()}</strong></div>
-                    </div>
+            return (
+              <div>
+                {/* Back bar */}
+                <div style={{ marginBottom: 16 }}>
+                  <button
+                    onClick={() => setViewingTrader(null)}
+                    style={{ background: 'none', border: '1px solid var(--border)', color: '#9ca3af', padding: '8px 16px', borderRadius: 8, cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}
+                  >
+                    ← All Traders
+                  </button>
+                </div>
 
-                    {/* Security Question */}
-                    <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid var(--border)' }}>
-                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Security Question</div>
-                      <div style={{ fontSize: 14, fontWeight: 600 }}>{traderDetail?.security_question || 'Not set'}</div>
-                      {traderDetail?.security_answer && (
-                        <div style={{ fontSize: 13, color: '#9ca3af', marginTop: 4 }}>Answer: <strong>{traderDetail.security_answer}</strong></div>
-                      )}
-                    </div>
+                {viewingTraderLoading && (
+                  <div style={{ textAlign: 'center', color: '#6b7280', padding: 40 }}>Loading trader details...</div>
+                )}
 
-                    {/* Settlement Info */}
-                    <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid var(--border)' }}>
-                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Settlement</div>
-                      <div style={{ fontSize: 13 }}>
-                        Method: <strong>{traderDetail?.settlement_method || 'Not set'}</strong>
-                        {traderDetail?.settlement_destination && <> — {traderDetail.settlement_destination}</>}
+                {!viewingTraderLoading && (
+                  <>
+                    {/* Hero card */}
+                    <div className="adm-card" style={{ marginBottom: 16 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+                        {/* Avatar */}
+                        <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg, #f59e0b, #ef4444)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
+                          {initials}
+                        </div>
+                        {/* Name + badges */}
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>{t.full_name}</div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${statusColor}22`, color: statusColor, border: `1px solid ${statusColor}44` }}>{t.status}</span>
+                            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${tierColor}22`, color: tierColor, border: `1px solid ${tierColor}44` }}>{t.tier === 'standard' ? 'Free' : t.tier}</span>
+                            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(156,163,175,0.15)', color: '#9ca3af', border: '1px solid rgba(156,163,175,0.3)' }}>{t.role || 'trader'}</span>
+                            {t.binance_connected && <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' }}>Binance ✓</span>}
+                          </div>
+                        </div>
+                        {/* Quick actions */}
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <label style={{ fontSize: 11, color: '#6b7280' }}>Status</label>
+                            <select className="adm-select" value={t.status} onChange={async (e) => { await handleStatusChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, status: e.target.value })); }}>
+                              <option value="pending">Pending</option>
+                              <option value="active">Active</option>
+                              <option value="paused">Paused</option>
+                              <option value="suspended">Suspended</option>
+                            </select>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <label style={{ fontSize: 11, color: '#6b7280' }}>Tier</label>
+                            <select className="adm-select" value={t.tier} onChange={async (e) => { await handleTierChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, tier: e.target.value })); }}>
+                              <option value="standard">Free</option>
+                              <option value="starter">Starter</option>
+                              <option value="pro">Pro</option>
+                            </select>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <label style={{ fontSize: 11, color: '#6b7280' }}>Role</label>
+                            <select className="adm-select" value={t.role || 'trader'} onChange={async (e) => { await handleRoleChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, role: e.target.value })); }}>
+                              <option value="trader">Trader</option>
+                              <option value="employee">Employee</option>
+                              <option value="admin">Admin</option>
+                            </select>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Google ID */}
-                    {traderDetail?.google_id && (
-                      <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid var(--border)' }}>
-                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Google Account</div>
-                        <div style={{ fontSize: 13 }}>ID: {traderDetail.google_id}</div>
+                    {/* Info + Wallet row */}
+                    <div className="adm-two-col" style={{ marginBottom: 16, alignItems: 'flex-start' }}>
+                      {/* Trader info grid */}
+                      <div className="adm-card" style={{ flex: '1 1 0' }}>
+                        <div className="adm-card-header"><h3>Account Info</h3></div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px', fontSize: 13, padding: '4px 0' }}>
+                          {[
+                            ['Email', t.email],
+                            ['Phone', t.phone],
+                            ['Trades', t.total_trades],
+                            ['Volume', fmtKES(t.total_volume)],
+                            ['Joined', t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'],
+                            ['Last Login', t.last_login ? new Date(t.last_login).toLocaleString() : '—'],
+                            ['Security Q', t.security_question || '—'],
+                            ['Answer', t.security_answer || '—'],
+                            ['Settlement', t.settlement_method || '—'],
+                            ['Destination', t.settlement_destination || '—'],
+                          ].map(([label, value]) => (
+                            <div key={label}>
+                              <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>{label}</div>
+                              <div style={{ fontWeight: 600, wordBreak: 'break-all' }}>{value}</div>
+                            </div>
+                          ))}
+                          {t.google_id && (
+                            <div style={{ gridColumn: '1 / -1' }}>
+                              <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Google ID</div>
+                              <div style={{ fontWeight: 600, fontSize: 12, wordBreak: 'break-all' }}>{t.google_id}</div>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    )}
+
+                      {/* Wallet stats */}
+                      <div className="adm-card" style={{ flex: '1 1 0' }}>
+                        <div className="adm-card-header"><h3>Wallet</h3></div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                          {[
+                            ['Balance', w?.balance, '#10b981'],
+                            ['Reserved', w?.reserved, '#f59e0b'],
+                            ['Total Earned', w?.total_earned, '#3b82f6'],
+                            ['Withdrawn', w?.total_withdrawn, '#8b5cf6'],
+                            ['Fees Paid', w?.total_fees_paid, '#ef4444'],
+                          ].map(([label, val, color]) => (
+                            <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{label}</div>
+                              <div style={{ fontSize: 16, fontWeight: 700, color: color || '#fff' }}>{w ? fmtKES(val ?? 0) : '—'}</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Reset Password */}
+                        <div style={{ marginTop: 16 }}>
+                          <button
+                            style={{ width: '100%', padding: '10px', borderRadius: 8, border: '1px solid #ef4444', background: 'rgba(239,68,68,0.1)', color: '#ef4444', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
+                            disabled={resetPwLoading}
+                            onClick={async () => {
+                              setResetPwLoading(true);
+                              try {
+                                await api.post(`/admin/traders/${t.id}/reset-password`);
+                                setResetPwMsg('Password reset! New password sent via SMS.');
+                              } catch (e) { setResetPwMsg('Failed to reset password.'); }
+                              setResetPwLoading(false);
+                            }}
+                          >
+                            {resetPwLoading ? 'Resetting...' : 'Reset Password'}
+                          </button>
+                          {resetPwMsg && <div style={{ marginTop: 6, fontSize: 12, color: resetPwMsg.includes('Failed') ? '#ef4444' : '#10b981', textAlign: 'center' }}>{resetPwMsg}</div>}
+                        </div>
+                      </div>
+                    </div>
 
                     {/* Resolve Payment */}
-                    <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid #f59e0b' }}>
-                      <div style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600, marginBottom: 8 }}>Resolve Unmatched Payment</div>
-                      <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 10 }}>
-                        Enter the M-Pesa reference and amount. Safaricom will verify the transaction before crediting the wallet.
+                    <div className="adm-card" style={{ marginBottom: 16, border: '1px solid rgba(245,158,11,0.3)' }}>
+                      <div className="adm-card-header">
+                        <h3 style={{ color: '#f59e0b' }}>Resolve Unmatched Payment</h3>
                       </div>
-                      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                      <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
+                        Enter the M-Pesa reference and amount to verify with Safaricom and credit this trader's wallet.
+                      </p>
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
                         <input
                           value={resolveRef}
                           onChange={e => setResolveRef(e.target.value.toUpperCase())}
                           placeholder="M-Pesa Ref e.g. QK12AB3CD4"
-                          style={{ flex: 2, padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }}
+                          style={{ flex: '2 1 180px', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }}
                         />
                         <input
                           value={resolveAmount}
                           onChange={e => setResolveAmount(e.target.value)}
                           placeholder="Amount (KES)"
                           type="number"
-                          style={{ flex: 1, padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }}
+                          style={{ flex: '1 1 120px', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }}
                         />
+                        <button
+                          disabled={resolveLoading || !resolveRef || !resolveAmount}
+                          style={{ flex: '1 1 140px', padding: '10px 16px', borderRadius: 8, border: 'none', background: resolveLoading ? '#374151' : '#f59e0b', color: '#000', fontWeight: 700, fontSize: 13, cursor: resolveLoading ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+                          onClick={async () => {
+                            setResolveLoading(true);
+                            setResolveMsg({ text: '', type: '' });
+                            try {
+                              await api.post(`/admin/traders/${t.id}/resolve-payment`, {
+                                mpesa_ref: resolveRef,
+                                amount: parseFloat(resolveAmount),
+                              });
+                              setResolveMsg({ text: 'Verifying with Safaricom...', type: 'info' });
+                              let attempts = 0;
+                              const poll = setInterval(async () => {
+                                attempts++;
+                                try {
+                                  const r = await api.get(`/admin/traders/${t.id}/resolve-payment/status?mpesa_ref=${resolveRef}`);
+                                  const { status, message } = r.data;
+                                  if (status === 'credited') {
+                                    setResolveMsg({ text: message, type: 'success' });
+                                    setResolveRef(''); setResolveAmount('');
+                                    clearInterval(poll);
+                                    // Refresh wallet
+                                    api.get(`/admin/traders/${t.id}/wallet`).then(r => setViewingTraderWallet(r.data)).catch(() => {});
+                                  } else if (status === 'failed') {
+                                    setResolveMsg({ text: message, type: 'error' });
+                                    clearInterval(poll);
+                                  } else if (attempts >= 10) {
+                                    setResolveMsg({ text: 'Safaricom took too long to respond. Try again.', type: 'error' });
+                                    clearInterval(poll);
+                                  }
+                                } catch (e) { clearInterval(poll); }
+                              }, 3000);
+                            } catch (e) {
+                              setResolveMsg({ text: e.response?.data?.detail || 'Failed to start verification.', type: 'error' });
+                            }
+                            setResolveLoading(false);
+                          }}
+                        >
+                          {resolveLoading ? 'Submitting...' : 'Verify & Credit Wallet'}
+                        </button>
                       </div>
-                      <button
-                        disabled={resolveLoading || !resolveRef || !resolveAmount}
-                        style={{ width: '100%', padding: '9px', borderRadius: 6, border: 'none', background: resolveLoading ? '#374151' : '#f59e0b', color: '#000', fontWeight: 700, fontSize: 13, cursor: resolveLoading ? 'default' : 'pointer' }}
-                        onClick={async () => {
-                          setResolveLoading(true);
-                          setResolveMsg({ text: '', type: '' });
-                          try {
-                            await api.post(`/admin/traders/${selectedTrader.id}/resolve-payment`, {
-                              mpesa_ref: resolveRef,
-                              amount: parseFloat(resolveAmount),
-                            });
-                            setResolveMsg({ text: 'Verifying with Safaricom...', type: 'info' });
-                            // Poll for result every 3s for up to 30s
-                            let attempts = 0;
-                            const poll = setInterval(async () => {
-                              attempts++;
-                              try {
-                                const r = await api.get(`/admin/traders/${selectedTrader.id}/resolve-payment/status?mpesa_ref=${resolveRef}`);
-                                const { status, message } = r.data;
-                                if (status === 'credited') {
-                                  setResolveMsg({ text: message, type: 'success' });
-                                  setResolveRef(''); setResolveAmount('');
-                                  clearInterval(poll);
-                                } else if (status === 'failed') {
-                                  setResolveMsg({ text: message, type: 'error' });
-                                  clearInterval(poll);
-                                } else if (attempts >= 10) {
-                                  setResolveMsg({ text: 'Safaricom took too long to respond. Try again.', type: 'error' });
-                                  clearInterval(poll);
-                                }
-                              } catch (e) { clearInterval(poll); }
-                            }, 3000);
-                          } catch (e) {
-                            setResolveMsg({ text: e.response?.data?.detail || 'Failed to start verification.', type: 'error' });
-                          }
-                          setResolveLoading(false);
-                        }}
-                      >
-                        {resolveLoading ? 'Submitting...' : 'Verify & Credit Wallet'}
-                      </button>
                       {resolveMsg.text && (
-                        <div style={{ marginTop: 8, fontSize: 12, textAlign: 'center', padding: '6px 8px', borderRadius: 6,
+                        <div style={{ fontSize: 13, padding: '8px 12px', borderRadius: 8,
                           color: resolveMsg.type === 'success' ? '#10b981' : resolveMsg.type === 'error' ? '#ef4444' : '#f59e0b',
                           background: resolveMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : resolveMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)',
                         }}>
@@ -944,37 +1070,86 @@ export default function Admin() {
                       )}
                     </div>
 
-                    {/* Reset Password */}
-                    <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
-                      <button
-                        style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #ef4444', background: 'rgba(239,68,68,0.1)', color: '#ef4444', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
-                        disabled={resetPwLoading}
-                        onClick={async () => {
-                          setResetPwLoading(true);
-                          try {
-                            await api.post(`/admin/traders/${selectedTrader.id}/reset-password`);
-                            setResetPwMsg('Password reset! New password sent via SMS.');
-                          } catch (e) {
-                            setResetPwMsg('Failed to reset password.');
-                          }
-                          setResetPwLoading(false);
-                        }}
-                      >
-                        {resetPwLoading ? 'Resetting...' : 'Reset Password'}
-                      </button>
-                      <button
-                        style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}
-                        onClick={() => setSelectedTrader(null)}
-                      >
-                        Close
-                      </button>
+                    {/* Recent Transactions */}
+                    <div className="adm-card" style={{ marginBottom: 16 }}>
+                      <div className="adm-card-header">
+                        <h3>Recent Transactions</h3>
+                        <span className="adm-card-count">{viewingTraderTx.length} shown</span>
+                      </div>
+                      <div className="adm-table-wrap">
+                        <table className="adm-table">
+                          <thead>
+                            <tr>
+                              <th>Type</th>
+                              <th>Direction</th>
+                              <th>Amount</th>
+                              <th>M-Pesa Code</th>
+                              <th>Reference</th>
+                              <th>Status</th>
+                              <th>Time</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {viewingTraderTx.length === 0 ? (
+                              <tr><td colSpan={7} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No transactions</td></tr>
+                            ) : viewingTraderTx.map((tx) => (
+                              <tr key={tx.id}>
+                                <td>{tx.transaction_type}</td>
+                                <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
+                                <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>{tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}</td>
+                                <td className="mono" style={{ color: '#f59e0b' }}>{tx.mpesa_transaction_id || '—'}</td>
+                                <td className="mono">{tx.bill_ref_number || '—'}</td>
+                                <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
+                                <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                    {resetPwMsg && <div style={{ marginTop: 8, fontSize: 12, color: resetPwMsg.includes('Failed') ? '#ef4444' : '#10b981', textAlign: 'center' }}>{resetPwMsg}</div>}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+
+                    {/* Recent Orders */}
+                    <div className="adm-card">
+                      <div className="adm-card-header">
+                        <h3>Recent Orders</h3>
+                        <span className="adm-card-count">{viewingTraderOrders.length} shown</span>
+                      </div>
+                      <div className="adm-table-wrap">
+                        <table className="adm-table">
+                          <thead>
+                            <tr>
+                              <th>Order #</th>
+                              <th>Side</th>
+                              <th>Crypto</th>
+                              <th>Fiat Amount</th>
+                              <th>Price</th>
+                              <th>Status</th>
+                              <th>Created</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {viewingTraderOrders.length === 0 ? (
+                              <tr><td colSpan={7} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No orders</td></tr>
+                            ) : viewingTraderOrders.map((o) => (
+                              <tr key={o.id}>
+                                <td className="mono" style={{ fontSize: 11 }}>{o.binance_order_number || o.id}</td>
+                                <td><span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`}>{o.side}</span></td>
+                                <td>{o.crypto_amount} {o.asset || 'USDT'}</td>
+                                <td style={{ fontWeight: 600 }}>{fmtKES(o.fiat_amount)}</td>
+                                <td>{o.price ? `${fmtKES(o.price)}/USDT` : '—'}</td>
+                                <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
+                                <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
 
           {/* ==================== DISPUTES ==================== */}
           {activeTab === 'disputes' && (
