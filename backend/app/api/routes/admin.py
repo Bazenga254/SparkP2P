@@ -235,6 +235,60 @@ async def create_employee(
     }
 
 
+@router.get("/traders/{trader_id}/detail")
+async def get_trader_detail(
+    trader_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get detailed trader info including security question and settlement."""
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    return {
+        "security_question": trader.security_question or "",
+        "security_answer": getattr(trader, 'security_answer', '') or "",
+        "settlement_method": trader.settlement_method or "",
+        "settlement_phone": trader.settlement_phone or "",
+        "settlement_account": trader.settlement_account or "",
+        "settlement_paybill": getattr(trader, 'settlement_paybill', '') or "",
+        "settlement_destination": trader.settlement_phone or trader.settlement_account or trader.phone or "",
+        "google_id": getattr(trader, 'google_id', '') or "",
+        "binance_username": getattr(trader, 'binance_username', '') or "",
+        "phone": trader.phone or "",
+        "created_at": str(trader.created_at) if trader.created_at else "",
+    }
+
+
+@router.post("/traders/{trader_id}/reset-password")
+async def reset_trader_password(
+    trader_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset trader password and send new one via SMS."""
+    import secrets
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    new_password = secrets.token_urlsafe(8)
+    from app.core.security import hash_password
+    trader.password_hash = hash_password(new_password)
+    await db.commit()
+
+    # Send via SMS
+    try:
+        from app.services.sms import send_sms
+        send_sms(trader.phone, f"SparkP2P: Your password has been reset. New password: {new_password}")
+    except Exception:
+        pass
+
+    logger.info(f"Password reset for trader {trader.id} ({trader.full_name})")
+    return {"status": "ok", "message": "Password reset and sent via SMS"}
+
+
 @router.put("/traders/{trader_id}/role")
 async def update_trader_role(
     trader_id: int,

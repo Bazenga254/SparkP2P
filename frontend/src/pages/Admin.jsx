@@ -42,6 +42,11 @@ export default function Admin() {
   const navigate = useNavigate();
   const [dashboard, setDashboard] = useState(null);
   const [traders, setTraders] = useState([]);
+  const [selectedTrader, setSelectedTrader] = useState(null);
+  const [paybillBalance, setPaybillBalance] = useState(null);
+  const [traderDetail, setTraderDetail] = useState(null);
+  const [resetPwLoading, setResetPwLoading] = useState(false);
+  const [resetPwMsg, setResetPwMsg] = useState('');
   const [disputes, setDisputes] = useState([]);
   const [unmatched, setUnmatched] = useState([]);
   const [analytics, setAnalytics] = useState(null);
@@ -150,6 +155,13 @@ export default function Admin() {
       setUnmatched(unmatchedRes.data);
       setAnalytics(analyticsRes.data);
       setOnlineTraders(onlineRes.data);
+
+      // Fetch paybill balance + trigger refresh
+      try {
+        api.post('/payment/balance/refresh').catch(() => {});
+        const balRes = await api.get('/payment/balance');
+        if (balRes.data) setPaybillBalance(balRes.data);
+      } catch(e) {}
     } catch (err) {
       console.error('Admin load error:', err);
     }
@@ -340,10 +352,18 @@ export default function Admin() {
                     <TrendingUp size={22} />
                   </div>
                 </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4' }}>
+                <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4', cursor: 'pointer' }} onClick={async () => {
+                  try { await api.post('/payment/balance/refresh'); setTimeout(async () => { try { const r = await api.get('/payment/balance'); if (r.data?.balance) setPaybillBalance(r.data); } catch(e){} }, 10000); } catch(e){}
+                }}>
                   <div className="adm-stat-info">
-                    <span className="adm-stat-label">Platform Float</span>
-                    <span className="adm-stat-value">{fmtKES(dashboard.platform.total_float)}</span>
+                    <span className="adm-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Paybill Balance {paybillBalance?.updated_at && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite', boxShadow: '0 0 6px #10b981' }} />}</span>
+                    <span className="adm-stat-value">
+                      {paybillBalance?.balance
+                        ? fmtKES(Object.values(paybillBalance.balance).reduce((sum, a) => sum + (a.available || 0), 0))
+                        : fmtKES(dashboard.platform.total_float)}
+                    </span>
+                    {paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Updated: {new Date(paybillBalance.updated_at).toLocaleTimeString()}</span>}
+                    {!paybillBalance?.balance && <span style={{ fontSize: 10, color: '#6b7280' }}>Click to refresh</span>}
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4' }}>
                     <Banknote size={22} />
@@ -439,25 +459,43 @@ export default function Admin() {
                     <h3>Monthly Volumes</h3>
                     <span className="adm-card-count">Last 6 months</span>
                   </div>
-                  <div className="adm-chart-container">
+                  <div style={{ padding: '10px 20px 0' }}>
                     {analytics?.monthly_volumes?.length > 0 ? (
-                      analytics.monthly_volumes.map((m, i) => (
-                        <div key={i} className="adm-chart-col">
-                          <div className="adm-chart-bars">
-                            <div
-                              className="adm-chart-bar buy"
-                              style={{ height: `${(m.buy_volume / maxVolume) * 140}px` }}
-                              title={`Buy: ${fmtKES(m.buy_volume)}`}
-                            />
-                            <div
-                              className="adm-chart-bar sell"
-                              style={{ height: `${(m.sell_volume / maxVolume) * 140}px` }}
-                              title={`Sell: ${fmtKES(m.sell_volume)}`}
-                            />
-                          </div>
-                          <span className="adm-chart-label">{m.month.split(' ')[0]}</span>
+                      <div style={{ display: 'flex', gap: 0 }}>
+                        {/* Y-axis labels */}
+                        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', paddingBottom: 24, marginRight: 8, width: 60, textAlign: 'right' }}>
+                          {[maxVolume, maxVolume * 0.75, maxVolume * 0.5, maxVolume * 0.25, 0].map((v, i) => (
+                            <span key={i} style={{ fontSize: 10, color: '#6b7280', lineHeight: 1 }}>
+                              {v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : v >= 1000 ? `${(v/1000).toFixed(0)}K` : v.toFixed(0)}
+                            </span>
+                          ))}
                         </div>
-                      ))
+                        {/* Chart area */}
+                        <div style={{ flex: 1, position: 'relative' }}>
+                          {/* Grid lines */}
+                          <div style={{ position: 'absolute', inset: 0, bottom: 24, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', pointerEvents: 'none' }}>
+                            {[0,1,2,3,4].map(i => <div key={i} style={{ borderBottom: '1px solid var(--border)', width: '100%' }} />)}
+                          </div>
+                          {/* Bars */}
+                          <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-end', height: 160, position: 'relative', paddingBottom: 24 }}>
+                            {analytics.monthly_volumes.map((m, i) => (
+                              <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
+                                <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 136 }}>
+                                  <div style={{
+                                    width: 18, background: 'var(--blue)', borderRadius: '3px 3px 0 0',
+                                    height: `${Math.max((m.buy_volume / maxVolume) * 136, 2)}px`,
+                                  }} title={`Buy: ${fmtKES(m.buy_volume)}`} />
+                                  <div style={{
+                                    width: 18, background: 'var(--green)', borderRadius: '3px 3px 0 0',
+                                    height: `${Math.max((m.sell_volume / maxVolume) * 136, 2)}px`,
+                                  }} title={`Sell: ${fmtKES(m.sell_volume)}`} />
+                                </div>
+                                <span style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>{m.month.split(' ')[0]}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
                     ) : (
                       <p className="adm-empty" style={{ padding: '40px 0' }}>No volume data yet</p>
                     )}
@@ -706,7 +744,14 @@ export default function Admin() {
                   <tbody>
                     {traders.map((t) => (
                       <tr key={t.id}>
-                        <td>{t.full_name}</td>
+                        <td><button style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline', padding: 0 }} onClick={async () => {
+                          setSelectedTrader(t);
+                          try {
+                            const res = await api.get(`/admin/traders/${t.id}/detail`);
+                            setTraderDetail(res.data);
+                          } catch (e) { setTraderDetail({}); }
+                          setResetPwMsg('');
+                        }}>{t.full_name}</button></td>
                         <td>{t.email}</td>
                         <td>{t.phone}</td>
                         <td>
@@ -748,6 +793,82 @@ export default function Admin() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Trader Detail Modal */}
+              {selectedTrader && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setSelectedTrader(null)}>
+                  <div style={{ background: 'var(--surface)', borderRadius: 12, width: 500, maxHeight: '80vh', overflow: 'auto', padding: 24, border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                      <h3 style={{ margin: 0 }}>{selectedTrader.full_name}</h3>
+                      <button onClick={() => setSelectedTrader(null)} style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: 20, cursor: 'pointer' }}>✕</button>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 13, marginBottom: 16 }}>
+                      <div><span style={{ color: '#6b7280' }}>Email:</span> <strong>{selectedTrader.email}</strong></div>
+                      <div><span style={{ color: '#6b7280' }}>Phone:</span> <strong>{selectedTrader.phone}</strong></div>
+                      <div><span style={{ color: '#6b7280' }}>Role:</span> <strong>{selectedTrader.role}</strong></div>
+                      <div><span style={{ color: '#6b7280' }}>Status:</span> <strong>{selectedTrader.status}</strong></div>
+                      <div><span style={{ color: '#6b7280' }}>Tier:</span> <strong>{selectedTrader.tier}</strong></div>
+                      <div><span style={{ color: '#6b7280' }}>Binance:</span> <strong>{selectedTrader.binance_connected ? 'Connected' : 'No'}</strong></div>
+                      <div><span style={{ color: '#6b7280' }}>Trades:</span> <strong>{selectedTrader.total_trades}</strong></div>
+                      <div><span style={{ color: '#6b7280' }}>Volume:</span> <strong>KES {selectedTrader.total_volume?.toLocaleString()}</strong></div>
+                    </div>
+
+                    {/* Security Question */}
+                    <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Security Question</div>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{traderDetail?.security_question || 'Not set'}</div>
+                      {traderDetail?.security_answer && (
+                        <div style={{ fontSize: 13, color: '#9ca3af', marginTop: 4 }}>Answer: <strong>{traderDetail.security_answer}</strong></div>
+                      )}
+                    </div>
+
+                    {/* Settlement Info */}
+                    <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Settlement</div>
+                      <div style={{ fontSize: 13 }}>
+                        Method: <strong>{traderDetail?.settlement_method || 'Not set'}</strong>
+                        {traderDetail?.settlement_destination && <> — {traderDetail.settlement_destination}</>}
+                      </div>
+                    </div>
+
+                    {/* Google ID */}
+                    {traderDetail?.google_id && (
+                      <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid var(--border)' }}>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Google Account</div>
+                        <div style={{ fontSize: 13 }}>ID: {traderDetail.google_id}</div>
+                      </div>
+                    )}
+
+                    {/* Reset Password */}
+                    <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+                      <button
+                        style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #ef4444', background: 'rgba(239,68,68,0.1)', color: '#ef4444', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
+                        disabled={resetPwLoading}
+                        onClick={async () => {
+                          setResetPwLoading(true);
+                          try {
+                            await api.post(`/admin/traders/${selectedTrader.id}/reset-password`);
+                            setResetPwMsg('Password reset! New password sent via SMS.');
+                          } catch (e) {
+                            setResetPwMsg('Failed to reset password.');
+                          }
+                          setResetPwLoading(false);
+                        }}
+                      >
+                        {resetPwLoading ? 'Resetting...' : 'Reset Password'}
+                      </button>
+                      <button
+                        style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}
+                        onClick={() => setSelectedTrader(null)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    {resetPwMsg && <div style={{ marginTop: 8, fontSize: 12, color: resetPwMsg.includes('Failed') ? '#ef4444' : '#10b981', textAlign: 'center' }}>{resetPwMsg}</div>}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
