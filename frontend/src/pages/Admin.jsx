@@ -719,7 +719,14 @@ export default function Admin() {
                         </td>
                         <td>{tx.trader_name}</td>
                         <td>{tx.sender_name !== '-' ? tx.sender_name : tx.destination !== '-' ? tx.destination : '-'}</td>
-                        <td className="mono">{tx.phone !== '-' ? tx.phone : tx.trader_phone}</td>
+                        <td className="mono">{
+                          (() => {
+                            const p = tx.phone !== '-' ? tx.phone : tx.trader_phone;
+                            // Safaricom hashes MSISDN in production (64-char hex) — show sender name instead
+                            if (p && p.length > 20) return tx.sender_name !== '-' ? tx.sender_name : 'Hidden';
+                            return p || '-';
+                          })()
+                        }</td>
                         <td className="mono" style={{ color: '#f59e0b' }}>{tx.mpesa_transaction_id}</td>
                         <td className="mono">{tx.bill_ref_number}</td>
                         <td>
@@ -960,7 +967,7 @@ export default function Admin() {
                       {unmatched.map((p) => (
                         <tr key={p.id}>
                           <td>KES {p.amount.toLocaleString()}</td>
-                          <td>{p.phone}</td>
+                          <td>{p.phone && p.phone.length > 20 ? (p.sender_name || 'Hidden') : (p.phone || '-')}</td>
                           <td>{p.sender_name}</td>
                           <td className="mono">{p.bill_ref_number}</td>
                           <td className="mono">{p.mpesa_transaction_id}</td>
