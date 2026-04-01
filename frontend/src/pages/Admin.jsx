@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield } from 'lucide-react';
 
 const sidebarSections = [
   {
@@ -25,6 +25,7 @@ const sidebarSections = [
     label: 'PLATFORM',
     items: [
       { key: 'revenue', icon: TrendingUp, label: 'Revenue' },
+      { key: 'security', icon: Shield, label: 'Security' },
       { key: 'settings', icon: Settings, label: 'Settings' },
     ],
   },
@@ -56,6 +57,7 @@ export default function Admin() {
   const [viewingTraderTx, setViewingTraderTx] = useState([]);
   const [viewingTraderOrders, setViewingTraderOrders] = useState([]);
   const [viewingTraderLoading, setViewingTraderLoading] = useState(false);
+  const [showSecurityAnswer, setShowSecurityAnswer] = useState(false);
   const [txPage, setTxPage] = useState(1);
   const [ordersPage, setOrdersPage] = useState(1);
   const PAGE_SIZE = 15;
@@ -76,6 +78,8 @@ export default function Admin() {
   const PAGE_TX_SIZE = 25;
   const [activeTab, setActiveTab] = useState('dashboard');
   const [refreshing, setRefreshing] = useState(false);
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -85,6 +89,9 @@ export default function Admin() {
   const [templateSaving, setTemplateSaving] = useState(false);
   const [templateMsg, setTemplateMsg] = useState('');
   const [expandedTemplates, setExpandedTemplates] = useState({});
+  const [supportTickets, setSupportTickets] = useState([]);
+  const [supportLoading, setSupportLoading] = useState(false);
+  const [expandedTicket, setExpandedTicket] = useState(null);
 
   const loadTemplates = async () => {
     try {
@@ -92,6 +99,26 @@ export default function Admin() {
       setTemplates(res.data);
     } catch (err) {
       console.error('Templates load error:', err);
+    }
+  };
+
+  const loadSupportTickets = async () => {
+    setSupportLoading(true);
+    try {
+      const res = await getAdminSupportTickets();
+      setSupportTickets(res.data);
+    } catch (err) {
+      console.error('Support tickets load error:', err);
+    }
+    setSupportLoading(false);
+  };
+
+  const handleCloseTicket = async (ticketId) => {
+    try {
+      await closeSupportTicket(ticketId);
+      loadSupportTickets();
+    } catch (err) {
+      console.error('Close ticket error:', err);
     }
   };
 
@@ -213,6 +240,10 @@ export default function Admin() {
   };
 
   useEffect(() => {
+    if (activeTab === 'disputes') loadSupportTickets();
+  }, [activeTab]);
+
+  useEffect(() => {
     loadData();
     loadTransactions(txPeriod);
     loadOrders(cryptoPeriod);
@@ -273,6 +304,7 @@ export default function Admin() {
     setTxPage(1);
     setOrdersPage(1);
     setResetPwMsg('');
+    setShowSecurityAnswer(false);
     setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
     try {
       const [detailRes, walletRes, txRes, ordersRes] = await Promise.all([
@@ -296,6 +328,7 @@ export default function Admin() {
     unmatched: 'Unmatched Payments',
     transactions: 'Transactions',
     revenue: 'Revenue',
+    security: 'Security',
     settings: 'Settings',
   };
 
@@ -1059,12 +1092,11 @@ export default function Admin() {
                           {[
                             ['Email', t.email],
                             ['Phone', t.phone],
-                            ['Trades', t.total_trades],
+                            ['Trades', t.total_trades ?? '—'],
                             ['Volume', fmtKES(t.total_volume)],
                             ['Joined', t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'],
                             ['Last Login', t.last_login ? new Date(t.last_login).toLocaleString() : '—'],
                             ['Security Q', t.security_question || '—'],
-                            ['Answer', t.security_answer || '—'],
                             ['Settlement', t.settlement_method || '—'],
                             ['Destination', t.settlement_destination || '—'],
                           ].map(([label, value]) => (
@@ -1073,6 +1105,18 @@ export default function Admin() {
                               <div style={{ fontWeight: 600, wordBreak: 'break-all' }}>{value}</div>
                             </div>
                           ))}
+                          <div>
+                            <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Answer</div>
+                            <div style={{ fontWeight: 600, wordBreak: 'break-all', display: 'flex', alignItems: 'center', gap: 8 }}>
+                              {showSecurityAnswer ? (t.security_answer || '—') : '••••••••'}
+                              <button
+                                onClick={() => setShowSecurityAnswer(v => !v)}
+                                style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid #f59e0b' }}
+                              >
+                                {showSecurityAnswer ? 'Hide' : 'Show'}
+                              </button>
+                            </div>
+                          </div>
                           {t.google_id && (
                             <div style={{ gridColumn: '1 / -1' }}>
                               <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Google ID</div>
@@ -1323,42 +1367,158 @@ export default function Admin() {
 
           {/* ==================== DISPUTES ==================== */}
           {activeTab === 'disputes' && (
-            <div className="adm-card">
-              <div className="adm-card-header">
-                <h3>Disputed Orders</h3>
-                <span className="adm-card-count">{disputes.length} disputes</span>
-              </div>
-              {disputes.length === 0 ? (
-                <p className="adm-empty">No disputes found</p>
-              ) : (
-                <div className="adm-table-wrap">
-                  <table className="adm-table">
-                    <thead>
-                      <tr>
-                        <th>Order #</th>
-                        <th>Trader</th>
-                        <th>Side</th>
-                        <th>Amount</th>
-                        <th>Risk Score</th>
-                        <th>Created</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {disputes.map((d) => (
-                        <tr key={d.id}>
-                          <td className="mono">{d.binance_order_number}</td>
-                          <td>{d.trader_id}</td>
-                          <td><span className={`adm-badge ${d.side === 'BUY' ? 'green' : 'red'}`}>{d.side}</span></td>
-                          <td>KES {d.fiat_amount.toLocaleString()}</td>
-                          <td>{d.risk_score || '-'}</td>
-                          <td>{new Date(d.created_at).toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+            <>
+              {/* Order Disputes */}
+              <div className="adm-card" style={{ marginBottom: 16 }}>
+                <div className="adm-card-header">
+                  <h3>Disputed Orders</h3>
+                  <span className="adm-card-count">{disputes.length} disputes</span>
                 </div>
-              )}
-            </div>
+                {disputes.length === 0 ? (
+                  <p className="adm-empty">No disputes found</p>
+                ) : (
+                  <div className="adm-table-wrap">
+                    <table className="adm-table">
+                      <thead>
+                        <tr>
+                          <th>Order #</th>
+                          <th>Trader</th>
+                          <th>Side</th>
+                          <th>Amount</th>
+                          <th>Risk Score</th>
+                          <th>Created</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {disputes.map((d) => (
+                          <tr key={d.id}>
+                            <td className="mono">{d.binance_order_number}</td>
+                            <td>{d.trader_id}</td>
+                            <td><span className={`adm-badge ${d.side === 'BUY' ? 'green' : 'red'}`}>{d.side}</span></td>
+                            <td>KES {d.fiat_amount.toLocaleString()}</td>
+                            <td>{d.risk_score || '-'}</td>
+                            <td>{new Date(d.created_at).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Escalated Support Tickets */}
+              <div className="adm-card">
+                <div className="adm-card-header">
+                  <h3>Support Tickets</h3>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <span className="adm-card-count">
+                      {supportTickets.filter((t) => t.status === 'escalated').length} escalated
+                    </span>
+                    <button
+                      className="adm-btn-sm"
+                      onClick={loadSupportTickets}
+                      disabled={supportLoading}
+                      style={{ fontSize: 12, padding: '4px 10px' }}
+                    >
+                      {supportLoading ? 'Loading…' : 'Refresh'}
+                    </button>
+                  </div>
+                </div>
+                {supportTickets.length === 0 && !supportLoading ? (
+                  <p className="adm-empty">No support tickets yet.{' '}
+                    <button className="adm-link" onClick={loadSupportTickets}>Load</button>
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 0' }}>
+                    {supportTickets.map((ticket) => (
+                      <div
+                        key={ticket.id}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 10,
+                          overflow: 'hidden',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 10,
+                            padding: '10px 14px',
+                            cursor: 'pointer',
+                            background: expandedTicket === ticket.id ? 'var(--bg)' : 'transparent',
+                          }}
+                          onClick={() => setExpandedTicket(expandedTicket === ticket.id ? null : ticket.id)}
+                        >
+                          <span
+                            style={{
+                              width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                              background: ticket.status === 'escalated' ? '#f59e0b' : ticket.status === 'open' ? '#10b981' : '#6b7280',
+                            }}
+                          />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
+                              #{ticket.id} — {ticket.subject || 'No subject'}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                              Trader #{ticket.trader_id} · {new Date(ticket.updated_at).toLocaleString()}
+                              {ticket.escalation_reason && (
+                                <span style={{ color: '#f59e0b', marginLeft: 6 }}>
+                                  ⚡ {ticket.escalation_reason}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <span className={`adm-badge ${ticket.status === 'escalated' ? 'yellow' : ticket.status === 'open' ? 'green' : 'dim'}`}>
+                            {ticket.status}
+                          </span>
+                          {ticket.status === 'escalated' && (
+                            <button
+                              className="adm-btn-sm"
+                              onClick={(e) => { e.stopPropagation(); handleCloseTicket(ticket.id); }}
+                              style={{ fontSize: 11, padding: '3px 8px', background: 'rgba(16,185,129,0.15)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)' }}
+                            >
+                              Close
+                            </button>
+                          )}
+                        </div>
+                        {expandedTicket === ticket.id && (
+                          <div style={{ borderTop: '1px solid var(--border)', padding: '12px 14px', background: 'var(--bg)' }}>
+                            {(ticket.messages || []).length === 0 ? (
+                              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>No messages.</p>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                {ticket.messages.map((m, i) => (
+                                  <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                                    <div style={{
+                                      maxWidth: '75%',
+                                      padding: '7px 11px',
+                                      borderRadius: m.role === 'user' ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
+                                      background: m.role === 'user' ? 'rgba(99,102,241,0.15)' : 'var(--card)',
+                                      border: '1px solid var(--border)',
+                                      fontSize: 12,
+                                      lineHeight: 1.5,
+                                      color: 'var(--text)',
+                                      whiteSpace: 'pre-wrap',
+                                      wordBreak: 'break-word',
+                                    }}>
+                                      <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginBottom: 3 }}>
+                                        {m.role === 'user' ? 'Trader' : 'AI Support'} · {m.ts ? new Date(m.ts).toLocaleTimeString() : ''}
+                                      </div>
+                                      {m.content}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
           )}
 
           {/* ==================== UNMATCHED ==================== */}
@@ -1483,6 +1643,100 @@ export default function Admin() {
               </div>
             </>
           )}
+
+          {/* ==================== SECURITY ==================== */}
+          {activeTab === 'security' && (() => {
+            // Fetch audit logs when tab opens
+            if (!auditLoading && auditLogs.length === 0) {
+              setAuditLoading(true);
+              api.get('/admin/audit-logs?limit=200').then(res => {
+                setAuditLogs(res.data || []);
+              }).catch(() => {}).finally(() => setAuditLoading(false));
+            }
+            const securityFeatures = [
+              { label: 'Audit Trail', status: 'active', desc: 'All admin/employee access to trader PII is logged with IP and timestamp.' },
+              { label: 'Data Masking', status: 'active', desc: 'Phone numbers are masked (07XX XXX 678) for non-admin roles.' },
+              { label: 'Role Restrictions', status: 'active', desc: 'Employees cannot view settlement accounts, security answers, or full phone numbers.' },
+              { label: 'IP Restriction', status: 'config', desc: 'Set ALLOWED_ADMIN_IPS in .env to restrict admin access to specific IPs. Currently: allow all.' },
+              { label: 'Session Timeout', status: 'active', desc: 'Users auto-logged out after 30 min of inactivity. Bot API calls also keep session alive.' },
+              { label: 'Withdrawal OTP', status: 'active', desc: 'All withdrawals require a one-time SMS code before processing.' },
+              { label: 'Login Lockout', status: 'active', desc: '3 failed login attempts locks account for 24 hours.' },
+              { label: 'Password Cooldown', status: 'active', desc: 'Password changes require OTP and have a 48-hour cooldown.' },
+              { label: 'Encrypted Credentials', status: 'active', desc: 'Binance cookies, 2FA secrets, and fund passwords are encrypted at rest.' },
+              { label: 'HTTPS / TLS', status: 'active', desc: 'All traffic encrypted in transit via Let\'s Encrypt TLS certificate.' },
+            ];
+            return (
+              <div>
+                {/* Security Features Status */}
+                <div className="adm-card" style={{ marginBottom: 20 }}>
+                  <div className="adm-card-header"><h3>Security Controls Status</h3></div>
+                  <div style={{ padding: '12px 20px 16px' }}>
+                    {securityFeatures.map(f => (
+                      <div key={f.label} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 0', borderBottom: '1px solid #1f2937' }}>
+                        <span style={{
+                          marginTop: 2, flexShrink: 0, width: 10, height: 10, borderRadius: '50%',
+                          background: f.status === 'active' ? '#10b981' : '#f59e0b',
+                          boxShadow: f.status === 'active' ? '0 0 6px #10b981' : '0 0 6px #f59e0b',
+                          display: 'inline-block',
+                        }} />
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: '#fff' }}>{f.label}</div>
+                          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>{f.desc}</div>
+                        </div>
+                        <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 600, color: f.status === 'active' ? '#10b981' : '#f59e0b', flexShrink: 0 }}>
+                          {f.status === 'active' ? 'ACTIVE' : 'ACTION NEEDED'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Audit Logs */}
+                <div className="adm-card">
+                  <div className="adm-card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <h3>Audit Log — Admin Access to Sensitive Data</h3>
+                    <button onClick={() => { setAuditLogs([]); setAuditLoading(false); }} style={{ background: 'none', border: '1px solid #374151', color: '#9ca3af', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>
+                      Refresh
+                    </button>
+                  </div>
+                  {auditLoading ? (
+                    <div style={{ padding: 24, color: '#9ca3af', textAlign: 'center' }}>Loading...</div>
+                  ) : auditLogs.length === 0 ? (
+                    <div style={{ padding: 24, color: '#6b7280', textAlign: 'center', fontSize: 13 }}>No audit logs yet. Logs are recorded when admins/employees view trader data.</div>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="adm-table">
+                        <thead>
+                          <tr>
+                            <th>Time</th>
+                            <th>Actor (ID)</th>
+                            <th>Role</th>
+                            <th>Action</th>
+                            <th>Target Trader</th>
+                            <th>Detail</th>
+                            <th>IP Address</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {auditLogs.map(log => (
+                            <tr key={log.id}>
+                              <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{log.created_at ? new Date(log.created_at).toLocaleString() : '—'}</td>
+                              <td>#{log.actor_id}</td>
+                              <td><span style={{ background: log.actor_role === 'admin' ? '#7c3aed22' : '#0e3a5a', color: log.actor_role === 'admin' ? '#a78bfa' : '#38bdf8', borderRadius: 4, padding: '2px 7px', fontSize: 11, fontWeight: 600 }}>{log.actor_role}</span></td>
+                              <td style={{ fontSize: 12, color: '#f59e0b' }}>{log.action}</td>
+                              <td>{log.target_trader_id ? `#${log.target_trader_id}` : '—'}</td>
+                              <td style={{ fontSize: 11, color: '#9ca3af', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{log.detail || '—'}</td>
+                              <td style={{ fontSize: 12, fontFamily: 'monospace' }}>{log.ip_address || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ==================== SETTINGS ==================== */}
           {activeTab === 'settings' && (

@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select, func, case, extract
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,12 +12,19 @@ from app.core.security import create_access_token
 from app.models import Trader, TraderStatus, Order, OrderStatus, Payment, PaymentDirection, PaymentStatus, ChatMessage
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.message_template import MessageTemplate
-from app.api.deps import get_admin_trader, get_employee_or_admin
+from app.api.deps import get_admin_trader, get_employee_or_admin, get_client_ip, write_audit_log
 from app.services.message_templates import seed_default_templates, refresh_template_cache
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def mask_phone(phone: str) -> str:
+    """Mask phone: 0712345678 → 07XX XXX 678"""
+    if not phone or len(phone) < 7:
+        return phone or "—"
+    return phone[:2] + "XX XXX " + phone[-3:]
 
 
 class AdminLoginRequest(BaseModel):
@@ -165,13 +172,15 @@ async def admin_dashboard(
 
 @router.get("/traders")
 async def list_traders(
+    request: Request,
     status: TraderStatus = None,
     limit: int = Query(default=50, le=200),
     offset: int = 0,
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all traders."""
+    """List all traders. Phones are masked for non-admin roles."""
+    from fastapi import Request
     query = select(Trader)
     if status:
         query = query.where(Trader.status == status)
@@ -180,12 +189,20 @@ async def list_traders(
     result = await db.execute(query)
     traders = result.scalars().all()
 
+    is_full_admin = admin.is_admin and admin.role == "admin"
+
+    await write_audit_log(
+        db, admin, "list_traders",
+        ip_address=get_client_ip(request),
+        detail=f"limit={limit} offset={offset} status={status}",
+    )
+
     return [
         {
             "id": t.id,
             "full_name": t.full_name,
             "email": t.email,
-            "phone": t.phone,
+            "phone": t.phone if is_full_admin else mask_phone(t.phone),
             "status": t.status.value,
             "binance_connected": t.binance_connected,
             "tier": t.tier,
@@ -237,27 +254,41 @@ async def create_employee(
 
 @router.get("/traders/{trader_id}/detail")
 async def get_trader_detail(
+    request: Request,
     trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get detailed trader info including security question and settlement."""
+    """Get detailed trader info. Settlement details restricted to full admins only."""
     result = await db.execute(select(Trader).where(Trader.id == trader_id))
     trader = result.scalar_one_or_none()
     if not trader:
         raise HTTPException(status_code=404, detail="Trader not found")
 
+    is_full_admin = admin.is_admin and admin.role == "admin"
+
+    await write_audit_log(
+        db, admin, "view_trader_detail",
+        ip_address=get_client_ip(request),
+        target_trader_id=trader_id,
+        detail=f"Viewed detail for {trader.full_name}",
+    )
+
     return {
         "security_question": trader.security_question or "",
-        "security_answer": getattr(trader, 'security_answer_plain', '') or "",
-        "settlement_method": trader.settlement_method or "",
-        "settlement_phone": trader.settlement_phone or "",
-        "settlement_account": trader.settlement_account or "",
-        "settlement_paybill": getattr(trader, 'settlement_paybill', '') or "",
-        "settlement_destination": trader.settlement_phone or trader.settlement_account or trader.phone or "",
+        "security_answer": (getattr(trader, 'security_answer_plain', '') or "") if is_full_admin else "— restricted —",
+        "settlement_method": trader.settlement_method or "" if is_full_admin else "— restricted —",
+        "settlement_phone": trader.settlement_phone or "" if is_full_admin else "— restricted —",
+        "settlement_account": trader.settlement_account or "" if is_full_admin else "— restricted —",
+        "settlement_paybill": getattr(trader, 'settlement_paybill', '') or "" if is_full_admin else "— restricted —",
+        "settlement_destination": (trader.settlement_phone or trader.settlement_account or trader.phone or "") if is_full_admin else "— restricted —",
         "google_id": getattr(trader, 'google_id', '') or "",
         "binance_username": getattr(trader, 'binance_username', '') or "",
-        "phone": trader.phone or "",
+        "phone": trader.phone or "" if is_full_admin else mask_phone(trader.phone),
         "created_at": str(trader.created_at) if trader.created_at else "",
+        "last_login": trader.last_login.isoformat() if trader.last_login else "",
+        "total_trades": trader.total_trades or 0,
+        "total_volume": float(trader.total_volume or 0),
     }
 
 
@@ -1232,3 +1263,90 @@ async def seed_templates(
     """Seed default message templates. Use force=true to reset all to defaults."""
     await seed_default_templates(force=force)
     return {"status": "seeded", "force": force}
+
+
+@router.get("/support-tickets")
+async def list_support_tickets(
+    status: str = None,
+    limit: int = Query(default=50, le=200),
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """List support tickets — defaults to escalated ones for the disputes tab."""
+    from app.models.support_ticket import SupportTicket, TicketStatus
+    from sqlalchemy import desc
+    query = select(SupportTicket)
+    if status:
+        query = query.where(SupportTicket.status == status)
+    else:
+        query = query.where(SupportTicket.status == TicketStatus.ESCALATED)
+    query = query.order_by(desc(SupportTicket.updated_at)).limit(limit)
+    result = await db.execute(query)
+    tickets = result.scalars().all()
+
+    # Fetch trader names
+    trader_ids = list({t.trader_id for t in tickets})
+    traders_result = await db.execute(select(Trader).where(Trader.id.in_(trader_ids)))
+    traders_map = {t.id: t for t in traders_result.scalars().all()}
+
+    return [
+        {
+            "id": t.id,
+            "trader_id": t.trader_id,
+            "trader_name": traders_map.get(t.trader_id, Trader()).full_name if t.trader_id in traders_map else "Unknown",
+            "trader_phone": traders_map.get(t.trader_id, Trader()).phone if t.trader_id in traders_map else "",
+            "subject": t.subject,
+            "status": t.status.value,
+            "messages": t.messages or [],
+            "escalation_reason": t.escalation_reason,
+            "created_at": t.created_at.isoformat() if t.created_at else "",
+            "updated_at": t.updated_at.isoformat() if t.updated_at else "",
+        }
+        for t in tickets
+    ]
+
+
+@router.put("/support-tickets/{ticket_id}/close")
+async def close_support_ticket(
+    ticket_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark a support ticket as closed."""
+    from app.models.support_ticket import SupportTicket, TicketStatus
+    result = await db.execute(select(SupportTicket).where(SupportTicket.id == ticket_id))
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    ticket.status = TicketStatus.CLOSED
+    await db.commit()
+    return {"status": "closed", "ticket_id": ticket_id}
+
+
+@router.get("/audit-logs")
+async def get_audit_logs(
+    limit: int = Query(default=100, le=500),
+    offset: int = 0,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """View audit logs of admin/employee access to sensitive data."""
+    from app.models.audit_log import AuditLog
+    from sqlalchemy import desc
+    result = await db.execute(
+        select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit).offset(offset)
+    )
+    logs = result.scalars().all()
+    return [
+        {
+            "id": l.id,
+            "actor_id": l.actor_id,
+            "actor_role": l.actor_role,
+            "action": l.action,
+            "target_trader_id": l.target_trader_id,
+            "detail": l.detail,
+            "ip_address": l.ip_address,
+            "created_at": l.created_at.isoformat() if l.created_at else "",
+        }
+        for l in logs
+    ]

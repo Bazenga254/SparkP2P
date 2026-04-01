@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
 import { useNavigate } from 'react-router-dom';
-import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard } from 'lucide-react';
+import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
+import SupportChat from '../components/SupportChat';
 
 function SpreadCalculator() {
   const [buyPrice, setBuyPrice] = useState('');
@@ -131,6 +132,13 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('overview');
   const [refreshing, setRefreshing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
+  const [showBalance, setShowBalance] = useState(false);
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [withdrawPreview, setWithdrawPreview] = useState(null);
+  const [withdrawOtp, setWithdrawOtp] = useState('');
+  const [withdrawOtpSent, setWithdrawOtpSent] = useState(false);
+  const [withdrawOtpLoading, setWithdrawOtpLoading] = useState(false);
+  const [withdrawMsg, setWithdrawMsg] = useState('');
   const [sessionHealth, setSessionHealth] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -247,28 +255,14 @@ export default function Dashboard() {
         return;
       }
 
-      const confirmed = confirm(
-        `Withdraw from SparkP2P wallet\n\n` +
-        `Balance: KES ${p.balance.toLocaleString()}\n` +
-        `Transaction fee: KES ${p.transaction_fee.toLocaleString()}\n` +
-        `You receive: KES ${p.you_receive.toLocaleString()}\n\n` +
-        `Proceed?`
-      );
-      if (!confirmed) return;
+      setWithdrawPreview(p);
+      setWithdrawOtp('');
+      setWithdrawOtpSent(false);
+      setWithdrawMsg('');
+      setShowWithdrawModal(true);
     } catch (err) {
       alert(err.response?.data?.detail || 'Could not check withdrawal');
-      return;
     }
-
-    setWithdrawing(true);
-    try {
-      const res = await requestWithdrawal();
-      alert(res.data.message || 'Withdrawal sent!');
-      await loadData();
-    } catch (err) {
-      alert(err.response?.data?.detail || 'Withdrawal failed');
-    }
-    setWithdrawing(false);
   };
 
   const handleDeposit = async () => {
@@ -571,16 +565,24 @@ export default function Dashboard() {
                 <div className="wallet-mini-header">
                   <Wallet size={18} />
                   <span>Wallet Balance</span>
+                  <button
+                    onClick={() => setShowBalance(v => !v)}
+                    style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center' }}
+                    title={showBalance ? 'Hide balance' : 'Show balance'}
+                  >
+                    {showBalance ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
                 </div>
-                <div className="wallet-mini-amount">KES {wallet?.balance?.toLocaleString() || '0'}</div>
+                <div className="wallet-mini-amount">
+                  {showBalance ? `KES ${wallet?.balance?.toLocaleString() || '0'}` : 'KES ••••••'}
+                </div>
                 {wallet?.reserved > 0 && (
                   <div className="wallet-reserved" style={{ fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>
-                    Reserved: KES {wallet.reserved.toLocaleString()}
+                    Reserved: {showBalance ? `KES ${wallet.reserved.toLocaleString()}` : 'KES ••••'}
                   </div>
                 )}
                 <div className="wallet-mini-stats">
-                  <span>Earned: KES {wallet?.total_earned?.toLocaleString() || '0'}</span>
-                  <span>Fees: KES {wallet?.total_fees_paid?.toLocaleString() || '0'}</span>
+                  <span>Earned: {showBalance ? `KES ${wallet?.total_earned?.toLocaleString() || '0'}` : 'KES ••••'}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                   <button
@@ -981,6 +983,95 @@ export default function Dashboard() {
         {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} />}
       </main>
 
+      {/* Withdraw OTP Modal */}
+      {showWithdrawModal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#1f2937', borderRadius: 16, padding: 32, width: '100%', maxWidth: 420, boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <h3 style={{ color: '#fff', fontSize: 18, margin: 0 }}>Confirm Withdrawal</h3>
+              <button onClick={() => setShowWithdrawModal(false)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 20 }}>×</button>
+            </div>
+
+            {/* Fee summary */}
+            {withdrawPreview && (
+              <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: 20, fontSize: 13 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
+                  <span>Wallet Balance</span><span style={{ color: '#fff', fontWeight: 600 }}>KES {withdrawPreview.balance?.toLocaleString()}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
+                  <span>Transaction Fee</span><span style={{ color: '#f59e0b', fontWeight: 600 }}>- KES {withdrawPreview.transaction_fee?.toLocaleString()}</span>
+                </div>
+                <div style={{ borderTop: '1px solid #374151', paddingTop: 8, display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#10b981', fontWeight: 700 }}>You Receive</span><span style={{ color: '#10b981', fontWeight: 700, fontSize: 15 }}>KES {withdrawPreview.you_receive?.toLocaleString()}</span>
+                </div>
+              </div>
+            )}
+
+            {!withdrawOtpSent ? (
+              <>
+                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 16 }}>We'll send a one-time code to your registered phone number to authorize this withdrawal.</p>
+                <button
+                  onClick={async () => {
+                    setWithdrawOtpLoading(true);
+                    setWithdrawMsg('');
+                    try {
+                      const res = await requestWithdrawalOtp();
+                      setWithdrawOtpSent(true);
+                      setWithdrawMsg(res.data.message || 'OTP sent');
+                    } catch (e) {
+                      setWithdrawMsg(e.response?.data?.detail || 'Failed to send OTP');
+                    }
+                    setWithdrawOtpLoading(false);
+                  }}
+                  disabled={withdrawOtpLoading}
+                  style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}
+                >
+                  {withdrawOtpLoading ? 'Sending...' : 'Send OTP to my phone'}
+                </button>
+              </>
+            ) : (
+              <>
+                <p style={{ color: '#10b981', fontSize: 13, marginBottom: 12 }}>{withdrawMsg}</p>
+                <input
+                  type="text"
+                  maxLength={6}
+                  placeholder="Enter 6-digit OTP"
+                  value={withdrawOtp}
+                  onChange={e => setWithdrawOtp(e.target.value.replace(/\D/g, ''))}
+                  style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 16, letterSpacing: 6, textAlign: 'center', marginBottom: 12, boxSizing: 'border-box' }}
+                />
+                {withdrawMsg && !withdrawMsg.includes('sent') && (
+                  <p style={{ color: '#ef4444', fontSize: 12, marginBottom: 8 }}>{withdrawMsg}</p>
+                )}
+                <button
+                  onClick={async () => {
+                    if (withdrawOtp.length !== 6) { setWithdrawMsg('Enter the 6-digit code'); return; }
+                    setWithdrawing(true);
+                    setWithdrawMsg('');
+                    try {
+                      const res = await requestWithdrawal(withdrawOtp);
+                      setShowWithdrawModal(false);
+                      alert(res.data.message || 'Withdrawal sent!');
+                      await loadData();
+                    } catch (e) {
+                      setWithdrawMsg(e.response?.data?.detail || 'Withdrawal failed');
+                    }
+                    setWithdrawing(false);
+                  }}
+                  disabled={withdrawing || withdrawOtp.length !== 6}
+                  style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: withdrawOtp.length === 6 ? 'linear-gradient(135deg,#10b981,#059669)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: withdrawOtp.length === 6 ? 'pointer' : 'not-allowed', marginBottom: 8 }}
+                >
+                  {withdrawing ? 'Processing...' : 'Confirm Withdrawal'}
+                </button>
+                <button onClick={() => { setWithdrawOtpSent(false); setWithdrawOtp(''); setWithdrawMsg(''); }} style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: '1px solid #374151', background: 'none', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
+                  Resend OTP
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Deposit Modal */}
       {showDepositModal && (
         <div style={{
@@ -1275,6 +1366,7 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      <SupportChat />
     </div>
   );
 }

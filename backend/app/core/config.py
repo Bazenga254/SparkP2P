@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Claude AI
     ANTHROPIC_API_KEY: str = ""
 
+    # OpenAI
+    OPENAI_API_KEY: str = ""
+
     # Platform
     PLATFORM_NAME: str = "SparkP2P"
     PLATFORM_FEE_PER_TRADE: int = 15  # KES per trade
@@ -62,6 +65,7 @@ class Settings(BaseSettings):
 
     # Admin
     ADMIN_PASSWORD: str = "SparkAdmin2026"
+    ALLOWED_ADMIN_IPS: str = ""  # Comma-separated IPs, empty = allow all (set in .env)
 
     # Encryption key for storing sensitive data (Binance cookies, 2FA secrets)
     ENCRYPTION_KEY: str = "change-this-encryption-key"

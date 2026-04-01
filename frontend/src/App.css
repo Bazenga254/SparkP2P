@@ -2183,6 +2183,29 @@ body {
   color: #9ca3af;
 }
 
+.adm-btn-sm {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.adm-btn-sm:hover { background: var(--border); }
+.adm-btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.adm-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
 /* Select in table */
 .adm-select {
   background: var(--bg);

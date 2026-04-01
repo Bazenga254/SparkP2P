@@ -4,11 +4,13 @@ const api = axios.create({
   baseURL: '/api',
 });
 
-// Add auth token to all requests
+// Add auth token to all requests + ping activity tracker so bot trading keeps session alive
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+    // Notify AuthContext that there is API activity (keeps inactivity timer reset)
+    window.dispatchEvent(new Event('api-activity'));
   }
   return config;
 });
@@ -33,7 +35,8 @@ export const updateSettlement = (data) => api.put('/traders/settlement', data);
 export const updateVerification = (data) => api.put('/traders/verification', data);
 export const updateTradingConfig = (data) => api.put('/traders/trading-config', data);
 export const getWallet = () => api.get('/traders/wallet');
-export const requestWithdrawal = () => api.post('/traders/wallet/withdraw');
+export const requestWithdrawalOtp = () => api.post('/traders/wallet/withdraw/request-otp');
+export const requestWithdrawal = (otp_code) => api.post('/traders/wallet/withdraw', { otp_code });
 export const getWalletTransactions = (limit = 50) => api.get(`/traders/wallet/transactions?limit=${limit}`);
 export const getSessionHealth = () => api.get('/traders/session-health');
 export const updateProfile = (data) => api.put('/traders/profile', data);
@@ -83,5 +86,12 @@ export const resolveDispute = (orderId, data) => api.put(`/admin/disputes/${orde
 export const assignDispute = (orderId) => api.put(`/admin/disputes/${orderId}/assign`);
 export const sendChatMessage = (data) => api.post('/chat/send', data);
 export const getChatHistory = (orderId) => api.get(`/chat/history/${orderId}`);
+
+// Support Chat
+export const sendSupportMessage = (message, ticket_id = null) => api.post('/support/chat', { message, ticket_id });
+export const getSupportTickets = () => api.get('/support/tickets');
+export const getActiveSupportTicket = () => api.get('/support/tickets/active');
+export const getAdminSupportTickets = () => api.get('/admin/support-tickets');
+export const closeSupportTicket = (ticketId) => api.put(`/admin/support-tickets/${ticketId}/close`);
 
 export default api;

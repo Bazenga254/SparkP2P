@@ -610,6 +610,7 @@ async def update_trading_config(
 # ── Profile, Security Question, Change Password ───────────────────
 
 _change_pw_otp_codes: dict[str, str] = {}  # email -> OTP for in-app password change
+_withdraw_otp_codes: dict[str, str] = {}  # email -> OTP for withdrawal confirmation
 
 
 class UpdateProfileRequest(BaseModel):
@@ -866,16 +867,27 @@ async def get_wallet(
     )
 
 
+class WithdrawRequest(BaseModel):
+    otp_code: str
+
+
 @router.post("/wallet/withdraw")
 async def request_withdrawal(
+    data: WithdrawRequest,
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
     """Request withdrawal of wallet balance.
-    Checks 48-hour cooldown on new payment methods.
+    Requires OTP verification. Checks 48-hour cooldown on new payment methods.
     """
     from app.services.settlement.engine import SettlementEngine
     from datetime import datetime, timezone
+
+    # Verify OTP
+    stored_otp = _withdraw_otp_codes.get(trader.email)
+    if not stored_otp or stored_otp != data.otp_code.strip():
+        raise HTTPException(status_code=401, detail="Invalid or expired OTP code")
+    del _withdraw_otp_codes[trader.email]
 
     # Check 48-hour cooldown
     if trader.settlement_changed_at:
@@ -965,6 +977,23 @@ async def preview_withdrawal(
         "cooldown_active": cooldown_active,
         "cooldown_hours": cooldown_hours,
     }
+
+
+@router.post("/wallet/withdraw/request-otp")
+async def request_withdrawal_otp(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Send OTP to trader's phone to authorize a withdrawal."""
+    import random
+    otp_code = str(random.randint(100000, 999999))
+    _withdraw_otp_codes[trader.email] = otp_code
+    try:
+        from app.services.sms import sms_verification_code
+        sms_verification_code(trader.phone, otp_code)
+    except Exception as e:
+        logger.warning(f"Withdrawal OTP SMS failed for {trader.email}: {e}")
+    masked = trader.phone[-4:] if trader.phone else "****"
+    return {"status": "sent", "message": f"OTP sent to number ending {masked}"}
 
 
 @router.post("/wallet/withdraw/simulate")

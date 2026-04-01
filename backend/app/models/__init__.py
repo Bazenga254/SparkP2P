@@ -5,6 +5,8 @@ from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
 from app.models.chat import ChatMessage
 from app.models.message_template import MessageTemplate
+from app.models.support_ticket import SupportTicket, TicketStatus
+from app.models.audit_log import AuditLog
 
 __all__ = [
     "Trader", "SettlementMethod", "TraderStatus",
@@ -14,4 +16,6 @@ __all__ = [
     "Subscription", "SubscriptionPlan", "SubscriptionStatus",
     "ChatMessage",
     "MessageTemplate",
+    "SupportTicket", "TicketStatus",
+    "AuditLog",
 ]

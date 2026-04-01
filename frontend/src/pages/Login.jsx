@@ -36,6 +36,9 @@ export default function Login() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
+  // Show inactivity message if redirected
+  const inactivityLogout = searchParams.get('reason') === 'inactivity';
+
   // Handle Google OAuth callback
   useEffect(() => {
     const googleToken = searchParams.get('google_token');
@@ -451,6 +454,13 @@ export default function Login() {
                 <span className="login-field-hint">
                   Code sent to {phoneHint}
                 </span>
+              </div>
+            )}
+
+            {/* Inactivity logout banner */}
+            {inactivityLogout && (
+              <div style={{ background: '#1e3a2f', border: '1px solid #059669', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#6ee7b7', display: 'flex', gap: 8, alignItems: 'center' }}>
+                🔐 You were logged out after 30 minutes of inactivity.
               </div>
             )}
 
