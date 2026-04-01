@@ -69,6 +69,9 @@ export default function Admin() {
   const [cryptoPeriod, setCryptoPeriod] = useState('all'); // crypto period — default all
   const [txType, setTxType] = useState('fiat'); // 'fiat' | 'crypto'
   const [ordersSearch, setOrdersSearch] = useState('');
+  const [ordersPage, setOrdersPage] = useState(1);
+  const [txLastUpdated, setTxLastUpdated] = useState(null);
+  const ORDERS_PAGE_SIZE = 25;
   const [activeTab, setActiveTab] = useState('dashboard');
   const [refreshing, setRefreshing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -194,10 +197,12 @@ export default function Admin() {
     }
   };
 
-  const loadOrders = async (period, search) => {
+  const loadOrders = async (period, search, resetPage = false) => {
     try {
-      const res = await getAdminOrders(period, 50, search);
+      const res = await getAdminOrders(period, 200, search);
       setOrders(res.data);
+      setTxLastUpdated(new Date());
+      if (resetPage) setOrdersPage(1);
     } catch (err) {
       console.error('Orders load error:', err);
     }
@@ -224,7 +229,17 @@ export default function Admin() {
   }, []);
 
   useEffect(() => { loadTransactions(txPeriod); }, [txPeriod]);
-  useEffect(() => { loadOrders(cryptoPeriod); }, [cryptoPeriod]);
+  useEffect(() => { loadOrders(cryptoPeriod, '', true); }, [cryptoPeriod]);
+
+  // Real-time polling when on transactions tab
+  useEffect(() => {
+    if (activeTab !== 'transactions') return;
+    const poll = setInterval(() => {
+      if (txType === 'crypto') loadOrders(cryptoPeriod, ordersSearch);
+      else loadTransactions(txPeriod, txnSearch);
+    }, 10000);
+    return () => clearInterval(poll);
+  }, [activeTab, txType, cryptoPeriod, txPeriod]);
 
   const handleStatusChange = async (traderId, newStatus) => {
     await updateTraderStatus(traderId, newStatus);
@@ -784,58 +799,81 @@ export default function Admin() {
               )}
 
               {/* ---- CRYPTO (Binance Orders) ---- */}
-              {txType === 'crypto' && (
-                <>
-                  <div style={{ padding: '12px 0', display: 'flex', gap: 8 }}>
-                    <input type="text" placeholder="Search by order #, trader, counterparty..."
-                      value={ordersSearch} onChange={(e) => setOrdersSearch(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && loadOrders(cryptoPeriod, ordersSearch)}
-                      style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
-                    />
-                    <button onClick={() => loadOrders(cryptoPeriod, ordersSearch)}
-                      style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
-                      Search
-                    </button>
-                    {ordersSearch && (
-                      <button onClick={() => { setOrdersSearch(''); loadOrders(cryptoPeriod, ''); }}
-                        style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
-                        Clear
+              {txType === 'crypto' && (() => {
+                const totalPages = Math.max(1, Math.ceil(orders.orders.length / ORDERS_PAGE_SIZE));
+                const pageSlice = orders.orders.slice((ordersPage - 1) * ORDERS_PAGE_SIZE, ordersPage * ORDERS_PAGE_SIZE);
+                return (
+                  <>
+                    <div style={{ padding: '12px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <input type="text" placeholder="Search by order #, trader, counterparty..."
+                        value={ordersSearch} onChange={(e) => setOrdersSearch(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && loadOrders(cryptoPeriod, ordersSearch, true)}
+                        style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
+                      />
+                      <button onClick={() => loadOrders(cryptoPeriod, ordersSearch, true)}
+                        style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                        Search
                       </button>
-                    )}
-                  </div>
-                  <div style={{ padding: '0 0 8px', fontSize: 12, color: '#6b7280' }}>{orders.total} orders</div>
-                  <div className="adm-table-wrap">
-                    <table className="adm-table">
-                      <thead>
-                        <tr>
-                          <th>Order #</th><th>Side</th><th>Trader</th><th>Crypto</th>
-                          <th>Fiat Amount</th><th>Rate</th><th>Counterparty</th>
-                          <th>Fee</th><th>Status</th><th>Time</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {orders.orders.map((o) => (
-                          <tr key={o.id}>
-                            <td className="mono" style={{ fontSize: 11, color: '#f59e0b' }}>{o.binance_order_number || o.id}</td>
-                            <td><span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`}>{o.side}</span></td>
-                            <td>{o.trader_name}</td>
-                            <td style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset}</td>
-                            <td style={{ fontWeight: 600, color: '#10b981' }}>{fmtKES(o.fiat_amount)}</td>
-                            <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${o.price.toLocaleString()}/USDT` : '—'}</td>
-                            <td>{o.counterparty}</td>
-                            <td style={{ color: '#ef4444', fontSize: 12 }}>{o.platform_fee ? fmtKES(o.platform_fee) : '—'}</td>
-                            <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
-                            <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '-'}</td>
+                      {ordersSearch && (
+                        <button onClick={() => { setOrdersSearch(''); loadOrders(cryptoPeriod, '', true); }}
+                          style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ padding: '0 0 10px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <span style={{ fontSize: 12, color: '#6b7280' }}>{orders.total} orders total</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#10b981' }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite' }} />
+                        Live · updates every 10s
+                      </span>
+                      {txLastUpdated && <span style={{ fontSize: 11, color: '#4b5563' }}>Last: {txLastUpdated.toLocaleTimeString()}</span>}
+                    </div>
+                    <div className="adm-table-wrap">
+                      <table className="adm-table">
+                        <thead>
+                          <tr>
+                            <th>Order #</th><th>Side</th><th>Trader</th><th>Crypto</th>
+                            <th>Fiat Amount</th><th>Rate</th><th>Counterparty</th>
+                            <th>Fee</th><th>Status</th><th>Time</th>
                           </tr>
-                        ))}
-                        {orders.orders.length === 0 && (
-                          <tr><td colSpan={10} className="adm-empty">No crypto orders found</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
+                        </thead>
+                        <tbody>
+                          {pageSlice.length === 0 ? (
+                            <tr><td colSpan={10} className="adm-empty">No crypto orders found</td></tr>
+                          ) : pageSlice.map((o) => (
+                            <tr key={o.id}>
+                              <td className="mono" style={{ fontSize: 11, color: '#f59e0b' }}>{o.binance_order_number || o.id}</td>
+                              <td><span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`}>{o.side}</span></td>
+                              <td>{o.trader_name}</td>
+                              <td style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset}</td>
+                              <td style={{ fontWeight: 600, color: '#10b981' }}>{fmtKES(o.fiat_amount)}</td>
+                              <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${o.price.toLocaleString()}/USDT` : '—'}</td>
+                              <td>{o.counterparty}</td>
+                              <td style={{ color: '#ef4444', fontSize: 12 }}>{o.platform_fee ? fmtKES(o.platform_fee) : '—'}</td>
+                              <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
+                              <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {totalPages > 1 && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+                        <button onClick={() => setOrdersPage(p => Math.max(1, p - 1))} disabled={ordersPage === 1}
+                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: ordersPage === 1 ? 'transparent' : 'var(--bg)', color: ordersPage === 1 ? '#4b5563' : '#fff', cursor: ordersPage === 1 ? 'default' : 'pointer', fontSize: 13 }}>
+                          ← Prev
+                        </button>
+                        <span style={{ fontSize: 13, color: '#6b7280' }}>Page {ordersPage} of {totalPages} · {orders.orders.length} orders loaded</span>
+                        <button onClick={() => setOrdersPage(p => Math.min(totalPages, p + 1))} disabled={ordersPage === totalPages}
+                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: ordersPage === totalPages ? 'transparent' : 'var(--bg)', color: ordersPage === totalPages ? '#4b5563' : '#fff', cursor: ordersPage === totalPages ? 'default' : 'pointer', fontSize: 13 }}>
+                          Next →
+                        </button>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
 
