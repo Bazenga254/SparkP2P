@@ -289,6 +289,77 @@ async def reset_trader_password(
     return {"status": "ok", "message": "Password reset and sent via SMS"}
 
 
+# In-memory store for pending payment resolutions: {mpesa_ref: {trader_id, amount, status, message}}
+_pending_resolutions: dict = {}
+
+
+class ResolvePaymentRequest(BaseModel):
+    mpesa_ref: str
+    amount: float
+
+
+@router.post("/traders/{trader_id}/resolve-payment")
+async def resolve_payment(
+    trader_id: int,
+    req: ResolvePaymentRequest,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verify an M-Pesa transaction via Safaricom and credit trader wallet if valid."""
+    mpesa_ref = req.mpesa_ref.strip().upper()
+    amount = req.amount
+
+    # 1. Duplicate check — has this receipt already been credited?
+    existing = await db.execute(
+        select(Payment).where(Payment.mpesa_transaction_id == mpesa_ref)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="This M-Pesa reference has already been credited.")
+
+    # 2. Trader exists?
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    # 3. Store pending resolution and trigger Safaricom verification
+    _pending_resolutions[mpesa_ref] = {
+        "trader_id": trader_id,
+        "amount": amount,
+        "status": "verifying",
+        "message": "Waiting for Safaricom to confirm transaction...",
+    }
+
+    try:
+        from app.services.mpesa.client import mpesa_client
+        await mpesa_client.query_transaction(mpesa_ref)
+        logger.info(f"Resolve payment: queried Safaricom for {mpesa_ref} (trader {trader_id}, KES {amount})")
+    except Exception as e:
+        _pending_resolutions.pop(mpesa_ref, None)
+        raise HTTPException(status_code=502, detail=f"Safaricom query failed: {e}")
+
+    return {"status": "verifying", "mpesa_ref": mpesa_ref, "message": "Verification sent to Safaricom. Check status in a few seconds."}
+
+
+@router.get("/traders/{trader_id}/resolve-payment/status")
+async def resolve_payment_status(
+    trader_id: int,
+    mpesa_ref: str,
+    admin: Trader = Depends(get_admin_trader),
+):
+    """Poll for the result of a pending payment resolution."""
+    mpesa_ref = mpesa_ref.strip().upper()
+    info = _pending_resolutions.get(mpesa_ref)
+    if not info:
+        # Check if already credited
+        return {"status": "unknown", "message": "No pending resolution found for this reference."}
+    return {
+        "status": info["status"],
+        "message": info["message"],
+        "amount": info.get("credited_amount"),
+    }
+
+
 @router.put("/traders/{trader_id}/role")
 async def update_trader_role(
     trader_id: int,

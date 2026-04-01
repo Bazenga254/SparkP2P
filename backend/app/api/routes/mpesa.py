@@ -611,6 +611,122 @@ async def b2b_timeout(request: Request):
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
+# ── Transaction Status Callbacks (used for payment resolution) ─────
+
+@router.post("/status/result")
+async def transaction_status_result(request: Request, db: AsyncSession = Depends(get_db)):
+    """Safaricom Transaction Status callback — used to verify unmatched payments."""
+    from app.api.routes.admin import _pending_resolutions
+    data = await request.json()
+    logger.info(f"Transaction Status Result: {data}")
+
+    try:
+        result = data.get("Result", {})
+        result_code = result.get("ResultCode")
+
+        # Extract the original transaction ID from the result
+        params = {}
+        for item in result.get("ResultParameters", {}).get("ResultParameter", []):
+            params[item.get("Key", "")] = item.get("Value", "")
+
+        original_ref = params.get("OriginalTransactionID", "") or result.get("TransactionID", "")
+        safaricom_amount = float(params.get("Amount", 0))
+
+        pending = _pending_resolutions.get(original_ref)
+        if not pending:
+            logger.warning(f"No pending resolution for {original_ref}")
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        if result_code != 0:
+            pending["status"] = "failed"
+            pending["message"] = f"Safaricom could not verify this transaction: {result.get('ResultDesc', 'Unknown error')}"
+            logger.warning(f"Resolution failed for {original_ref}: {result.get('ResultDesc')}")
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        # Amount tolerance check (±5 KES)
+        expected = pending["amount"]
+        if abs(safaricom_amount - expected) > 5:
+            pending["status"] = "failed"
+            pending["message"] = f"Amount mismatch: Safaricom shows KES {safaricom_amount:,.0f} but you entered KES {expected:,.0f}"
+            logger.warning(f"Amount mismatch for {original_ref}: expected {expected}, got {safaricom_amount}")
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        # Final duplicate check before crediting
+        existing = await db.execute(select(Payment).where(Payment.mpesa_transaction_id == original_ref))
+        if existing.scalar_one_or_none():
+            pending["status"] = "failed"
+            pending["message"] = "This transaction has already been credited."
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        # Credit wallet
+        trader_id = pending["trader_id"]
+        sender_name = params.get("DebitPartyName", "")
+
+        result_q = await db.execute(select(Wallet).where(Wallet.trader_id == trader_id))
+        wallet = result_q.scalar_one_or_none()
+        if not wallet:
+            wallet = Wallet(trader_id=trader_id, balance=0, reserved=0)
+            db.add(wallet)
+            await db.flush()
+
+        wallet.balance += safaricom_amount
+        wallet.total_earned += safaricom_amount
+
+        txn = WalletTransaction(
+            trader_id=trader_id,
+            wallet_id=wallet.id,
+            transaction_type=TransactionType.DEPOSIT,
+            amount=safaricom_amount,
+            balance_after=wallet.balance,
+            description=f"Resolved deposit - verified by Safaricom",
+            mpesa_receipt=original_ref,
+            status="completed",
+        )
+        db.add(txn)
+
+        payment = Payment(
+            trader_id=trader_id,
+            direction=PaymentDirection.INBOUND,
+            transaction_type="C2B",
+            amount=safaricom_amount,
+            phone="",
+            sender_name=sender_name,
+            bill_ref_number="RESOLVED",
+            mpesa_transaction_id=original_ref,
+            status=PaymentStatus.COMPLETED,
+        )
+        db.add(payment)
+        await db.commit()
+
+        # Adjust paybill balance
+        adjust_paybill_balance(safaricom_amount, direction="in")
+
+        # Notify trader
+        try:
+            from app.api.routes.traders import add_notification
+            add_notification(trader_id, f"Deposit Resolved: KES {safaricom_amount:,.0f}",
+                             f"Your wallet has been credited. Receipt: {original_ref}", "payment")
+        except Exception:
+            pass
+
+        pending["status"] = "credited"
+        pending["credited_amount"] = safaricom_amount
+        pending["message"] = f"✓ Verified by Safaricom. KES {safaricom_amount:,.0f} credited to trader's wallet."
+        logger.info(f"Resolved payment {original_ref}: KES {safaricom_amount} credited to trader {trader_id}")
+
+    except Exception as e:
+        logger.error(f"Transaction status result error: {e}")
+
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+@router.post("/status/timeout")
+async def transaction_status_timeout(request: Request):
+    data = await request.json()
+    logger.warning(f"Transaction Status Timeout: {data}")
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
 # ── STK Push Callback ─────────────────────────────────────────────
 
 @router.post("/stkpush/callback")

@@ -47,6 +47,10 @@ export default function Admin() {
   const [traderDetail, setTraderDetail] = useState(null);
   const [resetPwLoading, setResetPwLoading] = useState(false);
   const [resetPwMsg, setResetPwMsg] = useState('');
+  const [resolveRef, setResolveRef] = useState('');
+  const [resolveAmount, setResolveAmount] = useState('');
+  const [resolveLoading, setResolveLoading] = useState(false);
+  const [resolveMsg, setResolveMsg] = useState({ text: '', type: '' });
   const [disputes, setDisputes] = useState([]);
   const [unmatched, setUnmatched] = useState([]);
   const [analytics, setAnalytics] = useState(null);
@@ -779,6 +783,7 @@ export default function Admin() {
                             setTraderDetail(res.data);
                           } catch (e) { setTraderDetail({}); }
                           setResetPwMsg('');
+                          setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
                         }}>{t.full_name}</button></td>
                         <td>{t.email}</td>
                         <td>{t.phone}</td>
@@ -867,6 +872,77 @@ export default function Admin() {
                         <div style={{ fontSize: 13 }}>ID: {traderDetail.google_id}</div>
                       </div>
                     )}
+
+                    {/* Resolve Payment */}
+                    <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, marginBottom: 12, border: '1px solid #f59e0b' }}>
+                      <div style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600, marginBottom: 8 }}>Resolve Unmatched Payment</div>
+                      <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 10 }}>
+                        Enter the M-Pesa reference and amount. Safaricom will verify the transaction before crediting the wallet.
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                        <input
+                          value={resolveRef}
+                          onChange={e => setResolveRef(e.target.value.toUpperCase())}
+                          placeholder="M-Pesa Ref e.g. QK12AB3CD4"
+                          style={{ flex: 2, padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }}
+                        />
+                        <input
+                          value={resolveAmount}
+                          onChange={e => setResolveAmount(e.target.value)}
+                          placeholder="Amount (KES)"
+                          type="number"
+                          style={{ flex: 1, padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }}
+                        />
+                      </div>
+                      <button
+                        disabled={resolveLoading || !resolveRef || !resolveAmount}
+                        style={{ width: '100%', padding: '9px', borderRadius: 6, border: 'none', background: resolveLoading ? '#374151' : '#f59e0b', color: '#000', fontWeight: 700, fontSize: 13, cursor: resolveLoading ? 'default' : 'pointer' }}
+                        onClick={async () => {
+                          setResolveLoading(true);
+                          setResolveMsg({ text: '', type: '' });
+                          try {
+                            await api.post(`/admin/traders/${selectedTrader.id}/resolve-payment`, {
+                              mpesa_ref: resolveRef,
+                              amount: parseFloat(resolveAmount),
+                            });
+                            setResolveMsg({ text: 'Verifying with Safaricom...', type: 'info' });
+                            // Poll for result every 3s for up to 30s
+                            let attempts = 0;
+                            const poll = setInterval(async () => {
+                              attempts++;
+                              try {
+                                const r = await api.get(`/admin/traders/${selectedTrader.id}/resolve-payment/status?mpesa_ref=${resolveRef}`);
+                                const { status, message } = r.data;
+                                if (status === 'credited') {
+                                  setResolveMsg({ text: message, type: 'success' });
+                                  setResolveRef(''); setResolveAmount('');
+                                  clearInterval(poll);
+                                } else if (status === 'failed') {
+                                  setResolveMsg({ text: message, type: 'error' });
+                                  clearInterval(poll);
+                                } else if (attempts >= 10) {
+                                  setResolveMsg({ text: 'Safaricom took too long to respond. Try again.', type: 'error' });
+                                  clearInterval(poll);
+                                }
+                              } catch (e) { clearInterval(poll); }
+                            }, 3000);
+                          } catch (e) {
+                            setResolveMsg({ text: e.response?.data?.detail || 'Failed to start verification.', type: 'error' });
+                          }
+                          setResolveLoading(false);
+                        }}
+                      >
+                        {resolveLoading ? 'Submitting...' : 'Verify & Credit Wallet'}
+                      </button>
+                      {resolveMsg.text && (
+                        <div style={{ marginTop: 8, fontSize: 12, textAlign: 'center', padding: '6px 8px', borderRadius: 6,
+                          color: resolveMsg.type === 'success' ? '#10b981' : resolveMsg.type === 'error' ? '#ef4444' : '#f59e0b',
+                          background: resolveMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : resolveMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)',
+                        }}>
+                          {resolveMsg.text}
+                        </div>
+                      )}
+                    </div>
 
                     {/* Reset Password */}
                     <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
