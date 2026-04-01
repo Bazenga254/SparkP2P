@@ -184,23 +184,17 @@ export default function Admin() {
     loadTemplates();
     const interval = setInterval(loadData, 30000);
 
-    // Paybill balance: trigger refresh immediately, then poll every 30s
-    const fetchBalance = async () => {
+    // Paybill balance: SSE for instant updates + trigger initial refresh
+    api.post('/payment/balance/refresh').catch(() => {});
+    const balanceES = new EventSource('/api/payment/balance/stream');
+    balanceES.onmessage = (e) => {
       try {
-        await api.post('/payment/balance/refresh');
-      } catch(e) {}
-      // Safaricom delivers the result async (~5-10s), so poll after 12s
-      setTimeout(async () => {
-        try {
-          const r = await api.get('/payment/balance');
-          if (r.data?.balance) setPaybillBalance(r.data);
-        } catch(e) {}
-      }, 12000);
+        const data = JSON.parse(e.data);
+        if (data?.updated_at) setPaybillBalance(data);
+      } catch {}
     };
-    fetchBalance();
-    const balInterval = setInterval(fetchBalance, 30000);
 
-    return () => { clearInterval(interval); clearInterval(balInterval); };
+    return () => { clearInterval(interval); balanceES.close(); };
   }, []);
 
   useEffect(() => {

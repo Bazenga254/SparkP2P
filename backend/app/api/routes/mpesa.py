@@ -181,6 +181,9 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
         # Not a P2P payment — forward to existing website handler if needed
         logger.info(f"Non-P2P payment received: ref={bill_ref}, amount={amount}")
 
+    # Adjust paybill balance in real-time
+    adjust_paybill_balance(amount, direction="in")
+
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
@@ -425,6 +428,9 @@ async def b2c_result(request: Request, db: AsyncSession = Depends(get_db)):
                     payment.sender_name = receiver_name  # Store receiver name
                 if result_code == 0:
                     payment.status = PaymentStatus.COMPLETED
+                    # Deduct from paybill balance in real-time
+                    if payment.amount:
+                        adjust_paybill_balance(payment.amount, direction="out")
                 else:
                     payment.status = PaymentStatus.FAILED
                     payment.remarks = (payment.remarks or "") + f" | B2C failed: {result_desc}"
@@ -449,8 +455,69 @@ async def b2c_timeout(request: Request):
 
 # ── Account Balance ───────────────────────────────────────────────
 
-# In-memory cache: {"balance": {...}, "updated_at": "...", "raw": {...}}
+import asyncio
+import json as _json
+from datetime import datetime, timezone as _tz
+from fastapi.responses import StreamingResponse
+
+# In-memory cache: {"available": float, "updated_at": str, "source": str}
 _paybill_balance_cache: dict = {}
+# SSE subscribers: set of asyncio.Queue
+_balance_subscribers: set = set()
+
+
+def _broadcast_balance():
+    """Push current balance to all SSE subscribers."""
+    msg = _json.dumps(_paybill_balance_cache)
+    dead = set()
+    for q in _balance_subscribers:
+        try:
+            q.put_nowait(msg)
+        except asyncio.QueueFull:
+            dead.add(q)
+    _balance_subscribers.difference_update(dead)
+
+
+def adjust_paybill_balance(amount: float, direction: str = "in"):
+    """Adjust cached balance immediately when a payment is processed.
+    direction='in' for C2B deposits, 'out' for B2C payouts."""
+    global _paybill_balance_cache
+    if not _paybill_balance_cache.get("available"):
+        return  # No baseline yet — wait for first Safaricom callback
+    delta = amount if direction == "in" else -amount
+    _paybill_balance_cache["available"] = round(_paybill_balance_cache["available"] + delta, 2)
+    _paybill_balance_cache["updated_at"] = datetime.now(_tz.utc).isoformat()
+    _paybill_balance_cache["source"] = "realtime"
+    _broadcast_balance()
+
+
+@router.get("/balance/stream")
+async def paybill_balance_stream(request: Request):
+    """SSE stream — pushes balance update immediately when it changes."""
+    queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+    _balance_subscribers.add(queue)
+
+    async def event_generator():
+        try:
+            # Send current value immediately on connect
+            if _paybill_balance_cache:
+                yield f"data: {_json.dumps(_paybill_balance_cache)}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=25)
+                    yield f"data: {msg}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"  # prevent proxy timeout
+        finally:
+            _balance_subscribers.discard(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/balance/refresh")
@@ -467,15 +534,15 @@ async def refresh_paybill_balance():
 
 @router.get("/balance")
 async def get_paybill_balance():
-    """Return cached paybill balance (populated by Safaricom callback)."""
+    """Return cached paybill balance."""
     if not _paybill_balance_cache:
-        return {"balance": None, "updated_at": None, "message": "No balance data yet — click refresh"}
+        return {"available": None, "updated_at": None, "message": "No balance data yet"}
     return _paybill_balance_cache
 
 
 @router.post("/balance/result")
 async def paybill_balance_result(request: Request):
-    """Safaricom callback with account balance result."""
+    """Safaricom callback with account balance result — updates cache and pushes via SSE."""
     global _paybill_balance_cache
     data = await request.json()
     logger.info(f"Balance Result: {data}")
@@ -484,31 +551,35 @@ async def paybill_balance_result(request: Request):
         result = data.get("Result", {})
         result_code = result.get("ResultCode")
         if result_code == 0:
-            # Parse balance string: "Working Account|KES|50.00|50.00|0.00|0.00"
             params = {}
             for item in result.get("ResultParameters", {}).get("ResultParameter", []):
                 params[item.get("Key", "")] = item.get("Value", "")
 
+            # Parse: "Working Account|KES|50.00|50.00|0.00|0.00"
             balance_str = params.get("AccountBalance", "")
+            total_available = 0.0
             accounts = {}
             for entry in balance_str.split("&"):
                 parts = entry.split("|")
                 if len(parts) >= 3:
+                    avail = float(parts[2]) if parts[2] else 0
+                    total_available += avail
                     accounts[parts[0].strip()] = {
                         "currency": parts[1].strip(),
-                        "available": float(parts[2]) if parts[2] else 0,
+                        "available": avail,
                         "reserved": float(parts[3]) if len(parts) > 3 and parts[3] else 0,
                     }
 
-            from datetime import datetime, timezone
             _paybill_balance_cache = {
-                "balance": accounts,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-                "raw": params,
+                "available": total_available,
+                "accounts": accounts,
+                "updated_at": datetime.now(_tz.utc).isoformat(),
+                "source": "safaricom",
             }
-            logger.info(f"Paybill balance updated: {accounts}")
+            logger.info(f"Paybill balance updated: KES {total_available}")
+            _broadcast_balance()
         else:
-            logger.warning(f"Balance query failed: code={result_code}, desc={result.get('ResultDesc')}")
+            logger.warning(f"Balance query failed: code={result_code}")
     except Exception as e:
         logger.error(f"Balance result parse error: {e}")
 
@@ -517,7 +588,6 @@ async def paybill_balance_result(request: Request):
 
 @router.post("/balance/timeout")
 async def paybill_balance_timeout(request: Request):
-    """Safaricom balance query timeout."""
     data = await request.json()
     logger.warning(f"Balance query timeout: {data}")
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
