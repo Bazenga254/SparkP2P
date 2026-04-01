@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword } from '../services/api';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -54,6 +54,10 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [cpPhoneHint, setCpPhoneHint] = useState('');
   const [cpShowPw, setCpShowPw] = useState(false);
   const [cpLoading, setCpLoading] = useState(false);
+  const [cpCooldownUntil, setCpCooldownUntil] = useState(
+    profile?.password_change_cooldown_until ? new Date(profile.password_change_cooldown_until) : null
+  );
+  const [cpCooldown, setCpCooldown] = useState('');
 
   const PW_RULES = [
     { label: 'At least 8 characters', test: (p) => p.length >= 8 },
@@ -62,6 +66,22 @@ export default function SettingsPanel({ profile, onUpdate }) {
     { label: '2 numbers', test: (p) => (p.match(/[0-9]/g) || []).length >= 2 },
     { label: '2 special chars (!@#$%...)', test: (p) => (p.match(/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/g) || []).length >= 2 },
   ];
+
+  // Countdown ticker for password change cooldown
+  useEffect(() => {
+    if (!cpCooldownUntil) return;
+    const tick = () => {
+      const diff = cpCooldownUntil - Date.now();
+      if (diff <= 0) { setCpCooldownUntil(null); setCpCooldown(''); return; }
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setCpCooldown(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [cpCooldownUntil]);
 
   // Trading
   const [autoRelease, setAutoRelease] = useState(profile?.auto_release_enabled ?? true);
@@ -531,7 +551,21 @@ export default function SettingsPanel({ profile, onUpdate }) {
               An OTP will be sent to your registered phone number to authorize the change.
             </p>
 
-            {cpStep === 0 && (
+            {cpCooldownUntil ? (
+              <div style={{ padding: 16, background: 'rgba(245,158,11,0.06)', borderRadius: 10, border: '1px solid rgba(245,158,11,0.25)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                  <span style={{ fontSize: 20 }}>⏳</span>
+                  <span style={{ fontSize: 13, color: '#f59e0b', fontWeight: 600 }}>Password change locked</span>
+                </div>
+                <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 10px' }}>
+                  For your security, you can only change your password once every 48 hours.
+                </p>
+                <div style={{ fontSize: 30, fontWeight: 800, color: '#f59e0b', fontVariantNumeric: 'tabular-nums', letterSpacing: 2 }}>
+                  {cpCooldown}
+                </div>
+                <p style={{ fontSize: 11, color: '#6b7280', marginTop: 6 }}>Time remaining until you can change your password again.</p>
+              </div>
+            ) : cpStep === 0 ? (
               <button
                 onClick={async () => {
                   setCpLoading(true);
@@ -541,7 +575,12 @@ export default function SettingsPanel({ profile, onUpdate }) {
                     setCpStep(1);
                     showMsg(res.data.message || 'OTP sent to your phone');
                   } catch (err) {
-                    showMsg(err.response?.data?.detail || 'Failed to send OTP');
+                    const detail = err.response?.data?.detail;
+                    if (detail?.code === 'password_change_cooldown') {
+                      setCpCooldownUntil(new Date(detail.cooldown_until));
+                    } else {
+                      showMsg(typeof detail === 'string' ? detail : 'Failed to send OTP');
+                    }
                   }
                   setCpLoading(false);
                 }}
@@ -550,7 +589,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
               >
                 {cpLoading ? 'Sending OTP...' : 'Change Password'}
               </button>
-            )}
+            ) : null}
 
             {cpStep === 1 && (
               <form onSubmit={async (e) => {
@@ -560,7 +599,10 @@ export default function SettingsPanel({ profile, onUpdate }) {
                 if (cpNewPw !== cpConfirm) { showMsg('Passwords do not match'); return; }
                 setCpLoading(true);
                 try {
-                  await changePassword(cpOtp, cpNewPw);
+                  const res = await changePassword(cpOtp, cpNewPw);
+                  if (res.data.cooldown_until) {
+                    setCpCooldownUntil(new Date(res.data.cooldown_until));
+                  }
                   setCpStep(2);
                   showMsg('Password changed successfully!');
                   setCpOtp(''); setCpNewPw(''); setCpConfirm('');
@@ -616,16 +658,13 @@ export default function SettingsPanel({ profile, onUpdate }) {
               </form>
             )}
 
-            {cpStep === 2 && (
+            {cpStep === 2 && !cpCooldownUntil && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 16, background: 'rgba(16,185,129,0.08)', borderRadius: 10, border: '1px solid #10b981' }}>
                 <span style={{ fontSize: 24 }}>✅</span>
                 <div>
                   <div style={{ fontWeight: 600, color: '#10b981', fontSize: 14 }}>Password changed successfully</div>
                   <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>Your new password is active.</div>
                 </div>
-                <button onClick={() => setCpStep(0)} style={{ marginLeft: 'auto', padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 12 }}>
-                  Change Again
-                </button>
               </div>
             )}
           </div>

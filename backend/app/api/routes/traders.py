@@ -107,6 +107,7 @@ class TraderProfileResponse(BaseModel):
     onboarding_complete: bool = False
     security_question: Optional[str] = None
     settlement_cooldown_until: Optional[str] = None  # ISO datetime when cooldown ends
+    password_change_cooldown_until: Optional[str] = None  # ISO datetime, 48hr after last pw change
 
 
 # In-memory store for phone verification results
@@ -341,6 +342,12 @@ async def get_profile(
             (trader.settlement_changed_at + timedelta(hours=48)).isoformat()
             if trader.settlement_changed_at and
                (trader.settlement_changed_at + timedelta(hours=48)) > datetime.now(timezone.utc)
+            else None
+        ),
+        password_change_cooldown_until=(
+            (trader.password_changed_at + timedelta(hours=48)).isoformat()
+            if trader.password_changed_at and
+               (trader.password_changed_at + timedelta(hours=48)) > datetime.now(timezone.utc)
             else None
         ),
     )
@@ -659,6 +666,19 @@ async def request_change_password_otp(
     trader: Trader = Depends(get_current_trader),
 ):
     """Send OTP to trader's phone to authorize a password change."""
+    if trader.password_changed_at:
+        cooldown_end = trader.password_changed_at + timedelta(hours=48)
+        if datetime.now(timezone.utc) < cooldown_end:
+            remaining = int((cooldown_end - datetime.now(timezone.utc)).total_seconds())
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "password_change_cooldown",
+                    "message": "Password can only be changed once every 48 hours.",
+                    "cooldown_until": cooldown_end.isoformat(),
+                    "remaining_seconds": remaining,
+                },
+            )
     import random
     otp_code = str(random.randint(100000, 999999))
     _change_pw_otp_codes[trader.email] = otp_code
@@ -677,8 +697,23 @@ async def change_password(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Verify OTP and update password (must differ from current)."""
+    """Verify OTP and update password (must differ from current). 48hr cooldown enforced."""
     import re
+    # Enforce 48-hour cooldown
+    if trader.password_changed_at:
+        cooldown_end = trader.password_changed_at + timedelta(hours=48)
+        if datetime.now(timezone.utc) < cooldown_end:
+            remaining = int((cooldown_end - datetime.now(timezone.utc)).total_seconds())
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "password_change_cooldown",
+                    "message": "Password can only be changed once every 48 hours.",
+                    "cooldown_until": cooldown_end.isoformat(),
+                    "remaining_seconds": remaining,
+                },
+            )
+
     stored = _change_pw_otp_codes.get(trader.email)
     if not stored or stored != data.otp_code:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP code")
@@ -701,9 +736,11 @@ async def change_password(
     trader.password_hash = hash_password(data.new_password)
     trader.failed_login_attempts = 0
     trader.locked_until = None
+    trader.password_changed_at = datetime.now(timezone.utc)
     _change_pw_otp_codes.pop(trader.email, None)
     await db.commit()
-    return {"message": "Password changed successfully"}
+    cooldown_until = (trader.password_changed_at + timedelta(hours=48)).isoformat()
+    return {"message": "Password changed successfully", "cooldown_until": cooldown_until}
 
 
 @router.get("/session-health")
