@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from typing import Optional
-from sqlalchemy import select
+from sqlalchemy import select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -637,9 +637,10 @@ async def update_profile(
         name = data.full_name.strip().upper()
         if len(name) < 3:
             raise HTTPException(status_code=400, detail="Full name must be at least 3 characters")
-        trader.full_name = name
-    await db.commit()
-    return {"message": "Profile updated", "full_name": trader.full_name}
+        await db.execute(sql_update(Trader).where(Trader.id == trader.id).values(full_name=name))
+        await db.commit()
+        return {"message": "Profile updated", "full_name": name}
+    return {"message": "Nothing to update", "full_name": trader.full_name}
 
 
 @router.post("/security-question")
@@ -655,8 +656,12 @@ async def set_security_question(
             detail="Security question is already set and cannot be changed",
         )
     from app.core.security import hash_password
-    trader.security_question = data.security_question.strip()
-    trader.security_answer_hash = hash_password(data.security_answer.strip().lower())
+    await db.execute(
+        sql_update(Trader).where(Trader.id == trader.id).values(
+            security_question=data.security_question.strip(),
+            security_answer_hash=hash_password(data.security_answer.strip().lower()),
+        )
+    )
     await db.commit()
     return {"message": "Security question saved successfully"}
 
@@ -733,13 +738,18 @@ async def change_password(
     if verify_password(data.new_password, trader.password_hash):
         raise HTTPException(status_code=400, detail="New password must be different from your current password")
 
-    trader.password_hash = hash_password(data.new_password)
-    trader.failed_login_attempts = 0
-    trader.locked_until = None
-    trader.password_changed_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    await db.execute(
+        sql_update(Trader).where(Trader.id == trader.id).values(
+            password_hash=hash_password(data.new_password),
+            failed_login_attempts=0,
+            locked_until=None,
+            password_changed_at=now,
+        )
+    )
     _change_pw_otp_codes.pop(trader.email, None)
     await db.commit()
-    cooldown_until = (trader.password_changed_at + timedelta(hours=48)).isoformat()
+    cooldown_until = (now + timedelta(hours=48)).isoformat()
     return {"message": "Password changed successfully", "cooldown_until": cooldown_until}
 
 
