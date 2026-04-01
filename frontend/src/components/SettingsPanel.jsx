@@ -67,6 +67,21 @@ export default function SettingsPanel({ profile, onUpdate }) {
     { label: '2 special chars (!@#$%...)', test: (p) => (p.match(/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/g) || []).length >= 2 },
   ];
 
+  // Sync profile data into local state once profile loads (useState only runs once at mount)
+  useEffect(() => {
+    if (profile?.full_name) setEditName(profile.full_name);
+  }, [profile?.full_name]);
+
+  useEffect(() => {
+    if (profile?.security_question) setSqJustSaved(profile.security_question);
+  }, [profile?.security_question]);
+
+  useEffect(() => {
+    if (profile?.password_change_cooldown_until) {
+      setCpCooldownUntil((prev) => prev || new Date(profile.password_change_cooldown_until));
+    }
+  }, [profile?.password_change_cooldown_until]);
+
   // Countdown ticker for password change cooldown
   useEffect(() => {
     if (!cpCooldownUntil) return;
