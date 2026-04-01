@@ -241,6 +241,18 @@ async def _credit_wallet_deposit(
 
     logger.info(f"Deposit credited: KES {amount} to trader {trader_id} (ref: {mpesa_txn_id})")
 
+    # Push in-app notification for real-time dashboard update
+    try:
+        from app.api.routes.traders import add_notification
+        add_notification(
+            trader_id,
+            f"Deposit Received: KES {amount:,.0f}",
+            f"Your wallet has been credited. New balance: KES {wallet.balance:,.0f}",
+            "payment"
+        )
+    except Exception as e:
+        logger.error(f"Failed to push deposit notification: {e}")
+
     # Send email + SMS notifications
     try:
         from app.services.email import send_deposit_received

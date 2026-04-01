@@ -203,6 +203,26 @@ export default function Dashboard() {
     return () => { clearTimeout(timer); clearInterval(interval); };
   }, []);
 
+  // Fast wallet poll every 5s for real-time balance updates
+  useEffect(() => {
+    const walletPoll = setInterval(async () => {
+      if (!localStorage.getItem('token')) return;
+      try {
+        const res = await getWallet();
+        if (res.data) {
+          setWallet(prev => {
+            if (prev && res.data.balance !== prev.balance) {
+              // Balance changed — also refresh transactions
+              getWalletTransactions(20).then(r => { if (r.data) setTransactions(r.data); }).catch(() => {});
+            }
+            return res.data;
+          });
+        }
+      } catch (e) {}
+    }, 5000);
+    return () => clearInterval(walletPoll);
+  }, []);
+
   // Redirect to onboarding if not complete (only for traders, not admin/employees)
   useEffect(() => {
     if (profile && profile.onboarding_complete === false && profile.role === 'trader') {
