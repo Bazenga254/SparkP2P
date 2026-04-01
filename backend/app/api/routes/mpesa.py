@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.services.matching.engine import MatchingEngine
 from app.services.settlement.engine import SettlementEngine
-from app.models import Order, OrderStatus, Trader
+from app.models import Order, OrderStatus, Trader, Payment, PaymentDirection, PaymentStatus
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 
 from sqlalchemy import select
@@ -224,7 +224,6 @@ async def _credit_wallet_deposit(
     db.add(txn)
 
     # Also create Payment record for admin transaction visibility
-    from app.models import Payment, PaymentDirection, PaymentStatus
     payment = Payment(
         trader_id=trader_id,
         direction=PaymentDirection.INBOUND,
