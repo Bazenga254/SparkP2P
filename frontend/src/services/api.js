@@ -23,6 +23,8 @@ api.interceptors.response.use(
 export const login = (email, password, otp_code) => api.post('/auth/login', { email, password, otp_code });
 export const register = (data) => api.post('/auth/register', data);
 export const sendVerificationCode = (email) => api.post('/auth/send-verification', { email });
+export const requestPasswordReset = (email) => api.post('/auth/reset-password/request', { email });
+export const confirmPasswordReset = (email, otp_code, new_password) => api.post('/auth/reset-password/confirm', { email, otp_code, new_password });
 
 // Trader
 export const getProfile = () => api.get('/traders/me');

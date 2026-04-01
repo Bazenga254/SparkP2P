@@ -25,6 +25,7 @@ router = APIRouter()
 # In-memory store for email verification codes (use Redis in production)
 _verification_codes: dict[str, str] = {}
 _login_otp_codes: dict[str, str] = {}  # email -> OTP for login 2FA
+_reset_otp_codes: dict[str, str] = {}  # email -> OTP for password reset
 
 
 class RegisterRequest(BaseModel):
@@ -367,6 +368,86 @@ async def employee_login(data: EmployeeLoginRequest, db: AsyncSession = Depends(
         "full_name": employee.full_name,
         "role": employee.role,
     }
+
+
+# ═══════════════════════════════════════════════════════════
+# PASSWORD RESET
+# ═══════════════════════════════════════════════════════════
+
+class ResetRequestModel(BaseModel):
+    email: EmailStr
+
+
+class ResetConfirmModel(BaseModel):
+    email: EmailStr
+    otp_code: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v):
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        if len(re.findall(r"[A-Z]", v)) < 2:
+            raise ValueError("Password must contain at least 2 uppercase letters")
+        if len(re.findall(r"[a-z]", v)) < 2:
+            raise ValueError("Password must contain at least 2 lowercase letters")
+        if len(re.findall(r"[0-9]", v)) < 2:
+            raise ValueError("Password must contain at least 2 numbers")
+        if len(re.findall(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>/?]", v)) < 2:
+            raise ValueError("Password must contain at least 2 special characters")
+        return v
+
+
+@router.post("/reset-password/request")
+async def reset_password_request(data: ResetRequestModel, db: AsyncSession = Depends(get_db)):
+    """Step 1: Send OTP to trader's registered phone for password reset."""
+    result = await db.execute(select(Trader).where(Trader.email == data.email))
+    trader = result.scalar_one_or_none()
+
+    # Always return success to prevent email enumeration
+    if not trader or not trader.phone:
+        return {"message": "If that email is registered, an OTP has been sent to the linked phone number."}
+
+    otp_code = str(random.randint(100000, 999999))
+    _reset_otp_codes[data.email] = otp_code
+
+    try:
+        from app.services.sms import sms_verification_code
+        sms_verification_code(trader.phone, otp_code)
+    except Exception as e:
+        logger.warning(f"Reset OTP SMS failed for {data.email}: {e}")
+
+    masked = f"***{trader.phone[-4:]}"
+    return {"message": f"OTP sent to {masked}", "phone_hint": masked}
+
+
+@router.post("/reset-password/confirm")
+async def reset_password_confirm(data: ResetConfirmModel, db: AsyncSession = Depends(get_db)):
+    """Step 2: Verify OTP and set new password (must differ from old)."""
+    stored = _reset_otp_codes.get(data.email)
+    if not stored or stored != data.otp_code:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP code")
+
+    result = await db.execute(select(Trader).where(Trader.email == data.email))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    # Ensure new password is not the same as the current one
+    if verify_password(data.new_password, trader.password_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="New password must be different from your current password",
+        )
+
+    trader.password_hash = hash_password(data.new_password)
+    trader.failed_login_attempts = 0
+    trader.locked_until = None
+    _reset_otp_codes.pop(data.email, None)
+    await db.commit()
+
+    return {"message": "Password reset successfully. You can now log in with your new password."}
 
 
 # ═══════════════════════════════════════════════════════════
