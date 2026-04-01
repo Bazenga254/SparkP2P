@@ -35,7 +35,7 @@ class Payment(Base):
 
     # Payment details
     amount = Column(Float, nullable=False)
-    phone = Column(String(20), nullable=True)
+    phone = Column(String(100), nullable=True)
     bill_ref_number = Column(String(100), nullable=True)  # Account number for C2B
     sender_name = Column(String(255), nullable=True)
 
