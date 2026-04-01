@@ -70,8 +70,10 @@ export default function Admin() {
   const [txType, setTxType] = useState('fiat'); // 'fiat' | 'crypto'
   const [ordersSearch, setOrdersSearch] = useState('');
   const [cryptoPage, setCryptoPage] = useState(1);
+  const [fiatPage, setFiatPage] = useState(1);
   const [txLastUpdated, setTxLastUpdated] = useState(null);
-  const ORDERS_PAGE_SIZE = 25;
+  const [fiatLastUpdated, setFiatLastUpdated] = useState(null);
+  const PAGE_TX_SIZE = 25;
   const [activeTab, setActiveTab] = useState('dashboard');
   const [refreshing, setRefreshing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -188,10 +190,12 @@ export default function Admin() {
 
   const [txnSearch, setTxnSearch] = useState('');
 
-  const loadTransactions = async (period, search) => {
+  const loadTransactions = async (period, search, resetPage = false) => {
     try {
-      const res = await getAdminTransactions(period, 50, search);
+      const res = await getAdminTransactions(period, 200, search);
       setTransactions(res.data);
+      setFiatLastUpdated(new Date());
+      if (resetPage) setFiatPage(1);
     } catch (err) {
       console.error('Transactions load error:', err);
     }
@@ -228,7 +232,7 @@ export default function Admin() {
     return () => { clearInterval(interval); balanceES.close(); };
   }, []);
 
-  useEffect(() => { loadTransactions(txPeriod); }, [txPeriod]);
+  useEffect(() => { loadTransactions(txPeriod, '', true); }, [txPeriod]);
   useEffect(() => { loadOrders(cryptoPeriod, '', true); }, [cryptoPeriod]);
 
   // Real-time polling when on transactions tab
@@ -738,70 +742,94 @@ export default function Admin() {
               </div>
 
               {/* ---- FIAT (M-Pesa Payments) ---- */}
-              {txType === 'fiat' && (
-                <>
-                  <div style={{ padding: '12px 0', display: 'flex', gap: 8 }}>
-                    <input type="text" placeholder="Search by M-Pesa code, phone, name..."
-                      value={txnSearch} onChange={(e) => setTxnSearch(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && loadTransactions(txPeriod, txnSearch)}
-                      style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
-                    />
-                    <button onClick={() => loadTransactions(txPeriod, txnSearch)}
-                      style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
-                      Search
-                    </button>
-                    {txnSearch && (
-                      <button onClick={() => { setTxnSearch(''); loadTransactions(txPeriod, ''); }}
-                        style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
-                        Clear
+              {txType === 'fiat' && (() => {
+                const fiatTotal = transactions.transactions.length;
+                const fiatTotalPages = Math.max(1, Math.ceil(fiatTotal / PAGE_TX_SIZE));
+                const fiatSlice = transactions.transactions.slice((fiatPage - 1) * PAGE_TX_SIZE, fiatPage * PAGE_TX_SIZE);
+                return (
+                  <>
+                    <div style={{ padding: '12px 0', display: 'flex', gap: 8 }}>
+                      <input type="text" placeholder="Search by M-Pesa code, phone, name..."
+                        value={txnSearch} onChange={(e) => setTxnSearch(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && loadTransactions(txPeriod, txnSearch, true)}
+                        style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
+                      />
+                      <button onClick={() => loadTransactions(txPeriod, txnSearch, true)}
+                        style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                        Search
                       </button>
-                    )}
-                  </div>
-                  <div style={{ padding: '0 0 8px', fontSize: 12, color: '#6b7280' }}>{transactions.total} payment records</div>
-                  <div className="adm-table-wrap">
-                    <table className="adm-table">
-                      <thead>
-                        <tr>
-                          <th>ID</th><th>Direction</th><th>Type</th><th>Amount</th>
-                          <th>Trader</th><th>Recipient/Sender</th><th>Phone</th>
-                          <th>M-Pesa Code</th><th>Reference</th><th>Status</th><th>Time</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {transactions.transactions.map((tx) => (
-                          <tr key={tx.id}>
-                            <td className="mono">{tx.id}</td>
-                            <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
-                            <td>{tx.transaction_type}</td>
-                            <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>
-                              {tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}
-                            </td>
-                            <td>{tx.trader_name}</td>
-                            <td>{tx.sender_name !== '-' ? tx.sender_name : tx.destination !== '-' ? tx.destination : '-'}</td>
-                            <td className="mono">{(() => {
-                              const p = tx.phone !== '-' ? tx.phone : tx.trader_phone;
-                              if (p && p.length > 20) return tx.sender_name !== '-' ? tx.sender_name : 'Hidden';
-                              return p || '-';
-                            })()}</td>
-                            <td className="mono" style={{ color: '#f59e0b' }}>{tx.mpesa_transaction_id}</td>
-                            <td className="mono">{tx.bill_ref_number}</td>
-                            <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
-                            <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '-'}</td>
+                      {txnSearch && (
+                        <button onClick={() => { setTxnSearch(''); loadTransactions(txPeriod, '', true); }}
+                          style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ padding: '0 0 10px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <span style={{ fontSize: 12, color: '#6b7280' }}>{transactions.total} payment records</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#10b981' }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite' }} />
+                        Live · updates every 10s
+                      </span>
+                      {fiatLastUpdated && <span style={{ fontSize: 11, color: '#4b5563' }}>Last: {fiatLastUpdated.toLocaleTimeString()}</span>}
+                    </div>
+                    <div className="adm-table-wrap">
+                      <table className="adm-table">
+                        <thead>
+                          <tr>
+                            <th>ID</th><th>Direction</th><th>Type</th><th>Amount</th>
+                            <th>Trader</th><th>Recipient/Sender</th><th>Phone</th>
+                            <th>M-Pesa Code</th><th>Reference</th><th>Status</th><th>Time</th>
                           </tr>
-                        ))}
-                        {transactions.transactions.length === 0 && (
-                          <tr><td colSpan={11} className="adm-empty">No fiat transactions found</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
+                        </thead>
+                        <tbody>
+                          {fiatSlice.length === 0 ? (
+                            <tr><td colSpan={11} className="adm-empty">No fiat transactions found</td></tr>
+                          ) : fiatSlice.map((tx) => (
+                            <tr key={tx.id}>
+                              <td className="mono">{tx.id}</td>
+                              <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
+                              <td>{tx.transaction_type}</td>
+                              <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>
+                                {tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}
+                              </td>
+                              <td>{tx.trader_name}</td>
+                              <td>{tx.sender_name !== '-' ? tx.sender_name : tx.destination !== '-' ? tx.destination : '-'}</td>
+                              <td className="mono">{(() => {
+                                const p = tx.phone !== '-' ? tx.phone : tx.trader_phone;
+                                if (p && p.length > 20) return tx.sender_name !== '-' ? tx.sender_name : 'Hidden';
+                                return p || '-';
+                              })()}</td>
+                              <td className="mono" style={{ color: '#f59e0b' }}>{tx.mpesa_transaction_id}</td>
+                              <td className="mono">{tx.bill_ref_number}</td>
+                              <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
+                              <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {fiatTotalPages > 1 && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+                        <button onClick={() => setFiatPage(p => Math.max(1, p - 1))} disabled={fiatPage === 1}
+                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: fiatPage === 1 ? 'transparent' : 'var(--bg)', color: fiatPage === 1 ? '#4b5563' : '#fff', cursor: fiatPage === 1 ? 'default' : 'pointer', fontSize: 13 }}>
+                          ← Prev
+                        </button>
+                        <span style={{ fontSize: 13, color: '#6b7280' }}>Page {fiatPage} of {fiatTotalPages} · {fiatTotal} transactions loaded</span>
+                        <button onClick={() => setFiatPage(p => Math.min(fiatTotalPages, p + 1))} disabled={fiatPage === fiatTotalPages}
+                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: fiatPage === fiatTotalPages ? 'transparent' : 'var(--bg)', color: fiatPage === fiatTotalPages ? '#4b5563' : '#fff', cursor: fiatPage === fiatTotalPages ? 'default' : 'pointer', fontSize: 13 }}>
+                          Next →
+                        </button>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
 
               {/* ---- CRYPTO (Binance Orders) ---- */}
               {txType === 'crypto' && (() => {
-                const totalPages = Math.max(1, Math.ceil(orders.orders.length / ORDERS_PAGE_SIZE));
-                const pageSlice = orders.orders.slice((cryptoPage - 1) * ORDERS_PAGE_SIZE, cryptoPage * ORDERS_PAGE_SIZE);
+                const totalPages = Math.max(1, Math.ceil(orders.orders.length / PAGE_TX_SIZE));
+                const pageSlice = orders.orders.slice((cryptoPage - 1) * PAGE_TX_SIZE, cryptoPage * PAGE_TX_SIZE);
                 return (
                   <>
                     <div style={{ padding: '12px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
