@@ -1,4 +1,5 @@
 import logging
+import re
 
 from fastapi import APIRouter, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -134,7 +135,17 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
     txn_id = data.get("TransID", "")
 
     # Route based on account reference prefix
-    if bill_ref.startswith("P2P-"):
+    # P2P-T0001        → direct wallet deposit (trader prefix only, no order suffix)
+    # P2P-T0001-98765  → P2P trade payment (trader prefix + Binance order number)
+    # DEP-1            → legacy wallet deposit format (kept for backward compatibility)
+    if re.match(r'^P2P-T\d{4}$', bill_ref):
+        # Exact trader deposit reference: P2P-T0001 (no order number suffix)
+        try:
+            trader_id = int(bill_ref[5:])  # strip "P2P-T"
+            await _credit_wallet_deposit(trader_id, amount, txn_id, phone, sender_name, db)
+        except (ValueError, IndexError):
+            logger.error(f"Invalid P2P deposit reference: {bill_ref}")
+    elif bill_ref.startswith("P2P-"):
         # This is a P2P trade payment (sell side — buyer pays us)
         engine = MatchingEngine(db)
         order = await engine.match_c2b_payment(
@@ -170,8 +181,7 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
             # Payment matched — trigger auto-release
             await _trigger_auto_release(order, db)
     elif bill_ref.startswith("DEP-"):
-        # This is a wallet deposit (manual Paybill payment)
-        # Extract trader ID from account reference: DEP-{trader_id}
+        # Legacy wallet deposit format (DEP-{trader_id}) — kept for backward compatibility
         try:
             trader_id = int(bill_ref.split("-")[1])
             await _credit_wallet_deposit(trader_id, amount, txn_id, phone, sender_name, db)

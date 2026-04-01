@@ -1111,7 +1111,7 @@ export default function Dashboard() {
                 <span style={{ color: '#9ca3af' }}>Paybill Number</span>
                 <span style={{ color: '#fff', fontWeight: 600 }}>4041355</span>
                 <span style={{ color: '#9ca3af' }}>Account Number</span>
-                <span style={{ color: '#f59e0b', fontWeight: 600 }}>DEP-{profile?.id || '...'}</span>
+                <span style={{ color: '#f59e0b', fontWeight: 600 }}>P2P-T{String(profile?.id || 0).padStart(4, '0')}</span>
               </div>
               <p style={{ fontSize: 11, color: '#6b7280', marginTop: 8, marginBottom: 0 }}>
                 Send any amount from M-Pesa, bank app, or agent. Your wallet will be credited automatically.
