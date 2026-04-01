@@ -56,6 +56,9 @@ export default function Admin() {
   const [viewingTraderTx, setViewingTraderTx] = useState([]);
   const [viewingTraderOrders, setViewingTraderOrders] = useState([]);
   const [viewingTraderLoading, setViewingTraderLoading] = useState(false);
+  const [txPage, setTxPage] = useState(1);
+  const [ordersPage, setOrdersPage] = useState(1);
+  const PAGE_SIZE = 15;
   const [disputes, setDisputes] = useState([]);
   const [unmatched, setUnmatched] = useState([]);
   const [analytics, setAnalytics] = useState(null);
@@ -235,14 +238,16 @@ export default function Admin() {
     setViewingTraderTx([]);
     setViewingTraderOrders([]);
     setViewingTraderLoading(true);
+    setTxPage(1);
+    setOrdersPage(1);
     setResetPwMsg('');
     setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
     try {
       const [detailRes, walletRes, txRes, ordersRes] = await Promise.all([
         api.get(`/admin/traders/${trader.id}/detail`),
         api.get(`/admin/traders/${trader.id}/wallet`),
-        api.get(`/admin/traders/${trader.id}/transactions?limit=20`),
-        api.get(`/admin/traders/${trader.id}/orders?limit=20`),
+        api.get(`/admin/traders/${trader.id}/transactions?limit=60`),
+        api.get(`/admin/traders/${trader.id}/orders?limit=60`),
       ]);
       setViewingTrader(prev => ({ ...prev, ...(detailRes.data || {}) }));
       setViewingTraderWallet(walletRes.data);
@@ -1074,84 +1079,122 @@ export default function Admin() {
                     </div>{/* end resolve card */}
 
                     {/* Recent Transactions */}
-                    <div className="adm-card" style={{ marginBottom: 16 }}>
-                      <div className="adm-card-header">
-                        <h3>Recent Transactions</h3>
-                        <span className="adm-card-count">{viewingTraderTx.length} shown</span>
-                      </div>
-                      <div className="adm-table-wrap">
-                        <table className="adm-table">
-                          <thead>
-                            <tr>
-                              <th>Type</th>
-                              <th>Direction</th>
-                              <th>Amount</th>
-                              <th>Balance After</th>
-                              <th>M-Pesa Code</th>
-                              <th>Description</th>
-                              <th>Status</th>
-                              <th>Time</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {viewingTraderTx.length === 0 ? (
-                              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No transactions</td></tr>
-                            ) : viewingTraderTx.map((tx) => (
-                              <tr key={tx.id}>
-                                <td style={{ textTransform: 'capitalize' }}>{(tx.transaction_type || '').replace(/_/g, ' ')}</td>
-                                <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
-                                <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>{tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}</td>
-                                <td style={{ color: '#9ca3af' }}>{fmtKES(tx.balance_after)}</td>
-                                <td className="mono" style={{ color: '#f59e0b', fontSize: 11 }}>{tx.mpesa_transaction_id || '—'}</td>
-                                <td style={{ fontSize: 12, color: '#9ca3af', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.description || '—'}</td>
-                                <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
-                                <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '—'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
+                    {(() => {
+                      const txTotalPages = Math.ceil(viewingTraderTx.length / PAGE_SIZE);
+                      const txSlice = viewingTraderTx.slice((txPage - 1) * PAGE_SIZE, txPage * PAGE_SIZE);
+                      return (
+                        <div className="adm-card" style={{ marginBottom: 16 }}>
+                          <div className="adm-card-header">
+                            <h3>Recent Transactions</h3>
+                            <span className="adm-card-count">{viewingTraderTx.length} total</span>
+                          </div>
+                          <div className="adm-table-wrap">
+                            <table className="adm-table">
+                              <thead>
+                                <tr>
+                                  <th>Type</th>
+                                  <th>Direction</th>
+                                  <th>Amount</th>
+                                  <th>Balance After</th>
+                                  <th>M-Pesa Code</th>
+                                  <th>Description</th>
+                                  <th>Status</th>
+                                  <th>Time</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {txSlice.length === 0 ? (
+                                  <tr><td colSpan={8} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No transactions</td></tr>
+                                ) : txSlice.map((tx) => (
+                                  <tr key={tx.id}>
+                                    <td style={{ textTransform: 'capitalize' }}>{(tx.transaction_type || '').replace(/_/g, ' ')}</td>
+                                    <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
+                                    <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>{tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}</td>
+                                    <td style={{ color: '#9ca3af' }}>{fmtKES(tx.balance_after)}</td>
+                                    <td className="mono" style={{ color: '#f59e0b', fontSize: 11 }}>{tx.mpesa_transaction_id || '—'}</td>
+                                    <td style={{ fontSize: 12, color: '#9ca3af', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.description || '—'}</td>
+                                    <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
+                                    <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          {txTotalPages > 1 && (
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+                              <button onClick={() => setTxPage(p => Math.max(1, p - 1))} disabled={txPage === 1}
+                                style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: txPage === 1 ? 'transparent' : 'var(--bg)', color: txPage === 1 ? '#4b5563' : '#fff', cursor: txPage === 1 ? 'default' : 'pointer', fontSize: 13 }}>
+                                ← Prev
+                              </button>
+                              <span style={{ fontSize: 13, color: '#6b7280' }}>Page {txPage} of {txTotalPages} · {viewingTraderTx.length} transactions</span>
+                              <button onClick={() => setTxPage(p => Math.min(txTotalPages, p + 1))} disabled={txPage === txTotalPages}
+                                style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: txPage === txTotalPages ? 'transparent' : 'var(--bg)', color: txPage === txTotalPages ? '#4b5563' : '#fff', cursor: txPage === txTotalPages ? 'default' : 'pointer', fontSize: 13 }}>
+                                Next →
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Recent Orders */}
-                    <div className="adm-card">
-                      <div className="adm-card-header">
-                        <h3>Recent Orders</h3>
-                        <span className="adm-card-count">{viewingTraderOrders.length} shown</span>
-                      </div>
-                      <div className="adm-table-wrap">
-                        <table className="adm-table">
-                          <thead>
-                            <tr>
-                              <th>Order #</th>
-                              <th>Side</th>
-                              <th>Crypto</th>
-                              <th>Fiat Amount</th>
-                              <th>Rate</th>
-                              <th>Counterparty</th>
-                              <th>Status</th>
-                              <th>Created</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {viewingTraderOrders.length === 0 ? (
-                              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No orders</td></tr>
-                            ) : viewingTraderOrders.map((o) => (
-                              <tr key={o.id}>
-                                <td className="mono" style={{ fontSize: 11 }}>{o.binance_order_number || o.id}</td>
-                                <td><span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`}>{o.side}</span></td>
-                                <td style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset || 'USDT'}</td>
-                                <td style={{ fontWeight: 600, color: '#10b981' }}>{fmtKES(o.fiat_amount)}</td>
-                                <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${(o.price).toLocaleString()}/USDT` : '—'}</td>
-                                <td style={{ fontSize: 12 }}>{o.counterparty || '—'}</td>
-                                <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
-                                <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '—'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
+                    {(() => {
+                      const ordTotalPages = Math.ceil(viewingTraderOrders.length / PAGE_SIZE);
+                      const ordSlice = viewingTraderOrders.slice((ordersPage - 1) * PAGE_SIZE, ordersPage * PAGE_SIZE);
+                      return (
+                        <div className="adm-card">
+                          <div className="adm-card-header">
+                            <h3>Recent Orders</h3>
+                            <span className="adm-card-count">{viewingTraderOrders.length} total</span>
+                          </div>
+                          <div className="adm-table-wrap">
+                            <table className="adm-table">
+                              <thead>
+                                <tr>
+                                  <th>Order #</th>
+                                  <th>Side</th>
+                                  <th>Crypto</th>
+                                  <th>Fiat Amount</th>
+                                  <th>Rate</th>
+                                  <th>Counterparty</th>
+                                  <th>Status</th>
+                                  <th>Created</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {ordSlice.length === 0 ? (
+                                  <tr><td colSpan={8} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No orders</td></tr>
+                                ) : ordSlice.map((o) => (
+                                  <tr key={o.id}>
+                                    <td className="mono" style={{ fontSize: 11 }}>{o.binance_order_number || o.id}</td>
+                                    <td><span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`}>{o.side}</span></td>
+                                    <td style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset || 'USDT'}</td>
+                                    <td style={{ fontWeight: 600, color: '#10b981' }}>{fmtKES(o.fiat_amount)}</td>
+                                    <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${(o.price).toLocaleString()}/USDT` : '—'}</td>
+                                    <td style={{ fontSize: 12 }}>{o.counterparty || '—'}</td>
+                                    <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
+                                    <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          {ordTotalPages > 1 && (
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+                              <button onClick={() => setOrdersPage(p => Math.max(1, p - 1))} disabled={ordersPage === 1}
+                                style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: ordersPage === 1 ? 'transparent' : 'var(--bg)', color: ordersPage === 1 ? '#4b5563' : '#fff', cursor: ordersPage === 1 ? 'default' : 'pointer', fontSize: 13 }}>
+                                ← Prev
+                              </button>
+                              <span style={{ fontSize: 13, color: '#6b7280' }}>Page {ordersPage} of {ordTotalPages} · {viewingTraderOrders.length} orders</span>
+                              <button onClick={() => setOrdersPage(p => Math.min(ordTotalPages, p + 1))} disabled={ordersPage === ordTotalPages}
+                                style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: ordersPage === ordTotalPages ? 'transparent' : 'var(--bg)', color: ordersPage === ordTotalPages ? '#4b5563' : '#fff', cursor: ordersPage === ordTotalPages ? 'default' : 'pointer', fontSize: 13 }}>
+                                Next →
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </>
                 )}
               </div>
