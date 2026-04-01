@@ -69,7 +69,7 @@ export default function Admin() {
   const [cryptoPeriod, setCryptoPeriod] = useState('all'); // crypto period — default all
   const [txType, setTxType] = useState('fiat'); // 'fiat' | 'crypto'
   const [ordersSearch, setOrdersSearch] = useState('');
-  const [ordersPage, setOrdersPage] = useState(1);
+  const [cryptoPage, setCryptoPage] = useState(1);
   const [txLastUpdated, setTxLastUpdated] = useState(null);
   const ORDERS_PAGE_SIZE = 25;
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -202,7 +202,7 @@ export default function Admin() {
       const res = await getAdminOrders(period, 200, search);
       setOrders(res.data);
       setTxLastUpdated(new Date());
-      if (resetPage) setOrdersPage(1);
+      if (resetPage) setCryptoPage(1);
     } catch (err) {
       console.error('Orders load error:', err);
     }
@@ -801,7 +801,7 @@ export default function Admin() {
               {/* ---- CRYPTO (Binance Orders) ---- */}
               {txType === 'crypto' && (() => {
                 const totalPages = Math.max(1, Math.ceil(orders.orders.length / ORDERS_PAGE_SIZE));
-                const pageSlice = orders.orders.slice((ordersPage - 1) * ORDERS_PAGE_SIZE, ordersPage * ORDERS_PAGE_SIZE);
+                const pageSlice = orders.orders.slice((cryptoPage - 1) * ORDERS_PAGE_SIZE, cryptoPage * ORDERS_PAGE_SIZE);
                 return (
                   <>
                     <div style={{ padding: '12px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -860,13 +860,13 @@ export default function Admin() {
                     </div>
                     {totalPages > 1 && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
-                        <button onClick={() => setOrdersPage(p => Math.max(1, p - 1))} disabled={ordersPage === 1}
-                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: ordersPage === 1 ? 'transparent' : 'var(--bg)', color: ordersPage === 1 ? '#4b5563' : '#fff', cursor: ordersPage === 1 ? 'default' : 'pointer', fontSize: 13 }}>
+                        <button onClick={() => setCryptoPage(p => Math.max(1, p - 1))} disabled={cryptoPage === 1}
+                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: cryptoPage === 1 ? 'transparent' : 'var(--bg)', color: cryptoPage === 1 ? '#4b5563' : '#fff', cursor: cryptoPage === 1 ? 'default' : 'pointer', fontSize: 13 }}>
                           ← Prev
                         </button>
-                        <span style={{ fontSize: 13, color: '#6b7280' }}>Page {ordersPage} of {totalPages} · {orders.orders.length} orders loaded</span>
-                        <button onClick={() => setOrdersPage(p => Math.min(totalPages, p + 1))} disabled={ordersPage === totalPages}
-                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: ordersPage === totalPages ? 'transparent' : 'var(--bg)', color: ordersPage === totalPages ? '#4b5563' : '#fff', cursor: ordersPage === totalPages ? 'default' : 'pointer', fontSize: 13 }}>
+                        <span style={{ fontSize: 13, color: '#6b7280' }}>Page {cryptoPage} of {totalPages} · {orders.orders.length} orders loaded</span>
+                        <button onClick={() => setCryptoPage(p => Math.min(totalPages, p + 1))} disabled={cryptoPage === totalPages}
+                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: cryptoPage === totalPages ? 'transparent' : 'var(--bg)', color: cryptoPage === totalPages ? '#4b5563' : '#fff', cursor: cryptoPage === totalPages ? 'default' : 'pointer', fontSize: 13 }}>
                           Next →
                         </button>
                       </div>
