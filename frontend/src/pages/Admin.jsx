@@ -65,7 +65,8 @@ export default function Admin() {
   const [onlineTraders, setOnlineTraders] = useState([]);
   const [transactions, setTransactions] = useState({ total: 0, transactions: [] });
   const [orders, setOrders] = useState({ total: 0, orders: [] });
-  const [txPeriod, setTxPeriod] = useState('today');
+  const [txPeriod, setTxPeriod] = useState('today');   // fiat period
+  const [cryptoPeriod, setCryptoPeriod] = useState('all'); // crypto period — default all
   const [txType, setTxType] = useState('fiat'); // 'fiat' | 'crypto'
   const [ordersSearch, setOrdersSearch] = useState('');
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -205,7 +206,7 @@ export default function Admin() {
   useEffect(() => {
     loadData();
     loadTransactions(txPeriod);
-    loadOrders(txPeriod);
+    loadOrders(cryptoPeriod);
     loadTemplates();
     const interval = setInterval(loadData, 30000);
 
@@ -222,10 +223,8 @@ export default function Admin() {
     return () => { clearInterval(interval); balanceES.close(); };
   }, []);
 
-  useEffect(() => {
-    loadTransactions(txPeriod);
-    loadOrders(txPeriod);
-  }, [txPeriod]);
+  useEffect(() => { loadTransactions(txPeriod); }, [txPeriod]);
+  useEffect(() => { loadOrders(cryptoPeriod); }, [cryptoPeriod]);
 
   const handleStatusChange = async (traderId, newStatus) => {
     await updateTraderStatus(traderId, newStatus);
@@ -708,14 +707,18 @@ export default function Admin() {
                     ))}
                   </div>
                 </div>
-                {/* Period filter */}
+                {/* Period filter — drives fiat or crypto depending on active type */}
                 <div className="adm-period-filter">
-                  {['today', 'week', 'month', 'year', 'all'].map((p) => (
-                    <button key={p} className={`adm-period-btn ${txPeriod === p ? 'active' : ''}`}
-                      onClick={() => setTxPeriod(p)}>
-                      {p.charAt(0).toUpperCase() + p.slice(1)}
-                    </button>
-                  ))}
+                  {['today', 'week', 'month', 'year', 'all'].map((p) => {
+                    const activePeriod = txType === 'fiat' ? txPeriod : cryptoPeriod;
+                    const setter = txType === 'fiat' ? setTxPeriod : setCryptoPeriod;
+                    return (
+                      <button key={p} className={`adm-period-btn ${activePeriod === p ? 'active' : ''}`}
+                        onClick={() => setter(p)}>
+                        {p.charAt(0).toUpperCase() + p.slice(1)}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -786,15 +789,15 @@ export default function Admin() {
                   <div style={{ padding: '12px 0', display: 'flex', gap: 8 }}>
                     <input type="text" placeholder="Search by order #, trader, counterparty..."
                       value={ordersSearch} onChange={(e) => setOrdersSearch(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && loadOrders(txPeriod, ordersSearch)}
+                      onKeyDown={(e) => e.key === 'Enter' && loadOrders(cryptoPeriod, ordersSearch)}
                       style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
                     />
-                    <button onClick={() => loadOrders(txPeriod, ordersSearch)}
+                    <button onClick={() => loadOrders(cryptoPeriod, ordersSearch)}
                       style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
                       Search
                     </button>
                     {ordersSearch && (
-                      <button onClick={() => { setOrdersSearch(''); loadOrders(txPeriod, ''); }}
+                      <button onClick={() => { setOrdersSearch(''); loadOrders(cryptoPeriod, ''); }}
                         style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
                         Clear
                       </button>
