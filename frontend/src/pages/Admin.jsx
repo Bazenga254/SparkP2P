@@ -159,7 +159,7 @@ export default function Admin() {
       // Fetch cached paybill balance
       try {
         const balRes = await api.get('/payment/balance');
-        if (balRes.data) setPaybillBalance(balRes.data);
+        if (balRes.data?.updated_at) setPaybillBalance(balRes.data);
       } catch(e) {}
     } catch (err) {
       console.error('Admin load error:', err);
@@ -363,17 +363,18 @@ export default function Admin() {
                   </div>
                 </div>
                 <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4', cursor: 'pointer' }} onClick={async () => {
-                  try { await api.post('/payment/balance/refresh'); setTimeout(async () => { try { const r = await api.get('/payment/balance'); if (r.data?.balance) setPaybillBalance(r.data); } catch(e){} }, 10000); } catch(e){}
+                  try { await api.post('/payment/balance/refresh'); } catch(e) {}
                 }}>
                   <div className="adm-stat-info">
-                    <span className="adm-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Paybill Balance {paybillBalance?.updated_at && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite', boxShadow: '0 0 6px #10b981' }} />}</span>
-                    <span className="adm-stat-value">
-                      {paybillBalance?.balance
-                        ? fmtKES(Object.values(paybillBalance.balance).reduce((sum, a) => sum + (a.available || 0), 0))
-                        : fmtKES(dashboard.platform.total_float)}
+                    <span className="adm-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      Paybill Balance
+                      {paybillBalance?.updated_at && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite', boxShadow: '0 0 6px #10b981' }} />}
                     </span>
-                    {paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Updated: {new Date(paybillBalance.updated_at).toLocaleTimeString()}</span>}
-                    {!paybillBalance?.balance && <span style={{ fontSize: 10, color: '#6b7280' }}>Click to refresh</span>}
+                    <span className="adm-stat-value">
+                      {paybillBalance?.available != null ? fmtKES(paybillBalance.available) : '—'}
+                    </span>
+                    {paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Updated: {new Date(paybillBalance.updated_at).toLocaleTimeString()} · {paybillBalance.source === 'realtime' ? 'live' : 'Safaricom'}</span>}
+                    {!paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Click to refresh</span>}
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4' }}>
                     <Banknote size={22} />
