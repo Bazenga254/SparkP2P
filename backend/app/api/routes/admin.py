@@ -261,6 +261,95 @@ async def get_trader_detail(
     }
 
 
+@router.get("/traders/{trader_id}/wallet")
+async def get_trader_wallet(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a trader's wallet balance and stats."""
+    from app.models.wallet import Wallet, WalletTransaction
+    result = await db.execute(select(Wallet).where(Wallet.trader_id == trader_id))
+    wallet = result.scalar_one_or_none()
+    if not wallet:
+        return {"balance": 0, "reserved": 0, "total_earned": 0, "total_withdrawn": 0, "total_fees_paid": 0}
+    return {
+        "balance": wallet.balance,
+        "reserved": wallet.reserved,
+        "total_earned": wallet.total_earned,
+        "total_withdrawn": getattr(wallet, 'total_withdrawn', 0) or 0,
+        "total_fees_paid": wallet.total_fees_paid,
+    }
+
+
+@router.get("/traders/{trader_id}/transactions")
+async def get_trader_transactions(
+    trader_id: int,
+    limit: int = 20,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a trader's recent wallet transactions."""
+    from app.models.wallet import WalletTransaction
+    from sqlalchemy import desc
+    result = await db.execute(
+        select(WalletTransaction)
+        .where(WalletTransaction.trader_id == trader_id)
+        .order_by(desc(WalletTransaction.created_at))
+        .limit(limit)
+    )
+    txns = result.scalars().all()
+    return [
+        {
+            "id": t.id,
+            "transaction_type": t.transaction_type.value if hasattr(t.transaction_type, 'value') else str(t.transaction_type),
+            "direction": "inbound" if t.amount >= 0 else "outbound",
+            "amount": abs(t.amount),
+            "balance_after": t.balance_after,
+            "description": t.description or "",
+            "mpesa_transaction_id": getattr(t, 'mpesa_receipt', '') or "",
+            "bill_ref_number": "",
+            "status": t.status or "completed",
+            "created_at": t.created_at.isoformat() if t.created_at else "",
+        }
+        for t in txns
+    ]
+
+
+@router.get("/traders/{trader_id}/orders")
+async def get_trader_orders(
+    trader_id: int,
+    limit: int = 20,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a trader's recent orders."""
+    from sqlalchemy import desc
+    result = await db.execute(
+        select(Order)
+        .where(Order.trader_id == trader_id)
+        .order_by(desc(Order.created_at))
+        .limit(limit)
+    )
+    orders = result.scalars().all()
+    return [
+        {
+            "id": o.id,
+            "side": o.side.value if hasattr(o.side, 'value') else str(o.side),
+            "status": o.status.value if hasattr(o.status, 'value') else str(o.status),
+            "fiat_amount": o.fiat_amount,
+            "crypto_amount": o.crypto_amount,
+            "asset": o.crypto_currency or "USDT",
+            "price": o.exchange_rate,
+            "counterparty": o.counterparty_name or "",
+            "platform_fee": o.platform_fee or 0,
+            "binance_order_number": o.binance_order_number or "",
+            "created_at": o.created_at.isoformat() if o.created_at else "",
+        }
+        for o in orders
+    ]
+
+
 @router.post("/traders/{trader_id}/reset-password")
 async def reset_trader_password(
     trader_id: int,

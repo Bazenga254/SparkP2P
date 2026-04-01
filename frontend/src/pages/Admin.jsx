@@ -966,7 +966,6 @@ export default function Admin() {
                             ['Reserved', w?.reserved, '#f59e0b'],
                             ['Total Earned', w?.total_earned, '#3b82f6'],
                             ['Withdrawn', w?.total_withdrawn, '#8b5cf6'],
-                            ['Fees Paid', w?.total_fees_paid, '#ef4444'],
                           ].map(([label, val, color]) => (
                             <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
                               <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{label}</div>
@@ -1083,22 +1082,24 @@ export default function Admin() {
                               <th>Type</th>
                               <th>Direction</th>
                               <th>Amount</th>
+                              <th>Balance After</th>
                               <th>M-Pesa Code</th>
-                              <th>Reference</th>
+                              <th>Description</th>
                               <th>Status</th>
                               <th>Time</th>
                             </tr>
                           </thead>
                           <tbody>
                             {viewingTraderTx.length === 0 ? (
-                              <tr><td colSpan={7} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No transactions</td></tr>
+                              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No transactions</td></tr>
                             ) : viewingTraderTx.map((tx) => (
                               <tr key={tx.id}>
-                                <td>{tx.transaction_type}</td>
+                                <td style={{ textTransform: 'capitalize' }}>{(tx.transaction_type || '').replace(/_/g, ' ')}</td>
                                 <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
                                 <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>{tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}</td>
-                                <td className="mono" style={{ color: '#f59e0b' }}>{tx.mpesa_transaction_id || '—'}</td>
-                                <td className="mono">{tx.bill_ref_number || '—'}</td>
+                                <td style={{ color: '#9ca3af' }}>{fmtKES(tx.balance_after)}</td>
+                                <td className="mono" style={{ color: '#f59e0b', fontSize: 11 }}>{tx.mpesa_transaction_id || '—'}</td>
+                                <td style={{ fontSize: 12, color: '#9ca3af', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.description || '—'}</td>
                                 <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
                                 <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '—'}</td>
                               </tr>
@@ -1122,21 +1123,23 @@ export default function Admin() {
                               <th>Side</th>
                               <th>Crypto</th>
                               <th>Fiat Amount</th>
-                              <th>Price</th>
+                              <th>Rate</th>
+                              <th>Counterparty</th>
                               <th>Status</th>
                               <th>Created</th>
                             </tr>
                           </thead>
                           <tbody>
                             {viewingTraderOrders.length === 0 ? (
-                              <tr><td colSpan={7} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No orders</td></tr>
+                              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No orders</td></tr>
                             ) : viewingTraderOrders.map((o) => (
                               <tr key={o.id}>
                                 <td className="mono" style={{ fontSize: 11 }}>{o.binance_order_number || o.id}</td>
                                 <td><span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`}>{o.side}</span></td>
-                                <td>{o.crypto_amount} {o.asset || 'USDT'}</td>
-                                <td style={{ fontWeight: 600 }}>{fmtKES(o.fiat_amount)}</td>
-                                <td>{o.price ? `${fmtKES(o.price)}/USDT` : '—'}</td>
+                                <td style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset || 'USDT'}</td>
+                                <td style={{ fontWeight: 600, color: '#10b981' }}>{fmtKES(o.fiat_amount)}</td>
+                                <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${(o.price).toLocaleString()}/USDT` : '—'}</td>
+                                <td style={{ fontSize: 12 }}>{o.counterparty || '—'}</td>
                                 <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
                                 <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '—'}</td>
                               </tr>
