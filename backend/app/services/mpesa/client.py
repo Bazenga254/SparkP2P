@@ -194,6 +194,24 @@ class MpesaClient:
         logger.info(f"STK Push sent to {phone}: {result}")
         return result
 
+    # ── Account Balance Query ─────────────────────────────────────
+
+    async def query_account_balance(self) -> dict:
+        """Query the Paybill account balance. Result delivered via callback."""
+        payload = {
+            "Initiator": self.initiator_name,
+            "SecurityCredential": self.security_credential,
+            "CommandID": "AccountBalance",
+            "PartyA": self.shortcode,
+            "IdentifierType": "4",  # Paybill
+            "Remarks": "Balance check",
+            "QueueTimeOutURL": f"{self.callback_base}/api/payment/balance/timeout",
+            "ResultURL": f"{self.callback_base}/api/payment/balance/result",
+        }
+        return await self._make_request(
+            "/mpesa/accountbalance/v1/query", payload
+        )
+
     # ── Transaction Status Query ──────────────────────────────────
 
     async def query_transaction(self, transaction_id: str) -> dict:

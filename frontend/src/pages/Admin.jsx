@@ -156,9 +156,8 @@ export default function Admin() {
       setAnalytics(analyticsRes.data);
       setOnlineTraders(onlineRes.data);
 
-      // Fetch paybill balance + trigger refresh
+      // Fetch cached paybill balance
       try {
-        api.post('/payment/balance/refresh').catch(() => {});
         const balRes = await api.get('/payment/balance');
         if (balRes.data) setPaybillBalance(balRes.data);
       } catch(e) {}
@@ -184,7 +183,24 @@ export default function Admin() {
     loadTransactions(txPeriod);
     loadTemplates();
     const interval = setInterval(loadData, 30000);
-    return () => clearInterval(interval);
+
+    // Paybill balance: trigger refresh immediately, then poll every 30s
+    const fetchBalance = async () => {
+      try {
+        await api.post('/payment/balance/refresh');
+      } catch(e) {}
+      // Safaricom delivers the result async (~5-10s), so poll after 12s
+      setTimeout(async () => {
+        try {
+          const r = await api.get('/payment/balance');
+          if (r.data?.balance) setPaybillBalance(r.data);
+        } catch(e) {}
+      }, 12000);
+    };
+    fetchBalance();
+    const balInterval = setInterval(fetchBalance, 30000);
+
+    return () => { clearInterval(interval); clearInterval(balInterval); };
   }, []);
 
   useEffect(() => {

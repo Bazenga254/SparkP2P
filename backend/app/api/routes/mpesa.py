@@ -447,6 +447,82 @@ async def b2c_timeout(request: Request):
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
+# ── Account Balance ───────────────────────────────────────────────
+
+# In-memory cache: {"balance": {...}, "updated_at": "...", "raw": {...}}
+_paybill_balance_cache: dict = {}
+
+
+@router.post("/balance/refresh")
+async def refresh_paybill_balance():
+    """Trigger Safaricom account balance query. Result arrives via /balance/result."""
+    try:
+        result = await mpesa_client.query_account_balance()
+        logger.info(f"Balance query triggered: {result}")
+        return {"status": "queued", "result": result}
+    except Exception as e:
+        logger.error(f"Balance query failed: {e}")
+        return {"status": "error", "detail": str(e)}
+
+
+@router.get("/balance")
+async def get_paybill_balance():
+    """Return cached paybill balance (populated by Safaricom callback)."""
+    if not _paybill_balance_cache:
+        return {"balance": None, "updated_at": None, "message": "No balance data yet — click refresh"}
+    return _paybill_balance_cache
+
+
+@router.post("/balance/result")
+async def paybill_balance_result(request: Request):
+    """Safaricom callback with account balance result."""
+    global _paybill_balance_cache
+    data = await request.json()
+    logger.info(f"Balance Result: {data}")
+
+    try:
+        result = data.get("Result", {})
+        result_code = result.get("ResultCode")
+        if result_code == 0:
+            # Parse balance string: "Working Account|KES|50.00|50.00|0.00|0.00"
+            params = {}
+            for item in result.get("ResultParameters", {}).get("ResultParameter", []):
+                params[item.get("Key", "")] = item.get("Value", "")
+
+            balance_str = params.get("AccountBalance", "")
+            accounts = {}
+            for entry in balance_str.split("&"):
+                parts = entry.split("|")
+                if len(parts) >= 3:
+                    accounts[parts[0].strip()] = {
+                        "currency": parts[1].strip(),
+                        "available": float(parts[2]) if parts[2] else 0,
+                        "reserved": float(parts[3]) if len(parts) > 3 and parts[3] else 0,
+                    }
+
+            from datetime import datetime, timezone
+            _paybill_balance_cache = {
+                "balance": accounts,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "raw": params,
+            }
+            logger.info(f"Paybill balance updated: {accounts}")
+        else:
+            logger.warning(f"Balance query failed: code={result_code}, desc={result.get('ResultDesc')}")
+    except Exception as e:
+        logger.error(f"Balance result parse error: {e}")
+
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+@router.post("/balance/timeout")
+async def paybill_balance_timeout(request: Request):
+    """Safaricom balance query timeout."""
+    data = await request.json()
+    logger.warning(f"Balance query timeout: {data}")
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
 # ── B2B Callbacks ─────────────────────────────────────────────────
 
 @router.post("/b2b/result")
