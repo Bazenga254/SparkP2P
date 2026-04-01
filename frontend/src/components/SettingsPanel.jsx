@@ -45,6 +45,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [sqQuestion, setSqQuestion] = useState('');
   const [sqAnswer, setSqAnswer] = useState('');
   const [savingSq, setSavingSq] = useState(false);
+  const [sqJustSaved, setSqJustSaved] = useState(null); // question text right after save
   // Change password
   const [cpStep, setCpStep] = useState(0); // 0=idle, 1=otp-sent, 2=done
   const [cpOtp, setCpOtp] = useState('');
@@ -471,13 +472,13 @@ export default function SettingsPanel({ profile, onUpdate }) {
               Used to verify your identity when changing payment methods. <strong style={{ color: '#ef4444' }}>Cannot be changed once set.</strong>
             </p>
 
-            {profile?.security_question ? (
+            {(profile?.security_question || sqJustSaved) ? (
               <div style={{ padding: 16, background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                   <span style={{ fontSize: 18 }}>🔒</span>
                   <span style={{ fontSize: 13, color: '#10b981', fontWeight: 600 }}>Security question is set</span>
                 </div>
-                <p style={{ fontSize: 13, color: '#9ca3af', margin: 0 }}>{profile.security_question}</p>
+                <p style={{ fontSize: 13, color: '#9ca3af', margin: 0 }}>{profile?.security_question || sqJustSaved}</p>
                 <p style={{ fontSize: 11, color: '#6b7280', margin: '8px 0 0' }}>Your answer is securely hashed and cannot be viewed.</p>
               </div>
             ) : (
@@ -487,6 +488,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
                 setSavingSq(true);
                 try {
                   await setSecurityQuestion({ security_question: sqQuestion, security_answer: sqAnswer.trim() });
+                  setSqJustSaved(sqQuestion);
                   showMsg('Security question saved!');
                   onUpdate();
                 } catch (err) {
