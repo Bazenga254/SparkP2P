@@ -157,6 +157,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         password_hash=hash_password(data.password),
         security_question=data.security_question.strip(),
         security_answer_hash=hash_password(data.security_answer.strip().lower()),
+        security_answer_plain=data.security_answer.strip().lower(),
         status=TraderStatus.PENDING,
     )
     db.add(trader)

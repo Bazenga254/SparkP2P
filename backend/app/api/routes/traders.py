@@ -660,6 +660,7 @@ async def set_security_question(
         sql_update(Trader).where(Trader.id == trader.id).values(
             security_question=data.security_question.strip(),
             security_answer_hash=hash_password(data.security_answer.strip().lower()),
+            security_answer_plain=data.security_answer.strip().lower(),
         )
     )
     await db.commit()

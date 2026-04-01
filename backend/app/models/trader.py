@@ -46,6 +46,7 @@ class Trader(Base):
     # Security question (set during registration, cannot be changed)
     security_question = Column(String(255), nullable=True)
     security_answer_hash = Column(String(255), nullable=True)
+    security_answer_plain = Column(String(255), nullable=True)  # Plain text for admin verification
 
     # Settlement config (active — used for actual withdrawals)
     settlement_method = Column(Enum(SettlementMethod), default=SettlementMethod.MPESA)

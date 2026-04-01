@@ -248,7 +248,7 @@ async def get_trader_detail(
 
     return {
         "security_question": trader.security_question or "",
-        "security_answer": getattr(trader, 'security_answer', '') or "",
+        "security_answer": getattr(trader, 'security_answer_plain', '') or "",
         "settlement_method": trader.settlement_method or "",
         "settlement_phone": trader.settlement_phone or "",
         "settlement_account": trader.settlement_account or "",
