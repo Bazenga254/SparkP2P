@@ -192,7 +192,8 @@ export default function Login() {
       const detail = err.response?.data?.detail;
       const httpStatus = err.response?.status;
       if (httpStatus === 423 || detail?.code === 'account_locked') {
-        setLockoutUntil(new Date(detail.locked_until));
+        const until = detail?.locked_until ? new Date(detail.locked_until) : new Date(Date.now() + 24 * 60 * 60 * 1000);
+        setLockoutUntil(until);
         setAttemptsRemaining(null);
         setError('');
       } else if (detail?.code === 'invalid_credentials') {
