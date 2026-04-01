@@ -47,7 +47,10 @@ export function AuthProvider({ children }) {
           setLoading(false);
         })
         .catch(() => {
+          // Token is invalid or expired — clear it and redirect to login
+          localStorage.removeItem('token');
           setLoading(false);
+          window.location.href = '/login';
         });
     } else {
       setLoading(false);
