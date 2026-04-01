@@ -456,6 +456,7 @@ async def list_unmatched_payments(
         .where(
             Payment.order_id.is_(None),
             Payment.direction == PaymentDirection.INBOUND,
+            ~Payment.bill_ref_number.like("DEP-%"),
         )
         .order_by(Payment.created_at.desc())
     )
