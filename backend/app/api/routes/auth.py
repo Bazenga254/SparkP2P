@@ -1,6 +1,7 @@
 import re
 import random
 import secrets
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from urllib.parse import urlencode
 import logging
@@ -178,21 +179,73 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     )
 
 
+MAX_LOGIN_ATTEMPTS = 3
+LOCKOUT_HOURS = 24
+
+
 @router.post("/login")
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     """Two-step login with SMS OTP.
     Step 1: Send email + password → returns otp_required=true, sends SMS OTP
     Step 2: Send email + password + otp_code → returns access_token
+    Lockout: 3 failed attempts locks account for 24 hours.
     """
     result = await db.execute(
         select(Trader).where(Trader.email == data.email)
     )
     trader = result.scalar_one_or_none()
 
+    # Check lockout first (even if email not found — don't reveal that)
+    if trader and trader.locked_until:
+        now = datetime.now(timezone.utc)
+        if trader.locked_until > now:
+            remaining_seconds = int((trader.locked_until - now).total_seconds())
+            raise HTTPException(
+                status_code=423,
+                detail={
+                    "code": "account_locked",
+                    "message": "Account locked due to too many failed attempts.",
+                    "locked_until": trader.locked_until.isoformat(),
+                    "remaining_seconds": remaining_seconds,
+                },
+            )
+        else:
+            # Lockout expired — reset
+            trader.failed_login_attempts = 0
+            trader.locked_until = None
+            await db.commit()
+
     if not trader or not verify_password(data.password, trader.password_hash):
+        # Increment failed attempts if trader exists
+        if trader:
+            trader.failed_login_attempts = (trader.failed_login_attempts or 0) + 1
+            attempts_remaining = MAX_LOGIN_ATTEMPTS - trader.failed_login_attempts
+            if trader.failed_login_attempts >= MAX_LOGIN_ATTEMPTS:
+                trader.locked_until = datetime.now(timezone.utc) + timedelta(hours=LOCKOUT_HOURS)
+                trader.failed_login_attempts = MAX_LOGIN_ATTEMPTS
+                await db.commit()
+                raise HTTPException(
+                    status_code=423,
+                    detail={
+                        "code": "account_locked",
+                        "message": "Account locked for 24 hours after too many failed attempts.",
+                        "locked_until": trader.locked_until.isoformat(),
+                        "remaining_seconds": LOCKOUT_HOURS * 3600,
+                    },
+                )
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "code": "invalid_credentials",
+                    "message": "Invalid email or password",
+                    "attempts_remaining": max(0, attempts_remaining),
+                    "show_reset": trader.failed_login_attempts >= 1,
+                },
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+            detail={"code": "invalid_credentials", "message": "Invalid email or password", "attempts_remaining": MAX_LOGIN_ATTEMPTS, "show_reset": False},
         )
 
     if trader.status == TraderStatus.SUSPENDED:
@@ -210,8 +263,12 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
                 detail="Invalid or expired OTP code",
             )
 
-        # OTP valid — issue token
+        # OTP valid — issue token, reset lockout counters
         _login_otp_codes.pop(data.email, None)
+        trader.failed_login_attempts = 0
+        trader.locked_until = None
+        trader.last_login = datetime.now(timezone.utc)
+        await db.commit()
         token = create_access_token({"sub": str(trader.id), "email": trader.email})
 
         return {

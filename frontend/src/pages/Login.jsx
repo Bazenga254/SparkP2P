@@ -25,6 +25,10 @@ export default function Login() {
   const [otpRequired, setOtpRequired] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [phoneHint, setPhoneHint] = useState('');
+  const [lockoutUntil, setLockoutUntil] = useState(null); // Date object
+  const [lockoutCountdown, setLockoutCountdown] = useState('');
+  const [attemptsRemaining, setAttemptsRemaining] = useState(null);
+  const [showReset, setShowReset] = useState(false);
   const [googleProfile, setGoogleProfile] = useState(null); // {token, name, id, role} — needs phone+KYC
   const [profileForm, setProfileForm] = useState({ full_name: '', phone: '' });
   const [savingProfile, setSavingProfile] = useState(false);
@@ -55,6 +59,28 @@ export default function Login() {
       setError(`Google login failed: ${googleError}`);
     }
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Lockout countdown ticker
+  useEffect(() => {
+    if (!lockoutUntil) return;
+    const tick = () => {
+      const diff = lockoutUntil - Date.now();
+      if (diff <= 0) {
+        setLockoutUntil(null);
+        setLockoutCountdown('');
+        return;
+      }
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setLockoutCountdown(
+        `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+      );
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [lockoutUntil]);
 
   const handleCompleteProfile = async (e) => {
     e.preventDefault();
@@ -161,10 +187,19 @@ export default function Login() {
       }
     } catch (err) {
       const detail = err.response?.data?.detail;
-      if (Array.isArray(detail)) {
+      const httpStatus = err.response?.status;
+      if (httpStatus === 423 || detail?.code === 'account_locked') {
+        setLockoutUntil(new Date(detail.locked_until));
+        setAttemptsRemaining(null);
+        setError('');
+      } else if (detail?.code === 'invalid_credentials') {
+        setAttemptsRemaining(detail.attempts_remaining ?? null);
+        setShowReset(detail.show_reset || false);
+        setError(detail.message || 'Invalid email or password');
+      } else if (Array.isArray(detail)) {
         setError(detail.map((d) => d.msg).join('. '));
       } else {
-        setError(detail || 'Something went wrong');
+        setError(typeof detail === 'string' ? detail : detail?.message || 'Something went wrong');
       }
     } finally {
       setLoading(false);
@@ -419,9 +454,47 @@ export default function Login() {
               </div>
             )}
 
+            {/* Account lockout banner */}
+            {lockoutUntil && (
+              <div className="login-lockout-banner">
+                <div className="login-lockout-icon">🔒</div>
+                <div className="login-lockout-text">
+                  <strong>Account Locked</strong>
+                  <p>Too many failed attempts. Try again in:</p>
+                  <div className="login-lockout-timer">{lockoutCountdown}</div>
+                  <p style={{ fontSize: 12, marginTop: 6, color: '#9ca3af' }}>
+                    Or{' '}
+                    <a href="/reset-password" style={{ color: '#f59e0b', textDecoration: 'underline' }}>
+                      reset your password
+                    </a>{' '}
+                    to regain access.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {error && <div className="login-error">{error}</div>}
 
-            <button type="submit" className="login-submit" disabled={loading}>
+            {/* Attempts remaining warning */}
+            {!isRegister && attemptsRemaining !== null && attemptsRemaining > 0 && (
+              <div className="login-attempts-warning">
+                {attemptsRemaining === 1
+                  ? 'Warning: 1 attempt remaining before your account is locked for 24 hours.'
+                  : `${attemptsRemaining} attempts remaining before lockout.`}
+              </div>
+            )}
+
+            {/* Reset password hint after first failure */}
+            {!isRegister && showReset && !lockoutUntil && (
+              <p style={{ fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 4 }}>
+                Forgot your password?{' '}
+                <a href="/reset-password" style={{ color: '#f59e0b', fontWeight: 600, textDecoration: 'underline' }}>
+                  Reset Password
+                </a>
+              </p>
+            )}
+
+            <button type="submit" className="login-submit" disabled={loading || !!lockoutUntil}>
               {loading ? 'Please wait...' : isRegister ? 'Create Account' : otpRequired ? 'Verify & Sign In' : 'Sign In'}
             </button>
 
@@ -448,7 +521,7 @@ export default function Login() {
             {isRegister ? 'Sign up with Google' : 'Continue with Google'}
           </button>
 
-          <p className="login-toggle" onClick={() => { setIsRegister(!isRegister); setError(''); setCodeSent(false); }}>
+          <p className="login-toggle" onClick={() => { setIsRegister(!isRegister); setError(''); setCodeSent(false); setAttemptsRemaining(null); setShowReset(false); setLockoutUntil(null); }}>
             {isRegister ? 'Already have an account? ' : "Don't have an account? "}
             <span>{isRegister ? 'Sign in' : 'Register'}</span>
           </p>

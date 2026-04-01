@@ -88,6 +88,11 @@ class Trader(Base):
     # Tier (affects per-trade fee)
     tier = Column(String(20), default="standard")  # standard, silver, gold
 
+    # Login security
+    failed_login_attempts = Column(Integer, default=0)
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+    last_login = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
