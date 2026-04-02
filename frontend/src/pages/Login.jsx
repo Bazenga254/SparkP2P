@@ -14,7 +14,7 @@ const PASSWORD_RULES = [
 export default function Login() {
   const [isRegister, setIsRegister] = useState(false);
   const [form, setForm] = useState({
-    first_name: '', last_name: '', email: '', phone: '', password: '', confirm_password: '', email_code: '',
+    first_name: '', last_name: '', email: localStorage.getItem('remembered_email') || '', phone: '', password: '', confirm_password: '', email_code: '',
     security_question: '', security_answer: '',
   });
   const [error, setError] = useState('');
@@ -30,6 +30,7 @@ export default function Login() {
   const [attemptsRemaining, setAttemptsRemaining] = useState(null);
   const [resendCooldown, setResendCooldown] = useState(0); // seconds
   const [showReset, setShowReset] = useState(false);
+  const [rememberMe, setRememberMe] = useState(() => !!localStorage.getItem('remembered_email'));
   const [googleProfile, setGoogleProfile] = useState(null); // {token, name, id, role} — needs phone+KYC
   const [profileForm, setProfileForm] = useState({ full_name: '', phone: '' });
   const [savingProfile, setSavingProfile] = useState(false);
@@ -205,6 +206,8 @@ export default function Login() {
         } else {
           // Step 2: OTP verified, got token
           const role = res.data.role || 'trader';
+          if (rememberMe) localStorage.setItem('remembered_email', form.email);
+          else localStorage.removeItem('remembered_email');
           loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
           navigate(role === 'employee' ? '/employee' : '/dashboard');
         }
@@ -458,6 +461,22 @@ export default function Login() {
                   </span>
                 </div>
               </>
+            )}
+
+            {/* Remember Me */}
+            {!isRegister && !otpRequired && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 12px' }}>
+                <input
+                  type="checkbox"
+                  id="remember-me"
+                  checked={rememberMe}
+                  onChange={e => setRememberMe(e.target.checked)}
+                  style={{ width: 16, height: 16, accentColor: '#f59e0b', cursor: 'pointer' }}
+                />
+                <label htmlFor="remember-me" style={{ fontSize: 13, color: '#6b7280', cursor: 'pointer', userSelect: 'none' }}>
+                  Remember me
+                </label>
+              </div>
             )}
 
             {/* Login OTP Step */}
