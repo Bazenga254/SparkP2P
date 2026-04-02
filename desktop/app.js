@@ -33,6 +33,10 @@ let lockFrameListener = null;
 let chromeProcess = null; // Child process reference for killing Chrome on quit
 let connectingBinance = false; // Prevents concurrent connectBinance() calls
 let scanningInProgress = false; // Prevents concurrent initialScan() calls
+let sessionStartTime = null;   // When Binance login was last confirmed
+let loggedOutStrikes = 0;      // Consecutive failed isLoggedIn() checks before re-login
+const SESSION_GRACE_MS = 30 * 60 * 1000; // 30 min grace period before re-login is allowed
+const LOGOUT_STRIKES_NEEDED = 3;          // Require 3 consecutive failures before declaring session lost
 // Load .env file for API keys — check app data folder and app directory
 try {
   const envPath = app.isPackaged
@@ -375,6 +379,8 @@ async function connectBinance() {
       detected = true;
       clearInterval(check);
       console.log('[SparkP2P] Login detected!');
+      sessionStartTime = Date.now();
+      loggedOutStrikes = 0;
 
       // Lock Chrome immediately so user cannot interact with Binance
       await lockChromeBrowser();
@@ -839,20 +845,36 @@ async function pollCycle() {
 
   try {
     // ── Check Binance session ───────────────────────────────
-    if (browserLocked && !(await isLoggedIn())) {
-      console.log('[SparkP2P] Session expired — re-login required');
-      stopPoller();
-      scanningInProgress = false;
-      await unlockChromeBrowser();
-      const page = await getPage('binance.com');
-      if (page) await page.goto('https://accounts.binance.com/en/login', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-      if (mainWindow) {
-        mainWindow.show();
-        mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("binance-disconnected"))');
+    // Only check after the 30-minute grace period has passed since login
+    const sessionAge = sessionStartTime ? Date.now() - sessionStartTime : Infinity;
+    if (browserLocked && sessionAge > SESSION_GRACE_MS) {
+      if (!(await isLoggedIn())) {
+        loggedOutStrikes++;
+        console.log(`[SparkP2P] isLoggedIn() returned false (strike ${loggedOutStrikes}/${LOGOUT_STRIKES_NEEDED})`);
+        if (loggedOutStrikes < LOGOUT_STRIKES_NEEDED) {
+          // Not enough consecutive failures yet — could be a transient navigation glitch
+          scanningInProgress = false;
+          return;
+        }
+        // 3 strikes in a row — session is genuinely gone
+        console.log('[SparkP2P] Session expired — re-login required');
+        loggedOutStrikes = 0;
+        sessionStartTime = null;
+        stopPoller();
+        scanningInProgress = false;
+        await unlockChromeBrowser();
+        const page = await getPage('binance.com');
+        if (page) await page.goto('https://accounts.binance.com/en/login', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("binance-disconnected"))');
+        }
+        connectingBinance = false;
+        connectBinance();
+        return;
+      } else {
+        loggedOutStrikes = 0; // Reset strikes on successful login check
       }
-      connectingBinance = false;
-      connectBinance();
-      return;
     }
 
     const page = await getPage();
