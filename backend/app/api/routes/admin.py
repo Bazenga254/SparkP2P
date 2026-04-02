@@ -87,13 +87,17 @@ async def admin_dashboard(
     )
     active_traders = result.scalar()
 
-    # Today's orders
+    # Today's completed/released orders only
+    completed_statuses = [OrderStatus.RELEASED, OrderStatus.COMPLETED]
     result = await db.execute(
         select(
             func.count(Order.id),
             func.coalesce(func.sum(Order.fiat_amount), 0),
             func.coalesce(func.sum(Order.platform_fee), 0),
-        ).where(func.date(Order.created_at) == today)
+        ).where(
+            func.date(Order.created_at) == today,
+            Order.status.in_(completed_statuses),
+        )
     )
     today_orders, today_volume, today_order_revenue = result.one()
 
@@ -113,14 +117,8 @@ async def admin_dashboard(
     today_wallet_fees = float(result.scalar() or 0)
     today_revenue = float(today_order_revenue) + today_wallet_fees
 
-    # Completed orders today
-    result = await db.execute(
-        select(func.count(Order.id)).where(
-            func.date(Order.created_at) == today,
-            Order.status == OrderStatus.COMPLETED,
-        )
-    )
-    completed_today = result.scalar()
+    # Completed orders today (subset of the above)
+    completed_today = today_orders
 
     # Disputed orders
     result = await db.execute(
@@ -905,7 +903,10 @@ async def admin_analytics(
             func.sum(Order.platform_fee + Order.settlement_fee).label("profit"),
             func.count(Order.id).label("trades"),
         )
-        .where(Order.created_at >= six_months_ago)
+        .where(
+            Order.created_at >= six_months_ago,
+            Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
+        )
         .group_by("yr", "mo")
         .order_by("yr", "mo")
     )
