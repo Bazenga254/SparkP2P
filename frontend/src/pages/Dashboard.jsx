@@ -809,8 +809,14 @@ export default function Dashboard() {
                   <div className="card-header">
                     <Wallet size={20} />
                     <h3>Binance Wallet</h3>
+                    {binanceData.balances?.length === 0 && (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12, color: '#f59e0b', background: 'rgba(245,158,11,0.1)', borderRadius: 20, padding: '2px 10px' }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', display: 'inline-block', animation: 'pulse 1.4s ease-in-out infinite' }} />
+                        Scanning...
+                      </span>
+                    )}
                     <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
-                      Synced: {binanceData.updated_at ? new Date(binanceData.updated_at).toLocaleTimeString() : 'Scanning...'}
+                      {binanceData.updated_at ? `Synced: ${new Date(binanceData.updated_at).toLocaleTimeString()}` : ''}
                     </span>
                   </div>
                   {binanceData.balances?.length > 0 ? (
@@ -832,8 +838,10 @@ export default function Dashboard() {
                       ))}
                     </div>
                   ) : (
-                    <div style={{ padding: '20px 0', textAlign: 'center', color: '#6b7280', fontSize: 13 }}>
-                      Waiting for AI scan to read your Binance balance...
+                    <div style={{ padding: '24px 0', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                      <div style={{ width: 36, height: 36, border: '3px solid rgba(245,158,11,0.2)', borderTop: '3px solid #f59e0b', borderRadius: '50%', animation: 'spin 0.9s linear infinite' }} />
+                      <span style={{ color: '#9ca3af', fontSize: 13 }}>Bot is scanning your Binance account...</span>
+                      <span style={{ color: '#6b7280', fontSize: 11 }}>Balance will appear once the initial scan completes</span>
                     </div>
                   )}
                 </div>

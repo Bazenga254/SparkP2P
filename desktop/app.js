@@ -410,9 +410,13 @@ async function initialScan() {
   const nickname = profileData?.nickname || '';
   console.log(`[SparkP2P] Username: ${nickname || 'unknown'}`);
 
-  // Step 2: Funding wallet — get USDT balance
+  // Step 2 & 3: Read wallet balances (AI if key available, DOM fallback otherwise)
   console.log('[SparkP2P] Step 2: Reading funding wallet...');
   let fundingData = null;
+  console.log('[SparkP2P] Step 3: Reading spot wallet...');
+  let spotData = null;
+  const allBalances = [];
+
   if (aiApiKey) {
     await page.goto('https://www.binance.com/en/my/wallet/funding', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 5000));
@@ -425,13 +429,8 @@ async function initialScan() {
       }
       List ALL visible crypto balances. If USDT shows 3.39, return {"asset":"USDT","total":3.39,"available":3.39}.
     `);
-  }
-  console.log('[SparkP2P] Funding:', JSON.stringify(fundingData)?.substring(0, 200));
+    console.log('[SparkP2P] Funding:', JSON.stringify(fundingData)?.substring(0, 200));
 
-  // Step 3: Spot wallet — get USDT balance
-  console.log('[SparkP2P] Step 3: Reading spot wallet...');
-  let spotData = null;
-  if (aiApiKey) {
     await page.goto('https://www.binance.com/en/my/wallet/account/overview', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 5000));
     const ss2 = await page.screenshot({ type: 'jpeg', quality: 80 });
@@ -443,23 +442,27 @@ async function initialScan() {
       }
       List ALL visible crypto balances with their amounts.
     `);
-  }
-  console.log('[SparkP2P] Spot:', JSON.stringify(spotData)?.substring(0, 200));
+    console.log('[SparkP2P] Spot:', JSON.stringify(spotData)?.substring(0, 200));
 
-  // Combine balances
-  const allBalances = [];
-  const seen = new Set();
-  for (const b of (fundingData?.funding_balances || [])) {
-    if (b.asset && !seen.has(b.asset + '_funding')) {
-      seen.add(b.asset + '_funding');
-      allBalances.push({ asset: b.asset, free: b.available || b.total || 0, locked: (b.total || 0) - (b.available || 0), total: b.total || 0, wallet: 'Funding' });
+    const seen = new Set();
+    for (const b of (fundingData?.funding_balances || [])) {
+      if (b.asset && !seen.has(b.asset + '_funding')) {
+        seen.add(b.asset + '_funding');
+        allBalances.push({ asset: b.asset, free: b.available || b.total || 0, locked: (b.total || 0) - (b.available || 0), total: b.total || 0, wallet: 'Funding' });
+      }
     }
-  }
-  for (const b of (spotData?.spot_balances || [])) {
-    if (b.asset && !seen.has(b.asset + '_spot')) {
-      seen.add(b.asset + '_spot');
-      allBalances.push({ asset: b.asset, free: b.available || b.total || 0, locked: (b.total || 0) - (b.available || 0), total: b.total || 0, wallet: 'Spot' });
+    for (const b of (spotData?.spot_balances || [])) {
+      if (b.asset && !seen.has(b.asset + '_spot')) {
+        seen.add(b.asset + '_spot');
+        allBalances.push({ asset: b.asset, free: b.available || b.total || 0, locked: (b.total || 0) - (b.available || 0), total: b.total || 0, wallet: 'Spot' });
+      }
     }
+  } else {
+    // No AI key — use DOM-based balance reading as fallback
+    console.log('[SparkP2P] No AI key — using DOM balance reader');
+    const domBalances = await readBalance();
+    allBalances.push(...domBalances);
+    console.log('[SparkP2P] DOM balances:', JSON.stringify(domBalances)?.substring(0, 200));
   }
 
   console.log(`[SparkP2P] Total balances found: ${allBalances.length}`);
@@ -632,28 +635,57 @@ async function readOrders() {
 }
 
 async function readBalance() {
-  // Navigate to wallet overview and read balance from page
+  // Navigate to wallet overview and read balance from page DOM
   const page = await navigateTo('https://www.binance.com/en/my/wallet/account/overview');
   if (!page) return [];
 
   try {
-    await new Promise(r => setTimeout(r, 3000)); // Wait for balances to load
+    await new Promise(r => setTimeout(r, 5000)); // Wait for balances to load
 
     const balances = await page.evaluate(() => {
       const results = [];
-      // Read balance amounts from the wallet page
       const text = document.body.innerText;
 
-      // Look for USDT balance specifically
-      const usdtMatch = text.match(/USDT[^]*?([\d.]+)/);
-      if (usdtMatch) {
-        results.push({ asset: 'USDT', free: parseFloat(usdtMatch[1]), locked: 0, total: parseFloat(usdtMatch[1]) });
+      // Strategy 1: Find rows with asset + amount pattern in wallet table
+      const rows = document.querySelectorAll('tr, [class*="assetRow"], [class*="coinRow"], [class*="asset-row"]');
+      rows.forEach(row => {
+        const rowText = row.innerText || '';
+        // Look for known crypto assets followed by a number
+        const assetMatch = rowText.match(/^(USDT|BTC|ETH|BNB|USDC|BUSD)\s+([\d,]+\.?\d*)/m);
+        if (assetMatch) {
+          const asset = assetMatch[1];
+          const total = parseFloat(assetMatch[2].replace(/,/g, ''));
+          if (total > 0 && !results.find(r => r.asset === asset)) {
+            results.push({ asset, free: total, locked: 0, total, wallet: 'Spot' });
+          }
+        }
+      });
+
+      // Strategy 2: Scan full page text for Estimated Balance in USDT
+      if (results.length === 0) {
+        const estMatch = text.match(/Estimated Balance\s*[\n\r]*\s*([\d,]+\.?\d*)\s*USDT/i);
+        if (estMatch) {
+          const total = parseFloat(estMatch[1].replace(/,/g, ''));
+          if (total >= 0) results.push({ asset: 'USDT', free: total, locked: 0, total, wallet: 'Spot' });
+        }
       }
 
-      // Also try to read "Estimated Balance"
-      const estMatch = text.match(/Estimated Balance[^]*?([\d.]+)\s*USDT/);
-      if (estMatch && results.length === 0) {
-        results.push({ asset: 'USDT', free: parseFloat(estMatch[1]), locked: 0, total: parseFloat(estMatch[1]) });
+      // Strategy 3: Look for prominent USDT amount on the page
+      if (results.length === 0) {
+        const spans = Array.from(document.querySelectorAll('span, div, p'));
+        for (const el of spans) {
+          const t = (el.innerText || '').trim();
+          if (/^\d[\d,]*\.\d{2,8}$/.test(t)) {
+            const prev = el.previousElementSibling?.innerText || el.parentElement?.innerText || '';
+            if (prev.includes('USDT') || prev.includes('Total')) {
+              const val = parseFloat(t.replace(/,/g, ''));
+              if (val >= 0) {
+                results.push({ asset: 'USDT', free: val, locked: 0, total: val, wallet: 'Spot' });
+                break;
+              }
+            }
+          }
+        }
       }
 
       return results;
