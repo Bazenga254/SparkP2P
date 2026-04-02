@@ -40,6 +40,7 @@ class Trader(Base):
     binance_username = Column(String(100), nullable=True)
     google_id = Column(String(100), nullable=True, default="")
     binance_connected = Column(Boolean, default=False)
+    last_extension_sync = Column(DateTime(timezone=True), nullable=True)
     binance_fund_password = Column(String(512), nullable=True)  # Encrypted
     binance_verify_method = Column(String(20), default="none")  # none, totp, fund_password, manual
 

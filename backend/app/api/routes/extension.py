@@ -107,6 +107,10 @@ async def report_orders(
         if action:
             actions.append(action)
 
+    # Update last sync timestamp — used by frontend to detect initial scan complete
+    trader.last_extension_sync = datetime.now(timezone.utc)
+    await db.commit()
+
     return {"actions": actions}
 
 

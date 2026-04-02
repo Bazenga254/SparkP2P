@@ -106,6 +106,7 @@ class TraderProfileResponse(BaseModel):
     subscription_expires: Optional[str] = None
     onboarding_complete: bool = False
     security_question: Optional[str] = None
+    last_extension_sync: Optional[str] = None
     settlement_cooldown_until: Optional[str] = None  # ISO datetime when cooldown ends
     password_change_cooldown_until: Optional[str] = None  # ISO datetime, 48hr after last pw change
 
@@ -338,6 +339,7 @@ async def get_profile(
         subscription_expires=sub_expires,
         onboarding_complete=bool(onboarding_complete),
         security_question=trader.security_question,
+        last_extension_sync=trader.last_extension_sync.isoformat() if trader.last_extension_sync else None,
         settlement_cooldown_until=(
             (trader.settlement_changed_at + timedelta(hours=48)).isoformat()
             if trader.settlement_changed_at and

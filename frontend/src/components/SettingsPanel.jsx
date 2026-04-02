@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword } from '../services/api';
+import { useNavigate } from 'react-router-dom';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile } from '../services/api';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
 
@@ -18,9 +19,12 @@ const BANK_PAYBILLS = {
 };
 
 export default function SettingsPanel({ profile, onUpdate }) {
+  const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('binance');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const [connecting, setConnecting] = useState(false);
+  const connectPollRef = useRef(null);
 
   // Binance
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
@@ -124,15 +128,30 @@ export default function SettingsPanel({ profile, onUpdate }) {
   };
 
   const handleConnectBinance = () => {
-    // If running in Electron desktop app, use real Chrome browser
     if (window.sparkp2p?.isDesktop) {
       window.sparkp2p.connectBinance();
-      showMsg('Opening Chrome browser for Binance login...');
-      return;
     }
-    // Web fallback: use remote browser stream
-    setShowRemoteBrowser(true);
+    setConnecting(true);
+    if (!window.sparkp2p?.isDesktop) {
+      setShowRemoteBrowser(true);
+    }
   };
+
+  // Poll until binance_connected = true, then navigate to dashboard with scanning state
+  useEffect(() => {
+    if (!connecting) return;
+    connectPollRef.current = setInterval(async () => {
+      try {
+        const res = await getProfile();
+        if (res.data.binance_connected) {
+          clearInterval(connectPollRef.current);
+          setConnecting(false);
+          navigate('/dashboard?scanning=1');
+        }
+      } catch (_) {}
+    }, 3000);
+    return () => clearInterval(connectPollRef.current);
+  }, [connecting]);
 
   const handleRequestOTP = async () => {
     setLoading(true);
@@ -259,16 +278,27 @@ export default function SettingsPanel({ profile, onUpdate }) {
                 Once logged in, the bot takes over and trades for you 24/7.
                 No passwords are stored — only session cookies.
               </p>
-              <button
-                onClick={handleConnectBinance}
-                style={{
-                  padding: '14px 32px', borderRadius: 10, border: 'none',
-                  background: '#f59e0b', color: '#000', fontWeight: 700,
-                  cursor: 'pointer', fontSize: 15,
-                }}
-              >
-                Connect Binance
-              </button>
+              {connecting ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                  <div style={{
+                    width: 36, height: 36, border: '3px solid rgba(245,158,11,0.2)',
+                    borderTop: '3px solid #f59e0b', borderRadius: '50%',
+                    animation: 'spin 0.8s linear infinite',
+                  }} />
+                  <span style={{ color: '#f59e0b', fontSize: 13 }}>Waiting for Binance login...</span>
+                </div>
+              ) : (
+                <button
+                  onClick={handleConnectBinance}
+                  style={{
+                    padding: '14px 32px', borderRadius: 10, border: 'none',
+                    background: '#f59e0b', color: '#000', fontWeight: 700,
+                    cursor: 'pointer', fontSize: 15,
+                  }}
+                >
+                  Connect Binance
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -278,10 +308,10 @@ export default function SettingsPanel({ profile, onUpdate }) {
       {showRemoteBrowser && (
         <RemoteBrowser
           onConnected={() => {
-            showMsg('Binance connected! Bot session saved.');
-            onUpdate();
+            setShowRemoteBrowser(false);
+            setConnecting(true);
           }}
-          onClose={() => setShowRemoteBrowser(false)}
+          onClose={() => { setShowRemoteBrowser(false); setConnecting(false); }}
         />
       )}
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import SupportChat from '../components/SupportChat';
@@ -124,6 +124,9 @@ function SpreadCalculator() {
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [scanning, setScanning] = useState(searchParams.get('scanning') === '1');
+  const scanPollRef = useRef(null);
   const [profile, setProfile] = useState(null);
   const [wallet, setWallet] = useState(null);
   const [stats, setStats] = useState(null);
@@ -237,6 +240,28 @@ export default function Dashboard() {
       navigate('/onboarding');
     }
   }, [profile]);
+
+  // Scanning overlay: poll until first extension sync received
+  useEffect(() => {
+    if (!scanning) return;
+    // Clear the URL param without re-render
+    setSearchParams({}, { replace: true });
+    scanPollRef.current = setInterval(async () => {
+      try {
+        const res = await getProfile();
+        if (res.data.last_extension_sync) {
+          clearInterval(scanPollRef.current);
+          setScanning(false);
+        }
+      } catch (_) {}
+    }, 3000);
+    // Safety timeout: remove overlay after 90s even if scan never signals
+    const timeout = setTimeout(() => {
+      clearInterval(scanPollRef.current);
+      setScanning(false);
+    }, 90000);
+    return () => { clearInterval(scanPollRef.current); clearTimeout(timeout); };
+  }, [scanning]);
 
   const handleWithdraw = async () => {
     if (!wallet || wallet.balance <= 0) return;
@@ -393,6 +418,41 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard">
+      {/* Binance initial scan overlay */}
+      {scanning && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(10,12,28,0.92)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          gap: 24, cursor: 'wait',
+        }}>
+          <div style={{
+            width: 72, height: 72,
+            border: '5px solid rgba(245,158,11,0.2)',
+            borderTop: '5px solid #f59e0b',
+            borderRadius: '50%',
+            animation: 'spin 0.9s linear infinite',
+          }} />
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>
+              Scanning Binance Orders...
+            </div>
+            <div style={{ fontSize: 14, color: '#9ca3af', maxWidth: 300 }}>
+              Your bot is performing the initial scan. This may take up to a minute. Please wait.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            {[0, 1, 2].map(i => (
+              <div key={i} style={{
+                width: 8, height: 8, borderRadius: '50%', background: '#f59e0b',
+                animation: `bounce 1.2s ease-in-out ${i * 0.2}s infinite`,
+              }} />
+            ))}
+          </div>
+        </div>
+      )}
+
       <header className="dash-header">
         <div className="dash-header-left">
           <img src="/logo.png" alt="SparkP2P" className="header-logo" />
