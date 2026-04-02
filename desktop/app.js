@@ -98,6 +98,10 @@ function createMainWindow() {
   };
 
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    // -3 = ERR_ABORTED — fires on normal SPA navigations, ignore it
+    // Also ignore failures on data: URLs (our own retry page)
+    if (errorCode === -3) return;
+    if (validatedURL && validatedURL.startsWith('data:')) return;
     console.log(`[SparkP2P] Page load failed (${errorCode}): ${errorDescription}`);
     // Show a retry page inline
     mainWindow.webContents.loadURL(`data:text/html,
