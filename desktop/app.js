@@ -88,10 +88,37 @@ app.on('before-quit', () => { stopPoller(); if (tray) tray.destroy(); });
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1280, height: 850, title: 'SparkP2P',
+    backgroundColor: '#0d0f1e',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true },
     autoHideMenuBar: true,
   });
-  mainWindow.loadURL(DASHBOARD_URL);
+
+  const loadDashboard = (attempt = 1) => {
+    mainWindow.loadURL(DASHBOARD_URL).catch(() => {});
+  };
+
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    console.log(`[SparkP2P] Page load failed (${errorCode}): ${errorDescription}`);
+    // Show a retry page inline
+    mainWindow.webContents.loadURL(`data:text/html,
+      <html><head><style>
+        body{margin:0;background:#0d0f1e;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px;}
+        h2{color:#f59e0b;margin:0;}p{color:#9ca3af;margin:0;font-size:14px;}
+        button{margin-top:8px;padding:12px 28px;background:#f59e0b;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;}
+      </style></head><body>
+        <h2>⚡ SparkP2P</h2>
+        <p>Could not connect. Check your internet connection.</p>
+        <button onclick="location.reload()">Retry</button>
+        <p style="font-size:12px;color:#6b7280;">Error: ${errorDescription}</p>
+      </body></html>
+    `);
+    // Auto-retry after 10 seconds
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) loadDashboard();
+    }, 10000);
+  });
+
+  loadDashboard();
   mainWindow.on('close', (e) => { if (!app.isQuitting) { e.preventDefault(); mainWindow.hide(); } });
 
   // Capture token on every page load and navigation
