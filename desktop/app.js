@@ -1424,42 +1424,89 @@ async function readEmailOTP(binancePage = null) {
   }
 }
 
-// ── Enter a 6-digit code into a labeled input section ────────────────────────
-async function enterCodeIntoSection(page, labelKeyword, code) {
-  // Find an input near a label containing the keyword
-  const entered = await page.evaluate((keyword, code) => {
-    const allText = Array.from(document.querySelectorAll('label, div, span, p'));
-    for (const el of allText) {
-      if (el.textContent.toLowerCase().includes(keyword)) {
-        // Look for an input nearby
-        let node = el;
-        for (let i = 0; i < 5; i++) {
-          node = node.nextElementSibling || node.parentElement;
-          if (!node) break;
-          const inputs = node.querySelectorAll('input[maxlength="1"]');
-          if (inputs.length >= 6) {
-            [...inputs].slice(0, 6).forEach((inp, idx) => {
-              inp.focus();
-              inp.value = code[idx];
-              inp.dispatchEvent(new Event('input', { bubbles: true }));
-              inp.dispatchEvent(new Event('change', { bubbles: true }));
-            });
-            return true;
-          }
-          const single = node.querySelector('input[maxlength="6"], input[type="tel"], input[type="number"]');
-          if (single) {
-            single.focus();
-            single.value = code;
-            single.dispatchEvent(new Event('input', { bubbles: true }));
-            single.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
-          }
+// ── Type a 6-digit code using real keyboard events (like a human) ─────────────
+// Returns the CSS selector of the input that was focused, or null if not found.
+async function _findInputNearLabel(page, labelKeyword) {
+  // Returns { type: 'split'|'single', selector: string } or null
+  return await page.evaluate((keyword) => {
+    const allEls = Array.from(document.querySelectorAll('label, div, span, p, h3, h4'));
+    for (const el of allEls) {
+      if (!el.textContent.toLowerCase().includes(keyword)) continue;
+      // Search up to 6 levels of siblings + parent for inputs
+      let node = el;
+      for (let depth = 0; depth < 8; depth++) {
+        node = node.nextElementSibling || node.parentElement;
+        if (!node) break;
+        // 6 individual digit boxes (maxlength=1)
+        const splitInputs = node.querySelectorAll('input[maxlength="1"]');
+        if (splitInputs.length >= 6) {
+          // Return selector for first box
+          const id = `_sbox_${Date.now()}`;
+          splitInputs[0].setAttribute('data-sparkfind', id);
+          return { type: 'split', attr: id };
+        }
+        // Single 6-digit input
+        const single = node.querySelector(
+          'input[maxlength="6"], input[type="tel"], input[type="number"], input[autocomplete="one-time-code"]'
+        );
+        if (single) {
+          const id = `_sbox_${Date.now()}`;
+          single.setAttribute('data-sparkfind', id);
+          return { type: 'single', attr: id };
         }
       }
     }
-    return false;
-  }, labelKeyword, code);
-  return entered;
+    return null;
+  }, labelKeyword);
+}
+
+async function enterCodeIntoSection(page, labelKeyword, code) {
+  const found = await _findInputNearLabel(page, labelKeyword);
+  if (!found) return false;
+
+  if (found.type === 'split') {
+    // Re-query all sibling maxlength=1 inputs from the same parent
+    const allBoxes = await page.evaluate((attr) => {
+      const first = document.querySelector(`[data-sparkfind="${attr}"]`);
+      if (!first) return 0;
+      first.removeAttribute('data-sparkfind');
+      // Collect all maxlength=1 siblings in same container
+      const parent = first.parentElement;
+      const inputs = parent ? parent.querySelectorAll('input[maxlength="1"]') : [];
+      inputs.forEach((inp, i) => inp.setAttribute('data-sparkidx', String(i)));
+      return inputs.length;
+    }, found.attr);
+
+    for (let i = 0; i < Math.min(6, allBoxes); i++) {
+      const inp = await page.$(`[data-sparkidx="${i}"]`);
+      if (inp) {
+        await inp.click();
+        await new Promise(r => setTimeout(r, 40));
+        // Clear existing value first, then type the digit
+        await inp.evaluate(el => { el.value = ''; });
+        await inp.type(String(code[i]), { delay: 60 });
+        await new Promise(r => setTimeout(r, 30));
+      }
+    }
+    // Clean up temp attributes
+    await page.evaluate(() => {
+      document.querySelectorAll('[data-sparkidx]').forEach(el => el.removeAttribute('data-sparkidx'));
+    });
+    console.log(`[SparkP2P] Typed ${code} into split boxes (${labelKeyword})`);
+    return true;
+
+  } else {
+    // Single input — click it, clear it, type the whole code
+    const inp = await page.$(`[data-sparkfind="${found.attr}"]`);
+    if (!inp) return false;
+    await inp.click({ clickCount: 3 }); // triple-click to select all
+    await new Promise(r => setTimeout(r, 80));
+    await inp.evaluate(el => { el.value = ''; });
+    await inp.type(code, { delay: 60 });
+    await inp.evaluate(el => el.removeAttribute('data-sparkfind'));
+    console.log(`[SparkP2P] Typed ${code} into single input (${labelKeyword})`);
+    return true;
+  }
 }
 
 async function handleSecurityVerification(page) {
@@ -1492,45 +1539,62 @@ async function handleSecurityVerification(page) {
       } else {
         const code = generateTOTP(totpSecret);
         console.log(`[SparkP2P] TOTP code: ${code}`);
-        const entered = await enterCodeIntoSection(page, 'authenticator', code);
+        let entered = await enterCodeIntoSection(page, 'authenticator', code);
+        if (!entered) entered = await enterCodeIntoSection(page, 'google', code);
         if (!entered) {
-          // Fallback: type into any 6-digit input group
+          // Last-resort fallback: type into the first available digit inputs
           const digitInputs = await page.$$('input[maxlength="1"]');
           if (digitInputs.length >= 6) {
-            for (let i = 0; i < 6; i++) await digitInputs[i].type(code[i], { delay: 50 });
+            for (let i = 0; i < 6; i++) {
+              await digitInputs[i].click();
+              await digitInputs[i].evaluate(el => { el.value = ''; });
+              await digitInputs[i].type(code[i], { delay: 60 });
+              await new Promise(r => setTimeout(r, 30));
+            }
+            entered = true;
           } else {
             const inp = await page.$('input[maxlength="6"], input[type="tel"], input[autocomplete="one-time-code"]');
-            if (inp) { await inp.click(); await inp.type(code, { delay: 40 }); }
+            if (inp) {
+              await inp.click({ clickCount: 3 });
+              await inp.evaluate(el => { el.value = ''; });
+              await inp.type(code, { delay: 60 });
+              entered = true;
+            }
           }
         }
-        console.log('[SparkP2P] TOTP entered');
+        console.log(`[SparkP2P] TOTP ${entered ? 'entered' : 'FAILED to enter'}`);
       }
     }
 
     // ── Email OTP — read from Gmail ──
     if (verification.hasEmail) {
       console.log('[SparkP2P] Email OTP required — fetching from Gmail...');
-      // First click "Get Code" / "Send Code" button if present, then wait for email
-      await page.evaluate(() => {
-        const btn = Array.from(document.querySelectorAll('button, a')).find(b =>
-          /send|get code/i.test(b.textContent)
+      // Click "Get Code" / "Send Code" if present (triggers the email send)
+      const sentCode = await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button, a, span')).find(b =>
+          /^(send|get code|send code)$/i.test(b.textContent.trim())
         );
-        if (btn) btn.click();
+        if (btn) { btn.click(); return true; }
+        return false;
       });
-      // readEmailOTP handles waiting, retrying, and resending automatically
+      if (sentCode) console.log('[SparkP2P] Clicked Send Code button');
+      // readEmailOTP handles waiting, retrying, and auto-resend automatically
       const emailCode = await readEmailOTP(page);
       if (emailCode) {
-        const entered = await enterCodeIntoSection(page, 'email', emailCode);
+        let entered = await enterCodeIntoSection(page, 'email', emailCode);
         if (!entered) {
-          // Fallback: find any unfilled 6-digit input group
-          const allDigitGroups = await page.$$('input[maxlength="1"]');
-          // Skip the ones already filled (TOTP used first 6)
+          // Fallback: type into digit inputs after any TOTP inputs
+          const allDigitInputs = await page.$$('input[maxlength="1"]');
           const start = verification.hasAuth ? 6 : 0;
-          for (let i = 0; i < 6 && (start + i) < allDigitGroups.length; i++) {
-            await allDigitGroups[start + i].type(emailCode[i], { delay: 50 });
+          for (let i = 0; i < 6 && (start + i) < allDigitInputs.length; i++) {
+            await allDigitInputs[start + i].click();
+            await allDigitInputs[start + i].evaluate(el => { el.value = ''; });
+            await allDigitInputs[start + i].type(emailCode[i], { delay: 60 });
+            await new Promise(r => setTimeout(r, 30));
           }
+          entered = true;
         }
-        console.log('[SparkP2P] Email OTP entered');
+        console.log(`[SparkP2P] Email OTP ${entered ? 'entered' : 'FAILED to enter'}`);
       } else {
         console.log('[SparkP2P] Could not get email OTP — manual intervention needed');
         await takeScreenshot('Email OTP required — manual needed');
@@ -1541,7 +1605,11 @@ async function handleSecurityVerification(page) {
     // ── Fund Password ──
     if (verification.hasFundPw && traderPin) {
       const inp = await page.$('input[type="password"]');
-      if (inp) { await inp.click(); await inp.type(traderPin, { delay: 30 }); }
+      if (inp) {
+        await inp.click({ clickCount: 3 });
+        await inp.evaluate(el => { el.value = ''; });
+        await inp.type(traderPin, { delay: 40 });
+      }
       console.log('[SparkP2P] Fund password entered');
     }
 
@@ -1552,15 +1620,21 @@ async function handleSecurityVerification(page) {
       return false;
     }
 
-    // Click confirm/submit button
-    await new Promise(r => setTimeout(r, 500));
-    await page.evaluate(() => {
+    // ── Submit — try clicking the button, then press Enter as backup ──
+    await new Promise(r => setTimeout(r, 600));
+    const btnClicked = await page.evaluate(() => {
       const btn = Array.from(document.querySelectorAll('button')).find(b => {
-        const t = b.textContent.toLowerCase();
-        return t.includes('confirm') || t.includes('submit') || t.includes('verify') || t.includes('next');
+        const t = b.textContent.toLowerCase().trim();
+        return t === 'confirm' || t === 'submit' || t === 'verify' || t === 'next' || t === 'continue';
       });
-      if (btn) btn.click();
+      if (btn) { btn.click(); return true; }
+      return false;
     });
+    if (!btnClicked) {
+      // No button found — press Enter on keyboard (works on most forms)
+      console.log('[SparkP2P] No submit button found — pressing Enter');
+      await page.keyboard.press('Enter');
+    }
 
     await new Promise(r => setTimeout(r, 3000));
 
