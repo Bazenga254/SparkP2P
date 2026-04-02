@@ -1269,95 +1269,179 @@ function generateTOTP(secret) {
 // PIN/PASSKEY ENTRY — Auto-enter security code when Binance asks
 // ═══════════════════════════════════════════════════════════
 
-async function handleSecurityVerification(page) {
-  // After clicking release/confirm, Binance may ask for:
-  // 1. Passkey/PIN (6-digit code)
-  // 2. Google Authenticator code
-  // 3. Email/SMS verification
-  // 4. Security password
+// ── Read email OTP from Gmail (opened in new Chrome tab) ──────────────────────
+async function readEmailOTP() {
+  if (!browser) return null;
+  let gmailPage = null;
+  try {
+    console.log('[SparkP2P] Opening Gmail to find Binance OTP...');
+    gmailPage = await browser.newPage();
+    await gmailPage.goto('https://mail.google.com/mail/u/0/#inbox', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 3000));
 
+    // Search for the latest Binance security email
+    await gmailPage.goto('https://mail.google.com/mail/u/0/#search/from%3Ado-not-reply%40binance.com+newer_than%3A1h', {
+      waitUntil: 'networkidle2', timeout: 15000,
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2500));
+
+    // Click the first (most recent) email
+    const clicked = await gmailPage.evaluate(() => {
+      const rows = document.querySelectorAll('tr.zA');
+      if (rows.length > 0) { rows[0].click(); return true; }
+      return false;
+    });
+
+    if (!clicked) {
+      console.log('[SparkP2P] No recent Binance email found in Gmail');
+      return null;
+    }
+
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Extract 6-digit OTP from the email body
+    const emailText = await gmailPage.evaluate(() => document.body.innerText).catch(() => '');
+    const match = emailText.match(/\b(\d{6})\b/);
+    if (match) {
+      console.log(`[SparkP2P] Email OTP found: ${match[1]}`);
+      return match[1];
+    }
+    console.log('[SparkP2P] Could not extract OTP from email');
+    return null;
+  } catch (e) {
+    console.error('[SparkP2P] readEmailOTP error:', e.message?.substring(0, 60));
+    return null;
+  } finally {
+    if (gmailPage && !gmailPage.isClosed()) await gmailPage.close().catch(() => {});
+  }
+}
+
+// ── Enter a 6-digit code into a labeled input section ────────────────────────
+async function enterCodeIntoSection(page, labelKeyword, code) {
+  // Find an input near a label containing the keyword
+  const entered = await page.evaluate((keyword, code) => {
+    const allText = Array.from(document.querySelectorAll('label, div, span, p'));
+    for (const el of allText) {
+      if (el.textContent.toLowerCase().includes(keyword)) {
+        // Look for an input nearby
+        let node = el;
+        for (let i = 0; i < 5; i++) {
+          node = node.nextElementSibling || node.parentElement;
+          if (!node) break;
+          const inputs = node.querySelectorAll('input[maxlength="1"]');
+          if (inputs.length >= 6) {
+            [...inputs].slice(0, 6).forEach((inp, idx) => {
+              inp.focus();
+              inp.value = code[idx];
+              inp.dispatchEvent(new Event('input', { bubbles: true }));
+              inp.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+            return true;
+          }
+          const single = node.querySelector('input[maxlength="6"], input[type="tel"], input[type="number"]');
+          if (single) {
+            single.focus();
+            single.value = code;
+            single.dispatchEvent(new Event('input', { bubbles: true }));
+            single.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }, labelKeyword, code);
+  return entered;
+}
+
+async function handleSecurityVerification(page) {
   await new Promise(r => setTimeout(r, 2000));
 
-  // Check what Binance is asking for
+  // Detect what Binance is asking for — may be multiple fields
   const verification = await page.evaluate(() => {
     const text = document.body.innerText.toLowerCase();
-    const html = document.body.innerHTML.toLowerCase();
-
-    // Check for PIN/password input
-    const pinInputs = document.querySelectorAll('input[type="password"], input[type="tel"], input[maxlength="6"], input[maxlength="1"]');
-    const hasVerification = pinInputs.length > 0;
-
-    let type = 'none';
-    if (text.includes('security verification') || text.includes('verify')) type = 'verification';
-    if (text.includes('passkey') || text.includes('pass key')) type = 'passkey';
-    if (text.includes('authenticator') || text.includes('google auth')) type = 'authenticator';
-    if (text.includes('email verification') || text.includes('email code')) type = 'email';
-    if (text.includes('sms') || text.includes('phone verification')) type = 'sms';
-    if (text.includes('fund password') || text.includes('trading password')) type = 'fund_password';
-    if (pinInputs.length === 6 || (pinInputs.length > 0 && pinInputs[0].maxLength == 1)) type = 'pin_digits';
-    if (pinInputs.length === 1 && pinInputs[0].type === 'password') type = 'password';
-
-    return { hasVerification, type, inputCount: pinInputs.length };
+    const hasEmail = text.includes('email verification') || text.includes('email code') || text.includes('email address');
+    const hasAuth = text.includes('authenticator') || text.includes('google auth') || text.includes('authentication code');
+    const hasFundPw = text.includes('fund password') || text.includes('trading password');
+    const hasPasskey = text.includes('passkey');
+    const inputs = document.querySelectorAll('input[maxlength="1"], input[maxlength="6"], input[type="tel"], input[type="password"]');
+    return { hasEmail, hasAuth, hasFundPw, hasPasskey, hasAny: inputs.length > 0, inputCount: inputs.length };
   });
 
-  if (!verification.hasVerification) {
+  if (!verification.hasAny) {
     console.log('[SparkP2P] No security verification needed');
     return true;
   }
 
-  console.log(`[SparkP2P] Security verification: ${verification.type} (${verification.inputCount} inputs)`);
-
-  // Take screenshot of verification dialog
-  await takeScreenshot(`Security verification: ${verification.type}`);
-
-  // Auto-enter PIN if we have it
-  if (!traderPin) {
-    console.log('[SparkP2P] No PIN configured — cannot auto-verify. Screenshot sent to dashboard.');
-    return false;
-  }
+  console.log(`[SparkP2P] Verification needed — email:${verification.hasEmail} auth:${verification.hasAuth} fundpw:${verification.hasFundPw}`);
+  await takeScreenshot('Security verification');
 
   try {
-    if (verification.type === 'pin_digits') {
-      // Multiple single-digit inputs (e.g., 6 boxes)
-      const inputs = await page.$$('input[maxlength="1"]');
-      for (let i = 0; i < Math.min(inputs.length, traderPin.length); i++) {
-        await inputs[i].type(traderPin[i], { delay: 50 });
-      }
-      console.log('[SparkP2P] PIN digits entered');
-
-    } else if (verification.type === 'password' || verification.type === 'fund_password') {
-      // Single password input
-      const input = await page.$('input[type="password"]');
-      if (input) {
-        await input.click();
-        await input.type(traderPin, { delay: 30 });
-        console.log('[SparkP2P] Password entered');
-      }
-
-    } else if (verification.type === 'authenticator') {
+    // ── Google Authenticator ──
+    if (verification.hasAuth) {
       if (!totpSecret) {
-        console.log('[SparkP2P] Google Authenticator required but no TOTP secret configured');
-        await takeScreenshot('TOTP secret not configured');
+        console.log('[SparkP2P] TOTP required but not configured');
+      } else {
+        const code = generateTOTP(totpSecret);
+        console.log(`[SparkP2P] TOTP code: ${code}`);
+        const entered = await enterCodeIntoSection(page, 'authenticator', code);
+        if (!entered) {
+          // Fallback: type into any 6-digit input group
+          const digitInputs = await page.$$('input[maxlength="1"]');
+          if (digitInputs.length >= 6) {
+            for (let i = 0; i < 6; i++) await digitInputs[i].type(code[i], { delay: 50 });
+          } else {
+            const inp = await page.$('input[maxlength="6"], input[type="tel"], input[autocomplete="one-time-code"]');
+            if (inp) { await inp.click(); await inp.type(code, { delay: 40 }); }
+          }
+        }
+        console.log('[SparkP2P] TOTP entered');
+      }
+    }
+
+    // ── Email OTP — read from Gmail ──
+    if (verification.hasEmail) {
+      console.log('[SparkP2P] Email OTP required — fetching from Gmail...');
+      // First click "Get Code" / "Send Code" button if present, then wait for email
+      await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button, a')).find(b =>
+          /send|get code/i.test(b.textContent)
+        );
+        if (btn) btn.click();
+      });
+      await new Promise(r => setTimeout(r, 4000)); // wait for email to arrive
+      const emailCode = await readEmailOTP();
+      if (emailCode) {
+        const entered = await enterCodeIntoSection(page, 'email', emailCode);
+        if (!entered) {
+          // Fallback: find any unfilled 6-digit input group
+          const allDigitGroups = await page.$$('input[maxlength="1"]');
+          // Skip the ones already filled (TOTP used first 6)
+          const start = verification.hasAuth ? 6 : 0;
+          for (let i = 0; i < 6 && (start + i) < allDigitGroups.length; i++) {
+            await allDigitGroups[start + i].type(emailCode[i], { delay: 50 });
+          }
+        }
+        console.log('[SparkP2P] Email OTP entered');
+      } else {
+        console.log('[SparkP2P] Could not get email OTP — manual intervention needed');
+        await takeScreenshot('Email OTP required — manual needed');
         return false;
       }
-      const code = generateTOTP(totpSecret);
-      console.log(`[SparkP2P] Generated TOTP code: ${code}`);
-      // Enter into 6 individual digit boxes or a single input
-      const digitInputs = await page.$$('input[maxlength="1"]');
-      if (digitInputs.length >= 6) {
-        for (let i = 0; i < 6; i++)
-          await digitInputs[i].type(code[i], { delay: 50 });
-      } else {
-        const input = await page.$('input[type="tel"], input[type="number"], input[maxlength="6"], input[autocomplete="one-time-code"]');
-        if (input) { await input.click(); await input.type(code, { delay: 40 }); }
-        else await page.keyboard.type(code, { delay: 50 });
-      }
-      console.log('[SparkP2P] TOTP code entered');
+    }
 
-    } else {
-      // Generic: try typing the PIN into whatever input is focused
-      await page.keyboard.type(traderPin, { delay: 50 });
-      console.log('[SparkP2P] PIN typed into active input');
+    // ── Fund Password ──
+    if (verification.hasFundPw && traderPin) {
+      const inp = await page.$('input[type="password"]');
+      if (inp) { await inp.click(); await inp.type(traderPin, { delay: 30 }); }
+      console.log('[SparkP2P] Fund password entered');
+    }
+
+    // Passkey — cannot automate
+    if (verification.hasPasskey && !verification.hasAuth && !verification.hasEmail) {
+      console.log('[SparkP2P] Passkey required — cannot automate');
+      await takeScreenshot('Passkey required');
+      return false;
     }
 
     // Click confirm/submit button
