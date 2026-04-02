@@ -282,22 +282,14 @@ async function injectLockOverlay(page) {
     el.id = 'sparkp2p-browser-lock';
     el.style.cssText = [
       'position:fixed', 'top:0', 'left:0', 'width:100vw', 'height:100vh',
-      'background:rgba(0,0,0,0.93)', 'z-index:2147483647',
-      'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
+      'background:transparent', 'z-index:2147483647',
       'cursor:not-allowed', 'pointer-events:all', 'user-select:none',
       'font-family:-apple-system,sans-serif',
     ].join('!important;') + '!important';
     el.innerHTML = `
-      <div style="text-align:center;color:#fff;max-width:380px;padding:40px">
-        <div style="font-size:60px;margin-bottom:16px">🔒</div>
-        <h2 style="color:#f59e0b;font-size:22px;margin:0 0 10px">SparkP2P Bot Active</h2>
-        <p style="color:#9ca3af;font-size:13px;line-height:1.7;margin:0 0 20px">
-          This browser is locked for your security.<br>
-          The bot is monitoring and trading on your behalf.
-        </p>
-        <div style="padding:10px 18px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;font-size:12px;color:#f59e0b">
-          You can minimize this window safely
-        </div>
+      <div style="position:fixed;bottom:16px;right:16px;display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(0,0,0,0.75);border:1px solid rgba(245,158,11,0.5);border-radius:20px;backdrop-filter:blur(4px)">
+        <span style="font-size:14px">🔒</span>
+        <span style="color:#f59e0b;font-size:12px;font-weight:600">SparkP2P Bot Active</span>
       </div>`;
     const block = e => { e.preventDefault(); e.stopImmediatePropagation(); };
     ['click','mousedown','mouseup','dblclick','contextmenu',
