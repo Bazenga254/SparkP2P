@@ -128,6 +128,8 @@ async def get_order_stats(
 ):
     """Get trading statistics."""
     today = func.current_date()
+    # Only count orders that actually completed — not pending/cancelled/expired
+    completed_statuses = [OrderStatus.RELEASED, OrderStatus.COMPLETED]
 
     # Today's stats
     result = await db.execute(
@@ -138,6 +140,7 @@ async def get_order_stats(
         ).where(
             Order.trader_id == trader.id,
             func.date(Order.created_at) == today,
+            Order.status.in_(completed_statuses),
         )
     )
     today_count, today_volume, today_fees = result.one()
@@ -152,6 +155,7 @@ async def get_order_stats(
             Order.trader_id == trader.id,
             func.date(Order.created_at) == today,
             Order.side == OrderSide.SELL,
+            Order.status.in_(completed_statuses),
         )
     )
     sell_count, sell_volume, sell_crypto = result.one()
@@ -166,6 +170,7 @@ async def get_order_stats(
             Order.trader_id == trader.id,
             func.date(Order.created_at) == today,
             Order.side == OrderSide.BUY,
+            Order.status.in_(completed_statuses),
         )
     )
     buy_count, buy_volume, buy_crypto = result.one()
