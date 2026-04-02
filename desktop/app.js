@@ -1270,43 +1270,151 @@ function generateTOTP(secret) {
 // ═══════════════════════════════════════════════════════════
 
 // ── Read email OTP from Gmail (opened in new Chrome tab) ──────────────────────
-async function readEmailOTP() {
+// ── Read Binance OTP from Gmail — smart version ──────────────────────────────
+// • Searches for all recent Binance emails, picks the NEWEST one sent within
+//   the last 10 minutes (OTPs expire in 10 min on Binance).
+// • If no qualifying email found, returns null so the caller can resend.
+// • If multiple emails exist, uses the timestamp to pick the latest one.
+async function _readEmailOTPOnce(gmailPage, sentAfterMs) {
+  // Search Binance security emails sent in the last hour
+  await gmailPage.goto(
+    'https://mail.google.com/mail/u/0/#search/from%3Ado-not-reply%40binance.com+subject%3Averification+newer_than%3A1h',
+    { waitUntil: 'networkidle2', timeout: 15000 }
+  ).catch(() => {});
+  await new Promise(r => setTimeout(r, 2500));
+
+  // Collect all email rows with their timestamps
+  const emails = await gmailPage.evaluate(() => {
+    const rows = document.querySelectorAll('tr.zA');
+    return Array.from(rows).map((row, idx) => {
+      const timeEl = row.querySelector('td.xW span, td.xW, [data-tooltip]');
+      const subjectEl = row.querySelector('span.bog, .y6 span');
+      return {
+        idx,
+        timeText: timeEl?.getAttribute('data-tooltip') || timeEl?.title || timeEl?.innerText || '',
+        subject: subjectEl?.innerText || '',
+      };
+    });
+  });
+
+  console.log(`[SparkP2P] Gmail: found ${emails.length} Binance email(s)`);
+
+  if (emails.length === 0) return null;
+
+  // Find the most recent email that was sent AFTER sentAfterMs
+  // Gmail timestamps are like "Apr 2, 2026, 3:45 PM" — parse them
+  let targetIdx = null;
+  const now = Date.now();
+  const OTP_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
+
+  for (const email of emails) {
+    // Try to parse the tooltip timestamp (full date+time)
+    let emailTime = null;
+    if (email.timeText) {
+      try { emailTime = new Date(email.timeText).getTime(); } catch (_) {}
+    }
+
+    // If we can parse the time, check it's within the OTP window
+    if (emailTime && !isNaN(emailTime)) {
+      const ageMs = now - emailTime;
+      if (ageMs <= OTP_MAX_AGE_MS && emailTime >= sentAfterMs) {
+        console.log(`[SparkP2P] Found qualifying email (age: ${Math.round(ageMs/1000)}s): "${email.subject}"`);
+        targetIdx = email.idx; // first match = newest (Gmail sorts newest first)
+        break;
+      } else if (ageMs > OTP_MAX_AGE_MS) {
+        console.log(`[SparkP2P] Email too old (${Math.round(ageMs/1000)}s), skipping`);
+      }
+    } else {
+      // Can't parse time — fall back to just using the first (newest) email
+      // if it arrived after we triggered the send
+      if (targetIdx === null) targetIdx = email.idx;
+    }
+  }
+
+  if (targetIdx === null) {
+    console.log('[SparkP2P] No qualifying recent Binance email found');
+    return null;
+  }
+
+  // Click the selected email
+  const clicked = await gmailPage.evaluate((idx) => {
+    const rows = document.querySelectorAll('tr.zA');
+    if (rows[idx]) { rows[idx].click(); return true; }
+    return false;
+  }, targetIdx);
+
+  if (!clicked) return null;
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Extract 6-digit OTP — look for patterns like "123456" or "Your code is 123456"
+  const emailText = await gmailPage.evaluate(() => document.body.innerText).catch(() => '');
+
+  // Match 6-digit code — prefer one near keywords like "code", "verification", "OTP"
+  const lines = emailText.split('\n');
+  let code = null;
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    if (lower.includes('verif') || lower.includes('code') || lower.includes('otp') || lower.includes('security')) {
+      const m = line.match(/\b(\d{6})\b/);
+      if (m) { code = m[1]; break; }
+    }
+  }
+  // Fallback: any 6-digit number in the body
+  if (!code) {
+    const m = emailText.match(/\b(\d{6})\b/);
+    if (m) code = m[1];
+  }
+
+  if (code) {
+    console.log(`[SparkP2P] Email OTP extracted: ${code}`);
+    return code;
+  }
+  console.log('[SparkP2P] Could not extract OTP code from email body');
+  return null;
+}
+
+// ── Main readEmailOTP — with retry + resend logic ─────────────────────────────
+// Tries up to MAX_ATTEMPTS times. On each failed attempt it goes back to the
+// Binance tab and clicks the resend button before trying Gmail again.
+async function readEmailOTP(binancePage = null) {
   if (!browser) return null;
   let gmailPage = null;
+  const MAX_ATTEMPTS = 3;
+  const WAIT_FOR_EMAIL_MS = 5000;   // initial wait after send
+  const RESEND_WAIT_MS   = 8000;    // wait after resend
+  const sentAt = Date.now();        // timestamp when we triggered the send
+
   try {
-    console.log('[SparkP2P] Opening Gmail to find Binance OTP...');
     gmailPage = await browser.newPage();
-    await gmailPage.goto('https://mail.google.com/mail/u/0/#inbox', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 3000));
 
-    // Search for the latest Binance security email
-    await gmailPage.goto('https://mail.google.com/mail/u/0/#search/from%3Ado-not-reply%40binance.com+newer_than%3A1h', {
-      waitUntil: 'networkidle2', timeout: 15000,
-    }).catch(() => {});
-    await new Promise(r => setTimeout(r, 2500));
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      console.log(`[SparkP2P] Gmail OTP attempt ${attempt}/${MAX_ATTEMPTS}...`);
+      await new Promise(r => setTimeout(r, attempt === 1 ? WAIT_FOR_EMAIL_MS : RESEND_WAIT_MS));
 
-    // Click the first (most recent) email
-    const clicked = await gmailPage.evaluate(() => {
-      const rows = document.querySelectorAll('tr.zA');
-      if (rows.length > 0) { rows[0].click(); return true; }
-      return false;
-    });
+      const code = await _readEmailOTPOnce(gmailPage, sentAt);
+      if (code) return code;
 
-    if (!clicked) {
-      console.log('[SparkP2P] No recent Binance email found in Gmail');
-      return null;
+      // No OTP found — try to resend from the Binance verification page
+      if (attempt < MAX_ATTEMPTS && binancePage) {
+        console.log('[SparkP2P] OTP not arrived — clicking Resend on Binance...');
+        const resent = await binancePage.evaluate(() => {
+          // Look for resend / get code / send again buttons
+          const btn = Array.from(document.querySelectorAll('button, span, a')).find(el => {
+            const t = el.textContent.trim().toLowerCase();
+            return t === 'resend' || t === 'send again' || t === 'get code' || t === 'resend code';
+          });
+          if (btn) { btn.click(); return true; }
+          return false;
+        });
+        if (resent) {
+          console.log('[SparkP2P] Resend clicked — waiting for new email...');
+        } else {
+          console.log('[SparkP2P] No resend button found on Binance page');
+        }
+      }
     }
 
-    await new Promise(r => setTimeout(r, 2000));
-
-    // Extract 6-digit OTP from the email body
-    const emailText = await gmailPage.evaluate(() => document.body.innerText).catch(() => '');
-    const match = emailText.match(/\b(\d{6})\b/);
-    if (match) {
-      console.log(`[SparkP2P] Email OTP found: ${match[1]}`);
-      return match[1];
-    }
-    console.log('[SparkP2P] Could not extract OTP from email');
+    console.log('[SparkP2P] All OTP attempts exhausted — manual intervention needed');
     return null;
   } catch (e) {
     console.error('[SparkP2P] readEmailOTP error:', e.message?.substring(0, 60));
@@ -1409,8 +1517,8 @@ async function handleSecurityVerification(page) {
         );
         if (btn) btn.click();
       });
-      await new Promise(r => setTimeout(r, 4000)); // wait for email to arrive
-      const emailCode = await readEmailOTP();
+      // readEmailOTP handles waiting, retrying, and resending automatically
+      const emailCode = await readEmailOTP(page);
       if (emailCode) {
         const entered = await enterCodeIntoSection(page, 'email', emailCode);
         if (!entered) {
