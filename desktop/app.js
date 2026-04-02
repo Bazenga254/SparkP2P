@@ -287,19 +287,23 @@ async function isLoggedIn() {
   const page = await getPage('binance.com');
   if (!page) return false;
   try {
-    // Check if we see a logged-in indicator (user avatar, menu, etc.)
     const url = page.url();
-    if (url.includes('login') || url.includes('accounts.binance.com')) return false;
-    // Check for user menu (logged in users see their profile icon)
-    const loggedIn = await page.evaluate(() => {
-      return !!(document.querySelector('[data-testid="user-avatar"]') ||
-               document.querySelector('.user-avatar') ||
-               document.querySelector('[class*="AccountButton"]') ||
-               document.querySelector('[aria-label="User Center"]') ||
-               document.querySelector('#header_user_avatar') ||
-               document.cookie.includes('logined'));
-    }).catch(() => false);
-    return loggedIn;
+    // Definitely not logged in if on login/register/auth pages
+    if (url.includes('accounts.binance.com')) return false;
+    if (/\/(login|register|forgot-password|security-verify)/.test(url)) return false;
+    // If we're on any binance.com page that's not the login page, user is authenticated
+    // (Binance redirects to login if not authenticated)
+    if (url.includes('binance.com') && url.length > 20) {
+      // Double-check: make sure the page didn't silently redirect to a login form
+      const hasLoginForm = await page.evaluate(() => {
+        return !!(document.querySelector('input[type="password"][placeholder*="assword"]') ||
+                  document.querySelector('button[data-bn-type="button"][type="submit"]') &&
+                  document.querySelector('form') &&
+                  document.querySelector('input[name="email"]'));
+      }).catch(() => false);
+      return !hasLoginForm;
+    }
+    return false;
   } catch (e) { return false; }
 }
 
