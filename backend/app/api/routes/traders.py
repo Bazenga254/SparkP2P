@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import encrypt_data, decode_access_token
+from app.core.security import encrypt_data, decode_access_token, create_access_token
 from app.models import Trader, SettlementMethod
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.services.binance.client import BinanceP2PClient
@@ -770,6 +770,28 @@ async def get_session_health(
         "last_success": health.get("last_success"),
         "last_check": health.get("last_check"),
         "consecutive_failures": health.get("consecutive_failures", 0),
+    }
+
+
+@router.post("/refresh-token")
+async def refresh_token(
+    trader: Trader = Depends(get_current_trader),
+):
+    """
+    Exchange a valid (non-expired) JWT for a fresh 30-day token.
+    Desktop app calls this every 20 minutes to keep the session alive.
+    No OTP required — the existing valid token is proof of identity.
+    """
+    from app.models import TraderStatus
+    if trader.status != TraderStatus.ACTIVE:
+        raise HTTPException(status_code=403, detail="Account is not active")
+    new_token = create_access_token({"sub": str(trader.id), "email": trader.email})
+    return {
+        "access_token": new_token,
+        "token_type": "bearer",
+        "trader_id": trader.id,
+        "full_name": trader.full_name,
+        "role": trader.role or "trader",
     }
 
 

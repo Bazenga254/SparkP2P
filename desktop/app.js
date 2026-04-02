@@ -455,6 +455,30 @@ function checkInactivityTimeout() {
 // Check inactivity every 5 minutes
 setInterval(checkInactivityTimeout, 5 * 60 * 1000);
 
+// Silently refresh JWT every 20 minutes — prevents session expiry without re-login
+setInterval(async () => {
+  if (!token) return;
+  try {
+    const res = await fetch(`${API_BASE}/traders/refresh-token`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.access_token) {
+        token = data.access_token;
+        // Store refreshed token back in the dashboard's localStorage
+        if (mainWindow) {
+          mainWindow.webContents.executeJavaScript(
+            `localStorage.setItem("token", ${JSON.stringify(data.access_token)})`
+          ).catch(() => {});
+        }
+        console.log('[SparkP2P] Token refreshed — session extended 30 days');
+      }
+    }
+  } catch (e) {}
+}, 20 * 60 * 1000);
+
 // ═══════════════════════════════════════════════════════════
 // INITIAL SCAN — First thing after login:
 // 1. Profile page → get username
