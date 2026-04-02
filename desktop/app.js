@@ -18,7 +18,7 @@ console.error = (...a) => { fs.appendFileSync(logFile, `[${new Date().toISOStrin
 const API_BASE = 'https://sparkp2p.com/api';
 const DASHBOARD_URL = 'https://sparkp2p.com/dashboard';
 const CDP_PORT = 9222;
-const POLL_INTERVAL = 120000; // 2 minutes
+const POLL_INTERVAL = 30000; // 30 seconds
 
 let mainWindow = null;
 let tray = null;
