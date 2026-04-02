@@ -465,60 +465,59 @@ async function initialScan() {
   const nickname = profileData?.nickname || '';
   console.log(`[SparkP2P] Username: ${nickname || 'unknown'}`);
 
-  // Step 2 & 3: Read wallet balances (AI if key available, DOM fallback otherwise)
-  console.log('[SparkP2P] Step 2: Reading funding wallet...');
-  let fundingData = null;
-  console.log('[SparkP2P] Step 3: Reading spot wallet...');
-  let spotData = null;
+  // Step 2 & 3: Read wallet balances via DOM text (overlay-safe — screenshots are blocked by lock overlay)
   const allBalances = [];
 
-  if (aiApiKey) {
-    await page.goto('https://www.binance.com/en/my/wallet/funding', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
+  const readWalletDOM = async (url, walletType) => {
+    console.log(`[SparkP2P] Step: Reading ${walletType} wallet...`);
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 5000));
-    const ss1 = await page.screenshot({ type: 'jpeg', quality: 80 });
-    fundingData = await aiScanner.analyzeScreenshot(ss1, `
-      Look at this Binance Funding wallet page. Extract:
-      {
-        "funding_balances": [{ "asset": "string", "total": number, "available": number }],
-        "estimated_total_usd": number or null
-      }
-      List ALL visible crypto balances. If USDT shows 3.39, return {"asset":"USDT","total":3.39,"available":3.39}.
-    `);
-    console.log('[SparkP2P] Funding:', JSON.stringify(fundingData)?.substring(0, 200));
 
-    await page.goto('https://www.binance.com/en/my/wallet/account/overview', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 5000));
-    const ss2 = await page.screenshot({ type: 'jpeg', quality: 80 });
-    spotData = await aiScanner.analyzeScreenshot(ss2, `
-      Look at this Binance Spot/Overview wallet page. Extract:
-      {
-        "spot_balances": [{ "asset": "string", "total": number, "available": number }],
-        "estimated_total_usd": number or null
-      }
-      List ALL visible crypto balances with their amounts.
-    `);
-    console.log('[SparkP2P] Spot:', JSON.stringify(spotData)?.substring(0, 200));
+    // Read raw page text — works even with the lock overlay covering the page visually
+    const pageText = await page.evaluate(() => {
+      // Remove the SparkP2P lock overlay from DOM reading (it's a fixed overlay, not real content)
+      const overlay = document.getElementById('sparkp2p-browser-lock');
+      const overlayText = overlay ? overlay.innerText : '';
+      const fullText = document.body.innerText;
+      return fullText.replace(overlayText, '');
+    }).catch(() => '');
 
-    const seen = new Set();
-    for (const b of (fundingData?.funding_balances || [])) {
-      if (b.asset && !seen.has(b.asset + '_funding')) {
-        seen.add(b.asset + '_funding');
-        allBalances.push({ asset: b.asset, free: b.available || b.total || 0, locked: (b.total || 0) - (b.available || 0), total: b.total || 0, wallet: 'Funding' });
+    if (!pageText) return [];
+
+    // If AI key available, use GPT to parse the raw text (more reliable than screenshot with overlay)
+    if (aiApiKey) {
+      const parsed = await aiScanner.analyzeText(pageText, `
+        This is raw text from a Binance ${walletType} wallet page. Extract all crypto balances:
+        Return JSON: {"balances": [{"asset": "USDT", "total": 42.32, "available": 42.32, "locked": 0}]}
+        Only include assets with total > 0. If no balances found return {"balances": []}.
+      `);
+      console.log(`[SparkP2P] ${walletType}:`, JSON.stringify(parsed)?.substring(0, 200));
+      return (parsed?.balances || []).map(b => ({
+        asset: b.asset, free: b.available ?? b.total ?? 0,
+        locked: b.locked ?? 0, total: b.total ?? 0, wallet: walletType,
+      }));
+    }
+
+    // DOM regex fallback (no AI key)
+    const results = [];
+    const assets = ['USDT', 'BTC', 'ETH', 'BNB', 'USDC', 'BUSD'];
+    for (const asset of assets) {
+      const match = pageText.match(new RegExp(`${asset}[\\s\\S]{0,200}?(\\d[\\d,]*\\.\\d+)`, 'i'));
+      if (match) {
+        const total = parseFloat(match[1].replace(/,/g, ''));
+        if (total > 0) results.push({ asset, free: total, locked: 0, total, wallet: walletType });
       }
     }
-    for (const b of (spotData?.spot_balances || [])) {
-      if (b.asset && !seen.has(b.asset + '_spot')) {
-        seen.add(b.asset + '_spot');
-        allBalances.push({ asset: b.asset, free: b.available || b.total || 0, locked: (b.total || 0) - (b.available || 0), total: b.total || 0, wallet: 'Spot' });
-      }
-    }
-  } else {
-    // No AI key — use DOM-based balance reading as fallback
-    console.log('[SparkP2P] No AI key — using DOM balance reader');
-    const domBalances = await readBalance();
-    allBalances.push(...domBalances);
-    console.log('[SparkP2P] DOM balances:', JSON.stringify(domBalances)?.substring(0, 200));
-  }
+    return results;
+  };
+
+  const fundingBals = await readWalletDOM('https://www.binance.com/en/my/wallet/funding', 'Funding');
+  allBalances.push(...fundingBals);
+
+  const spotBals = await readWalletDOM('https://www.binance.com/en/my/wallet/account/overview', 'Spot');
+  // Deduplicate: skip spot assets already found in funding
+  const fundingAssets = new Set(fundingBals.map(b => b.asset));
+  allBalances.push(...spotBals.filter(b => !fundingAssets.has(b.asset)));
 
   console.log(`[SparkP2P] Total balances found: ${allBalances.length}`);
 

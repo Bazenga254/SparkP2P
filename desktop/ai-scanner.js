@@ -45,6 +45,26 @@ async function analyzeScreenshot(screenshotBuffer, prompt) {
   }
 }
 
+async function analyzeText(text, prompt) {
+  if (!client) return null;
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o',
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: prompt + '\n\nPage text:\n' + text.substring(0, 8000) + '\n\nRespond ONLY with valid JSON. No markdown, no explanation.',
+      }],
+    });
+    const content = response.choices[0]?.message?.content || '';
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+  } catch (e) {
+    console.error('[AI Scanner] analyzeText error:', e.message?.substring(0, 80));
+    return null;
+  }
+}
+
 async function scanWallet(page) {
   await page.goto('https://www.binance.com/en/my/wallet/funding', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
   await new Promise(r => setTimeout(r, 5000));
@@ -151,4 +171,4 @@ async function fullScan(page) {
   return result;
 }
 
-module.exports = { initAI, analyzeScreenshot, scanWallet, scanP2PAds, scanOrders, scanProfile, analyzeOrderPage, fullScan };
+module.exports = { initAI, analyzeScreenshot, analyzeText, scanWallet, scanP2PAds, scanOrders, scanProfile, analyzeOrderPage, fullScan };
