@@ -1,7 +1,7 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { execFile } = require('child_process');
+const { execFile, execSync } = require('child_process');
 const puppeteer = require('puppeteer-core');
 const aiScanner = require('./ai-scanner');
 const { autoUpdater } = require('electron-updater');
@@ -86,10 +86,23 @@ function checkForUpdates() {
   autoUpdater.checkForUpdatesAndNotify().catch(() => {});
 }
 app.on('window-all-closed', (e) => e.preventDefault());
+function killChrome() {
+  if (!chromeProcess) return;
+  const pid = chromeProcess.pid;
+  chromeProcess = null;
+  try {
+    // Kill the entire process tree (Chrome spawns many child processes)
+    if (process.platform === 'win32') {
+      execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+    } else {
+      process.kill(-pid, 'SIGKILL');
+    }
+  } catch (e) {}
+}
+
 app.on('before-quit', () => {
   stopPoller();
-  // Kill Chrome process when the app quits
-  if (chromeProcess) { try { chromeProcess.kill(); } catch(e) {} chromeProcess = null; }
+  killChrome();
   if (browser) { try { browser.disconnect(); } catch(e) {} browser = null; }
   if (tray) tray.destroy();
 });
