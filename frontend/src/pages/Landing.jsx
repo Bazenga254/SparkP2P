@@ -12,7 +12,6 @@ export default function Landing() {
           </div>
           <div className="land-nav-links">
             <a href="#features">Features</a>
-            <a href="#pricing">Pricing</a>
             <a href="#download">Download</a>
             <Link to="/login" className="land-nav-login">Login</Link>
           </div>
@@ -159,63 +158,7 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Pricing */}
-      <section className="land-pricing" id="pricing">
-        <div className="land-section-inner">
-          <div className="land-section-header">
-            <span className="land-section-tag">Pricing</span>
-            <h2>Simple, Monthly<br /><span className="land-highlight">Subscription</span></h2>
-            <p className="land-section-desc">Choose the plan that fits your trading style. No per-trade fees.</p>
-          </div>
-          <div className="land-pricing-grid two-tier">
-            <div className="land-price-card">
-              <div className="land-price-tier">Starter</div>
-              <div className="land-price-amount">
-                <span className="land-price-currency">KES</span>
-                <span className="land-price-number">5,000</span>
-                <span className="land-price-per">/month</span>
-              </div>
-              <p className="land-price-desc">Perfect for sellers who want to automate crypto releases</p>
-              <ul className="land-price-features">
-                <li className="included">Sell-side automation</li>
-                <li className="included">Auto-release on payment verification</li>
-                <li className="included">M-Pesa payment matching</li>
-                <li className="included">Real-time profit tracking</li>
-                <li className="included">Unlimited sell trades</li>
-                <li className="included">Dashboard & analytics</li>
-                <li className="included">Email support</li>
-                <li className="excluded">Buy-side automation</li>
-                <li className="excluded">Auto-pay sellers</li>
-                <li className="excluded">AI fraud detection</li>
-              </ul>
-              <Link to="/login" className="land-price-btn">Get Started</Link>
-            </div>
-            <div className="land-price-card featured">
-              <div className="land-price-popular">Recommended</div>
-              <div className="land-price-tier">Pro</div>
-              <div className="land-price-amount">
-                <span className="land-price-currency">KES</span>
-                <span className="land-price-number">10,000</span>
-                <span className="land-price-per">/month</span>
-              </div>
-              <p className="land-price-desc">Full automation for serious P2P merchants running both sides</p>
-              <ul className="land-price-features">
-                <li className="included">Everything in Starter</li>
-                <li className="included">Buy-side automation</li>
-                <li className="included">Auto-pay sellers via M-Pesa/Bank</li>
-                <li className="included">AI fraud detection</li>
-                <li className="included">Dynamic spread monitoring</li>
-                <li className="included">Unlimited buy & sell trades</li>
-                <li className="included">Binance chat bot</li>
-                <li className="included">Priority support</li>
-                <li className="included">Multi-payment method support</li>
-                <li className="included">Advanced analytics</li>
-              </ul>
-              <Link to="/login" className="land-price-btn featured">Get Started</Link>
-            </div>
-          </div>
-        </div>
-      </section>
+      {/* Pricing — hidden (free access period) */}
 
       {/* Download Section */}
       <section className="land-download" id="download">
@@ -269,7 +212,6 @@ export default function Landing() {
           </div>
           <div className="land-footer-links">
             <a href="#features">Features</a>
-            <a href="#pricing">Pricing</a>
             <Link to="/login">Login</Link>
             <a href="mailto:support@sparkp2p.com">Contact</a>
           </div>

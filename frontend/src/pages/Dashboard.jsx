@@ -534,19 +534,7 @@ export default function Dashboard() {
       </nav>
 
       <main className="dash-content">
-        {/* Subscription Banner */}
-        {profile && !profile.subscription_plan && (
-          <div className="subscription-banner">
-            <div className="subscription-banner-text">
-              <strong>No active subscription.</strong> Subscribe to start automating your trades.
-            </div>
-            <button className="subscription-banner-btn" onClick={() => navigate('/subscribe')}>
-              Subscribe Now
-            </button>
-          </div>
-        )}
-
-        {activeTab === 'overview' && (
+{activeTab === 'overview' && (
           <>
             {/* Row 1: Greeting + Wallet */}
             <div className="overview-grid-top">

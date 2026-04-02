@@ -44,7 +44,6 @@ const STEPS = [
   { key: 'binance', title: 'Connect Binance', icon: Link2 },
   { key: 'verification', title: 'Verification', icon: Shield },
   { key: 'settlement', title: 'Settlement', icon: Banknote },
-  { key: 'subscribe', title: 'Subscribe', icon: CreditCard },
 ];
 
 export default function Onboarding() {
@@ -127,10 +126,6 @@ export default function Onboarding() {
       }
       // Determine starting step based on existing progress
       if (res.data.settlement_method) setSettlementSaved(true);
-      if (res.data.subscription_plan) {
-        // All done
-        setCompleted(true);
-      }
     } catch (err) {
       console.error('Failed to load profile', err);
     }
@@ -287,14 +282,7 @@ export default function Onboarding() {
         <div className="onb-completion">
           <div className="onb-completion-icon">&#127881;</div>
           <h1>You're all set!</h1>
-          <p>
-            Your SparkP2P account is ready.
-            {!profile?.subscription_plan && (
-              <span className="onb-note">
-                {' '}Note: Automation won't work until you subscribe.
-              </span>
-            )}
-          </p>
+          <p>Your SparkP2P account is ready. Start automating your trades.</p>
           <button className="onb-btn-primary" onClick={handleGoToDashboard}>
             Go to Dashboard
             <ChevronRight size={18} />
@@ -857,151 +845,16 @@ export default function Onboarding() {
               </button>
               <button
                 className="onb-btn-primary"
-                onClick={() => setCurrentStep(4)}
+                onClick={() => setCompleted(true)}
                 disabled={!canAdvanceStep3}
               >
-                Next
+                Finish Setup
                 <ChevronRight size={18} />
               </button>
             </div>
           </div>
         )}
 
-        {/* Step 5: Subscribe */}
-        {currentStep === 4 && (
-          <div className="onb-step-content">
-            <div className="onb-step-header">
-              <CreditCard size={28} className="onb-step-icon" />
-              <div>
-                <h2>Choose Your Plan</h2>
-                <p>Select a plan to activate your automation</p>
-              </div>
-            </div>
-
-            {profile?.subscription_plan ? (
-              <div className="onb-card onb-success-card">
-                <Check size={24} className="onb-success-icon" />
-                <div>
-                  <h3>Subscribed - {profile.subscription_plan} Plan</h3>
-                  <p>Your automation is ready to go.</p>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="onb-plan-cards">
-                  <div
-                    className={`onb-plan-card ${selectedPlan === 'starter' ? 'selected' : ''}`}
-                    onClick={() => setSelectedPlan('starter')}
-                  >
-                    <div className="onb-plan-icon">
-                      <Zap size={24} />
-                    </div>
-                    <h3>Starter</h3>
-                    <div className="onb-plan-price">
-                      <span className="onb-price-amount">KES 5,000</span>
-                      <span className="onb-price-period">/month</span>
-                    </div>
-                    <ul className="onb-plan-features">
-                      <li><Check size={14} /> Sell-side automation</li>
-                      <li><Check size={14} /> Auto crypto release</li>
-                      <li><Check size={14} /> Payment matching</li>
-                      <li><Check size={14} /> Chat notifications</li>
-                    </ul>
-                    <div className="onb-plan-select">
-                      {selectedPlan === 'starter' ? 'Selected' : 'Select'}
-                    </div>
-                  </div>
-
-                  <div
-                    className={`onb-plan-card pro ${selectedPlan === 'pro' ? 'selected' : ''}`}
-                    onClick={() => setSelectedPlan('pro')}
-                  >
-                    <div className="onb-plan-badge">Popular</div>
-                    <div className="onb-plan-icon">
-                      <Crown size={24} />
-                    </div>
-                    <h3>Pro</h3>
-                    <div className="onb-plan-price">
-                      <span className="onb-price-amount">KES 10,000</span>
-                      <span className="onb-price-period">/month</span>
-                    </div>
-                    <ul className="onb-plan-features">
-                      <li><Check size={14} /> Everything in Starter</li>
-                      <li><Check size={14} /> Buy-side auto-pay</li>
-                      <li><Check size={14} /> Priority settlement</li>
-                      <li><Check size={14} /> Advanced analytics</li>
-                      <li><Check size={14} /> Priority support</li>
-                    </ul>
-                    <div className="onb-plan-select">
-                      {selectedPlan === 'pro' ? 'Selected' : 'Select'}
-                    </div>
-                  </div>
-                </div>
-
-                {selectedPlan && (
-                  <div className="onb-card onb-pay-card">
-                    <h3>Pay with M-Pesa</h3>
-                    <p className="onb-pay-summary">
-                      {selectedPlan === 'pro' ? 'Pro' : 'Starter'} Plan &mdash; KES{' '}
-                      {selectedPlan === 'pro' ? '10,000' : '5,000'}
-                    </p>
-                    <div className="onb-form">
-                      <label>M-Pesa Phone Number</label>
-                      <input
-                        type="tel"
-                        placeholder="e.g. 0712345678"
-                        value={subPhone}
-                        onChange={(e) => setSubPhone(e.target.value)}
-                        disabled={subLoading || subPolling}
-                      />
-                    </div>
-
-                    {subError && <div className="onb-msg error">{subError}</div>}
-                    {subMsg && (
-                      <div className={`onb-msg ${subMsg.type}`}>{subMsg.text}</div>
-                    )}
-
-                    <button
-                      className="onb-btn-primary onb-pay-btn"
-                      onClick={handleSubscribe}
-                      disabled={subLoading || subPolling || !subPhone}
-                    >
-                      {subPolling
-                        ? 'Waiting for payment...'
-                        : subLoading
-                        ? 'Sending STK Push...'
-                        : `Pay KES ${selectedPlan === 'pro' ? '10,000' : '5,000'}`}
-                    </button>
-
-                    {subPolling && (
-                      <p className="onb-polling-hint">
-                        Check your phone for the M-Pesa prompt. Enter your PIN to
-                        complete payment.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-
-            <div className="onb-actions">
-              <button className="onb-btn-ghost" onClick={() => setCurrentStep(2)}>
-                <ChevronLeft size={18} />
-                Back
-              </button>
-              {profile?.subscription_plan ? (
-                <button className="onb-btn-primary" onClick={() => setCompleted(true)}>
-                  Finish Setup
-                  <ChevronRight size={18} />
-                </button>
-              ) : (
-                <button className="onb-btn-link" onClick={handleSkipSubscribe}>
-                  Subscribe Later
-                </button>
-              )}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

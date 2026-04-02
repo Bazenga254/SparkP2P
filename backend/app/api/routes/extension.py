@@ -93,18 +93,6 @@ async def report_orders(
     Extension reports current Binance orders to VPS.
     VPS stores/updates them and returns actions the extension should execute.
     """
-    # Check subscription
-    from app.models.subscription import Subscription, SubscriptionStatus
-    sub_result = await db.execute(
-        select(Subscription).where(
-            Subscription.trader_id == trader.id,
-            Subscription.status == SubscriptionStatus.ACTIVE,
-        ).order_by(Subscription.expires_at.desc())
-    )
-    sub = sub_result.scalar_one_or_none()
-    if not sub or not sub.is_active:
-        return {"actions": [], "message": "No active subscription"}
-
     actions: list[dict] = []
 
     # Process sell orders (buyer pays us KES, we release crypto)
@@ -541,8 +529,8 @@ async def _process_reported_buy_order(
 
     logger.info(f"New buy order tracked: {order_number} for trader {trader.full_name}")
 
-    # Auto-pay if enabled, within limits, AND trader is on Pro tier
-    if not (trader.auto_pay_enabled and amount <= trader.max_single_trade and trader.tier == "pro"):
+    # Auto-pay if enabled and within limits
+    if not (trader.auto_pay_enabled and amount <= trader.max_single_trade):
         await db.commit()
         return None
 
