@@ -109,6 +109,7 @@ class TraderProfileResponse(BaseModel):
     last_extension_sync: Optional[str] = None
     settlement_cooldown_until: Optional[str] = None  # ISO datetime when cooldown ends
     password_change_cooldown_until: Optional[str] = None  # ISO datetime, 48hr after last pw change
+    binance_verify_method: Optional[str] = None
 
 
 # In-memory store for phone verification results
@@ -352,6 +353,7 @@ async def get_profile(
                (trader.password_changed_at + timedelta(hours=48)) > datetime.now(timezone.utc)
             else None
         ),
+        binance_verify_method=trader.binance_verify_method or "none",
     )
 
 

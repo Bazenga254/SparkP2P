@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification } from '../services/api';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
 
@@ -53,6 +53,11 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [bankAccount, setBankAccount] = useState('');
   const [customPaybill, setCustomPaybill] = useState('');
   const [paybillAccount, setPaybillAccount] = useState('');
+
+  // Binance verification method
+  const [verifyMethod, setVerifyMethod] = useState(profile?.binance_verify_method || 'none');
+  const [verifyInput, setVerifyInput] = useState('');
+  const [verifySaved, setVerifySaved] = useState(false);
 
   // Security / Profile
   const [editName, setEditName] = useState(profile?.full_name || '');
@@ -301,6 +306,115 @@ export default function SettingsPanel({ profile, onUpdate }) {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {activeSection === 'binance' && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3>Release Verification</h3>
+          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
+            When releasing crypto, Binance asks for identity verification. Choose your method so the bot can automate it.
+          </p>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+            {[
+              { value: 'fund_password', label: 'Fund Password', desc: 'Your Binance trade/fund password' },
+              { value: 'totp', label: 'Google Authenticator (TOTP)', desc: 'Auto-generate 2FA codes from your secret key' },
+            ].map(opt => (
+              <div key={opt.value}
+                onClick={() => { setVerifyMethod(opt.value); setVerifyInput(''); setVerifySaved(false); }}
+                style={{
+                  padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
+                  border: `1px solid ${verifyMethod === opt.value ? '#f59e0b' : 'var(--border)'}`,
+                  background: verifyMethod === opt.value ? 'rgba(245,158,11,0.08)' : 'var(--bg)',
+                  display: 'flex', alignItems: 'center', gap: 12,
+                }}>
+                <div style={{
+                  width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+                  border: `2px solid ${verifyMethod === opt.value ? '#f59e0b' : '#4b5563'}`,
+                  background: verifyMethod === opt.value ? '#f59e0b' : 'transparent',
+                }} />
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#fff' }}>{opt.label}</div>
+                  <div style={{ fontSize: 12, color: '#9ca3af' }}>{opt.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {verifyMethod === 'totp' && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 14, marginBottom: 12, fontSize: 12, color: '#9ca3af', lineHeight: 1.8 }}>
+                <strong style={{ color: '#f59e0b', display: 'block', marginBottom: 6 }}>How to get your TOTP Secret Key:</strong>
+                <ol style={{ paddingLeft: 16, margin: 0 }}>
+                  <li>Open Binance → <strong style={{ color: '#e4e4e7' }}>Profile → Security</strong></li>
+                  <li>Tap <strong style={{ color: '#e4e4e7' }}>Google Authenticator → Manage</strong></li>
+                  <li>Select <strong style={{ color: '#e4e4e7' }}>Change Authenticator</strong> or <strong style={{ color: '#e4e4e7' }}>View Key</strong></li>
+                  <li>Copy the <strong style={{ color: '#f59e0b' }}>Secret Key</strong> (looks like: JBSWY3DPEHPK3PXP)</li>
+                </ol>
+                <p style={{ margin: '8px 0 0', color: '#ef4444', fontSize: 11 }}>⚠️ If you reset your GA, you must re-add Binance to your Google Authenticator app.</p>
+              </div>
+              <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>TOTP Secret Key</label>
+              <input
+                type="password"
+                placeholder="e.g. JBSWY3DPEHPK3PXP"
+                value={verifyInput}
+                onChange={e => { setVerifyInput(e.target.value); setVerifySaved(false); }}
+                style={{ width: '100%', boxSizing: 'border-box', letterSpacing: 2 }}
+              />
+            </div>
+          )}
+
+          {verifyMethod === 'fund_password' && (
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Fund Password</label>
+              <input
+                type="password"
+                placeholder="Your Binance fund/trade password"
+                value={verifyInput}
+                onChange={e => { setVerifyInput(e.target.value); setVerifySaved(false); }}
+                maxLength={8}
+                style={{ width: '100%', boxSizing: 'border-box' }}
+              />
+            </div>
+          )}
+
+          {verifySaved && (
+            <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', fontSize: 13, color: '#10b981', marginBottom: 12 }}>
+              ✓ Saved — bot will use this to auto-verify releases
+            </div>
+          )}
+
+          <button
+            disabled={!verifyInput.trim() || loading}
+            onClick={async () => {
+              setLoading(true);
+              try {
+                await updateVerification({
+                  verify_method: verifyMethod,
+                  totp_secret: verifyMethod === 'totp' ? verifyInput.trim() : null,
+                  fund_password: verifyMethod === 'fund_password' ? verifyInput.trim() : null,
+                });
+                setVerifySaved(true);
+                setVerifyInput('');
+                if (window.sparkp2p?.isDesktop) {
+                  if (verifyMethod === 'totp') window.sparkp2p.setTotpSecret(verifyInput.trim());
+                  if (verifyMethod === 'fund_password') window.sparkp2p.setPin(verifyInput.trim());
+                }
+              } catch (e) {
+                showMsg('Failed to save verification method');
+              }
+              setLoading(false);
+            }}
+            style={{
+              padding: '11px 24px', borderRadius: 8, border: 'none',
+              background: verifyInput.trim() ? '#f59e0b' : '#374151',
+              color: verifyInput.trim() ? '#000' : '#6b7280',
+              fontWeight: 700, fontSize: 13, cursor: verifyInput.trim() ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {loading ? 'Saving...' : 'Save Verification Method'}
+          </button>
         </div>
       )}
 
