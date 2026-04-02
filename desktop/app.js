@@ -453,6 +453,65 @@ setInterval(checkInactivityTimeout, 5 * 60 * 1000);
 // 5. Navigate to P2P ads page and keep browser there
 // ═══════════════════════════════════════════════════════════
 
+async function verifyTraderIdentity(page) {
+  if (!token) return;
+  try {
+    // Navigate to P2P My Ads — payment methods here show the real account holder name
+    await page.goto('https://p2p.binance.com/en/myAds', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 4000));
+
+    const pageText = await page.evaluate(() => {
+      const overlay = document.getElementById('sparkp2p-browser-lock');
+      const overlayText = overlay ? overlay.innerText : '';
+      return document.body.innerText.replace(overlayText, '');
+    }).catch(() => '');
+
+    if (!pageText) return;
+
+    let realName = '';
+    if (aiApiKey) {
+      const result = await aiScanner.analyzeText(pageText, `
+        This is from a Binance P2P "My Ads" page. Find the payment method account holder's real name.
+        It appears next to M-PESA, bank, or other payment methods (e.g. "JOHN DOE KAMAU").
+        Return JSON: {"real_name": "FULL NAME IN CAPS or empty string if not found"}
+      `);
+      realName = (result?.real_name || '').trim().toUpperCase();
+    }
+
+    if (!realName) {
+      console.log('[SparkP2P] Identity scan: no name found, skipping');
+      return;
+    }
+
+    console.log(`[SparkP2P] Identity scan: found name "${realName}"`);
+
+    const res = await fetch(`${API_BASE}/ext/verify-identity`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ p2p_real_name: realName }),
+    }).catch(() => null);
+
+    if (!res) return;
+    const data = await res.json().catch(() => ({}));
+
+    if (!data.verified) {
+      console.log(`[SparkP2P] IDENTITY MISMATCH: ${data.message}`);
+      stopPoller();
+      await unlockChromeBrowser();
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.webContents.executeJavaScript(
+          `window.dispatchEvent(new CustomEvent("identity-mismatch", { detail: ${JSON.stringify({ message: data.message })} }))`
+        ).catch(() => {});
+      }
+    } else {
+      console.log(`[SparkP2P] Identity verified: ${realName}`);
+    }
+  } catch (e) {
+    console.error('[SparkP2P] Identity verify error:', e.message?.substring(0, 60));
+  }
+}
+
 async function initialScan() {
   if (scanningInProgress) return; // Prevent concurrent scans
   scanningInProgress = true;
@@ -543,8 +602,12 @@ async function initialScan() {
     console.log('[SparkP2P] Data uploaded to VPS');
   }
 
-  // Step 5: Navigate to P2P ads/trade page — browser stays here
-  console.log('[SparkP2P] Step 5: Going to P2P page...');
+  // Step 5: Scan payment method real name for identity verification
+  console.log('[SparkP2P] Step 5: Verifying trader identity...');
+  await verifyTraderIdentity(page);
+
+  // Step 6: Navigate to P2P ads/trade page — browser stays here
+  console.log('[SparkP2P] Step 6: Going to P2P page...');
   await page.goto('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
   await new Promise(r => setTimeout(r, 3000));
 

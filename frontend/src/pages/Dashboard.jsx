@@ -143,6 +143,7 @@ export default function Dashboard() {
   const [withdrawOtpLoading, setWithdrawOtpLoading] = useState(false);
   const [withdrawMsg, setWithdrawMsg] = useState('');
   const [sessionHealth, setSessionHealth] = useState(null);
+  const [identityError, setIdentityError] = useState('');
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -198,6 +199,13 @@ export default function Dashboard() {
     }
     setRefreshing(false);
   };
+
+  // Listen for identity mismatch event from desktop bot
+  useEffect(() => {
+    const handler = (e) => setIdentityError(e.detail?.message || 'Identity verification failed. Please log in with your registered Binance account.');
+    window.addEventListener('identity-mismatch', handler);
+    return () => window.removeEventListener('identity-mismatch', handler);
+  }, []);
 
   useEffect(() => {
     // Wait a tick to ensure token is stored after login redirect
@@ -450,6 +458,22 @@ export default function Dashboard() {
               }} />
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Identity mismatch alert */}
+      {identityError && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9998,
+          background: '#7f1d1d', borderBottom: '2px solid #ef4444',
+          padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <span style={{ fontSize: 20 }}>🚫</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ color: '#fca5a5', fontWeight: 700, fontSize: 14 }}>Identity Verification Failed</div>
+            <div style={{ color: '#fecaca', fontSize: 13, marginTop: 2 }}>{identityError}</div>
+          </div>
+          <button onClick={() => setIdentityError('')} style={{ background: 'transparent', border: '1px solid #ef4444', color: '#fca5a5', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 13 }}>Dismiss</button>
         </div>
       )}
 

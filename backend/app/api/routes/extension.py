@@ -388,6 +388,44 @@ async def get_account_data(
     return {"balances": [], "completed_orders": [], "active_ads": [], "payment_methods": [], "updated_at": None}
 
 
+class VerifyIdentityData(BaseModel):
+    p2p_real_name: str = ""
+
+
+@router.post("/verify-identity")
+async def verify_identity(
+    data: VerifyIdentityData,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Desktop bot scans the real name from Binance P2P payment methods after login.
+    We compare it against the registered full_name to detect account switching fraud.
+    """
+    p2p_name = " ".join(data.p2p_real_name.strip().upper().split())
+    registered_name = " ".join((trader.full_name or "").strip().upper().split())
+
+    if not p2p_name:
+        return {"verified": True, "message": "No name found, skipping check"}
+
+    if p2p_name != registered_name:
+        logger.warning(
+            f"Identity mismatch for trader {trader.id} ({trader.email}): "
+            f"Binance P2P name='{p2p_name}', registered='{registered_name}'"
+        )
+        return {
+            "verified": False,
+            "message": f"The Binance account name '{p2p_name}' does not match your registered name '{registered_name}'. Please log in with your own Binance account."
+        }
+
+    # Save the verified name on the trader record
+    trader.binance_username = p2p_name
+    trader.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info(f"Identity verified for trader {trader.id}: {p2p_name}")
+    return {"verified": True, "message": "Identity verified"}
+
+
 # ── Internal helpers ──────────────────────────────────────────────
 
 async def _process_reported_sell_order(
