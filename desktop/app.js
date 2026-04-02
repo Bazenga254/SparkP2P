@@ -905,10 +905,25 @@ async function pollCycle() {
       body: JSON.stringify({ sell_orders: orders.sell.map(norm), buy_orders: orders.buy.map(norm) }),
     }).catch(() => null);
 
-    // VPS may also request actions (e.g. send message)
+    // VPS may also request actions (e.g. send message, release)
     if (res?.ok) {
       const { actions } = await res.json().catch(() => ({ actions: [] }));
       for (const a of (actions || [])) await execAction(a);
+    }
+
+    // ── Step 2b: Also poll pending-actions for VPS-confirmed releases ──
+    // This catches orders where M-Pesa was confirmed via Safaricom C2B callback
+    const pendingRes = await fetch(`${API_BASE}/ext/pending-actions`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    }).catch(() => null);
+    if (pendingRes?.ok) {
+      const { actions: pendingActions } = await pendingRes.json().catch(() => ({ actions: [] }));
+      for (const a of (pendingActions || [])) {
+        if (a.action === 'release') {
+          console.log(`[SparkP2P] VPS confirmed M-Pesa payment — releasing order ${a.order_number}`);
+          await execAction(a);
+        }
+      }
     }
 
     // ── Step 3: Complete paid SELL orders ──────────────────
@@ -916,20 +931,23 @@ async function pollCycle() {
     let releasedCount = 0;
     for (const order of orders.sell) {
       const st = (order.status || '').toLowerCase();
-      if (st.includes('paid') || st.includes('payment received')) {
-        console.log(`[SparkP2P] Step 3: Binance shows PAID for order ${order.orderNumber} — verifying M-Pesa...`);
+      const isBinancePaid = st.includes('paid') || st.includes('payment received');
 
-        // SECURITY: Verify M-Pesa payment was actually received via Safaricom C2B callback
-        // before releasing crypto. Prevents fraudulent "I have paid" clicks.
-        const verified = await verifyMpesaPayment(order.orderNumber, order.totalPrice);
-        if (!verified) {
-          console.log(`[SparkP2P] ⚠️  M-Pesa NOT confirmed for order ${order.orderNumber} — SKIPPING release`);
+      // Check M-Pesa for ALL active sell orders — not just GPT-detected "Paid"
+      // This covers cases where GPT misreads the status label
+      const verified = await verifyMpesaPayment(order.orderNumber, order.totalPrice);
+
+      if (verified) {
+        if (!isBinancePaid) {
+          // M-Pesa confirmed but Binance not yet showing "Paid" — wait for buyer to confirm
+          console.log(`[SparkP2P] M-Pesa confirmed for ${order.orderNumber} but Binance shows "${order.status}" — waiting for buyer to click "I have paid"`);
           continue;
         }
-
-        console.log(`[SparkP2P] ✅ M-Pesa confirmed for order ${order.orderNumber} — releasing...`);
+        console.log(`[SparkP2P] ✅ M-Pesa + Binance both confirmed for ${order.orderNumber} — releasing...`);
         await execAction({ action: 'release', order_number: order.orderNumber, message: null });
         releasedCount++;
+      } else if (isBinancePaid) {
+        console.log(`[SparkP2P] ⚠️  Order ${order.orderNumber} shows PAID on Binance but M-Pesa NOT confirmed — HOLDING release`);
       }
     }
 
@@ -1184,8 +1202,8 @@ async function execAction(action) {
   console.log(`[SparkP2P] Executing: ${type} for order ${order_number}`);
 
   try {
-    // Navigate to the specific order
-    const page = await navigateTo(`https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES?orderNumber=${order_number}`);
+    // Navigate to the specific order page
+    const page = await navigateTo(`https://p2p.binance.com/en/fiatOrder?orderNo=${order_number}`);
     if (!page) return;
     await takeScreenshot(`Before ${type}: order ${order_number}`);
 
