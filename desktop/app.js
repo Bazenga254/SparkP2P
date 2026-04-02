@@ -561,6 +561,11 @@ async function scanWalletBalances(page) {
   const fundingAssets = new Set(fundingBals.map(b => b.asset));
   const allBalances = [...fundingBals, ...spotBals.filter(b => !fundingAssets.has(b.asset))];
   console.log(`[SparkP2P] Wallet scan: ${allBalances.length} assets (${fundingBals.length} funding, ${spotBals.length} spot)`);
+
+  // Successfully scanned Binance pages — session is alive, reset the re-login timer
+  sessionStartTime = Date.now();
+  loggedOutStrikes = 0;
+
   return allBalances;
 }
 
