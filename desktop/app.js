@@ -384,13 +384,19 @@ async function connectBinance() {
 
       // Sync cookies to mark as connected on VPS
       await syncCookies();
+      connectingBinance = false;
 
-      // Start poller FIRST (so heartbeats keep going)
+      // Block window.open() on all Binance pages to prevent popup tabs
+      const mainPage = await getPage();
+      if (mainPage) {
+        await mainPage.evaluateOnNewDocument(() => { window.open = () => null; }).catch(() => {});
+      }
+
+      // Run initial scan FIRST — poller would race on the same tab causing extra tabs
+      await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
+
+      // Start poller only after scan is done (no more tab conflicts)
       startPoller();
-      connectingBinance = false; // Connected — allow reconnect if needed later
-
-      // Then do the initial scan in background (takes time, won't block heartbeats)
-      initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
     }
   }, 2000);
 }
@@ -791,7 +797,7 @@ function stopPoller() {
 }
 
 async function pollCycle() {
-  if (!pollerRunning || !token || !browser) return;
+  if (!pollerRunning || !token || !browser || scanningInProgress) return;
 
   try {
     // Check if Binance session has expired (logged out)
