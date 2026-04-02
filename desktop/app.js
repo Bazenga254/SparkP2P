@@ -51,6 +51,21 @@ try {
 } catch (e) {}
 let aiApiKey = process.env.OPENAI_API_KEY || null;
 
+// Persist token to disk so it survives app restarts
+const TOKEN_FILE = path.join(app.getPath('userData'), 'session.json');
+function saveTokenToDisk(t) {
+  try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token: t, savedAt: Date.now() })); } catch (e) {}
+}
+function loadTokenFromDisk() {
+  try {
+    const data = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+    return data?.token || null;
+  } catch (e) { return null; }
+}
+// Load persisted token on startup
+token = loadTokenFromDisk();
+if (token) console.log('[SparkP2P] Session restored from disk');
+
 // ═══════════════════════════════════════════════════════════
 // ELECTRON
 // ═══════════════════════════════════════════════════════════
@@ -157,12 +172,22 @@ function createMainWindow() {
       .then((t) => {
         if (t && t !== token) {
           token = t;
-          console.log('[SparkP2P] Token captured');
+          saveTokenToDisk(t);
+          console.log('[SparkP2P] Token captured and saved');
           tryAutoStart();
         }
       }).catch(() => {});
   };
-  mainWindow.webContents.on('did-finish-load', captureToken);
+
+  // On every page load: inject persisted token into localStorage BEFORE React checks auth
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (token) {
+      mainWindow.webContents.executeJavaScript(
+        `localStorage.setItem("token", ${JSON.stringify(token)})`
+      ).catch(() => {});
+    }
+    captureToken();
+  });
   mainWindow.webContents.on('did-navigate-in-page', captureToken);
   // Also poll for token every 5 seconds (catches SPA login)
   setInterval(captureToken, 5000);
@@ -467,6 +492,7 @@ setInterval(async () => {
       const data = await res.json();
       if (data.access_token) {
         token = data.access_token;
+        saveTokenToDisk(token);
         // Store refreshed token back in the dashboard's localStorage
         if (mainWindow) {
           mainWindow.webContents.executeJavaScript(
