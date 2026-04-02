@@ -16,62 +16,41 @@ from app.services.mpesa.client import mpesa_client
 logger = logging.getLogger(__name__)
 
 
-# B2C fee schedule — Business Bouquet Tariff (registered users)
-# Based on actual Safaricom tariff signed by Spark Freelance Solutions
-B2C_FEES = [
-    (49, 0),
-    (100, 0),
-    (500, 4),
-    (1000, 9),
-    (1500, 14),
-    (2500, 19),
-    (3500, 24),
-    (5000, 33),
-    (7500, 40),
-    (10000, 46),
-    (15000, 55),
-    (20000, 60),
-    (25000, 65),
-    (30000, 70),
-    (35000, 80),
-    (40000, 96),
-    (45000, 100),
-    (50000, 105),
-    (70000, 105),
-    (150000, 105),
-]
-
-B2B_FEE = 50  # Approximate flat fee for B2B
-PLATFORM_WITHDRAWAL_FEE = 50  # KES 50 fixed fee on manual withdrawals
+MIN_WITHDRAWAL = 1000  # KES — minimum withdrawal amount
 
 
-def estimate_b2c_fee(amount: float) -> int:
-    """Estimate B2C transaction fee based on amount."""
-    for threshold, fee in B2C_FEES:
-        if amount <= threshold:
-            return fee
-    return 40
+def calculate_withdrawal_fee(amount: float) -> float:
+    """SparkP2P withdrawal fee schedule.
+
+    1,000 – 10,000   : 0.1%
+    10,001 – 25,000  : KES 20 fixed
+    25,001 – 50,000  : KES 30 fixed
+    50,001 – 100,000 : KES 50 fixed
+    100,001+         : KES 60 fixed
+    """
+    if amount <= 10_000:
+        return round(amount * 0.001, 2)
+    elif amount <= 25_000:
+        return 20
+    elif amount <= 50_000:
+        return 30
+    elif amount <= 100_000:
+        return 50
+    else:
+        return 60
 
 
 def get_total_settlement_fee(trader, amount: float, is_manual_withdrawal: bool = True) -> tuple:
     """Calculate total settlement fee.
 
-    Manual withdrawal (trader cashing out):
-        Safaricom fee + KES 50 platform fee = trader pays
-
-    Automated trading (bot paying sellers):
-        SparkP2P covers Safaricom fee = FREE for trader
+    Manual withdrawal (trader cashing out): SparkP2P fee applies.
+    Automated trading (bot paying sellers): FREE for trader.
 
     Returns (safaricom_fee, platform_fee, total_fee)
     """
-    if trader.settlement_method == SettlementMethod.MPESA:
-        safaricom_fee = estimate_b2c_fee(amount)
-    else:
-        safaricom_fee = B2B_FEE
-
     if is_manual_withdrawal:
-        # Manual: trader pays Safaricom + KES 50
-        return safaricom_fee, PLATFORM_WITHDRAWAL_FEE, safaricom_fee + PLATFORM_WITHDRAWAL_FEE
+        fee = calculate_withdrawal_fee(amount)
+        return 0, fee, fee
     else:
         # Automated: SparkP2P covers everything, trader pays nothing
         return 0, 0, 0

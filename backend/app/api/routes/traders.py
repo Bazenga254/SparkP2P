@@ -910,8 +910,14 @@ async def request_withdrawal(
             detail="No funds available for withdrawal",
         )
 
+    from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL
+    if wallet.balance < MIN_WITHDRAWAL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Minimum withdrawal is KES {MIN_WITHDRAWAL:,}. Your balance is KES {wallet.balance:,.0f}.",
+        )
+
     # Calculate fees
-    from app.services.settlement.engine import get_total_settlement_fee
     safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, wallet.balance)
     net_amount = wallet.balance - total_fee
 
@@ -949,13 +955,16 @@ async def preview_withdrawal(
     db: AsyncSession = Depends(get_db),
 ):
     """Preview withdrawal fees before confirming."""
-    from app.services.settlement.engine import get_total_settlement_fee
+    from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL
 
     result = await db.execute(select(Wallet).where(Wallet.trader_id == trader.id))
     wallet = result.scalar_one_or_none()
 
     if not wallet or wallet.balance <= 0:
         return {"can_withdraw": False, "reason": "No funds available"}
+
+    if wallet.balance < MIN_WITHDRAWAL:
+        return {"can_withdraw": False, "reason": f"Minimum withdrawal is KES {MIN_WITHDRAWAL:,}"}
 
     safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, wallet.balance)
     net_amount = wallet.balance - total_fee
