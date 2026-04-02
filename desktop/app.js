@@ -527,19 +527,15 @@ async function readWalletPage(page, url, walletType) {
   await page.goto(url, { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
   await new Promise(r => setTimeout(r, 5000));
 
-  const pageText = await page.evaluate(() => {
-    const overlay = document.getElementById('sparkp2p-browser-lock');
-    const overlayText = overlay ? overlay.innerText : '';
-    return document.body.innerText.replace(overlayText, '');
-  }).catch(() => '');
-
-  if (!pageText) return [];
+  // Take full-page screenshot — overlay is transparent so AI sees the real page
+  const screenshot = await page.screenshot({ type: 'jpeg', quality: 85 });
 
   if (aiApiKey) {
-    const parsed = await aiScanner.analyzeText(pageText, `
-      This is raw text from a Binance ${walletType} wallet page. Extract ALL crypto coin balances.
-      Return JSON: {"balances": [{"asset": "USDT", "total": 42.32, "available": 42.32, "locked": 0}]}
-      Include ALL coins with total > 0. If no balances found return {"balances": []}.
+    const parsed = await aiScanner.analyzeScreenshot(screenshot, `
+      This is a screenshot of a Binance ${walletType} wallet page.
+      Extract ALL visible crypto coin balances from the "My Assets" or coin list.
+      Return JSON: {"balances": [{"asset": "USDT", "total": 42.31, "available": 42.31, "locked": 0}]}
+      Include ALL coins with a total > 0. If nothing visible return {"balances": []}.
     `);
     console.log(`[SparkP2P] ${walletType}:`, JSON.stringify(parsed)?.substring(0, 200));
     return (parsed?.balances || []).map(b => ({
@@ -548,17 +544,7 @@ async function readWalletPage(page, url, walletType) {
     }));
   }
 
-  // DOM regex fallback (no AI key)
-  const results = [];
-  const assets = ['USDT', 'BTC', 'ETH', 'BNB', 'USDC', 'BUSD', 'XRP', 'SOL', 'ADA', 'DOGE'];
-  for (const asset of assets) {
-    const match = pageText.match(new RegExp(`${asset}[\\s\\S]{0,200}?(\\d[\\d,]*\\.\\d+)`, 'i'));
-    if (match) {
-      const total = parseFloat(match[1].replace(/,/g, ''));
-      if (total > 0) results.push({ asset, free: total, locked: 0, total, wallet: walletType });
-    }
-  }
-  return results;
+  return []; // No AI key — cannot parse screenshot without AI
 }
 
 async function scanWalletBalances(page) {
@@ -668,17 +654,12 @@ async function readOrders() {
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 3000));
 
-    // Read DOM text directly — overlay-safe (screenshot would only show the lock overlay)
-    const pageText = await page.evaluate(() => {
-      const overlay = document.getElementById('sparkp2p-browser-lock');
-      const overlayText = overlay ? overlay.innerText : '';
-      return document.body.innerText.replace(overlayText, '');
-    }).catch(() => '');
+    // Take screenshot — overlay is transparent so GPT-4o sees the real orders page
+    const screenshot = await page.screenshot({ type: 'jpeg', quality: 85 });
 
-    // Use GPT-4o to parse the orders from page text
-    if (aiApiKey && pageText) {
-      const aiResult = await aiScanner.analyzeText(pageText, `
-        This is raw text from a Binance P2P orders page. Extract ALL pending/active orders.
+    if (aiApiKey) {
+      const aiResult = await aiScanner.analyzeScreenshot(screenshot, `
+        This is a screenshot of a Binance P2P orders page. Extract ALL visible pending/active orders.
         Return JSON: {
           "orders": [{
             "order_number": "string (18-20 digit number)",
@@ -689,10 +670,10 @@ async function readOrders() {
             "counterparty": "string"
           }]
         }
-        If no orders found return {"orders":[]}.
+        If page shows "No records" or no orders, return {"orders": []}.
       `);
 
-      if (aiResult?.orders?.length > 0) {
+      if (aiResult?.orders) {
         const sell = [], buy = [];
         for (const o of aiResult.orders) {
           const order = {
@@ -714,36 +695,7 @@ async function readOrders() {
       }
     }
 
-    // Fallback: DOM reading
-    const orders = await page.evaluate(() => {
-      const results = { sell: [], buy: [] };
-      const text = document.body.innerText;
-
-      // Check for "No records"
-      if (text.includes('No records') || text.includes('No data')) return results;
-
-      // Try to find order numbers and details
-      const orderNumbers = text.match(/\d{18,}/g) || [];
-      const kesAmounts = text.match(/[\d,]+\.?\d*\s*KES/gi) || [];
-      const usdtAmounts = text.match(/[\d.]+\s*USDT/gi) || [];
-
-      for (let i = 0; i < orderNumbers.length; i++) {
-        const order = {
-          orderNumber: orderNumbers[i],
-          tradeType: text.toLowerCase().includes('sell') ? 'SELL' : 'BUY',
-          totalPrice: kesAmounts[i] ? parseFloat(kesAmounts[i].replace(/[,KES\s]/gi, '')) : 0,
-          amount: usdtAmounts[i] ? parseFloat(usdtAmounts[i].replace(/[USDT\s]/gi, '')) : 0,
-          asset: 'USDT',
-          status: 'PENDING',
-        };
-        if (order.tradeType === 'SELL') results.sell.push(order);
-        else results.buy.push(order);
-      }
-
-      return results;
-    });
-
-    return orders;
+    return { sell: [], buy: [] };
   } catch (e) {
     console.error('[SparkP2P] Read orders error:', e.message?.substring(0, 60));
     _ordersTabOpen = false;
