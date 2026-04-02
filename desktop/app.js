@@ -607,23 +607,28 @@ async function readOrders() {
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 3000));
 
-    // Use GPT-4o to read the orders page if AI is available
-    if (aiApiKey) {
-      const screenshot = await page.screenshot({ type: 'jpeg', quality: 80 });
-      const aiResult = await aiScanner.analyzeScreenshot(screenshot, `
-        Look at this Binance P2P orders page. Extract ALL pending/active orders:
-        {
+    // Read DOM text directly — overlay-safe (screenshot would only show the lock overlay)
+    const pageText = await page.evaluate(() => {
+      const overlay = document.getElementById('sparkp2p-browser-lock');
+      const overlayText = overlay ? overlay.innerText : '';
+      return document.body.innerText.replace(overlayText, '');
+    }).catch(() => '');
+
+    // Use GPT-4o to parse the orders from page text
+    if (aiApiKey && pageText) {
+      const aiResult = await aiScanner.analyzeText(pageText, `
+        This is raw text from a Binance P2P orders page. Extract ALL pending/active orders.
+        Return JSON: {
           "orders": [{
-            "order_number": "string (long number like 12871954638757629952)",
+            "order_number": "string (18-20 digit number)",
             "type": "SELL" or "BUY",
             "amount_fiat": number (KES amount),
             "amount_crypto": number (USDT amount),
             "status": "Pending Payment" or "Paid" or "Appeal" or "Completed",
-            "counterparty": "string (username)"
-          }],
-          "has_orders": true/false
+            "counterparty": "string"
+          }]
         }
-        If the page shows "No records" or is empty, return {"orders":[],"has_orders":false}.
+        If no orders found return {"orders":[]}.
       `);
 
       if (aiResult?.orders?.length > 0) {
@@ -643,7 +648,7 @@ async function readOrders() {
             else buy.push(order);
           }
         }
-
+        console.log(`[SparkP2P] AI found ${sell.length} sell, ${buy.length} buy orders`);
         return { sell, buy };
       }
     }
