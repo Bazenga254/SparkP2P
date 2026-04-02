@@ -31,6 +31,8 @@ let traderPin = null; // Binance security PIN — stored in memory only
 let browserLocked = false;
 let lockFrameListener = null;
 let chromeProcess = null; // Child process reference for killing Chrome on quit
+let connectingBinance = false; // Prevents concurrent connectBinance() calls
+let scanningInProgress = false; // Prevents concurrent initialScan() calls
 // Load .env file for API keys — check app data folder and app directory
 try {
   const envPath = app.isPackaged
@@ -148,10 +150,10 @@ function createMainWindow() {
   // Also poll for token every 5 seconds (catches SPA login)
   setInterval(captureToken, 5000);
 
-  // Intercept WebSocket remote browser — open Chrome instead
+  // Intercept WebSocket remote browser — open Chrome instead (only if not already connecting/connected)
   mainWindow.webContents.session.webRequest.onBeforeRequest(
     { urls: ['wss://sparkp2p.com/api/browser/login-stream*', 'ws://*/api/browser/login-stream*'] },
-    (_, cb) => { cb({ cancel: true }); connectBinance(); }
+    (_, cb) => { cb({ cancel: true }); if (!connectingBinance && !pollerRunning) connectBinance(); }
   );
 }
 
@@ -208,6 +210,8 @@ async function launchChrome(url) {
     if (browser) { try { browser.disconnect(); } catch(e) {} browser = null; }
     stopPoller();
     browserLocked = false;
+    connectingBinance = false;
+    scanningInProgress = false;
     if (lockFrameListener) { lockFrameListener = null; }
     if (mainWindow) {
       mainWindow.show();
@@ -338,6 +342,9 @@ async function unlockChromeBrowser() {
 // ═══════════════════════════════════════════════════════════
 
 async function connectBinance() {
+  if (connectingBinance || pollerRunning) return; // Already connecting or running
+  connectingBinance = true;
+
   // Check if we already have a Binance page open
   let existingPage = browser ? await getPage('binance.com') : null;
 
@@ -356,7 +363,7 @@ async function connectBinance() {
   const check = setInterval(async () => {
     if (detected) return; // Already handling login
     attempts++;
-    if (attempts > 300) { clearInterval(check); return; } // 10 min timeout
+    if (attempts > 300) { clearInterval(check); connectingBinance = false; return; } // 10 min timeout
 
     if (await isLoggedIn()) {
       if (detected) return; // Double-check after async
@@ -380,9 +387,10 @@ async function connectBinance() {
 
       // Start poller FIRST (so heartbeats keep going)
       startPoller();
+      connectingBinance = false; // Connected — allow reconnect if needed later
 
       // Then do the initial scan in background (takes time, won't block heartbeats)
-      initialScan().catch(e => console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)));
+      initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
     }
   }, 2000);
 }
@@ -440,8 +448,11 @@ setInterval(checkInactivityTimeout, 5 * 60 * 1000);
 // ═══════════════════════════════════════════════════════════
 
 async function initialScan() {
+  if (scanningInProgress) return; // Prevent concurrent scans
+  scanningInProgress = true;
+
   const page = await getPage();
-  if (!page) return;
+  if (!page) { scanningInProgress = false; return; }
 
   console.log('[SparkP2P] === INITIAL SCAN START ===');
 
@@ -533,6 +544,7 @@ async function initialScan() {
   await new Promise(r => setTimeout(r, 3000));
 
   console.log('[SparkP2P] === INITIAL SCAN COMPLETE ===');
+  scanningInProgress = false;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -799,6 +811,7 @@ async function pollCycle() {
         );
       }
       // Re-run connect flow to wait for re-login
+      connectingBinance = false;
       connectBinance();
       return;
     }
