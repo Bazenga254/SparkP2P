@@ -30,6 +30,7 @@ let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 let traderPin = null; // Binance security PIN — stored in memory only
 let browserLocked = false;
 let lockFrameListener = null;
+let chromeProcess = null; // Child process reference for killing Chrome on quit
 // Load .env file for API keys — check app data folder and app directory
 try {
   const envPath = app.isPackaged
@@ -83,7 +84,13 @@ function checkForUpdates() {
   autoUpdater.checkForUpdatesAndNotify().catch(() => {});
 }
 app.on('window-all-closed', (e) => e.preventDefault());
-app.on('before-quit', () => { stopPoller(); if (tray) tray.destroy(); });
+app.on('before-quit', () => {
+  stopPoller();
+  // Kill Chrome process when the app quits
+  if (chromeProcess) { try { chromeProcess.kill(); } catch(e) {} chromeProcess = null; }
+  if (browser) { try { browser.disconnect(); } catch(e) {} browser = null; }
+  if (tray) tray.destroy();
+});
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -181,12 +188,27 @@ function findChrome() {
 async function launchChrome(url) {
   const chrome = findChrome();
   if (!chrome) { console.error('Chrome not found'); return false; }
-  execFile(chrome, [
+  chromeProcess = execFile(chrome, [
     `--remote-debugging-port=${CDP_PORT}`,
     '--no-first-run', '--no-default-browser-check',
     '--user-data-dir=' + path.join(app.getPath('userData'), 'chrome-binance'),
     url || 'https://accounts.binance.com/en/login',
   ]);
+  chromeProcess.on('exit', () => {
+    // Chrome was closed externally — stop the bot, don't reopen
+    console.log('[SparkP2P] Chrome closed by user');
+    chromeProcess = null;
+    if (browser) { try { browser.disconnect(); } catch(e) {} browser = null; }
+    stopPoller();
+    browserLocked = false;
+    if (lockFrameListener) { lockFrameListener = null; }
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.webContents.executeJavaScript(
+        'window.dispatchEvent(new CustomEvent("binance-disconnected"))'
+      ).catch(() => {});
+    }
+  });
   console.log('[SparkP2P] Chrome launched');
   await new Promise(r => setTimeout(r, 4000));
   return true;
@@ -195,6 +217,12 @@ async function launchChrome(url) {
 async function connectPuppeteer() {
   try {
     browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${CDP_PORT}`, defaultViewport: null });
+    // When Chrome closes externally, immediately stop the bot (prevents auto-reopen)
+    browser.on('disconnected', () => {
+      if (browser) { browser = null; }
+      stopPoller();
+      browserLocked = false;
+    });
     console.log('[SparkP2P] Puppeteer connected');
     return true;
   } catch (e) { return false; }
