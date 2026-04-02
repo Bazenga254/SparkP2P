@@ -859,6 +859,28 @@ function stopPoller() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
+async function verifyMpesaPayment(orderNumber, fiatAmount) {
+  if (!token) return false;
+  try {
+    const res = await fetch(`${API_BASE}/ext/verify-payment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ binance_order_number: orderNumber, fiat_amount: fiatAmount || 0 }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data.verified) {
+      console.log(`[SparkP2P] M-Pesa verified: receipt=${data.mpesa_receipt}, amount=KES ${data.amount_received}, from=${data.payer_name}`);
+    } else {
+      console.log(`[SparkP2P] M-Pesa NOT verified: ${data.reason}`);
+    }
+    return data.verified === true;
+  } catch (e) {
+    console.error('[SparkP2P] verifyMpesaPayment error:', e.message?.substring(0, 60));
+    return false;
+  }
+}
+
 async function pollCycle() {
   if (!pollerRunning || !token || !browser || scanningInProgress) return;
   scanningInProgress = true;
@@ -916,7 +938,17 @@ async function pollCycle() {
     for (const order of orders.sell) {
       const st = (order.status || '').toLowerCase();
       if (st.includes('paid') || st.includes('payment received')) {
-        console.log(`[SparkP2P] Step 3: PAID sell order ${order.orderNumber} — releasing...`);
+        console.log(`[SparkP2P] Step 3: Binance shows PAID for order ${order.orderNumber} — verifying M-Pesa...`);
+
+        // SECURITY: Verify M-Pesa payment was actually received via Safaricom C2B callback
+        // before releasing crypto. Prevents fraudulent "I have paid" clicks.
+        const verified = await verifyMpesaPayment(order.orderNumber, order.totalPrice);
+        if (!verified) {
+          console.log(`[SparkP2P] ⚠️  M-Pesa NOT confirmed for order ${order.orderNumber} — SKIPPING release`);
+          continue;
+        }
+
+        console.log(`[SparkP2P] ✅ M-Pesa confirmed for order ${order.orderNumber} — releasing...`);
         await execAction({ action: 'release', order_number: order.orderNumber, message: null });
         releasedCount++;
       }

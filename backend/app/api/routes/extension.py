@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models import Order, OrderSide, OrderStatus, Trader
+from app.models import Order, OrderSide, OrderStatus, Trader, Payment, PaymentStatus
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.services.settlement.engine import SettlementEngine
 from app.api.deps import get_current_trader
@@ -262,6 +262,71 @@ async def get_pending_actions(
         })
 
     return {"actions": actions}
+
+
+class VerifyPaymentData(BaseModel):
+    binance_order_number: str
+    fiat_amount: float  # Expected KES amount from Binance order
+
+
+@router.post("/verify-payment")
+async def verify_payment(
+    data: VerifyPaymentData,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Bot calls this BEFORE releasing crypto on a SELL order.
+    Checks that a real M-Pesa payment was received via Safaricom C2B callback.
+    Returns verified=True only if the payment was matched and confirmed by Safaricom.
+    This prevents releasing crypto when a buyer fake-clicks "I have paid".
+    """
+    result = await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.binance_order_number == data.binance_order_number,
+            Order.side == OrderSide.SELL,
+        )
+    )
+    order = result.scalar_one_or_none()
+
+    if not order:
+        return {
+            "verified": False,
+            "reason": f"Order {data.binance_order_number} not found in our system. Cannot verify payment.",
+        }
+
+    # Check order status — PAYMENT_RECEIVED means M-Pesa C2B callback was received and matched
+    if order.status not in (OrderStatus.PAYMENT_RECEIVED, OrderStatus.RELEASED, OrderStatus.COMPLETED):
+        return {
+            "verified": False,
+            "reason": f"M-Pesa payment not confirmed yet. Order status: {order.status.value}. Waiting for Safaricom callback.",
+        }
+
+    # Fetch the linked payment record for receipt details
+    pay_result = await db.execute(
+        select(Payment).where(
+            Payment.order_id == order.id,
+            Payment.status == PaymentStatus.COMPLETED,
+        ).order_by(Payment.id.desc())
+    )
+    payment = pay_result.scalar_one_or_none()
+
+    # Verify amount matches (5 KES tolerance)
+    if payment and abs(payment.amount - data.fiat_amount) > 5:
+        return {
+            "verified": False,
+            "reason": f"Amount mismatch: expected KES {data.fiat_amount}, M-Pesa received KES {payment.amount}. Possible fraud.",
+        }
+
+    return {
+        "verified": True,
+        "reason": "M-Pesa payment confirmed by Safaricom",
+        "mpesa_receipt": payment.mpesa_transaction_id if payment else None,
+        "amount_received": payment.amount if payment else order.fiat_amount,
+        "payer_phone": payment.phone if payment else None,
+        "payer_name": payment.sender_name if payment else None,
+    }
 
 
 @router.post("/heartbeat")
