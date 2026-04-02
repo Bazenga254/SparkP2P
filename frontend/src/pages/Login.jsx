@@ -132,6 +132,26 @@ export default function Login() {
     setSendingCode(false);
   };
 
+  const handleResendOtp = async () => {
+    if (resendCooldown > 0) return;
+    setError('');
+    try {
+      await login(form.email, form.password);
+      setOtpCode('');
+      setError('');
+      // Start 30s cooldown
+      setResendCooldown(30);
+      const interval = setInterval(() => {
+        setResendCooldown(prev => {
+          if (prev <= 1) { clearInterval(interval); return 0; }
+          return prev - 1;
+        });
+      }, 1000);
+    } catch (err) {
+      setError('Failed to resend code. Please try again.');
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -152,26 +172,6 @@ export default function Login() {
         return;
       }
     }
-
-  const handleResendOtp = async () => {
-    if (resendCooldown > 0) return;
-    setError('');
-    try {
-      await login(form.email, form.password);
-      setOtpCode('');
-      setError('');
-      // Start 30s cooldown
-      setResendCooldown(30);
-      const interval = setInterval(() => {
-        setResendCooldown(prev => {
-          if (prev <= 1) { clearInterval(interval); return 0; }
-          return prev - 1;
-        });
-      }, 1000);
-    } catch (err) {
-      setError('Failed to resend code. Please try again.');
-    }
-  };
 
     setLoading(true);
     try {
