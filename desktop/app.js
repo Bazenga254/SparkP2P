@@ -132,7 +132,7 @@ function createMainWindow() {
   });
 
   loadDashboard();
-  mainWindow.on('close', (e) => { if (!app.isQuitting) { e.preventDefault(); mainWindow.hide(); } });
+  mainWindow.on('close', () => { app.isQuitting = true; app.quit(); });
 
   // Capture token on every page load and navigation
   const captureToken = () => {
