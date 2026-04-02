@@ -28,7 +28,8 @@ let browser = null;
 let pollerRunning = false;
 let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
-let traderPin = null; // Binance security PIN — stored in memory only
+let traderPin = null;    // Binance fund/trading password — stored in memory only
+let totpSecret = null;   // Google Authenticator base32 secret — stored in memory only
 let browserLocked = false;
 let lockFrameListener = null;
 let chromeProcess = null; // Child process reference for killing Chrome on quit
@@ -437,9 +438,31 @@ async function connectBinance() {
 let lastActiveTime = Date.now();
 const INACTIVITY_TIMEOUT = 6 * 60 * 60 * 1000; // 6 hours
 
+async function fetchAndApplyCredentials() {
+  if (!token) return;
+  try {
+    const res = await fetch(`${API_BASE}/traders/desktop-credentials`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const { verify_method, fund_password, totp_secret } = await res.json();
+    if (verify_method === 'fund_password' && fund_password) {
+      traderPin = fund_password;
+      console.log('[SparkP2P] Fund password loaded from backend');
+    } else if (verify_method === 'totp' && totp_secret) {
+      totpSecret = totp_secret.toUpperCase().replace(/\s/g, '');
+      console.log('[SparkP2P] TOTP secret loaded from backend');
+    }
+  } catch (e) {
+    console.log('[SparkP2P] Could not fetch credentials:', e.message?.substring(0, 40));
+  }
+}
+
 async function tryAutoStart() {
   if (!token) return; // Don't do anything until user logs into SparkP2P
   if (browser) return; // Already connected
+
+  await fetchAndApplyCredentials(); // Load PIN or TOTP from backend
 
   // Only try to reconnect to existing Chrome — don't launch new one
   try {
@@ -1206,6 +1229,40 @@ async function takeScreenshot(reason) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// TOTP — Generate Google Authenticator code from base32 secret
+// ═══════════════════════════════════════════════════════════
+
+function generateTOTP(secret) {
+  const crypto = require('crypto');
+  const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = secret.toUpperCase().replace(/\s|=/g, '');
+
+  // Decode base32 → bytes
+  let bits = '';
+  for (const ch of clean) {
+    const v = BASE32.indexOf(ch);
+    if (v === -1) continue;
+    bits += v.toString(2).padStart(5, '0');
+  }
+  const keyBytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8)
+    keyBytes.push(parseInt(bits.slice(i, i + 8), 2));
+  const key = Buffer.from(keyBytes);
+
+  // Counter = floor(unix_seconds / 30)
+  const counter = Math.floor(Date.now() / 1000 / 30);
+  const msg = Buffer.alloc(8);
+  msg.writeUInt32BE(Math.floor(counter / 0x100000000), 0);
+  msg.writeUInt32BE(counter >>> 0, 4);
+
+  // HMAC-SHA1 + dynamic truncation
+  const hmac = crypto.createHmac('sha1', key).update(msg).digest();
+  const offset = hmac[19] & 0x0f;
+  const code = ((hmac[offset] & 0x7f) << 24 | hmac[offset+1] << 16 | hmac[offset+2] << 8 | hmac[offset+3]) % 1000000;
+  return code.toString().padStart(6, '0');
+}
+
+// ═══════════════════════════════════════════════════════════
 // PIN/PASSKEY ENTRY — Auto-enter security code when Binance asks
 // ═══════════════════════════════════════════════════════════
 
@@ -1275,11 +1332,24 @@ async function handleSecurityVerification(page) {
       }
 
     } else if (verification.type === 'authenticator') {
-      // Google Authenticator — need TOTP code, not PIN
-      // TODO: Generate TOTP from secret if available
-      console.log('[SparkP2P] Authenticator required — cannot auto-generate code');
-      await takeScreenshot('Authenticator code required');
-      return false;
+      if (!totpSecret) {
+        console.log('[SparkP2P] Google Authenticator required but no TOTP secret configured');
+        await takeScreenshot('TOTP secret not configured');
+        return false;
+      }
+      const code = generateTOTP(totpSecret);
+      console.log(`[SparkP2P] Generated TOTP code: ${code}`);
+      // Enter into 6 individual digit boxes or a single input
+      const digitInputs = await page.$$('input[maxlength="1"]');
+      if (digitInputs.length >= 6) {
+        for (let i = 0; i < 6; i++)
+          await digitInputs[i].type(code[i], { delay: 50 });
+      } else {
+        const input = await page.$('input[type="tel"], input[type="number"], input[maxlength="6"], input[autocomplete="one-time-code"]');
+        if (input) { await input.click(); await input.type(code, { delay: 40 }); }
+        else await page.keyboard.type(code, { delay: 50 });
+      }
+      console.log('[SparkP2P] TOTP code entered');
 
     } else {
       // Generic: try typing the PIN into whatever input is focused
@@ -1578,9 +1648,10 @@ function norm(o) {
 // IPC
 ipcMain.handle('connect-binance', () => { connectBinance(); return { opened: true }; });
 ipcMain.handle('set-token', (_, t) => { token = t; return { ok: true }; });
-ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] PIN configured'); return { ok: true }; });
+ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] Fund password configured'); return { ok: true }; });
+ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });
 ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; aiScanner.initAI(key); console.log('[SparkP2P] GPT-4o configured'); return { ok: true }; });
-ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasAI: !!aiApiKey }));
+ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasTOTP: !!totpSecret, hasAI: !!aiApiKey }));
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
 ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
 ipcMain.handle('restart-app', () => { autoUpdater.quitAndInstall(); });

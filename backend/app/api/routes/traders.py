@@ -773,6 +773,35 @@ async def get_session_health(
     }
 
 
+@router.get("/desktop-credentials")
+async def get_desktop_credentials(
+    trader: Trader = Depends(get_current_trader),
+):
+    """
+    Returns the trader's decrypted Binance verification credentials to the desktop app.
+    Called once on startup so the bot can auto-enter PIN / TOTP when Binance asks.
+    Only returns to the authenticated owner — never exposed to other users.
+    """
+    from app.core.security import decrypt_data
+    fund_password = None
+    totp_secret = None
+    try:
+        if trader.binance_fund_password:
+            fund_password = decrypt_data(trader.binance_fund_password)
+    except Exception:
+        pass
+    try:
+        if trader.binance_2fa_secret:
+            totp_secret = decrypt_data(trader.binance_2fa_secret)
+    except Exception:
+        pass
+    return {
+        "verify_method": trader.binance_verify_method or "none",
+        "fund_password": fund_password,
+        "totp_secret": totp_secret,
+    }
+
+
 @router.post("/refresh-token")
 async def refresh_token(
     trader: Trader = Depends(get_current_trader),
