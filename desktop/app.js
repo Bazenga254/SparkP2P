@@ -517,8 +517,73 @@ async function verifyTraderIdentity(page) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════
+// WALLET SCANNER — Read all coin balances from Overview
+// Uses DOM text (overlay-safe) + AI parsing
+// ═══════════════════════════════════════════════════════════
+
+async function readWalletPage(page, url, walletType) {
+  console.log(`[SparkP2P] Reading ${walletType} wallet...`);
+  await page.goto(url, { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 5000));
+
+  const pageText = await page.evaluate(() => {
+    const overlay = document.getElementById('sparkp2p-browser-lock');
+    const overlayText = overlay ? overlay.innerText : '';
+    return document.body.innerText.replace(overlayText, '');
+  }).catch(() => '');
+
+  if (!pageText) return [];
+
+  if (aiApiKey) {
+    const parsed = await aiScanner.analyzeText(pageText, `
+      This is raw text from a Binance ${walletType} wallet page. Extract ALL crypto coin balances.
+      Return JSON: {"balances": [{"asset": "USDT", "total": 42.32, "available": 42.32, "locked": 0}]}
+      Include ALL coins with total > 0. If no balances found return {"balances": []}.
+    `);
+    console.log(`[SparkP2P] ${walletType}:`, JSON.stringify(parsed)?.substring(0, 200));
+    return (parsed?.balances || []).map(b => ({
+      asset: b.asset, free: b.available ?? b.total ?? 0,
+      locked: b.locked ?? 0, total: b.total ?? 0, wallet: walletType,
+    }));
+  }
+
+  // DOM regex fallback (no AI key)
+  const results = [];
+  const assets = ['USDT', 'BTC', 'ETH', 'BNB', 'USDC', 'BUSD', 'XRP', 'SOL', 'ADA', 'DOGE'];
+  for (const asset of assets) {
+    const match = pageText.match(new RegExp(`${asset}[\\s\\S]{0,200}?(\\d[\\d,]*\\.\\d+)`, 'i'));
+    if (match) {
+      const total = parseFloat(match[1].replace(/,/g, ''));
+      if (total > 0) results.push({ asset, free: total, locked: 0, total, wallet: walletType });
+    }
+  }
+  return results;
+}
+
+async function scanWalletBalances(page) {
+  const fundingBals = await readWalletPage(page, 'https://www.binance.com/en/my/wallet/funding', 'Funding');
+  const spotBals = await readWalletPage(page, 'https://www.binance.com/en/my/wallet/account/overview', 'Spot');
+
+  // Merge: if same asset exists in both, keep funding; add spot-only assets separately
+  const fundingAssets = new Set(fundingBals.map(b => b.asset));
+  const allBalances = [...fundingBals, ...spotBals.filter(b => !fundingAssets.has(b.asset))];
+  console.log(`[SparkP2P] Wallet scan: ${allBalances.length} assets (${fundingBals.length} funding, ${spotBals.length} spot)`);
+  return allBalances;
+}
+
+async function uploadBalances(balances, nickname = '') {
+  if (!token) return;
+  await fetch(`${API_BASE}/ext/report-account-data`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({ balances, active_ads: [], completed_orders: [], payment_methods: [], nickname }),
+  }).catch(() => {});
+  console.log(`[SparkP2P] Uploaded ${balances.length} balances to VPS`);
+}
+
 async function initialScan() {
-  if (scanningInProgress) return; // Prevent concurrent scans
+  if (scanningInProgress) return;
   scanningInProgress = true;
 
   const page = await getPage();
@@ -527,94 +592,22 @@ async function initialScan() {
   console.log('[SparkP2P] === INITIAL SCAN START ===');
 
   // Step 1: Profile — get username
-  console.log('[SparkP2P] Step 1: Reading profile...');
-  let profileData = null;
+  let nickname = '';
   if (aiApiKey) {
-    profileData = await aiScanner.scanProfile(page);
-  }
-  const nickname = profileData?.nickname || '';
-  console.log(`[SparkP2P] Username: ${nickname || 'unknown'}`);
-
-  // Step 2 & 3: Read wallet balances via DOM text (overlay-safe — screenshots are blocked by lock overlay)
-  const allBalances = [];
-
-  const readWalletDOM = async (url, walletType) => {
-    console.log(`[SparkP2P] Step: Reading ${walletType} wallet...`);
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 5000));
-
-    // Read raw page text — works even with the lock overlay covering the page visually
-    const pageText = await page.evaluate(() => {
-      // Remove the SparkP2P lock overlay from DOM reading (it's a fixed overlay, not real content)
-      const overlay = document.getElementById('sparkp2p-browser-lock');
-      const overlayText = overlay ? overlay.innerText : '';
-      const fullText = document.body.innerText;
-      return fullText.replace(overlayText, '');
-    }).catch(() => '');
-
-    if (!pageText) return [];
-
-    // If AI key available, use GPT to parse the raw text (more reliable than screenshot with overlay)
-    if (aiApiKey) {
-      const parsed = await aiScanner.analyzeText(pageText, `
-        This is raw text from a Binance ${walletType} wallet page. Extract all crypto balances:
-        Return JSON: {"balances": [{"asset": "USDT", "total": 42.32, "available": 42.32, "locked": 0}]}
-        Only include assets with total > 0. If no balances found return {"balances": []}.
-      `);
-      console.log(`[SparkP2P] ${walletType}:`, JSON.stringify(parsed)?.substring(0, 200));
-      return (parsed?.balances || []).map(b => ({
-        asset: b.asset, free: b.available ?? b.total ?? 0,
-        locked: b.locked ?? 0, total: b.total ?? 0, wallet: walletType,
-      }));
-    }
-
-    // DOM regex fallback (no AI key)
-    const results = [];
-    const assets = ['USDT', 'BTC', 'ETH', 'BNB', 'USDC', 'BUSD'];
-    for (const asset of assets) {
-      const match = pageText.match(new RegExp(`${asset}[\\s\\S]{0,200}?(\\d[\\d,]*\\.\\d+)`, 'i'));
-      if (match) {
-        const total = parseFloat(match[1].replace(/,/g, ''));
-        if (total > 0) results.push({ asset, free: total, locked: 0, total, wallet: walletType });
-      }
-    }
-    return results;
-  };
-
-  const fundingBals = await readWalletDOM('https://www.binance.com/en/my/wallet/funding', 'Funding');
-  allBalances.push(...fundingBals);
-
-  const spotBals = await readWalletDOM('https://www.binance.com/en/my/wallet/account/overview', 'Spot');
-  // Deduplicate: skip spot assets already found in funding
-  const fundingAssets = new Set(fundingBals.map(b => b.asset));
-  allBalances.push(...spotBals.filter(b => !fundingAssets.has(b.asset)));
-
-  console.log(`[SparkP2P] Total balances found: ${allBalances.length}`);
-
-  // Step 4: Upload to VPS
-  if (token) {
-    await fetch(`${API_BASE}/ext/report-account-data`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({
-        balances: allBalances,
-        active_ads: [],
-        completed_orders: [],
-        payment_methods: [],
-        nickname: nickname,
-      }),
-    }).catch(() => {});
-    console.log('[SparkP2P] Data uploaded to VPS');
+    const profileData = await aiScanner.scanProfile(page);
+    nickname = profileData?.nickname || '';
+    console.log(`[SparkP2P] Username: ${nickname || 'unknown'}`);
   }
 
-  // Step 5: Scan payment method real name for identity verification
-  console.log('[SparkP2P] Step 5: Verifying trader identity...');
+  // Step 2: Scan all wallet balances (Funding + Spot)
+  const balances = await scanWalletBalances(page);
+
+  // Step 3: Upload to VPS
+  await uploadBalances(balances, nickname);
+
+  // Step 4: Verify trader identity
+  console.log('[SparkP2P] Verifying trader identity...');
   await verifyTraderIdentity(page);
-
-  // Step 6: Navigate to P2P ads/trade page — browser stays here
-  console.log('[SparkP2P] Step 6: Going to P2P page...');
-  await page.goto('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES', { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
-  await new Promise(r => setTimeout(r, 3000));
 
   console.log('[SparkP2P] === INITIAL SCAN COMPLETE ===');
   scanningInProgress = false;
@@ -750,9 +743,6 @@ async function readOrders() {
       return results;
     });
 
-    // Navigate back to P2P trade page
-    await page.goto('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-
     return orders;
   } catch (e) {
     console.error('[SparkP2P] Read orders error:', e.message?.substring(0, 60));
@@ -871,79 +861,91 @@ function stopPoller() {
 
 async function pollCycle() {
   if (!pollerRunning || !token || !browser || scanningInProgress) return;
+  scanningInProgress = true;
 
   try {
-    // Check if Binance session has expired (logged out)
+    // ── Check Binance session ───────────────────────────────
     if (browserLocked && !(await isLoggedIn())) {
-      console.log('[SparkP2P] Binance session expired — unlocking browser for re-login');
+      console.log('[SparkP2P] Session expired — re-login required');
       stopPoller();
+      scanningInProgress = false;
       await unlockChromeBrowser();
       const page = await getPage('binance.com');
-      if (page) {
-        await page.goto('https://accounts.binance.com/en/login', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-      }
+      if (page) await page.goto('https://accounts.binance.com/en/login', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
       if (mainWindow) {
         mainWindow.show();
-        mainWindow.webContents.executeJavaScript(
-          'window.dispatchEvent(new CustomEvent("binance-disconnected"))'
-        );
+        mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("binance-disconnected"))');
       }
-      // Re-run connect flow to wait for re-login
       connectingBinance = false;
       connectBinance();
       return;
     }
 
-    // Read orders from the P2P orders page
+    const page = await getPage();
+    if (!page) { scanningInProgress = false; return; }
+
+    console.log(`[SparkP2P] ── POLL #${stats.polls + 1} ──`);
+
+    // ── Step 1: Scan wallet (Funding + Spot) ───────────────
+    console.log('[SparkP2P] Step 1: Scanning wallet balances...');
+    const balances = await scanWalletBalances(page);
+    await uploadBalances(balances);
+
+    // ── Step 2: Check P2P orders ───────────────────────────
+    console.log('[SparkP2P] Step 2: Checking P2P orders...');
     const orders = await readOrders();
     stats.orders = orders.sell.length + orders.buy.length;
-
-    console.log(`[SparkP2P] Orders: ${orders.sell.length} sell, ${orders.buy.length} buy`);
+    console.log(`[SparkP2P] Found: ${orders.sell.length} sell orders, ${orders.buy.length} buy orders`);
 
     // Report to VPS
     const res = await fetch(`${API_BASE}/ext/report-orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({
-        sell_orders: orders.sell.map(norm),
-        buy_orders: orders.buy.map(norm),
-      }),
-    });
+      body: JSON.stringify({ sell_orders: orders.sell.map(norm), buy_orders: orders.buy.map(norm) }),
+    }).catch(() => null);
 
-    if (res.ok) {
-      const { actions } = await res.json();
+    // VPS may also request actions (e.g. send message)
+    if (res?.ok) {
+      const { actions } = await res.json().catch(() => ({ actions: [] }));
       for (const a of (actions || [])) await execAction(a);
     }
 
-    // AUTO-RELEASE: If any sell order has status "Paid" or "Payment Received",
-    // release immediately — don't wait for C2B callback (Safaricom is unreliable)
+    // ── Step 3: Complete paid SELL orders ──────────────────
+    // BUY orders are handled manually by the trader
+    let releasedCount = 0;
     for (const order of orders.sell) {
       const st = (order.status || '').toLowerCase();
-      if (st === 'paid' || st === 'payment received' || st.includes('paid')) {
-        console.log(`[SparkP2P] PAID order detected: ${order.orderNumber} — auto-releasing!`);
+      if (st.includes('paid') || st.includes('payment received')) {
+        console.log(`[SparkP2P] Step 3: PAID sell order ${order.orderNumber} — releasing...`);
         await execAction({ action: 'release', order_number: order.orderNumber, message: null });
+        releasedCount++;
       }
     }
 
-    stats.polls++;
-    lastActiveTime = Date.now(); // Reset inactivity timer
-
-    // Heartbeat every poll (60s) — keeps "Binance Connected" status alive
-    fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
-
-    // Read market prices from P2P page for spread calculator
-    if (stats.polls % 3 === 0) {
-      try {
-        await readMarketPrices();
-      } catch (e) {}
+    // ── Step 4: Rescan wallet if orders were completed ─────
+    if (releasedCount > 0) {
+      console.log(`[SparkP2P] Step 4: ${releasedCount} order(s) released — rescanning wallet...`);
+      await new Promise(r => setTimeout(r, 4000)); // wait for Binance to update balance
+      const updatedBalances = await scanWalletBalances(page);
+      await uploadBalances(updatedBalances);
     }
 
-    // AI scan disabled during polling — runs only once on login (initialScan)
-    // to avoid navigating away from the P2P page and breaking order reading
+    stats.polls++;
+    lastActiveTime = Date.now();
+
+    // Heartbeat — keeps "Binance Connected" status alive on dashboard
+    fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
+
+    // Market prices — every 3rd poll
+    if (stats.polls % 3 === 0) await readMarketPrices().catch(() => {});
+
+    console.log(`[SparkP2P] Poll complete. Next in ${POLL_INTERVAL / 1000}s`);
 
   } catch (e) {
     stats.errors++;
     console.error('[SparkP2P] Poll error:', e.message);
+  } finally {
+    scanningInProgress = false;
   }
 }
 
