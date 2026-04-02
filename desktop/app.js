@@ -18,7 +18,8 @@ console.error = (...a) => { fs.appendFileSync(logFile, `[${new Date().toISOStrin
 const API_BASE = 'https://sparkp2p.com/api';
 const DASHBOARD_URL = 'https://sparkp2p.com/dashboard';
 const CDP_PORT = 9222;
-const POLL_INTERVAL = 30000; // 30 seconds
+const POLL_INTERVAL_IDLE   = 60000; // 1 minute — normal scanning (no active order)
+const POLL_INTERVAL_ACTIVE = 20000; // 20 seconds — focused order monitoring
 
 let mainWindow = null;
 let tray = null;
@@ -35,6 +36,8 @@ let connectingBinance = false; // Prevents concurrent connectBinance() calls
 let scanningInProgress = false; // Prevents concurrent initialScan() calls
 let sessionStartTime = null;   // When Binance login was last confirmed
 let loggedOutStrikes = 0;      // Consecutive failed isLoggedIn() checks before re-login
+let activeOrderNumber = null;  // Order number currently being monitored (null = idle)
+let activeOrderFiatAmount = 0; // KES amount of the active order (for M-Pesa verification)
 const SESSION_GRACE_MS = 30 * 60 * 1000; // 30 min grace period before re-login is allowed
 const LOGOUT_STRIKES_NEEDED = 3;          // Require 3 consecutive failures before declaring session lost
 // Load .env file for API keys — check app data folder and app directory
@@ -888,17 +891,28 @@ async function readAccountData() {
 // TRADING POLLER — Reads pages, reports to VPS, takes actions
 // ═══════════════════════════════════════════════════════════
 
+function scheduleNextPoll(delayMs) {
+  if (!pollerRunning) return;
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => {
+    await pollCycle();
+    scheduleNextPoll(activeOrderNumber ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE);
+  }, delayMs);
+}
+
 function startPoller() {
   if (pollerRunning) return;
   pollerRunning = true;
   console.log('[SparkP2P] Bot started');
-  pollCycle();
-  pollTimer = setInterval(pollCycle, POLL_INTERVAL);
+  scheduleNextPoll(0); // run immediately
 }
 
 function stopPoller() {
   pollerRunning = false;
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  activeOrderNumber = null;
+  activeOrderFiatAmount = 0;
+  scanningInProgress = false;
 }
 
 async function verifyMpesaPayment(orderNumber, fiatAmount) {
@@ -929,18 +943,15 @@ async function pollCycle() {
 
   try {
     // ── Check Binance session ───────────────────────────────
-    // Only check after the 30-minute grace period has passed since login
     const sessionAge = sessionStartTime ? Date.now() - sessionStartTime : Infinity;
     if (browserLocked && sessionAge > SESSION_GRACE_MS) {
       if (!(await isLoggedIn())) {
         loggedOutStrikes++;
         console.log(`[SparkP2P] isLoggedIn() returned false (strike ${loggedOutStrikes}/${LOGOUT_STRIKES_NEEDED})`);
         if (loggedOutStrikes < LOGOUT_STRIKES_NEEDED) {
-          // Not enough consecutive failures yet — could be a transient navigation glitch
           scanningInProgress = false;
           return;
         }
-        // 3 strikes in a row — session is genuinely gone
         console.log('[SparkP2P] Session expired — re-login required');
         loggedOutStrikes = 0;
         sessionStartTime = null;
@@ -957,97 +968,27 @@ async function pollCycle() {
         connectBinance();
         return;
       } else {
-        loggedOutStrikes = 0; // Reset strikes on successful login check
+        loggedOutStrikes = 0;
       }
     }
 
     const page = await getPage();
     if (!page) { scanningInProgress = false; return; }
 
-    console.log(`[SparkP2P] ── POLL #${stats.polls + 1} ──`);
-
-    // ── Step 1: Scan wallet (Funding + Spot) ───────────────
-    console.log('[SparkP2P] Step 1: Scanning wallet balances...');
-    const balances = await scanWalletBalances(page);
-    await uploadBalances(balances);
-
-    // ── Step 2: Check P2P orders ───────────────────────────
-    console.log('[SparkP2P] Step 2: Checking P2P orders...');
-    const orders = await readOrders();
-    stats.orders = orders.sell.length + orders.buy.length;
-    console.log(`[SparkP2P] Found: ${orders.sell.length} sell orders, ${orders.buy.length} buy orders`);
-
-    // Report to VPS
-    const res = await fetch(`${API_BASE}/ext/report-orders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ sell_orders: orders.sell.map(norm), buy_orders: orders.buy.map(norm), cancelled_order_numbers: orders.cancelled || [] }),
-    }).catch(() => null);
-
-    // VPS may also request actions (e.g. send message, release)
-    if (res?.ok) {
-      const { actions } = await res.json().catch(() => ({ actions: [] }));
-      for (const a of (actions || [])) await execAction(a);
-    }
-
-    // ── Step 2b: Also poll pending-actions for VPS-confirmed releases ──
-    // This catches orders where M-Pesa was confirmed via Safaricom C2B callback
-    const pendingRes = await fetch(`${API_BASE}/ext/pending-actions`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    }).catch(() => null);
-    if (pendingRes?.ok) {
-      const { actions: pendingActions } = await pendingRes.json().catch(() => ({ actions: [] }));
-      for (const a of (pendingActions || [])) {
-        if (a.action === 'release') {
-          console.log(`[SparkP2P] VPS confirmed M-Pesa payment — releasing order ${a.order_number}`);
-          await execAction(a);
-        }
-      }
-    }
-
-    // ── Step 3: Complete paid SELL orders ──────────────────
-    // BUY orders are handled manually by the trader
-    let releasedCount = 0;
-    for (const order of orders.sell) {
-      const st = (order.status || '').toLowerCase();
-      const isBinancePaid = st.includes('paid') || st.includes('payment received');
-
-      // Check M-Pesa for ALL active sell orders — not just GPT-detected "Paid"
-      // This covers cases where GPT misreads the status label
-      const verified = await verifyMpesaPayment(order.orderNumber, order.totalPrice);
-
-      if (verified) {
-        if (!isBinancePaid) {
-          // M-Pesa confirmed but Binance not yet showing "Paid" — wait for buyer to confirm
-          console.log(`[SparkP2P] M-Pesa confirmed for ${order.orderNumber} but Binance shows "${order.status}" — waiting for buyer to click "I have paid"`);
-          continue;
-        }
-        console.log(`[SparkP2P] ✅ M-Pesa + Binance both confirmed for ${order.orderNumber} — releasing...`);
-        await execAction({ action: 'release', order_number: order.orderNumber, message: null });
-        releasedCount++;
-      } else if (isBinancePaid) {
-        console.log(`[SparkP2P] ⚠️  Order ${order.orderNumber} shows PAID on Binance but M-Pesa NOT confirmed — HOLDING release`);
-      }
-    }
-
-    // ── Step 4: Rescan wallet if orders were completed ─────
-    if (releasedCount > 0) {
-      console.log(`[SparkP2P] Step 4: ${releasedCount} order(s) released — rescanning wallet...`);
-      await new Promise(r => setTimeout(r, 4000)); // wait for Binance to update balance
-      const updatedBalances = await scanWalletBalances(page);
-      await uploadBalances(updatedBalances);
+    // ── Route: focused order monitoring vs. idle full scan ──
+    if (activeOrderNumber) {
+      await monitorActiveOrder(page);
+    } else {
+      await idleScan(page);
     }
 
     stats.polls++;
     lastActiveTime = Date.now();
-
-    // Heartbeat — keeps "Binance Connected" status alive on dashboard
     fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
+    if (stats.polls % 5 === 0) await readMarketPrices().catch(() => {});
 
-    // Market prices — every 3rd poll
-    if (stats.polls % 3 === 0) await readMarketPrices().catch(() => {});
-
-    console.log(`[SparkP2P] Poll complete. Next in ${POLL_INTERVAL / 1000}s`);
+    const nextIn = (activeOrderNumber ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE) / 1000;
+    console.log(`[SparkP2P] Poll complete. ${activeOrderNumber ? `Monitoring order ${activeOrderNumber}` : 'Idle'} — next in ${nextIn}s`);
 
   } catch (e) {
     stats.errors++;
@@ -1055,6 +996,134 @@ async function pollCycle() {
   } finally {
     scanningInProgress = false;
   }
+}
+
+// ── Idle full scan — runs when no active order ──────────────────────────────
+async function idleScan(page) {
+  console.log(`[SparkP2P] ── IDLE SCAN #${stats.polls + 1} ──`);
+
+  // Step 1: Wallet
+  const balances = await scanWalletBalances(page);
+  await uploadBalances(balances);
+
+  // Step 2: Orders (active + cancelled tabs)
+  const orders = await readOrders();
+  stats.orders = orders.sell.length + orders.buy.length;
+  console.log(`[SparkP2P] Orders: ${orders.sell.length} sell, ${orders.buy.length} buy, ${orders.cancelled.length} cancelled`);
+
+  const res = await fetch(`${API_BASE}/ext/report-orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({ sell_orders: orders.sell.map(norm), buy_orders: orders.buy.map(norm), cancelled_order_numbers: orders.cancelled || [] }),
+  }).catch(() => null);
+
+  if (res?.ok) {
+    const { actions } = await res.json().catch(() => ({ actions: [] }));
+    for (const a of (actions || [])) await execAction(a);
+  }
+
+  // Step 2b: VPS-triggered pending releases
+  const pendingRes = await fetch(`${API_BASE}/ext/pending-actions`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  }).catch(() => null);
+  if (pendingRes?.ok) {
+    const { actions: pendingActions } = await pendingRes.json().catch(() => ({ actions: [] }));
+    for (const a of (pendingActions || [])) {
+      if (a.action === 'release') await execAction(a);
+    }
+  }
+
+  // Step 3: If a sell order is active/pending, switch to monitoring mode
+  if (orders.sell.length > 0) {
+    const firstPending = orders.sell[0];
+    console.log(`[SparkP2P] 🔔 Active sell order detected: ${firstPending.orderNumber} — switching to ORDER MONITORING MODE`);
+    activeOrderNumber = firstPending.orderNumber;
+    activeOrderFiatAmount = firstPending.totalPrice;
+    // Immediately do a first monitor cycle
+    await monitorActiveOrder(page);
+  }
+}
+
+// ── Focused order monitor — runs every 20s while an order is active ─────────
+async function monitorActiveOrder(page) {
+  console.log(`[SparkP2P] ── MONITORING ORDER ${activeOrderNumber} ──`);
+
+  // Navigate directly to the order detail page
+  await page.goto(`https://p2p.binance.com/en/fiatOrder?orderNo=${activeOrderNumber}`, {
+    waitUntil: 'networkidle2', timeout: 15000,
+  }).catch(() => {});
+  await new Promise(r => setTimeout(r, 2000));
+
+  const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
+  const lower = pageText.toLowerCase();
+
+  // ── Detect terminal states first ──
+  if (lower.includes('cancelled') || lower.includes('canceled') || lower.includes('order was cancelled')) {
+    console.log(`[SparkP2P] Order ${activeOrderNumber} CANCELLED on Binance — stopping monitoring`);
+    // Report to VPS
+    await fetch(`${API_BASE}/ext/report-orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [activeOrderNumber] }),
+    }).catch(() => {});
+    activeOrderNumber = null;
+    activeOrderFiatAmount = 0;
+    return;
+  }
+
+  if (lower.includes('completed') || lower.includes('order completed')) {
+    console.log(`[SparkP2P] Order ${activeOrderNumber} COMPLETED — rescanning wallet`);
+    activeOrderNumber = null;
+    activeOrderFiatAmount = 0;
+    const balances = await scanWalletBalances(page);
+    await uploadBalances(balances);
+    return;
+  }
+
+  // ── Check if buyer has clicked "Paid" ──
+  const isBinancePaid = lower.includes('payment received') || lower.includes('buyer has paid') ||
+    lower.includes('has paid') || lower.includes('confirm receipt') ||
+    (lower.includes('paid') && !lower.includes('pending payment'));
+
+  if (isBinancePaid) {
+    console.log(`[SparkP2P] Order ${activeOrderNumber} — Binance shows PAID. Verifying M-Pesa...`);
+    const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount);
+    if (verified) {
+      console.log(`[SparkP2P] ✅ M-Pesa + Binance both confirmed — releasing order ${activeOrderNumber}`);
+      await execAction({ action: 'release', order_number: activeOrderNumber, message: null });
+      // Wait for completion, then rescan wallet
+      await new Promise(r => setTimeout(r, 5000));
+      activeOrderNumber = null;
+      activeOrderFiatAmount = 0;
+      const balances = await scanWalletBalances(page);
+      await uploadBalances(balances);
+    } else {
+      console.log(`[SparkP2P] ⚠️  Binance shows PAID but M-Pesa NOT confirmed — holding release, will retry in 20s`);
+    }
+    return;
+  }
+
+  // ── Also check VPS for M-Pesa confirmation (Safaricom C2B may arrive before buyer clicks Paid) ──
+  const pendingRes = await fetch(`${API_BASE}/ext/pending-actions`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  }).catch(() => null);
+  if (pendingRes?.ok) {
+    const { actions } = await pendingRes.json().catch(() => ({ actions: [] }));
+    for (const a of (actions || [])) {
+      if (a.action === 'release' && a.order_number === activeOrderNumber) {
+        console.log(`[SparkP2P] VPS confirmed M-Pesa — releasing order ${activeOrderNumber}`);
+        await execAction(a);
+        await new Promise(r => setTimeout(r, 5000));
+        activeOrderNumber = null;
+        activeOrderFiatAmount = 0;
+        const balances = await scanWalletBalances(page);
+        await uploadBalances(balances);
+        return;
+      }
+    }
+  }
+
+  console.log(`[SparkP2P] Order ${activeOrderNumber} still PENDING — rechecking in 20s`);
 }
 
 // ═══════════════════════════════════════════════════════════
