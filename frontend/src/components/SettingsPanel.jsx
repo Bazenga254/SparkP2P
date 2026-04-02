@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword } from '../services/api';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -24,6 +24,18 @@ export default function SettingsPanel({ profile, onUpdate }) {
 
   // Binance
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
+
+  // Fee breakdown popup
+  const [showFeeInfo, setShowFeeInfo] = useState(false);
+  const feeInfoRef = useRef(null);
+
+  // Close fee popup on outside click
+  useEffect(() => {
+    if (!showFeeInfo) return;
+    const handler = (e) => { if (feeInfoRef.current && !feeInfoRef.current.contains(e.target)) setShowFeeInfo(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showFeeInfo]);
 
   // Settlement
   const [settlementMethod, setSettlementMethod] = useState(profile?.settlement_method || 'mpesa');
@@ -275,7 +287,91 @@ export default function SettingsPanel({ profile, onUpdate }) {
 
       {activeSection === 'settlement' && (
         <div className="card">
-          <h3>Settlement Method</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <h3 style={{ margin: 0 }}>Settlement Method</h3>
+            <div style={{ position: 'relative' }} ref={feeInfoRef}>
+              <button
+                onClick={() => setShowFeeInfo(v => !v)}
+                title="View withdrawal fee breakdown"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+              </button>
+              {showFeeInfo && (
+                <div style={{
+                  position: 'absolute', top: 26, left: 0, zIndex: 100,
+                  background: '#1e2240', border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: 12, padding: 16, width: 300,
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 12 }}>Withdrawal Fee Breakdown</div>
+
+                  {/* M-Pesa */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#10b981', marginBottom: 6 }}>📱 M-Pesa (Instant)</div>
+                    <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ color: '#9ca3af' }}>
+                          <th style={{ textAlign: 'left', paddingBottom: 4 }}>Amount</th>
+                          <th style={{ textAlign: 'right', paddingBottom: 4 }}>Fee</th>
+                        </tr>
+                      </thead>
+                      <tbody style={{ color: '#e5e7eb' }}>
+                        {[
+                          ['KES 1 – 500', 'KES 4 + 25'],
+                          ['KES 501 – 1,000', 'KES 9 + 25'],
+                          ['KES 1,001 – 2,500', 'KES 19 + 25'],
+                          ['KES 2,501 – 5,000', 'KES 33 + 25'],
+                          ['KES 5,001 – 10,000', 'KES 46 + 25'],
+                          ['KES 10,001 – 25,000', 'KES 65 + 25'],
+                          ['KES 25,001 – 50,000', 'KES 105 + 25'],
+                          ['KES 50,001 – 150,000', 'KES 105 + 25'],
+                        ].map(([range, fee]) => (
+                          <tr key={range}>
+                            <td style={{ padding: '2px 0' }}>{range}</td>
+                            <td style={{ textAlign: 'right', color: '#f59e0b' }}>{fee}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>Safaricom fee + KES 25 platform fee</div>
+                  </div>
+
+                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginBottom: 12 }} />
+
+                  {/* I&M Bank */}
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#60a5fa', marginBottom: 6 }}>🏦 I&M Bank (~1 hour)</div>
+                    <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ color: '#9ca3af' }}>
+                          <th style={{ textAlign: 'left', paddingBottom: 4 }}>Min. Amount</th>
+                          <th style={{ textAlign: 'right', paddingBottom: 4 }}>Fee</th>
+                        </tr>
+                      </thead>
+                      <tbody style={{ color: '#e5e7eb' }}>
+                        {[
+                          ['KES 1,000 – 10,000', '0.1%'],
+                          ['KES 25,000', 'KES 30'],
+                          ['KES 50,000', 'KES 30'],
+                          ['KES 100,000', 'KES 50'],
+                          ['KES 100,001+', 'KES 60'],
+                        ].map(([range, fee]) => (
+                          <tr key={range}>
+                            <td style={{ padding: '2px 0' }}>{range}</td>
+                            <td style={{ textAlign: 'right', color: '#f59e0b' }}>{fee}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>Withdrawals only available at tier minimums</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
           <p className="help-text">How you want to receive your funds after trades.</p>
 
           {/* Current Settlement Display */}
