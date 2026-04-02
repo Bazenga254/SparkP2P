@@ -188,6 +188,13 @@ function findChrome() {
 async function launchChrome(url) {
   const chrome = findChrome();
   if (!chrome) { console.error('Chrome not found'); return false; }
+
+  // Clear previous session files to prevent Chrome from restoring old tabs
+  const sessionDir = path.join(app.getPath('userData'), 'chrome-binance', 'Default');
+  ['Current Session', 'Current Tabs', 'Last Session', 'Last Tabs'].forEach(f => {
+    try { fs.unlinkSync(path.join(sessionDir, f)); } catch(e) {}
+  });
+
   chromeProcess = execFile(chrome, [
     `--remote-debugging-port=${CDP_PORT}`,
     '--no-first-run', '--no-default-browser-check',
@@ -345,11 +352,15 @@ async function connectBinance() {
   console.log('[SparkP2P] Waiting for login...');
 
   let attempts = 0;
+  let detected = false; // Guard against duplicate login detection
   const check = setInterval(async () => {
+    if (detected) return; // Already handling login
     attempts++;
     if (attempts > 300) { clearInterval(check); return; } // 10 min timeout
 
     if (await isLoggedIn()) {
+      if (detected) return; // Double-check after async
+      detected = true;
       clearInterval(check);
       console.log('[SparkP2P] Login detected!');
 
