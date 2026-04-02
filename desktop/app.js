@@ -28,6 +28,8 @@ let pollerRunning = false;
 let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 let traderPin = null; // Binance security PIN — stored in memory only
+let browserLocked = false;
+let lockFrameListener = null;
 // Load .env file for API keys — check app data folder and app directory
 try {
   const envPath = app.isPackaged
@@ -195,6 +197,72 @@ async function isLoggedIn() {
 }
 
 // ═══════════════════════════════════════════════════════════
+// BROWSER LOCK — Block user input on Chrome after login
+// ═══════════════════════════════════════════════════════════
+
+async function injectLockOverlay(page) {
+  await page.evaluate(() => {
+    if (document.getElementById('sparkp2p-browser-lock')) return;
+    const el = document.createElement('div');
+    el.id = 'sparkp2p-browser-lock';
+    el.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'width:100vw', 'height:100vh',
+      'background:rgba(0,0,0,0.93)', 'z-index:2147483647',
+      'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
+      'cursor:not-allowed', 'pointer-events:all', 'user-select:none',
+      'font-family:-apple-system,sans-serif',
+    ].join('!important;') + '!important';
+    el.innerHTML = `
+      <div style="text-align:center;color:#fff;max-width:380px;padding:40px">
+        <div style="font-size:60px;margin-bottom:16px">🔒</div>
+        <h2 style="color:#f59e0b;font-size:22px;margin:0 0 10px">SparkP2P Bot Active</h2>
+        <p style="color:#9ca3af;font-size:13px;line-height:1.7;margin:0 0 20px">
+          This browser is locked for your security.<br>
+          The bot is monitoring and trading on your behalf.
+        </p>
+        <div style="padding:10px 18px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;font-size:12px;color:#f59e0b">
+          You can minimize this window safely
+        </div>
+      </div>`;
+    const block = e => { e.preventDefault(); e.stopImmediatePropagation(); };
+    ['click','mousedown','mouseup','dblclick','contextmenu',
+     'keydown','keyup','keypress','wheel','scroll','touchstart','touchend'
+    ].forEach(t => el.addEventListener(t, block, true));
+    document.body.appendChild(el);
+  }).catch(() => {});
+}
+
+async function lockChromeBrowser() {
+  browserLocked = true;
+  const page = await getPage('binance.com');
+  if (!page) return;
+  await injectLockOverlay(page);
+  // Re-inject after every Puppeteer navigation (bot navigates internally)
+  if (lockFrameListener) page.off('framenavigated', lockFrameListener);
+  lockFrameListener = async (frame) => {
+    if (frame === page.mainFrame()) {
+      await new Promise(r => setTimeout(r, 600));
+      await injectLockOverlay(page).catch(() => {});
+    }
+  };
+  page.on('framenavigated', lockFrameListener);
+  console.log('[SparkP2P] Chrome browser locked');
+}
+
+async function unlockChromeBrowser() {
+  browserLocked = false;
+  const page = await getPage('binance.com');
+  if (page) {
+    if (lockFrameListener) { page.off('framenavigated', lockFrameListener); lockFrameListener = null; }
+    await page.evaluate(() => {
+      const el = document.getElementById('sparkp2p-browser-lock');
+      if (el) el.remove();
+    }).catch(() => {});
+  }
+  console.log('[SparkP2P] Chrome browser unlocked');
+}
+
+// ═══════════════════════════════════════════════════════════
 // CONNECT BINANCE — Open Chrome, wait for login, start bot
 // ═══════════════════════════════════════════════════════════
 
@@ -221,13 +289,11 @@ async function connectBinance() {
       clearInterval(check);
       console.log('[SparkP2P] Login detected!');
 
-      // Show alert IMMEDIATELY
-      if (mainWindow) {
-        mainWindow.show();
-        mainWindow.webContents.executeJavaScript(
-          'alert("Binance connected! Bot is running. Keep Chrome open (you can minimize it).")'
-        );
-      }
+      // Lock Chrome immediately so user cannot interact with Binance
+      await lockChromeBrowser();
+
+      // Bring SparkP2P dashboard to front
+      if (mainWindow) mainWindow.show();
 
       // Send heartbeat immediately so dashboard shows "Connected"
       if (token) {
@@ -615,6 +681,26 @@ async function pollCycle() {
   if (!pollerRunning || !token || !browser) return;
 
   try {
+    // Check if Binance session has expired (logged out)
+    if (browserLocked && !(await isLoggedIn())) {
+      console.log('[SparkP2P] Binance session expired — unlocking browser for re-login');
+      stopPoller();
+      await unlockChromeBrowser();
+      const page = await getPage('binance.com');
+      if (page) {
+        await page.goto('https://accounts.binance.com/en/login', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      }
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.webContents.executeJavaScript(
+          'window.dispatchEvent(new CustomEvent("binance-disconnected"))'
+        );
+      }
+      // Re-run connect flow to wait for re-login
+      connectBinance();
+      return;
+    }
+
     // Read orders from the P2P orders page
     const orders = await readOrders();
     stats.orders = orders.sell.length + orders.buy.length;
