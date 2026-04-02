@@ -679,7 +679,9 @@ async function navigateTo(url) {
 let _ordersTabOpen = false;
 
 async function readOrders() {
-  // Reuse the single main tab — navigate to orders page, read, navigate back
+  // IMPORTANT: Use DOM text — NOT screenshots — for orders.
+  // GPT Vision OCR misreads 18-20 digit order numbers causing duplicate DB records.
+  // DOM text gives exact digits straight from the HTML.
   if (!browser || _ordersTabOpen) return { sell: [], buy: [] };
 
   _ordersTabOpen = true;
@@ -689,30 +691,40 @@ async function readOrders() {
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 3000));
 
-    // Take screenshot — overlay is transparent so GPT-4o sees the real orders page
-    const screenshot = await page.screenshot({ type: 'jpeg', quality: 85 });
+    // Extract exact text from DOM — no OCR, no hallucinated digits
+    const pageText = await page.evaluate(() => {
+      return document.body.innerText;
+    }).catch(() => '');
+
+    if (!pageText) return { sell: [], buy: [] };
+    if (pageText.includes('No records') || pageText.includes('No data')) {
+      console.log('[SparkP2P] No P2P orders found');
+      return { sell: [], buy: [] };
+    }
 
     if (aiApiKey) {
-      const aiResult = await aiScanner.analyzeScreenshot(screenshot, `
-        This is a screenshot of a Binance P2P orders page. Extract ALL visible pending/active orders.
+      const aiResult = await aiScanner.analyzeText(pageText, `
+        This is exact text copied from a Binance P2P orders page.
+        Extract ALL pending or active orders (ignore Completed/Cancelled).
+        The order numbers are 18-20 digit integers — copy them EXACTLY as they appear, do NOT change any digits.
         Return JSON: {
           "orders": [{
-            "order_number": "string (18-20 digit number)",
+            "order_number": "exact 18-20 digit number as written",
             "type": "SELL" or "BUY",
-            "amount_fiat": number (KES amount),
-            "amount_crypto": number (USDT amount),
-            "status": "Pending Payment" or "Paid" or "Appeal" or "Completed",
+            "amount_fiat": number (KES amount, exact),
+            "amount_crypto": number (USDT amount, exact),
+            "status": "Pending Payment" or "Paid" or "Appeal",
             "counterparty": "string"
           }]
         }
-        If page shows "No records" or no orders, return {"orders": []}.
+        If no pending/active orders, return {"orders": []}.
       `);
 
       if (aiResult?.orders) {
         const sell = [], buy = [];
         for (const o of aiResult.orders) {
           const order = {
-            orderNumber: o.order_number || '',
+            orderNumber: String(o.order_number || '').replace(/\D/g, ''), // digits only
             tradeType: (o.type || '').toUpperCase() === 'BUY' ? 'BUY' : 'SELL',
             totalPrice: o.amount_fiat || 0,
             amount: o.amount_crypto || 0,
@@ -720,12 +732,12 @@ async function readOrders() {
             status: o.status || 'PENDING',
             counterparty: o.counterparty || '',
           };
-          if (order.orderNumber) {
+          if (order.orderNumber.length >= 15) { // valid order numbers are 18+ digits
             if (order.tradeType === 'SELL') sell.push(order);
             else buy.push(order);
           }
         }
-        console.log(`[SparkP2P] AI found ${sell.length} sell, ${buy.length} buy orders`);
+        console.log(`[SparkP2P] Orders: ${sell.length} sell, ${buy.length} buy`);
         return { sell, buy };
       }
     }
