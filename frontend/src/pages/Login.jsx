@@ -28,6 +28,7 @@ export default function Login() {
   const [lockoutUntil, setLockoutUntil] = useState(null); // Date object
   const [lockoutCountdown, setLockoutCountdown] = useState('');
   const [attemptsRemaining, setAttemptsRemaining] = useState(null);
+  const [resendCooldown, setResendCooldown] = useState(0); // seconds
   const [showReset, setShowReset] = useState(false);
   const [googleProfile, setGoogleProfile] = useState(null); // {token, name, id, role} — needs phone+KYC
   const [profileForm, setProfileForm] = useState({ full_name: '', phone: '' });
@@ -151,6 +152,26 @@ export default function Login() {
         return;
       }
     }
+
+  const handleResendOtp = async () => {
+    if (resendCooldown > 0) return;
+    setError('');
+    try {
+      await login(form.email, form.password);
+      setOtpCode('');
+      setError('');
+      // Start 30s cooldown
+      setResendCooldown(30);
+      const interval = setInterval(() => {
+        setResendCooldown(prev => {
+          if (prev <= 1) { clearInterval(interval); return 0; }
+          return prev - 1;
+        });
+      }, 1000);
+    } catch (err) {
+      setError('Failed to resend code. Please try again.');
+    }
+  };
 
     setLoading(true);
     try {
@@ -510,9 +531,17 @@ export default function Login() {
             </button>
 
             {!isRegister && otpRequired && (
-              <p style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginTop: 8, cursor: 'pointer' }}
-                onClick={() => { setOtpRequired(false); setOtpCode(''); setError(''); }}>
-                Didn't receive code? <span style={{ color: '#f59e0b' }}>Try again</span>
+              <p style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginTop: 8 }}>
+                Didn't receive code?{' '}
+                <span
+                  onClick={resendCooldown > 0 ? undefined : handleResendOtp}
+                  style={{
+                    color: resendCooldown > 0 ? '#6b7280' : '#f59e0b',
+                    cursor: resendCooldown > 0 ? 'default' : 'pointer',
+                  }}
+                >
+                  {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Try again'}
+                </span>
               </p>
             )}
           </form>
