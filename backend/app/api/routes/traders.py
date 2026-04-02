@@ -910,12 +910,22 @@ async def request_withdrawal(
             detail="No funds available for withdrawal",
         )
 
-    from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL
+    from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL, get_bank_withdrawal_eligibility
     if wallet.balance < MIN_WITHDRAWAL:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Minimum withdrawal is KES {MIN_WITHDRAWAL:,}. Your balance is KES {wallet.balance:,.0f}.",
         )
+
+    # For bank withdrawals, check tier eligibility
+    if trader.settlement_method.value != "mpesa":
+        eligibility = get_bank_withdrawal_eligibility(wallet.balance)
+        if not eligibility["eligible"]:
+            min_req = eligibility.get("min_required", 0)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{eligibility['reason']}. Keep trading to reach KES {min_req:,}.",
+            )
 
     # Calculate fees
     safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, wallet.balance)
@@ -955,7 +965,7 @@ async def preview_withdrawal(
     db: AsyncSession = Depends(get_db),
 ):
     """Preview withdrawal fees before confirming."""
-    from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL
+    from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL, get_bank_withdrawal_eligibility
 
     result = await db.execute(select(Wallet).where(Wallet.trader_id == trader.id))
     wallet = result.scalar_one_or_none()
@@ -965,6 +975,17 @@ async def preview_withdrawal(
 
     if wallet.balance < MIN_WITHDRAWAL:
         return {"can_withdraw": False, "reason": f"Minimum withdrawal is KES {MIN_WITHDRAWAL:,}"}
+
+    if trader.settlement_method.value != "mpesa":
+        eligibility = get_bank_withdrawal_eligibility(wallet.balance)
+        if not eligibility["eligible"]:
+            min_req = eligibility.get("min_required", 0)
+            return {
+                "can_withdraw": False,
+                "reason": eligibility["reason"],
+                "min_required": min_req,
+                "balance": wallet.balance,
+            }
 
     safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, wallet.balance)
     net_amount = wallet.balance - total_fee

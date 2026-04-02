@@ -48,32 +48,42 @@ def _safaricom_b2c_fee(amount: float) -> int:
     return 105
 
 
-def _bank_withdrawal_fee(amount: float) -> float:
-    """Fixed fee tiers for I&M bank withdrawals.
+def get_bank_withdrawal_eligibility(amount: float) -> dict:
+    """Check if amount is eligible for I&M bank withdrawal and return fee.
 
-    1,000 – 10,000   : 0.1%
-    10,001 – 25,000  : KES 20
-    25,001 – 50,000  : KES 30
-    50,001 – 100,000 : KES 50
-    100,001+         : KES 60
+    Minimum thresholds prevent partial withdrawals in mid-range tiers:
+      1,000 – 10,000  : any amount, fee 0.1%
+      10,001 – 24,999 : BLOCKED — must reach KES 25,000
+      25,000          : fee KES 30
+      25,001 – 49,999 : BLOCKED — must reach KES 50,000
+      50,000          : fee KES 30
+      50,001 – 99,999 : BLOCKED — must reach KES 100,000
+      100,000         : fee KES 50
+      100,001+        : any amount, fee KES 60
+
+    Returns dict with 'eligible' bool, 'fee', and 'reason' if blocked.
     """
+    if amount < MIN_WITHDRAWAL:
+        return {"eligible": False, "fee": 0, "reason": f"Minimum withdrawal is KES {MIN_WITHDRAWAL:,}"}
     if amount <= 10_000:
-        return round(amount * 0.001, 2)
-    elif amount <= 25_000:
-        return 20
-    elif amount <= 50_000:
-        return 30
-    elif amount <= 100_000:
-        return 50
-    else:
-        return 60
+        return {"eligible": True, "fee": round(amount * 0.001, 2), "min_required": None}
+    if amount < 25_000:
+        return {"eligible": False, "fee": 30, "reason": "Minimum withdrawal for this tier is KES 25,000", "min_required": 25_000}
+    if amount < 50_000:
+        return {"eligible": False, "fee": 30, "reason": "Minimum withdrawal for this tier is KES 50,000", "min_required": 50_000}
+    if amount < 100_000:
+        return {"eligible": False, "fee": 50, "reason": "Minimum withdrawal for this tier is KES 100,000", "min_required": 100_000}
+    if amount == 100_000:
+        return {"eligible": True, "fee": 50, "min_required": None}
+    # 100,001+
+    return {"eligible": True, "fee": 60, "min_required": None}
 
 
 def get_total_settlement_fee(trader, amount: float, is_manual_withdrawal: bool = True) -> tuple:
     """Calculate total settlement fee.
 
     M-Pesa withdrawal  : Safaricom B2C fee + KES 25 markup (instant)
-    Bank (I&M) withdrawal: Fixed tier fee (processed within 1 hour)
+    Bank (I&M) withdrawal: Tiered fixed fee with minimum thresholds
     Automated trading  : FREE for trader
 
     Returns (safaricom_fee, platform_fee, total_fee)
@@ -85,8 +95,9 @@ def get_total_settlement_fee(trader, amount: float, is_manual_withdrawal: bool =
         safaricom_fee = _safaricom_b2c_fee(amount)
         return safaricom_fee, MPESA_PLATFORM_MARKUP, safaricom_fee + MPESA_PLATFORM_MARKUP
     else:
-        # Bank (I&M) — fixed tier, no Safaricom fee
-        fee = _bank_withdrawal_fee(amount)
+        # Bank (I&M) — tiered fixed fee
+        eligibility = get_bank_withdrawal_eligibility(amount)
+        fee = eligibility["fee"]
         return 0, fee, fee
 
 
