@@ -54,10 +54,12 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [customPaybill, setCustomPaybill] = useState('');
   const [paybillAccount, setPaybillAccount] = useState('');
 
-  // Binance verification method
+  // Binance verification method — pre-populate from profile
   const [verifyMethod, setVerifyMethod] = useState(profile?.binance_verify_method || 'none');
   const [verifyInput, setVerifyInput] = useState('');
-  const [verifySaved, setVerifySaved] = useState(false);
+  const [verifySaved, setVerifySaved] = useState(
+    !!(profile?.binance_verify_method && profile.binance_verify_method !== 'none')
+  );
 
   // Security / Profile
   const [editName, setEditName] = useState(profile?.full_name || '');
@@ -342,7 +344,21 @@ export default function SettingsPanel({ profile, onUpdate }) {
             ))}
           </div>
 
-          {verifyMethod === 'totp' && (
+          {/* Already configured — show status, allow update */}
+          {verifySaved && !verifyInput && (
+            <div style={{ padding: '12px 14px', borderRadius: 8, background: 'rgba(16,185,129,0.08)', border: '1px solid #10b981', fontSize: 13, color: '#10b981', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>✓ {verifyMethod === 'totp' ? 'Google Authenticator secret' : 'Fund password'} is configured</span>
+              <button
+                onClick={() => setVerifyInput(' ')}
+                style={{ background: 'none', border: '1px solid #10b981', borderRadius: 6, color: '#10b981', fontSize: 12, padding: '4px 10px', cursor: 'pointer' }}
+              >
+                Update
+              </button>
+            </div>
+          )}
+
+          {/* Input — only shown when updating */}
+          {(!verifySaved || verifyInput) && verifyMethod === 'totp' && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 14, marginBottom: 12, fontSize: 12, color: '#9ca3af', lineHeight: 1.8 }}>
                 <strong style={{ color: '#f59e0b', display: 'block', marginBottom: 6 }}>How to get your TOTP Secret Key:</strong>
@@ -358,63 +374,72 @@ export default function SettingsPanel({ profile, onUpdate }) {
               <input
                 type="password"
                 placeholder="e.g. JBSWY3DPEHPK3PXP"
-                value={verifyInput}
-                onChange={e => { setVerifyInput(e.target.value); setVerifySaved(false); }}
+                value={verifyInput.trim()}
+                onChange={e => setVerifyInput(e.target.value)}
                 style={{ width: '100%', boxSizing: 'border-box', letterSpacing: 2 }}
+                autoFocus
               />
             </div>
           )}
 
-          {verifyMethod === 'fund_password' && (
+          {(!verifySaved || verifyInput) && verifyMethod === 'fund_password' && (
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Fund Password</label>
               <input
                 type="password"
                 placeholder="Your Binance fund/trade password"
-                value={verifyInput}
-                onChange={e => { setVerifyInput(e.target.value); setVerifySaved(false); }}
+                value={verifyInput.trim()}
+                onChange={e => setVerifyInput(e.target.value)}
                 maxLength={8}
                 style={{ width: '100%', boxSizing: 'border-box' }}
+                autoFocus
               />
             </div>
           )}
 
-          {verifySaved && (
-            <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', fontSize: 13, color: '#10b981', marginBottom: 12 }}>
-              ✓ Saved — bot will use this to auto-verify releases
+          {(!verifySaved || verifyInput.trim()) && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              {verifySaved && (
+                <button
+                  onClick={() => setVerifyInput('')}
+                  style={{ padding: '11px 18px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              )}
+              <button
+                disabled={!verifyInput.trim() || loading}
+                onClick={async () => {
+                  const val = verifyInput.trim();
+                  setLoading(true);
+                  try {
+                    await updateVerification({
+                      verify_method: verifyMethod,
+                      totp_secret: verifyMethod === 'totp' ? val : null,
+                      fund_password: verifyMethod === 'fund_password' ? val : null,
+                    });
+                    setVerifySaved(true);
+                    setVerifyInput('');
+                    if (window.sparkp2p?.isDesktop) {
+                      if (verifyMethod === 'totp') window.sparkp2p.setTotpSecret(val);
+                      if (verifyMethod === 'fund_password') window.sparkp2p.setPin(val);
+                    }
+                  } catch (e) {
+                    showMsg('Failed to save verification method');
+                  }
+                  setLoading(false);
+                }}
+                style={{
+                  flex: 1, padding: '11px 24px', borderRadius: 8, border: 'none',
+                  background: verifyInput.trim() ? '#f59e0b' : '#374151',
+                  color: verifyInput.trim() ? '#000' : '#6b7280',
+                  fontWeight: 700, fontSize: 13, cursor: verifyInput.trim() ? 'pointer' : 'not-allowed',
+                }}
+              >
+                {loading ? 'Saving...' : 'Save Verification Method'}
+              </button>
             </div>
           )}
-
-          <button
-            disabled={!verifyInput.trim() || loading}
-            onClick={async () => {
-              setLoading(true);
-              try {
-                await updateVerification({
-                  verify_method: verifyMethod,
-                  totp_secret: verifyMethod === 'totp' ? verifyInput.trim() : null,
-                  fund_password: verifyMethod === 'fund_password' ? verifyInput.trim() : null,
-                });
-                setVerifySaved(true);
-                setVerifyInput('');
-                if (window.sparkp2p?.isDesktop) {
-                  if (verifyMethod === 'totp') window.sparkp2p.setTotpSecret(verifyInput.trim());
-                  if (verifyMethod === 'fund_password') window.sparkp2p.setPin(verifyInput.trim());
-                }
-              } catch (e) {
-                showMsg('Failed to save verification method');
-              }
-              setLoading(false);
-            }}
-            style={{
-              padding: '11px 24px', borderRadius: 8, border: 'none',
-              background: verifyInput.trim() ? '#f59e0b' : '#374151',
-              color: verifyInput.trim() ? '#000' : '#6b7280',
-              fontWeight: 700, fontSize: 13, cursor: verifyInput.trim() ? 'pointer' : 'not-allowed',
-            }}
-          >
-            {loading ? 'Saving...' : 'Save Verification Method'}
-          </button>
         </div>
       )}
 
