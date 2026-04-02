@@ -144,23 +144,13 @@ function createMainWindow() {
     if (errorCode === -3) return;
     if (validatedURL && validatedURL.startsWith('data:')) return;
     console.log(`[SparkP2P] Page load failed (${errorCode}): ${errorDescription}`);
-    // Show a retry page inline
-    mainWindow.webContents.loadURL(`data:text/html,
-      <html><head><style>
-        body{margin:0;background:#0d0f1e;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px;}
-        h2{color:#f59e0b;margin:0;}p{color:#9ca3af;margin:0;font-size:14px;}
-        button{margin-top:8px;padding:12px 28px;background:#f59e0b;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;}
-      </style></head><body>
-        <h2>⚡ SparkP2P</h2>
-        <p>Could not connect. Check your internet connection.</p>
-        <button onclick="location.reload()">Retry</button>
-        <p style="font-size:12px;color:#6b7280;">Error: ${errorDescription}</p>
-      </body></html>
-    `);
-    // Auto-retry after 10 seconds
+    // Show a retry page inline (use encodeURIComponent so # in hex colors don't break the data URL)
+    const retryHTML = `<html><head><style>body{margin:0;background:rgb(13,15,30);color:white;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px;}h2{color:rgb(245,158,11);margin:0;}p{color:rgb(156,163,175);margin:0;font-size:14px;}button{margin-top:8px;padding:12px 28px;background:rgb(245,158,11);border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;}</style></head><body><h2>&#9889; SparkP2P</h2><p>Could not connect. Check your internet connection.</p><button onclick="location.reload()">Retry</button><p style="font-size:12px;color:rgb(107,114,128);">Error: ${errorDescription.replace(/</g,'&lt;')}</p></body></html>`;
+    mainWindow.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(retryHTML)}`);
+    // Auto-retry after 20 seconds
     setTimeout(() => {
       if (mainWindow && !mainWindow.isDestroyed()) loadDashboard();
-    }, 10000);
+    }, 20000);
   });
 
   loadDashboard();
