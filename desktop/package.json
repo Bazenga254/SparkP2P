@@ -53,6 +53,7 @@
       "ai-scanner.js",
       "preload.js",
       "icon.png",
+      ".env",
       "node_modules/**/*"
     ]
   },
