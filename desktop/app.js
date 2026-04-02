@@ -223,6 +223,11 @@ async function connectPuppeteer() {
       stopPoller();
       browserLocked = false;
     });
+    // Close any extra tabs — keep only the first one
+    const pages = await browser.pages();
+    for (let i = 1; i < pages.length; i++) {
+      await pages[i].close().catch(() => {});
+    }
     console.log('[SparkP2P] Puppeteer connected');
     return true;
   } catch (e) { return false; }
@@ -564,16 +569,15 @@ async function navigateTo(url) {
 let _ordersTabOpen = false;
 
 async function readOrders() {
-  // Open a SECOND TAB to check orders — don't touch the main tab
+  // Reuse the single main tab — navigate to orders page, read, navigate back
   if (!browser || _ordersTabOpen) return { sell: [], buy: [] };
 
   _ordersTabOpen = true;
-  let ordersTab = null;
   try {
-    ordersTab = await browser.newPage();
-    await ordersTab.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+    const page = await getPage();
+    if (!page) { _ordersTabOpen = false; return { sell: [], buy: [] }; }
+    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 3000));
-    const page = ordersTab;
 
     // Use GPT-4o to read the orders page if AI is available
     if (aiApiKey) {
@@ -611,9 +615,6 @@ async function readOrders() {
             else buy.push(order);
           }
         }
-
-        // Close orders tab
-        if (ordersTab) await ordersTab.close().catch(() => {});
 
         return { sell, buy };
       }
@@ -654,7 +655,6 @@ async function readOrders() {
     return orders;
   } catch (e) {
     console.error('[SparkP2P] Read orders error:', e.message?.substring(0, 60));
-    if (ordersTab) await ordersTab.close().catch(() => {});
     _ordersTabOpen = false;
     return { sell: [], buy: [] };
   } finally {
