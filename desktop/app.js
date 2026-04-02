@@ -162,6 +162,7 @@ function createMainWindow() {
 
   // Capture token on every page load and navigation
   const captureToken = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.executeJavaScript('localStorage.getItem("token")')
       .then((t) => {
         if (t && t !== token) {
@@ -175,6 +176,7 @@ function createMainWindow() {
 
   // On every page load: inject persisted token into localStorage BEFORE React checks auth
   mainWindow.webContents.on('did-finish-load', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     if (token) {
       mainWindow.webContents.executeJavaScript(
         `localStorage.setItem("token", ${JSON.stringify(token)})`
@@ -183,8 +185,9 @@ function createMainWindow() {
     captureToken();
   });
   mainWindow.webContents.on('did-navigate-in-page', captureToken);
-  // Also poll for token every 5 seconds (catches SPA login)
-  setInterval(captureToken, 5000);
+  // Also poll for token every 5 seconds (catches SPA login) — cleared on window destroy
+  const captureInterval = setInterval(captureToken, 5000);
+  mainWindow.once('destroyed', () => clearInterval(captureInterval));
 
   // Intercept WebSocket remote browser — open Chrome instead (only if not already connecting/connected)
   mainWindow.webContents.session.webRequest.onBeforeRequest(
