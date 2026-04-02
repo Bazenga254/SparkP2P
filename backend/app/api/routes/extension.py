@@ -56,6 +56,7 @@ class BinanceOrderData(BaseModel):
 class ReportOrdersRequest(BaseModel):
     sell_orders: list[BinanceOrderData] = []
     buy_orders: list[BinanceOrderData] = []
+    cancelled_order_numbers: list[str] = []  # Order numbers from Binance Cancelled history tab
 
 
 class ActionItem(BaseModel):
@@ -107,9 +108,22 @@ async def report_orders(
         if action:
             actions.append(action)
 
-    # Auto-cancel PENDING orders that have disappeared from the bot's report.
-    # When a buyer cancels on Binance, the order vanishes from the active orders
-    # list — the bot never sees it again, so we must mark it cancelled here.
+    # Mark explicitly cancelled orders (read from Binance Cancelled history tab)
+    for order_number in data.cancelled_order_numbers:
+        cancel_result = await db.execute(
+            select(Order).where(
+                Order.binance_order_number == order_number,
+                Order.trader_id == trader.id,
+                Order.status == OrderStatus.PENDING,
+            )
+        )
+        cancelled_order = cancel_result.scalar_one_or_none()
+        if cancelled_order:
+            cancelled_order.status = OrderStatus.CANCELLED
+            logger.info(f"Order {order_number} marked CANCELLED (from Binance history tab)")
+
+    # Also auto-cancel PENDING orders absent from the active list for >3 minutes
+    # (fallback in case the cancelled tab scan misses something)
     reported_numbers = {o.orderNumber for o in data.sell_orders + data.buy_orders}
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
     stale_result = await db.execute(

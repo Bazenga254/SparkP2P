@@ -702,28 +702,22 @@ async function readOrders() {
   // IMPORTANT: Use DOM text — NOT screenshots — for orders.
   // GPT Vision OCR misreads 18-20 digit order numbers causing duplicate DB records.
   // DOM text gives exact digits straight from the HTML.
-  if (!browser || _ordersTabOpen) return { sell: [], buy: [] };
+  if (!browser || _ordersTabOpen) return { sell: [], buy: [], cancelled: [] };
 
   _ordersTabOpen = true;
   try {
     const page = await getPage();
-    if (!page) { _ordersTabOpen = false; return { sell: [], buy: [] }; }
+    if (!page) { _ordersTabOpen = false; return { sell: [], buy: [], cancelled: [] }; }
+
+    // ── Step 1: Read active/ongoing orders (tab=0) ──────────────────────────
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 2500));
 
-    // Extract exact text from DOM — no OCR, no hallucinated digits
-    const pageText = await page.evaluate(() => {
-      return document.body.innerText;
-    }).catch(() => '');
+    const activeText = await page.evaluate(() => document.body.innerText).catch(() => '');
 
-    if (!pageText) return { sell: [], buy: [] };
-    if (pageText.includes('No records') || pageText.includes('No data')) {
-      console.log('[SparkP2P] No P2P orders found');
-      return { sell: [], buy: [] };
-    }
-
-    if (aiApiKey) {
-      const aiResult = await aiScanner.analyzeText(pageText, `
+    let sell = [], buy = [];
+    if (activeText && aiApiKey && !activeText.includes('No records') && !activeText.includes('No data')) {
+      const aiResult = await aiScanner.analyzeText(activeText, `
         This is exact text copied from a Binance P2P orders page.
         Extract ALL pending or active orders (ignore Completed/Cancelled).
         The order numbers are 18-20 digit integers — copy them EXACTLY as they appear, do NOT change any digits.
@@ -741,10 +735,9 @@ async function readOrders() {
       `);
 
       if (aiResult?.orders) {
-        const sell = [], buy = [];
         for (const o of aiResult.orders) {
           const order = {
-            orderNumber: String(o.order_number || '').replace(/\D/g, ''), // digits only
+            orderNumber: String(o.order_number || '').replace(/\D/g, ''),
             tradeType: (o.type || '').toUpperCase() === 'BUY' ? 'BUY' : 'SELL',
             totalPrice: o.amount_fiat || 0,
             amount: o.amount_crypto || 0,
@@ -752,21 +745,51 @@ async function readOrders() {
             status: o.status || 'PENDING',
             counterparty: o.counterparty || '',
           };
-          if (order.orderNumber.length >= 15) { // valid order numbers are 18+ digits
+          if (order.orderNumber.length >= 15) {
             if (order.tradeType === 'SELL') sell.push(order);
             else buy.push(order);
           }
         }
-        console.log(`[SparkP2P] Orders: ${sell.length} sell, ${buy.length} buy`);
-        return { sell, buy };
       }
     }
 
-    return { sell: [], buy: [] };
+    // ── Step 2: Read recently cancelled orders (tab=1, Cancelled filter) ───
+    let cancelled = [];
+    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Click the "Canceled" filter tab if it exists
+    await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
+      const cancelTab = tabs.find(el => el.textContent.trim() === 'Canceled' || el.textContent.trim() === 'Cancelled');
+      if (cancelTab) cancelTab.click();
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1500));
+
+    const cancelledText = await page.evaluate(() => document.body.innerText).catch(() => '');
+
+    if (cancelledText && aiApiKey && !cancelledText.includes('No records') && !cancelledText.includes('No data')) {
+      const aiResult = await aiScanner.analyzeText(cancelledText, `
+        This is text from a Binance P2P cancelled orders history page.
+        Extract order numbers of CANCELLED orders from TODAY only (ignore older dates).
+        The order numbers are 18-20 digit integers — copy them EXACTLY as they appear.
+        Return JSON: { "cancelled_order_numbers": ["number1", "number2", ...] }
+        If none today, return {"cancelled_order_numbers": []}.
+      `);
+      if (aiResult?.cancelled_order_numbers) {
+        cancelled = aiResult.cancelled_order_numbers
+          .map(n => String(n).replace(/\D/g, ''))
+          .filter(n => n.length >= 15);
+      }
+    }
+
+    console.log(`[SparkP2P] Orders: ${sell.length} sell, ${buy.length} buy, ${cancelled.length} cancelled`);
+    return { sell, buy, cancelled };
+
   } catch (e) {
     console.error('[SparkP2P] Read orders error:', e.message?.substring(0, 60));
     _ordersTabOpen = false;
-    return { sell: [], buy: [] };
+    return { sell: [], buy: [], cancelled: [] };
   } finally {
     _ordersTabOpen = false;
   }
@@ -958,7 +981,7 @@ async function pollCycle() {
     const res = await fetch(`${API_BASE}/ext/report-orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ sell_orders: orders.sell.map(norm), buy_orders: orders.buy.map(norm) }),
+      body: JSON.stringify({ sell_orders: orders.sell.map(norm), buy_orders: orders.buy.map(norm), cancelled_order_numbers: orders.cancelled || [] }),
     }).catch(() => null);
 
     // VPS may also request actions (e.g. send message, release)
