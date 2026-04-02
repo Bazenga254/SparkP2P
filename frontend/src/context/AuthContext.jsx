@@ -5,6 +5,7 @@ const AuthContext = createContext(null);
 
 const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const ACTIVITY_EVENTS = ['mousedown', 'keydown', 'touchstart', 'scroll', 'api-activity'];
+const LAST_ACTIVE_KEY = 'sparkp2p_last_active';
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -13,16 +14,17 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(() => {
     localStorage.removeItem('token');
+    localStorage.removeItem(LAST_ACTIVE_KEY);
     setUser(null);
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
   }, []);
 
   const resetInactivityTimer = useCallback(() => {
     if (!localStorage.getItem('token')) return;
+    localStorage.setItem(LAST_ACTIVE_KEY, Date.now().toString());
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
     inactivityTimer.current = setTimeout(() => {
       logout();
-      // Redirect to login with message
       window.location.href = '/login?reason=inactivity';
     }, INACTIVITY_TIMEOUT_MS);
   }, [logout]);
@@ -41,14 +43,26 @@ export function AuthProvider({ children }) {
   const checkAuth = () => {
     const token = localStorage.getItem('token');
     if (token) {
+      // Check if session expired due to inactivity while app was closed
+      const lastActive = localStorage.getItem(LAST_ACTIVE_KEY);
+      if (lastActive) {
+        const elapsed = Date.now() - parseInt(lastActive, 10);
+        if (elapsed > INACTIVITY_TIMEOUT_MS) {
+          localStorage.removeItem('token');
+          localStorage.removeItem(LAST_ACTIVE_KEY);
+          setLoading(false);
+          window.location.href = '/login?reason=inactivity';
+          return;
+        }
+      }
       getProfile()
         .then((res) => {
           setUser(res.data);
           setLoading(false);
         })
         .catch(() => {
-          // Token is invalid or expired — clear it and redirect to login
           localStorage.removeItem('token');
+          localStorage.removeItem(LAST_ACTIVE_KEY);
           setLoading(false);
           window.location.href = '/login';
         });
