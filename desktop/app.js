@@ -1467,7 +1467,7 @@ async function reportAccountData() {
 
 function norm(o) {
   // Map status strings to Binance status codes
-  const statusMap = { 'pending': 1, 'pending payment': 1, 'paid': 2, 'appeal': 3, 'completed': 4 };
+  const statusMap = { 'pending': 1, 'pending payment': 1, 'paid': 2, 'appeal': 3, 'completed': 4, 'cancelled': 5, 'canceled': 5, 'expired': 6 };
   const statusCode = typeof o.status === 'number' ? o.status :
     statusMap[(o.status || '').toLowerCase()] || 1;
 

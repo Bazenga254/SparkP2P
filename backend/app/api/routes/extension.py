@@ -14,7 +14,7 @@ Flow:
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -106,6 +106,26 @@ async def report_orders(
         action = await _process_reported_buy_order(order_data, trader, db)
         if action:
             actions.append(action)
+
+    # Auto-cancel PENDING orders that have disappeared from the bot's report.
+    # When a buyer cancels on Binance, the order vanishes from the active orders
+    # list — the bot never sees it again, so we must mark it cancelled here.
+    reported_numbers = {o.orderNumber for o in data.sell_orders + data.buy_orders}
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
+    stale_result = await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.status == OrderStatus.PENDING,
+            Order.created_at < cutoff,
+        )
+    )
+    for order in stale_result.scalars().all():
+        if order.binance_order_number not in reported_numbers:
+            order.status = OrderStatus.CANCELLED
+            logger.info(
+                f"Order {order.binance_order_number} auto-cancelled "
+                f"(absent from bot report for trader {trader.id})"
+            )
 
     # Update last sync timestamp — used by frontend to detect initial scan complete
     trader.last_extension_sync = datetime.now(timezone.utc)
@@ -519,6 +539,13 @@ async def _process_reported_sell_order(
     existing = result.scalar_one_or_none()
 
     if existing:
+        # If Binance shows this order as cancelled/expired, update our record
+        if order_data.orderStatus in (5, 6):
+            if existing.status == OrderStatus.PENDING:
+                existing.status = OrderStatus.CANCELLED if order_data.orderStatus == 5 else OrderStatus.EXPIRED
+                await db.commit()
+                logger.info(f"Order {order_number} marked {existing.status.value} from Binance status")
+            return None
         # Already tracked — check if payment was received and needs release
         if existing.status == OrderStatus.PAYMENT_RECEIVED and trader.auto_release_enabled:
             existing.status = OrderStatus.RELEASING
