@@ -95,6 +95,7 @@ export default function Admin() {
   const [expandedTicket, setExpandedTicket] = useState(null);
   const [ticketReplies, setTicketReplies] = useState({});   // { ticketId: text }
   const [ticketReplying, setTicketReplying] = useState({}); // { ticketId: bool }
+  const [unreadTicketCount, setUnreadTicketCount] = useState(0);
 
   // Withdrawals
   const [withdrawals, setWithdrawals] = useState({ withdrawals: [], total: 0, pages: 1, summary: {} });
@@ -301,9 +302,23 @@ export default function Admin() {
   };
 
   useEffect(() => {
-    if (activeTab === 'disputes') loadSupportTickets();
+    if (activeTab === 'disputes') { loadSupportTickets(); setUnreadTicketCount(0); }
     if (activeTab === 'withdrawals') loadWithdrawals();
   }, [activeTab]);
+
+  // Poll for escalated ticket count every 30s (background — works on any tab)
+  useEffect(() => {
+    const pollTickets = async () => {
+      try {
+        const res = await getAdminSupportTickets();
+        const escalated = (res.data || []).filter(t => t.status === 'escalated');
+        if (activeTab !== 'disputes') setUnreadTicketCount(escalated.length);
+      } catch (_) {}
+    };
+    pollTickets();
+    const iv = setInterval(pollTickets, 30000);
+    return () => clearInterval(iv);
+  }, []);
 
   useEffect(() => {
     loadData();
@@ -421,7 +436,7 @@ export default function Admin() {
               <div className="adm-nav-label">{section.label}</div>
               {section.items.map((item) => {
                 const Icon = item.icon;
-                const badgeCount = item.key === 'disputes' ? disputes.length : item.key === 'unmatched' ? unmatched.length : 0;
+                const badgeCount = item.key === 'disputes' ? unreadTicketCount : item.key === 'unmatched' ? unmatched.length : 0;
                 return (
                   <button
                     key={item.key}
@@ -458,6 +473,23 @@ export default function Admin() {
             </h1>
           </div>
           <div className="adm-topbar-right">
+            {unreadTicketCount > 0 && (
+              <button
+                onClick={() => setActiveTab('disputes')}
+                style={{
+                  position: 'relative', background: 'rgba(245,158,11,0.12)',
+                  border: '1px solid rgba(245,158,11,0.35)', borderRadius: 8,
+                  padding: '5px 12px', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 7,
+                  color: '#f59e0b', fontSize: 13, fontWeight: 600,
+                  animation: 'pulse 2s ease-in-out infinite',
+                }}
+                title="View support tickets"
+              >
+                <MessageSquare size={15} />
+                {unreadTicketCount} unread {unreadTicketCount === 1 ? 'ticket' : 'tickets'}
+              </button>
+            )}
             <button className="adm-refresh-btn" onClick={() => { loadData(); loadTransactions(txPeriod); }} disabled={refreshing}>
               <RefreshCw size={16} className={refreshing ? 'spinning' : ''} />
             </button>
