@@ -489,14 +489,14 @@ export default function SettingsPanel({ profile, onUpdate }) {
                       </thead>
                       <tbody style={{ color: '#e5e7eb' }}>
                         {[
-                          ['KES 1 – 500', 'KES 4 + 25'],
-                          ['KES 501 – 1,000', 'KES 9 + 25'],
-                          ['KES 1,001 – 2,500', 'KES 19 + 25'],
-                          ['KES 2,501 – 5,000', 'KES 33 + 25'],
-                          ['KES 5,001 – 10,000', 'KES 46 + 25'],
-                          ['KES 10,001 – 25,000', 'KES 65 + 25'],
-                          ['KES 25,001 – 50,000', 'KES 105 + 25'],
-                          ['KES 50,001 – 150,000', 'KES 105 + 25'],
+                          ['KES 1 – 500', 'KES 29'],
+                          ['KES 501 – 1,000', 'KES 34'],
+                          ['KES 1,001 – 2,500', 'KES 44'],
+                          ['KES 2,501 – 5,000', 'KES 58'],
+                          ['KES 5,001 – 10,000', 'KES 71'],
+                          ['KES 10,001 – 25,000', 'KES 90'],
+                          ['KES 25,001 – 50,000', 'KES 130'],
+                          ['KES 50,001 – 150,000', 'KES 130'],
                         ].map(([range, fee]) => (
                           <tr key={range}>
                             <td style={{ padding: '2px 0' }}>{range}</td>
@@ -505,7 +505,6 @@ export default function SettingsPanel({ profile, onUpdate }) {
                         ))}
                       </tbody>
                     </table>
-                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>Safaricom fee + KES 25 platform fee</div>
                   </div>
 
                   <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginBottom: 12 }} />
