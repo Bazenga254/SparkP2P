@@ -1078,15 +1078,48 @@ async function monitorActiveOrder(page) {
   await page.goto(`https://p2p.binance.com/en/fiatOrder?orderNo=${activeOrderNumber}`, {
     waitUntil: 'networkidle2', timeout: 15000,
   }).catch(() => {});
-  await new Promise(r => setTimeout(r, 2000));
+  await new Promise(r => setTimeout(r, 3000));
 
+  // ── Use AI vision to read the order state ──
+  const screenshot = await page.screenshot({ type: 'jpeg', quality: 80 });
+  const ai = await aiScanner.analyzeScreenshot(screenshot, `
+    This is a Binance P2P order detail page for a SELL order (I am selling USDT).
+    Look carefully at the entire page and tell me:
+    {
+      "status": one of "waiting_for_payment" | "buyer_paid" | "completed" | "cancelled" | "releasing" | "unknown",
+      "has_release_button": true/false,
+      "has_confirm_receipt_button": true/false,
+      "release_button_text": "exact text on the release button or null",
+      "buyer_has_paid_indicator": true/false,
+      "order_amount_fiat": number or null,
+      "latest_chat_message": "text of the most recent chat message from the buyer, or null",
+      "chat_needs_reply": true/false
+    }
+    Key signals:
+    - "waiting_for_payment" = buyer has NOT paid yet, page says something like "Waiting for buyer's payment"
+    - "buyer_paid" = buyer clicked "Transferred, Notify Seller" — look for green checkmark, "Payment completed" label, or a yellow/green "Release Crypto" button
+    - "completed" = order is finished, shows "Completed" or "Order Completed" prominently
+    - "cancelled" = shows "Cancelled" or "Appeal" state
+    - "releasing" = security verification dialog is open (OTP input boxes visible)
+  `);
+
+  // Fallback to text-based detection if AI unavailable
   const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
   const lower = pageText.toLowerCase();
 
-  // ── Detect terminal states first ──
-  if (lower.includes('cancelled') || lower.includes('canceled') || lower.includes('order was cancelled')) {
-    console.log(`[SparkP2P] Order ${activeOrderNumber} CANCELLED on Binance — stopping monitoring`);
-    // Report to VPS
+  let status = ai?.status || 'unknown';
+  if (status === 'unknown') {
+    if (lower.includes('cancelled') || lower.includes('canceled')) status = 'cancelled';
+    else if (lower.includes('completed') || lower.includes('order completed')) status = 'completed';
+    else if (lower.includes('confirm receipt') || lower.includes('buyer has paid') ||
+             lower.includes('payment completed') || lower.includes('has made payment')) status = 'buyer_paid';
+    else status = 'waiting_for_payment';
+  }
+  console.log(`[SparkP2P] Order ${activeOrderNumber} AI status: ${status} (release_btn:${ai?.has_release_button}, paid:${ai?.buyer_has_paid_indicator})`);
+
+  // ── Handle each state ──
+  if (status === 'cancelled') {
+    console.log(`[SparkP2P] Order ${activeOrderNumber} CANCELLED — stopping monitoring`);
     await fetch(`${API_BASE}/ext/report-orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -1097,7 +1130,7 @@ async function monitorActiveOrder(page) {
     return;
   }
 
-  if (lower.includes('completed') || lower.includes('order completed')) {
+  if (status === 'completed') {
     console.log(`[SparkP2P] Order ${activeOrderNumber} COMPLETED — rescanning wallet`);
     activeOrderNumber = null;
     activeOrderFiatAmount = 0;
@@ -1106,30 +1139,30 @@ async function monitorActiveOrder(page) {
     return;
   }
 
-  // ── Check if buyer has clicked "Paid" ──
-  const isBinancePaid = lower.includes('payment received') || lower.includes('buyer has paid') ||
-    lower.includes('has paid') || lower.includes('confirm receipt') ||
-    (lower.includes('paid') && !lower.includes('pending payment'));
-
-  if (isBinancePaid) {
+  if (status === 'buyer_paid' || ai?.has_release_button || ai?.buyer_has_paid_indicator) {
     console.log(`[SparkP2P] Order ${activeOrderNumber} — Binance shows PAID. Verifying M-Pesa...`);
     const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount);
     if (verified) {
       console.log(`[SparkP2P] ✅ M-Pesa + Binance both confirmed — releasing order ${activeOrderNumber}`);
-      await execAction({ action: 'release', order_number: activeOrderNumber, message: null });
-      // Wait for completion, then rescan wallet
+      // Pass AI context (release button text) to execAction
+      await execAction({
+        action: 'release',
+        order_number: activeOrderNumber,
+        message: 'Payment confirmed. Releasing crypto now.',
+        release_button_text: ai?.release_button_text || null,
+      });
       await new Promise(r => setTimeout(r, 5000));
       activeOrderNumber = null;
       activeOrderFiatAmount = 0;
       const balances = await scanWalletBalances(page);
       await uploadBalances(balances);
     } else {
-      console.log(`[SparkP2P] ⚠️  Binance shows PAID but M-Pesa NOT confirmed — holding release, will retry in 20s`);
+      console.log(`[SparkP2P] ⚠️  Binance shows PAID but M-Pesa NOT confirmed — holding, retry in 20s`);
     }
     return;
   }
 
-  // ── Also check VPS for M-Pesa confirmation (Safaricom C2B may arrive before buyer clicks Paid) ──
+  // ── Also check VPS for M-Pesa confirmation arriving before buyer clicks Paid ──
   const pendingRes = await fetch(`${API_BASE}/ext/pending-actions`, {
     headers: { 'Authorization': `Bearer ${token}` },
   }).catch(() => null);
@@ -1138,7 +1171,7 @@ async function monitorActiveOrder(page) {
     for (const a of (actions || [])) {
       if (a.action === 'release' && a.order_number === activeOrderNumber) {
         console.log(`[SparkP2P] VPS confirmed M-Pesa — releasing order ${activeOrderNumber}`);
-        await execAction(a);
+        await execAction({ ...a, release_button_text: ai?.release_button_text || null });
         await new Promise(r => setTimeout(r, 5000));
         activeOrderNumber = null;
         activeOrderFiatAmount = 0;
@@ -1661,23 +1694,87 @@ async function handleSecurityVerification(page) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// CLICK HELPER — Find and click buttons by text
+// CLICK HELPER — Find and click buttons by text, AI fallback
 // ═══════════════════════════════════════════════════════════
 
 async function clickButton(page, ...textOptions) {
+  // First try: direct text matching (fast, no API cost)
   const clicked = await page.evaluate((options) => {
     for (const text of options) {
-      const btn = Array.from(document.querySelectorAll('button, a[role="button"], [class*="btn"]')).find(b => {
+      const btn = Array.from(document.querySelectorAll('button, a[role="button"], [class*="btn"], [role="button"]')).find(b => {
         const t = (b.textContent || '').toLowerCase().trim();
-        return t.includes(text.toLowerCase());
+        return t === text.toLowerCase() || t.includes(text.toLowerCase());
       });
       if (btn) { btn.click(); return text; }
     }
     return null;
   }, textOptions);
 
-  if (clicked) console.log(`[SparkP2P] Clicked: "${clicked}"`);
-  return !!clicked;
+  if (clicked) { console.log(`[SparkP2P] Clicked: "${clicked}"`); return true; }
+
+  // AI fallback: take screenshot, ask AI to identify the button and give us its exact text
+  console.log(`[SparkP2P] Button not found by text (${textOptions[0]}...) — asking AI`);
+  try {
+    const screenshot = await page.screenshot({ type: 'jpeg', quality: 70 });
+    const aiResult = await aiScanner.analyzeScreenshot(screenshot, `
+      I am looking for a clickable button on this Binance page.
+      I need to click a button related to: "${textOptions.join('" or "')}"
+      List ALL visible buttons on the page and tell me which one I should click.
+      {
+        "target_button_text": "exact full text of the button I should click, or null if not found",
+        "all_buttons": ["list of all visible button texts"]
+      }
+    `);
+    if (aiResult?.target_button_text) {
+      const aiClicked = await page.evaluate((btnText) => {
+        const btn = Array.from(document.querySelectorAll('button, a[role="button"], [class*="btn"], [role="button"]'))
+          .find(b => (b.textContent || '').trim().toLowerCase() === btnText.toLowerCase());
+        if (btn) { btn.click(); return true; }
+        return false;
+      }, aiResult.target_button_text);
+      if (aiClicked) {
+        console.log(`[SparkP2P] AI found and clicked: "${aiResult.target_button_text}"`);
+        return true;
+      }
+    }
+    if (aiResult?.all_buttons?.length) {
+      console.log(`[SparkP2P] AI visible buttons: ${aiResult.all_buttons.slice(0, 8).join(' | ')}`);
+    }
+  } catch (e) { /* AI unavailable — not critical */ }
+
+  return false;
+}
+
+// ── Send a chat message on an order page ────────────────────────────────────
+async function sendChatMessage(page, message) {
+  // Scroll to bottom first — chat is usually at the bottom of the order page
+
+  // Scroll to bottom where chat usually is
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await new Promise(r => setTimeout(r, 800));
+
+  // Try known chat input selectors
+  const chatInput = await page.$(
+    'textarea[placeholder], ' +
+    'input[placeholder*="message" i], ' +
+    'input[placeholder*="type" i], ' +
+    'input[placeholder*="send" i], ' +
+    '[contenteditable="true"][class*="chat" i], ' +
+    '[contenteditable="true"][class*="input" i], ' +
+    '[contenteditable="true"]'
+  );
+
+  if (chatInput) {
+    await chatInput.click();
+    await new Promise(r => setTimeout(r, 300));
+    await chatInput.type(message, { delay: 30 });
+    await page.keyboard.press('Enter');
+    await new Promise(r => setTimeout(r, 800));
+    console.log(`[SparkP2P] Chat message sent: "${message.substring(0, 60)}"`);
+    return true;
+  }
+  console.log('[SparkP2P] Chat input not found');
+  return false;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1695,38 +1792,61 @@ async function execAction(action) {
     await takeScreenshot(`Before ${type}: order ${order_number}`);
 
     if (type === 'release') {
-      // Step 0: Send confirmation message in chat before releasing
+      // Step 0: Send a chat message to the buyer before releasing
       if (action.message) {
-        console.log(`[SparkP2P] Sending confirmation: ${action.message.substring(0, 60)}`);
-        const chatInput = await page.$('textarea, input[placeholder*="message" i], input[placeholder*="type" i], [contenteditable="true"]');
-        if (chatInput) {
-          await chatInput.click();
-          await chatInput.type(action.message, { delay: 20 });
-          await page.keyboard.press('Enter');
-          await new Promise(r => setTimeout(r, 1000));
-          console.log('[SparkP2P] Confirmation message sent');
-        }
+        await sendChatMessage(page, action.message);
       }
 
-      // Step 1: Click "Release" / "Confirm Release" button
-      let clicked = await clickButton(page, 'release', 'confirm release');
-      if (!clicked) {
-        // Try looking for the button in a different way
-        clicked = await clickButton(page, 'release crypto', 'release usdt');
-      }
+      // Step 1: Ask AI exactly which button to click for Release
+      await new Promise(r => setTimeout(r, 1000));
+      const releaseSS = await page.screenshot({ type: 'jpeg', quality: 80 });
+      const releaseAI = await aiScanner.analyzeScreenshot(releaseSS, `
+        This is a Binance P2P sell order page where I need to release crypto to the buyer.
+        The buyer has already paid. I need to find and click the Release button.
+        {
+          "release_button_text": "exact full text of the release/confirm button (e.g. 'Release Crypto', 'Release USDT', 'Confirm Release')",
+          "release_button_visible": true/false,
+          "page_state": "order_detail" | "confirmation_dialog" | "verification" | "completed" | "other"
+        }
+        Look for a prominent button — usually yellow/green — that says something about releasing or confirming.
+      `);
+
+      // Build list of button texts to try — AI result first, then known variants
+      const releaseTexts = [
+        releaseAI?.release_button_text,
+        action.release_button_text,
+        'Release Crypto', 'Release USDT', 'Release BTC', 'Release ETH',
+        'Confirm Release', 'Release', 'release',
+      ].filter(Boolean);
+
+      console.log(`[SparkP2P] Trying release buttons: ${releaseTexts.slice(0, 3).join(', ')}`);
+      let clicked = await clickButton(page, ...releaseTexts);
 
       if (clicked) {
+        await new Promise(r => setTimeout(r, 2500));
+
+        // Step 2: "Are you sure?" confirmation dialog — AI reads it to find the Yes/Confirm button
+        const confirmSS = await page.screenshot({ type: 'jpeg', quality: 80 });
+        const confirmAI = await aiScanner.analyzeScreenshot(confirmSS, `
+          Binance just showed a confirmation dialog after I clicked Release.
+          It asks something like "Are you sure you have received the payment?" or "Confirm release".
+          {
+            "dialog_visible": true/false,
+            "confirm_button_text": "exact text of the confirm/yes/proceed button",
+            "warning_text": "any warning message shown"
+          }
+        `);
+        const confirmTexts = [
+          confirmAI?.confirm_button_text,
+          'Confirm', 'Yes', 'I confirm', 'Confirm Release', 'Proceed',
+        ].filter(Boolean);
+        await clickButton(page, ...confirmTexts);
         await new Promise(r => setTimeout(r, 2000));
 
-        // Step 2: Confirm in dialog (Binance shows "Are you sure?")
-        await clickButton(page, 'confirm', 'yes', 'release');
-        await new Promise(r => setTimeout(r, 2000));
-
-        // Step 3: Handle security verification (PIN/passkey)
+        // Step 3: Security verification (email OTP + Google Authenticator)
         const verified = await handleSecurityVerification(page);
 
         await takeScreenshot(`After release: order ${order_number}`);
-
         await fetch(`${API_BASE}/ext/report-release`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
