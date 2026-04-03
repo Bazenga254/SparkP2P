@@ -56,7 +56,7 @@ export default function SupportChat({ forceOpen, onOpen }) {
 
   const sendMessage = async (text) => {
     const msg = (text || input).trim();
-    if (!msg || loading || escalated) return;
+    if (!msg || loading) return;
 
     setSuggestions([]); // clear old chips while waiting
     const newMessages = [...messages, { role: 'user', content: msg }];
@@ -93,12 +93,6 @@ export default function SupportChat({ forceOpen, onOpen }) {
 
   const requestAgent = () => sendMessage('I need to speak with a human agent.');
 
-  const startNew = () => {
-    setTicketId(null);
-    setEscalated(false);
-    setMessages([]);
-    setSuggestions([]);
-  };
 
   const isBlank = messages.length === 0 && !loading;
 
@@ -272,11 +266,7 @@ export default function SupportChat({ forceOpen, onOpen }) {
               }}>
                 <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
                 <div>
-                  Your case has been escalated to our support team. They will review it and reach out.{' '}
-                  <button onClick={startNew}
-                    style={{ background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', padding: 0, fontSize: 12, textDecoration: 'underline' }}>
-                    Start new chat
-                  </button>
+                  Your case has been escalated to our support team. You can still send messages and they will respond here.
                 </div>
               </div>
             )}
@@ -285,8 +275,7 @@ export default function SupportChat({ forceOpen, onOpen }) {
           </div>
 
           {/* Input area */}
-          {!escalated && (
-            <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', background: '#14172b' }}>
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', background: '#14172b' }}>
               {/* Talk to agent strip */}
               <div style={{
                 padding: '7px 12px 0',
@@ -343,7 +332,6 @@ export default function SupportChat({ forceOpen, onOpen }) {
                 </button>
               </div>
             </div>
-          )}
         </div>
       )}
 

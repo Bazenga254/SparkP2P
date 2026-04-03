@@ -140,12 +140,35 @@ async def support_chat(
         db.add(ticket)
         await db.flush()
 
-    # Don't allow chat on escalated/closed tickets
-    if ticket.status in (TicketStatus.ESCALATED, TicketStatus.CLOSED):
+    # Closed tickets cannot receive new messages
+    from sqlalchemy import cast as sa_cast, String as sa_String
+    is_closed = str(ticket.status).upper() in ("CLOSED", "AI_RESOLVED")
+    is_escalated = str(ticket.status).upper() == "ESCALATED"
+
+    if is_closed:
         return {
             "ticket_id": ticket.id,
-            "reply": "This conversation has been escalated to our support team. They will review your case shortly. You can start a new chat if you have a different question.",
+            "reply": "This conversation has been closed. Please start a new chat if you have a new question.",
+            "escalated": False,
+        }
+
+    # If escalated: store trader message and notify admin — no AI reply
+    if is_escalated:
+        messages = list(ticket.messages or [])
+        messages.append({
+            "role": "user",
+            "content": data.message,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        })
+        ticket.messages = messages
+        ticket.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        # Notify admin via a placeholder — admins see it in Disputes tab on refresh
+        return {
+            "ticket_id": ticket.id,
+            "reply": "Your message has been sent to the support team. They will reply shortly.",
             "escalated": True,
+            "suggestions": [],
         }
 
     # Build message history
