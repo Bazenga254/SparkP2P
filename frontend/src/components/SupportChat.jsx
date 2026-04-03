@@ -58,18 +58,23 @@ export default function SupportChat({ forceOpen, onOpen }) {
     const msg = (text || input).trim();
     if (!msg || loading) return;
 
-    setSuggestions([]); // clear old chips while waiting
+    setSuggestions([]);
     const newMessages = [...messages, { role: 'user', content: msg }];
     setMessages(newMessages);
     setInput('');
-    setLoading(true);
 
+    // If already escalated, just store the message silently — no AI, no loading spinner
+    if (escalated) {
+      sendSupportMessage(msg, ticketId).catch(() => {});
+      return;
+    }
+
+    setLoading(true);
     try {
       const res = await sendSupportMessage(msg, ticketId);
       const { ticket_id, escalated: isEscalated, suggestions: newSuggestions, reply } = res.data;
       setTicketId(ticket_id);
       if (isEscalated) {
-        // Ticket is with the support team — don't show a fake AI reply, just keep the user's message
         setEscalated(true);
         setMessages(newMessages);
         setSuggestions([]);
