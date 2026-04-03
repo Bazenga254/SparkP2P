@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Binance P2P - Confirm Release Dialog</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #0b0e11cc; color: #eaecef; margin: 0; padding: 20px; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); }
+  .dialog { background: #1e2026; border-radius: 12px; padding: 32px; max-width: 420px; width: 100%; position: relative; z-index: 10; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+  .dialog-icon { font-size: 48px; text-align: center; margin-bottom: 16px; }
+  .dialog-title { font-size: 18px; font-weight: 700; text-align: center; margin-bottom: 12px; }
+  .dialog-body { color: #848e9c; font-size: 14px; line-height: 1.6; text-align: center; margin-bottom: 24px; }
+  .warning-box { background: #f6465d11; border: 1px solid #f6465d44; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; }
+  .warning-text { color: #f6465d; font-size: 13px; }
+  .checklist { text-align: left; margin-bottom: 20px; }
+  .check-item { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; font-size: 13px; color: #eaecef; }
+  .check-icon { color: #0ecb81; margin-top: 1px; }
+  .btn-row { display: flex; gap: 12px; }
+  .btn-confirm { background: #f0b90b; color: #000; border: none; border-radius: 6px; padding: 14px; font-size: 15px; font-weight: 700; cursor: pointer; flex: 1; }
+  .btn-cancel { background: transparent; border: 1px solid #3d4149; color: #eaecef; border-radius: 6px; padding: 14px; font-size: 14px; cursor: pointer; flex: 1; }
+</style>
+</head>
+<body>
+<div class="backdrop"></div>
+<div class="dialog">
+  <div class="dialog-icon">⚠️</div>
+  <div class="dialog-title">Confirm Crypto Release</div>
+  <div class="dialog-body">
+    Are you sure you want to release <strong style="color:#f0b90b">50.00 USDT</strong> to the buyer?
+  </div>
+
+  <div class="warning-box">
+    <div class="warning-text">⚠️ Warning: Only release crypto after confirming payment received in your account. This action cannot be undone.</div>
+  </div>
+
+  <div class="checklist">
+    <div class="check-item">
+      <span class="check-icon">✓</span>
+      <span>I have verified the payment of <strong>KES 7,125.00</strong> has been received in my M-Pesa account</span>
+    </div>
+    <div class="check-item">
+      <span class="check-icon">✓</span>
+      <span>I confirm the payment is from the correct buyer</span>
+    </div>
+    <div class="check-item">
+      <span class="check-icon">✓</span>
+      <span>I understand this action is irreversible</span>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-cancel">Cancel</button>
+    <button class="btn-confirm">Confirm Release</button>
+  </div>
+</div>
+</body>
+</html>

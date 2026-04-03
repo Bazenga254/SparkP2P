@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Binance P2P Order - Waiting for Payment</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #0b0e11; color: #eaecef; margin: 0; padding: 20px; }
+  .header { background: #1e2026; padding: 16px 24px; border-bottom: 1px solid #2b2f36; display: flex; align-items: center; gap: 16px; }
+  .logo { color: #f0b90b; font-size: 20px; font-weight: bold; }
+  .container { max-width: 900px; margin: 24px auto; }
+  .order-box { background: #1e2026; border-radius: 8px; padding: 24px; margin-bottom: 16px; }
+  .order-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+  .status-badge { background: #f0b90b22; color: #f0b90b; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; display: inline-block; }
+  .info-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #2b2f36; }
+  .info-label { color: #848e9c; font-size: 14px; }
+  .info-value { font-size: 14px; font-weight: 500; }
+  .info-value.amount { color: #f0b90b; font-size: 18px; font-weight: 700; }
+  .timeline { display: flex; align-items: center; gap: 8px; margin: 20px 0; }
+  .step { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .step-circle { width: 28px; height: 28px; border-radius: 50%; background: #f0b90b; color: #000; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; }
+  .step-circle.inactive { background: #2b2f36; color: #848e9c; }
+  .step-line { flex: 1; height: 2px; background: #2b2f36; }
+  .step-label { font-size: 11px; color: #848e9c; white-space: nowrap; }
+  .waiting-box { background: #1a1d21; border: 1px solid #f0b90b44; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0; }
+  .waiting-title { font-size: 16px; color: #f0b90b; margin-bottom: 8px; }
+  .waiting-sub { color: #848e9c; font-size: 14px; }
+  .countdown { font-size: 24px; color: #f0b90b; font-weight: bold; margin: 8px 0; }
+  .chat-box { background: #1e2026; border-radius: 8px; padding: 16px; margin-top: 16px; }
+  .chat-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #848e9c; }
+  .chat-message { background: #2b2f36; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; max-width: 70%; }
+  .chat-message.mine { background: #f0b90b22; margin-left: auto; }
+  .chat-input-row { display: flex; gap: 8px; margin-top: 12px; }
+  .chat-input { flex: 1; background: #2b2f36; border: 1px solid #3d4149; border-radius: 6px; padding: 10px 14px; color: #eaecef; font-size: 14px; outline: none; }
+  .send-btn { background: #f0b90b; color: #000; border: none; border-radius: 6px; padding: 10px 20px; font-weight: 600; cursor: pointer; }
+  .btn-cancel { background: transparent; border: 1px solid #f6465d; color: #f6465d; border-radius: 6px; padding: 10px 20px; font-size: 14px; cursor: pointer; margin-top: 12px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">Binance</div>
+  <span style="color:#848e9c">P2P Trading</span>
+</div>
+<div class="container">
+  <div class="order-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <div class="order-title">Sell Order</div>
+      <span class="status-badge">⏳ Waiting for Buyer's Payment</span>
+    </div>
+
+    <div class="timeline">
+      <div class="step">
+        <div class="step-circle">✓</div>
+        <div class="step-label">Order Created</div>
+      </div>
+      <div class="step-line"></div>
+      <div class="step">
+        <div class="step-circle" style="background:#f0b90b">2</div>
+        <div class="step-label">Waiting Payment</div>
+      </div>
+      <div class="step-line"></div>
+      <div class="step">
+        <div class="step-circle inactive">3</div>
+        <div class="step-label">Release Crypto</div>
+      </div>
+      <div class="step-line"></div>
+      <div class="step">
+        <div class="step-circle inactive">4</div>
+        <div class="step-label">Completed</div>
+      </div>
+    </div>
+
+    <div class="waiting-box">
+      <div class="waiting-title">⏳ Waiting for Buyer's Payment</div>
+      <div class="waiting-sub">The buyer has not yet confirmed payment</div>
+      <div class="countdown">14:23</div>
+      <div class="waiting-sub">Order will auto-cancel if payment not received in time</div>
+    </div>
+
+    <div class="info-row">
+      <span class="info-label">Order Number</span>
+      <span class="info-value">20240403-SIM-001</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Amount</span>
+      <span class="info-value amount">50.00 USDT</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Price</span>
+      <span class="info-value">KES 142.50 / USDT</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Total to Receive</span>
+      <span class="info-value" style="color:#0ecb81;font-size:16px;font-weight:700">KES 7,125.00</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Payment Method</span>
+      <span class="info-value">M-Pesa</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Buyer</span>
+      <span class="info-value">John Kamau ★★★★☆ (156 trades)</span>
+    </div>
+
+    <button class="btn-cancel">Cancel Order</button>
+  </div>
+
+  <div class="chat-box">
+    <div class="chat-title">💬 Chat with Buyer</div>
+    <div class="chat-message">Hello, I want to buy USDT. I will pay via M-Pesa now.</div>
+    <div class="chat-message mine">Thank you! Please send KES 7,125 to the M-Pesa number and confirm once done.</div>
+    <div class="chat-input-row">
+      <input class="chat-input" placeholder="Type a message..." />
+      <button class="send-btn">Send</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
