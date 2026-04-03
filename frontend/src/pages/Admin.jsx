@@ -93,9 +93,14 @@ export default function Admin() {
   const [supportTickets, setSupportTickets] = useState([]);
   const [supportLoading, setSupportLoading] = useState(false);
   const [expandedTicket, setExpandedTicket] = useState(null);
-  const [ticketReplies, setTicketReplies] = useState({});   // { ticketId: text }
-  const [ticketReplying, setTicketReplying] = useState({}); // { ticketId: bool }
+  const [ticketReplies, setTicketReplies] = useState({});
+  const [ticketReplying, setTicketReplying] = useState({});
   const [unreadTicketCount, setUnreadTicketCount] = useState(0);
+  const [ticketCategory, setTicketCategory] = useState('open'); // 'open' | 'closed'
+  const [ticketPage, setTicketPage] = useState(1);
+  const [ticketTotal, setTicketTotal] = useState(0);
+  const [ticketPages, setTicketPages] = useState(1);
+  const TICKET_PAGE_SIZE = 20;
 
   // Withdrawals
   const [withdrawals, setWithdrawals] = useState({ withdrawals: [], total: 0, pages: 1, summary: {} });
@@ -115,11 +120,13 @@ export default function Admin() {
     }
   };
 
-  const loadSupportTickets = async () => {
+  const loadSupportTickets = async (category = ticketCategory, page = ticketPage) => {
     setSupportLoading(true);
     try {
-      const res = await getAdminSupportTickets();
-      setSupportTickets(res.data);
+      const res = await getAdminSupportTickets({ category, page, page_size: 20 });
+      setSupportTickets(res.data.tickets || []);
+      setTicketTotal(res.data.total || 0);
+      setTicketPages(res.data.pages || 1);
     } catch (err) {
       console.error('Support tickets load error:', err);
     }
@@ -302,26 +309,34 @@ export default function Admin() {
   };
 
   useEffect(() => {
-    if (activeTab === 'disputes') { loadSupportTickets(); setUnreadTicketCount(0); }
+    if (activeTab === 'disputes') { setUnreadTicketCount(0); loadSupportTickets(ticketCategory, ticketPage); }
     if (activeTab === 'withdrawals') loadWithdrawals();
   }, [activeTab]);
 
-  // Poll support tickets every 15s — refresh content when on disputes, badge when elsewhere
+  useEffect(() => {
+    if (activeTab === 'disputes') { setTicketPage(1); loadSupportTickets(ticketCategory, 1); }
+  }, [ticketCategory]);
+
+  // Poll open ticket count every 15s for badge; also refresh content when on disputes tab
   useEffect(() => {
     const pollTickets = async () => {
       try {
-        const res = await getAdminSupportTickets();
-        const tickets = res.data || [];
-        const escalated = tickets.filter(t => t.status === 'escalated');
-        // Always update the full ticket list so new messages appear in real-time
-        setSupportTickets(tickets);
-        setUnreadTicketCount(activeTab === 'disputes' ? 0 : escalated.length);
+        const res = await getAdminSupportTickets({ category: 'open', page: 1, page_size: 20 });
+        const data = res.data;
+        if (activeTab === 'disputes' && ticketCategory === 'open') {
+          setSupportTickets(data.tickets || []);
+          setTicketTotal(data.total || 0);
+          setTicketPages(data.pages || 1);
+          setUnreadTicketCount(0);
+        } else {
+          setUnreadTicketCount(data.total || 0);
+        }
       } catch (_) {}
     };
     pollTickets();
     const iv = setInterval(pollTickets, 15000);
     return () => clearInterval(iv);
-  }, [activeTab]);
+  }, [activeTab, ticketCategory]);
 
   useEffect(() => {
     loadData();
@@ -1503,28 +1518,37 @@ export default function Admin() {
                 )}
               </div>
 
-              {/* Escalated Support Tickets */}
+              {/* Support Tickets */}
               <div className="adm-card">
                 <div className="adm-card-header">
                   <h3>Support Tickets</h3>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span className="adm-card-count">
-                      {supportTickets.filter((t) => t.status === 'escalated').length} escalated
-                    </span>
-                    <button
-                      className="adm-btn-sm"
-                      onClick={loadSupportTickets}
-                      disabled={supportLoading}
-                      style={{ fontSize: 12, padding: '4px 10px' }}
-                    >
+                    <span className="adm-card-count">{ticketTotal} {ticketCategory}</span>
+                    <button className="adm-btn-sm" onClick={() => loadSupportTickets(ticketCategory, ticketPage)} disabled={supportLoading} style={{ fontSize: 12, padding: '4px 10px' }}>
                       {supportLoading ? 'Loading…' : 'Refresh'}
                     </button>
                   </div>
                 </div>
+
+                {/* Category tabs */}
+                <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', marginBottom: 12 }}>
+                  {['open', 'closed'].map((cat) => (
+                    <button key={cat} onClick={() => setTicketCategory(cat)}
+                      style={{
+                        padding: '8px 20px', background: 'none', border: 'none',
+                        borderBottom: ticketCategory === cat ? '2px solid #6366f1' : '2px solid transparent',
+                        color: ticketCategory === cat ? '#a5b4fc' : 'var(--text-secondary)',
+                        fontWeight: ticketCategory === cat ? 600 : 400,
+                        fontSize: 13, cursor: 'pointer', textTransform: 'capitalize',
+                      }}
+                    >
+                      {cat === 'open' ? `Open Tickets${unreadTicketCount > 0 && ticketCategory !== 'open' ? ` (${unreadTicketCount})` : ''}` : 'Closed Tickets'}
+                    </button>
+                  ))}
+                </div>
+
                 {supportTickets.length === 0 && !supportLoading ? (
-                  <p className="adm-empty">No support tickets yet.{' '}
-                    <button className="adm-link" onClick={loadSupportTickets}>Load</button>
-                  </p>
+                  <p className="adm-empty">No {ticketCategory} tickets.</p>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 0' }}>
                     {supportTickets.map((ticket) => (
@@ -1635,6 +1659,15 @@ export default function Admin() {
                         )}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* Pagination */}
+                {ticketPages > 1 && (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, paddingTop: 14, borderTop: '1px solid var(--border)', marginTop: 8 }}>
+                    <button className="adm-btn-sm" disabled={ticketPage <= 1} onClick={() => { const p = ticketPage - 1; setTicketPage(p); loadSupportTickets(ticketCategory, p); }}>← Prev</button>
+                    <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Page {ticketPage} of {ticketPages} · {ticketTotal} tickets</span>
+                    <button className="adm-btn-sm" disabled={ticketPage >= ticketPages} onClick={() => { const p = ticketPage + 1; setTicketPage(p); loadSupportTickets(ticketCategory, p); }}>Next →</button>
                   </div>
                 )}
               </div>

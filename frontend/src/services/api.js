@@ -91,7 +91,7 @@ export const getChatHistory = (orderId) => api.get(`/chat/history/${orderId}`);
 export const sendSupportMessage = (message, ticket_id = null) => api.post('/support/chat', { message, ticket_id });
 export const getSupportTickets = () => api.get('/support/tickets');
 export const getActiveSupportTicket = () => api.get('/support/tickets/active');
-export const getAdminSupportTickets = () => api.get('/admin/support-tickets');
+export const getAdminSupportTickets = (params = {}) => api.get('/admin/support-tickets', { params });
 export const closeSupportTicket = (ticketId) => api.put(`/admin/support-tickets/${ticketId}/close`);
 export const replyToSupportTicket = (ticketId, message) => api.post(`/admin/support-tickets/${ticketId}/reply`, { message });
 

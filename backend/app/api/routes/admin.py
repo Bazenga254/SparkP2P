@@ -1268,43 +1268,69 @@ async def seed_templates(
 
 @router.get("/support-tickets")
 async def list_support_tickets(
-    status: str = None,
-    limit: int = Query(default=50, le=200),
+    category: str = "open",   # "open" = OPEN+ESCALATED, "closed" = CLOSED+AI_RESOLVED
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, le=100),
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """List support tickets — defaults to escalated ones for the disputes tab."""
-    from app.models.support_ticket import SupportTicket, TicketStatus
-    from sqlalchemy import desc, cast, String
-    query = select(SupportTicket)
-    if status:
-        query = query.where(cast(SupportTicket.status, String).ilike(status))
-    else:
-        query = query.where(cast(SupportTicket.status, String).ilike("ESCALATED"))
-    query = query.order_by(desc(SupportTicket.updated_at)).limit(limit)
-    result = await db.execute(query)
+    """List support tickets with category filter and pagination."""
+    from app.models.support_ticket import SupportTicket
+    from sqlalchemy import desc, cast, String, func, or_
+
+    if category == "closed":
+        status_filter = or_(
+            cast(SupportTicket.status, String).ilike("CLOSED"),
+            cast(SupportTicket.status, String).ilike("AI_RESOLVED"),
+        )
+    else:  # open (default)
+        status_filter = or_(
+            cast(SupportTicket.status, String).ilike("OPEN"),
+            cast(SupportTicket.status, String).ilike("ESCALATED"),
+        )
+
+    # Total count
+    count_result = await db.execute(select(func.count()).select_from(SupportTicket).where(status_filter))
+    total = count_result.scalar() or 0
+
+    offset = (page - 1) * page_size
+    result = await db.execute(
+        select(SupportTicket)
+        .where(status_filter)
+        .order_by(desc(SupportTicket.updated_at))
+        .limit(page_size)
+        .offset(offset)
+    )
     tickets = result.scalars().all()
 
     # Fetch trader names
     trader_ids = list({t.trader_id for t in tickets})
-    traders_result = await db.execute(select(Trader).where(Trader.id.in_(trader_ids)))
-    traders_map = {t.id: t for t in traders_result.scalars().all()}
+    traders_map = {}
+    if trader_ids:
+        traders_result = await db.execute(select(Trader).where(Trader.id.in_(trader_ids)))
+        traders_map = {t.id: t for t in traders_result.scalars().all()}
 
-    return [
-        {
-            "id": t.id,
-            "trader_id": t.trader_id,
-            "trader_name": traders_map.get(t.trader_id, Trader()).full_name if t.trader_id in traders_map else "Unknown",
-            "trader_phone": traders_map.get(t.trader_id, Trader()).phone if t.trader_id in traders_map else "",
-            "subject": t.subject,
-            "status": t.status.value,
-            "messages": t.messages or [],
-            "escalation_reason": t.escalation_reason,
-            "created_at": t.created_at.isoformat() if t.created_at else "",
-            "updated_at": t.updated_at.isoformat() if t.updated_at else "",
-        }
-        for t in tickets
-    ]
+    return {
+        "tickets": [
+            {
+                "id": t.id,
+                "trader_id": t.trader_id,
+                "trader_name": traders_map[t.trader_id].full_name if t.trader_id in traders_map else "Unknown",
+                "trader_phone": traders_map[t.trader_id].phone if t.trader_id in traders_map else "",
+                "subject": t.subject,
+                "status": next((s for s in ("escalated","closed","open","ai_resolved") if s in str(t.status).lower()), str(t.status).lower()),
+                "messages": t.messages or [],
+                "escalation_reason": t.escalation_reason,
+                "created_at": t.created_at.isoformat() if t.created_at else "",
+                "updated_at": t.updated_at.isoformat() if t.updated_at else "",
+            }
+            for t in tickets
+        ],
+        "total": total,
+        "page": page,
+        "pages": max(1, -(-total // page_size)),  # ceiling division
+        "category": category,
+    }
 
 
 @router.post("/support-tickets/{ticket_id}/reply")
