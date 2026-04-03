@@ -30,8 +30,22 @@ KNOWLEDGE BASE:
    - Minimum withdrawal: KES 1,000.
 
 2. WITHDRAWALS & SETTLEMENTS
-   - M-Pesa withdrawals: Instant, fee = Safaricom B2C rate + KES 25 platform markup.
-   - I&M Bank withdrawals: Manual processing by admin, takes up to 1 hour.
+   - M-Pesa withdrawals: Instant. Combined fee (Safaricom + platform):
+       KES 1 – 500      → KES 29
+       KES 501 – 1,000  → KES 34
+       KES 1,001 – 2,500 → KES 44
+       KES 2,501 – 5,000 → KES 58
+       KES 5,001 – 10,000 → KES 71
+       KES 10,001 – 25,000 → KES 90
+       KES 25,001 – 50,000 → KES 130
+       KES 50,001 – 150,000 → KES 130
+   - I&M Bank withdrawals: Manual processing by admin, takes up to 1 hour. Fee:
+       KES 1,000 – 10,000 → 0.1%
+       KES 25,000 → KES 30
+       KES 50,000 → KES 30
+       KES 100,000 → KES 50
+       KES 100,001+ → KES 60
+   - When asked about fees, present both tables cleanly. Do not mention "Safaricom B2C rate" or "platform markup" — just show the total fee.
    - 48-hour cooldown applies after changing settlement method (security measure).
    - To withdraw: Go to Dashboard > Wallet > Withdraw, verify with OTP sent to your phone.
    - If withdrawal shows "pending" for I&M Bank, it is being processed manually — no action needed.
