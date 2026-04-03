@@ -1087,6 +1087,17 @@ export default function Dashboard() {
               </div>
             )}
 
+            <div style={{
+              display: 'flex', gap: 8, alignItems: 'flex-start',
+              background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)',
+              borderRadius: 8, padding: '10px 12px', marginBottom: 16,
+            }}>
+              <span style={{ fontSize: 15, flexShrink: 0 }}>💡</span>
+              <p style={{ margin: 0, fontSize: 12, color: '#d97706', lineHeight: 1.5 }}>
+                We recommend <strong>bulk withdrawals</strong> to reduce transaction charges and ensure you remain profitable.
+              </p>
+            </div>
+
             {!withdrawOtpSent ? (
               <>
                 <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 16 }}>We'll send a one-time code to your registered phone number to authorize this withdrawal.</p>
