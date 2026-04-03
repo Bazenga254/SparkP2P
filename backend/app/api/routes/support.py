@@ -66,10 +66,9 @@ KNOWLEDGE BASE:
    - Cancelled / Expired: Order did not complete, no funds moved.
 
 5. SUBSCRIPTION PLANS
-   - Starter: KES 5,000/month — suitable for new traders.
-   - Pro: KES 10,000/month — advanced features, higher limits.
-   - Payment via M-Pesa (Daraja) or Whop marketplace (card).
-   - Subscription renews monthly; trading pauses if expired.
+   - SparkP2P is currently free to use — no subscription is required at this time.
+   - Do not mention subscription plans, pricing, or payment unless the trader explicitly asks about future plans.
+   - If asked about cost or subscriptions, say: "SparkP2P is currently free to use."
 
 6. SECURITY & 2FA
    - For automated order release, set up Google Authenticator in Settings > Binance > Release Verification.
