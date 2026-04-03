@@ -88,12 +88,13 @@ export const sendChatMessage = (data) => api.post('/chat/send', data);
 export const getChatHistory = (orderId) => api.get(`/chat/history/${orderId}`);
 
 // Support Chat
-export const sendSupportMessage = (message, ticket_id = null) => api.post('/support/chat', { message, ticket_id });
+export const sendSupportMessage = (message, ticket_id = null, attachment_url = null, attachment_name = null) => api.post('/support/chat', { message, ticket_id, attachment_url, attachment_name });
 export const getSupportTickets = () => api.get('/support/tickets');
 export const getActiveSupportTicket = () => api.get('/support/tickets/active');
 export const getAdminSupportTickets = (params = {}) => api.get('/admin/support-tickets', { params });
 export const closeSupportTicket = (ticketId) => api.put(`/admin/support-tickets/${ticketId}/close`);
-export const replyToSupportTicket = (ticketId, message) => api.post(`/admin/support-tickets/${ticketId}/reply`, { message });
+export const replyToSupportTicket = (ticketId, message, attachmentUrl = null, attachmentName = null) => api.post(`/admin/support-tickets/${ticketId}/reply`, { message, attachment_url: attachmentUrl, attachment_name: attachmentName });
+export const uploadSupportAttachment = (file) => { const fd = new FormData(); fd.append('file', file); return api.post('/support/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); };
 
 // Withdrawals
 export const getAdminWithdrawals = (params = {}) => api.get('/admin/withdrawals', { params });

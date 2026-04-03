@@ -1,8 +1,10 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_db
@@ -57,3 +59,9 @@ app.include_router(support.router, prefix="/api", tags=["Support"])
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": settings.APP_NAME}
+
+
+# Serve uploaded support attachments
+_uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
+os.makedirs(os.path.join(_uploads_dir, "support"), exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")

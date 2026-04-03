@@ -1347,11 +1347,15 @@ async def reply_support_ticket(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     messages = list(ticket.messages or [])
-    messages.append({
+    msg = {
         "role": "admin",
         "content": data.get("message", "").strip(),
         "ts": datetime.now(timezone.utc).isoformat(),
-    })
+    }
+    if data.get("attachment_url"):
+        msg["attachment_url"] = data["attachment_url"]
+        msg["attachment_name"] = data.get("attachment_name", "file")
+    messages.append(msg)
     ticket.messages = messages
     ticket.updated_at = datetime.now(timezone.utc)
     await db.commit()

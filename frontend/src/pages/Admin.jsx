@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X } from 'lucide-react';
 
 const sidebarSections = [
   {
@@ -95,6 +95,9 @@ export default function Admin() {
   const [expandedTicket, setExpandedTicket] = useState(null);
   const [ticketReplies, setTicketReplies] = useState({});
   const [ticketReplying, setTicketReplying] = useState({});
+  const [ticketAttachments, setTicketAttachments] = useState({}); // { [ticketId]: { url, name, type } }
+  const [ticketUploading, setTicketUploading] = useState({});
+  const adminFileRefs = useRef({});
   const [unreadTicketCount, setUnreadTicketCount] = useState(0);
   const [ticketCategory, setTicketCategory] = useState('open'); // 'open' | 'closed'
   const [ticketPage, setTicketPage] = useState(1);
@@ -166,13 +169,30 @@ export default function Admin() {
     setWdActionLoading(null);
   };
 
+  const handleAdminFileSelect = async (ticketId, e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setTicketUploading((p) => ({ ...p, [ticketId]: true }));
+    try {
+      const res = await uploadSupportAttachment(file);
+      setTicketAttachments((p) => ({ ...p, [ticketId]: { url: res.data.url, name: res.data.name, type: res.data.type } }));
+    } catch {
+      alert('Upload failed. Max 10 MB. Allowed: images, PDF, DOC, TXT.');
+    } finally {
+      setTicketUploading((p) => ({ ...p, [ticketId]: false }));
+      e.target.value = '';
+    }
+  };
+
   const handleReplyTicket = async (ticketId) => {
     const msg = (ticketReplies[ticketId] || '').trim();
-    if (!msg) return;
+    const att = ticketAttachments[ticketId];
+    if (!msg && !att) return;
     setTicketReplying((p) => ({ ...p, [ticketId]: true }));
     try {
-      const res = await replyToSupportTicket(ticketId, msg);
+      const res = await replyToSupportTicket(ticketId, msg, att?.url, att?.name);
       setTicketReplies((p) => ({ ...p, [ticketId]: '' }));
+      setTicketAttachments((p) => { const n = { ...p }; delete n[ticketId]; return n; });
       setSupportTickets((prev) => prev.map((t) =>
         t.id === ticketId ? { ...t, messages: res.data.messages } : t
       ));
@@ -1627,13 +1647,47 @@ export default function Admin() {
                                         {m.role === 'user' ? 'Trader' : m.role === 'admin' ? 'Admin' : 'AI Support'} · {m.ts ? new Date(m.ts).toLocaleTimeString() : ''}
                                       </div>
                                       {m.content}
+                                      {m.attachment_url && (
+                                        <div style={{ marginTop: 6 }}>
+                                          {m.attachment_type?.startsWith('image/') ? (
+                                            <img src={m.attachment_url} alt={m.attachment_name} style={{ maxWidth: 180, maxHeight: 140, borderRadius: 6, display: 'block' }} />
+                                          ) : (
+                                            <a href={m.attachment_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: '#a5b4fc', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                              <Paperclip size={11} /> {m.attachment_name || 'Attachment'}
+                                            </a>
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 ))}
                               </div>
                             )}
+                            {/* Attachment preview */}
+                            {ticketAttachments[ticket.id] && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, padding: '5px 8px', background: 'rgba(99,102,241,0.08)', borderRadius: 6, fontSize: 11, color: '#a5b4fc' }}>
+                                <Paperclip size={12} />
+                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ticketAttachments[ticket.id].name}</span>
+                                <button onClick={() => setTicketAttachments((p) => { const n = { ...p }; delete n[ticket.id]; return n; })} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#a5b4fc', padding: 0, display: 'flex' }}><X size={12} /></button>
+                              </div>
+                            )}
                             {/* Reply box */}
                             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                              <input
+                                type="file"
+                                accept="image/*,.pdf,.doc,.docx,.txt"
+                                style={{ display: 'none' }}
+                                ref={(el) => { adminFileRefs.current[ticket.id] = el; }}
+                                onChange={(e) => handleAdminFileSelect(ticket.id, e)}
+                              />
+                              <button
+                                onClick={() => adminFileRefs.current[ticket.id]?.click()}
+                                disabled={ticketUploading[ticket.id]}
+                                title="Attach file"
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: ticketAttachments[ticket.id] ? '#a5b4fc' : 'var(--text-secondary)', padding: '6px 4px', display: 'flex', alignItems: 'center' }}
+                              >
+                                <Paperclip size={16} />
+                              </button>
                               <textarea
                                 value={ticketReplies[ticket.id] || ''}
                                 onChange={(e) => setTicketReplies((p) => ({ ...p, [ticket.id]: e.target.value }))}
@@ -1648,11 +1702,11 @@ export default function Admin() {
                               />
                               <button
                                 onClick={() => handleReplyTicket(ticket.id)}
-                                disabled={ticketReplying[ticket.id] || !(ticketReplies[ticket.id] || '').trim()}
+                                disabled={ticketReplying[ticket.id] || ticketUploading[ticket.id] || (!(ticketReplies[ticket.id] || '').trim() && !ticketAttachments[ticket.id])}
                                 className="adm-btn-sm"
                                 style={{ padding: '8px 14px', background: 'rgba(99,102,241,0.2)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.4)', whiteSpace: 'nowrap' }}
                               >
-                                {ticketReplying[ticket.id] ? 'Sending…' : 'Send Reply'}
+                                {ticketUploading[ticket.id] ? 'Uploading…' : ticketReplying[ticket.id] ? 'Sending…' : 'Send Reply'}
                               </button>
                             </div>
                           </div>

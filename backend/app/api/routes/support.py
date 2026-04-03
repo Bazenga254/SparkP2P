@@ -1,7 +1,9 @@
 import logging
+import os
+import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -103,6 +105,8 @@ RULES:
 class ChatRequest(BaseModel):
     message: str
     ticket_id: Optional[int] = None
+    attachment_url: Optional[str] = None
+    attachment_name: Optional[str] = None
 
 
 class EscalateRequest(BaseModel):
@@ -155,11 +159,11 @@ async def support_chat(
     # If escalated: store trader message and notify admin — no AI reply
     if is_escalated:
         messages = list(ticket.messages or [])
-        messages.append({
-            "role": "user",
-            "content": data.message,
-            "ts": datetime.now(timezone.utc).isoformat(),
-        })
+        user_msg = {"role": "user", "content": data.message, "ts": datetime.now(timezone.utc).isoformat()}
+        if data.attachment_url:
+            user_msg["attachment_url"] = data.attachment_url
+            user_msg["attachment_name"] = data.attachment_name or "file"
+        messages.append(user_msg)
         ticket.messages = messages
         ticket.updated_at = datetime.now(timezone.utc)
         await db.commit()
@@ -173,11 +177,11 @@ async def support_chat(
 
     # Build message history
     messages = ticket.messages or []
-    messages.append({
-        "role": "user",
-        "content": data.message,
-        "ts": datetime.now(timezone.utc).isoformat(),
-    })
+    user_msg = {"role": "user", "content": data.message, "ts": datetime.now(timezone.utc).isoformat()}
+    if data.attachment_url:
+        user_msg["attachment_url"] = data.attachment_url
+        user_msg["attachment_name"] = data.attachment_name or "file"
+    messages.append(user_msg)
 
     # Call OpenAI
     try:
@@ -303,3 +307,31 @@ async def get_active_ticket(
         "status": ticket.status.value,
         "messages": ticket.messages or [],
     }
+
+
+_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf",
+                  "text/plain", "application/msword",
+                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+_MAX_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+@router.post("/support/upload")
+async def upload_support_attachment(
+    file: UploadFile = File(...),
+    trader: Trader = Depends(get_current_trader),
+):
+    """Upload a file attachment for a support message. Returns the URL."""
+    if file.content_type not in _ALLOWED_TYPES:
+        raise HTTPException(status_code=400, detail="File type not allowed. Allowed: images, PDF, DOC, TXT.")
+    data = await file.read()
+    if len(data) > _MAX_SIZE:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 10 MB.")
+
+    ext = os.path.splitext(file.filename or "file")[1].lower() or ".bin"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    save_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads", "support")
+    os.makedirs(save_dir, exist_ok=True)
+    with open(os.path.join(save_dir, filename), "wb") as f:
+        f.write(data)
+
+    return {"url": f"/uploads/support/{filename}", "name": file.filename, "type": file.content_type}

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { MessageCircle, X, Send, ChevronDown, Loader, AlertCircle, UserCheck } from 'lucide-react';
-import { sendSupportMessage, getActiveSupportTicket } from '../services/api';
+import { MessageCircle, X, Send, ChevronDown, Loader, AlertCircle, UserCheck, Paperclip } from 'lucide-react';
+import { sendSupportMessage, getActiveSupportTicket, uploadSupportAttachment } from '../services/api';
 
 // ── Initial topic chips shown before the user types anything ─────────────────
 const QUICK_TOPICS = [
@@ -22,9 +22,12 @@ export default function SupportChat({ forceOpen, onOpen }) {
   const [ticketId, setTicketId]   = useState(null);
   const [escalated, setEscalated] = useState(false);
   const [unread, setUnread]       = useState(false);
-  const [suggestions, setSuggestions] = useState([]); // follow-up chips from last AI reply
-  const bottomRef = useRef(null);
-  const inputRef  = useRef(null);
+  const [suggestions, setSuggestions] = useState([]);
+  const [attachment, setAttachment]   = useState(null); // { url, name, type }
+  const [uploading, setUploading]     = useState(false);
+  const bottomRef  = useRef(null);
+  const inputRef   = useRef(null);
+  const fileRef    = useRef(null);
 
   // Load active ticket on mount
   useEffect(() => {
@@ -54,24 +57,42 @@ export default function SupportChat({ forceOpen, onOpen }) {
     }
   }, [open]);
 
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const res = await uploadSupportAttachment(file);
+      setAttachment({ url: res.data.url, name: res.data.name, type: res.data.type });
+    } catch {
+      alert('Upload failed. Max 10 MB. Allowed: images, PDF, DOC, TXT.');
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
   const sendMessage = async (text) => {
     const msg = (text || input).trim();
-    if (!msg || loading) return;
+    if ((!msg && !attachment) || loading) return;
 
     setSuggestions([]);
-    const newMessages = [...messages, { role: 'user', content: msg }];
+    const userMsg = { role: 'user', content: msg };
+    if (attachment) { userMsg.attachment_url = attachment.url; userMsg.attachment_name = attachment.name; userMsg.attachment_type = attachment.type; }
+    const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInput('');
+    const sentAttachment = attachment;
+    setAttachment(null);
 
-    // If already escalated, just store the message silently — no AI, no loading spinner
     if (escalated) {
-      sendSupportMessage(msg, ticketId).catch(() => {});
+      sendSupportMessage(msg, ticketId, sentAttachment?.url, sentAttachment?.name).catch(() => {});
       return;
     }
 
     setLoading(true);
     try {
-      const res = await sendSupportMessage(msg, ticketId);
+      const res = await sendSupportMessage(msg, ticketId, sentAttachment?.url, sentAttachment?.name);
       const { ticket_id, escalated: isEscalated, suggestions: newSuggestions, reply } = res.data;
       setTicketId(ticket_id);
       if (isEscalated) {
@@ -215,13 +236,26 @@ export default function SupportChat({ forceOpen, onOpen }) {
                 <div style={{
                   maxWidth: '80%', padding: '8px 12px',
                   borderRadius: m.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
-                  background: m.role === 'user' ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : '#1e2240',
+                  background: m.role === 'user' ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : m.role === 'admin' ? 'rgba(16,185,129,0.15)' : '#1e2240',
                   color: m.role === 'user' ? 'white' : '#e5e7eb',
                   fontSize: 13, lineHeight: 1.5,
                   border: m.role === 'user' ? 'none' : '1px solid rgba(255,255,255,0.08)',
                   whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 }}>
+                  {m.role === 'admin' && <div style={{ fontSize: 10, color: '#6ee7b7', marginBottom: 3, fontWeight: 600 }}>Support Team</div>}
                   {m.content}
+                  {m.attachment_url && (
+                    <div style={{ marginTop: 6 }}>
+                      {m.attachment_type?.startsWith('image/') ? (
+                        <img src={m.attachment_url} alt={m.attachment_name} style={{ maxWidth: '100%', borderRadius: 8, display: 'block' }} />
+                      ) : (
+                        <a href={m.attachment_url} target="_blank" rel="noreferrer"
+                          style={{ display: 'flex', alignItems: 'center', gap: 5, color: m.role === 'user' ? 'rgba(255,255,255,0.85)' : '#a5b4fc', fontSize: 12, textDecoration: 'none' }}>
+                          📎 {m.attachment_name || 'Attachment'}
+                        </a>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -303,8 +337,32 @@ export default function SupportChat({ forceOpen, onOpen }) {
                 </button>
               </div>
 
+              {/* Attachment preview */}
+              {attachment && (
+                <div style={{ padding: '4px 12px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: '#a5b4fc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    📎 {attachment.name}
+                  </span>
+                  <button onClick={() => setAttachment(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, padding: 0 }}>✕</button>
+                </div>
+              )}
+
               {/* Text input row */}
-              <div style={{ padding: '8px 12px 10px', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              <div style={{ padding: '8px 12px 10px', display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt" style={{ display: 'none' }} onChange={handleFileSelect} />
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={uploading}
+                  title="Attach file"
+                  style={{
+                    width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
+                    background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
+                    cursor: uploading ? 'not-allowed' : 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  {uploading ? <Loader size={15} color="#6366f1" style={{ animation: 'spin 1s linear infinite' }} /> : <Paperclip size={15} color="#6b7280" />}
+                </button>
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -322,19 +380,19 @@ export default function SupportChat({ forceOpen, onOpen }) {
                   }}
                 />
                 <button onClick={() => sendMessage()}
-                  disabled={!input.trim() || loading}
+                  disabled={(!input.trim() && !attachment) || loading}
                   style={{
                     width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
-                    background: !input.trim() || loading ? '#1e2240' : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                    background: (!input.trim() && !attachment) || loading ? '#1e2240' : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
                     border: '1px solid rgba(255,255,255,0.1)',
-                    cursor: !input.trim() || loading ? 'not-allowed' : 'pointer',
+                    cursor: (!input.trim() && !attachment) || loading ? 'not-allowed' : 'pointer',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     transition: 'background 0.2s',
                   }}
                 >
                   {loading
                     ? <Loader size={16} color="#6366f1" style={{ animation: 'spin 1s linear infinite' }} />
-                    : <Send size={16} color={!input.trim() ? '#6b7280' : 'white'} />
+                    : <Send size={16} color={!input.trim() && !attachment ? '#6b7280' : 'white'} />
                   }
                 </button>
               </div>
