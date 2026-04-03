@@ -9,7 +9,7 @@ const QUICK_TOPICS = [
   { icon: '📤', label: 'Withdrawal issue',    msg: 'I have an issue with my withdrawal or M-Pesa payment.' },
   { icon: '📋', label: 'Order problem',       msg: 'I have a problem with one of my P2P orders.' },
   { icon: '⚙️', label: 'Account & Settings', msg: 'How do I update my account settings or change my settlement method?' },
-  { icon: '💳', label: 'Subscription plans', msg: 'What are the subscription plans and pricing?' },
+  { icon: '💸', label: 'Fees & Charges',      msg: 'What are the fees for withdrawals, M-Pesa transfers, and platform charges?' },
 ];
 
 export default function SupportChat() {
