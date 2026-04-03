@@ -1593,7 +1593,7 @@ export default function Admin() {
                           <span className={`adm-badge ${ticket.status === 'escalated' ? 'yellow' : ticket.status === 'open' ? 'green' : 'dim'}`}>
                             {ticket.status}
                           </span>
-                          {ticket.status === 'escalated' && (
+                          {ticketCategory === 'open' && (
                             <button
                               className="adm-btn-sm"
                               onClick={(e) => { e.stopPropagation(); handleCloseTicket(ticket.id); }}
