@@ -257,12 +257,16 @@ async def get_active_ticket(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get the most recent open ticket for the chat widget to resume."""
+    """Get the most recent open or escalated ticket for the chat widget to resume."""
+    from sqlalchemy import or_, cast, String
     result = await db.execute(
         select(SupportTicket)
         .where(
             SupportTicket.trader_id == trader.id,
-            SupportTicket.status == TicketStatus.OPEN,
+            or_(
+                cast(SupportTicket.status, String).ilike("OPEN"),
+                cast(SupportTicket.status, String).ilike("ESCALATED"),
+            ),
         )
         .order_by(SupportTicket.updated_at.desc())
         .limit(1)
