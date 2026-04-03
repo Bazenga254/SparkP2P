@@ -1690,71 +1690,40 @@ export default function Admin() {
 
           {/* ==================== WITHDRAWALS ==================== */}
           {activeTab === 'withdrawals' && (
-            <div className="adm-section">
-              <div className="adm-section-header">
-                <h2 className="adm-section-title">Withdrawals</h2>
-                <button className="adm-btn adm-btn-ghost" onClick={() => loadWithdrawals(wdMethod, wdStatus, wdPeriod, wdPage)}>
-                  <RefreshCw size={14} /> Refresh
-                </button>
-              </div>
-
-              {/* Summary cards */}
-              <div className="adm-stats-grid" style={{ marginBottom: 20 }}>
-                <div className="adm-stat-card">
-                  <div className="adm-stat-label">Pending Disbursements</div>
-                  <div className="adm-stat-value" style={{ color: '#f59e0b' }}>
-                    {withdrawals.summary?.pending_count ?? 0}
+            <div className="adm-card">
+              {/* ── Header: title + method toggle + period filter ── */}
+              <div className="adm-card-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <h3>Withdrawals</h3>
+                  {/* Method toggle */}
+                  <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
+                    {[['all','All'], ['mpesa','M-Pesa'], ['bank_paybill','I&M Bank']].map(([val, label]) => (
+                      <button key={val} onClick={() => { setWdMethod(val); setWdPage(1); loadWithdrawals(val, wdStatus, wdPeriod, 1); }}
+                        style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                          background: wdMethod === val ? '#f59e0b' : 'transparent',
+                          color: wdMethod === val ? '#000' : '#9ca3af',
+                        }}>
+                        {label}
+                      </button>
+                    ))}
                   </div>
-                  <div className="adm-stat-sub">I&amp;M Bank — needs action</div>
-                </div>
-                <div className="adm-stat-card">
-                  <div className="adm-stat-label">Pending Amount</div>
-                  <div className="adm-stat-value" style={{ color: '#f59e0b' }}>
-                    KES {(withdrawals.summary?.pending_amount ?? 0).toLocaleString()}
+                  {/* Status toggle */}
+                  <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
+                    {[['all','All Status'], ['pending','Pending'], ['completed','Completed']].map(([val, label]) => (
+                      <button key={val} onClick={() => { setWdStatus(val); setWdPage(1); loadWithdrawals(wdMethod, val, wdPeriod, 1); }}
+                        style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                          background: wdStatus === val ? (val === 'pending' ? '#f59e0b' : val === 'completed' ? '#10b981' : '#f59e0b') : 'transparent',
+                          color: wdStatus === val ? '#000' : '#9ca3af',
+                        }}>
+                        {val === 'pending' && (withdrawals.summary?.pending_count > 0) ? `Pending (${withdrawals.summary.pending_count})` : label}
+                      </button>
+                    ))}
                   </div>
-                  <div className="adm-stat-sub">Awaiting manual transfer</div>
-                </div>
-                <div className="adm-stat-card">
-                  <div className="adm-stat-label">Total Withdrawals</div>
-                  <div className="adm-stat-value">{withdrawals.summary?.total_count ?? 0}</div>
-                  <div className="adm-stat-sub">All time</div>
-                </div>
-                <div className="adm-stat-card">
-                  <div className="adm-stat-label">Total Disbursed</div>
-                  <div className="adm-stat-value" style={{ color: '#10b981' }}>
-                    KES {(withdrawals.summary?.total_amount ?? 0).toLocaleString()}
-                  </div>
-                  <div className="adm-stat-sub">All time</div>
-                </div>
-              </div>
-
-              {/* Filters */}
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-                {/* Method filter */}
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {[['all','All Methods'],['mpesa','M-Pesa'],['bank_paybill','I&M Bank']].map(([val, label]) => (
-                    <button key={val}
-                      className={`adm-tab-pill ${wdMethod === val ? 'active' : ''}`}
-                      onClick={() => { setWdMethod(val); setWdPage(1); loadWithdrawals(val, wdStatus, wdPeriod, 1); }}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                {/* Status filter */}
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {[['all','All Status'],['pending','Pending'],['completed','Completed']].map(([val, label]) => (
-                    <button key={val}
-                      className={`adm-tab-pill ${wdStatus === val ? 'active' : ''}`}
-                      onClick={() => { setWdStatus(val); setWdPage(1); loadWithdrawals(wdMethod, val, wdPeriod, 1); }}>
-                      {label}
-                    </button>
-                  ))}
                 </div>
                 {/* Period filter */}
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {[['today','Today'],['week','This Week'],['month','This Month'],['all','All Time']].map(([val, label]) => (
-                    <button key={val}
-                      className={`adm-tab-pill ${wdPeriod === val ? 'active' : ''}`}
+                <div className="adm-period-filter">
+                  {[['today','Today'], ['week','Week'], ['month','Month'], ['all','All']].map(([val, label]) => (
+                    <button key={val} className={`adm-period-btn ${wdPeriod === val ? 'active' : ''}`}
                       onClick={() => { setWdPeriod(val); setWdPage(1); loadWithdrawals(wdMethod, wdStatus, val, 1); }}>
                       {label}
                     </button>
@@ -1762,105 +1731,106 @@ export default function Admin() {
                 </div>
               </div>
 
-              {/* Table */}
-              {wdLoading ? (
-                <div className="adm-loading">Loading withdrawals...</div>
-              ) : withdrawals.withdrawals.length === 0 ? (
-                <div className="adm-empty">No withdrawals found.</div>
-              ) : (
-                <div className="adm-table-wrap">
-                  <table className="adm-table">
-                    <thead>
-                      <tr>
-                        <th>Trader</th>
-                        <th>Method</th>
-                        <th>Destination</th>
-                        <th>Amount (Net)</th>
-                        <th>Status</th>
-                        <th>Requested</th>
-                        <th>Processed By</th>
-                        <th>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {withdrawals.withdrawals.map((wd) => (
-                        <tr key={wd.id}>
-                          <td>
-                            <div style={{ fontWeight: 600 }}>{wd.trader_name}</div>
-                            <div style={{ fontSize: 11, color: 'var(--adm-muted)' }}>{wd.trader_phone}</div>
-                          </td>
-                          <td>
-                            <span style={{
-                              padding: '3px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600,
-                              background: wd.settlement_method === 'mpesa' ? '#10b98122' : '#3b82f622',
-                              color: wd.settlement_method === 'mpesa' ? '#10b981' : '#60a5fa',
-                            }}>
-                              {wd.settlement_method === 'mpesa' ? 'M-Pesa' : 'I&M Bank'}
-                            </span>
-                          </td>
-                          <td>
-                            <div style={{ fontFamily: 'monospace', fontSize: 13 }}>{wd.destination}</div>
-                            {wd.bank_name && <div style={{ fontSize: 11, color: 'var(--adm-muted)' }}>{wd.bank_name}</div>}
-                          </td>
-                          <td style={{ fontWeight: 700, color: '#10b981' }}>
-                            KES {wd.amount.toLocaleString()}
-                          </td>
-                          <td>
-                            <span style={{
-                              padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600,
-                              background: wd.status === 'completed' ? '#10b98122' : wd.status === 'failed' ? '#ef444422' : '#f59e0b22',
-                              color: wd.status === 'completed' ? '#10b981' : wd.status === 'failed' ? '#ef4444' : '#f59e0b',
-                            }}>
-                              {wd.status === 'completed' ? '✓ Completed' : wd.status === 'failed' ? '✗ Failed' : '⏳ Pending'}
-                            </span>
-                          </td>
-                          <td style={{ fontSize: 12, color: 'var(--adm-muted)' }}>
-                            {wd.created_at ? new Date(wd.created_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
-                          </td>
-                          <td style={{ fontSize: 12 }}>
-                            {wd.processed_by ? (
-                              <div>
-                                <div style={{ fontWeight: 500 }}>{wd.processed_by}</div>
-                                <div style={{ color: 'var(--adm-muted)', fontSize: 11 }}>
-                                  {wd.processed_at ? new Date(wd.processed_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : ''}
-                                </div>
-                              </div>
-                            ) : '—'}
-                          </td>
-                          <td>
-                            {wd.status === 'pending' ? (
-                              <button
-                                className="adm-btn adm-btn-success"
-                                disabled={wdActionLoading === wd.id}
-                                onClick={() => handleMarkComplete(wd.id)}
-                                style={{ fontSize: 12, padding: '5px 12px' }}>
-                                {wdActionLoading === wd.id ? '...' : '✓ Mark Complete'}
-                              </button>
-                            ) : wd.status === 'completed' && wd.settlement_method !== 'mpesa' ? (
-                              <button
-                                className="adm-btn adm-btn-ghost"
-                                disabled={wdActionLoading === wd.id}
-                                onClick={() => handleMarkPending(wd.id)}
-                                style={{ fontSize: 12, padding: '5px 12px' }}>
-                                {wdActionLoading === wd.id ? '...' : '↩ Revert'}
-                              </button>
-                            ) : (
-                              <span style={{ fontSize: 12, color: 'var(--adm-muted)' }}>Auto</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              {/* ── Stats bar ── */}
+              <div style={{ padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 24, borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: '#6b7280' }}>{withdrawals.summary?.total_count ?? 0} total withdrawals</span>
+                <span style={{ fontSize: 12, color: '#10b981' }}>KES {(withdrawals.summary?.total_amount ?? 0).toLocaleString()} disbursed</span>
+                {(withdrawals.summary?.pending_count ?? 0) > 0 && (
+                  <span style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600 }}>
+                    ⚠ {withdrawals.summary.pending_count} I&amp;M pending · KES {withdrawals.summary.pending_amount.toLocaleString()} needs transfer
+                  </span>
+                )}
+              </div>
 
-              {/* Pagination */}
+              {/* ── Table ── */}
+              <div className="adm-table-wrap">
+                <table className="adm-table">
+                  <thead>
+                    <tr>
+                      <th>Trader</th>
+                      <th>Method</th>
+                      <th>Destination</th>
+                      <th>Amount (Net)</th>
+                      <th>Status</th>
+                      <th>Requested</th>
+                      <th>Processed By</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {wdLoading ? (
+                      <tr><td colSpan={8} className="adm-empty">Loading...</td></tr>
+                    ) : withdrawals.withdrawals.length === 0 ? (
+                      <tr><td colSpan={8} className="adm-empty">No withdrawals found</td></tr>
+                    ) : withdrawals.withdrawals.map((wd) => (
+                      <tr key={wd.id}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{wd.trader_name}</div>
+                          <div style={{ fontSize: 11, color: '#6b7280' }}>{wd.trader_phone}</div>
+                        </td>
+                        <td>
+                          <span className={`adm-badge ${wd.settlement_method === 'mpesa' ? 'green' : 'blue'}`}>
+                            {wd.settlement_method === 'mpesa' ? 'M-Pesa' : 'I&M Bank'}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="mono" style={{ fontSize: 13 }}>{wd.destination}</div>
+                          {wd.bank_name && <div style={{ fontSize: 11, color: '#6b7280' }}>{wd.bank_name}</div>}
+                        </td>
+                        <td style={{ fontWeight: 700, color: '#10b981' }}>
+                          {fmtKES(wd.amount)}
+                        </td>
+                        <td>
+                          <span className={`adm-badge ${wd.status === 'completed' ? 'green' : wd.status === 'failed' ? 'red' : 'yellow'}`}>
+                            {wd.status === 'completed' ? 'Completed' : wd.status === 'failed' ? 'Failed' : 'Pending'}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: 12, color: '#9ca3af' }}>
+                          {wd.created_at ? new Date(wd.created_at).toLocaleString() : '—'}
+                        </td>
+                        <td style={{ fontSize: 12 }}>
+                          {wd.processed_by ? (
+                            <>
+                              <div style={{ fontWeight: 500 }}>{wd.processed_by}</div>
+                              <div style={{ color: '#6b7280', fontSize: 11 }}>
+                                {wd.processed_at ? new Date(wd.processed_at).toLocaleString() : ''}
+                              </div>
+                            </>
+                          ) : <span style={{ color: '#4b5563' }}>—</span>}
+                        </td>
+                        <td>
+                          {wd.status === 'pending' ? (
+                            <button disabled={wdActionLoading === wd.id} onClick={() => handleMarkComplete(wd.id)}
+                              style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#10b981', color: '#000', fontWeight: 600, fontSize: 12, cursor: 'pointer', opacity: wdActionLoading === wd.id ? 0.6 : 1 }}>
+                              {wdActionLoading === wd.id ? '...' : '✓ Mark Complete'}
+                            </button>
+                          ) : wd.status === 'completed' && wd.settlement_method !== 'mpesa' ? (
+                            <button disabled={wdActionLoading === wd.id} onClick={() => handleMarkPending(wd.id)}
+                              style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 12, cursor: 'pointer' }}>
+                              {wdActionLoading === wd.id ? '...' : '↩ Revert'}
+                            </button>
+                          ) : (
+                            <span style={{ fontSize: 12, color: '#4b5563' }}>Auto</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* ── Pagination ── */}
               {withdrawals.pages > 1 && (
-                <div className="adm-pagination" style={{ marginTop: 12 }}>
-                  <button disabled={wdPage <= 1} onClick={() => { setWdPage(p => p - 1); loadWithdrawals(wdMethod, wdStatus, wdPeriod, wdPage - 1); }}>← Prev</button>
-                  <span>Page {wdPage} of {withdrawals.pages}</span>
-                  <button disabled={wdPage >= withdrawals.pages} onClick={() => { setWdPage(p => p + 1); loadWithdrawals(wdMethod, wdStatus, wdPeriod, wdPage + 1); }}>Next →</button>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+                  <button onClick={() => { setWdPage(p => p - 1); loadWithdrawals(wdMethod, wdStatus, wdPeriod, wdPage - 1); }} disabled={wdPage <= 1}
+                    style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: wdPage <= 1 ? 'transparent' : 'var(--bg)', color: wdPage <= 1 ? '#4b5563' : '#fff', cursor: wdPage <= 1 ? 'default' : 'pointer', fontSize: 13 }}>
+                    ← Prev
+                  </button>
+                  <span style={{ fontSize: 13, color: '#6b7280' }}>Page {wdPage} of {withdrawals.pages} · {withdrawals.total} withdrawals</span>
+                  <button onClick={() => { setWdPage(p => p + 1); loadWithdrawals(wdMethod, wdStatus, wdPeriod, wdPage + 1); }} disabled={wdPage >= withdrawals.pages}
+                    style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: wdPage >= withdrawals.pages ? 'transparent' : 'var(--bg)', color: wdPage >= withdrawals.pages ? '#4b5563' : '#fff', cursor: wdPage >= withdrawals.pages ? 'default' : 'pointer', fontSize: 13 }}>
+                    Next →
+                  </button>
                 </div>
               )}
             </div>
