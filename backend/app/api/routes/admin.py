@@ -1307,6 +1307,31 @@ async def list_support_tickets(
     ]
 
 
+@router.post("/support-tickets/{ticket_id}/reply")
+async def reply_support_ticket(
+    ticket_id: int,
+    data: dict,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin sends a reply message to the trader on a support ticket."""
+    from app.models.support_ticket import SupportTicket
+    result = await db.execute(select(SupportTicket).where(SupportTicket.id == ticket_id))
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    messages = list(ticket.messages or [])
+    messages.append({
+        "role": "admin",
+        "content": data.get("message", "").strip(),
+        "ts": datetime.now(timezone.utc).isoformat(),
+    })
+    ticket.messages = messages
+    ticket.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"status": "ok", "ticket_id": ticket_id, "messages": messages}
+
+
 @router.put("/support-tickets/{ticket_id}/close")
 async def close_support_ticket(
     ticket_id: int,

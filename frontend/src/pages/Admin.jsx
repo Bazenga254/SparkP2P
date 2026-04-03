@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet } from 'lucide-react';
@@ -93,6 +93,8 @@ export default function Admin() {
   const [supportTickets, setSupportTickets] = useState([]);
   const [supportLoading, setSupportLoading] = useState(false);
   const [expandedTicket, setExpandedTicket] = useState(null);
+  const [ticketReplies, setTicketReplies] = useState({});   // { ticketId: text }
+  const [ticketReplying, setTicketReplying] = useState({}); // { ticketId: bool }
 
   // Withdrawals
   const [withdrawals, setWithdrawals] = useState({ withdrawals: [], total: 0, pages: 1, summary: {} });
@@ -154,6 +156,22 @@ export default function Admin() {
       console.error('Mark pending error:', err);
     }
     setWdActionLoading(null);
+  };
+
+  const handleReplyTicket = async (ticketId) => {
+    const msg = (ticketReplies[ticketId] || '').trim();
+    if (!msg) return;
+    setTicketReplying((p) => ({ ...p, [ticketId]: true }));
+    try {
+      const res = await replyToSupportTicket(ticketId, msg);
+      setTicketReplies((p) => ({ ...p, [ticketId]: '' }));
+      setSupportTickets((prev) => prev.map((t) =>
+        t.id === ticketId ? { ...t, messages: res.data.messages } : t
+      ));
+    } catch (err) {
+      console.error('Reply error:', err);
+    }
+    setTicketReplying((p) => ({ ...p, [ticketId]: false }));
   };
 
   const handleCloseTicket = async (ticketId) => {
@@ -1531,14 +1549,14 @@ export default function Admin() {
                             {(ticket.messages || []).length === 0 ? (
                               <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>No messages.</p>
                             ) : (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
                                 {ticket.messages.map((m, i) => (
                                   <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
                                     <div style={{
                                       maxWidth: '75%',
                                       padding: '7px 11px',
                                       borderRadius: m.role === 'user' ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
-                                      background: m.role === 'user' ? 'rgba(99,102,241,0.15)' : 'var(--card)',
+                                      background: m.role === 'user' ? 'rgba(99,102,241,0.15)' : m.role === 'admin' ? 'rgba(16,185,129,0.12)' : 'var(--card)',
                                       border: '1px solid var(--border)',
                                       fontSize: 12,
                                       lineHeight: 1.5,
@@ -1547,7 +1565,7 @@ export default function Admin() {
                                       wordBreak: 'break-word',
                                     }}>
                                       <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginBottom: 3 }}>
-                                        {m.role === 'user' ? 'Trader' : 'AI Support'} · {m.ts ? new Date(m.ts).toLocaleTimeString() : ''}
+                                        {m.role === 'user' ? 'Trader' : m.role === 'admin' ? 'Admin' : 'AI Support'} · {m.ts ? new Date(m.ts).toLocaleTimeString() : ''}
                                       </div>
                                       {m.content}
                                     </div>
@@ -1555,6 +1573,29 @@ export default function Admin() {
                                 ))}
                               </div>
                             )}
+                            {/* Reply box */}
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                              <textarea
+                                value={ticketReplies[ticket.id] || ''}
+                                onChange={(e) => setTicketReplies((p) => ({ ...p, [ticket.id]: e.target.value }))}
+                                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleReplyTicket(ticket.id); } }}
+                                placeholder="Type a reply to the trader…"
+                                rows={2}
+                                style={{
+                                  flex: 1, resize: 'none', padding: '7px 10px', borderRadius: 8,
+                                  border: '1px solid var(--border)', background: 'var(--card)',
+                                  color: 'var(--text)', fontSize: 12, fontFamily: 'inherit', outline: 'none',
+                                }}
+                              />
+                              <button
+                                onClick={() => handleReplyTicket(ticket.id)}
+                                disabled={ticketReplying[ticket.id] || !(ticketReplies[ticket.id] || '').trim()}
+                                className="adm-btn-sm"
+                                style={{ padding: '8px 14px', background: 'rgba(99,102,241,0.2)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.4)', whiteSpace: 'nowrap' }}
+                              >
+                                {ticketReplying[ticket.id] ? 'Sending…' : 'Send Reply'}
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
