@@ -1351,3 +1351,155 @@ async def get_audit_logs(
         }
         for l in logs
     ]
+
+
+# ═══════════════════════════════════════════════════════════
+# WITHDRAWALS — Track M-Pesa and I&M Bank disbursements
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/withdrawals")
+async def get_withdrawals(
+    method: str = Query(None),       # mpesa | bank_paybill | all
+    status: str = Query(None),       # pending | completed | failed | all
+    period: str = Query("all"),      # today | week | month | all
+    page: int = Query(1, ge=1),
+    limit: int = Query(30, le=100),
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all withdrawal transactions with trader details."""
+    from sqlalchemy import desc, and_
+
+    q = (
+        select(WalletTransaction, Trader)
+        .join(Trader, Trader.id == WalletTransaction.trader_id)
+        .where(WalletTransaction.transaction_type == TransactionType.WITHDRAWAL)
+    )
+
+    if method and method != "all":
+        q = q.where(WalletTransaction.settlement_method == method)
+
+    if status and status != "all":
+        q = q.where(WalletTransaction.status == status)
+
+    if period == "today":
+        today = datetime.now(timezone.utc).date()
+        q = q.where(func.date(WalletTransaction.created_at) == today)
+    elif period == "week":
+        q = q.where(WalletTransaction.created_at >= datetime.now(timezone.utc) - timedelta(days=7))
+    elif period == "month":
+        q = q.where(WalletTransaction.created_at >= datetime.now(timezone.utc) - timedelta(days=30))
+
+    # Summary counts (before pagination)
+    count_q = select(
+        func.count(WalletTransaction.id).label("total"),
+        func.sum(func.abs(WalletTransaction.amount)).label("total_amount"),
+        func.count(
+            case((WalletTransaction.status == "pending", WalletTransaction.id))
+        ).label("pending_count"),
+        func.sum(
+            case((WalletTransaction.status == "pending", func.abs(WalletTransaction.amount)), else_=0)
+        ).label("pending_amount"),
+    ).select_from(WalletTransaction).where(
+        WalletTransaction.transaction_type == TransactionType.WITHDRAWAL
+    )
+    summary_result = await db.execute(count_q)
+    summary = summary_result.one()
+
+    total = (await db.execute(
+        select(func.count(WalletTransaction.id))
+        .select_from(WalletTransaction)
+        .join(Trader, Trader.id == WalletTransaction.trader_id)
+        .where(WalletTransaction.transaction_type == TransactionType.WITHDRAWAL)
+    )).scalar_one()
+
+    q = q.order_by(desc(WalletTransaction.created_at)).offset((page - 1) * limit).limit(limit)
+    result = await db.execute(q)
+    rows = result.all()
+
+    withdrawals = []
+    for tx, trader in rows:
+        # Resolve destination from stored field or trader's current settlement config
+        dest = tx.destination or (
+            trader.settlement_phone if (tx.settlement_method or "mpesa") == "mpesa"
+            else f"{trader.settlement_paybill} / {trader.settlement_account or ''}"
+        )
+        method_label = tx.settlement_method or (
+            trader.settlement_method.value if trader.settlement_method else "mpesa"
+        )
+        withdrawals.append({
+            "id": tx.id,
+            "trader_id": trader.id,
+            "trader_name": trader.full_name,
+            "trader_phone": trader.phone,
+            "amount": abs(tx.amount),          # net amount sent
+            "status": tx.status,               # pending | completed | failed
+            "settlement_method": method_label,
+            "destination": dest,
+            "bank_name": trader.settlement_bank_name or "",
+            "description": tx.description or "",
+            "processed_by": tx.processed_by or None,
+            "processed_at": tx.processed_at.isoformat() if tx.processed_at else None,
+            "created_at": tx.created_at.isoformat() if tx.created_at else "",
+        })
+
+    return {
+        "withdrawals": withdrawals,
+        "total": total,
+        "page": page,
+        "pages": max(1, -(-total // limit)),
+        "summary": {
+            "total_count": summary.total or 0,
+            "total_amount": float(summary.total_amount or 0),
+            "pending_count": summary.pending_count or 0,
+            "pending_amount": float(summary.pending_amount or 0),
+        },
+    }
+
+
+@router.put("/withdrawals/{tx_id}/complete")
+async def mark_withdrawal_complete(
+    tx_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark an I&M Bank withdrawal as manually disbursed/completed."""
+    result = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.id == tx_id,
+            WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+        )
+    )
+    tx = result.scalar_one_or_none()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Withdrawal not found")
+
+    tx.status = "completed"
+    tx.processed_by = admin.full_name
+    tx.processed_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"status": "completed", "processed_by": admin.full_name}
+
+
+@router.put("/withdrawals/{tx_id}/pending")
+async def mark_withdrawal_pending(
+    tx_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Revert a withdrawal to pending (e.g. if disbursement failed)."""
+    result = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.id == tx_id,
+            WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+        )
+    )
+    tx = result.scalar_one_or_none()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Withdrawal not found")
+
+    tx.status = "pending"
+    tx.processed_by = None
+    tx.processed_at = None
+    await db.commit()
+    return {"status": "pending"}

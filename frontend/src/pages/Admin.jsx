@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet } from 'lucide-react';
 
 const sidebarSections = [
   {
@@ -11,6 +11,7 @@ const sidebarSections = [
     items: [
       { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
       { key: 'transactions', icon: ArrowRightLeft, label: 'Transactions' },
+      { key: 'withdrawals', icon: Wallet, label: 'Withdrawals' },
     ],
   },
   {
@@ -93,6 +94,15 @@ export default function Admin() {
   const [supportLoading, setSupportLoading] = useState(false);
   const [expandedTicket, setExpandedTicket] = useState(null);
 
+  // Withdrawals
+  const [withdrawals, setWithdrawals] = useState({ withdrawals: [], total: 0, pages: 1, summary: {} });
+  const [wdMethod, setWdMethod] = useState('all');   // all | mpesa | bank_paybill
+  const [wdStatus, setWdStatus] = useState('all');   // all | pending | completed
+  const [wdPeriod, setWdPeriod] = useState('all');
+  const [wdPage, setWdPage] = useState(1);
+  const [wdLoading, setWdLoading] = useState(false);
+  const [wdActionLoading, setWdActionLoading] = useState(null); // tx id being actioned
+
   const loadTemplates = async () => {
     try {
       const res = await getMessageTemplates();
@@ -111,6 +121,39 @@ export default function Admin() {
       console.error('Support tickets load error:', err);
     }
     setSupportLoading(false);
+  };
+
+  const loadWithdrawals = async (method = wdMethod, status = wdStatus, period = wdPeriod, page = wdPage) => {
+    setWdLoading(true);
+    try {
+      const res = await getAdminWithdrawals({ method, status, period, page, limit: 30 });
+      setWithdrawals(res.data);
+    } catch (err) {
+      console.error('Withdrawals load error:', err);
+    }
+    setWdLoading(false);
+  };
+
+  const handleMarkComplete = async (txId) => {
+    setWdActionLoading(txId);
+    try {
+      await markWithdrawalComplete(txId);
+      loadWithdrawals();
+    } catch (err) {
+      console.error('Mark complete error:', err);
+    }
+    setWdActionLoading(null);
+  };
+
+  const handleMarkPending = async (txId) => {
+    setWdActionLoading(txId);
+    try {
+      await markWithdrawalPending(txId);
+      loadWithdrawals();
+    } catch (err) {
+      console.error('Mark pending error:', err);
+    }
+    setWdActionLoading(null);
   };
 
   const handleCloseTicket = async (ticketId) => {
@@ -241,6 +284,7 @@ export default function Admin() {
 
   useEffect(() => {
     if (activeTab === 'disputes') loadSupportTickets();
+    if (activeTab === 'withdrawals') loadWithdrawals();
   }, [activeTab]);
 
   useEffect(() => {
@@ -1642,6 +1686,184 @@ export default function Admin() {
                 )}
               </div>
             </>
+          )}
+
+          {/* ==================== WITHDRAWALS ==================== */}
+          {activeTab === 'withdrawals' && (
+            <div className="adm-section">
+              <div className="adm-section-header">
+                <h2 className="adm-section-title">Withdrawals</h2>
+                <button className="adm-btn adm-btn-ghost" onClick={() => loadWithdrawals(wdMethod, wdStatus, wdPeriod, wdPage)}>
+                  <RefreshCw size={14} /> Refresh
+                </button>
+              </div>
+
+              {/* Summary cards */}
+              <div className="adm-stats-grid" style={{ marginBottom: 20 }}>
+                <div className="adm-stat-card">
+                  <div className="adm-stat-label">Pending Disbursements</div>
+                  <div className="adm-stat-value" style={{ color: '#f59e0b' }}>
+                    {withdrawals.summary?.pending_count ?? 0}
+                  </div>
+                  <div className="adm-stat-sub">I&amp;M Bank — needs action</div>
+                </div>
+                <div className="adm-stat-card">
+                  <div className="adm-stat-label">Pending Amount</div>
+                  <div className="adm-stat-value" style={{ color: '#f59e0b' }}>
+                    KES {(withdrawals.summary?.pending_amount ?? 0).toLocaleString()}
+                  </div>
+                  <div className="adm-stat-sub">Awaiting manual transfer</div>
+                </div>
+                <div className="adm-stat-card">
+                  <div className="adm-stat-label">Total Withdrawals</div>
+                  <div className="adm-stat-value">{withdrawals.summary?.total_count ?? 0}</div>
+                  <div className="adm-stat-sub">All time</div>
+                </div>
+                <div className="adm-stat-card">
+                  <div className="adm-stat-label">Total Disbursed</div>
+                  <div className="adm-stat-value" style={{ color: '#10b981' }}>
+                    KES {(withdrawals.summary?.total_amount ?? 0).toLocaleString()}
+                  </div>
+                  <div className="adm-stat-sub">All time</div>
+                </div>
+              </div>
+
+              {/* Filters */}
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+                {/* Method filter */}
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {[['all','All Methods'],['mpesa','M-Pesa'],['bank_paybill','I&M Bank']].map(([val, label]) => (
+                    <button key={val}
+                      className={`adm-tab-pill ${wdMethod === val ? 'active' : ''}`}
+                      onClick={() => { setWdMethod(val); setWdPage(1); loadWithdrawals(val, wdStatus, wdPeriod, 1); }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {/* Status filter */}
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {[['all','All Status'],['pending','Pending'],['completed','Completed']].map(([val, label]) => (
+                    <button key={val}
+                      className={`adm-tab-pill ${wdStatus === val ? 'active' : ''}`}
+                      onClick={() => { setWdStatus(val); setWdPage(1); loadWithdrawals(wdMethod, val, wdPeriod, 1); }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {/* Period filter */}
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {[['today','Today'],['week','This Week'],['month','This Month'],['all','All Time']].map(([val, label]) => (
+                    <button key={val}
+                      className={`adm-tab-pill ${wdPeriod === val ? 'active' : ''}`}
+                      onClick={() => { setWdPeriod(val); setWdPage(1); loadWithdrawals(wdMethod, wdStatus, val, 1); }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Table */}
+              {wdLoading ? (
+                <div className="adm-loading">Loading withdrawals...</div>
+              ) : withdrawals.withdrawals.length === 0 ? (
+                <div className="adm-empty">No withdrawals found.</div>
+              ) : (
+                <div className="adm-table-wrap">
+                  <table className="adm-table">
+                    <thead>
+                      <tr>
+                        <th>Trader</th>
+                        <th>Method</th>
+                        <th>Destination</th>
+                        <th>Amount (Net)</th>
+                        <th>Status</th>
+                        <th>Requested</th>
+                        <th>Processed By</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {withdrawals.withdrawals.map((wd) => (
+                        <tr key={wd.id}>
+                          <td>
+                            <div style={{ fontWeight: 600 }}>{wd.trader_name}</div>
+                            <div style={{ fontSize: 11, color: 'var(--adm-muted)' }}>{wd.trader_phone}</div>
+                          </td>
+                          <td>
+                            <span style={{
+                              padding: '3px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600,
+                              background: wd.settlement_method === 'mpesa' ? '#10b98122' : '#3b82f622',
+                              color: wd.settlement_method === 'mpesa' ? '#10b981' : '#60a5fa',
+                            }}>
+                              {wd.settlement_method === 'mpesa' ? 'M-Pesa' : 'I&M Bank'}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ fontFamily: 'monospace', fontSize: 13 }}>{wd.destination}</div>
+                            {wd.bank_name && <div style={{ fontSize: 11, color: 'var(--adm-muted)' }}>{wd.bank_name}</div>}
+                          </td>
+                          <td style={{ fontWeight: 700, color: '#10b981' }}>
+                            KES {wd.amount.toLocaleString()}
+                          </td>
+                          <td>
+                            <span style={{
+                              padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600,
+                              background: wd.status === 'completed' ? '#10b98122' : wd.status === 'failed' ? '#ef444422' : '#f59e0b22',
+                              color: wd.status === 'completed' ? '#10b981' : wd.status === 'failed' ? '#ef4444' : '#f59e0b',
+                            }}>
+                              {wd.status === 'completed' ? '✓ Completed' : wd.status === 'failed' ? '✗ Failed' : '⏳ Pending'}
+                            </span>
+                          </td>
+                          <td style={{ fontSize: 12, color: 'var(--adm-muted)' }}>
+                            {wd.created_at ? new Date(wd.created_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                          </td>
+                          <td style={{ fontSize: 12 }}>
+                            {wd.processed_by ? (
+                              <div>
+                                <div style={{ fontWeight: 500 }}>{wd.processed_by}</div>
+                                <div style={{ color: 'var(--adm-muted)', fontSize: 11 }}>
+                                  {wd.processed_at ? new Date(wd.processed_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : ''}
+                                </div>
+                              </div>
+                            ) : '—'}
+                          </td>
+                          <td>
+                            {wd.status === 'pending' ? (
+                              <button
+                                className="adm-btn adm-btn-success"
+                                disabled={wdActionLoading === wd.id}
+                                onClick={() => handleMarkComplete(wd.id)}
+                                style={{ fontSize: 12, padding: '5px 12px' }}>
+                                {wdActionLoading === wd.id ? '...' : '✓ Mark Complete'}
+                              </button>
+                            ) : wd.status === 'completed' && wd.settlement_method !== 'mpesa' ? (
+                              <button
+                                className="adm-btn adm-btn-ghost"
+                                disabled={wdActionLoading === wd.id}
+                                onClick={() => handleMarkPending(wd.id)}
+                                style={{ fontSize: 12, padding: '5px 12px' }}>
+                                {wdActionLoading === wd.id ? '...' : '↩ Revert'}
+                              </button>
+                            ) : (
+                              <span style={{ fontSize: 12, color: 'var(--adm-muted)' }}>Auto</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Pagination */}
+              {withdrawals.pages > 1 && (
+                <div className="adm-pagination" style={{ marginTop: 12 }}>
+                  <button disabled={wdPage <= 1} onClick={() => { setWdPage(p => p - 1); loadWithdrawals(wdMethod, wdStatus, wdPeriod, wdPage - 1); }}>← Prev</button>
+                  <span>Page {wdPage} of {withdrawals.pages}</span>
+                  <button disabled={wdPage >= withdrawals.pages} onClick={() => { setWdPage(p => p + 1); loadWithdrawals(wdMethod, wdStatus, wdPeriod, wdPage + 1); }}>Next →</button>
+                </div>
+              )}
+            </div>
           )}
 
           {/* ==================== SECURITY ==================== */}

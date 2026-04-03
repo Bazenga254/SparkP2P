@@ -186,13 +186,23 @@ class SettlementEngine:
             wallet.total_fees_paid += total_fee
 
             # Record withdrawal
+            # I&M Bank (bank_paybill) withdrawals are processed manually by admin
+            # so they start as "pending" until admin marks them complete
+            is_bank = trader.settlement_method == SettlementMethod.BANK_PAYBILL
+            withdrawal_destination = (
+                trader.settlement_phone if trader.settlement_method == SettlementMethod.MPESA
+                else f"{trader.settlement_paybill} / {trader.settlement_account or ''}"
+            )
             txn = WalletTransaction(
                 trader_id=trader_id,
                 wallet_id=wallet.id,
                 transaction_type=TransactionType.WITHDRAWAL,
                 amount=-net_amount,
                 balance_after=wallet.balance,
-                description=f"Withdrawal: KES {net_amount} to {trader.settlement_method.value}",
+                description=f"Withdrawal: KES {net_amount:,.0f} to {trader.settlement_method.value}",
+                status="pending" if is_bank else "completed",
+                destination=withdrawal_destination,
+                settlement_method=trader.settlement_method.value,
             )
             self.db.add(txn)
 

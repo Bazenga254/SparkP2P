@@ -62,4 +62,10 @@ class WalletTransaction(Base):
     mpesa_receipt = Column(String(50), nullable=True)
     status = Column(String(20), default="completed")  # pending, completed, failed
 
+    # Withdrawal tracking (for admin manual processing of I&M bank withdrawals)
+    destination = Column(String(200), nullable=True)      # phone or paybill+account
+    settlement_method = Column(String(20), nullable=True) # mpesa, bank_paybill, etc.
+    processed_by = Column(String(100), nullable=True)     # admin name who marked complete
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

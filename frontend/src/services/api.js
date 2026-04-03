@@ -94,4 +94,9 @@ export const getActiveSupportTicket = () => api.get('/support/tickets/active');
 export const getAdminSupportTickets = () => api.get('/admin/support-tickets');
 export const closeSupportTicket = (ticketId) => api.put(`/admin/support-tickets/${ticketId}/close`);
 
+// Withdrawals
+export const getAdminWithdrawals = (params = {}) => api.get('/admin/withdrawals', { params });
+export const markWithdrawalComplete = (txId) => api.put(`/admin/withdrawals/${txId}/complete`);
+export const markWithdrawalPending = (txId) => api.put(`/admin/withdrawals/${txId}/pending`);
+
 export default api;
