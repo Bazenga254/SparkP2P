@@ -1377,7 +1377,13 @@ async def get_withdrawals(
     )
 
     if method and method != "all":
-        q = q.where(WalletTransaction.settlement_method == method)
+        from sqlalchemy import or_
+        if method == "mpesa":
+            # NULLs are legacy rows created before the column existed — all were M-Pesa
+            q = q.where(or_(WalletTransaction.settlement_method == "mpesa",
+                            WalletTransaction.settlement_method.is_(None)))
+        else:
+            q = q.where(WalletTransaction.settlement_method == method)
 
     if status and status != "all":
         q = q.where(WalletTransaction.status == status)
