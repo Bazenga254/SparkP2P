@@ -1275,12 +1275,12 @@ async def list_support_tickets(
 ):
     """List support tickets — defaults to escalated ones for the disputes tab."""
     from app.models.support_ticket import SupportTicket, TicketStatus
-    from sqlalchemy import desc
+    from sqlalchemy import desc, cast, String
     query = select(SupportTicket)
     if status:
-        query = query.where(SupportTicket.status == status)
+        query = query.where(cast(SupportTicket.status, String).ilike(status))
     else:
-        query = query.where(SupportTicket.status == TicketStatus.ESCALATED)
+        query = query.where(cast(SupportTicket.status, String).ilike("ESCALATED"))
     query = query.order_by(desc(SupportTicket.updated_at)).limit(limit)
     result = await db.execute(query)
     tickets = result.scalars().all()
