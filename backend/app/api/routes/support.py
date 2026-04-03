@@ -140,10 +140,10 @@ async def support_chat(
         db.add(ticket)
         await db.flush()
 
-    # Closed tickets cannot receive new messages
-    from sqlalchemy import cast as sa_cast, String as sa_String
-    is_closed = str(ticket.status).upper() in ("CLOSED", "AI_RESOLVED")
-    is_escalated = str(ticket.status).upper() == "ESCALATED"
+    # Determine ticket state robustly (handles enum name, value, and str repr)
+    _status = str(ticket.status).lower()
+    is_closed = any(s in _status for s in ("closed", "ai_resolved"))
+    is_escalated = "escalated" in _status
 
     if is_closed:
         return {

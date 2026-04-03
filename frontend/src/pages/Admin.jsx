@@ -306,19 +306,22 @@ export default function Admin() {
     if (activeTab === 'withdrawals') loadWithdrawals();
   }, [activeTab]);
 
-  // Poll for escalated ticket count every 30s (background — works on any tab)
+  // Poll support tickets every 15s — refresh content when on disputes, badge when elsewhere
   useEffect(() => {
     const pollTickets = async () => {
       try {
         const res = await getAdminSupportTickets();
-        const escalated = (res.data || []).filter(t => t.status === 'escalated');
-        if (activeTab !== 'disputes') setUnreadTicketCount(escalated.length);
+        const tickets = res.data || [];
+        const escalated = tickets.filter(t => t.status === 'escalated');
+        // Always update the full ticket list so new messages appear in real-time
+        setSupportTickets(tickets);
+        setUnreadTicketCount(activeTab === 'disputes' ? 0 : escalated.length);
       } catch (_) {}
     };
     pollTickets();
-    const iv = setInterval(pollTickets, 30000);
+    const iv = setInterval(pollTickets, 15000);
     return () => clearInterval(iv);
-  }, []);
+  }, [activeTab]);
 
   useEffect(() => {
     loadData();
