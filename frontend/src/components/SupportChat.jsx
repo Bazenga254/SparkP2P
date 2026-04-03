@@ -66,13 +66,15 @@ export default function SupportChat({ forceOpen, onOpen }) {
 
     try {
       const res = await sendSupportMessage(msg, ticketId);
-      const { ticket_id, reply, escalated: isEscalated, suggestions: newSuggestions } = res.data;
+      const { ticket_id, escalated: isEscalated, suggestions: newSuggestions, reply } = res.data;
       setTicketId(ticket_id);
-      setMessages([...newMessages, { role: 'assistant', content: reply }]);
       if (isEscalated) {
+        // Ticket is with the support team — don't show a fake AI reply, just keep the user's message
         setEscalated(true);
+        setMessages(newMessages);
         setSuggestions([]);
       } else {
+        setMessages([...newMessages, { role: 'assistant', content: reply }]);
         setSuggestions(newSuggestions || []);
       }
       if (!open) setUnread(true);
