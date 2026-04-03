@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff } from 'lucide-react';
+import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import SupportChat from '../components/SupportChat';
 
@@ -147,6 +147,7 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [openSupportChat, setOpenSupportChat] = useState(false);
   const [showPaybill, setShowPaybill] = useState(false);
   const [copied, setCopied] = useState('');
   const [binanceData, setBinanceData] = useState(null);
@@ -506,6 +507,20 @@ export default function Dashboard() {
               <Shield size={18} />
             </button>
           )}
+          <div style={{ position: 'relative' }}>
+            <button
+              className="icon-btn"
+              title="Messages"
+              onClick={() => { setOpenSupportChat(true); }}
+            >
+              <MessageSquare size={18} />
+              {notifications.filter(n => !n.read && n.type === 'support').length > 0 && (
+                <span style={{ position: 'absolute', top: -2, right: -2, background: '#6366f1', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
+                  {notifications.filter(n => !n.read && n.type === 'support').length}
+                </span>
+              )}
+            </button>
+          </div>
           <div style={{ position: 'relative' }}>
             <button className="icon-btn" onClick={() => { setShowNotifications(!showNotifications); setUnreadCount(0); api.post('/traders/notifications/mark-read').catch(() => {}); }}>
               <Bell size={18} />
@@ -1457,7 +1472,7 @@ export default function Dashboard() {
           </div>
         </div>
       )}
-      <SupportChat />
+      <SupportChat forceOpen={openSupportChat} onOpen={() => setOpenSupportChat(false)} />
     </div>
   );
 }

@@ -1329,6 +1329,16 @@ async def reply_support_ticket(
     ticket.messages = messages
     ticket.updated_at = datetime.now(timezone.utc)
     await db.commit()
+
+    # Notify the trader
+    from app.api.routes.traders import add_notification
+    add_notification(
+        ticket.trader_id,
+        title="Support Reply",
+        message=data.get("message", "").strip()[:120],
+        notif_type="support",
+    )
+
     return {"status": "ok", "ticket_id": ticket_id, "messages": messages}
 
 

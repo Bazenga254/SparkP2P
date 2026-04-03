@@ -12,8 +12,10 @@ const QUICK_TOPICS = [
   { icon: '💸', label: 'Fees & Charges',      msg: 'What are the fees for withdrawals, M-Pesa transfers, and platform charges?' },
 ];
 
-export default function SupportChat() {
+export default function SupportChat({ forceOpen, onOpen }) {
   const [open, setOpen]           = useState(false);
+
+  useEffect(() => { if (forceOpen) { setOpen(true); if (onOpen) onOpen(); } }, [forceOpen]);
   const [messages, setMessages]   = useState([]);
   const [input, setInput]         = useState('');
   const [loading, setLoading]     = useState(false);
