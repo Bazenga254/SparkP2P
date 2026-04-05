@@ -1135,9 +1135,13 @@ async function extractMpesaCodesFromChat(page) {
         const b64 = imgBuffer.toString('base64');
         console.log(`[SparkP2P] Sending chat image ${i + 1} to Vision...`);
         const result = await askVisionForMpesaCode(b64);
-        console.log(`[SparkP2P] Vision chat image ${i + 1}: code=${result.mpesa_code}`);
-        if (result.mpesa_code) {
-          return [result.mpesa_code];
+        const code = result.mpesa_code;
+        console.log(`[SparkP2P] Vision chat image ${i + 1}: code=${code} (length=${code ? code.length : 0})`);
+        // Validate: exactly 10 uppercase alphanumeric chars
+        if (code && /^[A-Z0-9]{10}$/.test(code)) {
+          return [code];
+        } else if (code) {
+          console.log(`[SparkP2P] Rejected code "${code}" — not exactly 10 uppercase chars`);
         }
       } catch (e) {
         console.log(`[SparkP2P] Could not screenshot chat image ${i + 1}: ${e.message?.substring(0, 40)}`);
@@ -1168,11 +1172,17 @@ async function askVisionForMpesaCode(b64) {
           role: 'user',
           content: [
             { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-            { type: 'text', text: `This is an M-Pesa SMS screenshot. Find the transaction code for a SENT payment.
-It appears as: "XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to SPARK FREELANCE..."
-The code is exactly 10 uppercase letters and digits.
+            { type: 'text', text: `This is an M-Pesa SMS screenshot showing a conversation.
 
-Return ONLY valid JSON: {"mpesa_code": "<code or null>"}` },
+Find the code for a SENT/outgoing payment only — the message will say:
+"XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to SPARK FREELANCE SOLUTIONS..."
+
+IGNORE any RECEIVED messages (e.g. "You have received Ksh... from KCB").
+
+The code is EXACTLY 10 characters: uppercase letters and digits only (e.g. UD5IZBFOER).
+Count every character carefully — must be exactly 10.
+
+Return ONLY valid JSON: {"mpesa_code": "<exactly 10-char code, or null if not found>"}` },
           ],
         }],
       }),
