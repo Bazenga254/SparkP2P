@@ -181,6 +181,11 @@ class TwoFAInput(BaseModel):
     code: str
 
 
+class GmailInput(BaseModel):
+    gmail_email: str
+    gmail_password: str
+
+
 @router.post("/login/start")
 async def login_start(trader: Trader = Depends(get_current_trader)):
     """Step 0: Launch browser and navigate to Binance login page."""
@@ -257,6 +262,19 @@ async def login_2fa(
         raise HTTPException(status_code=400, detail="No active login session.")
     return await session.submit_2fa(data.code)
 
+
+
+
+@router.post("/login/gmail")
+async def login_open_gmail(
+    data: GmailInput,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Open Gmail tab in same browser and log in — enables auto OTP scanning."""
+    session = get_wizard(trader.id)
+    if not session:
+        raise HTTPException(status_code=400, detail="No active login session.")
+    return await session.open_gmail(data.gmail_email, data.gmail_password)
 
 @router.get("/login/screenshot")
 async def login_screenshot(trader: Trader = Depends(get_current_trader)):

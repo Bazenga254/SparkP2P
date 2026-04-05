@@ -121,8 +121,6 @@ async def support_chat(
     db: AsyncSession = Depends(get_db),
 ):
     """Send a message to AI support. Creates or continues a ticket."""
-    from openai import OpenAI
-
     # Load or create ticket
     ticket = None
     if data.ticket_id:
@@ -183,22 +181,23 @@ async def support_chat(
         user_msg["attachment_name"] = data.attachment_name or "file"
     messages.append(user_msg)
 
-    # Call OpenAI
+    # Call Claude
     try:
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        openai_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        import anthropic
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        claude_messages = []
         for m in messages:
-            openai_messages.append({"role": m["role"], "content": m["content"]})
+            claude_messages.append({"role": m["role"], "content": m["content"]})
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=openai_messages,
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            system=SYSTEM_PROMPT,
+            messages=claude_messages,
             max_tokens=500,
-            temperature=0.7,
         )
-        reply = response.choices[0].message.content.strip()
+        reply = response.content[0].text.strip()
     except Exception as e:
-        logger.error(f"OpenAI error: {e}")
+        logger.error(f"Claude error: {e}")
         reply = "I'm having trouble connecting right now. Please try again in a moment, or type 'human' to speak with our support team."
 
     # Parse follow-up suggestions from AI response
