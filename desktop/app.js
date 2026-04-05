@@ -1106,20 +1106,98 @@ function stopPoller() {
 
 async function extractMpesaCodesFromChat(page) {
   try {
-    const codes = await page.evaluate(() => {
-      // Grab all text visible on the page (chat panel is part of the DOM)
+    // ── Step 1: Try DOM text first (buyer typed the code as text) ──────────
+    const textCodes = await page.evaluate(() => {
       const fullText = document.body.innerText || '';
-      // M-Pesa codes: exactly 10 uppercase alphanumeric chars as a standalone word
       const matches = fullText.match(/\b[A-Z0-9]{10}\b/g) || [];
       return [...new Set(matches)];
     });
-    if (codes.length > 0) {
-      console.log(`[SparkP2P] M-Pesa codes found in chat: ${codes.join(', ')}`);
+    if (textCodes.length > 0) {
+      console.log(`[SparkP2P] M-Pesa codes found in chat text: ${textCodes.join(', ')}`);
+      return textCodes;
     }
-    return codes;
+
+    // ── Step 2: No text codes — buyer may have sent a screenshot image ──────
+    // Click the last image in the chat to open the lightbox, then Vision reads it
+    console.log('[SparkP2P] No text codes — checking chat images with Vision...');
+    const imageFound = await page.evaluate(() => {
+      // Images inside the chat message area (Binance renders them as <img> tags)
+      const imgs = Array.from(document.querySelectorAll(
+        '[class*="chat"] img, [class*="message"] img, [class*="Message"] img, [class*="Chat"] img'
+      )).filter(img => img.width > 40 && img.height > 40); // skip tiny icons
+      if (imgs.length === 0) return false;
+      imgs[imgs.length - 1].click(); // click the most recent image
+      return true;
+    });
+
+    if (!imageFound) {
+      console.log('[SparkP2P] No chat images found either');
+      return [];
+    }
+
+    // Wait for lightbox / enlarged view to open
+    await new Promise(r => setTimeout(r, 2000));
+    await takeScreenshot('chat_image_enlarged', page);
+
+    // Use Vision to read the M-Pesa code from the enlarged screenshot
+    const code = await extractCodeFromChatImageWithVision(page);
+
+    // Close the lightbox
+    await page.keyboard.press('Escape').catch(() => {});
+    await new Promise(r => setTimeout(r, 500));
+
+    if (code) {
+      console.log(`[SparkP2P] Vision extracted M-Pesa code from chat image: ${code}`);
+      return [code];
+    }
+    return [];
   } catch (e) {
     console.error('[SparkP2P] extractMpesaCodesFromChat error:', e.message?.substring(0, 60));
     return [];
+  }
+}
+
+async function extractCodeFromChatImageWithVision(page) {
+  if (!anthropicApiKey) return null;
+  try {
+    const raw = await page.screenshot({ type: 'jpeg', quality: 90 });
+    const b64 = raw.toString('base64');
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 200,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
+            { type: 'text', text: `This screenshot shows an M-Pesa SMS conversation. Find the M-Pesa transaction code for a SENT payment (format: exactly 10 uppercase letters/digits, e.g. "UD5IZBFOER").
+
+Look for text like "UD5IZBFOER Confirmed. Ksh X,XXX.XX sent to..." — that is the SENT code.
+Ignore codes for received/incoming payments.
+
+Return ONLY valid JSON: {"mpesa_code": "<10-char code or null>"}` },
+          ],
+        }],
+      }),
+    });
+    const data = await resp.json();
+    const text = (data.content?.[0]?.text || '').trim()
+      .replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      const result = JSON.parse(match[0]);
+      return result.mpesa_code || null;
+    }
+    return null;
+  } catch (e) {
+    console.error('[Vision] extractCodeFromChatImageWithVision error:', e.message?.substring(0, 60));
+    return null;
   }
 }
 
