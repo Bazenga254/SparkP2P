@@ -1327,7 +1327,7 @@ async function idleScan(page) {
   // Take screenshot and use Claude Vision to detect orders
   await takeScreenshot('idle_scan_orders_tab', page);
   const visionInfo = await analyzePageWithVision(page);
-  console.log(`[SparkP2P] Vision sees: ${visionInfo.screen}, orders detected`);
+  console.log(`[SparkP2P] Vision sees: ${visionInfo.screen} (orders_list expected here — proceeding to click orders)`);
 
   // Also read orders via DOM for reporting to VPS
   const orders = await readOrders();
@@ -2249,7 +2249,7 @@ Extract ALL data with perfect precision and identify the exact screen state.
 Return ONLY a valid JSON object — no markdown, no explanation, no code fences.
 
 {
-  "screen": "<awaiting_payment|payment_processing|verify_payment|confirm_release_modal|passkey_failed|security_verification|totp_input|email_otp_input|order_complete|unknown>",
+  "screen": "<orders_list|awaiting_payment|payment_processing|verify_payment|confirm_release_modal|passkey_failed|security_verification|totp_input|email_otp_input|order_complete|unknown>",
   "order_number": "<exact order number string or null>",
   "buyer_name": "<exact full name or null>",
   "fiat_amount_kes": <KES amount as plain number e.g. 1000.00 — NEVER add zeros>,
@@ -2273,6 +2273,8 @@ CRITICAL NUMBER RULES — read every digit individually:
 - Commas are thousand separators, periods are decimal points
 
 Screen identification rules:
+- Table of orders with columns "Type/Date", "Order number", "Price", "Fiat / Crypto Amount", "Counterparty", "Status" → orders_list
+- "Please release" or "Appeal" status links in a table row → orders_list
 - "Awaiting Buyer's Payment" with countdown timer → awaiting_payment
 - "Payment Processing" or "Processing Payment" or "Verifying Payment" or loading spinner with no action buttons → payment_processing
 - "Verify Payment" or "Payment Received" button visible → verify_payment
