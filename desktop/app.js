@@ -1111,40 +1111,48 @@ async function extractMpesaCodesFromChat(page) {
   }
   try {
     // Find all <img> elements in the right half of the viewport (chat panel)
-    // and screenshot each one directly — no mouse, no clicks, no lightbox needed
     const chatImgHandles = await page.evaluateHandle(() => {
       const vw = window.innerWidth;
       return Array.from(document.querySelectorAll('img')).filter(img => {
         const r = img.getBoundingClientRect();
-        return r.width > 60 && r.height > 60   // not an icon
-          && r.left > vw * 0.5                  // right panel (chat)
-          && r.top >= 0 && r.bottom <= window.innerHeight; // visible
+        return r.width > 60 && r.height > 60
+          && r.left > vw * 0.5
+          && r.top >= 0 && r.bottom <= window.innerHeight;
       });
     });
 
     const imgElements = await chatImgHandles.getProperties();
     const handles = [...imgElements.values()].filter(h => h.asElement());
-
     console.log(`[SparkP2P] Chat images found: ${handles.length}`);
 
-    // Screenshot each chat image directly and ask Vision to read the M-Pesa code
     for (let i = handles.length - 1; i >= 0; i--) {
       const el = handles[i].asElement();
       try {
-        const imgBuffer = await el.screenshot({ type: 'jpeg', quality: 95 });
-        const b64 = imgBuffer.toString('base64');
-        console.log(`[SparkP2P] Sending chat image ${i + 1} to Vision...`);
-        const result = await askVisionForMpesaCode(b64);
+        // Click the element directly via JS — triggers React's handler, opens lightbox
+        await el.evaluate(node => node.click());
+        console.log(`[SparkP2P] Clicked chat image ${i + 1} — waiting for lightbox...`);
+        await new Promise(r => setTimeout(r, 2000));
+
+        // Screenshot the full page — lightbox should now be open and full-size
+        const enlarged = await page.screenshot({ type: 'jpeg', quality: 95 });
+        await takeScreenshot(`chat_image_${i + 1}_enlarged`, page);
+
+        const result = await askVisionForMpesaCode(enlarged.toString('base64'));
         const code = result.mpesa_code;
-        console.log(`[SparkP2P] Vision chat image ${i + 1}: code=${code} (length=${code ? code.length : 0})`);
-        // Validate: exactly 10 uppercase alphanumeric chars
+        console.log(`[SparkP2P] Vision enlarged image ${i + 1}: code=${code} (length=${code ? code.length : 0})`);
+
+        // Close lightbox before next attempt
+        await page.keyboard.press('Escape').catch(() => {});
+        await new Promise(r => setTimeout(r, 500));
+
         if (code && /^[A-Z0-9]{10}$/.test(code)) {
           return [code];
         } else if (code) {
-          console.log(`[SparkP2P] Rejected code "${code}" — not exactly 10 uppercase chars`);
+          console.log(`[SparkP2P] Rejected code "${code}" — not exactly 10 chars`);
         }
       } catch (e) {
-        console.log(`[SparkP2P] Could not screenshot chat image ${i + 1}: ${e.message?.substring(0, 40)}`);
+        console.log(`[SparkP2P] Chat image ${i + 1} error: ${e.message?.substring(0, 60)}`);
+        await page.keyboard.press('Escape').catch(() => {});
       }
     }
 
