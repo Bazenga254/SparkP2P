@@ -458,7 +458,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
         <div className="card" style={{ marginTop: 16 }}>
           <h3 style={{ marginBottom: 4 }}>Gmail Account</h3>
           <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
-            Keep Gmail open in your browser — the extension automatically detects it and syncs the session every 15 minutes. No login or password required.
+            The desktop app opens Gmail automatically when Binance connects and syncs the session every 1 minute. No login or password required.
           </p>
           {gmailConfigured ? (
             <div style={{

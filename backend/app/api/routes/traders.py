@@ -30,6 +30,7 @@ class BinanceConnectRequest(BaseModel):
     csrf_token: str
     bnc_uuid: Optional[str] = None
     totp_secret: Optional[str] = None
+    gmail_cookies: Optional[list] = None  # Gmail cookies from desktop app's Chrome browser
 
 
 class CompleteProfileRequest(BaseModel):
@@ -407,6 +408,11 @@ async def connect_binance(
     if data.cookies_full:
         trader.binance_cookies_full = encrypt_data(json.dumps(data.cookies_full))
         logger.info(f"Stored {len(data.cookies_full)} full cookies for trader {trader.id}")
+
+    # Save Gmail cookies when desktop app captures them (Gmail tab open alongside Binance)
+    if data.gmail_cookies and len(data.gmail_cookies) > 0:
+        trader.gmail_cookies = encrypt_data(json.dumps(data.gmail_cookies))
+        logger.info(f"Gmail session synced: {len(data.gmail_cookies)} cookies for trader {trader.id}")
 
     # Mark as connected if full cookies provided (verified login from desktop app)
     if data.cookies_full and len(data.cookies_full) > 10:
@@ -1386,8 +1392,7 @@ async def save_gmail_credentials(
 async def get_gmail_credentials(
     trader: Trader = Depends(get_current_trader),
 ):
-    """Check if Gmail credentials are configured (never returns the password)."""
+    """Check if Gmail session is active (synced from desktop app)."""
     return {
-        "configured": bool(trader.gmail_email),
-        "gmail_email": trader.gmail_email or "",
+        "configured": bool(trader.gmail_cookies),
     }

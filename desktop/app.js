@@ -529,6 +529,9 @@ function checkInactivityTimeout() {
 // Check inactivity every 5 minutes
 setInterval(checkInactivityTimeout, 5 * 60 * 1000);
 
+// Sync cookies (Binance + Gmail) to VPS every 1 minute
+setInterval(() => { if (pollerRunning) syncCookies(); }, 60 * 1000);
+
 // Silently refresh JWT every 20 minutes — prevents session expiry without re-login
 setInterval(async () => {
   if (!token) return;
