@@ -1309,36 +1309,33 @@ async function idleScan(page) {
   await uploadBalances(balances);
   if (pauseNavigation) return;
 
-  // ── Step 2: Navigate P2P market page (establishes P2P session) ───────────
-  console.log('[SparkP2P] Step 2: Navigating to P2P market...');
-  await page.goto('https://p2p.binance.com/trade/all-payments/USDT?fiat=KES',
-    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-  await new Promise(r => setTimeout(r, 2000));
-  if (pauseNavigation) return;
-
-  // ── Step 3: Check completed orders tab (tab=1) ────────────────────────────
-  console.log('[SparkP2P] Step 3: Checking completed orders (tab=1)...');
-  await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1',
-    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-  await new Promise(r => setTimeout(r, 2000));
-  if (pauseNavigation) return;
-
-  // ── Step 4: Check active/processing orders (tab=0) with Vision ───────────
-  console.log('[SparkP2P] Step 4: Checking active orders (tab=0) with Claude Vision...');
+  // ── Step 2: Go straight to Processing tab (tab=0) ───────────────────────
+  console.log('[SparkP2P] Step 2: Checking active orders (tab=0) with Claude Vision...');
   await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
     { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
   await new Promise(r => setTimeout(r, 3000));
   if (pauseNavigation) return;
 
-  // Take screenshot and use Claude Vision to detect orders
+  // Vision confirms what's on screen, DOM reads the order list
   await takeScreenshot('idle_scan_orders_tab', page);
   const visionInfo = await analyzePageWithVision(page);
-  console.log(`[SparkP2P] Vision sees: ${visionInfo.screen} (orders_list expected here — proceeding to click orders)`);
+  console.log(`[SparkP2P] Vision sees: ${visionInfo.screen}`);
 
-  // Also read orders via DOM for reporting to VPS
   const orders = await readOrders();
   stats.orders = orders.sell.length + orders.buy.length;
   console.log(`[SparkP2P] Orders: ${orders.sell.length} sell, ${orders.buy.length} buy, ${orders.cancelled.length} cancelled`);
+
+  // ── Step 3: Check completed/cancelled tab (tab=1) — only when no active orders ──
+  if (orders.sell.length === 0 && orders.buy.length === 0) {
+    console.log('[SparkP2P] Step 3: No active orders — checking completed tab (tab=1)...');
+    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1',
+      { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2000));
+    if (pauseNavigation) return;
+    // Re-read cancelled orders from this tab
+    const cancelledOrders = await readOrders();
+    orders.cancelled = cancelledOrders.cancelled || [];
+  }
 
   // Report orders to VPS
   const res = await fetch(`${API_BASE}/ext/report-orders`, {
@@ -1356,7 +1353,7 @@ async function idleScan(page) {
     for (const a of (actions || [])) await execAction(a);
   }
 
-  // ── Step 5: If sell orders exist, click each one and check payment ────────
+  // ── Step 4: If sell orders exist, click each one — already on tab=0 ───────
   if (orders.sell.length > 0) {
     console.log(`[SparkP2P] 🔔 ${orders.sell.length} active sell order(s) detected`);
 
@@ -1364,11 +1361,7 @@ async function idleScan(page) {
       if (pauseNavigation) break;
       console.log(`[SparkP2P] Processing order ${order.orderNumber} (KES ${order.totalPrice})`);
 
-      // Navigate back to orders tab and click the order using mouse
-      await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
-        { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-      await new Promise(r => setTimeout(r, 2500));
-
+      // We are already on tab=0 — click directly, no extra navigation
       const clicked = await clickOrderWithMouse(page, order.orderNumber);
       if (!clicked) {
         console.log(`[SparkP2P] Could not click order ${order.orderNumber} — skipping`);
