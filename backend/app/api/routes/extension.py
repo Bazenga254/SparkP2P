@@ -15,7 +15,7 @@ Flow:
 
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -301,6 +301,7 @@ async def get_pending_actions(
 class VerifyPaymentData(BaseModel):
     binance_order_number: str
     fiat_amount: float  # Expected KES amount from Binance order
+    mpesa_codes_from_chat: Optional[List[str]] = None  # M-Pesa codes extracted from the buyer's chat messages
 
 
 @router.post("/verify-payment")
@@ -315,6 +316,31 @@ async def verify_payment(
     Returns verified=True only if the payment was matched and confirmed by Safaricom.
     This prevents releasing crypto when a buyer fake-clicks "I have paid".
     """
+    # ── Step 1: Try direct M-Pesa code lookup from buyer's chat message ──────
+    # If the bot extracted M-Pesa codes from the chat, check them against our
+    # Payment records first. This catches cases where the C2B callback arrived
+    # but the order status hasn't been updated yet.
+    if data.mpesa_codes_from_chat:
+        for code in data.mpesa_codes_from_chat:
+            pay_result = await db.execute(
+                select(Payment).where(
+                    Payment.mpesa_transaction_id == code,
+                    Payment.status == PaymentStatus.COMPLETED,
+                )
+            )
+            direct_payment = pay_result.scalar_one_or_none()
+            if direct_payment:
+                logger.info(f"M-Pesa code {code} matched directly in Payment table for order {data.binance_order_number}")
+                return {
+                    "verified": True,
+                    "reason": f"M-Pesa code {code} confirmed in our records",
+                    "mpesa_receipt": code,
+                    "amount_received": direct_payment.amount,
+                    "payer_phone": direct_payment.phone,
+                    "payer_name": direct_payment.sender_name,
+                }
+
+    # ── Step 2: Fall back to order-status check ───────────────────────────────
     result = await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,

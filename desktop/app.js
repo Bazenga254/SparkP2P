@@ -512,6 +512,9 @@ async function connectBinance() {
         fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
       }
 
+      // Re-fetch credentials now that we're logged in (ensures Anthropic key is loaded)
+      await fetchAndApplyCredentials();
+
       // Sync cookies immediately — don't block on Gmail
       await syncCookies();
       connectingBinance = false;
@@ -1101,13 +1104,41 @@ function stopPoller() {
   scanningInProgress = false;
 }
 
-async function verifyMpesaPayment(orderNumber, fiatAmount) {
+async function extractMpesaCodesFromChat(page) {
+  try {
+    const codes = await page.evaluate(() => {
+      // Grab all text visible on the page (chat panel is part of the DOM)
+      const fullText = document.body.innerText || '';
+      // M-Pesa codes: exactly 10 uppercase alphanumeric chars as a standalone word
+      const matches = fullText.match(/\b[A-Z0-9]{10}\b/g) || [];
+      return [...new Set(matches)];
+    });
+    if (codes.length > 0) {
+      console.log(`[SparkP2P] M-Pesa codes found in chat: ${codes.join(', ')}`);
+    }
+    return codes;
+  } catch (e) {
+    console.error('[SparkP2P] extractMpesaCodesFromChat error:', e.message?.substring(0, 60));
+    return [];
+  }
+}
+
+async function verifyMpesaPayment(orderNumber, fiatAmount, page = null) {
   if (!token) return false;
   try {
+    // Extract M-Pesa codes from the chat panel if page is available
+    let mpesaCodes = [];
+    if (page) {
+      mpesaCodes = await extractMpesaCodesFromChat(page);
+    }
     const res = await fetch(`${API_BASE}/ext/verify-payment`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ binance_order_number: orderNumber, fiat_amount: fiatAmount || 0 }),
+      body: JSON.stringify({
+        binance_order_number: orderNumber,
+        fiat_amount: fiatAmount || 0,
+        mpesa_codes_from_chat: mpesaCodes,
+      }),
     });
     if (!res.ok) return false;
     const data = await res.json();
@@ -1255,39 +1286,57 @@ async function idleScan(page) {
         continue;
       }
 
-      // Wait for order detail page to load, take screenshot
-      await new Promise(r => setTimeout(r, 3000));
+      // Wait for order detail page to fully load
+      await new Promise(r => setTimeout(r, 5000));
       await takeScreenshot(`order_detail_${order.orderNumber}`, page);
 
-      // Use vision to read the order state
-      const orderInfo = await analyzePageWithVision(page);
-      console.log(`[SparkP2P] Order ${order.orderNumber} vision: ${orderInfo.screen}`);
+      // Vision retry loop — up to 3 attempts if page returns unknown
+      let orderInfo = { screen: 'unknown' };
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        orderInfo = await analyzePageWithVision(page);
+        console.log(`[SparkP2P] Order ${order.orderNumber} vision attempt ${attempt}: ${orderInfo.screen}`);
+        if (orderInfo.screen !== 'unknown') break;
+        console.log('[SparkP2P] Vision returned unknown — waiting 3s and retrying...');
+        await new Promise(r => setTimeout(r, 3000));
+        await takeScreenshot(`order_detail_retry${attempt}_${order.orderNumber}`, page);
+      }
 
       if (orderInfo.screen === 'verify_payment') {
         // Buyer has paid — verify M-Pesa before releasing
         console.log(`[SparkP2P] Order ${order.orderNumber} shows VERIFY PAYMENT — checking M-Pesa...`);
-        const verified = await verifyMpesaPayment(order.orderNumber, order.totalPrice || orderInfo.fiat_amount_kes);
+        const verified = await verifyMpesaPayment(order.orderNumber, order.totalPrice || orderInfo.fiat_amount_kes, page);
         if (verified) {
           console.log(`[SparkP2P] ✅ M-Pesa confirmed — starting vision release for ${order.orderNumber}`);
           activeOrderNumber = order.orderNumber;
           activeOrderFiatAmount = order.totalPrice;
+          // releaseWithVision handles all DOM interactions — no mouse needed
           await releaseWithVision(page, order.orderNumber, { message: 'Payment confirmed. Releasing crypto now.' });
           activeOrderNumber = null;
           activeOrderFiatAmount = 0;
         } else {
           console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed for ${order.orderNumber} — holding`);
+          activeOrderNumber = order.orderNumber;
+          activeOrderFiatAmount = order.totalPrice;
+          break;
         }
-      } else if (orderInfo.screen === 'awaiting_payment') {
-        console.log(`[SparkP2P] Order ${order.orderNumber} still awaiting buyer payment`);
+      } else if (orderInfo.screen === 'awaiting_payment' || orderInfo.screen === 'payment_processing') {
+        console.log(`[SparkP2P] Order ${order.orderNumber} awaiting buyer payment — monitoring`);
         activeOrderNumber = order.orderNumber;
         activeOrderFiatAmount = order.totalPrice;
-        // Don't release — just monitor
         break;
       } else if (orderInfo.screen === 'order_complete') {
         console.log(`[SparkP2P] Order ${order.orderNumber} already completed`);
+      } else if (orderInfo.screen === 'confirm_release_modal' || orderInfo.screen === 'security_verification' ||
+                 orderInfo.screen === 'totp_input' || orderInfo.screen === 'email_otp_input' || orderInfo.screen === 'passkey_failed') {
+        // Already mid-release — jump straight into vision loop
+        console.log(`[SparkP2P] Order ${order.orderNumber} mid-release (${orderInfo.screen}) — continuing with vision`);
+        activeOrderNumber = order.orderNumber;
+        activeOrderFiatAmount = order.totalPrice;
+        await releaseWithVision(page, order.orderNumber, {});
+        activeOrderNumber = null;
+        activeOrderFiatAmount = 0;
       } else {
-        // Unknown state — set as active and let monitorActiveOrder handle it
-        console.log(`[SparkP2P] Order ${order.orderNumber} in state: ${orderInfo.screen} — monitoring`);
+        console.log(`[SparkP2P] Order ${order.orderNumber} state: ${orderInfo.screen} — will retry next poll`);
         activeOrderNumber = order.orderNumber;
         activeOrderFiatAmount = order.totalPrice;
         break;
@@ -1298,59 +1347,46 @@ async function idleScan(page) {
   }
 }
 
-// ── Click an order row using real mouse movement ─────────────────────────────
+// ── Click an order row using DOM (reliable, no mouse needed) ─────────────────
 async function clickOrderWithMouse(page, orderNumber) {
-  // Take screenshot first so vision can guide us
   await takeScreenshot(`before_click_order_${orderNumber}`, page);
 
-  // Use vision to find where to click
-  const visionInfo = await analyzePageWithVision(page);
-  console.log(`[SparkP2P] Vision before click: ${visionInfo.screen}`);
-
-  // Get the bounding box of the order number element
-  const box = await page.evaluate((orderNo) => {
-    // Find <a> link containing the order number
-    const all = [
-      ...Array.from(document.querySelectorAll('a')),
-      ...Array.from(document.querySelectorAll('span, td, div, p')),
-    ];
-    for (const el of all) {
-      const text = el.textContent.replace(/\s/g, '');
-      if (text.includes(orderNo)) {
-        const rect = el.getBoundingClientRect();
-        if (rect.width > 10 && rect.height > 5) {
-          return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), found: 'order-number' };
-        }
+  const found = await page.evaluate((orderNo) => {
+    // Strategy 1: <a> tag whose text is exactly or contains the order number
+    const links = Array.from(document.querySelectorAll('a'));
+    for (const a of links) {
+      if (a.textContent.replace(/\s/g, '').includes(orderNo)) {
+        a.click();
+        return 'order-number-link';
       }
     }
-    // Fallback: click "Please release" link
-    const releaseEl = Array.from(document.querySelectorAll('a, span')).find(
+    // Strategy 2: any element whose trimmed text equals the order number
+    const all = Array.from(document.querySelectorAll('span, td, div, p'));
+    for (const el of all) {
+      if (el.children.length === 0 && el.textContent.trim().replace(/\s/g, '') === orderNo) {
+        el.click();
+        return 'order-number-text';
+      }
+    }
+    // Strategy 3: "Please release" link — click the row containing it
+    const releaseEl = Array.from(document.querySelectorAll('a, span, div')).find(
       el => el.textContent.trim() === 'Please release'
     );
     if (releaseEl) {
-      const rect = releaseEl.getBoundingClientRect();
-      return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), found: 'please-release' };
+      releaseEl.click();
+      return 'please-release';
     }
-    // Last resort: first clickable order row
-    const row = document.querySelector('tr a, [class*="order"] a, tbody tr');
-    if (row) {
-      const rect = row.getBoundingClientRect();
-      return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), found: 'row' };
-    }
+    // Strategy 4: first row in the orders table
+    const firstRow = document.querySelector('tbody tr td a, table tr:not(:first-child) a');
+    if (firstRow) { firstRow.click(); return 'first-row'; }
     return null;
   }, orderNumber);
 
-  if (!box) {
-    console.log(`[SparkP2P] Could not find order ${orderNumber} on page`);
+  if (!found) {
+    console.log(`[SparkP2P] Could not find order ${orderNumber} in DOM`);
     return false;
   }
-
-  console.log(`[SparkP2P] Mouse moving to order (${box.x}, ${box.y}) via "${box.found}"`);
-  // Smooth human-like mouse movement
-  await page.mouse.move(box.x, box.y, { steps: 15 });
-  await new Promise(r => setTimeout(r, 200));
-  await page.mouse.click(box.x, box.y);
-  console.log(`[SparkP2P] Clicked order ${orderNumber}`);
+  console.log(`[SparkP2P] Clicked order ${orderNumber} via DOM (${found})`);
   return true;
 }
 
@@ -1407,112 +1443,93 @@ async function navigateToOrderDetail(page, orderNumber) {
 async function monitorActiveOrder(page) {
   console.log(`[SparkP2P] ── MONITORING ORDER ${activeOrderNumber} ──`);
 
-  await navigateToOrderDetail(page, activeOrderNumber);
-  await new Promise(r => setTimeout(r, 1500));
+  // Navigate to the order detail page via the orders list (DOM click)
+  await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
+    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 3000));
 
-  // ── Use AI vision to read the order state ──
-  const screenshot = await page.screenshot({ type: 'jpeg', quality: 80 });
-  const ai = await aiScanner.analyzeScreenshot(screenshot, `
-    This is a Binance P2P order detail page for a SELL order (I am selling USDT).
-    Look carefully at the entire page and tell me:
-    {
-      "status": one of "waiting_for_payment" | "buyer_paid" | "completed" | "cancelled" | "releasing" | "unknown",
-      "has_release_button": true/false,
-      "has_confirm_receipt_button": true/false,
-      "release_button_text": "exact text on the release button or null",
-      "buyer_has_paid_indicator": true/false,
-      "order_amount_fiat": number or null,
-      "latest_chat_message": "text of the most recent chat message from the buyer, or null",
-      "chat_needs_reply": true/false
-    }
-    Key signals:
-    - "waiting_for_payment" = buyer has NOT paid yet, page says something like "Waiting for buyer's payment"
-    - "buyer_paid" = buyer clicked "Transferred, Notify Seller" — look for green checkmark, "Payment completed" label, or a yellow/green "Release Crypto" button
-    - "completed" = order is finished, shows "Completed" or "Order Completed" prominently
-    - "cancelled" = shows "Cancelled" or "Appeal" state
-    - "releasing" = security verification dialog is open (OTP input boxes visible)
-  `);
-
-  // Fallback to text-based detection if AI unavailable
-  const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
-  const lower = pageText.toLowerCase();
-
-  let status = ai?.status || 'unknown';
-  if (status === 'unknown') {
-    if (lower.includes('cancelled') || lower.includes('canceled')) status = 'cancelled';
-    else if (lower.includes('completed') || lower.includes('order completed')) status = 'completed';
-    else if (lower.includes('confirm receipt') || lower.includes('buyer has paid') ||
-             lower.includes('payment completed') || lower.includes('has made payment')) status = 'buyer_paid';
-    else status = 'waiting_for_payment';
-  }
-  console.log(`[SparkP2P] Order ${activeOrderNumber} AI status: ${status} (release_btn:${ai?.has_release_button}, paid:${ai?.buyer_has_paid_indicator})`);
-
-  // ── Handle each state ──
-  if (status === 'cancelled') {
-    console.log(`[SparkP2P] Order ${activeOrderNumber} CANCELLED — stopping monitoring`);
-    await fetch(`${API_BASE}/ext/report-orders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [activeOrderNumber] }),
-    }).catch(() => {});
+  const clicked = await clickOrderWithMouse(page, activeOrderNumber);
+  if (!clicked) {
+    console.log(`[SparkP2P] Order ${activeOrderNumber} not found on orders list — may be complete or cancelled`);
     activeOrderNumber = null;
     activeOrderFiatAmount = 0;
     return;
   }
 
-  if (status === 'completed') {
-    console.log(`[SparkP2P] Order ${activeOrderNumber} COMPLETED — rescanning wallet`);
-    activeOrderNumber = null;
-    activeOrderFiatAmount = 0;
+  // Wait for order detail to load then use Claude Vision
+  await new Promise(r => setTimeout(r, 5000));
+  await takeScreenshot(`monitor_${activeOrderNumber}`, page);
+
+  // Vision with retry
+  let info = { screen: 'unknown' };
+  for (let i = 1; i <= 3; i++) {
+    info = await analyzePageWithVision(page);
+    console.log(`[SparkP2P] Monitor vision attempt ${i}: ${info.screen}`);
+    if (info.screen !== 'unknown') break;
+    await new Promise(r => setTimeout(r, 3000));
+  }
+
+  const screen = info.screen;
+
+  if (screen === 'order_complete') {
+    console.log(`[SparkP2P] Order ${activeOrderNumber} COMPLETED`);
+    activeOrderNumber = null; activeOrderFiatAmount = 0;
     const balances = await scanWalletBalances(page);
     await uploadBalances(balances);
     return;
   }
 
-  if (status === 'buyer_paid' || ai?.has_release_button || ai?.buyer_has_paid_indicator) {
-    console.log(`[SparkP2P] Order ${activeOrderNumber} — Binance shows PAID. Verifying M-Pesa...`);
-    const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount);
+  if (screen === 'awaiting_payment' || screen === 'payment_processing') {
+    console.log(`[SparkP2P] Order ${activeOrderNumber} still waiting for buyer payment`);
+    return; // Keep monitoring next poll
+  }
+
+  if (screen === 'verify_payment') {
+    console.log(`[SparkP2P] Order ${activeOrderNumber} PAID — verifying M-Pesa...`);
+    const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount || info.fiat_amount_kes, page);
     if (verified) {
-      console.log(`[SparkP2P] ✅ M-Pesa + Binance both confirmed — releasing order ${activeOrderNumber}`);
-      // Pass AI context (release button text) to execAction
-      await execAction({
-        action: 'release',
-        order_number: activeOrderNumber,
-        message: 'Payment confirmed. Releasing crypto now.',
-        release_button_text: ai?.release_button_text || null,
-      });
-      await new Promise(r => setTimeout(r, 5000));
-      activeOrderNumber = null;
-      activeOrderFiatAmount = 0;
+      console.log(`[SparkP2P] ✅ M-Pesa confirmed — releasing via vision`);
+      await releaseWithVision(page, activeOrderNumber, { message: 'Payment confirmed. Releasing crypto now.' });
+      activeOrderNumber = null; activeOrderFiatAmount = 0;
       const balances = await scanWalletBalances(page);
       await uploadBalances(balances);
     } else {
-      console.log(`[SparkP2P] ⚠️  Binance shows PAID but M-Pesa NOT confirmed — holding, retry in 20s`);
+      console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — holding`);
     }
     return;
   }
 
-  // ── Also check VPS for M-Pesa confirmation arriving before buyer clicks Paid ──
-  const pendingRes = await fetch(`${API_BASE}/ext/pending-actions`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  }).catch(() => null);
-  if (pendingRes?.ok) {
-    const { actions } = await pendingRes.json().catch(() => ({ actions: [] }));
-    for (const a of (actions || [])) {
-      if (a.action === 'release' && a.order_number === activeOrderNumber) {
-        console.log(`[SparkP2P] VPS confirmed M-Pesa — releasing order ${activeOrderNumber}`);
-        await execAction({ ...a, release_button_text: ai?.release_button_text || null });
-        await new Promise(r => setTimeout(r, 5000));
-        activeOrderNumber = null;
-        activeOrderFiatAmount = 0;
-        const balances = await scanWalletBalances(page);
-        await uploadBalances(balances);
-        return;
-      }
-    }
+  // Mid-release states — jump straight into vision release loop
+  if (['confirm_release_modal','passkey_failed','security_verification','totp_input','email_otp_input'].includes(screen)) {
+    console.log(`[SparkP2P] Order ${activeOrderNumber} mid-release (${screen}) — continuing`);
+    await releaseWithVision(page, activeOrderNumber, {});
+    activeOrderNumber = null; activeOrderFiatAmount = 0;
+    return;
   }
 
-  console.log(`[SparkP2P] Order ${activeOrderNumber} still PENDING — rechecking in 20s`);
+  // DOM text fallback when vision returns unknown
+  const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
+  const lower = pageText.toLowerCase();
+  if (lower.includes('cancelled') || lower.includes('canceled')) {
+    console.log(`[SparkP2P] Order ${activeOrderNumber} CANCELLED`);
+    await fetch(`${API_BASE}/ext/report-orders`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [activeOrderNumber] }),
+    }).catch(() => {});
+    activeOrderNumber = null; activeOrderFiatAmount = 0;
+    return;
+  }
+  if (lower.includes('verify payment') || lower.includes('payment received') || lower.includes('confirm payment')) {
+    console.log(`[SparkP2P] DOM text indicates payment received — checking M-Pesa`);
+    const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount, page);
+    if (verified) {
+      await releaseWithVision(page, activeOrderNumber, { message: 'Payment confirmed. Releasing crypto now.' });
+      activeOrderNumber = null; activeOrderFiatAmount = 0;
+    }
+    return;
+  }
+
+  console.log(`[SparkP2P] Order ${activeOrderNumber} screen: ${screen} — rechecking next poll`);
 }
 
 // ═══════════════════════════════════════════════════════════
