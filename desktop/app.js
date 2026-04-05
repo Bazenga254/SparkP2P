@@ -1594,6 +1594,10 @@ async function monitorActiveOrder(page) {
         await new Promise(r => setTimeout(r, 4000));
       }
 
+      // Scroll to bottom so Payment Received button is visible
+      await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+      await new Promise(r => setTimeout(r, 1000));
+
       // Click Payment Received directly on the order detail page
       const clicked = await clickButton(page, 'Payment Received', 'payment received');
       console.log(`[SparkP2P] Payment Received clicked: ${clicked}`);
