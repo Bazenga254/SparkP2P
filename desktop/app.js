@@ -1344,7 +1344,12 @@ async function idleScan(page) {
   const res = await fetch(`${API_BASE}/ext/report-orders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    body: JSON.stringify({ sell_orders: orders.sell.map(norm), buy_orders: orders.buy.map(norm), cancelled_order_numbers: orders.cancelled || [] }),
+    body: JSON.stringify({
+        sell_orders: orders.sell.map(norm),
+        buy_orders: orders.buy.map(norm),
+        cancelled_order_numbers: orders.cancelled || [],
+        active_order_numbers: activeOrderNumber ? [activeOrderNumber] : [],
+      }),
   }).catch(() => null);
   if (res?.ok) {
     const { actions } = await res.json().catch(() => ({ actions: [] }));

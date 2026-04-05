@@ -57,6 +57,7 @@ class ReportOrdersRequest(BaseModel):
     sell_orders: list[BinanceOrderData] = []
     buy_orders: list[BinanceOrderData] = []
     cancelled_order_numbers: list[str] = []  # Order numbers from Binance Cancelled history tab
+    active_order_numbers: list[str] = []     # Orders bot is actively processing (never auto-cancel these)
 
 
 class ActionItem(BaseModel):
@@ -124,7 +125,9 @@ async def report_orders(
 
     # Also auto-cancel PENDING orders absent from the active list for >3 minutes
     # (fallback in case the cancelled tab scan misses something)
+    # Never auto-cancel orders the bot is actively processing on the order detail page
     reported_numbers = {o.orderNumber for o in data.sell_orders + data.buy_orders}
+    protected_numbers = set(data.active_order_numbers)
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
     stale_result = await db.execute(
         select(Order).where(
@@ -134,12 +137,27 @@ async def report_orders(
         )
     )
     for order in stale_result.scalars().all():
-        if order.binance_order_number not in reported_numbers:
+        if order.binance_order_number not in reported_numbers and \
+           order.binance_order_number not in protected_numbers:
             order.status = OrderStatus.CANCELLED
             logger.info(
                 f"Order {order.binance_order_number} auto-cancelled "
                 f"(absent from bot report for trader {trader.id})"
             )
+
+    # Reactivate any order the bot is actively processing that got wrongly cancelled
+    for order_number in protected_numbers:
+        react_result = await db.execute(
+            select(Order).where(
+                Order.trader_id == trader.id,
+                Order.binance_order_number == order_number,
+                Order.status == OrderStatus.CANCELLED,
+            )
+        )
+        reactivate = react_result.scalar_one_or_none()
+        if reactivate:
+            reactivate.status = OrderStatus.PENDING
+            logger.info(f"Order {order_number} reactivated — bot is actively processing it on Binance")
 
     # Update last sync timestamp — used by frontend to detect initial scan complete
     trader.last_extension_sync = datetime.now(timezone.utc)
@@ -340,7 +358,32 @@ async def verify_payment(
                     "payer_name": direct_payment.sender_name,
                 }
 
-    # ── Step 2: Fall back to order-status check ───────────────────────────────
+    # ── Step 2: Fiat-amount + time-window fallback ────────────────────────────
+    # If we have a chat code but it's not in our DB yet (Safaricom callback pending),
+    # also try matching by amount received in the last 30 minutes
+    if data.mpesa_codes_from_chat and data.fiat_amount:
+        window = datetime.now(timezone.utc) - timedelta(minutes=30)
+        amount_result = await db.execute(
+            select(Payment).where(
+                Payment.trader_id == trader.id,
+                Payment.status == PaymentStatus.COMPLETED,
+                Payment.amount.between(data.fiat_amount - 5, data.fiat_amount + 5),
+                Payment.created_at >= window,
+            ).order_by(Payment.id.desc())
+        )
+        amount_payment = amount_result.scalar_one_or_none()
+        if amount_payment:
+            logger.info(f"M-Pesa payment matched by amount KES {data.fiat_amount} for order {data.binance_order_number}")
+            return {
+                "verified": True,
+                "reason": f"M-Pesa payment matched by amount KES {data.fiat_amount}",
+                "mpesa_receipt": amount_payment.mpesa_transaction_id,
+                "amount_received": amount_payment.amount,
+                "payer_phone": amount_payment.phone,
+                "payer_name": amount_payment.sender_name,
+            }
+
+    # ── Step 3: Fall back to order-status check ───────────────────────────────
     result = await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,
