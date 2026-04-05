@@ -1578,7 +1578,15 @@ async function monitorActiveOrder(page) {
     const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount || info.fiat_amount_kes, page);
     if (verified) {
       console.log(`[SparkP2P] ✅ M-Pesa confirmed — releasing via vision`);
-      await releaseWithVision(page, activeOrderNumber, { message: 'Payment confirmed. Releasing crypto now.' });
+      // Close any open lightbox and let the page settle before clicking Payment Received
+      await page.keyboard.press('Escape').catch(() => {});
+      await new Promise(r => setTimeout(r, 1000));
+      // Click Payment Received directly — we already know we're on verify_payment screen
+      const clicked = await clickButton(page, 'Payment Received', 'payment received');
+      console.log(`[SparkP2P] Payment Received clicked: ${clicked}`);
+      await new Promise(r => setTimeout(r, 2000));
+      // Continue the full release flow (confirm modal, TOTP, email OTP, etc.)
+      await releaseWithVision(page, activeOrderNumber, {});
       activeOrderNumber = null; activeOrderFiatAmount = 0;
       const balances = await scanWalletBalances(page);
       await uploadBalances(balances);
@@ -1612,7 +1620,11 @@ async function monitorActiveOrder(page) {
     console.log(`[SparkP2P] DOM text indicates payment received — checking M-Pesa`);
     const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount, page);
     if (verified) {
-      await releaseWithVision(page, activeOrderNumber, { message: 'Payment confirmed. Releasing crypto now.' });
+      await page.keyboard.press('Escape').catch(() => {});
+      await new Promise(r => setTimeout(r, 1000));
+      await clickButton(page, 'Payment Received', 'payment received');
+      await new Promise(r => setTimeout(r, 2000));
+      await releaseWithVision(page, activeOrderNumber, {});
       activeOrderNumber = null; activeOrderFiatAmount = 0;
     }
     return;
