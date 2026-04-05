@@ -423,6 +423,270 @@ class BinanceBrowserSession:
         except Exception:
             return []
 
+    async def release_with_vision(
+        self,
+        order_number: str,
+        totp_secret: Optional[str] = None,
+        gmail_page=None,
+        api_key: str = None,
+        known_gmail_ids: set = None,
+    ) -> dict:
+        """
+        Navigate to an order page and release it using Claude Vision at each step.
+
+        Instead of fragile CSS selectors, Claude reads each screenshot like a human
+        and returns the exact screen state + correct next action. Prevents misreads
+        like "7 USDT" being parsed as "7,000 USDT".
+
+        Steps handled automatically:
+          1. awaiting_payment   → wait + poll
+          2. verify_payment     → click Payment Received
+          3. confirm_release_modal → tick checkbox → click Confirm Release
+          4. passkey_failed     → click My Passkeys Are Not Available
+          5. security_verification → click Authenticator App → then Email
+          6. totp_input         → generate code via pyotp → fill + submit
+          7. email_otp_input    → scan Gmail → fill + submit
+          8. order_complete     → done ✓
+        """
+        import base64
+        import pyotp
+        from app.services.binance.vision import analyze_page
+
+        if not api_key:
+            from app.core.config import settings
+            api_key = settings.ANTHROPIC_API_KEY
+
+        try:
+            order_url = f"https://p2p.binance.com/en/fiatOrderDetail?orderNo={order_number}"
+            await self.page.goto(order_url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3)
+
+            MAX_STEPS = 20
+            step = 0
+            last_screen = "unknown"
+
+            while step < MAX_STEPS:
+                step += 1
+
+                # Screenshot → Claude Vision
+                raw = await self.page.screenshot(type="jpeg", quality=85)
+                b64 = base64.b64encode(raw).decode("utf-8")
+                info = await analyze_page(b64, api_key)
+                screen = info.get("screen", "unknown")
+                last_screen = screen
+
+                logger.info(
+                    f"[Vision] Trader {self.trader_id} | Order {order_number} | "
+                    f"Step {step} | Screen: {screen} | "
+                    f"USDT: {info.get('usdt_amount')} | KES: {info.get('fiat_amount_kes')}"
+                )
+
+                # ── Order complete ──────────────────────────────────────────
+                if screen == "order_complete" or info.get("sale_successful"):
+                    logger.info(f"[Vision] Order {order_number} released successfully!")
+                    return {
+                        "success": True,
+                        "screen": screen,
+                        "usdt_amount": info.get("usdt_amount"),
+                        "fiat_amount_kes": info.get("fiat_amount_kes"),
+                        "buyer_name": info.get("buyer_name"),
+                    }
+
+                # ── Awaiting payment — poll until buyer pays ────────────────
+                if screen == "awaiting_payment":
+                    await asyncio.sleep(15)
+                    await self.page.reload(wait_until="domcontentloaded")
+                    await asyncio.sleep(3)
+                    continue
+
+                # ── Verify payment — click Payment Received ─────────────────
+                if screen == "verify_payment":
+                    clicked = False
+                    for selector in [
+                        'button:has-text("Payment Received")',
+                        'button:has-text("payment received")',
+                    ]:
+                        btn = self.page.locator(selector)
+                        if await btn.count() > 0:
+                            await btn.first.click()
+                            clicked = True
+                            break
+                    if not clicked:
+                        await self.page.get_by_role("button", name="Payment Received").click()
+                    await asyncio.sleep(2)
+                    continue
+
+                # ── Confirm release modal — checkbox + Confirm Release ───────
+                if screen == "confirm_release_modal":
+                    if info.get("checkbox_visible") and not info.get("checkbox_checked"):
+                        cb = self.page.locator('input[type="checkbox"]').first
+                        if await cb.count() > 0:
+                            await cb.click()
+                            await asyncio.sleep(1)
+                    for selector in [
+                        'button:has-text("Confirm Release")',
+                        'button:has-text("confirm release")',
+                    ]:
+                        btn = self.page.locator(selector)
+                        if await btn.count() > 0:
+                            await btn.first.click()
+                            break
+                    await asyncio.sleep(2)
+                    continue
+
+                # ── Passkey failed — click "My Passkeys Are Not Available" ──
+                if screen == "passkey_failed":
+                    for selector in [
+                        'text="My Passkeys Are Not Available"',
+                        ':has-text("My Passkeys Are Not Available")',
+                        'a:has-text("Passkeys")',
+                    ]:
+                        link = self.page.locator(selector).first
+                        if await link.count() > 0:
+                            await link.click()
+                            break
+                    await asyncio.sleep(2)
+                    continue
+
+                # ── Security verification 0/2 or 1/2 ───────────────────────
+                if screen == "security_verification":
+                    pending = info.get("pending_verifications", [])
+                    completed = info.get("completed_verifications", [])
+
+                    if "Authenticator App" in pending:
+                        for selector in [
+                            'text="Authenticator App"',
+                            ':has-text("Authenticator App")',
+                        ]:
+                            btn = self.page.locator(selector).first
+                            if await btn.count() > 0:
+                                await btn.click()
+                                break
+                        await asyncio.sleep(2)
+                        continue
+
+                    if "Email" in pending and "Authenticator App" in completed:
+                        for selector in ['text="Email"', ':has-text("Email")']:
+                            btn = self.page.locator(selector).first
+                            if await btn.count() > 0:
+                                await btn.click()
+                                break
+                        await asyncio.sleep(2)
+                        continue
+
+                # ── TOTP input — generate via pyotp ────────────────────────
+                if screen == "totp_input":
+                    if not totp_secret:
+                        logger.error(f"TOTP required but not configured for trader {self.trader_id}")
+                        return {"success": False, "error": "TOTP required but not configured"}
+                    code = pyotp.TOTP(totp_secret).now()
+                    logger.info(f"[Vision] Auto-filling TOTP for trader {self.trader_id}")
+                    inp = self.page.locator(
+                        'input[maxlength="6"], input[type="tel"], '
+                        'input[placeholder*="code"], input[placeholder*="Code"]'
+                    ).first
+                    if await inp.count() > 0:
+                        await inp.fill(code)
+                        await asyncio.sleep(0.5)
+                    for selector in [
+                        'button:has-text("Confirm")',
+                        'button:has-text("Submit")',
+                        'button:has-text("Verify")',
+                        'button[type="submit"]',
+                    ]:
+                        btn = self.page.locator(selector).first
+                        if await btn.count() > 0:
+                            await btn.click()
+                            break
+                    await asyncio.sleep(2)
+                    continue
+
+                # ── Email OTP — scan Gmail tab ──────────────────────────────
+                if screen == "email_otp_input":
+                    if not gmail_page:
+                        logger.error(f"Email OTP required but no Gmail tab for trader {self.trader_id}")
+                        return {"success": False, "error": "Email OTP required but Gmail not connected"}
+
+                    otp = await self._scan_gmail_for_otp(gmail_page, known_ids=known_gmail_ids or set())
+                    if not otp:
+                        logger.error(f"Gmail OTP scan timed out for trader {self.trader_id}")
+                        return {"success": False, "error": "Email OTP not found in Gmail"}
+
+                    logger.info(f"[Vision] Auto-filling email OTP for trader {self.trader_id}")
+                    inp = self.page.locator(
+                        'input[maxlength="6"], input[type="tel"], '
+                        'input[placeholder*="code"], input[placeholder*="Code"]'
+                    ).first
+                    if await inp.count() > 0:
+                        await inp.fill(otp)
+                        await asyncio.sleep(0.5)
+                    for selector in [
+                        'button:has-text("Confirm")',
+                        'button:has-text("Submit")',
+                        'button:has-text("Verify")',
+                        'button[type="submit"]',
+                    ]:
+                        btn = self.page.locator(selector).first
+                        if await btn.count() > 0:
+                            await btn.click()
+                            break
+                    await asyncio.sleep(2)
+                    continue
+
+                # ── Unknown — wait and retry ────────────────────────────────
+                logger.warning(f"[Vision] Unknown screen for order {order_number}, retrying...")
+                await asyncio.sleep(5)
+                await self.page.reload(wait_until="domcontentloaded")
+                await asyncio.sleep(3)
+
+            logger.error(f"[Vision] Order {order_number} exceeded {MAX_STEPS} steps")
+            return {"success": False, "error": f"Exceeded {MAX_STEPS} steps", "last_screen": last_screen}
+
+        except Exception as e:
+            logger.error(f"[Vision] release_with_vision failed for {order_number}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _scan_gmail_for_otp(self, gmail_page, known_ids: set = None, max_wait: int = 60) -> Optional[str]:
+        """Scan an open Gmail tab for a new Binance OTP email and extract the 6-digit code."""
+        import re as re_mod
+        if known_ids is None:
+            known_ids = set()
+        try:
+            await gmail_page.bring_to_front()
+            search_url = "https://mail.google.com/mail/u/0/#search/from%3A(binance)"
+            waited = 0
+            while waited < max_wait:
+                await gmail_page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(2)
+                rows = gmail_page.locator("tr.zA")
+                count = await rows.count()
+                for i in range(count):
+                    row = rows.nth(i)
+                    tid = await row.get_attribute("id")
+                    if tid in known_ids:
+                        continue
+                    await row.click()
+                    await asyncio.sleep(2)
+                    body = ""
+                    for sel in [".a3s.aiL", "[data-message-id]", ".ii.gt"]:
+                        el = gmail_page.locator(sel).first
+                        if await el.count() > 0:
+                            body = await el.text_content() or ""
+                            if body:
+                                break
+                    matches = re_mod.findall(r"\b(\d{6})\b", body)
+                    if matches:
+                        await self.page.bring_to_front()
+                        return matches[0]
+                await asyncio.sleep(4)
+                waited += 4
+            await self.page.bring_to_front()
+            return None
+        except Exception as e:
+            logger.error(f"Gmail OTP scan failed: {e}")
+            await self.page.bring_to_front()
+            return None
+
     def get_status(self) -> dict:
         """Get session status."""
         return {
