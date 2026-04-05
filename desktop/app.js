@@ -470,13 +470,17 @@ async function fetchAndApplyCredentials() {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (!res.ok) return;
-    const { verify_method, fund_password, totp_secret } = await res.json();
+    const { verify_method, fund_password, totp_secret, anthropic_api_key } = await res.json();
     if (verify_method === 'fund_password' && fund_password) {
       traderPin = fund_password;
       console.log('[SparkP2P] Fund password loaded from backend');
     } else if (verify_method === 'totp' && totp_secret) {
       totpSecret = totp_secret.toUpperCase().replace(/\s/g, '');
       console.log('[SparkP2P] TOTP secret loaded from backend');
+    }
+    if (anthropic_api_key) {
+      anthropicApiKey = anthropic_api_key;
+      console.log('[SparkP2P] Claude Vision API key loaded from backend');
     }
   } catch (e) {
     console.log('[SparkP2P] Could not fetch credentials:', e.message?.substring(0, 40));

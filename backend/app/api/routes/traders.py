@@ -801,6 +801,7 @@ async def get_desktop_credentials(
         "verify_method": trader.binance_verify_method or "none",
         "fund_password": fund_password,
         "totp_secret": totp_secret,
+        "anthropic_api_key": settings.ANTHROPIC_API_KEY,
     }
 
 
