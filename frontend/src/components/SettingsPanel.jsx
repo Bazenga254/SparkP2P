@@ -271,16 +271,40 @@ export default function SettingsPanel({ profile, onUpdate }) {
               <p style={{ fontSize: 13, color: '#9ca3af', marginTop: 8 }}>
                 Your Binance session is saved. The bot can trade on your behalf 24/7.
               </p>
-              <button
-                onClick={handleConnectBinance}
-                style={{
-                  marginTop: 12, padding: '10px 20px', borderRadius: 8,
-                  border: '1px solid #f59e0b', background: 'transparent',
-                  color: '#f59e0b', cursor: 'pointer', fontSize: 13,
-                }}
-              >
-                Re-connect (if session expired)
-              </button>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                <button
+                  onClick={handleConnectBinance}
+                  style={{
+                    padding: '10px 20px', borderRadius: 8,
+                    border: '1px solid #f59e0b', background: 'transparent',
+                    color: '#f59e0b', cursor: 'pointer', fontSize: 13,
+                  }}
+                >
+                  Re-connect (if session expired)
+                </button>
+                <button
+                  onClick={() => { window.sparkp2p?.unlockBrowser(); window.sparkp2p?.pauseNavigation(); }}
+                  style={{
+                    padding: '10px 20px', borderRadius: 8,
+                    border: '1px solid #6b7280', background: 'transparent',
+                    color: '#9ca3af', cursor: 'pointer', fontSize: 13,
+                  }}
+                  title="Stop all bot navigation so you can use Chrome freely"
+                >
+                  Pause Bot
+                </button>
+                <button
+                  onClick={() => { window.sparkp2p?.lockBrowser(); window.sparkp2p?.resumeNavigation(); }}
+                  style={{
+                    padding: '10px 20px', borderRadius: 8,
+                    border: '1px solid #6b7280', background: 'transparent',
+                    color: '#9ca3af', cursor: 'pointer', fontSize: 13,
+                  }}
+                  title="Resume bot after manual interaction"
+                >
+                  Resume Bot
+                </button>
+              </div>
             </div>
           ) : (
             <div style={{
@@ -316,6 +340,56 @@ export default function SettingsPanel({ profile, onUpdate }) {
                   Connect Binance
                 </button>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Gmail Account */}
+      {activeSection === 'binance' && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3 style={{ marginBottom: 4 }}>Gmail Account</h3>
+          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
+            Used for email OTP verification during order release. The desktop app opens Gmail alongside Binance automatically.
+          </p>
+          {gmailConfigured ? (
+            <div className="name-verify-box match">
+              <h4>Gmail Connected</h4>
+              <p style={{ fontSize: 13, color: '#9ca3af', marginTop: 8 }}>
+                Gmail session is active. The bot will read OTP codes automatically during order release.
+              </p>
+              <button
+                onClick={() => {
+                  window.sparkp2p?.openGmailTab();
+                }}
+                style={{
+                  marginTop: 12, padding: '10px 20px', borderRadius: 8,
+                  border: '1px solid #f59e0b', background: 'transparent',
+                  color: '#f59e0b', cursor: 'pointer', fontSize: 13,
+                }}
+              >
+                Re-connect Gmail (if session expired)
+              </button>
+            </div>
+          ) : (
+            <div style={{
+              textAlign: 'center', padding: '30px 20px',
+              background: 'var(--bg)', borderRadius: 12,
+              border: '1px dashed var(--border)',
+            }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>✉️</div>
+              <h4 style={{ marginBottom: 8 }}>Link Your Gmail Account</h4>
+              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20 }}>
+                Opens Gmail in the bot's Chrome window. Log in once and the session is saved permanently.
+              </p>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  window.sparkp2p?.openGmailTab();
+                }}
+              >
+                Connect Gmail
+              </button>
             </div>
           )}
         </div>
@@ -448,35 +522,6 @@ export default function SettingsPanel({ profile, onUpdate }) {
               >
                 {loading ? 'Saving...' : 'Save Verification Method'}
               </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Gmail Account */}
-      {activeSection === 'binance' && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3 style={{ marginBottom: 4 }}>Gmail Account</h3>
-          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
-            The desktop app opens Gmail automatically when Binance connects and syncs the session every 1 minute. No login or password required.
-          </p>
-          {gmailConfigured ? (
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)',
-              borderRadius: 8, padding: '10px 14px',
-            }}>
-              <span style={{ fontSize: 18 }}>✓</span>
-              <span style={{ fontSize: 13, color: '#10b981' }}>Gmail session active — auto-synced from your browser</span>
-            </div>
-          ) : (
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)',
-              borderRadius: 8, padding: '10px 14px',
-            }}>
-              <span style={{ fontSize: 18 }}>⚠</span>
-              <span style={{ fontSize: 13, color: '#f59e0b' }}>Gmail not detected — open Gmail in Chrome and the extension will sync it automatically</span>
             </div>
           )}
         </div>

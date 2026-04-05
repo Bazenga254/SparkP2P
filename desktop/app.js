@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile, execSync } = require('child_process');
@@ -33,6 +33,7 @@ let totpSecret = null;   // Google Authenticator base32 secret — stored in mem
 let browserLocked = false;
 let lockFrameListener = null;
 let chromeProcess = null; // Child process reference for killing Chrome on quit
+let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
 let connectingBinance = false; // Prevents concurrent connectBinance() calls
 let scanningInProgress = false; // Prevents concurrent initialScan() calls
 let sessionStartTime = null;   // When Binance login was last confirmed
@@ -202,14 +203,47 @@ function createTray() {
   try {
     tray = new Tray(path.join(__dirname, 'icon.png'));
     tray.setToolTip('SparkP2P');
-    tray.setContextMenu(Menu.buildFromTemplate([
+
+    const buildTrayMenu = () => Menu.buildFromTemplate([
       { label: 'Open SparkP2P', click: () => mainWindow.show() },
       { type: 'separator' },
       { label: 'Connect Binance', click: () => connectBinance() },
       { type: 'separator' },
+      {
+        label: pauseNavigation ? '▶ Resume Bot (re-enable navigation)' : '⏸ Pause Bot (free Chrome)',
+        click: async () => {
+          if (pauseNavigation) {
+            pauseNavigation = false;
+            await lockChromeBrowser();
+            console.log('[SparkP2P] Navigation RESUMED via tray');
+          } else {
+            pauseNavigation = true;
+            await unlockChromeBrowser();
+            console.log('[SparkP2P] Navigation PAUSED via tray — Chrome is free');
+          }
+          tray.setContextMenu(buildTrayMenu());
+        },
+      },
+      { type: 'separator' },
       { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } },
-    ]));
+    ]);
+
+    tray.setContextMenu(buildTrayMenu());
     tray.on('double-click', () => mainWindow.show());
+
+    // Global shortcut Ctrl+Shift+P — pause/resume bot from anywhere
+    globalShortcut.register('CommandOrControl+Shift+P', async () => {
+      if (pauseNavigation) {
+        pauseNavigation = false;
+        await lockChromeBrowser();
+        console.log('[SparkP2P] Bot RESUMED via shortcut');
+      } else {
+        pauseNavigation = true;
+        await unlockChromeBrowser();
+        console.log('[SparkP2P] Bot PAUSED via shortcut — Chrome is free');
+      }
+      tray.setContextMenu(buildTrayMenu());
+    });
   } catch (e) {}
 }
 
@@ -293,19 +327,31 @@ async function getPage(urlMatch) {
 }
 
 async function openGmailTab() {
-  if (!browser) return;
+  if (!browser) return false;
   try {
-    // Reuse existing Gmail tab if still open
+    // Reuse existing Gmail tab if already open
     const pages = await browser.pages();
-    const existing = pages.find(p => p.url().includes('mail.google.com'));
-    if (existing) { gmailPage = existing; console.log('[SparkP2P] Gmail tab already open'); return; }
+    const existing = pages.find(p => p.url().includes('mail.google.com') || p.url().includes('accounts.google.com/'));
+    if (existing) {
+      gmailPage = existing;
+      const loggedIn = !existing.url().includes('accounts.google.com');
+      console.log(`[SparkP2P] Gmail tab found — ${loggedIn ? 'logged in' : 'needs login'}`);
+      gmailPage.on('close', () => { gmailPage = null; });
+      return loggedIn;
+    }
+    // Open Gmail tab — always show it, even if login is required
+    // The chrome-binance profile starts fresh, user may need to log in once
     gmailPage = await browser.newPage();
-    await gmailPage.goto('https://mail.google.com/mail/u/0/#inbox', { waitUntil: 'domcontentloaded', timeout: 20000 });
-    console.log('[SparkP2P] Gmail tab opened');
-    gmailPage.on('close', () => { gmailPage = null; console.log('[SparkP2P] Gmail tab closed'); });
+    await gmailPage.goto('https://mail.google.com/mail/u/0/#inbox', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    const finalUrl = gmailPage.url();
+    const loggedIn = !finalUrl.includes('accounts.google.com') && !finalUrl.includes('/signin');
+    console.log(`[SparkP2P] Gmail tab opened — ${loggedIn ? 'logged in' : 'not logged in (user can sign in now)'}`);
+    gmailPage.on('close', () => { gmailPage = null; });
+    return loggedIn;
   } catch (e) {
     console.error('[SparkP2P] Could not open Gmail tab:', e.message?.substring(0, 60));
     gmailPage = null;
+    return false;
   }
 }
 
@@ -438,12 +484,20 @@ async function connectBinance() {
         fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
       }
 
-      // Sync cookies to mark as connected on VPS
+      // Sync cookies immediately — don't block on Gmail
       await syncCookies();
       connectingBinance = false;
 
-      // Open Gmail tab alongside Binance — stays open for OTP scanning
-      await openGmailTab();
+      // Open Gmail tab in background — doesn't block connect flow
+      // If Chrome profile has Gmail logged in it will be ready for OTP scanning
+      openGmailTab().then(ok => {
+        if (ok) {
+          console.log('[SparkP2P] Gmail ready for OTP scanning');
+          syncCookies(); // Re-sync now that Gmail cookies are available
+        } else {
+          console.log('[SparkP2P] Gmail not detected — open Gmail in Chrome manually if needed');
+        }
+      }).catch(() => {});
 
       // Block window.open() on all Binance pages to prevent popup tabs
       const mainPage = await getPage();
@@ -708,8 +762,33 @@ async function initialScan() {
   console.log('[SparkP2P] Verifying trader identity...');
   await verifyTraderIdentity(page);
 
+  // Step 5: Resume any in-progress orders from before restart
+  await resumeInProgressOrders();
+
   console.log('[SparkP2P] === INITIAL SCAN COMPLETE ===');
   scanningInProgress = false;
+}
+
+async function resumeInProgressOrders() {
+  if (!token) return;
+  try {
+    console.log('[SparkP2P] Checking for in-progress orders to resume...');
+    const res = await fetch(`${API_BASE}/ext/pending-actions`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    }).catch(() => null);
+    if (!res?.ok) return;
+
+    const { actions } = await res.json().catch(() => ({ actions: [] }));
+    const releaseAction = (actions || []).find(a => a.action === 'release' && a.order_number);
+    if (!releaseAction) { console.log('[SparkP2P] No in-progress orders to resume'); return; }
+
+    // Set activeOrderNumber — the poll cycle will route to monitorActiveOrder automatically
+    console.log(`[SparkP2P] 🔄 Will resume order ${releaseAction.order_number} on first poll`);
+    activeOrderNumber = releaseAction.order_number;
+    activeOrderFiatAmount = releaseAction.fiat_amount || 0;
+  } catch (e) {
+    console.error('[SparkP2P] resumeInProgressOrders error:', e.message?.substring(0, 60));
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -730,18 +809,22 @@ async function syncCookies() {
       full.push({ name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure, httpOnly: c.httpOnly });
     }
 
-    // Gmail cookies — captured from the same Chrome browser if user is logged into Gmail
+    // Gmail cookies — read directly from gmailPage tab (most reliable)
     let gmailCookies = null;
     try {
-      const gc = await page.cookies('https://mail.google.com', 'https://accounts.google.com', 'https://google.com');
-      if (gc.some(c => c.name === 'GMAIL_AT' || c.name === 'SID' || c.name === 'SSID')) {
-        gmailCookies = gc.map(c => ({
-          name: c.name, value: c.value, domain: c.domain, path: c.path,
-          secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite || 'no_restriction',
-        }));
-        console.log(`[SparkP2P] Gmail session detected — ${gmailCookies.length} cookies captured`);
+      const gp = gmailPage && !gmailPage.isClosed() ? gmailPage : null;
+      if (gp) {
+        const gc = await gp.cookies('https://mail.google.com', 'https://accounts.google.com', 'https://google.com');
+        // Accept any Google session cookie as proof of login
+        if (gc.length > 0 && gc.some(c => ['GMAIL_AT','SID','SSID','__Secure-1PSID','__Secure-3PSID','HSID','APISID'].includes(c.name))) {
+          gmailCookies = gc.map(c => ({
+            name: c.name, value: c.value, domain: c.domain, path: c.path,
+            secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite || 'no_restriction',
+          }));
+          console.log(`[SparkP2P] Gmail session detected — ${gmailCookies.length} cookies captured`);
+        }
       }
-    } catch (e) { /* Gmail not open — skip */ }
+    } catch (e) { /* gmailPage not ready — skip */ }
 
     await fetch(`${API_BASE}/traders/connect-binance`, {
       method: 'POST',
@@ -1013,7 +1096,7 @@ async function verifyMpesaPayment(orderNumber, fiatAmount) {
 }
 
 async function pollCycle() {
-  if (!pollerRunning || !token || !browser || scanningInProgress) return;
+  if (!pollerRunning || !token || !browser || scanningInProgress || pauseNavigation) return;
   scanningInProgress = true;
 
   try {
@@ -1120,14 +1203,59 @@ async function idleScan(page) {
 }
 
 // ── Focused order monitor — runs every 20s while an order is active ─────────
+async function navigateToOrderDetail(page, orderNumber) {
+  console.log(`[SparkP2P] Navigating to order ${orderNumber} via orders list`);
+  await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
+    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 3000));
+
+  // Find the element containing the order number and get its screen coordinates
+  const box = await page.evaluate((orderNo) => {
+    // Look for <a> link or any element whose text contains the order number
+    const candidates = [
+      ...Array.from(document.querySelectorAll('a')),
+      ...Array.from(document.querySelectorAll('span, td, div')),
+    ];
+    for (const el of candidates) {
+      if (el.textContent.replace(/\s/g, '').includes(orderNo)) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        }
+      }
+    }
+    // Fallback: find "Please release" text
+    const releaseEl = Array.from(document.querySelectorAll('*')).find(
+      el => el.children.length === 0 && el.textContent.trim() === 'Please release'
+    );
+    if (releaseEl) {
+      const rect = releaseEl.getBoundingClientRect();
+      if (rect.width > 0) return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+    return null;
+  }, orderNumber);
+
+  if (!box) {
+    console.error(`[SparkP2P] Could not find order ${orderNumber} on page`);
+    return false;
+  }
+
+  console.log(`[SparkP2P] Moving mouse to order at (${Math.round(box.x)}, ${Math.round(box.y)}) and clicking`);
+  await page.mouse.move(box.x, box.y, { steps: 10 }); // smooth move
+  await new Promise(r => setTimeout(r, 300));
+  await page.mouse.click(box.x, box.y);
+  await new Promise(r => setTimeout(r, 3000));
+
+  const finalUrl = page.url();
+  console.log(`[SparkP2P] Now on: ${finalUrl}`);
+  return true;
+}
+
 async function monitorActiveOrder(page) {
   console.log(`[SparkP2P] ── MONITORING ORDER ${activeOrderNumber} ──`);
 
-  // Navigate directly to the order detail page
-  await page.goto(`https://p2p.binance.com/en/fiatOrder?orderNo=${activeOrderNumber}`, {
-    waitUntil: 'networkidle2', timeout: 15000,
-  }).catch(() => {});
-  await new Promise(r => setTimeout(r, 3000));
+  await navigateToOrderDetail(page, activeOrderNumber);
+  await new Promise(r => setTimeout(r, 1500));
 
   // ── Use AI vision to read the order state ──
   const screenshot = await page.screenshot({ type: 'jpeg', quality: 80 });
@@ -1471,6 +1599,26 @@ async function readEmailOTP(binancePage = null) {
     await openGmailTab();
   }
   if (!gmailPage) { console.error('[SparkP2P] Could not open Gmail tab'); return null; }
+
+  // If Gmail tab is on login page, wait up to 60s for user to log in
+  const gmailUrl = gmailPage.url();
+  if (gmailUrl.includes('accounts.google.com') || gmailUrl.includes('/signin')) {
+    console.log('[SparkP2P] Gmail not logged in — waiting up to 60s for user to sign in...');
+    await gmailPage.bringToFront();
+    const loginDeadline = Date.now() + 60000;
+    while (Date.now() < loginDeadline) {
+      await new Promise(r => setTimeout(r, 2000));
+      const url = gmailPage.url();
+      if (!url.includes('accounts.google.com') && !url.includes('/signin')) {
+        console.log('[SparkP2P] Gmail login detected — proceeding with OTP read');
+        break;
+      }
+    }
+    if (gmailPage.url().includes('accounts.google.com')) {
+      console.error('[SparkP2P] Gmail login timeout — could not read OTP');
+      return null;
+    }
+  }
 
   try {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -1842,7 +1990,7 @@ Extract ALL data with perfect precision and identify the exact screen state.
 Return ONLY a valid JSON object — no markdown, no explanation, no code fences.
 
 {
-  "screen": "<awaiting_payment|verify_payment|confirm_release_modal|passkey_failed|security_verification|totp_input|email_otp_input|order_complete|unknown>",
+  "screen": "<awaiting_payment|payment_processing|verify_payment|confirm_release_modal|passkey_failed|security_verification|totp_input|email_otp_input|order_complete|unknown>",
   "order_number": "<exact order number string or null>",
   "buyer_name": "<exact full name or null>",
   "fiat_amount_kes": <KES amount as plain number e.g. 1000.00 — NEVER add zeros>,
@@ -1867,13 +2015,14 @@ CRITICAL NUMBER RULES — read every digit individually:
 
 Screen identification rules:
 - "Awaiting Buyer's Payment" with countdown timer → awaiting_payment
-- "Verify Payment" with Payment Received button → verify_payment
+- "Payment Processing" or "Processing Payment" or "Verifying Payment" or loading spinner with no action buttons → payment_processing
+- "Verify Payment" or "Payment Received" button visible → verify_payment
 - Modal saying "Received payment in your account?" with checkbox → confirm_release_modal
 - Modal saying "Verify with passkey" with "Verification failed" → passkey_failed
 - Modal saying "Security Verification Requirements" with 0/2 or 1/2 → security_verification
 - Input box specifically for Authenticator App code → totp_input
 - Input box specifically for Email verification code → email_otp_input
-- "Order Completed" or "Sale Successful" → order_complete`;
+- "Order Completed" or "Sale Successful" or "Released" → order_complete`;
 
 async function analyzePageWithVision(page) {
   if (!anthropicApiKey) {
@@ -1925,9 +2074,8 @@ async function releaseWithVision(page, orderNumber, action) {
   console.log(`[Vision] Starting vision-driven release for order ${orderNumber}`);
 
   try {
-    await page.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNumber}`,
-      { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 3000));
+    await navigateToOrderDetail(page, orderNumber);
+    await new Promise(r => setTimeout(r, 1500));
 
     // Send pre-release chat message if provided
     if (action.message) await sendChatMessage(page, action.message);
@@ -1953,6 +2101,15 @@ async function releaseWithVision(page, orderNumber, action) {
       if (screen === 'awaiting_payment') {
         console.log('[Vision] Awaiting buyer payment — polling in 15s...');
         await new Promise(r => setTimeout(r, 15000));
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+
+      // ── Payment processing — Binance verifying payment ──────
+      if (screen === 'payment_processing') {
+        console.log('[Vision] Payment processing — waiting 8s for Binance to complete...');
+        await new Promise(r => setTimeout(r, 8000));
         await page.reload({ waitUntil: 'domcontentloaded' });
         await new Promise(r => setTimeout(r, 3000));
         continue;
@@ -2048,8 +2205,21 @@ async function releaseWithVision(page, orderNumber, action) {
         continue;
       }
 
-      // ── Unknown — wait and reload ───────────────────────────
-      console.log(`[Vision] Unknown screen at step ${step} — reloading...`);
+      // ── Unknown — try common buttons first, then reload ─────
+      console.log(`[Vision] Unknown screen at step ${step} — trying common buttons...`);
+      // Log all visible buttons so we can debug what Binance is showing
+      const visibleButtons = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('button, [role="button"]'))
+          .map(b => b.textContent.trim()).filter(t => t.length > 0 && t.length < 50)
+      ).catch(() => []);
+      if (visibleButtons.length) console.log(`[Vision] Visible buttons: ${visibleButtons.join(' | ')}`);
+
+      // Try clicking "Payment Received" or "Release" in case vision misidentified the screen
+      const triedClick = await clickButton(page,
+        'Payment Received', 'Confirm Release', 'Release', 'Verify Payment', 'Confirm'
+      );
+      if (triedClick) { await new Promise(r => setTimeout(r, 2000)); continue; }
+
       await new Promise(r => setTimeout(r, 5000));
       await page.reload({ waitUntil: 'domcontentloaded' });
       await new Promise(r => setTimeout(r, 3000));
@@ -2073,8 +2243,12 @@ async function execAction(action) {
   console.log(`[SparkP2P] Executing: ${type} for order ${order_number}`);
 
   try {
-    // Navigate to the specific order page
-    const page = await navigateTo(`https://p2p.binance.com/en/fiatOrder?orderNo=${order_number}`);
+    // For release, let releaseWithVision handle navigation (uses fiatOrderDetail URL)
+    // For other actions, navigate to order page first
+    const orderUrl = type === 'release'
+      ? `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order_number}`
+      : `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order_number}`;
+    const page = await navigateTo(orderUrl);
     if (!page) return;
     await takeScreenshot(`Before ${type}: order ${order_number}`);
 
@@ -2257,6 +2431,23 @@ function norm(o) {
 
 // IPC
 ipcMain.handle('connect-binance', () => { connectBinance(); return { opened: true }; });
+ipcMain.handle('unlock-browser', async () => { await unlockChromeBrowser(); console.log('[SparkP2P] Browser manually unlocked'); return { ok: true }; });
+ipcMain.handle('lock-browser', async () => { const p = await getPage(); if (p) await lockChromeBrowser(); return { ok: true }; });
+ipcMain.handle('pause-navigation', () => { pauseNavigation = true; console.log('[SparkP2P] Navigation PAUSED — Chrome is free'); return { ok: true }; });
+ipcMain.handle('resume-navigation', () => { pauseNavigation = false; console.log('[SparkP2P] Navigation RESUMED'); return { ok: true }; });
+ipcMain.handle('open-gmail-tab', async () => {
+  // If Chrome is not running yet, launch it to Gmail directly
+  if (!browser) {
+    const chrome = findChrome();
+    if (!chrome) return { opened: false, error: 'Chrome not found' };
+    await launchChrome('https://mail.google.com/mail/u/0/#inbox');
+    await connectPuppeteer();
+    if (!browser) return { opened: false, error: 'Could not connect to Chrome' };
+  }
+  const ok = await openGmailTab();
+  if (ok) syncCookies();
+  return { opened: true, loggedIn: ok };
+});
 ipcMain.handle('set-token', (_, t) => { token = t; return { ok: true }; });
 ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] Fund password configured'); return { ok: true }; });
 ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });

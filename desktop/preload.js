@@ -3,6 +3,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('sparkp2p', {
   isDesktop: true,
   connectBinance: () => ipcRenderer.invoke('connect-binance'),
+  openGmailTab: () => ipcRenderer.invoke('open-gmail-tab'),
+  unlockBrowser: () => ipcRenderer.invoke('unlock-browser'),
+  lockBrowser: () => ipcRenderer.invoke('lock-browser'),
+  pauseNavigation: () => ipcRenderer.invoke('pause-navigation'),
+  resumeNavigation: () => ipcRenderer.invoke('resume-navigation'),
   setToken: (token) => ipcRenderer.invoke('set-token', token),
   setPin: (pin) => ipcRenderer.invoke('set-pin', pin),
   setTotpSecret: (secret) => ipcRenderer.invoke('set-totp-secret', secret),
