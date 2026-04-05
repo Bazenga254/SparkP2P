@@ -6,9 +6,7 @@
   "permissions": ["cookies", "storage", "alarms", "tabs", "scripting", "notifications"],
   "host_permissions": [
     "https://*.binance.com/*",
-    "https://sparkp2p.com/*",
-    "https://mail.google.com/*",
-    "https://accounts.google.com/*"
+    "https://sparkp2p.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
