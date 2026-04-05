@@ -2254,30 +2254,50 @@ async function clickButton(page, ...textOptions) {
 
 // ── Send a chat message on an order page ────────────────────────────────────
 async function sendChatMessage(page, message) {
-  // Scroll to bottom first — chat is usually at the bottom of the order page
-
-  // Scroll to bottom where chat usually is
+  // Scroll to bottom — chat input is at the bottom of the order page
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await new Promise(r => setTimeout(r, 800));
 
-  // Try known chat input selectors
-  const chatInput = await page.$(
-    'textarea[placeholder], ' +
-    'input[placeholder*="message" i], ' +
-    'input[placeholder*="type" i], ' +
-    'input[placeholder*="send" i], ' +
-    '[contenteditable="true"][class*="chat" i], ' +
-    '[contenteditable="true"][class*="input" i], ' +
-    '[contenteditable="true"]'
-  );
+  // Find and click the chat input via DOM — handles Binance's div-based input
+  const sent = await page.evaluate((msg) => {
+    const selectors = [
+      'input[placeholder*="message" i]',
+      'input[placeholder*="Enter message" i]',
+      'textarea[placeholder]',
+      '[contenteditable="true"]',
+      '[placeholder*="message" i]',
+      '[placeholder*="Enter message" i]',
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el) {
+        el.click();
+        el.focus();
+        // For contenteditable divs
+        if (el.isContentEditable) {
+          el.textContent = msg;
+          el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        } else {
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+            || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+          if (nativeInputValueSetter) {
+            nativeInputValueSetter.call(el, msg);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          } else {
+            el.value = msg;
+          }
+        }
+        return sel;
+      }
+    }
+    return null;
+  }, message);
 
-  if (chatInput) {
-    await chatInput.click();
-    await new Promise(r => setTimeout(r, 300));
-    await chatInput.type(message, { delay: 30 });
+  if (sent) {
+    await new Promise(r => setTimeout(r, 500));
     await page.keyboard.press('Enter');
-    await new Promise(r => setTimeout(r, 800));
-    console.log(`[SparkP2P] Chat message sent: "${message.substring(0, 60)}"`);
+    await new Promise(r => setTimeout(r, 1000));
+    console.log(`[SparkP2P] Chat message sent via "${sent}": "${message.substring(0, 60)}"`);
     return true;
   }
   console.log('[SparkP2P] Chat input not found');
@@ -2481,7 +2501,14 @@ async function releaseWithVision(page, orderNumber, action) {
 
       // ── Passkey failed — skip to alternative method ─────────
       if (screen === 'passkey_failed') {
-        await clickButton(page, 'My Passkeys Are Not Available', 'Passkeys Are Not Available', 'Use another method');
+        // Click by DOM text search — handles colon variants like "My Passkeys: Are Not Available"
+        const passKeyClicked = await page.evaluate(() => {
+          const all = Array.from(document.querySelectorAll('button, a, span, div'));
+          const el = all.find(e => /passkeys?\s*:?\s*are\s+not\s+available/i.test(e.textContent.trim()));
+          if (el) { el.click(); return el.textContent.trim().substring(0, 60); }
+          return null;
+        });
+        console.log(`[Vision] Passkey button clicked: "${passKeyClicked}"`);
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
