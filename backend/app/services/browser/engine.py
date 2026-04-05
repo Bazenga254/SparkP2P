@@ -45,12 +45,14 @@ class BinanceBrowserSession:
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+        self.gmail_page = None  # Gmail tab opened alongside Binance
         self.running = False
         self.last_poll = None
         self.poll_count = 0
         self.error_count = 0
         self.last_error = None
         self.connected = False
+        self.is_processing = False  # True while release_with_vision() is active — pauses polling
 
     async def start(self, cookies: list = None, storage_state: dict = None):
         """Start the browser session."""
@@ -456,6 +458,7 @@ class BinanceBrowserSession:
             from app.core.config import settings
             api_key = settings.ANTHROPIC_API_KEY
 
+        self.is_processing = True
         try:
             order_url = f"https://p2p.binance.com/en/fiatOrderDetail?orderNo={order_number}"
             await self.page.goto(order_url, wait_until="domcontentloaded", timeout=30000)
@@ -645,6 +648,8 @@ class BinanceBrowserSession:
         except Exception as e:
             logger.error(f"[Vision] release_with_vision failed for {order_number}: {e}")
             return {"success": False, "error": str(e)}
+        finally:
+            self.is_processing = False
 
     async def _scan_gmail_for_otp(self, gmail_page, known_ids: set = None, max_wait: int = 60) -> Optional[str]:
         """Scan an open Gmail tab for a new Binance OTP email and extract the 6-digit code."""
@@ -694,6 +699,7 @@ class BinanceBrowserSession:
             "trader_name": self.trader_name,
             "running": self.running,
             "connected": self.connected,
+            "is_processing": self.is_processing,
             "last_poll": self.last_poll.isoformat() if self.last_poll else None,
             "poll_count": self.poll_count,
             "error_count": self.error_count,
@@ -762,6 +768,10 @@ class BrowserAutomationEngine:
         """Poll orders for all active sessions and process them."""
         for trader_id, session in list(self.sessions.items()):
             if not session.running:
+                continue
+            if session.is_processing:
+                # Bot is mid-release (vision flow active) — don't navigate away
+                logger.debug(f"Skipping poll for trader {trader_id} — release in progress")
                 continue
             try:
                 orders = await session.get_pending_orders()
