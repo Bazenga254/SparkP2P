@@ -2393,9 +2393,26 @@ async function releaseWithVision(page, orderNumber, action) {
         return { success: false, error: 'paused' };
       }
       step++;
-      const info = await analyzePageWithVision(page);
+
+      // ── DOM pre-check: catch modals Vision misses due to overlay ────────────
+      const domScreen = await page.evaluate(() => {
+        const text = document.body.innerText || '';
+        if (text.includes('My Passkeys Are Not Available') || text.includes('Passkeys Are Not Available'))
+          return 'passkey_failed';
+        if (text.includes('Security Verification') && (text.includes('0/2') || text.includes('1/2')))
+          return 'security_verification';
+        if (text.includes('Sale Successful') || text.includes('Order Completed') || text.includes('Released'))
+          return 'order_complete';
+        return null;
+      }).catch(() => null);
+
+      if (domScreen) {
+        console.log(`[Vision] Step ${step}/${MAX_STEPS} | DOM detected: ${domScreen}`);
+      }
+
+      const info = domScreen ? { screen: domScreen } : await analyzePageWithVision(page);
       const screen = info.screen || 'unknown';
-      console.log(`[Vision] Step ${step}/${MAX_STEPS} | ${screen}`);
+      if (!domScreen) console.log(`[Vision] Step ${step}/${MAX_STEPS} | ${screen}`);
 
       // ── Order complete ──────────────────────────────────────
       if (screen === 'order_complete' || info.sale_successful) {
