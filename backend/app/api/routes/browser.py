@@ -371,37 +371,7 @@ async def start_bot(
     if not success:
         raise HTTPException(status_code=500, detail="Failed to start bot")
 
-    # Auto-open Gmail tab if credentials are configured
-    gmail_status = "not_configured"
-    if target.gmail_email and target.gmail_password:
-        try:
-            session = browser_engine.get_session(target_id)
-            if session:
-                gmail_email = target.gmail_email
-                gmail_password = decrypt_data(target.gmail_password)
-                # Open Gmail in a second tab in the same browser context
-                gmail_page = await session.context.new_page()
-                from app.services.browser.login_wizard import LoginWizardSession
-                # Use a temporary wizard-like session just for Gmail login
-                tmp = LoginWizardSession.__new__(LoginWizardSession)
-                tmp.trader_id = target_id
-                tmp.context = session.context
-                tmp.page = session.page
-                tmp.gmail_page = gmail_page
-                tmp.gmail_email = gmail_email
-                result = await tmp.open_gmail(gmail_email, gmail_password)
-                if result.get("success"):
-                    session.gmail_page = gmail_page
-                    gmail_status = "logged_in"
-                    logger.info(f"Gmail tab opened for trader {target_id}")
-                else:
-                    gmail_status = f"failed: {result.get('message')}"
-                    logger.warning(f"Gmail login failed for trader {target_id}: {result.get('message')}")
-        except Exception as e:
-            gmail_status = f"error: {e}"
-            logger.error(f"Gmail auto-open failed for trader {target_id}: {e}")
-
-    return {"status": "started", "trader_id": target_id, "gmail": gmail_status}
+    return {"status": "started", "trader_id": target_id}
 
 
 @router.post("/bot/stop")

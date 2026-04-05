@@ -39,6 +39,7 @@ let sessionStartTime = null;   // When Binance login was last confirmed
 let loggedOutStrikes = 0;      // Consecutive failed isLoggedIn() checks before re-login
 let activeOrderNumber = null;  // Order number currently being monitored (null = idle)
 let activeOrderFiatAmount = 0; // KES amount of the active order (for M-Pesa verification)
+let gmailPage = null;          // Persistent Gmail tab — opened alongside Binance, kept alive
 const SESSION_GRACE_MS = 30 * 60 * 1000; // 30 min grace period before re-login is allowed
 const LOGOUT_STRIKES_NEEDED = 3;          // Require 3 consecutive failures before declaring session lost
 // Load .env file for API keys — check app data folder and app directory
@@ -54,6 +55,7 @@ try {
   }
 } catch (e) {}
 let aiApiKey = process.env.OPENAI_API_KEY || null;
+let anthropicApiKey = process.env.ANTHROPIC_API_KEY || null;
 
 // Persist token to disk so it survives app restarts
 const TOKEN_FILE = path.join(app.getPath('userData'), 'session.json');
@@ -290,6 +292,23 @@ async function getPage(urlMatch) {
   return pages.find(p => p.url().includes('binance.com') && !p.url().includes('accounts.google')) || pages[0];
 }
 
+async function openGmailTab() {
+  if (!browser) return;
+  try {
+    // Reuse existing Gmail tab if still open
+    const pages = await browser.pages();
+    const existing = pages.find(p => p.url().includes('mail.google.com'));
+    if (existing) { gmailPage = existing; console.log('[SparkP2P] Gmail tab already open'); return; }
+    gmailPage = await browser.newPage();
+    await gmailPage.goto('https://mail.google.com/mail/u/0/#inbox', { waitUntil: 'domcontentloaded', timeout: 20000 });
+    console.log('[SparkP2P] Gmail tab opened');
+    gmailPage.on('close', () => { gmailPage = null; console.log('[SparkP2P] Gmail tab closed'); });
+  } catch (e) {
+    console.error('[SparkP2P] Could not open Gmail tab:', e.message?.substring(0, 60));
+    gmailPage = null;
+  }
+}
+
 async function isLoggedIn() {
   const page = await getPage('binance.com');
   if (!page) return false;
@@ -422,6 +441,9 @@ async function connectBinance() {
       // Sync cookies to mark as connected on VPS
       await syncCookies();
       connectingBinance = false;
+
+      // Open Gmail tab alongside Binance — stays open for OTP scanning
+      await openGmailTab();
 
       // Block window.open() on all Binance pages to prevent popup tabs
       const mainPage = await getPage();
@@ -1431,27 +1453,36 @@ async function _readEmailOTPOnce(gmailPage, sentAfterMs) {
 // Binance tab and clicks the resend button before trying Gmail again.
 async function readEmailOTP(binancePage = null) {
   if (!browser) return null;
-  let gmailPage = null;
   const MAX_ATTEMPTS = 3;
-  const WAIT_FOR_EMAIL_MS = 5000;   // initial wait after send
-  const RESEND_WAIT_MS   = 8000;    // wait after resend
-  const sentAt = Date.now();        // timestamp when we triggered the send
+  const WAIT_FOR_EMAIL_MS = 5000;
+  const RESEND_WAIT_MS   = 8000;
+  const sentAt = Date.now();
+
+  // Ensure persistent Gmail tab is open — open it now if it was closed
+  if (!gmailPage || gmailPage.isClosed()) {
+    console.log('[SparkP2P] Gmail tab not open — opening now...');
+    await openGmailTab();
+  }
+  if (!gmailPage) { console.error('[SparkP2P] Could not open Gmail tab'); return null; }
 
   try {
-    gmailPage = await browser.newPage();
-
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       console.log(`[SparkP2P] Gmail OTP attempt ${attempt}/${MAX_ATTEMPTS}...`);
+      await gmailPage.bringToFront();
       await new Promise(r => setTimeout(r, attempt === 1 ? WAIT_FOR_EMAIL_MS : RESEND_WAIT_MS));
 
       const code = await _readEmailOTPOnce(gmailPage, sentAt);
-      if (code) return code;
+      if (code) {
+        // Switch back to Binance tab before returning
+        if (binancePage) await binancePage.bringToFront().catch(() => {});
+        return code;
+      }
 
-      // No OTP found — try to resend from the Binance verification page
+      // No OTP yet — click Resend on Binance then wait again
       if (attempt < MAX_ATTEMPTS && binancePage) {
-        console.log('[SparkP2P] OTP not arrived — clicking Resend on Binance...');
+        console.log('[SparkP2P] OTP not arrived — switching to Binance to resend...');
+        await binancePage.bringToFront();
         const resent = await binancePage.evaluate(() => {
-          // Look for resend / get code / send again buttons
           const btn = Array.from(document.querySelectorAll('button, span, a')).find(el => {
             const t = el.textContent.trim().toLowerCase();
             return t === 'resend' || t === 'send again' || t === 'get code' || t === 'resend code';
@@ -1459,22 +1490,19 @@ async function readEmailOTP(binancePage = null) {
           if (btn) { btn.click(); return true; }
           return false;
         });
-        if (resent) {
-          console.log('[SparkP2P] Resend clicked — waiting for new email...');
-        } else {
-          console.log('[SparkP2P] No resend button found on Binance page');
-        }
+        if (resent) console.log('[SparkP2P] Resend clicked');
       }
     }
 
-    console.log('[SparkP2P] All OTP attempts exhausted — manual intervention needed');
+    console.log('[SparkP2P] All OTP attempts exhausted');
+    if (binancePage) await binancePage.bringToFront().catch(() => {});
     return null;
   } catch (e) {
     console.error('[SparkP2P] readEmailOTP error:', e.message?.substring(0, 60));
+    if (binancePage) await binancePage.bringToFront().catch(() => {});
     return null;
-  } finally {
-    if (gmailPage && !gmailPage.isClosed()) await gmailPage.close().catch(() => {});
   }
+  // Note: gmailPage stays open — it's a persistent tab
 }
 
 // ── Type a 6-digit code using real keyboard events (like a human) ─────────────
@@ -1798,6 +1826,238 @@ async function sendChatMessage(page, message) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// CLAUDE VISION — Screenshot-based page analysis
+// ═══════════════════════════════════════════════════════════
+
+const VISION_PROMPT = `You are analyzing a Binance P2P order page screenshot.
+Extract ALL data with perfect precision and identify the exact screen state.
+
+Return ONLY a valid JSON object — no markdown, no explanation, no code fences.
+
+{
+  "screen": "<awaiting_payment|verify_payment|confirm_release_modal|passkey_failed|security_verification|totp_input|email_otp_input|order_complete|unknown>",
+  "order_number": "<exact order number string or null>",
+  "buyer_name": "<exact full name or null>",
+  "fiat_amount_kes": <KES amount as plain number e.g. 1000.00 — NEVER add zeros>,
+  "usdt_amount": <USDT amount as plain number e.g. 7.71 — read character by character>,
+  "countdown_timer": "<e.g. 13:32 or null>",
+  "verification_progress": "<e.g. 0/2 or 1/2 or null>",
+  "pending_verifications": [],
+  "completed_verifications": [],
+  "buttons_visible": [],
+  "passkeys_not_available_visible": false,
+  "checkbox_visible": false,
+  "checkbox_checked": false,
+  "input_field_visible": false,
+  "sale_successful": false,
+  "error_message": "<any error text visible or null>"
+}
+
+CRITICAL NUMBER RULES — read every digit individually:
+- "7.71 USDT" → usdt_amount: 7.71   (NOT 7710, NOT 7000, NOT 771)
+- "1,000.00 KES" → fiat_amount_kes: 1000.00
+- Commas are thousand separators, periods are decimal points
+
+Screen identification rules:
+- "Awaiting Buyer's Payment" with countdown timer → awaiting_payment
+- "Verify Payment" with Payment Received button → verify_payment
+- Modal saying "Received payment in your account?" with checkbox → confirm_release_modal
+- Modal saying "Verify with passkey" with "Verification failed" → passkey_failed
+- Modal saying "Security Verification Requirements" with 0/2 or 1/2 → security_verification
+- Input box specifically for Authenticator App code → totp_input
+- Input box specifically for Email verification code → email_otp_input
+- "Order Completed" or "Sale Successful" → order_complete`;
+
+async function analyzePageWithVision(page) {
+  if (!anthropicApiKey) {
+    console.log('[Vision] No Anthropic API key — skipping vision analysis');
+    return { screen: 'unknown' };
+  }
+  try {
+    const raw = await page.screenshot({ type: 'jpeg', quality: 85 });
+    const b64 = raw.toString('base64');
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 800,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
+            { type: 'text', text: VISION_PROMPT },
+          ],
+        }],
+      }),
+    });
+    const data = await resp.json();
+    let text = (data.content?.[0]?.text || '').trim()
+      .replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'');
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      const result = JSON.parse(match[0]);
+      console.log(`[Vision] screen=${result.screen} usdt=${result.usdt_amount} kes=${result.fiat_amount_kes}`);
+      return result;
+    }
+    return { screen: 'unknown' };
+  } catch (e) {
+    console.error('[Vision] analyzePageWithVision error:', e.message?.substring(0, 80));
+    return { screen: 'unknown' };
+  }
+}
+
+async function releaseWithVision(page, orderNumber, action) {
+  const MAX_STEPS = 20;
+  let step = 0;
+
+  console.log(`[Vision] Starting vision-driven release for order ${orderNumber}`);
+
+  try {
+    await page.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNumber}`,
+      { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 3000));
+
+    // Send pre-release chat message if provided
+    if (action.message) await sendChatMessage(page, action.message);
+
+    while (step < MAX_STEPS) {
+      step++;
+      const info = await analyzePageWithVision(page);
+      const screen = info.screen || 'unknown';
+      console.log(`[Vision] Step ${step}/${MAX_STEPS} | ${screen}`);
+
+      // ── Order complete ──────────────────────────────────────
+      if (screen === 'order_complete' || info.sale_successful) {
+        console.log(`[Vision] Order ${orderNumber} released successfully!`);
+        await fetch(`${API_BASE}/ext/report-release`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ order_number: orderNumber, success: true }),
+        }).catch(() => {});
+        return { success: true };
+      }
+
+      // ── Awaiting payment — poll until buyer pays ────────────
+      if (screen === 'awaiting_payment') {
+        console.log('[Vision] Awaiting buyer payment — polling in 15s...');
+        await new Promise(r => setTimeout(r, 15000));
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+
+      // ── Verify payment — click Payment Received ─────────────
+      if (screen === 'verify_payment') {
+        await clickButton(page, 'Payment Received', 'payment received');
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+
+      // ── Confirm release modal — checkbox + Confirm Release ──
+      if (screen === 'confirm_release_modal') {
+        if (info.checkbox_visible && !info.checkbox_checked) {
+          const cb = await page.$('input[type="checkbox"]');
+          if (cb) { await cb.click(); await new Promise(r => setTimeout(r, 800)); }
+        }
+        await clickButton(page, 'Confirm Release', 'Confirm release', 'Confirm');
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+
+      // ── Passkey failed — skip to alternative method ─────────
+      if (screen === 'passkey_failed') {
+        await clickButton(page, 'My Passkeys Are Not Available', 'Passkeys Are Not Available', 'Use another method');
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+
+      // ── Security verification selector ──────────────────────
+      if (screen === 'security_verification') {
+        const pending = info.pending_verifications || [];
+        const completed = info.completed_verifications || [];
+        if (pending.includes('Authenticator App')) {
+          await clickButton(page, 'Authenticator App', 'Authenticator');
+        } else if (pending.includes('Email') && completed.includes('Authenticator App')) {
+          await clickButton(page, 'Email');
+        }
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+
+      // ── TOTP input — generate via pyotp equivalent ──────────
+      if (screen === 'totp_input') {
+        if (!totpSecret) {
+          console.error('[Vision] TOTP required but not configured');
+          return { success: false, error: 'TOTP not configured' };
+        }
+        const code = generateTOTP(totpSecret);
+        console.log(`[Vision] Auto-filling TOTP: ${code}`);
+        let entered = await enterCodeIntoSection(page, 'authenticator', code);
+        if (!entered) entered = await enterCodeIntoSection(page, 'google', code);
+        if (!entered) {
+          const inp = await page.$('input[maxlength="6"], input[type="tel"]');
+          if (inp) { await inp.click({ clickCount: 3 }); await inp.type(code, { delay: 50 }); }
+        }
+        await clickButton(page, 'Confirm', 'Submit', 'Verify');
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+
+      // ── Email OTP — switch to Gmail tab, scan, switch back ──
+      if (screen === 'email_otp_input') {
+        // Trigger the OTP email send
+        await page.evaluate(() => {
+          const btn = Array.from(document.querySelectorAll('button, span, a')).find(el =>
+            /^(send|get code|send code)$/i.test(el.textContent.trim())
+          );
+          if (btn) btn.click();
+        });
+        await new Promise(r => setTimeout(r, 1000));
+
+        console.log('[Vision] Email OTP needed — switching to Gmail tab...');
+        const emailCode = await readEmailOTP(page);
+        if (!emailCode) {
+          console.error('[Vision] Email OTP not found in Gmail');
+          return { success: false, error: 'Email OTP not found' };
+        }
+        console.log(`[Vision] Got OTP ${emailCode} — switching back to Binance tab`);
+        await page.bringToFront();
+        let entered = await enterCodeIntoSection(page, 'email', emailCode);
+        if (!entered) {
+          const digitInputs = await page.$$('input[maxlength="1"]');
+          const start = (info.completed_verifications || []).includes('Authenticator App') ? 6 : 0;
+          for (let i = 0; i < 6 && (start + i) < digitInputs.length; i++) {
+            await digitInputs[start + i].click();
+            await digitInputs[start + i].type(emailCode[i], { delay: 50 });
+          }
+        }
+        await clickButton(page, 'Confirm', 'Submit', 'Verify');
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+
+      // ── Unknown — wait and reload ───────────────────────────
+      console.log(`[Vision] Unknown screen at step ${step} — reloading...`);
+      await new Promise(r => setTimeout(r, 5000));
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    console.error(`[Vision] Order ${orderNumber} exceeded ${MAX_STEPS} steps`);
+    return { success: false, error: `Exceeded ${MAX_STEPS} steps` };
+
+  } catch (e) {
+    console.error('[Vision] releaseWithVision error:', e.message?.substring(0, 80));
+    return { success: false, error: e.message };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 // ACTION EXECUTION — Full automation with PIN + screenshots
 // ═══════════════════════════════════════════════════════════
 
@@ -1812,76 +2072,10 @@ async function execAction(action) {
     await takeScreenshot(`Before ${type}: order ${order_number}`);
 
     if (type === 'release') {
-      // Step 0: Send a chat message to the buyer before releasing
-      if (action.message) {
-        await sendChatMessage(page, action.message);
-      }
-
-      // Step 1: Ask AI exactly which button to click for Release
-      await new Promise(r => setTimeout(r, 1000));
-      const releaseSS = await page.screenshot({ type: 'jpeg', quality: 80 });
-      const releaseAI = await aiScanner.analyzeScreenshot(releaseSS, `
-        This is a Binance P2P sell order page where I need to release crypto to the buyer.
-        The buyer has already paid. I need to find and click the Release button.
-        {
-          "release_button_text": "exact full text of the release/confirm button (e.g. 'Release Crypto', 'Release USDT', 'Confirm Release')",
-          "release_button_visible": true/false,
-          "page_state": "order_detail" | "confirmation_dialog" | "verification" | "completed" | "other"
-        }
-        Look for a prominent button — usually yellow/green — that says something about releasing or confirming.
-      `);
-
-      // Build list of button texts to try — AI result first, then known variants
-      const releaseTexts = [
-        releaseAI?.release_button_text,
-        action.release_button_text,
-        'Release Crypto', 'Release USDT', 'Release BTC', 'Release ETH',
-        'Confirm Release', 'Release', 'release',
-      ].filter(Boolean);
-
-      console.log(`[SparkP2P] Trying release buttons: ${releaseTexts.slice(0, 3).join(', ')}`);
-      let clicked = await clickButton(page, ...releaseTexts);
-
-      if (clicked) {
-        await new Promise(r => setTimeout(r, 2500));
-
-        // Step 2: "Are you sure?" confirmation dialog — AI reads it to find the Yes/Confirm button
-        const confirmSS = await page.screenshot({ type: 'jpeg', quality: 80 });
-        const confirmAI = await aiScanner.analyzeScreenshot(confirmSS, `
-          Binance just showed a confirmation dialog after I clicked Release.
-          It asks something like "Are you sure you have received the payment?" or "Confirm release".
-          {
-            "dialog_visible": true/false,
-            "confirm_button_text": "exact text of the confirm/yes/proceed button",
-            "warning_text": "any warning message shown"
-          }
-        `);
-        const confirmTexts = [
-          confirmAI?.confirm_button_text,
-          'Confirm', 'Yes', 'I confirm', 'Confirm Release', 'Proceed',
-        ].filter(Boolean);
-        await clickButton(page, ...confirmTexts);
-        await new Promise(r => setTimeout(r, 2000));
-
-        // Step 3: Security verification (email OTP + Google Authenticator)
-        const verified = await handleSecurityVerification(page);
-
-        await takeScreenshot(`After release: order ${order_number}`);
-        await fetch(`${API_BASE}/ext/report-release`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ order_number, success: verified, error: verified ? null : 'Verification failed' }),
-        });
-        if (verified) stats.actions++;
-      } else {
-        console.log('[SparkP2P] Release button not found');
-        await takeScreenshot(`Release button not found: ${order_number}`);
-        await fetch(`${API_BASE}/ext/report-release`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ order_number, success: false, error: 'Release button not found' }),
-        });
-      }
+      // Vision-driven release — Claude reads every screenshot and decides the next action
+      const result = await releaseWithVision(page, order_number, action);
+      if (result.success) stats.actions++;
+      await takeScreenshot(`After release: order ${order_number}`);
 
     } else if (type === 'pay' || type === 'mark_as_paid') {
       // Step 1: Click "Payment Done" / "Transferred, notify seller"
@@ -2060,7 +2254,8 @@ ipcMain.handle('set-token', (_, t) => { token = t; return { ok: true }; });
 ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] Fund password configured'); return { ok: true }; });
 ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });
 ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; aiScanner.initAI(key); console.log('[SparkP2P] GPT-4o configured'); return { ok: true }; });
-ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasTOTP: !!totpSecret, hasAI: !!aiApiKey }));
+ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; console.log('[SparkP2P] Claude Vision configured'); return { ok: true }; });
+ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasTOTP: !!totpSecret, hasAI: !!aiApiKey, hasVision: !!anthropicApiKey }));
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
 ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
 ipcMain.handle('restart-app', () => { autoUpdater.quitAndInstall(); });

@@ -30,7 +30,6 @@ class BinanceConnectRequest(BaseModel):
     csrf_token: str
     bnc_uuid: Optional[str] = None
     totp_secret: Optional[str] = None
-    gmail_cookies: Optional[list] = None  # Gmail session cookies captured by extension
 
 
 class CompleteProfileRequest(BaseModel):
@@ -408,11 +407,6 @@ async def connect_binance(
     if data.cookies_full:
         trader.binance_cookies_full = encrypt_data(json.dumps(data.cookies_full))
         logger.info(f"Stored {len(data.cookies_full)} full cookies for trader {trader.id}")
-
-    # Save Gmail cookies captured from the extension (user already logged into Gmail in Chrome)
-    if data.gmail_cookies and len(data.gmail_cookies) > 0:
-        trader.gmail_cookies = encrypt_data(json.dumps(data.gmail_cookies))
-        logger.info(f"Saved {len(data.gmail_cookies)} Gmail cookies for trader {trader.id}")
 
     # Mark as connected if full cookies provided (verified login from desktop app)
     if data.cookies_full and len(data.cookies_full) > 10:
