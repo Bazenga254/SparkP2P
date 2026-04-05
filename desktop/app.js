@@ -1123,7 +1123,28 @@ async function extractMpesaCodesFromChat(page) {
     if (result1.action === 'click_image') {
       // Vision saw a thumbnail it couldn't read — click where it said
       console.log(`[SparkP2P] Vision says click image at (${result1.click_x}, ${result1.click_y})`);
-      await page.mouse.click(result1.click_x, result1.click_y);
+
+      // Use elementFromPoint so React's event handlers fire correctly
+      const clicked = await page.evaluate((x, y) => {
+        const el = document.elementFromPoint(x, y);
+        if (!el) return 'no-element';
+        // Walk up to find the nearest clickable ancestor (img, div, or a)
+        let target = el;
+        for (let i = 0; i < 5; i++) {
+          if (!target || target === document.body) break;
+          if (['IMG', 'A', 'BUTTON'].includes(target.tagName) ||
+              target.onclick || target.getAttribute('role') === 'button') {
+            target.click();
+            return target.tagName + ':' + (target.className || '').substring(0, 40);
+          }
+          target = target.parentElement;
+        }
+        // Nothing obviously clickable — click the element itself
+        el.click();
+        return 'fallback:' + el.tagName;
+      }, result1.click_x, result1.click_y);
+
+      console.log(`[SparkP2P] Clicked element: ${clicked}`);
       await new Promise(r => setTimeout(r, 2500));
       await takeScreenshot('chat_image_enlarged', page);
 
