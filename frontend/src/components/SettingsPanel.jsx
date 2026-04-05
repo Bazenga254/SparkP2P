@@ -283,24 +283,22 @@ export default function SettingsPanel({ profile, onUpdate }) {
                   Re-connect (if session expired)
                 </button>
                 <button
-                  onClick={() => { window.sparkp2p?.unlockBrowser(); window.sparkp2p?.pauseNavigation(); }}
+                  onClick={() => fetch('http://127.0.0.1:9223/pause').catch(() => {})}
                   style={{
                     padding: '10px 20px', borderRadius: 8,
                     border: '1px solid #6b7280', background: 'transparent',
                     color: '#9ca3af', cursor: 'pointer', fontSize: 13,
                   }}
-                  title="Stop all bot navigation so you can use Chrome freely"
                 >
                   Pause Bot
                 </button>
                 <button
-                  onClick={() => { window.sparkp2p?.lockBrowser(); window.sparkp2p?.resumeNavigation(); }}
+                  onClick={() => fetch('http://127.0.0.1:9223/resume').catch(() => {})}
                   style={{
                     padding: '10px 20px', borderRadius: 8,
                     border: '1px solid #6b7280', background: 'transparent',
                     color: '#9ca3af', cursor: 'pointer', fontSize: 13,
                   }}
-                  title="Resume bot after manual interaction"
                 >
                   Resume Bot
                 </button>

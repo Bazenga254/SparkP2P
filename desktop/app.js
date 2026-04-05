@@ -1,10 +1,36 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 const { execFile, execSync } = require('child_process');
 const puppeteer = require('puppeteer-core');
 const aiScanner = require('./ai-scanner');
 const { autoUpdater } = require('electron-updater');
+
+// ── Local control server on port 9223 ───────────────────────
+// Lets the Settings panel pause/resume via fetch() — works even in packaged app
+http.createServer(async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'application/json');
+  if (req.url === '/pause') {
+    pauseNavigation = true;
+    scanningInProgress = false;
+    await unlockChromeBrowser().catch(() => {});
+    console.log('[SparkP2P] Bot PAUSED via local API');
+    res.end(JSON.stringify({ ok: true, paused: true }));
+  } else if (req.url === '/resume') {
+    pauseNavigation = false;
+    await lockChromeBrowser().catch(() => {});
+    console.log('[SparkP2P] Bot RESUMED via local API');
+    res.end(JSON.stringify({ ok: true, paused: false }));
+  } else if (req.url === '/status') {
+    res.end(JSON.stringify({ paused: pauseNavigation, running: pollerRunning }));
+  } else {
+    res.end(JSON.stringify({ ok: false }));
+  }
+}).listen(9223, '127.0.0.1', () => {
+  console.log('[SparkP2P] Local control server on http://127.0.0.1:9223');
+});
 
 // Logging — use app data folder when packaged, __dirname when dev
 const logDir = app.isPackaged ? path.join(process.env.APPDATA || process.env.HOME, 'sparkp2p') : __dirname;
@@ -210,16 +236,17 @@ function createTray() {
       { label: 'Connect Binance', click: () => connectBinance() },
       { type: 'separator' },
       {
-        label: pauseNavigation ? '▶ Resume Bot (re-enable navigation)' : '⏸ Pause Bot (free Chrome)',
+        label: pauseNavigation ? '▶ Resume Bot' : '⏸ Pause Bot (free Chrome)',
         click: async () => {
           if (pauseNavigation) {
             pauseNavigation = false;
             await lockChromeBrowser();
-            console.log('[SparkP2P] Navigation RESUMED via tray');
+            console.log('[SparkP2P] Bot RESUMED via tray');
           } else {
             pauseNavigation = true;
+            scanningInProgress = false; // force-exit any running cycle immediately
             await unlockChromeBrowser();
-            console.log('[SparkP2P] Navigation PAUSED via tray — Chrome is free');
+            console.log('[SparkP2P] Bot PAUSED via tray — Chrome is free');
           }
           tray.setContextMenu(buildTrayMenu());
         },
@@ -239,6 +266,7 @@ function createTray() {
         console.log('[SparkP2P] Bot RESUMED via shortcut');
       } else {
         pauseNavigation = true;
+        scanningInProgress = false; // force-exit any running cycle immediately
         await unlockChromeBrowser();
         console.log('[SparkP2P] Bot PAUSED via shortcut — Chrome is free');
       }
@@ -624,7 +652,7 @@ async function verifyTraderIdentity(page) {
   if (!token) return;
   try {
     // Navigate to P2P My Ads — payment methods here show the real account holder name
-    await page.goto('https://p2p.binance.com/en/myAds', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+    await page.goto('https://p2p.binance.com/en/advertise/post-new?side=SELL&tradeType=SELL', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 4000));
 
     const pageText = await page.evaluate(() => {
@@ -1159,51 +1187,176 @@ async function pollCycle() {
 // ── Idle full scan — runs when no active order ──────────────────────────────
 async function idleScan(page) {
   console.log(`[SparkP2P] ── IDLE SCAN #${stats.polls + 1} ──`);
+  if (pauseNavigation) return;
 
-  // Step 1: Wallet
+  // ── Step 1: Wallet balances ──────────────────────────────────────────────
   const balances = await scanWalletBalances(page);
   await uploadBalances(balances);
+  if (pauseNavigation) return;
 
-  // Step 2: Orders (active + cancelled tabs)
+  // ── Step 2: Navigate P2P market page (establishes P2P session) ───────────
+  console.log('[SparkP2P] Step 2: Navigating to P2P market...');
+  await page.goto('https://p2p.binance.com/trade/all-payments/USDT?fiat=KES',
+    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 2000));
+  if (pauseNavigation) return;
+
+  // ── Step 3: Check completed orders tab (tab=1) ────────────────────────────
+  console.log('[SparkP2P] Step 3: Checking completed orders (tab=1)...');
+  await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1',
+    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 2000));
+  if (pauseNavigation) return;
+
+  // ── Step 4: Check active/processing orders (tab=0) with Vision ───────────
+  console.log('[SparkP2P] Step 4: Checking active orders (tab=0) with Claude Vision...');
+  await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
+    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 3000));
+  if (pauseNavigation) return;
+
+  // Take screenshot and use Claude Vision to detect orders
+  await takeScreenshot('idle_scan_orders_tab', page);
+  const visionInfo = await analyzePageWithVision(page);
+  console.log(`[SparkP2P] Vision sees: ${visionInfo.screen}, orders detected`);
+
+  // Also read orders via DOM for reporting to VPS
   const orders = await readOrders();
   stats.orders = orders.sell.length + orders.buy.length;
   console.log(`[SparkP2P] Orders: ${orders.sell.length} sell, ${orders.buy.length} buy, ${orders.cancelled.length} cancelled`);
 
+  // Report orders to VPS
   const res = await fetch(`${API_BASE}/ext/report-orders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
     body: JSON.stringify({ sell_orders: orders.sell.map(norm), buy_orders: orders.buy.map(norm), cancelled_order_numbers: orders.cancelled || [] }),
   }).catch(() => null);
-
   if (res?.ok) {
     const { actions } = await res.json().catch(() => ({ actions: [] }));
     for (const a of (actions || [])) await execAction(a);
   }
 
-  // Step 2b: VPS-triggered pending releases
-  const pendingRes = await fetch(`${API_BASE}/ext/pending-actions`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  }).catch(() => null);
-  if (pendingRes?.ok) {
-    const { actions: pendingActions } = await pendingRes.json().catch(() => ({ actions: [] }));
-    for (const a of (pendingActions || [])) {
-      if (a.action === 'release') await execAction(a);
+  // ── Step 5: If sell orders exist, click each one and check payment ────────
+  if (orders.sell.length > 0) {
+    console.log(`[SparkP2P] 🔔 ${orders.sell.length} active sell order(s) detected`);
+
+    for (const order of orders.sell) {
+      if (pauseNavigation) break;
+      console.log(`[SparkP2P] Processing order ${order.orderNumber} (KES ${order.totalPrice})`);
+
+      // Navigate back to orders tab and click the order using mouse
+      await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
+        { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 2500));
+
+      const clicked = await clickOrderWithMouse(page, order.orderNumber);
+      if (!clicked) {
+        console.log(`[SparkP2P] Could not click order ${order.orderNumber} — skipping`);
+        continue;
+      }
+
+      // Wait for order detail page to load, take screenshot
+      await new Promise(r => setTimeout(r, 3000));
+      await takeScreenshot(`order_detail_${order.orderNumber}`, page);
+
+      // Use vision to read the order state
+      const orderInfo = await analyzePageWithVision(page);
+      console.log(`[SparkP2P] Order ${order.orderNumber} vision: ${orderInfo.screen}`);
+
+      if (orderInfo.screen === 'verify_payment') {
+        // Buyer has paid — verify M-Pesa before releasing
+        console.log(`[SparkP2P] Order ${order.orderNumber} shows VERIFY PAYMENT — checking M-Pesa...`);
+        const verified = await verifyMpesaPayment(order.orderNumber, order.totalPrice || orderInfo.fiat_amount_kes);
+        if (verified) {
+          console.log(`[SparkP2P] ✅ M-Pesa confirmed — starting vision release for ${order.orderNumber}`);
+          activeOrderNumber = order.orderNumber;
+          activeOrderFiatAmount = order.totalPrice;
+          await releaseWithVision(page, order.orderNumber, { message: 'Payment confirmed. Releasing crypto now.' });
+          activeOrderNumber = null;
+          activeOrderFiatAmount = 0;
+        } else {
+          console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed for ${order.orderNumber} — holding`);
+        }
+      } else if (orderInfo.screen === 'awaiting_payment') {
+        console.log(`[SparkP2P] Order ${order.orderNumber} still awaiting buyer payment`);
+        activeOrderNumber = order.orderNumber;
+        activeOrderFiatAmount = order.totalPrice;
+        // Don't release — just monitor
+        break;
+      } else if (orderInfo.screen === 'order_complete') {
+        console.log(`[SparkP2P] Order ${order.orderNumber} already completed`);
+      } else {
+        // Unknown state — set as active and let monitorActiveOrder handle it
+        console.log(`[SparkP2P] Order ${order.orderNumber} in state: ${orderInfo.screen} — monitoring`);
+        activeOrderNumber = order.orderNumber;
+        activeOrderFiatAmount = order.totalPrice;
+        break;
+      }
     }
+  } else {
+    console.log('[SparkP2P] No active orders — staying idle');
+  }
+}
+
+// ── Click an order row using real mouse movement ─────────────────────────────
+async function clickOrderWithMouse(page, orderNumber) {
+  // Take screenshot first so vision can guide us
+  await takeScreenshot(`before_click_order_${orderNumber}`, page);
+
+  // Use vision to find where to click
+  const visionInfo = await analyzePageWithVision(page);
+  console.log(`[SparkP2P] Vision before click: ${visionInfo.screen}`);
+
+  // Get the bounding box of the order number element
+  const box = await page.evaluate((orderNo) => {
+    // Find <a> link containing the order number
+    const all = [
+      ...Array.from(document.querySelectorAll('a')),
+      ...Array.from(document.querySelectorAll('span, td, div, p')),
+    ];
+    for (const el of all) {
+      const text = el.textContent.replace(/\s/g, '');
+      if (text.includes(orderNo)) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 10 && rect.height > 5) {
+          return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), found: 'order-number' };
+        }
+      }
+    }
+    // Fallback: click "Please release" link
+    const releaseEl = Array.from(document.querySelectorAll('a, span')).find(
+      el => el.textContent.trim() === 'Please release'
+    );
+    if (releaseEl) {
+      const rect = releaseEl.getBoundingClientRect();
+      return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), found: 'please-release' };
+    }
+    // Last resort: first clickable order row
+    const row = document.querySelector('tr a, [class*="order"] a, tbody tr');
+    if (row) {
+      const rect = row.getBoundingClientRect();
+      return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), found: 'row' };
+    }
+    return null;
+  }, orderNumber);
+
+  if (!box) {
+    console.log(`[SparkP2P] Could not find order ${orderNumber} on page`);
+    return false;
   }
 
-  // Step 3: If a sell order is active/pending, switch to monitoring mode
-  if (orders.sell.length > 0) {
-    const firstPending = orders.sell[0];
-    console.log(`[SparkP2P] 🔔 Active sell order detected: ${firstPending.orderNumber} — switching to ORDER MONITORING MODE`);
-    activeOrderNumber = firstPending.orderNumber;
-    activeOrderFiatAmount = firstPending.totalPrice;
-    // Immediately do a first monitor cycle
-    await monitorActiveOrder(page);
-  }
+  console.log(`[SparkP2P] Mouse moving to order (${box.x}, ${box.y}) via "${box.found}"`);
+  // Smooth human-like mouse movement
+  await page.mouse.move(box.x, box.y, { steps: 15 });
+  await new Promise(r => setTimeout(r, 200));
+  await page.mouse.click(box.x, box.y);
+  console.log(`[SparkP2P] Clicked order ${orderNumber}`);
+  return true;
 }
 
 // ── Focused order monitor — runs every 20s while an order is active ─────────
 async function navigateToOrderDetail(page, orderNumber) {
+  if (pauseNavigation) { console.log('[SparkP2P] Navigation paused — skipping order navigation'); return false; }
   console.log(`[SparkP2P] Navigating to order ${orderNumber} via orders list`);
   await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
     { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
@@ -1418,13 +1571,24 @@ async function readMarketPrices() {
 // SCREENSHOT — Capture page and send to VPS
 // ═══════════════════════════════════════════════════════════
 
-async function takeScreenshot(reason) {
-  const page = await getPage();
+// ── Screenshots folder — all bot screenshots saved here for review ───────────
+const screenshotsDir = path.join(app.getPath('userData'), 'sparkp2p-screenshots');
+try { fs.mkdirSync(screenshotsDir, { recursive: true }); } catch (e) {}
+
+async function takeScreenshot(reason, specificPage) {
+  const page = specificPage || await getPage();
   if (!page) return null;
   try {
-    const buffer = await page.screenshot({ type: 'jpeg', quality: 70, fullPage: false });
+    const buffer = await page.screenshot({ type: 'jpeg', quality: 80, fullPage: false });
     const base64 = buffer.toString('base64');
-    console.log(`[SparkP2P] Screenshot taken: ${reason} (${Math.round(buffer.length / 1024)}KB)`);
+
+    // Save to local screenshots folder
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeReason = (reason || 'screenshot').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 40);
+    const filename = path.join(screenshotsDir, `${ts}_${safeReason}.jpg`);
+    try { fs.writeFileSync(filename, buffer); } catch (e) {}
+
+    console.log(`[SparkP2P] Screenshot: ${reason} → ${filename} (${Math.round(buffer.length / 1024)}KB)`);
 
     // Send to VPS for monitoring
     if (token) {
@@ -2081,6 +2245,11 @@ async function releaseWithVision(page, orderNumber, action) {
     if (action.message) await sendChatMessage(page, action.message);
 
     while (step < MAX_STEPS) {
+      // Stop immediately if user paused the bot
+      if (pauseNavigation) {
+        console.log('[Vision] Bot paused by user — halting vision loop');
+        return { success: false, error: 'paused' };
+      }
       step++;
       const info = await analyzePageWithVision(page);
       const screen = info.screen || 'unknown';
@@ -2433,8 +2602,8 @@ function norm(o) {
 ipcMain.handle('connect-binance', () => { connectBinance(); return { opened: true }; });
 ipcMain.handle('unlock-browser', async () => { await unlockChromeBrowser(); console.log('[SparkP2P] Browser manually unlocked'); return { ok: true }; });
 ipcMain.handle('lock-browser', async () => { const p = await getPage(); if (p) await lockChromeBrowser(); return { ok: true }; });
-ipcMain.handle('pause-navigation', () => { pauseNavigation = true; console.log('[SparkP2P] Navigation PAUSED — Chrome is free'); return { ok: true }; });
-ipcMain.handle('resume-navigation', () => { pauseNavigation = false; console.log('[SparkP2P] Navigation RESUMED'); return { ok: true }; });
+ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser(); console.log('[SparkP2P] Navigation PAUSED — Chrome is free'); return { ok: true }; });
+ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED'); return { ok: true }; });
 ipcMain.handle('open-gmail-tab', async () => {
   // If Chrome is not running yet, launch it to Gmail directly
   if (!browser) {
