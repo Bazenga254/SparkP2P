@@ -26,6 +26,11 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [connecting, setConnecting] = useState(false);
   const connectPollRef = useRef(null);
 
+  // Gmail session
+  const [gmailConfigured, setGmailConfigured] = useState(false);
+  const [gmailStoredEmail, setGmailStoredEmail] = useState('');
+  const [showGmailBrowser, setShowGmailBrowser] = useState(false);
+
   // Binance
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
 
@@ -159,6 +164,14 @@ export default function SettingsPanel({ profile, onUpdate }) {
     }, 3000);
     return () => clearInterval(connectPollRef.current);
   }, [connecting]);
+
+  // Load Gmail status on mount
+  useEffect(() => {
+    api.get('/traders/gmail-credentials').then(r => {
+      setGmailConfigured(r.data.configured);
+      setGmailStoredEmail(r.data.gmail_email || '');
+    }).catch(() => {});
+  }, []);
 
   const handleRequestOTP = async () => {
     setLoading(true);
@@ -441,6 +454,59 @@ export default function SettingsPanel({ profile, onUpdate }) {
             </div>
           )}
         </div>
+      )}
+
+      {/* Gmail OTP Scanner */}
+      {activeSection === 'binance' && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3 style={{ marginBottom: 4 }}>Gmail OTP Scanner</h3>
+          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
+            A secure browser opens where you log into Gmail directly — including 2FA. No passwords stored. The bot uses your Gmail session to auto-read Binance OTP emails during order release.
+          </p>
+
+          {gmailConfigured ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)',
+                borderRadius: 8, padding: '10px 14px',
+              }}>
+                <span style={{ fontSize: 13, color: '#10b981' }}>✓ Gmail connected: {gmailStoredEmail}</span>
+                <button
+                  onClick={() => setShowGmailBrowser(true)}
+                  style={{ background: 'none', border: '1px solid #374151', borderRadius: 6, padding: '4px 12px', color: '#9ca3af', fontSize: 12, cursor: 'pointer' }}
+                >Reconnect</button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowGmailBrowser(true)}
+              style={{
+                width: '100%', padding: '12px', borderRadius: 8, border: 'none',
+                background: 'linear-gradient(135deg, #4285f4, #34a853)',
+                color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              }}
+            >
+              Connect Gmail
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Gmail Browser Modal */}
+      {showGmailBrowser && (
+        <RemoteBrowser
+          mode="gmail"
+          onConnected={() => {
+            setShowGmailBrowser(false);
+            setGmailConfigured(true);
+            api.get('/traders/gmail-credentials').then(r => {
+              setGmailStoredEmail(r.data.gmail_email || '');
+            }).catch(() => {});
+          }}
+          onClose={() => setShowGmailBrowser(false)}
+        />
       )}
 
       {/* Remote Browser Modal */}

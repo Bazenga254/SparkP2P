@@ -41,8 +41,9 @@ class RemoteBrowserSession:
     # Class-level Xvfb display counter
     _next_display = 99
 
-    def __init__(self, trader_id: int):
+    def __init__(self, trader_id: int, start_url: str = None):
         self.trader_id = trader_id
+        self._start_url = start_url or BINANCE_LOGIN_URL
         self.playwright = None
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
@@ -115,8 +116,8 @@ class RemoteBrowserSession:
             # Handle popups (Google OAuth, etc.) — switch to new page
             self.context.on("page", self._on_popup)
 
-            # Navigate to Binance login
-            await self.page.goto(BINANCE_LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
+            # Navigate to start URL (Binance login by default)
+            await self.page.goto(self._start_url, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(1)
 
             logger.info(f"Remote browser session started for trader {self.trader_id}")

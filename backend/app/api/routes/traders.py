@@ -1361,3 +1361,32 @@ async def check_deposit_status(
         "balance_after": txn.balance_after,
         "mpesa_receipt": txn.mpesa_receipt,
     }
+
+
+class GmailCredentials(BaseModel):
+    gmail_email: str
+    gmail_password: str
+
+
+@router.post("/gmail-credentials")
+async def save_gmail_credentials(
+    data: GmailCredentials,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save Gmail credentials for automated OTP scanning during order release."""
+    trader.gmail_email = data.gmail_email
+    trader.gmail_password = encrypt_data(data.gmail_password)
+    await db.commit()
+    return {"message": "Gmail credentials saved successfully"}
+
+
+@router.get("/gmail-credentials")
+async def get_gmail_credentials(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Check if Gmail credentials are configured (never returns the password)."""
+    return {
+        "configured": bool(trader.gmail_email),
+        "gmail_email": trader.gmail_email or "",
+    }

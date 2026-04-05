@@ -45,7 +45,7 @@ router = APIRouter()
 # ═══════════════════════════════════════════════════════════
 
 @router.websocket("/login-stream")
-async def login_stream(websocket: WebSocket, token: str = Query(default=None)):
+async def login_stream(websocket: WebSocket, token: str = Query(default=None), mode: str = Query(default="binance")):
     """Live browser stream. User logs into Binance directly."""
     if not token:
         await websocket.close(code=4001, reason="Missing token")
@@ -58,12 +58,13 @@ async def login_stream(websocket: WebSocket, token: str = Query(default=None)):
         return
 
     await websocket.accept()
-    logger.info(f"Live browser WebSocket for trader {trader_id}")
+    logger.info(f"Live browser WebSocket for trader {trader_id} mode={mode}")
 
     # Clean up any prior session
     await remove_remote_session(trader_id)
 
-    session = RemoteBrowserSession(trader_id)
+    start_url = "https://mail.google.com" if mode == "gmail" else None
+    session = RemoteBrowserSession(trader_id, start_url=start_url)
     started = await session.start()
     if not started:
         await websocket.send_json({"type": "error", "message": "Failed to launch browser"})
@@ -126,21 +127,32 @@ async def login_stream(websocket: WebSocket, token: str = Query(default=None)):
                         result = await db.execute(select(Trader).where(Trader.id == trader_id))
                         trader = result.scalar_one_or_none()
                         if trader:
-                            trader.binance_cookies_full = encrypt_data(json.dumps(cookies))
-                            cookie_dict = {c["name"]: c["value"] for c in cookies}
-                            trader.binance_cookies = encrypt_data(json.dumps(cookie_dict))
-                            csrf = cookie_dict.get("csrftoken", "")
-                            if csrf:
-                                trader.binance_csrf_token = encrypt_data(csrf)
-                            bnc_uuid = cookie_dict.get("bnc-uuid", "")
-                            if bnc_uuid:
-                                trader.binance_bnc_uuid = encrypt_data(bnc_uuid)
-                            trader.binance_connected = True
-                            await db.commit()
-                    await websocket.send_json({
-                        "type": "session_saved", "cookie_count": len(cookies),
-                        "message": f"Session saved! {len(cookies)} cookies.",
-                    })
+                            if mode == "gmail":
+                                # Save Gmail cookies
+                                trader.gmail_cookies = encrypt_data(json.dumps(cookies))
+                                trader.gmail_email = data.get("gmail_email", trader.gmail_email)
+                                await db.commit()
+                                await websocket.send_json({
+                                    "type": "session_saved", "cookie_count": len(cookies),
+                                    "message": f"Gmail connected! {len(cookies)} cookies saved.",
+                                })
+                            else:
+                                # Save Binance cookies
+                                trader.binance_cookies_full = encrypt_data(json.dumps(cookies))
+                                cookie_dict = {c["name"]: c["value"] for c in cookies}
+                                trader.binance_cookies = encrypt_data(json.dumps(cookie_dict))
+                                csrf = cookie_dict.get("csrftoken", "")
+                                if csrf:
+                                    trader.binance_csrf_token = encrypt_data(csrf)
+                                bnc_uuid = cookie_dict.get("bnc-uuid", "")
+                                if bnc_uuid:
+                                    trader.binance_bnc_uuid = encrypt_data(bnc_uuid)
+                                trader.binance_connected = True
+                                await db.commit()
+                                await websocket.send_json({
+                                    "type": "session_saved", "cookie_count": len(cookies),
+                                    "message": f"Session saved! {len(cookies)} cookies.",
+                                })
                 else:
                     await websocket.send_json({"type": "error", "message": "Not logged in yet"})
             elif t == "close":
@@ -356,10 +368,40 @@ async def start_bot(
         cookies_full=cookies_full,
     )
 
-    if success:
-        return {"status": "started", "trader_id": target_id}
-    else:
+    if not success:
         raise HTTPException(status_code=500, detail="Failed to start bot")
+
+    # Auto-open Gmail tab if credentials are configured
+    gmail_status = "not_configured"
+    if target.gmail_email and target.gmail_password:
+        try:
+            session = browser_engine.get_session(target_id)
+            if session:
+                gmail_email = target.gmail_email
+                gmail_password = decrypt_data(target.gmail_password)
+                # Open Gmail in a second tab in the same browser context
+                gmail_page = await session.context.new_page()
+                from app.services.browser.login_wizard import LoginWizardSession
+                # Use a temporary wizard-like session just for Gmail login
+                tmp = LoginWizardSession.__new__(LoginWizardSession)
+                tmp.trader_id = target_id
+                tmp.context = session.context
+                tmp.page = session.page
+                tmp.gmail_page = gmail_page
+                tmp.gmail_email = gmail_email
+                result = await tmp.open_gmail(gmail_email, gmail_password)
+                if result.get("success"):
+                    session.gmail_page = gmail_page
+                    gmail_status = "logged_in"
+                    logger.info(f"Gmail tab opened for trader {target_id}")
+                else:
+                    gmail_status = f"failed: {result.get('message')}"
+                    logger.warning(f"Gmail login failed for trader {target_id}: {result.get('message')}")
+        except Exception as e:
+            gmail_status = f"error: {e}"
+            logger.error(f"Gmail auto-open failed for trader {target_id}: {e}")
+
+    return {"status": "started", "trader_id": target_id, "gmail": gmail_status}
 
 
 @router.post("/bot/stop")

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-export default function RemoteBrowser({ onConnected, onClose }) {
-  const [status, setStatus] = useState('starting');  // starting, live, logged_in, saving, done, error
-  const [message, setMessage] = useState('Launching Binance...');
+export default function RemoteBrowser({ onConnected, onClose, mode = 'binance' }) {
+  const isGmail = mode === 'gmail';
+  const [status, setStatus] = useState('starting');
+  const [message, setMessage] = useState(isGmail ? 'Launching Gmail...' : 'Launching Binance...');
   const [url, setUrl] = useState('');
   const canvasRef = useRef(null);
   const wsRef = useRef(null);
@@ -14,12 +15,12 @@ export default function RemoteBrowser({ onConnected, onClose }) {
 
   const connectWs = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/api/browser/login-stream?token=${token}`);
+    const ws = new WebSocket(`${protocol}//${window.location.host}/api/browser/login-stream?token=${token}&mode=${mode}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
       setStatus('live');
-      setMessage('Log into your Binance account');
+      setMessage(isGmail ? 'Log into your Gmail account' : 'Log into your Binance account');
     };
 
     ws.onmessage = (event) => {
@@ -38,14 +39,19 @@ export default function RemoteBrowser({ onConnected, onClose }) {
           };
           img.src = `data:image/jpeg;base64,${msg.data}`;
           if (msg.url) setUrl(msg.url);
-          if (msg.logged_in && status !== 'done') {
+          if (!isGmail && msg.logged_in && status !== 'done') {
             setStatus('logged_in');
             setMessage('Login detected! Click "Save & Start Bot" to activate.');
+          }
+          // For Gmail: detect inbox loaded
+          if (isGmail && msg.url && msg.url.includes('mail.google.com') && status === 'live') {
+            setStatus('logged_in');
+            setMessage('Gmail inbox detected! Click "Save Gmail Session" to save.');
           }
         }
         if (msg.type === 'session_saved') {
           setStatus('done');
-          setMessage(`Connected! ${msg.cookie_count} cookies saved.`);
+          setMessage(isGmail ? `Gmail connected! ${msg.cookie_count} cookies saved.` : `Connected! ${msg.cookie_count} cookies saved.`);
           if (onConnected) onConnected();
         }
         if (msg.type === 'error') setMessage(msg.message);
@@ -54,7 +60,7 @@ export default function RemoteBrowser({ onConnected, onClose }) {
 
     ws.onerror = () => { setStatus('error'); setMessage('Connection error'); };
     ws.onclose = () => { if (status !== 'done') { setStatus('error'); setMessage('Session ended'); } };
-  }, [token, onConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, onConnected, mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     connectWs();
@@ -141,7 +147,7 @@ export default function RemoteBrowser({ onConnected, onClose }) {
               padding: '6px 18px', borderRadius: 6, border: 'none',
               background: '#10b981', color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer',
             }}>
-              Save & Start Bot
+              {isGmail ? 'Save Gmail Session' : 'Save & Start Bot'}
             </button>
           )}
           <button onClick={handleClose} style={{

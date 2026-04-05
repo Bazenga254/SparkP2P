@@ -133,6 +133,7 @@ export default function Dashboard() {
   const [orders, setOrders] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [activeTab, setActiveTab] = useState('overview');
+  const [txnTab, setTxnTab] = useState('deposits');
   const [refreshing, setRefreshing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
   const [showBalance, setShowBalance] = useState(false);
@@ -996,82 +997,151 @@ export default function Dashboard() {
 
         {activeTab === 'transactions' && (
           <>
-            {/* Deposit History */}
-            <div className="card" style={{ marginBottom: 20 }}>
-              <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <h3>Deposit History</h3>
+            {/* Sub-tabs */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+              {['deposits', 'withdrawals'].map((t) => (
                 <button
-                  onClick={() => setShowDepositModal(true)}
+                  key={t}
+                  onClick={() => setTxnTab(t)}
                   style={{
-                    padding: '6px 16px', borderRadius: 8, border: 'none',
-                    background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff',
-                    fontWeight: 600, fontSize: 12, cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', gap: 4,
+                    padding: '8px 22px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                    fontWeight: 600, fontSize: 13,
+                    background: txnTab === t ? 'linear-gradient(135deg, #10b981, #059669)' : '#1f2937',
+                    color: txnTab === t ? '#fff' : '#9ca3af',
+                    transition: 'all 0.15s',
                   }}
                 >
-                  <Plus size={14} /> New Deposit
+                  {t.charAt(0).toUpperCase() + t.slice(1)}
                 </button>
-              </div>
-              {depositHistory.length > 0 ? (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Amount</th>
-                      <th>Status</th>
-                      <th>Receipt</th>
-                      <th>Balance After</th>
-                      <th>Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {depositHistory.map((dep) => (
-                      <tr key={dep.id}>
-                        <td className="positive">+KES {dep.amount.toLocaleString()}</td>
-                        <td style={{
-                          color: dep.status === 'completed' ? '#10b981' : dep.status === 'failed' ? '#ef4444' : '#f59e0b',
-                        }}>
-                          {dep.status}
-                        </td>
-                        <td className="mono">{dep.mpesa_receipt || '-'}</td>
-                        <td>KES {dep.balance_after?.toLocaleString() || '-'}</td>
-                        <td>{new Date(dep.created_at).toLocaleString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p className="empty-msg">No deposits yet. Deposit funds to enable auto-pay for buy orders.</p>
-              )}
+              ))}
             </div>
 
-            {/* All Wallet Transactions */}
-            <div className="card">
-              <h3>All Wallet Transactions</h3>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Type</th>
-                    <th>Amount</th>
-                    <th>Balance After</th>
-                    <th>Description</th>
-                    <th>Time</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {transactions.map((txn) => (
-                    <tr key={txn.id}>
-                      <td>{txn.type.replace(/_/g, ' ')}</td>
-                      <td className={txn.amount >= 0 ? 'positive' : 'negative'}>
-                        {txn.amount >= 0 ? '+' : ''}{txn.amount.toLocaleString()}
-                      </td>
-                      <td>KES {txn.balance_after.toLocaleString()}</td>
-                      <td>{txn.description}</td>
-                      <td>{new Date(txn.created_at).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {/* Deposits Tab */}
+            {txnTab === 'deposits' && (
+              <div className="card">
+                <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <h3>Deposit History</h3>
+                  <button
+                    onClick={() => setShowDepositModal(true)}
+                    style={{
+                      padding: '6px 16px', borderRadius: 8, border: 'none',
+                      background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff',
+                      fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 4,
+                    }}
+                  >
+                    <Plus size={14} /> New Deposit
+                  </button>
+                </div>
+                {depositHistory.length > 0 ? (
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Receipt</th>
+                        <th>Balance After</th>
+                        <th>Time</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {depositHistory.map((dep) => (
+                        <tr key={dep.id}>
+                          <td className="positive">+KES {dep.amount.toLocaleString()}</td>
+                          <td style={{
+                            color: dep.status === 'completed' ? '#10b981' : dep.status === 'failed' ? '#ef4444' : '#f59e0b',
+                          }}>
+                            {dep.status}
+                          </td>
+                          <td className="mono">{dep.mpesa_receipt || '-'}</td>
+                          <td>KES {dep.balance_after?.toLocaleString() || '-'}</td>
+                          <td>{new Date(dep.created_at).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="empty-msg">No deposits yet. Deposit funds to enable auto-pay for buy orders.</p>
+                )}
+              </div>
+            )}
+
+            {/* Withdrawals Tab */}
+            {txnTab === 'withdrawals' && (() => {
+              // Group platform_fee + settlement_fee at the same timestamp into one "fees" row
+              const negative = transactions.filter(t => t.amount < 0);
+              const grouped = [];
+              const feeMap = {}; // key = minute-truncated timestamp → accumulated fee amount
+
+              negative.forEach(txn => {
+                const minuteKey = txn.created_at.slice(0, 16); // "2026-04-01T11:44"
+                if (txn.type === 'platform_fee' || txn.type === 'settlement_fee') {
+                  if (!feeMap[minuteKey]) {
+                    feeMap[minuteKey] = { type: 'fees', amount: 0, balance_after: txn.balance_after, description: 'Transaction fees', created_at: txn.created_at, id: 'fee-' + minuteKey };
+                    grouped.push(feeMap[minuteKey]);
+                  }
+                  feeMap[minuteKey].amount += txn.amount;
+                } else {
+                  grouped.push(txn);
+                }
+              });
+
+              return (
+                <div className="card">
+                  <h3>Withdrawals & Fees</h3>
+                  {grouped.length > 0 ? (
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Type</th>
+                          <th>Amount</th>
+                          <th>Balance After</th>
+                          <th>Sent To</th>
+                          <th>Description</th>
+                          <th>Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {grouped.map((txn) => {
+                          const desc = (txn.description || '').toLowerCase();
+                          let destination = null;
+                          if (txn.type === 'withdrawal') {
+                            if (desc.includes('mpesa') || desc.includes('m-pesa') || desc.includes('safaricom')) {
+                              destination = { label: 'Safaricom M-Pesa', color: '#10b981', bg: 'rgba(16,185,129,0.1)' };
+                            } else if (desc.includes('i&m') || desc.includes('im bank') || desc.includes('i & m')) {
+                              destination = { label: 'I&M Bank', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' };
+                            } else if (desc.includes('bank') || desc.includes('paybill') || desc.includes('till')) {
+                              destination = { label: 'Bank', color: '#8b5cf6', bg: 'rgba(139,92,246,0.1)' };
+                            }
+                          }
+                          return (
+                            <tr key={txn.id}>
+                              <td>{txn.type.replace(/_/g, ' ')}</td>
+                              <td className="negative">{txn.amount.toLocaleString()}</td>
+                              <td>KES {txn.balance_after.toLocaleString()}</td>
+                              <td>
+                                {destination ? (
+                                  <span style={{
+                                    padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600,
+                                    color: destination.color, background: destination.bg,
+                                  }}>
+                                    {destination.label}
+                                  </span>
+                                ) : '—'}
+                              </td>
+                              <td>{txn.description}</td>
+                              <td>{new Date(txn.created_at).toLocaleString()}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p className="empty-msg">No withdrawals yet.</p>
+                  )}
+                </div>
+              );
+            })()}
           </>
         )}
 

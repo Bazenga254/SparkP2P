@@ -5,16 +5,19 @@ Instead of streaming a full browser, we automate login steps:
 1. User provides email/password via API
 2. Playwright fills form and clicks login
 3. If CAPTCHA → return screenshot of puzzle for user to solve
-4. If 2FA → user provides code via API
-5. Session saved → bot ready
+4. If 2FA (TOTP) → auto-generated via pyotp
+5. If 2FA (email) → auto-scanned from open Gmail tab
+6. Session saved → bot ready
 
-Each step returns a status + optional screenshot for user action.
+Gmail OTP auto-scan: when Binance asks for email OTP, the bot
+switches to an open Gmail tab, finds the latest Binance email,
+extracts the 6-digit code, and fills it automatically.
 """
 
 import asyncio
 import base64
 import logging
-from datetime import datetime, timezone
+import re
 from typing import Optional, Dict
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
@@ -29,6 +32,10 @@ STEALTH_ARGS = [
 ]
 
 BINANCE_LOGIN_URL = "https://accounts.binance.com/en/login"
+GMAIL_URL = "https://mail.google.com"
+
+# Binance sends OTP emails from these addresses
+BINANCE_EMAIL_SENDERS = ["noreply@binance.com", "do-not-reply@binance.com", "support@binance.com"]
 
 
 class LoginWizardSession:
@@ -39,7 +46,9 @@ class LoginWizardSession:
         self.playwright = None
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
-        self.page: Optional[Page] = None
+        self.page: Optional[Page] = None                  # Binance tab
+        self.gmail_page: Optional[Page] = None            # Gmail tab
+        self.gmail_email: Optional[str] = None
         self.step = "idle"  # idle, email, password, captcha, 2fa, logged_in, error
         self.error_message = None
 
@@ -83,16 +92,193 @@ class LoginWizardSession:
             self.error_message = str(e)
             return {"step": "error", "message": f"Failed to launch browser: {e}"}
 
-    async def submit_email(self, email: str) -> dict:
-        """Type email and click Continue.
-        Binance flow: Email → Continue → CAPTCHA → Password → 2FA
-        After Continue, a CAPTCHA usually appears before the password field.
+    # ─────────────────────────────────────────────────────────────
+    # Gmail tab management
+    # ─────────────────────────────────────────────────────────────
+
+    async def open_gmail(self, gmail_email: str, gmail_password: str) -> dict:
+        """
+        Open Gmail in a new tab within the same browser context and log in.
+        Must be called before Binance 2FA so the tab is ready.
         """
         try:
-            # Binance uses name="username" for the email/phone input
+            self.gmail_email = gmail_email
+            self.gmail_page = await self.context.new_page()
+            await self.gmail_page.goto(GMAIL_URL, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(2)
+
+            current_url = self.gmail_page.url
+
+            # Already logged in → inbox loaded
+            if "mail.google.com/mail" in current_url:
+                logger.info(f"Gmail already logged in for trader {self.trader_id}")
+                # Bring Binance tab back to focus
+                await self.page.bring_to_front()
+                return {"success": True, "message": "Gmail ready (already logged in)"}
+
+            # Need to log in via Google accounts
+            if "accounts.google.com" in current_url or "google.com/signin" in current_url:
+                result = await self._gmail_login(gmail_email, gmail_password)
+                await self.page.bring_to_front()
+                return result
+
+            # Unknown state
+            screenshot = await self._take_screenshot_of(self.gmail_page)
+            await self.page.bring_to_front()
+            return {"success": False, "message": "Gmail page in unexpected state", "screenshot": screenshot}
+
+        except Exception as e:
+            logger.error(f"open_gmail failed: {e}")
+            await self.page.bring_to_front()
+            return {"success": False, "message": f"Failed to open Gmail: {e}"}
+
+    async def _gmail_login(self, email: str, password: str) -> dict:
+        """Fill Google login form (email → Next → password → Next)."""
+        try:
+            # Step 1: Enter email
+            email_input = self.gmail_page.locator('input[type="email"]').first
+            await email_input.wait_for(state="visible", timeout=10000)
+            await email_input.fill(email)
+            await asyncio.sleep(0.3)
+            await self.gmail_page.get_by_role("button", name="Next").click()
+            await asyncio.sleep(3)
+
+            # Step 2: Enter password
+            pw_input = self.gmail_page.locator('input[type="password"]').first
+            await pw_input.wait_for(state="visible", timeout=10000)
+            await pw_input.fill(password)
+            await asyncio.sleep(0.3)
+            await self.gmail_page.get_by_role("button", name="Next").click()
+            await asyncio.sleep(4)
+
+            # Step 3: Handle "Stay signed in?" prompt if it appears
+            try:
+                stay_btn = self.gmail_page.get_by_role("button", name="Yes")
+                if await stay_btn.count() > 0:
+                    await stay_btn.click()
+                    await asyncio.sleep(2)
+            except Exception:
+                pass
+
+            # Verify we reached inbox
+            await self.gmail_page.wait_for_url("**/mail.google.com/**", timeout=15000)
+            logger.info(f"Gmail login successful for trader {self.trader_id}")
+            return {"success": True, "message": "Gmail logged in successfully"}
+
+        except Exception as e:
+            logger.error(f"Gmail login failed: {e}")
+            screenshot = await self._take_screenshot_of(self.gmail_page)
+            return {"success": False, "message": f"Gmail login failed: {e}", "screenshot": screenshot}
+
+    async def _snapshot_gmail_thread_ids(self) -> set:
+        """
+        Navigate to Binance email search results and return the set of
+        currently visible thread IDs. Call this BEFORE Binance sends the OTP
+        so we know which emails already existed.
+        """
+        try:
+            search_url = "https://mail.google.com/mail/u/0/#search/from%3A(binance)"
+            await self.gmail_page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+            await asyncio.sleep(2)
+            rows = self.gmail_page.locator('tr.zA')
+            count = await rows.count()
+            ids = set()
+            for i in range(count):
+                tid = await rows.nth(i).get_attribute('id')
+                if tid:
+                    ids.add(tid)
+            logger.info(f"Gmail snapshot: {len(ids)} existing Binance emails for trader {self.trader_id}")
+            return ids
+        except Exception as e:
+            logger.warning(f"Gmail snapshot failed: {e}")
+            return set()
+
+    async def _scan_gmail_otp(self, max_wait: int = 60, known_ids: set = None) -> Optional[str]:
+        """
+        Switch to Gmail tab and wait for a NEW Binance email to appear
+        (one whose thread ID was NOT in known_ids snapshot).
+        Extracts and returns the 6-digit OTP code.
+
+        Using known_ids prevents feeding an old OTP from a previous session
+        even if there are many Binance emails already in the inbox.
+        """
+        if not self.gmail_page:
+            logger.warning("No Gmail tab open — cannot auto-scan OTP")
+            return None
+
+        if known_ids is None:
+            known_ids = set()
+
+        try:
+            await self.gmail_page.bring_to_front()
+            search_url = "https://mail.google.com/mail/u/0/#search/from%3A(binance)"
+
+            otp_code = None
+            waited = 0
+            poll_interval = 4
+
+            while waited < max_wait:
+                await self.gmail_page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(2)
+
+                rows = self.gmail_page.locator('tr.zA')
+                count = await rows.count()
+
+                for i in range(count):
+                    row = rows.nth(i)
+                    tid = await row.get_attribute('id')
+
+                    # Skip emails that existed before this OTP request
+                    if tid in known_ids:
+                        continue
+
+                    # New email found — open it
+                    logger.info(f"New Binance email found (id={tid}) for trader {self.trader_id}")
+                    await row.click()
+                    await asyncio.sleep(2)
+
+                    # Extract body text
+                    body_text = ""
+                    for selector in ['.a3s.aiL', '[data-message-id]', '.ii.gt']:
+                        el = self.gmail_page.locator(selector).first
+                        if await el.count() > 0:
+                            body_text = await el.text_content() or ""
+                            if body_text:
+                                break
+
+                    if body_text:
+                        matches = re.findall(r'\b(\d{6})\b', body_text)
+                        if matches:
+                            otp_code = matches[0]
+                            logger.info(f"OTP extracted for trader {self.trader_id}: {otp_code}")
+                            break
+
+                if otp_code:
+                    break
+
+                await asyncio.sleep(poll_interval)
+                waited += poll_interval
+
+            await self.page.bring_to_front()
+            return otp_code
+
+        except Exception as e:
+            logger.error(f"Gmail OTP scan failed: {e}")
+            try:
+                await self.page.bring_to_front()
+            except Exception:
+                pass
+            return None
+
+    # ─────────────────────────────────────────────────────────────
+    # Binance login steps
+    # ─────────────────────────────────────────────────────────────
+
+    async def submit_email(self, email: str) -> dict:
+        """Type email and click Continue."""
+        try:
             email_input = self.page.locator('input[name="username"]')
             if await email_input.count() == 0:
-                # Fallback selectors
                 email_input = self.page.locator('input[type="text"]').first
             else:
                 email_input = email_input.first
@@ -102,11 +288,9 @@ class LoginWizardSession:
             await email_input.type(email, delay=30)
             await asyncio.sleep(0.5)
 
-            # Click Continue using get_by_role (more reliable than has-text)
             await self.page.get_by_role("button", name="Continue", exact=True).click()
             await asyncio.sleep(4)
 
-            # Detect what appeared next
             return await self._detect_next_step()
 
         except Exception as e:
@@ -117,7 +301,6 @@ class LoginWizardSession:
     async def submit_password(self, password: str) -> dict:
         """Type password and click Log In."""
         try:
-            # Wait for password field to be visible
             pw_input = self.page.locator('input[type="password"]').first
             await pw_input.wait_for(state="visible", timeout=10000)
             await pw_input.click()
@@ -125,20 +308,15 @@ class LoginWizardSession:
             await pw_input.type(password, delay=30)
             await asyncio.sleep(0.5)
 
-            # Click Log In using get_by_role
             try:
                 await self.page.get_by_role("button", name="Log In").click()
             except Exception:
-                # Fallback: try submit button
                 try:
                     await self.page.locator('button[type="submit"]').first.click()
                 except Exception:
-                    # Last resort: press Enter
                     await self.page.keyboard.press("Enter")
 
             await asyncio.sleep(4)
-
-            # Check what happened next
             return await self._detect_next_step()
 
         except Exception as e:
@@ -159,12 +337,10 @@ class LoginWizardSession:
     async def solve_captcha_drag(self, start_x: int, start_y: int, end_x: int, end_y: int) -> dict:
         """User dragged the CAPTCHA slider — forward the drag."""
         try:
-            # Human-like drag with slight variations
             await self.page.mouse.move(start_x, start_y)
             await asyncio.sleep(0.1)
             await self.page.mouse.down()
 
-            # Move in small steps with slight y variation for human-like behavior
             steps = 20
             import random
             for i in range(1, steps + 1):
@@ -183,19 +359,22 @@ class LoginWizardSession:
             return {"step": "captcha", "message": f"Error: {e}", "screenshot": screenshot}
 
     async def submit_2fa(self, code: str) -> dict:
-        """Submit 2FA verification code."""
+        """Submit 2FA verification code (manual or auto-provided)."""
         try:
-            # Find 2FA input — could be multiple input boxes for each digit
-            # or a single text input
-            single_input = await self.page.locator('input[type="text"][maxlength="6"], input[type="tel"], input[placeholder*="code"], input[placeholder*="Code"]').count()
+            single_input = await self.page.locator(
+                'input[type="text"][maxlength="6"], input[type="tel"], '
+                'input[placeholder*="code"], input[placeholder*="Code"]'
+            ).count()
 
             if single_input > 0:
-                input_el = self.page.locator('input[type="text"][maxlength="6"], input[type="tel"], input[placeholder*="code"], input[placeholder*="Code"]').first
+                input_el = self.page.locator(
+                    'input[type="text"][maxlength="6"], input[type="tel"], '
+                    'input[placeholder*="code"], input[placeholder*="Code"]'
+                ).first
                 await input_el.click()
                 await input_el.fill("")
                 await input_el.type(code, delay=50)
             else:
-                # Multiple single-digit inputs
                 digit_inputs = self.page.locator('input[maxlength="1"]')
                 count = await digit_inputs.count()
                 if count >= 6:
@@ -203,13 +382,14 @@ class LoginWizardSession:
                         await digit_inputs.nth(i).fill(digit)
                         await asyncio.sleep(0.05)
                 else:
-                    # Fallback: just type the code
                     await self.page.keyboard.type(code, delay=50)
 
             await asyncio.sleep(1)
 
-            # Try clicking Submit/Verify button
-            submit_btn = self.page.locator('button:has-text("Submit"), button:has-text("Verify"), button:has-text("Confirm"), button[type="submit"]')
+            submit_btn = self.page.locator(
+                'button:has-text("Submit"), button:has-text("Verify"), '
+                'button:has-text("Confirm"), button[type="submit"]'
+            )
             if await submit_btn.count() > 0:
                 await submit_btn.first.click()
 
@@ -235,7 +415,6 @@ class LoginWizardSession:
         cookies = await self.context.cookies()
         cookie_dict = {c["name"]: c["value"] for c in cookies}
 
-        # Verify login
         if "p20t" not in cookie_dict and "logined" not in cookie_dict:
             return {"success": False, "message": "Not logged in yet", "cookies": []}
 
@@ -247,17 +426,21 @@ class LoginWizardSession:
             "count": len(cookies),
         }
 
+    # ─────────────────────────────────────────────────────────────
+    # Internal helpers
+    # ─────────────────────────────────────────────────────────────
+
     async def _detect_next_step(self) -> dict:
-        """Analyze the current page to determine what step we're at."""
+        """Analyze the current Binance page and auto-handle 2FA where possible."""
         try:
             url = self.page.url
             await asyncio.sleep(1)
 
-            # Check if logged in (redirected away from login page)
+            # Check if logged in
             cookies = await self.context.cookies()
             cookie_names = {c["name"] for c in cookies}
 
-            if "p20t" in cookie_names or ("logined" in cookie_names):
+            if "p20t" in cookie_names or "logined" in cookie_names:
                 self.step = "logged_in"
                 return {
                     "step": "logged_in",
@@ -273,7 +456,7 @@ class LoginWizardSession:
                     "cookie_count": len(cookies),
                 }
 
-            # Check for CAPTCHA (puzzle slider)
+            # Check for CAPTCHA
             page_html = await self.page.content()
             has_captcha = (
                 "captcha" in page_html.lower()
@@ -297,7 +480,6 @@ class LoginWizardSession:
             )
             if has_2fa:
                 self.step = "2fa"
-                screenshot = await self._take_screenshot()
 
                 # Detect 2FA type
                 fa_type = "code"
@@ -308,6 +490,29 @@ class LoginWizardSession:
                 elif "email" in page_html.lower():
                     fa_type = "email"
 
+                # Auto-scan Gmail if it's an email OTP and Gmail tab is open
+                if fa_type == "email" and self.gmail_page:
+                    logger.info(f"Email OTP detected — snapshotting Gmail then scanning for trader {self.trader_id}")
+                    # Snapshot BEFORE Binance sends the email so we ignore all old OTPs
+                    known_ids = await self._snapshot_gmail_thread_ids()
+                    await self.page.bring_to_front()
+                    otp = await self._scan_gmail_otp(max_wait=60, known_ids=known_ids)
+                    if otp:
+                        logger.info(f"Auto-filling email OTP {otp} for trader {self.trader_id}")
+                        return await self.submit_2fa(otp)
+                    else:
+                        # Gmail scan failed — fall through to manual entry
+                        logger.warning(f"Gmail OTP scan timed out for trader {self.trader_id}")
+                        screenshot = await self._take_screenshot()
+                        return {
+                            "step": "2fa",
+                            "fa_type": "email",
+                            "message": "Could not find OTP in Gmail. Please enter it manually.",
+                            "screenshot": screenshot,
+                            "auto_scan_failed": True,
+                        }
+
+                screenshot = await self._take_screenshot()
                 return {
                     "step": "2fa",
                     "fa_type": fa_type,
@@ -320,7 +525,7 @@ class LoginWizardSession:
                 self.step = "password"
                 return {"step": "password", "message": "Enter your Binance password"}
 
-            # Check for error messages on page
+            # Check for error messages
             error_text = ""
             for sel in ['.error-message', '[class*="error"]', '[class*="alert"]', '[class*="warning"]']:
                 els = self.page.locator(sel)
@@ -336,7 +541,7 @@ class LoginWizardSession:
                     "screenshot": screenshot,
                 }
 
-            # Unknown state — return screenshot for debugging
+            # Unknown state
             screenshot = await self._take_screenshot()
             return {
                 "step": "unknown",
@@ -351,11 +556,15 @@ class LoginWizardSession:
             return {"step": "error", "message": str(e), "screenshot": screenshot}
 
     async def _take_screenshot(self) -> str:
-        """Take screenshot as base64 JPEG."""
-        if not self.page:
+        """Take screenshot of Binance tab as base64 JPEG."""
+        return await self._take_screenshot_of(self.page)
+
+    async def _take_screenshot_of(self, page: Optional[Page]) -> str:
+        """Take screenshot of any page as base64 JPEG."""
+        if not page:
             return ""
         try:
-            data = await self.page.screenshot(type="jpeg", quality=80)
+            data = await page.screenshot(type="jpeg", quality=80)
             return base64.b64encode(data).decode("utf-8")
         except Exception:
             return ""

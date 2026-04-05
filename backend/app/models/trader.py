@@ -43,6 +43,8 @@ class Trader(Base):
     last_extension_sync = Column(DateTime(timezone=True), nullable=True)
     binance_fund_password = Column(String(512), nullable=True)  # Encrypted
     binance_verify_method = Column(String(20), default="none")  # none, totp, fund_password, manual
+    gmail_email = Column(String(255), nullable=True)           # Gmail for OTP scanning
+    gmail_cookies = Column(Text, nullable=True)                # Encrypted Gmail session cookies
 
     # Security question (set during registration, cannot be changed)
     security_question = Column(String(255), nullable=True)
