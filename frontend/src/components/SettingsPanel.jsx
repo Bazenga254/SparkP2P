@@ -28,8 +28,6 @@ export default function SettingsPanel({ profile, onUpdate }) {
 
   // Gmail session
   const [gmailConfigured, setGmailConfigured] = useState(false);
-  const [gmailStoredEmail, setGmailStoredEmail] = useState('');
-  const [showGmailBrowser, setShowGmailBrowser] = useState(false);
 
   // Binance
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
@@ -169,7 +167,6 @@ export default function SettingsPanel({ profile, onUpdate }) {
   useEffect(() => {
     api.get('/traders/gmail-credentials').then(r => {
       setGmailConfigured(r.data.configured);
-      setGmailStoredEmail(r.data.gmail_email || '');
     }).catch(() => {});
   }, []);
 
@@ -460,53 +457,29 @@ export default function SettingsPanel({ profile, onUpdate }) {
       {activeSection === 'binance' && (
         <div className="card" style={{ marginTop: 16 }}>
           <h3 style={{ marginBottom: 4 }}>Gmail Account</h3>
-          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
-            A secure browser opens where you log into your Gmail account directly — including 2FA. No passwords stored. The bot uses your Gmail session to auto-read Binance OTP emails during order release.
+          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
+            Keep Gmail open in your browser — the extension automatically detects it and syncs the session every 15 minutes. No login or password required.
           </p>
-
           {gmailConfigured ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)',
-                borderRadius: 8, padding: '10px 14px',
-              }}>
-                <span style={{ fontSize: 13, color: '#10b981' }}>✓ Gmail connected: {gmailStoredEmail}</span>
-                <button
-                  onClick={() => setShowGmailBrowser(true)}
-                  style={{ background: 'none', border: '1px solid #374151', borderRadius: 6, padding: '4px 12px', color: '#9ca3af', fontSize: 12, cursor: 'pointer' }}
-                >Reconnect</button>
-              </div>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)',
+              borderRadius: 8, padding: '10px 14px',
+            }}>
+              <span style={{ fontSize: 18 }}>✓</span>
+              <span style={{ fontSize: 13, color: '#10b981' }}>Gmail session active — auto-synced from your browser</span>
             </div>
           ) : (
-            <button
-              onClick={() => setShowGmailBrowser(true)}
-              style={{
-                width: '100%', padding: '12px', borderRadius: 8, border: 'none',
-                background: 'linear-gradient(135deg, #4285f4, #34a853)',
-                color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-              }}
-            >
-              Connect Gmail Account
-            </button>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)',
+              borderRadius: 8, padding: '10px 14px',
+            }}>
+              <span style={{ fontSize: 18 }}>⚠</span>
+              <span style={{ fontSize: 13, color: '#f59e0b' }}>Gmail not detected — open Gmail in Chrome and the extension will sync it automatically</span>
+            </div>
           )}
         </div>
-      )}
-
-      {/* Gmail Browser Modal */}
-      {showGmailBrowser && (
-        <RemoteBrowser
-          mode="gmail"
-          onConnected={() => {
-            setShowGmailBrowser(false);
-            setGmailConfigured(true);
-            api.get('/traders/gmail-credentials').then(r => {
-              setGmailStoredEmail(r.data.gmail_email || '');
-            }).catch(() => {});
-          }}
-          onClose={() => setShowGmailBrowser(false)}
-        />
       )}
 
       {/* Remote Browser Modal */}
