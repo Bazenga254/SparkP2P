@@ -1105,79 +1105,43 @@ function stopPoller() {
 }
 
 async function extractMpesaCodesFromChat(page) {
+  if (!anthropicApiKey) {
+    console.log('[SparkP2P] No API key — skipping chat M-Pesa extraction');
+    return [];
+  }
   try {
-    // ── Step 1: Try DOM text first (buyer typed the code as plain text) ──────
-    const textCodes = await page.evaluate(() => {
-      const fullText = document.body.innerText || '';
-      const matches = fullText.match(/\b[A-Z0-9]{10}\b/g) || [];
-      return [...new Set(matches)];
-    });
-    if (textCodes.length > 0) {
-      console.log(`[SparkP2P] M-Pesa codes found in chat text: ${textCodes.join(', ')}`);
-      return textCodes;
+    // Round 1: full page screenshot → Vision decides what to do
+    const raw1 = await page.screenshot({ type: 'jpeg', quality: 90 });
+    const result1 = await askVisionForMpesaCode(raw1.toString('base64'));
+    console.log(`[SparkP2P] Vision chat scan: action=${result1.action} code=${result1.mpesa_code} click=(${result1.click_x},${result1.click_y})`);
+
+    if (result1.mpesa_code) {
+      console.log(`[SparkP2P] Vision found M-Pesa code: ${result1.mpesa_code}`);
+      return [result1.mpesa_code];
     }
 
-    // ── Step 2: Vision on the full page — thumbnail is often readable ────────
-    console.log('[SparkP2P] No text codes — asking Vision to read M-Pesa code from page (including chat thumbnail)...');
-    const code = await extractCodeFromChatImageWithVision(page);
-    if (code) {
-      console.log(`[SparkP2P] Vision read M-Pesa code from page: ${code}`);
-      return [code];
+    if (result1.action === 'click_image') {
+      // Vision saw a thumbnail it couldn't read — click where it said
+      console.log(`[SparkP2P] Vision says click image at (${result1.click_x}, ${result1.click_y})`);
+      await page.mouse.click(result1.click_x, result1.click_y);
+      await new Promise(r => setTimeout(r, 2500));
+      await takeScreenshot('chat_image_enlarged', page);
+
+      // Round 2: enlarged image → Vision reads the code
+      const raw2 = await page.screenshot({ type: 'jpeg', quality: 90 });
+      const result2 = await askVisionForMpesaCode(raw2.toString('base64'));
+      console.log(`[SparkP2P] Vision enlarged scan: action=${result2.action} code=${result2.mpesa_code}`);
+
+      await page.keyboard.press('Escape').catch(() => {});
+      await new Promise(r => setTimeout(r, 500));
+
+      if (result2.mpesa_code) {
+        console.log(`[SparkP2P] Vision found M-Pesa code from enlarged image: ${result2.mpesa_code}`);
+        return [result2.mpesa_code];
+      }
     }
 
-    // ── Step 3: Thumbnail too small — click it to open enlarged lightbox ─────
-    console.log('[SparkP2P] Vision could not read thumbnail — trying to click chat image...');
-
-    // Find ALL images on the page, log them for debugging, pick the one in the
-    // right half (chat panel) that is not a tiny icon or avatar
-    const imgInfo = await page.evaluate(() => {
-      const vw = window.innerWidth;
-      const results = [];
-      document.querySelectorAll('img').forEach(img => {
-        const rect = img.getBoundingClientRect();
-        if (rect.width < 40 || rect.height < 40) return; // skip icons
-        if (rect.left < vw * 0.5) return;                 // skip left panel
-        if (rect.top < 0 || rect.bottom > window.innerHeight) return; // off-screen
-        results.push({
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + rect.height / 2),
-          w: Math.round(rect.width),
-          h: Math.round(rect.height),
-          src: img.src?.substring(0, 60),
-          cls: img.className?.substring(0, 60),
-        });
-      });
-      return results;
-    });
-
-    console.log(`[SparkP2P] Chat-area images found: ${imgInfo.length}`, JSON.stringify(imgInfo));
-
-    if (imgInfo.length === 0) {
-      console.log('[SparkP2P] No chat images found in right panel');
-      return [];
-    }
-
-    // Click the last image (most recent message) using real mouse coords
-    const target = imgInfo[imgInfo.length - 1];
-    console.log(`[SparkP2P] Clicking chat image at (${target.x}, ${target.y}) size ${target.w}x${target.h}`);
-    await page.mouse.click(target.x, target.y);
-
-    // Wait for lightbox to open
-    await new Promise(r => setTimeout(r, 2500));
-    await takeScreenshot('chat_image_enlarged', page);
-
-    const code2 = await extractCodeFromChatImageWithVision(page);
-
-    // Close lightbox
-    await page.keyboard.press('Escape').catch(() => {});
-    await new Promise(r => setTimeout(r, 500));
-
-    if (code2) {
-      console.log(`[SparkP2P] Vision extracted M-Pesa code from enlarged image: ${code2}`);
-      return [code2];
-    }
-
-    console.log('[SparkP2P] Could not extract M-Pesa code from chat image');
+    console.log('[SparkP2P] Vision could not find M-Pesa code in chat');
     return [];
   } catch (e) {
     console.error('[SparkP2P] extractMpesaCodesFromChat error:', e.message?.substring(0, 60));
@@ -1185,11 +1149,8 @@ async function extractMpesaCodesFromChat(page) {
   }
 }
 
-async function extractCodeFromChatImageWithVision(page) {
-  if (!anthropicApiKey) return null;
+async function askVisionForMpesaCode(b64) {
   try {
-    const raw = await page.screenshot({ type: 'jpeg', quality: 90 });
-    const b64 = raw.toString('base64');
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -1199,17 +1160,28 @@ async function extractCodeFromChatImageWithVision(page) {
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 200,
+        max_tokens: 300,
         messages: [{
           role: 'user',
           content: [
             { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-            { type: 'text', text: `This screenshot shows an M-Pesa SMS conversation. Find the M-Pesa transaction code for a SENT payment (format: exactly 10 uppercase letters/digits, e.g. "UD5IZBFOER").
+            { type: 'text', text: `You are looking at a Binance P2P order page. The right side has a chat panel where the buyer may have sent an M-Pesa payment screenshot.
 
-Look for text like "UD5IZBFOER Confirmed. Ksh X,XXX.XX sent to..." — that is the SENT code.
-Ignore codes for received/incoming payments.
+Your job: find the M-Pesa SENT transaction code (exactly 10 uppercase letters+digits, e.g. "UD5IZBFOER").
+- The code appears in text like: "UD5IZBFOER Confirmed. Ksh 1,000.00 sent to SPARK FREELANCE..."
+- It could be in a chat thumbnail image that is too small to read.
 
-Return ONLY valid JSON: {"mpesa_code": "<10-char code or null>"}` },
+Return ONLY valid JSON — no markdown:
+{
+  "action": "found" | "click_image" | "not_found",
+  "mpesa_code": "<10-char code or null>",
+  "click_x": <pixel x to click on the thumbnail image, or null>,
+  "click_y": <pixel y to click on the thumbnail image, or null>
+}
+
+- If you can read the sent code → action="found", mpesa_code="<code>"
+- If there is a chat screenshot/thumbnail image that likely contains the code but you cannot read it → action="click_image", provide click_x and click_y at the center of that image
+- If no payment evidence at all → action="not_found"` },
           ],
         }],
       }),
@@ -1218,14 +1190,11 @@ Return ONLY valid JSON: {"mpesa_code": "<10-char code or null>"}` },
     const text = (data.content?.[0]?.text || '').trim()
       .replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
     const match = text.match(/\{[\s\S]*\}/);
-    if (match) {
-      const result = JSON.parse(match[0]);
-      return result.mpesa_code || null;
-    }
-    return null;
+    if (match) return JSON.parse(match[0]);
+    return { action: 'not_found', mpesa_code: null };
   } catch (e) {
-    console.error('[Vision] extractCodeFromChatImageWithVision error:', e.message?.substring(0, 60));
-    return null;
+    console.error('[Vision] askVisionForMpesaCode error:', e.message?.substring(0, 60));
+    return { action: 'not_found', mpesa_code: null };
   }
 }
 
