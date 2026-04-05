@@ -1570,14 +1570,35 @@ async function monitorActiveOrder(page) {
     console.log(`[SparkP2P] Order ${activeOrderNumber} PAID — verifying M-Pesa...`);
     const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount || info.fiat_amount_kes, page);
     if (verified) {
-      console.log(`[SparkP2P] ✅ M-Pesa confirmed — releasing via vision`);
-      // Close any open lightbox and let the page settle before clicking Payment Received
+      console.log(`[SparkP2P] ✅ M-Pesa confirmed — clicking Payment Received`);
+
+      // Close any open lightbox first
       await page.keyboard.press('Escape').catch(() => {});
-      await new Promise(r => setTimeout(r, 1000));
-      // Click Payment Received directly — we already know we're on verify_payment screen
+      await new Promise(r => setTimeout(r, 800));
+
+      // Confirm we are still on the order detail page (lightbox/Escape may have navigated away)
+      const currentUrl = page.url();
+      console.log(`[SparkP2P] Current URL after verification: ${currentUrl}`);
+
+      if (!currentUrl.includes('fiatOrderDetail')) {
+        // We navigated away — go back to orders list and re-click the order
+        console.log(`[SparkP2P] Not on order detail — navigating back and clicking order...`);
+        await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
+          { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 2500));
+        const reClicked = await clickOrderWithMouse(page, activeOrderNumber);
+        if (!reClicked) {
+          console.log(`[SparkP2P] Could not re-click order ${activeOrderNumber}`);
+          return;
+        }
+        await new Promise(r => setTimeout(r, 4000));
+      }
+
+      // Click Payment Received directly on the order detail page
       const clicked = await clickButton(page, 'Payment Received', 'payment received');
       console.log(`[SparkP2P] Payment Received clicked: ${clicked}`);
       await new Promise(r => setTimeout(r, 2000));
+
       // Continue the full release flow (confirm modal, TOTP, email OTP, etc.)
       await releaseWithVision(page, activeOrderNumber, {});
       activeOrderNumber = null; activeOrderFiatAmount = 0;
@@ -2487,22 +2508,24 @@ async function releaseWithVision(page, orderNumber, action) {
         continue;
       }
 
-      // ── Unknown — try common buttons first, then reload ─────
-      console.log(`[Vision] Unknown screen at step ${step} — trying common buttons...`);
-      // Log all visible buttons so we can debug what Binance is showing
-      const visibleButtons = await page.evaluate(() =>
-        Array.from(document.querySelectorAll('button, [role="button"]'))
-          .map(b => b.textContent.trim()).filter(t => t.length > 0 && t.length < 50)
-      ).catch(() => []);
-      if (visibleButtons.length) console.log(`[Vision] Visible buttons: ${visibleButtons.join(' | ')}`);
+      // ── Unknown — check if we drifted off the order detail page ────────────
+      const unknownUrl = page.url();
+      console.log(`[Vision] Unknown screen at step ${step} — URL: ${unknownUrl}`);
 
-      // Try clicking "Payment Received" or "Release" in case vision misidentified the screen
-      const triedClick = await clickButton(page,
-        'Payment Received', 'Confirm Release', 'Release', 'Verify Payment', 'Confirm'
-      );
-      if (triedClick) { await new Promise(r => setTimeout(r, 2000)); continue; }
+      if (!unknownUrl.includes('fiatOrderDetail')) {
+        // We are not on the order detail page — navigate back
+        console.log(`[Vision] Not on order detail page — navigating back to order ${orderNumber}`);
+        await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
+          { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 2500));
+        await clickOrderWithMouse(page, orderNumber);
+        await new Promise(r => setTimeout(r, 4000));
+        continue;
+      }
 
-      await new Promise(r => setTimeout(r, 5000));
+      // Still on the right page — just reload and retry Vision
+      console.log(`[Vision] On order page but Vision confused — reloading...`);
+      await new Promise(r => setTimeout(r, 3000));
       await page.reload({ waitUntil: 'domcontentloaded' });
       await new Promise(r => setTimeout(r, 3000));
     }
