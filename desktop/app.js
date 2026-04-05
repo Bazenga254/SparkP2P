@@ -2431,10 +2431,28 @@ async function releaseWithVision(page, orderNumber, action) {
 
       // ── Confirm release modal — checkbox + Confirm Release ──
       if (screen === 'confirm_release_modal') {
-        if (info.checkbox_visible && !info.checkbox_checked) {
-          const cb = await page.$('input[type="checkbox"]');
-          if (cb) { await cb.click(); await new Promise(r => setTimeout(r, 800)); }
-        }
+        // Tick the checkbox — try multiple selectors since Binance uses custom checkboxes
+        const cbClicked = await page.evaluate(() => {
+          const selectors = [
+            'input[type="checkbox"]',
+            '[class*="checkbox"]',
+            '[class*="Checkbox"]',
+            '[role="checkbox"]',
+          ];
+          for (const sel of selectors) {
+            const els = document.querySelectorAll(sel);
+            for (const el of els) {
+              const rect = el.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                el.click();
+                return sel;
+              }
+            }
+          }
+          return null;
+        });
+        console.log(`[Vision] Checkbox clicked via: ${cbClicked}`);
+        await new Promise(r => setTimeout(r, 1000));
         await clickButton(page, 'Confirm Release', 'Confirm release', 'Confirm');
         await new Promise(r => setTimeout(r, 2000));
         continue;
