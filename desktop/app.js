@@ -1594,6 +1594,10 @@ async function monitorActiveOrder(page) {
         await new Promise(r => setTimeout(r, 4000));
       }
 
+      // Send confirmation message to buyer in chat
+      await sendChatMessage(page, 'I have received your payment. Releasing crypto in a short while.');
+      await new Promise(r => setTimeout(r, 1000));
+
       // Scroll to bottom so Payment Received button is visible
       await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
       await new Promise(r => setTimeout(r, 1000));
