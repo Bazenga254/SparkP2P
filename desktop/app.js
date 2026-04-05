@@ -1106,7 +1106,7 @@ function stopPoller() {
 
 async function extractMpesaCodesFromChat(page) {
   try {
-    // ── Step 1: Try DOM text first (buyer typed the code as text) ──────────
+    // ── Step 1: Try DOM text first (buyer typed the code as plain text) ──────
     const textCodes = await page.evaluate(() => {
       const fullText = document.body.innerText || '';
       const matches = fullText.match(/\b[A-Z0-9]{10}\b/g) || [];
@@ -1117,39 +1117,67 @@ async function extractMpesaCodesFromChat(page) {
       return textCodes;
     }
 
-    // ── Step 2: No text codes — buyer may have sent a screenshot image ──────
-    // Click the last image in the chat to open the lightbox, then Vision reads it
-    console.log('[SparkP2P] No text codes — checking chat images with Vision...');
-    const imageFound = await page.evaluate(() => {
-      // Images inside the chat message area (Binance renders them as <img> tags)
-      const imgs = Array.from(document.querySelectorAll(
-        '[class*="chat"] img, [class*="message"] img, [class*="Message"] img, [class*="Chat"] img'
-      )).filter(img => img.width > 40 && img.height > 40); // skip tiny icons
-      if (imgs.length === 0) return false;
-      imgs[imgs.length - 1].click(); // click the most recent image
-      return true;
+    // ── Step 2: Vision on the full page — thumbnail is often readable ────────
+    console.log('[SparkP2P] No text codes — asking Vision to read M-Pesa code from page (including chat thumbnail)...');
+    const code = await extractCodeFromChatImageWithVision(page);
+    if (code) {
+      console.log(`[SparkP2P] Vision read M-Pesa code from page: ${code}`);
+      return [code];
+    }
+
+    // ── Step 3: Thumbnail too small — click it to open enlarged lightbox ─────
+    console.log('[SparkP2P] Vision could not read thumbnail — trying to click chat image...');
+
+    // Find ALL images on the page, log them for debugging, pick the one in the
+    // right half (chat panel) that is not a tiny icon or avatar
+    const imgInfo = await page.evaluate(() => {
+      const vw = window.innerWidth;
+      const results = [];
+      document.querySelectorAll('img').forEach(img => {
+        const rect = img.getBoundingClientRect();
+        if (rect.width < 40 || rect.height < 40) return; // skip icons
+        if (rect.left < vw * 0.5) return;                 // skip left panel
+        if (rect.top < 0 || rect.bottom > window.innerHeight) return; // off-screen
+        results.push({
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+          src: img.src?.substring(0, 60),
+          cls: img.className?.substring(0, 60),
+        });
+      });
+      return results;
     });
 
-    if (!imageFound) {
-      console.log('[SparkP2P] No chat images found either');
+    console.log(`[SparkP2P] Chat-area images found: ${imgInfo.length}`, JSON.stringify(imgInfo));
+
+    if (imgInfo.length === 0) {
+      console.log('[SparkP2P] No chat images found in right panel');
       return [];
     }
 
-    // Wait for lightbox / enlarged view to open
-    await new Promise(r => setTimeout(r, 2000));
+    // Click the last image (most recent message) using real mouse coords
+    const target = imgInfo[imgInfo.length - 1];
+    console.log(`[SparkP2P] Clicking chat image at (${target.x}, ${target.y}) size ${target.w}x${target.h}`);
+    await page.mouse.click(target.x, target.y);
+
+    // Wait for lightbox to open
+    await new Promise(r => setTimeout(r, 2500));
     await takeScreenshot('chat_image_enlarged', page);
 
-    // Use Vision to read the M-Pesa code from the enlarged screenshot
-    const code = await extractCodeFromChatImageWithVision(page);
+    const code2 = await extractCodeFromChatImageWithVision(page);
 
-    // Close the lightbox
+    // Close lightbox
     await page.keyboard.press('Escape').catch(() => {});
     await new Promise(r => setTimeout(r, 500));
 
-    if (code) {
-      console.log(`[SparkP2P] Vision extracted M-Pesa code from chat image: ${code}`);
-      return [code];
+    if (code2) {
+      console.log(`[SparkP2P] Vision extracted M-Pesa code from enlarged image: ${code2}`);
+      return [code2];
     }
+
+    console.log('[SparkP2P] Could not extract M-Pesa code from chat image');
     return [];
   } catch (e) {
     console.error('[SparkP2P] extractMpesaCodesFromChat error:', e.message?.substring(0, 60));
