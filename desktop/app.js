@@ -1139,16 +1139,20 @@ async function extractMpesaCodesFromChat(page) {
 
         const result = await askVisionForMpesaCode(enlarged.toString('base64'));
         const code = result.mpesa_code;
-        console.log(`[SparkP2P] Vision enlarged image ${i + 1}: code=${code} (length=${code ? code.length : 0})`);
+        const bankRef = result.bank_ref;
+        console.log(`[SparkP2P] Vision image ${i + 1}: mpesa_code=${code} bank_ref=${bankRef}`);
 
         // Close lightbox before next attempt
         await page.keyboard.press('Escape').catch(() => {});
         await new Promise(r => setTimeout(r, 500));
 
-        if (code && /^[A-Z0-9]{10}$/.test(code)) {
-          return [code];
-        } else if (code) {
-          console.log(`[SparkP2P] Rejected code "${code}" — not exactly 10 chars`);
+        const mpesaFound = (code && /^[A-Z0-9]{10}$/.test(code)) ? code : null;
+        const bankFound = (bankRef && /^[A-Z0-9]{6,20}$/i.test(bankRef.trim())) ? bankRef.trim().toUpperCase() : null;
+        if (!mpesaFound && code) console.log(`[SparkP2P] Rejected mpesa_code "${code}" — not exactly 10 chars`);
+        if (!bankFound && bankRef) console.log(`[SparkP2P] Rejected bank_ref "${bankRef}" — unexpected format`);
+
+        if (mpesaFound || bankFound) {
+          return { mpesaCodes: mpesaFound ? [mpesaFound] : [], bankRefs: bankFound ? [bankFound] : [] };
         }
       } catch (e) {
         console.log(`[SparkP2P] Chat image ${i + 1} error: ${e.message?.substring(0, 60)}`);
@@ -1156,11 +1160,11 @@ async function extractMpesaCodesFromChat(page) {
       }
     }
 
-    console.log('[SparkP2P] No M-Pesa code found in chat images');
-    return [];
+    console.log('[SparkP2P] No payment code found in chat images');
+    return { mpesaCodes: [], bankRefs: [] };
   } catch (e) {
     console.error('[SparkP2P] extractMpesaCodesFromChat error:', e.message?.substring(0, 60));
-    return [];
+    return { mpesaCodes: [], bankRefs: [] };
   }
 }
 
@@ -1175,22 +1179,26 @@ async function askVisionForMpesaCode(b64) {
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 100,
+        max_tokens: 150,
         messages: [{
           role: 'user',
           content: [
             { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-            { type: 'text', text: `This is an M-Pesa SMS screenshot showing a conversation.
+            { type: 'text', text: `This is a payment confirmation screenshot. Extract the transaction reference code for an OUTGOING/SENT payment to a paybill or business.
 
-Find the code for a SENT/outgoing payment only — the message will say:
-"XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to SPARK FREELANCE SOLUTIONS..."
+Two possible payment types:
 
-IGNORE any RECEIVED messages (e.g. "You have received Ksh... from KCB").
+1. M-Pesa SENT confirmation:
+   Message: "XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to SPARK FREELANCE SOLUTIONS..."
+   Code: EXACTLY 10 uppercase letters/digits (e.g. UD5IZBFOER)
+   IGNORE RECEIVED messages.
 
-The code is EXACTLY 10 characters: uppercase letters and digits only (e.g. UD5IZBFOER).
-Count every character carefully — must be exactly 10.
+2. Bank transfer to M-Pesa paybill (KCB, Equity, Co-op, Absa, etc.):
+   Message: "Your payment/transfer of KES X,XXX to paybill XXXXXXX was successful. Ref/Transaction ID: XXXXXXXXXXX"
+   Code: The reference/transaction ID shown (may be longer than 10 chars, e.g. FT24096123456)
 
-Return ONLY valid JSON: {"mpesa_code": "<exactly 10-char code, or null if not found>"}` },
+Return ONLY valid JSON:
+{"mpesa_code": "<M-Pesa 10-char code or null>", "bank_ref": "<bank transaction ref or null>"}` },
           ],
         }],
       }),
@@ -1200,20 +1208,24 @@ Return ONLY valid JSON: {"mpesa_code": "<exactly 10-char code, or null if not fo
       .replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
     const match = text.match(/\{[\s\S]*\}/);
     if (match) return JSON.parse(match[0]);
-    return { mpesa_code: null };
+    return { mpesa_code: null, bank_ref: null };
   } catch (e) {
     console.error('[Vision] askVisionForMpesaCode error:', e.message?.substring(0, 60));
-    return { mpesa_code: null };
+    return { mpesa_code: null, bank_ref: null };
   }
 }
 
 async function verifyMpesaPayment(orderNumber, fiatAmount, page = null) {
   if (!token) return false;
   try {
-    // Extract M-Pesa codes from the chat panel if page is available
-    let mpesaCodes = [];
+    // Extract M-Pesa codes and bank refs from the chat panel if page is available
+    let mpesaCodes = [], bankRefs = [];
     if (page) {
-      mpesaCodes = await extractMpesaCodesFromChat(page);
+      const extracted = await extractMpesaCodesFromChat(page);
+      mpesaCodes = extracted.mpesaCodes || [];
+      bankRefs = extracted.bankRefs || [];
+      if (mpesaCodes.length) console.log(`[SparkP2P] M-Pesa codes: ${mpesaCodes.join(', ')}`);
+      if (bankRefs.length) console.log(`[SparkP2P] Bank refs: ${bankRefs.join(', ')}`);
     }
     const res = await fetch(`${API_BASE}/ext/verify-payment`, {
       method: 'POST',
@@ -1221,7 +1233,8 @@ async function verifyMpesaPayment(orderNumber, fiatAmount, page = null) {
       body: JSON.stringify({
         binance_order_number: orderNumber,
         fiat_amount: fiatAmount || 0,
-        mpesa_codes_from_chat: mpesaCodes,
+        mpesa_codes_from_chat: mpesaCodes.length ? mpesaCodes : null,
+        bank_refs_from_chat: bankRefs.length ? bankRefs : null,
       }),
     });
     if (!res.ok) return false;
