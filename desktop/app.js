@@ -1107,10 +1107,49 @@ function stopPoller() {
 async function extractMpesaCodesFromChat(page) {
   if (!anthropicApiKey) {
     console.log('[SparkP2P] No API key — skipping chat M-Pesa extraction');
-    return [];
+    return { mpesaCodes: [], bankRefs: [] };
   }
   try {
-    // Find all <img> elements in the right half of the viewport (chat panel)
+    // ── Step 1: Scan buyer's TEXT messages for M-Pesa/bank codes ─────────────
+    // Buyer may type the code directly (e.g. "UD5IZBFOER") instead of sending a screenshot
+    const textCodes = await page.evaluate(() => {
+      const vw = window.innerWidth;
+      const mpesaPattern = /\b([A-Z0-9]{10})\b/g;
+      const bankRefPattern = /\b([A-Z0-9]{6,20})\b/g;
+      const found = { mpesaCodes: [], bankRefs: [] };
+
+      // Chat messages from buyer are on the RIGHT side of the chat panel (left > 50% viewport)
+      const allEls = Array.from(document.querySelectorAll('*'));
+      for (const el of allEls) {
+        if (el.children.length > 0) continue; // leaf nodes only (actual text)
+        const rect = el.getBoundingClientRect();
+        if (rect.left < vw * 0.45 || rect.width === 0 || rect.height === 0) continue;
+        const text = (el.textContent || '').trim();
+        if (!text || text.length > 200) continue; // skip long blocks
+
+        // M-Pesa codes: exactly 10 uppercase alphanumeric
+        let m;
+        mpesaPattern.lastIndex = 0;
+        while ((m = mpesaPattern.exec(text)) !== null) {
+          const code = m[1];
+          if (!found.mpesaCodes.includes(code)) found.mpesaCodes.push(code);
+        }
+        // Bank refs: 6-20 chars (only if not already in mpesaCodes)
+        bankRefPattern.lastIndex = 0;
+        while ((m = bankRefPattern.exec(text)) !== null) {
+          const ref = m[1];
+          if (ref.length !== 10 && !found.bankRefs.includes(ref)) found.bankRefs.push(ref);
+        }
+      }
+      return found;
+    });
+
+    if (textCodes.mpesaCodes.length || textCodes.bankRefs.length) {
+      console.log(`[SparkP2P] Found in chat text — M-Pesa: ${textCodes.mpesaCodes.join(', ')} Bank: ${textCodes.bankRefs.join(', ')}`);
+      return textCodes;
+    }
+
+    // ── Step 2: Find all <img> elements in the right half of the viewport (chat panel)
     const chatImgHandles = await page.evaluateHandle(() => {
       const vw = window.innerWidth;
       return Array.from(document.querySelectorAll('img')).filter(img => {
@@ -1413,7 +1452,7 @@ async function idleScan(page) {
           activeOrderNumber = order.orderNumber;
           activeOrderFiatAmount = order.totalPrice;
           await sendChatMessage(page,
-            'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method?'
+            'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa please share your M-Pesa reference code so that I can confirm.'
           );
           break;
         }
@@ -1631,7 +1670,7 @@ async function monitorActiveOrder(page) {
     } else {
       console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — asking buyer for payment method`);
       await sendChatMessage(page,
-        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method?'
+        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa please share your M-Pesa reference code so that I can confirm.'
       );
     }
     return;
@@ -1670,7 +1709,7 @@ async function monitorActiveOrder(page) {
     } else {
       console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — asking buyer`);
       await sendChatMessage(page,
-        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method?'
+        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa please share your M-Pesa reference code so that I can confirm.'
       );
     }
     return;
