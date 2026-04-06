@@ -1452,7 +1452,7 @@ async function idleScan(page) {
           activeOrderNumber = order.orderNumber;
           activeOrderFiatAmount = order.totalPrice;
           await sendChatMessage(page,
-            'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa please share your M-Pesa reference code so that I can confirm.'
+            'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa or bank please share your M-Pesa reference code so that I can confirm.'
           );
           break;
         }
@@ -1670,7 +1670,7 @@ async function monitorActiveOrder(page) {
     } else {
       console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — asking buyer for payment method`);
       await sendChatMessage(page,
-        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa please share your M-Pesa reference code so that I can confirm.'
+        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa or bank please share your M-Pesa reference code so that I can confirm.'
       );
     }
     return;
@@ -1709,7 +1709,7 @@ async function monitorActiveOrder(page) {
     } else {
       console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — asking buyer`);
       await sendChatMessage(page,
-        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa please share your M-Pesa reference code so that I can confirm.'
+        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa or bank please share your M-Pesa reference code so that I can confirm.'
       );
     }
     return;
