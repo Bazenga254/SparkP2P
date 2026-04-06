@@ -15,7 +15,7 @@ Flow:
 
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -57,6 +57,7 @@ class ReportOrdersRequest(BaseModel):
     sell_orders: list[BinanceOrderData] = []
     buy_orders: list[BinanceOrderData] = []
     cancelled_order_numbers: list[str] = []  # Order numbers from Binance Cancelled history tab
+    active_order_numbers: list[str] = []     # Orders bot is actively processing (never auto-cancel these)
 
 
 class ActionItem(BaseModel):
@@ -124,7 +125,9 @@ async def report_orders(
 
     # Also auto-cancel PENDING orders absent from the active list for >3 minutes
     # (fallback in case the cancelled tab scan misses something)
+    # Never auto-cancel orders the bot is actively processing on the order detail page
     reported_numbers = {o.orderNumber for o in data.sell_orders + data.buy_orders}
+    protected_numbers = set(data.active_order_numbers)
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
     stale_result = await db.execute(
         select(Order).where(
@@ -134,12 +137,27 @@ async def report_orders(
         )
     )
     for order in stale_result.scalars().all():
-        if order.binance_order_number not in reported_numbers:
+        if order.binance_order_number not in reported_numbers and \
+           order.binance_order_number not in protected_numbers:
             order.status = OrderStatus.CANCELLED
             logger.info(
                 f"Order {order.binance_order_number} auto-cancelled "
                 f"(absent from bot report for trader {trader.id})"
             )
+
+    # Reactivate any order the bot is actively processing that got wrongly cancelled
+    for order_number in protected_numbers:
+        react_result = await db.execute(
+            select(Order).where(
+                Order.trader_id == trader.id,
+                Order.binance_order_number == order_number,
+                Order.status == OrderStatus.CANCELLED,
+            )
+        )
+        reactivate = react_result.scalar_one_or_none()
+        if reactivate:
+            reactivate.status = OrderStatus.PENDING
+            logger.info(f"Order {order_number} reactivated — bot is actively processing it on Binance")
 
     # Update last sync timestamp — used by frontend to detect initial scan complete
     trader.last_extension_sync = datetime.now(timezone.utc)
@@ -301,6 +319,8 @@ async def get_pending_actions(
 class VerifyPaymentData(BaseModel):
     binance_order_number: str
     fiat_amount: float  # Expected KES amount from Binance order
+    mpesa_codes_from_chat: Optional[List[str]] = None  # M-Pesa codes (10-char) from buyer chat
+    bank_refs_from_chat: Optional[List[str]] = None    # Bank transfer refs from buyer chat
 
 
 @router.post("/verify-payment")
@@ -315,6 +335,60 @@ async def verify_payment(
     Returns verified=True only if the payment was matched and confirmed by Safaricom.
     This prevents releasing crypto when a buyer fake-clicks "I have paid".
     """
+    # ── Step 1: Try direct M-Pesa code lookup from buyer's chat message ──────
+    # If the bot extracted M-Pesa codes from the chat, check them against our
+    # Payment records first. This catches cases where the C2B callback arrived
+    # but the order status hasn't been updated yet.
+    # Check M-Pesa codes first
+    all_codes = list(data.mpesa_codes_from_chat or []) + list(data.bank_refs_from_chat or [])
+    for code in all_codes:
+        pay_result = await db.execute(
+            select(Payment).where(
+                Payment.mpesa_transaction_id == code,
+                Payment.status == PaymentStatus.COMPLETED,
+            )
+        )
+        direct_payment = pay_result.scalar_one_or_none()
+        if direct_payment:
+            source = "M-Pesa code" if code in (data.mpesa_codes_from_chat or []) else "Bank ref"
+            logger.info(f"{source} {code} matched in Payment table for order {data.binance_order_number}")
+            return {
+                "verified": True,
+                "reason": f"{source} {code} confirmed in our records",
+                "mpesa_receipt": code,
+                "amount_received": direct_payment.amount,
+                "payer_phone": direct_payment.phone,
+                "payer_name": direct_payment.sender_name,
+            }
+
+    # -- Step 2: Bank transfer fallback (only when NO M-Pesa code was in the chat) --
+    # Bank-to-paybill payments do not produce a standard M-Pesa code, so the buyer
+    # screenshot shows a bank reference instead. We only allow amount-matching when
+    # the bot found zero codes in the chat -- if a code WAS found but did not match,
+    # that is a strong fraud signal and we fall through to reject.
+    if not data.mpesa_codes_from_chat and data.fiat_amount:  # skip only when real M-Pesa code was sent
+        window = datetime.now(timezone.utc) - timedelta(minutes=30)
+        amount_result = await db.execute(
+            select(Payment).where(
+                Payment.trader_id == trader.id,
+                Payment.status == PaymentStatus.COMPLETED,
+                Payment.amount.between(data.fiat_amount - 5, data.fiat_amount + 5),
+                Payment.created_at >= window,
+            ).order_by(Payment.id.desc())
+        )
+        amount_payment = amount_result.scalar_one_or_none()
+        if amount_payment:
+            logger.info(f"Bank transfer matched KES {data.fiat_amount} for {data.binance_order_number}")
+            return {
+                "verified": True,
+                "reason": f"Bank transfer matched by amount KES {data.fiat_amount}",
+                "mpesa_receipt": amount_payment.mpesa_transaction_id,
+                "amount_received": amount_payment.amount,
+                "payer_phone": amount_payment.phone,
+                "payer_name": amount_payment.sender_name,
+            }
+
+    # -- Step 3: Fall back to order-status check (Safaricom C2B callback must exist) --
     result = await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,
@@ -582,7 +656,7 @@ async def _process_reported_sell_order(
     currency = order_data.asset
 
     prefix = f"T{trader.id:04d}"
-    account_ref = f"P2P-{prefix}-{order_number}"
+    account_ref = f"P2P-{prefix}"
 
     order = Order(
         trader_id=trader.id,
