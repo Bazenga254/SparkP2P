@@ -1623,6 +1623,33 @@ async function monitorActiveOrder(page) {
 
   if (screen === 'verify_payment') {
     console.log(`[SparkP2P] Order ${activeOrderNumber} PAID — verifying M-Pesa...`);
+
+    // Check if buyer already sent a screenshot or typed a code in chat
+    // If so, acknowledge it before starting verification so they don't think we're ignoring them
+    const buyerAlreadySent = await page.evaluate(() => {
+      const vw = window.innerWidth;
+      // Check for images in right side of screen (buyer's chat side)
+      const hasImage = Array.from(document.querySelectorAll('img')).some(img => {
+        const r = img.getBoundingClientRect();
+        return r.width > 60 && r.height > 60 && r.left > vw * 0.5
+          && r.top >= 0 && r.bottom <= window.innerHeight;
+      });
+      // Check for M-Pesa-like codes typed as text on right side
+      const hasCode = Array.from(document.querySelectorAll('*')).some(el => {
+        if (el.children.length > 0) return false;
+        const r = el.getBoundingClientRect();
+        if (r.left < vw * 0.5 || r.width === 0) return false;
+        return /\b[A-Z0-9]{10}\b/.test(el.textContent || '');
+      });
+      return hasImage || hasCode;
+    });
+
+    if (buyerAlreadySent) {
+      console.log(`[SparkP2P] Buyer already sent payment proof — acknowledging`);
+      await sendChatMessage(page, 'I can see that you have already made your payment, please wait as I verify this payment. Thank you!');
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
     const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount || info.fiat_amount_kes, page);
     if (verified) {
       console.log(`[SparkP2P] ✅ M-Pesa confirmed — clicking Payment Received`);
