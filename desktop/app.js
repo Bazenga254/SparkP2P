@@ -1409,9 +1409,12 @@ async function idleScan(page) {
           activeOrderNumber = null;
           activeOrderFiatAmount = 0;
         } else {
-          console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed for ${order.orderNumber} — holding`);
+          console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed for ${order.orderNumber} — asking buyer`);
           activeOrderNumber = order.orderNumber;
           activeOrderFiatAmount = order.totalPrice;
+          await sendChatMessage(page,
+            'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method?'
+          );
           break;
         }
       } else if (orderInfo.screen === 'awaiting_payment' || orderInfo.screen === 'payment_processing') {
@@ -1626,7 +1629,10 @@ async function monitorActiveOrder(page) {
       const balances = await scanWalletBalances(page);
       await uploadBalances(balances);
     } else {
-      console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — holding`);
+      console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — asking buyer for payment method`);
+      await sendChatMessage(page,
+        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method?'
+      );
     }
     return;
   }
@@ -1661,6 +1667,11 @@ async function monitorActiveOrder(page) {
       await new Promise(r => setTimeout(r, 2000));
       await releaseWithVision(page, activeOrderNumber, {});
       activeOrderNumber = null; activeOrderFiatAmount = 0;
+    } else {
+      console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — asking buyer`);
+      await sendChatMessage(page,
+        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method?'
+      );
     }
     return;
   }
