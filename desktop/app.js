@@ -86,6 +86,19 @@ let anthropicApiKey = process.env.ANTHROPIC_API_KEY || null;
 
 // Persist token to disk so it survives app restarts
 const TOKEN_FILE = path.join(app.getPath('userData'), 'session.json');
+
+// Persist Anthropic API key to disk — survives restarts without needing backend fetch
+const ANTHROPIC_KEY_FILE = path.join(app.getPath('userData'), 'anthropic_key.json');
+function saveAnthropicKey(key) {
+  try { fs.writeFileSync(ANTHROPIC_KEY_FILE, JSON.stringify({ key }), 'utf8'); } catch (_) {}
+}
+function loadAnthropicKey() {
+  try {
+    const data = JSON.parse(fs.readFileSync(ANTHROPIC_KEY_FILE, 'utf8'));
+    if (data?.key) { anthropicApiKey = data.key; console.log('[SparkP2P] Anthropic API key loaded from disk'); }
+  } catch (_) {}
+}
+loadAnthropicKey(); // Load immediately on startup
 function saveTokenToDisk(t) {
   try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token: t, savedAt: Date.now() })); } catch (e) {}
 }
@@ -565,7 +578,8 @@ async function fetchAndApplyCredentials() {
     }
     if (anthropic_api_key) {
       anthropicApiKey = anthropic_api_key;
-      console.log('[SparkP2P] Claude Vision API key loaded from backend');
+      saveAnthropicKey(anthropic_api_key); // persist to disk for future restarts
+      console.log('[SparkP2P] Claude Vision API key loaded from backend and saved to disk');
     }
   } catch (e) {
     console.log('[SparkP2P] Could not fetch credentials:', e.message?.substring(0, 40));
@@ -3231,7 +3245,7 @@ ipcMain.handle('set-token', (_, t) => { token = t; return { ok: true }; });
 ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] Fund password configured'); return { ok: true }; });
 ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });
 ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; aiScanner.initAI(key); console.log('[SparkP2P] GPT-4o configured'); return { ok: true }; });
-ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; console.log('[SparkP2P] Claude Vision configured'); return { ok: true }; });
+ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; saveAnthropicKey(key); console.log('[SparkP2P] Claude Vision configured and saved to disk'); return { ok: true }; });
 ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasTOTP: !!totpSecret, hasAI: !!aiApiKey, hasVision: !!anthropicApiKey }));
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
 ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
