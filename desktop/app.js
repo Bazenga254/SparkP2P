@@ -2571,6 +2571,17 @@ async function releaseWithVision(page, orderNumber, action) {
 
   console.log(`[Vision] Starting vision-driven release for order ${orderNumber}`);
 
+  // Ensure Anthropic API key is loaded — re-fetch credentials if missing
+  if (!anthropicApiKey) {
+    console.log('[Vision] Anthropic API key missing — re-fetching credentials...');
+    await fetchAndApplyCredentials();
+    if (!anthropicApiKey) {
+      console.error('[Vision] Anthropic API key still missing after re-fetch — cannot proceed with Vision release');
+      return { success: false, error: 'No Anthropic API key' };
+    }
+    console.log('[Vision] Anthropic API key loaded successfully');
+  }
+
   try {
     await navigateToOrderDetail(page, orderNumber);
     await new Promise(r => setTimeout(r, 1500));
