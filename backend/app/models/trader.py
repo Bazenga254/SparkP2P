@@ -92,6 +92,18 @@ class Trader(Base):
     # Tier (affects per-trade fee)
     tier = Column(String(20), default="standard")  # standard, silver, gold
 
+    # I&M Bank connection (encrypted session cookies)
+    im_cookies = Column(Text, nullable=True)       # Encrypted JSON session cookies
+    im_connected = Column(Boolean, default=False)  # True once desktop app syncs a live session
+
+    # M-PESA org portal connection
+    mpesa_portal_connected = Column(Boolean, default=False)  # True once desktop app logs into org portal
+
+    # Vision-scraped ad prices (updated every ~1 min by the desktop bot)
+    ad_buy_price = Column(Float, nullable=True)    # Trader's current Binance buy ad price
+    ad_sell_price = Column(Float, nullable=True)   # Trader's current Binance sell ad price
+    ad_prices_updated_at = Column(DateTime(timezone=True), nullable=True)
+
     # Login security
     failed_login_attempts = Column(Integer, default=0)
     locked_until = Column(DateTime(timezone=True), nullable=True)

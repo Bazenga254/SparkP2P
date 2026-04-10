@@ -25,21 +25,29 @@
   "build": {
     "appId": "com.sparkp2p.desktop",
     "productName": "SparkP2P",
-    "publish": [{
-      "provider": "github",
-      "owner": "Bazenga254",
-      "repo": "SparkP2P"
-    }],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Bazenga254",
+        "repo": "SparkP2P"
+      }
+    ],
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "icon.png"
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "icon": "icon.png"
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "icon": "icon.png"
     },
     "nsis": {
@@ -59,9 +67,9 @@
     ]
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.87.0",
     "chrome-remote-interface": "^0.34.0",
     "electron-updater": "^6.8.3",
-    "openai": "^6.33.0",
     "puppeteer-core": "^24.40.0"
   }
 }

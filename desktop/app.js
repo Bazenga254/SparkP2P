@@ -15,12 +15,15 @@ http.createServer(async (req, res) => {
   if (req.url === '/pause') {
     pauseNavigation = true;
     scanningInProgress = false;
-    await unlockChromeBrowser().catch(() => {});
-    console.log('[SparkP2P] Bot PAUSED via local API');
+    await lockChromeBrowser().catch(() => {});
+    startPauseInactivityTimer();
+    console.log('[SparkP2P] Bot PAUSED via local API — all windows locked, auto-resume in 30s');
     res.end(JSON.stringify({ ok: true, paused: true }));
   } else if (req.url === '/resume') {
     pauseNavigation = false;
+    clearPauseInactivityTimer();
     await lockChromeBrowser().catch(() => {});
+    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed"))').catch(() => {});
     console.log('[SparkP2P] Bot RESUMED via local API');
     res.end(JSON.stringify({ ok: true, paused: false }));
   } else if (req.url === '/status') {
@@ -30,6 +33,18 @@ http.createServer(async (req, res) => {
   }
 }).listen(9223, '127.0.0.1', () => {
   console.log('[SparkP2P] Local control server on http://127.0.0.1:9223');
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    // Another instance is already running — kill it and retry after 2s
+    console.log('[SparkP2P] Port 9223 in use — killing old instance and retrying...');
+    const { exec } = require('child_process');
+    const killCmd = process.platform === 'win32'
+      ? 'for /f "tokens=5" %a in (\'netstat -aon ^| findstr :9223\') do taskkill /F /PID %a'
+      : 'fuser -k 9223/tcp';
+    exec(killCmd, () => {});
+  } else {
+    console.error('[SparkP2P] Local server error:', err.message);
+  }
 });
 
 // Logging — use app data folder when packaged, __dirname when dev
@@ -67,6 +82,36 @@ let loggedOutStrikes = 0;      // Consecutive failed isLoggedIn() checks before 
 let activeOrderNumber = null;  // Order number currently being monitored (null = idle)
 let activeOrderFiatAmount = 0; // KES amount of the active order (for M-Pesa verification)
 let gmailPage = null;          // Persistent Gmail tab — opened alongside Binance, kept alive
+let imPage = null;             // Persistent I&M Bank tab — new tab in the main Binance browser
+let connectingIm = false;      // Prevents concurrent connectIm() calls
+let imWithdrawalRunning = false; // Prevents concurrent withdrawal executions
+let mpesaOrgPage = null;       // Persistent M-PESA org portal tab
+let connectingMpesa = false;   // Prevents concurrent connectMpesaPortal() calls
+let mpesaSweepRunning = false; // Prevents concurrent sweep executions
+let pauseInactivityTimer = null; // Auto-resume timer when bot is paused
+const PAUSE_AUTO_RESUME_MS = 30 * 1000; // 30 seconds
+
+function startPauseInactivityTimer() {
+  clearPauseInactivityTimer();
+  pauseInactivityTimer = setTimeout(async () => {
+    if (!pauseNavigation) return; // already resumed
+    console.log('[SparkP2P] 30s inactivity while paused — auto-resuming and locking all screens');
+    pauseNavigation = false;
+    await lockChromeBrowser().catch(() => {});
+    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed", { detail: { reason: "inactivity" } }))').catch(() => {});
+  }, PAUSE_AUTO_RESUME_MS);
+}
+
+function clearPauseInactivityTimer() {
+  if (pauseInactivityTimer) { clearTimeout(pauseInactivityTimer); pauseInactivityTimer = null; }
+}
+
+// Any mouse/keyboard activity on the Electron window resets the 30s timer
+function resetPauseTimerOnActivity() {
+  if (pauseNavigation && pauseInactivityTimer) {
+    startPauseInactivityTimer(); // reset the 30s countdown
+  }
+}
 const SESSION_GRACE_MS = 30 * 60 * 1000; // 30 min grace period before re-login is allowed
 const LOGOUT_STRIKES_NEEDED = 3;          // Require 3 consecutive failures before declaring session lost
 // Load .env file for API keys — check app data folder and app directory
@@ -119,7 +164,7 @@ if (token) console.log('[SparkP2P] Session restored from disk');
 app.whenReady().then(() => {
   createMainWindow();
   createTray();
-  aiScanner.initAI(aiApiKey);
+  aiScanner.initAI(anthropicApiKey);
   checkForUpdates();
 });
 
@@ -201,6 +246,9 @@ function createMainWindow() {
 
   loadDashboard();
   mainWindow.on('close', () => { app.isQuitting = true; app.quit(); });
+  // Reset pause inactivity timer on any user activity in the app window
+  mainWindow.webContents.on('before-input-event', () => resetPauseTimerOnActivity());
+  mainWindow.on('focus', () => resetPauseTimerOnActivity());
 
   // Capture token on every page load and navigation
   const captureToken = () => {
@@ -249,7 +297,7 @@ function createTray() {
       { label: 'Connect Binance', click: () => connectBinance() },
       { type: 'separator' },
       {
-        label: pauseNavigation ? '▶ Resume Bot' : '⏸ Pause Bot (free Chrome)',
+        label: pauseNavigation ? '▶ Resume Bot' : '⏸ Pause Bot',
         click: async () => {
           if (pauseNavigation) {
             pauseNavigation = false;
@@ -258,8 +306,8 @@ function createTray() {
           } else {
             pauseNavigation = true;
             scanningInProgress = false; // force-exit any running cycle immediately
-            await unlockChromeBrowser();
-            console.log('[SparkP2P] Bot PAUSED via tray — Chrome is free');
+            await lockChromeBrowser();
+            console.log('[SparkP2P] Bot PAUSED via tray — all windows locked');
           }
           tray.setContextMenu(buildTrayMenu());
         },
@@ -280,8 +328,8 @@ function createTray() {
       } else {
         pauseNavigation = true;
         scanningInProgress = false; // force-exit any running cycle immediately
-        await unlockChromeBrowser();
-        console.log('[SparkP2P] Bot PAUSED via shortcut — Chrome is free');
+        await lockChromeBrowser();
+        console.log('[SparkP2P] Bot PAUSED via shortcut — all windows locked');
       }
       tray.setContextMenu(buildTrayMenu());
     });
@@ -367,6 +415,59 @@ async function getPage(urlMatch) {
   return pages.find(p => p.url().includes('binance.com') && !p.url().includes('accounts.google')) || pages[0];
 }
 
+async function verifyGmailWithVision(page) {
+  if (!anthropicApiKey) {
+    // Fallback to URL check if no Vision key yet
+    const url = page.url();
+    return url.includes('mail.google.com') && !url.includes('accounts.google.com') && !url.includes('/signin');
+  }
+  try {
+    const ss = await page.screenshot({ encoding: 'base64' });
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 50,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+          { type: 'text', text: 'Is this a Gmail inbox showing emails (logged in)? Or is it a Google sign-in/login page? Reply with only: LOGGED_IN or LOGIN_PAGE' },
+        ]}],
+      }),
+    });
+    const data = await response.json();
+    const verdict = (data.content?.[0]?.text || '').trim().toUpperCase();
+    console.log(`[SparkP2P] Gmail Vision check: ${verdict}`);
+    return verdict === 'LOGGED_IN';
+  } catch (e) {
+    return false;
+  }
+}
+
+async function onGmailConfirmed() {
+  // Called once Vision confirms Gmail inbox is visible
+  console.log('[SparkP2P] Gmail login confirmed! Syncing cookies...');
+  await syncCookies();
+  mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("gmail-connected"))').catch(() => {});
+  // Lock tab — bot controls it now
+  if (gmailPage && !gmailPage.isClosed()) {
+    await injectLockOverlay(gmailPage).catch(() => {});
+    gmailPage.on('framenavigated', async (frame) => {
+      if (frame === gmailPage.mainFrame() && browserLocked) {
+        await new Promise(r => setTimeout(r, 600));
+        await injectLockOverlay(gmailPage).catch(() => {});
+      }
+    });
+  }
+  // Re-check setup completeness
+  const setup = await checkSetupComplete();
+  if (setup.complete && !pollerRunning) {
+    pauseNavigation = false;
+    mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
+    console.log('[SparkP2P] All connections established — bot ready to start');
+  }
+}
+
 async function openGmailTab() {
   if (!browser) return false;
   try {
@@ -375,25 +476,54 @@ async function openGmailTab() {
     const existing = pages.find(p => p.url().includes('mail.google.com') || p.url().includes('accounts.google.com/'));
     if (existing) {
       gmailPage = existing;
-      const loggedIn = !existing.url().includes('accounts.google.com');
-      console.log(`[SparkP2P] Gmail tab found — ${loggedIn ? 'logged in' : 'needs login'}`);
       gmailPage.on('close', () => { gmailPage = null; });
-      return loggedIn;
+      // Vision-verify the existing tab
+      const loggedIn = await verifyGmailWithVision(existing);
+      console.log(`[SparkP2P] Gmail tab found — ${loggedIn ? 'confirmed logged in' : 'on login page'}`);
+      if (loggedIn) { await onGmailConfirmed(); return true; }
+      // Not logged in — start polling for login
+      startGmailLoginPoller();
+      return false;
     }
-    // Open Gmail tab — always show it, even if login is required
-    // The chrome-binance profile starts fresh, user may need to log in once
+    // Open Gmail tab fresh
     gmailPage = await browser.newPage();
     await gmailPage.goto('https://mail.google.com/mail/u/0/#inbox', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-    const finalUrl = gmailPage.url();
-    const loggedIn = !finalUrl.includes('accounts.google.com') && !finalUrl.includes('/signin');
-    console.log(`[SparkP2P] Gmail tab opened — ${loggedIn ? 'logged in' : 'not logged in (user can sign in now)'}`);
     gmailPage.on('close', () => { gmailPage = null; });
-    return loggedIn;
+    const loggedIn = await verifyGmailWithVision(gmailPage);
+    console.log(`[SparkP2P] Gmail tab opened — ${loggedIn ? 'confirmed logged in' : 'needs login'}`);
+    if (loggedIn) { await onGmailConfirmed(); return true; }
+    // Not logged in — poll until user signs in
+    startGmailLoginPoller();
+    return false;
   } catch (e) {
     console.error('[SparkP2P] Could not open Gmail tab:', e.message?.substring(0, 60));
     gmailPage = null;
     return false;
   }
+}
+
+let gmailLoginPollTimer = null;
+function startGmailLoginPoller() {
+  if (gmailLoginPollTimer) return; // already polling
+  let attempts = 0;
+  let verifying = false;
+  console.log('[SparkP2P] Waiting for Gmail login...');
+  gmailLoginPollTimer = setInterval(async () => {
+    attempts++;
+    if (attempts > 600) { clearInterval(gmailLoginPollTimer); gmailLoginPollTimer = null; return; } // 10 min
+    if (!gmailPage || gmailPage.isClosed()) { clearInterval(gmailLoginPollTimer); gmailLoginPollTimer = null; return; }
+    if (verifying) return;
+    verifying = true;
+    try {
+      const loggedIn = await verifyGmailWithVision(gmailPage);
+      if (loggedIn) {
+        clearInterval(gmailLoginPollTimer);
+        gmailLoginPollTimer = null;
+        await onGmailConfirmed();
+      }
+    } catch (e) {}
+    verifying = false;
+  }, 3000);
 }
 
 async function isLoggedIn() {
@@ -450,31 +580,76 @@ async function injectLockOverlay(page) {
 
 async function lockChromeBrowser() {
   browserLocked = true;
-  const page = await getPage('binance.com');
-  if (!page) return;
-  await injectLockOverlay(page);
-  // Re-inject after every Puppeteer navigation (bot navigates internally)
-  if (lockFrameListener) page.off('framenavigated', lockFrameListener);
-  lockFrameListener = async (frame) => {
-    if (frame === page.mainFrame()) {
-      await new Promise(r => setTimeout(r, 600));
-      await injectLockOverlay(page).catch(() => {});
-    }
-  };
-  page.on('framenavigated', lockFrameListener);
-  console.log('[SparkP2P] Chrome browser locked');
+
+  // Lock Binance tab
+  const binancePage = await getPage('binance.com');
+  if (binancePage) {
+    await injectLockOverlay(binancePage);
+    if (lockFrameListener) binancePage.off('framenavigated', lockFrameListener);
+    lockFrameListener = async (frame) => {
+      if (frame === binancePage.mainFrame()) {
+        await new Promise(r => setTimeout(r, 600));
+        await injectLockOverlay(binancePage).catch(() => {});
+      }
+    };
+    binancePage.on('framenavigated', lockFrameListener);
+  }
+
+  // Lock Gmail tab
+  if (gmailPage && !gmailPage.isClosed()) {
+    await injectLockOverlay(gmailPage);
+    gmailPage.on('framenavigated', async (frame) => {
+      if (frame === gmailPage.mainFrame()) {
+        await new Promise(r => setTimeout(r, 600));
+        await injectLockOverlay(gmailPage).catch(() => {});
+      }
+    });
+  }
+
+  // Lock I&M tab
+  if (imPage && !imPage.isClosed()) {
+    await injectLockOverlay(imPage);
+    imPage.on('framenavigated', async (frame) => {
+      if (frame === imPage.mainFrame()) {
+        await new Promise(r => setTimeout(r, 600));
+        await injectLockOverlay(imPage).catch(() => {});
+      }
+    });
+  }
+
+  // Lock M-PESA org portal tab
+  if (mpesaOrgPage && !mpesaOrgPage.isClosed()) {
+    await injectLockOverlay(mpesaOrgPage);
+    mpesaOrgPage.on('framenavigated', async (frame) => {
+      if (frame === mpesaOrgPage.mainFrame()) {
+        await new Promise(r => setTimeout(r, 600));
+        await injectLockOverlay(mpesaOrgPage).catch(() => {});
+      }
+    });
+  }
+
+  console.log('[SparkP2P] Chrome browser locked (Binance + Gmail + I&M + M-PESA)');
 }
 
 async function unlockChromeBrowser() {
   browserLocked = false;
-  const page = await getPage('binance.com');
-  if (page) {
-    if (lockFrameListener) { page.off('framenavigated', lockFrameListener); lockFrameListener = null; }
+  const removeLock = async (page) => {
+    if (!page || page.isClosed()) return;
     await page.evaluate(() => {
       const el = document.getElementById('sparkp2p-browser-lock');
       if (el) el.remove();
     }).catch(() => {});
+  };
+
+  const binancePage = await getPage('binance.com');
+  if (binancePage) {
+    if (lockFrameListener) { binancePage.off('framenavigated', lockFrameListener); lockFrameListener = null; }
+    await removeLock(binancePage);
   }
+  await removeLock(gmailPage);
+  await removeLock(imPage);
+  await removeLock(mpesaOrgPage);
+
   console.log('[SparkP2P] Chrome browser unlocked');
 }
 
@@ -549,6 +724,14 @@ async function connectBinance() {
         await mainPage.evaluateOnNewDocument(() => { window.open = () => null; }).catch(() => {});
       }
 
+      // Verify all connections before starting bot
+      const setup = await checkSetupComplete();
+      if (!setup.complete) {
+        notifySetupIncomplete(setup.missing);
+        await lockChromeBrowser(); // lock browser so user can't browse freely
+        return;
+      }
+
       // Run initial scan FIRST — poller would race on the same tab causing extra tabs
       await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
 
@@ -586,11 +769,58 @@ async function fetchAndApplyCredentials() {
   }
 }
 
+// Check that Binance, Gmail, and I&M are all connected before allowing bot to start
+async function checkSetupComplete() {
+  if (!token) return { complete: false, missing: ['binance', 'gmail', 'im'] };
+  try {
+    const res = await fetch(`${API_BASE}/traders/me`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) return { complete: false, missing: [] };
+    const profile = await res.json();
+    const missing = [];
+    if (!profile.binance_connected) missing.push('Binance');
+    if (!profile.gmail_connected) missing.push('Gmail');
+    if (!profile.im_connected) missing.push('I&M Bank');
+    return { complete: missing.length === 0, missing };
+  } catch (e) {
+    return { complete: false, missing: [] };
+  }
+}
+
+function notifySetupIncomplete(missing) {
+  // Pause bot and tell frontend to show setup warning
+  pauseNavigation = true;
+  const detail = JSON.stringify({ missing });
+  mainWindow.webContents.executeJavaScript(
+    `window.dispatchEvent(new CustomEvent("setup-incomplete", { detail: ${detail} }))`
+  ).catch(() => {});
+  console.log(`[SparkP2P] Bot paused — missing connections: ${missing.join(', ')}`);
+}
+
 async function tryAutoStart() {
   if (!token) return; // Don't do anything until user logs into SparkP2P
   if (browser) return; // Already connected
 
+  // Reset all browser-session flags — stale DB state from the previous run is
+  // misleading. Vision will re-confirm and set them back to true this session.
+  try {
+    await fetch(`${API_BASE}/ext/reset-session-flags`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    console.log('[SparkP2P] Session flags reset — awaiting Vision confirmation');
+  } catch (e) {}
+
   await fetchAndApplyCredentials(); // Load PIN or TOTP from backend
+
+  // Check all connections before starting
+  const setup = await checkSetupComplete();
+  if (!setup.complete) {
+    notifySetupIncomplete(setup.missing);
+    // Don't launch Chrome — wait for user to connect missing services
+    return;
+  }
 
   // Only try to reconnect to existing Chrome — don't launch new one
   try {
@@ -681,7 +911,7 @@ async function verifyTraderIdentity(page) {
     if (!pageText) return;
 
     let realName = '';
-    if (aiApiKey) {
+    if (anthropicApiKey) {
       const result = await aiScanner.analyzeText(pageText, `
         This is from a Binance P2P "My Ads" page. Find the payment method account holder's real name.
         It appears next to M-PESA, bank, or other payment methods (e.g. "JOHN DOE KAMAU").
@@ -737,7 +967,7 @@ async function readWalletPage(page, url, walletType) {
   // Take full-page screenshot — overlay is transparent so AI sees the real page
   const screenshot = await page.screenshot({ type: 'jpeg', quality: 85 });
 
-  if (aiApiKey) {
+  if (anthropicApiKey) {
     const parsed = await aiScanner.analyzeScreenshot(screenshot, `
       This is a screenshot of a Binance ${walletType} wallet page.
       Extract ALL visible crypto coin balances from the "My Assets" or coin list.
@@ -791,7 +1021,7 @@ async function initialScan() {
 
   // Step 1: Profile — get username
   let nickname = '';
-  if (aiApiKey) {
+  if (anthropicApiKey) {
     const profileData = await aiScanner.scanProfile(page);
     nickname = profileData?.nickname || '';
     console.log(`[SparkP2P] Username: ${nickname || 'unknown'}`);
@@ -871,7 +1101,7 @@ async function syncCookies() {
       }
     } catch (e) { /* gmailPage not ready — skip */ }
 
-    await fetch(`${API_BASE}/traders/connect-binance`, {
+    const syncRes = await fetch(`${API_BASE}/traders/connect-binance`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({
@@ -881,6 +1111,10 @@ async function syncCookies() {
       }),
     });
     console.log(`[SparkP2P] ${cookies.length} Binance cookies synced${gmailCookies ? `, ${gmailCookies.length} Gmail cookies synced` : ''}`);
+    // Notify frontend to refresh profile so connection badge updates
+    if (syncRes.ok && full.length > 10) {
+      mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("binance-connected"))').catch(() => {});
+    }
   } catch (e) {}
 }
 
@@ -922,7 +1156,7 @@ async function readOrders() {
     const activeText = await page.evaluate(() => document.body.innerText).catch(() => '');
 
     let sell = [], buy = [];
-    if (activeText && aiApiKey && !activeText.includes('No records') && !activeText.includes('No data')) {
+    if (activeText && anthropicApiKey && !activeText.includes('No records') && !activeText.includes('No data')) {
       const aiResult = await aiScanner.analyzeText(activeText, `
         This is exact text copied from a Binance P2P orders page.
         Extract ALL pending or active orders (ignore Completed/Cancelled).
@@ -974,7 +1208,7 @@ async function readOrders() {
 
     const cancelledText = await page.evaluate(() => document.body.innerText).catch(() => '');
 
-    if (cancelledText && aiApiKey && !cancelledText.includes('No records') && !cancelledText.includes('No data')) {
+    if (cancelledText && anthropicApiKey && !cancelledText.includes('No records') && !cancelledText.includes('No data')) {
       const aiResult = await aiScanner.analyzeText(cancelledText, `
         This is text from a Binance P2P cancelled orders history page.
         Extract order numbers of CANCELLED orders from TODAY only (ignore older dates).
@@ -1391,7 +1625,7 @@ async function idleScan(page) {
   stats.orders = orders.sell.length + orders.buy.length;
   console.log(`[SparkP2P] Orders: ${orders.sell.length} sell, ${orders.buy.length} buy, ${orders.cancelled.length} cancelled`);
 
-  // ── Step 3: Check completed/cancelled tab (tab=1) — only when no active orders ──
+  // ── Step 3: No active orders — check completed tab + scan My Ads prices ────
   if (orders.sell.length === 0 && orders.buy.length === 0) {
     console.log('[SparkP2P] Step 3: No active orders — checking completed tab (tab=1)...');
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1',
@@ -1401,6 +1635,15 @@ async function idleScan(page) {
     // Re-read cancelled orders from this tab
     const cancelledOrders = await readOrders();
     orders.cancelled = cancelledOrders.cancelled || [];
+
+    // ── Step 3b: Scan My Ads for current buy/sell prices (every 1 min) ───────
+    // Floating prices change frequently — Vision scrape to keep spread calculator live
+    const secsSinceLastScan = (Date.now() - lastAdPriceScan) / 1000;
+    if (secsSinceLastScan >= 55) {
+      await scanMyAdPrices();
+    } else {
+      console.log(`[SparkP2P] Ad price scan skipped — last scan ${Math.round(secsSinceLastScan)}s ago`);
+    }
   }
 
   // Report orders to VPS
@@ -1808,6 +2051,97 @@ async function readMarketPrices() {
     }
   } catch (e) {
     // Page not ready or navigating
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// MY AD PRICES — Vision-scrape trader's own buy/sell prices
+// ═══════════════════════════════════════════════════════════
+
+const MY_ADS_URL = 'https://p2p.binance.com/en/myads?type=normal&code=default';
+let lastAdPriceScan = 0; // timestamp of last successful scan
+
+async function scanMyAdPrices() {
+  if (!token || !anthropicApiKey) return;
+  if (pauseNavigation) return;
+
+  const page = await getPage('binance.com');
+  if (!page || page.isClosed()) return;
+
+  try {
+    console.log('[SparkP2P] Scanning My Ads page for prices...');
+    await page.goto(MY_ADS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 3000));
+
+    if (pauseNavigation) return;
+
+    const ss = await page.screenshot({ encoding: 'base64' });
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 100,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+            {
+              type: 'text',
+              text: `This is a Binance P2P "My Ads" page showing the trader's own buy and sell advertisements.
+Find the Price/Exchange Rate column values.
+- The BUY ad row shows the price at which the trader buys USDT (paying KES).
+- The SELL ad row shows the price at which the trader sells USDT (receiving KES).
+Extract ONLY the numeric prices. Reply in this exact format with no extra text:
+BUY:129.74
+SELL:129.70
+If a price is not visible or there is no ad of that type, use 0 for that value.`,
+            },
+          ],
+        }],
+      }),
+    });
+
+    const data = await response.json();
+    const text_result = (data.content?.[0]?.text || '').trim();
+    console.log(`[SparkP2P] My Ads Vision result: ${text_result}`);
+
+    // Parse BUY:xxx and SELL:xxx from response
+    const buyMatch = text_result.match(/BUY[:=]\s*([\d.]+)/i);
+    const sellMatch = text_result.match(/SELL[:=]\s*([\d.]+)/i);
+
+    const buyPrice = buyMatch ? parseFloat(buyMatch[1]) : null;
+    const sellPrice = sellMatch ? parseFloat(sellMatch[1]) : null;
+
+    if ((buyPrice && buyPrice > 50) || (sellPrice && sellPrice > 50)) {
+      console.log(`[SparkP2P] My Ads prices — Buy: ${buyPrice}, Sell: ${sellPrice}`);
+
+      // Upload to backend
+      await fetch(`${API_BASE}/ext/report-ad-prices`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          buy: (buyPrice && buyPrice > 50) ? buyPrice : null,
+          sell: (sellPrice && sellPrice > 50) ? sellPrice : null,
+        }),
+      }).catch(() => {});
+
+      lastAdPriceScan = Date.now();
+
+      // Notify frontend to refresh spread calculator
+      mainWindow?.webContents.executeJavaScript(
+        `window.dispatchEvent(new CustomEvent("ad-prices-updated", { detail: { buy: ${buyPrice}, sell: ${sellPrice} } }))`
+      ).catch(() => {});
+    } else {
+      console.log('[SparkP2P] My Ads Vision: could not extract valid prices');
+    }
+  } catch (e) {
+    console.error('[SparkP2P] scanMyAdPrices error:', e.message?.substring(0, 80));
   }
 }
 
@@ -2534,7 +2868,10 @@ Screen identification rules:
 - Modal saying "Security Verification Requirements" with 0/2 or 1/2 → security_verification
 - Input box specifically for Authenticator App code → totp_input
 - Input box specifically for Email verification code → email_otp_input
-- "Order Completed" or "Sale Successful" or "Released" → order_complete`;
+- "Order Completed" or "Sale Successful" or "Released" → order_complete
+- Page is still loading (spinner, blank, skeleton) → awaiting_payment (assume still waiting, safe default)
+- Any page with a countdown timer visible → awaiting_payment
+- When uncertain between two states, pick the safer one (e.g. awaiting_payment over unknown)`;
 
 async function analyzePageWithVision(page) {
   if (!anthropicApiKey) {
@@ -2580,8 +2917,9 @@ async function analyzePageWithVision(page) {
 }
 
 async function releaseWithVision(page, orderNumber, action) {
-  const MAX_STEPS = 20;
+  const MAX_STEPS = 60;  // Raised: buyer has up to 15 min, awaiting_payment uses DOM poll not steps
   let step = 0;
+  let consecutiveUnknown = 0;  // Track back-to-back unknowns before reloading
 
   console.log(`[Vision] Starting vision-driven release for order ${orderNumber}`);
 
@@ -2633,6 +2971,9 @@ async function releaseWithVision(page, orderNumber, action) {
       const screen = info.screen || 'unknown';
       if (!domScreen) console.log(`[Vision] Step ${step}/${MAX_STEPS} | ${screen}`);
 
+      // Reset consecutive unknown counter on any known screen
+      if (screen !== 'unknown') consecutiveUnknown = 0;
+
       // ── Order complete ──────────────────────────────────────
       if (screen === 'order_complete' || info.sale_successful) {
         console.log(`[Vision] Order ${orderNumber} released successfully!`);
@@ -2644,19 +2985,50 @@ async function releaseWithVision(page, orderNumber, action) {
         return { success: true };
       }
 
-      // ── Awaiting payment — poll until buyer pays ────────────
+      // ── Awaiting payment — DOM poll, no Vision calls until buyer pays ─────
       if (screen === 'awaiting_payment') {
-        console.log('[Vision] Awaiting buyer payment — polling in 15s...');
-        await new Promise(r => setTimeout(r, 15000));
-        await page.reload({ waitUntil: 'domcontentloaded' });
-        await new Promise(r => setTimeout(r, 3000));
+        consecutiveUnknown = 0;
+        console.log('[Vision] Awaiting buyer payment — DOM polling every 20s (no Vision calls)...');
+        // Poll DOM up to 45 times (15 minutes) without consuming Vision steps
+        let paymentDetected = false;
+        for (let poll = 0; poll < 45; poll++) {
+          if (pauseNavigation) return { success: false, error: 'paused' };
+          await new Promise(r => setTimeout(r, 20000));
+          try {
+            await page.reload({ waitUntil: 'domcontentloaded' });
+            await new Promise(r => setTimeout(r, 2500));
+            const pageText = await page.evaluate(() => document.body.innerText || '').catch(() => '');
+            if (
+              pageText.includes('Payment Received') ||
+              pageText.includes('Verify Payment') ||
+              pageText.includes('Payment Processing') ||
+              pageText.includes('Processing Payment') ||
+              pageText.includes('Verifying Payment') ||
+              pageText.includes('Order Completed') ||
+              pageText.includes('Sale Successful') ||
+              pageText.includes('Received payment in your account')
+            ) {
+              console.log('[Vision] Payment detected via DOM — resuming Vision loop');
+              paymentDetected = true;
+              break;
+            }
+            console.log(`[Vision] Still awaiting payment (poll ${poll + 1}/45)...`);
+          } catch (e) {
+            console.log('[Vision] DOM poll error:', e.message?.substring(0, 40));
+          }
+        }
+        if (!paymentDetected) {
+          console.log('[Vision] Buyer did not pay within 15 minutes — giving up');
+          return { success: false, error: 'Payment timeout' };
+        }
         continue;
       }
 
       // ── Payment processing — Binance verifying payment ──────
       if (screen === 'payment_processing') {
-        console.log('[Vision] Payment processing — waiting 8s for Binance to complete...');
-        await new Promise(r => setTimeout(r, 8000));
+        consecutiveUnknown = 0;
+        console.log('[Vision] Payment processing — waiting 10s for Binance to complete...');
+        await new Promise(r => setTimeout(r, 10000));
         await page.reload({ waitUntil: 'domcontentloaded' });
         await new Promise(r => setTimeout(r, 3000));
         continue;
@@ -2996,24 +3368,35 @@ Return ONLY JSON: {"next_action": "authenticator"|"email"|"done", "x": <number>,
         continue;
       }
 
-      // ── Unknown — check if we drifted off the order detail page ────────────
+      // ── Unknown — wait and retry before reloading ───────────────────────────
+      consecutiveUnknown++;
       const unknownUrl = page.url();
-      console.log(`[Vision] Unknown screen at step ${step} — URL: ${unknownUrl}`);
+      console.log(`[Vision] Unknown screen at step ${step} (${consecutiveUnknown} in a row) — URL: ${unknownUrl}`);
 
       if (!unknownUrl.includes('fiatOrderDetail')) {
-        // We are not on the order detail page — navigate back
+        // We are not on the order detail page — navigate back immediately
         console.log(`[Vision] Not on order detail page — navigating back to order ${orderNumber}`);
         await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
           { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
         await new Promise(r => setTimeout(r, 2500));
         await clickOrderWithMouse(page, orderNumber);
         await new Promise(r => setTimeout(r, 4000));
+        consecutiveUnknown = 0;
         continue;
       }
 
-      // Still on the right page — just reload and retry Vision
-      console.log(`[Vision] On order page but Vision confused — reloading...`);
-      await new Promise(r => setTimeout(r, 3000));
+      // On the right page but Vision confused — wait longer before reloading
+      if (consecutiveUnknown < 3) {
+        // First 2 unknowns: just wait and retry Vision (page may be mid-load)
+        console.log(`[Vision] Waiting 5s and retrying Vision (attempt ${consecutiveUnknown}/3 before reload)...`);
+        await new Promise(r => setTimeout(r, 5000));
+        continue;
+      }
+
+      // 3+ consecutive unknowns — reload the page
+      console.log(`[Vision] 3 consecutive unknowns — reloading page...`);
+      consecutiveUnknown = 0;
+      await new Promise(r => setTimeout(r, 2000));
       await page.reload({ waitUntil: 'domcontentloaded' });
       await new Promise(r => setTimeout(r, 3000));
     }
@@ -3222,11 +3605,711 @@ function norm(o) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════
+// I&M BANK AUTOMATION
+// Opens as a new tab in the existing Binance browser — one browser, all tabs
+// ═══════════════════════════════════════════════════════════
+
+const IM_URL = 'https://digital.imbank.com/inm-retail/select-context'; // entry point — redirects to login if not authenticated
+const IM_TRANSFERS_URL = 'https://digital.imbank.com/inm-retail/transfers';
+const IM_KEEP_ALIVE_INTERVAL = 5 * 60 * 1000; // ping every 5 min to prevent session timeout
+let imKeepAliveTimer = null;
+
+async function connectIm() {
+  if (connectingIm) return;
+  connectingIm = true;
+  console.log('[SparkP2P] Opening I&M Bank tab...');
+  try {
+    // Ensure main browser is running — launch if needed
+    if (!browser) {
+      await launchChrome('https://digital.imbank.com');
+      await connectPuppeteer();
+      if (!browser) { connectingIm = false; return; }
+    }
+
+    // Check if an I&M tab is already open
+    const pages = await browser.pages();
+    const existing = pages.find(p => p.url().includes('imbank.com'));
+    if (existing) {
+      imPage = existing;
+    } else {
+      imPage = await browser.newPage();
+      await imPage.goto(IM_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    }
+    await imPage.bringToFront();
+    imPage.on('close', () => { imPage = null; });
+
+    // Poll until Claude Vision confirms the user is actually logged into I&M dashboard
+    let attempts = 0;
+    let verifying = false;
+    const check = setInterval(async () => {
+      attempts++;
+      if (attempts > 600) { clearInterval(check); connectingIm = false; return; } // 10 min timeout
+      if (verifying) return; // don't stack Vision calls
+      try {
+        const url = imPage.url();
+        // Quick URL pre-filter — skip obvious login/auth pages without Vision call
+        if (url.includes('/openid-connect/') || url.includes('/auth/realms/')) return;
+        if (!url.includes('imbank.com')) return;
+
+        // URL looks promising — use Vision to confirm dashboard is visible
+        verifying = true;
+        const ss = await imPage.screenshot({ encoding: 'base64' });
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 50,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+              { type: 'text', text: 'Is this an I&M Bank online banking dashboard showing account information (logged in)? Or is it a login/QR code screen? Reply with only: LOGGED_IN or LOGIN_PAGE' },
+            ]}],
+          }),
+        });
+        const data = await response.json();
+        const verdict = (data.content?.[0]?.text || '').trim().toUpperCase();
+        console.log(`[SparkP2P] I&M Vision check: ${verdict}`);
+        verifying = false;
+
+        if (verdict === 'LOGGED_IN') {
+          clearInterval(check);
+          console.log('[SparkP2P] I&M login confirmed by Vision! Syncing cookies...');
+          await syncImCookies();
+          startImKeepAlive();
+          // Lock the I&M tab immediately — bot controls it now
+          await injectLockOverlay(imPage).catch(() => {});
+          imPage.on('framenavigated', async (frame) => {
+            if (frame === imPage.mainFrame() && browserLocked) {
+              await new Promise(r => setTimeout(r, 600));
+              await injectLockOverlay(imPage).catch(() => {});
+            }
+          });
+          connectingIm = false;
+          mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("im-connected"))').catch(() => {});
+          // Re-check setup — if all 3 now connected, auto-start bot
+          const setup = await checkSetupComplete();
+          if (setup.complete && !pollerRunning) {
+            pauseNavigation = false;
+            mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
+            console.log('[SparkP2P] All connections established — bot ready to start');
+          }
+        }
+      } catch (e) { verifying = false; }
+    }, 3000); // check every 3s (Vision calls are slower than URL checks)
+  } catch (e) {
+    console.log('[SparkP2P] I&M connect error:', e.message);
+    connectingIm = false;
+  }
+}
+
+async function syncImCookies() {
+  if (!token || !imPage) return;
+  try {
+    const cookies = await imPage.cookies(IM_URL, 'https://digital.imbank.com');
+    if (cookies.length < 3) return;
+    await fetch(`${API_BASE}/traders/connect-im`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ cookies }),
+    });
+    console.log(`[SparkP2P] I&M ${cookies.length} cookies synced`);
+  } catch (e) { console.log('[SparkP2P] I&M cookie sync error:', e.message); }
+}
+
+function startImKeepAlive() {
+  if (imKeepAliveTimer) clearInterval(imKeepAliveTimer);
+  imKeepAliveTimer = setInterval(async () => {
+    if (!imPage || imPage.isClosed()) return;
+    try {
+      // Silent ping — navigate to same page to refresh session timer
+      await imPage.evaluate(() => fetch('/api/ping').catch(() => {}));
+      await syncImCookies();
+      console.log('[SparkP2P] I&M keep-alive ping sent');
+    } catch (e) {}
+  }, IM_KEEP_ALIVE_INTERVAL);
+}
+
+async function executeImWithdrawal(job) {
+  // job = { id, amount, destination }
+  // destination format: "AccountNumber|BankCode" or "AccountNumber" (I&M to I&M)
+  if (imWithdrawalRunning) return;
+  if (!imPage || imPage.isClosed()) {
+    console.log('[SparkP2P] I&M page not open — cannot execute withdrawal');
+    return;
+  }
+  imWithdrawalRunning = true;
+  console.log(`[SparkP2P] Executing I&M withdrawal: KES ${job.amount} → ${job.destination}`);
+
+  try {
+    // Navigate to transfers page
+    await imPage.goto(IM_TRANSFERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await imPage.waitForTimeout(2000);
+
+    // Use Claude Vision to navigate the transfer form
+    const screenshot = await imPage.screenshot({ encoding: 'base64' });
+    const prompt = `You are controlling an I&M Bank online banking portal to execute a bank transfer.
+Current screen shows the transfers/payments page.
+Task: Transfer KES ${job.amount} to account ${job.destination}.
+Describe what you see and what action to take next.
+Respond with JSON: { "action": "click|type|submit|wait|done|error", "selector": "css selector or null", "text": "text to type or null", "description": "what you see" }`;
+
+    let steps = 0;
+    const MAX_STEPS = 15;
+    let done = false;
+
+    while (steps < MAX_STEPS && !done) {
+      steps++;
+      const ss = await imPage.screenshot({ encoding: 'base64' });
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 500,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+            { type: 'text', text: `Transfer KES ${job.amount} to ${job.destination}. Current step ${steps}/${MAX_STEPS}. Respond JSON only: { "action": "click|type|submit|wait|done|error", "selector": "css selector", "text": "text to type if action=type", "description": "brief description" }` },
+          ]}],
+        }),
+      });
+      const data = await response.json();
+      let instruction;
+      try { instruction = JSON.parse(data.content[0].text); } catch { break; }
+
+      console.log(`[SparkP2P] I&M Vision step ${steps}: ${instruction.action} — ${instruction.description}`);
+
+      if (instruction.action === 'done') { done = true; break; }
+      if (instruction.action === 'error') { console.log('[SparkP2P] I&M Vision error:', instruction.description); break; }
+      if (instruction.action === 'wait') { await imPage.waitForTimeout(2000); continue; }
+      if (instruction.action === 'click' && instruction.selector) {
+        await imPage.click(instruction.selector).catch(() => {});
+        await imPage.waitForTimeout(1000);
+      }
+      if (instruction.action === 'type' && instruction.selector && instruction.text) {
+        await imPage.click(instruction.selector).catch(() => {});
+        await imPage.type(instruction.selector, String(instruction.text), { delay: 50 }).catch(() => {});
+        await imPage.waitForTimeout(500);
+      }
+      if (instruction.action === 'submit') {
+        await imPage.keyboard.press('Enter').catch(() => {});
+        await imPage.waitForTimeout(2000);
+      }
+    }
+
+    if (done) {
+      console.log(`[SparkP2P] I&M withdrawal KES ${job.amount} completed`);
+      await fetch(`${API_BASE}/ext/bank-withdrawal-complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ tx_id: job.id }),
+      });
+    } else {
+      console.log(`[SparkP2P] I&M withdrawal did not complete within ${MAX_STEPS} steps — requeuing`);
+      await fetch(`${API_BASE}/ext/bank-withdrawal-failed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ tx_id: job.id }),
+      });
+    }
+  } catch (e) {
+    console.log('[SparkP2P] I&M withdrawal error:', e.message);
+    await fetch(`${API_BASE}/ext/bank-withdrawal-failed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ tx_id: job.id }),
+    }).catch(() => {});
+  } finally {
+    imWithdrawalRunning = false;
+    await syncImCookies(); // refresh session after transfer
+  }
+}
+
+// Poll VPS every 30s for pending bank withdrawals and execute them
+setInterval(async () => {
+  if (!token || !imPage || imPage.isClosed() || imWithdrawalRunning) return;
+  try {
+    const res = await fetch(`${API_BASE}/ext/pending-bank-withdrawals`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.jobs && data.jobs.length > 0) {
+      console.log(`[SparkP2P] ${data.jobs.length} pending I&M withdrawal(s) found — executing first`);
+      await executeImWithdrawal(data.jobs[0]);
+    }
+  } catch (e) {}
+}, 30 * 1000);
+
+// ═══════════════════════════════════════════════════════════
+// M-PESA ORG PORTAL AUTOMATION
+// Automates org.ke.m-pesa.com to sweep funds from paybill 4041355
+// → linked I&M Bank account (FREE — "No charge" confirmed in portal)
+// Same approach as I&M Bank: real Chrome tab, cookie persistence, Vision
+// ═══════════════════════════════════════════════════════════
+
+const MPESA_ORG_URL = 'https://org.ke.m-pesa.com';
+const MPESA_ORG_REVENUE_URL = 'https://org.ke.m-pesa.com/#/mainPage/businessCenter/settlement/revenueSettlement/initiate';
+const MPESA_ORG_INITIATE_URL = 'https://org.ke.m-pesa.com/#/mainPage/transactionCenter/initiate/initiateTransaction/list';
+const MPESA_ORG_KEEP_ALIVE_INTERVAL = 5 * 60 * 1000; // ping every 5 min
+let mpesaOrgKeepAliveTimer = null;
+
+async function connectMpesaPortal() {
+  if (connectingMpesa) return;
+  connectingMpesa = true;
+  console.log('[SparkP2P] Opening M-PESA org portal tab...');
+  try {
+    // Ensure main browser is running — launch if needed
+    if (!browser) {
+      await launchChrome(MPESA_ORG_URL);
+      await connectPuppeteer();
+      if (!browser) { connectingMpesa = false; return; }
+    }
+
+    // Reuse existing M-PESA org tab if already open
+    const pages = await browser.pages();
+    const existing = pages.find(p => p.url().includes('org.ke.m-pesa.com'));
+    if (existing) {
+      mpesaOrgPage = existing;
+    } else {
+      mpesaOrgPage = await browser.newPage();
+      await mpesaOrgPage.goto(MPESA_ORG_URL, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    }
+    await mpesaOrgPage.bringToFront();
+    mpesaOrgPage.on('close', () => { mpesaOrgPage = null; });
+
+    // Poll until Vision confirms user is logged into M-PESA org dashboard
+    let attempts = 0;
+    let verifying = false;
+    const check = setInterval(async () => {
+      attempts++;
+      if (attempts > 600) { clearInterval(check); connectingMpesa = false; return; } // 10 min timeout
+      if (!mpesaOrgPage || mpesaOrgPage.isClosed()) { clearInterval(check); connectingMpesa = false; return; }
+      if (verifying) return;
+      verifying = true;
+      try {
+        const url = mpesaOrgPage.url();
+        // Skip obvious auth pages without Vision call
+        if (!url.includes('org.ke.m-pesa.com')) { verifying = false; return; }
+
+        const ss = await mpesaOrgPage.screenshot({ encoding: 'base64' });
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 50,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+              { type: 'text', text: 'Is this the M-PESA organization portal dashboard (logged in, showing menu/accounts/transactions)? Or is it a login page? Reply with only: LOGGED_IN or LOGIN_PAGE' },
+            ]}],
+          }),
+        });
+        const data = await response.json();
+        const verdict = (data.content?.[0]?.text || '').trim().toUpperCase();
+        console.log(`[SparkP2P] M-PESA portal Vision check: ${verdict}`);
+        verifying = false;
+
+        if (verdict === 'LOGGED_IN') {
+          clearInterval(check);
+          console.log('[SparkP2P] M-PESA portal login confirmed! Starting keep-alive...');
+          startMpesaOrgKeepAlive();
+          // Lock the tab — bot controls it
+          await injectLockOverlay(mpesaOrgPage).catch(() => {});
+          mpesaOrgPage.on('framenavigated', async (frame) => {
+            if (frame === mpesaOrgPage.mainFrame() && browserLocked) {
+              await new Promise(r => setTimeout(r, 600));
+              await injectLockOverlay(mpesaOrgPage).catch(() => {});
+            }
+          });
+          connectingMpesa = false;
+          // Mark connected in backend
+          if (token) {
+            await fetch(`${API_BASE}/traders/connect-mpesa-portal`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+              body: JSON.stringify({ connected: true }),
+            }).catch(() => {});
+          }
+          mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("mpesa-portal-connected"))').catch(() => {});
+        }
+      } catch (e) { verifying = false; }
+    }, 3000);
+  } catch (e) {
+    console.log('[SparkP2P] M-PESA portal connect error:', e.message);
+    connectingMpesa = false;
+  }
+}
+
+function startMpesaOrgKeepAlive() {
+  if (mpesaOrgKeepAliveTimer) clearInterval(mpesaOrgKeepAliveTimer);
+  mpesaOrgKeepAliveTimer = setInterval(async () => {
+    if (!mpesaOrgPage || mpesaOrgPage.isClosed()) return;
+    try {
+      // Silent keep-alive: navigate to home page to reset session timer
+      // Avoid navigating away from initiate page if a sweep is in progress
+      if (!mpesaSweepRunning) {
+        await mpesaOrgPage.evaluate(() => {
+          // Trigger a lightweight XHR instead of full navigation
+          fetch('/mainPage', { method: 'HEAD' }).catch(() => {});
+        }).catch(() => {});
+      }
+      console.log('[SparkP2P] M-PESA portal keep-alive sent');
+    } catch (e) {}
+  }, MPESA_ORG_KEEP_ALIVE_INTERVAL);
+}
+
+// ── Shared helper: fill a form on the M-PESA org portal ──────────────────────
+// Fills Amount(KSH), Remark, and Reason (Input Manually) on the current page,
+// then clicks Submit. Used by both Revenue Settlement and Org Withdrawal steps.
+async function _fillAndSubmitMpesaForm(page, amount, remark, reason) {
+  // Fill Amount(KSH)
+  const amountFilled = await page.evaluate((amt) => {
+    const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"], input:not([type])'));
+    for (const inp of inputs) {
+      const nearText = (inp.placeholder || inp.name || inp.id || inp.getAttribute('aria-label') || inp.closest('div,td,tr,label')?.textContent || '').toLowerCase();
+      if (nearText.includes('amount')) {
+        inp.value = '';
+        inp.focus();
+        inp.value = String(amt);
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }
+    }
+    return false;
+  }, amount).catch(() => false);
+
+  if (!amountFilled) await fillFieldWithVision(page, 'Amount(KSH)', String(amount));
+  console.log(`[SparkP2P] Amount filled: ${amountFilled}`);
+
+  await new Promise(r => setTimeout(r, 300));
+
+  // Fill Remark (textarea with placeholder "Remarks information for a transaction...")
+  await page.evaluate((txt) => {
+    const els = Array.from(document.querySelectorAll('textarea, input[type="text"]'));
+    for (const el of els) {
+      const hint = (el.placeholder || el.getAttribute('aria-label') || el.closest('div,td,tr')?.textContent || '').toLowerCase();
+      if (hint.includes('remark')) {
+        el.value = txt;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        break;
+      }
+    }
+  }, remark).catch(() => {});
+
+  await new Promise(r => setTimeout(r, 300));
+
+  // Reason dropdown: "Input Manually..." is either already selected or needs clicking
+  // The portal shows it pre-selected as a custom dropdown with value "Input Manually..."
+  // Just make sure it's set, then fill the reason textarea below it
+  await page.evaluate(() => {
+    // For standard <select>
+    const selects = Array.from(document.querySelectorAll('select'));
+    for (const sel of selects) {
+      const opts = Array.from(sel.options);
+      const manual = opts.find(o => o.text.toLowerCase().includes('manual') || o.text.toLowerCase().includes('input'));
+      if (manual) { sel.value = manual.value; sel.dispatchEvent(new Event('change', { bubbles: true })); return; }
+    }
+    // For custom dropdown already showing "Input Manually..." — nothing to do
+  }).catch(() => {});
+
+  await new Promise(r => setTimeout(r, 400));
+
+  // Fill the reason textarea / text input (labelled "Enter The Reason...")
+  await page.evaluate((txt) => {
+    const els = Array.from(document.querySelectorAll('textarea, input[type="text"]'));
+    for (const el of els) {
+      const hint = (el.placeholder || el.getAttribute('aria-label') || '').toLowerCase();
+      if (hint.includes('reason') || hint.includes('enter the reason')) {
+        el.value = txt;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+    }
+    // Fallback: first visible empty textarea
+    for (const el of els) {
+      if (!el.value && el.offsetParent && el.tagName === 'TEXTAREA') {
+        el.value = txt;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+    }
+  }, reason).catch(() => {});
+
+  await new Promise(r => setTimeout(r, 300));
+
+  // Click Submit
+  const submitted = await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+    const btn = btns.find(b => (b.textContent.trim().toLowerCase() === 'submit' || b.value?.toLowerCase() === 'submit') && b.offsetParent);
+    if (btn) { btn.click(); return true; }
+    return false;
+  }).catch(() => false);
+  console.log(`[SparkP2P] Submit clicked: ${submitted}`);
+  return submitted;
+}
+
+// ── Wait for "Operation succeeded." or "Transaction Budget" popup ─────────────
+async function _waitForMpesaSuccess(page, screenshotLabel) {
+  await new Promise(r => setTimeout(r, 3000));
+
+  // Check for success message first
+  const succeeded = await page.evaluate(() => {
+    const body = document.body.innerText.toLowerCase();
+    return body.includes('operation succeeded') || body.includes('successfully') || body.includes('success');
+  }).catch(() => false);
+
+  if (succeeded) {
+    console.log(`[SparkP2P] ✅ ${screenshotLabel} — "Operation succeeded." detected`);
+    await takeScreenshot(screenshotLabel + '_success', page);
+    return true;
+  }
+
+  // Look for a "Continue" / "OK" popup (Transaction Budget confirmation)
+  const popupClicked = await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button, a'));
+    const btn = btns.find(b => ['continue', 'ok', 'confirm'].includes(b.textContent.trim().toLowerCase()) && b.offsetParent);
+    if (btn) { btn.click(); return btn.textContent.trim(); }
+    return null;
+  }).catch(() => null);
+
+  if (popupClicked) {
+    console.log(`[SparkP2P] Popup button clicked: "${popupClicked}"`);
+    await new Promise(r => setTimeout(r, 2000));
+    await takeScreenshot(screenshotLabel + '_after_popup', page);
+    return true;
+  }
+
+  // Vision fallback — check what's on screen
+  if (anthropicApiKey) {
+    const ss = await page.screenshot({ encoding: 'base64' });
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 80,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+          { type: 'text', text: 'Does this page show "Operation succeeded" or a success message? Or is there a popup with a button to click? Reply JSON: {"success": true/false, "popup_button": "button text or null"}' },
+        ]}],
+      }),
+    }).catch(() => null);
+    if (resp?.ok) {
+      const vd = await resp.json().catch(() => ({}));
+      const vt = (vd.content?.[0]?.text || '').replace(/```json?/g, '').replace(/```/g, '').trim();
+      try {
+        const vi = JSON.parse(vt.match(/\{[\s\S]*\}/)?.[0] || '{}');
+        if (vi.success) { await takeScreenshot(screenshotLabel + '_vision_success', page); return true; }
+        if (vi.popup_button) {
+          await page.evaluate((txt) => {
+            const b = Array.from(document.querySelectorAll('button,a')).find(el => el.textContent.trim().toLowerCase() === txt.toLowerCase());
+            if (b) b.click();
+          }, vi.popup_button).catch(() => {});
+          console.log(`[SparkP2P] Vision clicked: "${vi.popup_button}"`);
+          await new Promise(r => setTimeout(r, 1500));
+          return true;
+        }
+      } catch (_) {}
+    }
+  }
+
+  await takeScreenshot(screenshotLabel + '_unknown', page);
+  return false;
+}
+
+// ── Full sweep: Step 1 Revenue Settlement + Step 2 Org Withdrawal ────────────
+async function executeMpesaSweep(sweepJob) {
+  // sweepJob = { sweep_id, amount, reference }
+  if (mpesaSweepRunning) return { success: false, error: 'sweep_in_progress' };
+  if (!mpesaOrgPage || mpesaOrgPage.isClosed()) {
+    console.log('[SparkP2P] M-PESA org page not open — cannot execute sweep');
+    return { success: false, error: 'portal_not_connected' };
+  }
+  mpesaSweepRunning = true;
+  const { sweep_id, amount, reference } = sweepJob;
+  console.log(`[SparkP2P] === M-PESA SWEEP KES ${amount} (sweep #${sweep_id}) ===`);
+
+  try {
+    // ── STEP 1: Revenue Settlement (utility float → working account) ────────
+    // Business Center → Revenue Settlement → Initiate Revenue Settlement
+    console.log('[SparkP2P] Step 1: Revenue Settlement...');
+    await mpesaOrgPage.goto(MPESA_ORG_REVENUE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 3000));
+    await takeScreenshot('sweep_step1_revenue_form', mpesaOrgPage);
+
+    const step1Submitted = await _fillAndSubmitMpesaForm(mpesaOrgPage, amount, 'P2p Transactions', 'p2p trades');
+    if (!step1Submitted) {
+      console.log('[SparkP2P] Step 1: Submit not found — debug screenshot saved');
+      mpesaSweepRunning = false;
+      if (token) {
+        await fetch(`${API_BASE}/ext/mpesa-sweep-failed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ sweep_id, error: 'Revenue Settlement submit not found' }),
+        }).catch(() => {});
+      }
+      return { success: false, error: 'revenue_settlement_submit_not_found' };
+    }
+
+    const step1Ok = await _waitForMpesaSuccess(mpesaOrgPage, 'sweep_step1_revenue');
+    console.log(`[SparkP2P] Step 1 result: ${step1Ok ? 'success' : 'unknown — proceeding anyway'}`);
+
+    // Brief pause between steps so the portal processes the settlement
+    await new Promise(r => setTimeout(r, 2000));
+
+    // ── STEP 2: Organization Withdrawal (working account → I&M Bank) ────────
+    // Transaction Center → Initiate Transaction → "Organization Withdrawal From MPESA-Real Time"
+    console.log('[SparkP2P] Step 2: Organization Withdrawal...');
+    await mpesaOrgPage.goto(MPESA_ORG_INITIATE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 3000));
+    await takeScreenshot('sweep_step2_withdrawal_form', mpesaOrgPage);
+
+    // Select "Organization Withdrawal From MPESA-Real Time" from Transaction Services dropdown
+    const serviceSelected = await mpesaOrgPage.evaluate(() => {
+      // Standard <select>
+      for (const sel of document.querySelectorAll('select')) {
+        const opts = Array.from(sel.options);
+        const target = opts.find(o => o.text.toLowerCase().includes('organisation withdrawal') ||
+                                      o.text.toLowerCase().includes('organization withdrawal') ||
+                                      o.text.toLowerCase().includes('withdrawal from mpesa'));
+        if (target) {
+          sel.value = target.value;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          return 'select:' + target.text;
+        }
+      }
+      // Custom dropdown trigger
+      for (const t of document.querySelectorAll('[class*="dropdown"],[class*="select"],[role="combobox"],[role="listbox"]')) {
+        const txt = t.textContent.toLowerCase();
+        if (txt.includes('service') || txt.includes('transaction') || txt.includes('select')) {
+          t.click();
+          return 'trigger_clicked';
+        }
+      }
+      return null;
+    }).catch(() => null);
+    console.log(`[SparkP2P] Service dropdown: ${serviceSelected}`);
+
+    if (serviceSelected === 'trigger_clicked') {
+      await new Promise(r => setTimeout(r, 1500));
+      await mpesaOrgPage.evaluate(() => {
+        const opts = Array.from(document.querySelectorAll('li,[role="option"],[class*="option"]'));
+        const t = opts.find(o => o.textContent.toLowerCase().includes('organisation withdrawal') ||
+                                  o.textContent.toLowerCase().includes('organization withdrawal') ||
+                                  o.textContent.toLowerCase().includes('withdrawal from mpesa'));
+        if (t) t.click();
+      }).catch(() => {});
+    }
+
+    await new Promise(r => setTimeout(r, 2000));
+
+    const step2Submitted = await _fillAndSubmitMpesaForm(mpesaOrgPage, amount, 'P2p Transactions', 'p2p trades');
+    if (!step2Submitted) {
+      console.log('[SparkP2P] Step 2: Submit not found');
+      mpesaSweepRunning = false;
+      if (token) {
+        await fetch(`${API_BASE}/ext/mpesa-sweep-failed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ sweep_id, error: 'Org Withdrawal submit not found' }),
+        }).catch(() => {});
+      }
+      return { success: false, error: 'org_withdrawal_submit_not_found' };
+    }
+
+    // "Transaction Budget" popup shows "No charge." — click Continue
+    const step2Ok = await _waitForMpesaSuccess(mpesaOrgPage, 'sweep_step2_withdrawal');
+    console.log(`[SparkP2P] Step 2 result: ${step2Ok ? 'success' : 'unknown'}`);
+
+    // Report to backend
+    if (token) {
+      await fetch(`${API_BASE}/ext/mpesa-sweep-complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ sweep_id, amount, reference }),
+      }).catch(() => {});
+    }
+
+    console.log(`[SparkP2P] ✅ M-PESA sweep KES ${amount} complete (Revenue Settlement + Org Withdrawal)`);
+    mpesaSweepRunning = false;
+    return { success: true };
+
+  } catch (e) {
+    console.error('[SparkP2P] executeMpesaSweep error:', e.message?.substring(0, 80));
+    await takeScreenshot('mpesa_sweep_error', mpesaOrgPage).catch(() => {});
+    if (token) {
+      await fetch(`${API_BASE}/ext/mpesa-sweep-failed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ sweep_id, error: e.message }),
+      }).catch(() => {});
+    }
+    mpesaSweepRunning = false;
+    return { success: false, error: e.message };
+  }
+}
+
+// Helper: use Vision to find a field by label and type a value
+async function fillFieldWithVision(page, fieldLabel, value) {
+  try {
+    const ss = await page.screenshot({ encoding: 'base64' });
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+          { type: 'text', text: `Find the input field labelled "${fieldLabel}" on this page. Reply JSON: {"selector": "best CSS selector for this input or null", "found": true/false}` },
+        ]}],
+      }),
+    });
+    const data = await resp.json();
+    const text = (data.content?.[0]?.text || '').replace(/```json?/g, '').replace(/```/g, '').trim();
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      const info = JSON.parse(match[0]);
+      if (info.found && info.selector) {
+        await page.click(info.selector).catch(() => {});
+        await page.evaluate((sel, val) => {
+          const el = document.querySelector(sel);
+          if (el) { el.value = val; el.dispatchEvent(new Event('input', { bubbles: true })); }
+        }, info.selector, value).catch(() => {});
+        console.log(`[SparkP2P] Vision filled "${fieldLabel}" via ${info.selector}`);
+      }
+    }
+  } catch (e) {}
+}
+
+// Poll VPS every 30s for pending M-PESA sweeps and execute them
+setInterval(async () => {
+  if (!token || !mpesaOrgPage || mpesaOrgPage.isClosed() || mpesaSweepRunning) return;
+  try {
+    const res = await fetch(`${API_BASE}/ext/pending-mpesa-sweeps`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.sweeps && data.sweeps.length > 0) {
+      console.log(`[SparkP2P] ${data.sweeps.length} pending M-PESA sweep(s) found — executing first`);
+      await executeMpesaSweep(data.sweeps[0]);
+    }
+  } catch (e) {}
+}, 30 * 1000);
+
 // IPC
 ipcMain.handle('connect-binance', () => { connectBinance(); return { opened: true }; });
+ipcMain.handle('connect-im', () => { connectIm(); return { opened: true }; });
+ipcMain.handle('connect-mpesa', () => { connectMpesaPortal(); return { opened: true }; });
 ipcMain.handle('unlock-browser', async () => { await unlockChromeBrowser(); console.log('[SparkP2P] Browser manually unlocked'); return { ok: true }; });
 ipcMain.handle('lock-browser', async () => { const p = await getPage(); if (p) await lockChromeBrowser(); return { ok: true }; });
-ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser(); console.log('[SparkP2P] Navigation PAUSED — Chrome is free'); return { ok: true }; });
+ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await lockChromeBrowser(); console.log('[SparkP2P] Navigation PAUSED — all windows locked'); return { ok: true }; });
 ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED'); return { ok: true }; });
 ipcMain.handle('open-gmail-tab', async () => {
   // If Chrome is not running yet, launch it to Gmail directly
@@ -3244,9 +4327,9 @@ ipcMain.handle('open-gmail-tab', async () => {
 ipcMain.handle('set-token', (_, t) => { token = t; return { ok: true }; });
 ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] Fund password configured'); return { ok: true }; });
 ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });
-ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; aiScanner.initAI(key); console.log('[SparkP2P] GPT-4o configured'); return { ok: true }; });
-ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; saveAnthropicKey(key); console.log('[SparkP2P] Claude Vision configured and saved to disk'); return { ok: true }; });
-ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasTOTP: !!totpSecret, hasAI: !!aiApiKey, hasVision: !!anthropicApiKey }));
+ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; console.log('[SparkP2P] AI key set (legacy)'); return { ok: true }; });
+ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; saveAnthropicKey(key); aiScanner.initAI(key); console.log('[SparkP2P] Claude configured and saved to disk'); return { ok: true }; });
+ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasTOTP: !!totpSecret, hasAI: !!anthropicApiKey, hasVision: !!anthropicApiKey }));
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
 ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
 ipcMain.handle('restart-app', () => { autoUpdater.quitAndInstall(); });

@@ -45,6 +45,7 @@ export const requestChangePasswordOtp = () => api.post('/traders/change-password
 export const changePassword = (otp_code, new_password) => api.post('/traders/change-password', { otp_code, new_password });
 export const getBinanceAccountData = () => api.get('/ext/account-data');
 export const getMarketPrices = () => api.get('/ext/market-prices');
+export const getMyAdPrices = () => api.get('/ext/my-ad-prices');
 export const initiateDeposit = (amount, phone) => api.post('/traders/deposit', { amount, phone });
 export const getDepositHistory = (limit = 50) => api.get(`/traders/deposit/history?limit=${limit}`);
 export const checkDepositStatus = (checkoutId) => api.get(`/traders/deposit/status/${checkoutId}`);
@@ -100,5 +101,10 @@ export const uploadSupportAttachment = (file) => { const fd = new FormData(); fd
 export const getAdminWithdrawals = (params = {}) => api.get('/admin/withdrawals', { params });
 export const markWithdrawalComplete = (txId) => api.put(`/admin/withdrawals/${txId}/complete`);
 export const markWithdrawalPending = (txId) => api.put(`/admin/withdrawals/${txId}/pending`);
+
+export const getTodayStats = () => api.get('/traders/stats/today');
+
+export const getAdminSweeps = (params = {}) => api.get('/admin/sweeps', { params });
+export const retrySweep = (sweepId) => api.post(`/admin/sweeps/${sweepId}/retry`);
 
 export default api;

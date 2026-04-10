@@ -29,6 +29,24 @@ export default function SettingsPanel({ profile, onUpdate }) {
   // Gmail session
   const [gmailConfigured, setGmailConfigured] = useState(false);
 
+  // I&M Bank connection
+  const [imConnecting, setImConnecting] = useState(false);
+  const imPollRef = useRef(null);
+
+  // M-PESA org portal connection
+  const [mpesaConnecting, setMpesaConnecting] = useState(false);
+  const mpesaPollRef = useRef(null);
+
+  // Pause Bot 2FA modal
+  const [showPauseModal, setShowPauseModal] = useState(false);
+  const [pauseStep, setPauseStep] = useState('warning'); // warning | otp | done
+  const [pauseOtpSent, setPauseOtpSent] = useState(false);
+  const [pauseOtpCode, setPauseOtpCode] = useState('');
+  const [pauseSecQ, setPauseSecQ] = useState('');
+  const [pauseSecAnswer, setPauseSecAnswer] = useState('');
+  const [pauseLoading, setPauseLoading] = useState(false);
+  const [pauseMsg, setPauseMsg] = useState('');
+
   // Binance
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
 
@@ -85,6 +103,9 @@ export default function SettingsPanel({ profile, onUpdate }) {
   );
   const [cpCooldown, setCpCooldown] = useState('');
 
+  // Settlement cooldown countdown
+  const [settleCooldown, setSettleCooldown] = useState('');
+
   const PW_RULES = [
     { label: 'At least 8 characters', test: (p) => p.length >= 8 },
     { label: '2 uppercase letters', test: (p) => (p.match(/[A-Z]/g) || []).length >= 2 },
@@ -123,6 +144,23 @@ export default function SettingsPanel({ profile, onUpdate }) {
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [cpCooldownUntil]);
+
+  // Countdown ticker for settlement method cooldown
+  useEffect(() => {
+    if (!profile?.settlement_cooldown_until) return;
+    const until = new Date(profile.settlement_cooldown_until);
+    const tick = () => {
+      const diff = until - Date.now();
+      if (diff <= 0) { setSettleCooldown(''); return; }
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setSettleCooldown(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [profile?.settlement_cooldown_until]);
 
   // Trading
   const [autoRelease, setAutoRelease] = useState(profile?.auto_release_enabled ?? true);
@@ -163,12 +201,114 @@ export default function SettingsPanel({ profile, onUpdate }) {
     return () => clearInterval(connectPollRef.current);
   }, [connecting]);
 
-  // Load Gmail status on mount
+  // Auto-resume notification
   useEffect(() => {
-    api.get('/traders/gmail-credentials').then(r => {
-      setGmailConfigured(r.data.configured);
-    }).catch(() => {});
+    const handler = (e) => {
+      if (e.detail?.reason === 'inactivity') {
+        setMessage('Bot automatically resumed and all sessions locked after 30 seconds of inactivity.');
+        setTimeout(() => setMessage(''), 6000);
+      }
+    };
+    window.addEventListener('bot-resumed', handler);
+    return () => window.removeEventListener('bot-resumed', handler);
   }, []);
+
+  // Load Gmail status on mount + re-check when desktop app confirms login
+  useEffect(() => {
+    const checkGmail = () => {
+      api.get('/traders/gmail-credentials').then(r => {
+        setGmailConfigured(r.data.configured);
+      }).catch(() => {});
+    };
+    checkGmail();
+    window.addEventListener('gmail-connected', checkGmail);
+    return () => window.removeEventListener('gmail-connected', checkGmail);
+  }, []);
+
+  // React to desktop app confirming M-PESA portal login
+  useEffect(() => {
+    const handler = async () => {
+      setMpesaConnecting(false);
+      if (onUpdate) { const r = await getProfile(); onUpdate(r.data); }
+    };
+    window.addEventListener('mpesa-portal-connected', handler);
+    return () => window.removeEventListener('mpesa-portal-connected', handler);
+  }, []);
+
+  const handleRequestPauseOtp = async () => {
+    setPauseLoading(true); setPauseMsg('');
+    try {
+      const res = await api.post('/traders/pause-bot/request-otp');
+      setPauseSecQ(res.data.security_question);
+      setPauseOtpSent(true);
+      setPauseStep('otp');
+      setPauseMsg(res.data.message);
+    } catch (err) {
+      setPauseMsg(err.response?.data?.detail || 'Failed to send OTP');
+    }
+    setPauseLoading(false);
+  };
+
+  const handleConfirmPause = async () => {
+    if (!pauseOtpCode || !pauseSecAnswer) { setPauseMsg('Please fill in all fields.'); return; }
+    setPauseLoading(true); setPauseMsg('');
+    try {
+      await api.post('/traders/pause-bot/confirm', { otp_code: pauseOtpCode, security_answer: pauseSecAnswer });
+      // Authorized — actually pause the bot
+      await fetch('http://127.0.0.1:9223/pause').catch(() => {});
+      setShowPauseModal(false);
+      setPauseStep('warning'); setPauseOtpCode(''); setPauseSecAnswer(''); setPauseMsg('');
+    } catch (err) {
+      setPauseMsg(err.response?.data?.detail || 'Verification failed.');
+    }
+    setPauseLoading(false);
+  };
+
+  const handleConnectIm = () => {
+    if (window.sparkp2p?.isDesktop) {
+      window.sparkp2p.connectIm();
+    }
+    setImConnecting(true);
+  };
+
+  // Poll until im_connected = true
+  useEffect(() => {
+    if (!imConnecting) return;
+    imPollRef.current = setInterval(async () => {
+      try {
+        const res = await getProfile();
+        if (res.data.im_connected) {
+          clearInterval(imPollRef.current);
+          setImConnecting(false);
+          if (onUpdate) onUpdate(res.data);
+        }
+      } catch (_) {}
+    }, 3000);
+    return () => clearInterval(imPollRef.current);
+  }, [imConnecting]);
+
+  const handleConnectMpesa = () => {
+    if (window.sparkp2p?.isDesktop) {
+      window.sparkp2p.connectMpesa();
+    }
+    setMpesaConnecting(true);
+  };
+
+  // Poll until mpesa_portal_connected = true
+  useEffect(() => {
+    if (!mpesaConnecting) return;
+    mpesaPollRef.current = setInterval(async () => {
+      try {
+        const res = await getProfile();
+        if (res.data.mpesa_portal_connected) {
+          clearInterval(mpesaPollRef.current);
+          setMpesaConnecting(false);
+          if (onUpdate) onUpdate(res.data);
+        }
+      } catch (_) {}
+    }, 3000);
+    return () => clearInterval(mpesaPollRef.current);
+  }, [mpesaConnecting]);
 
   const handleRequestOTP = async () => {
     setLoading(true);
@@ -283,7 +423,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
                   Re-connect (if session expired)
                 </button>
                 <button
-                  onClick={() => fetch('http://127.0.0.1:9223/pause').catch(() => {})}
+                  onClick={() => { setShowPauseModal(true); setPauseStep('warning'); setPauseMsg(''); }}
                   style={{
                     padding: '10px 20px', borderRadius: 8,
                     border: '1px solid #6b7280', background: 'transparent',
@@ -536,6 +676,112 @@ export default function SettingsPanel({ profile, onUpdate }) {
         />
       )}
 
+      {/* I&M Bank Connection */}
+      {activeSection === 'binance' && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3 style={{ marginBottom: 4 }}>I&amp;M Bank Account</h3>
+          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
+            Used to automatically execute bank withdrawals for traders. Log in once, the session stays alive 24/7.
+          </p>
+          {profile?.im_connected ? (
+            <div className="name-verify-box match">
+              <h4>I&amp;M Bank Connected</h4>
+              <p style={{ fontSize: 13, color: '#9ca3af', marginTop: 8 }}>
+                Session is active. Bank withdrawals will execute automatically when approved.
+              </p>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                <button
+                  onClick={handleConnectIm}
+                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #f59e0b', background: 'transparent', color: '#f59e0b', cursor: 'pointer', fontSize: 13 }}
+                >
+                  Re-connect (if session expired)
+                </button>
+                <button
+                  onClick={async () => { await api.post('/traders/disconnect-im'); if (onUpdate) { const r = await getProfile(); onUpdate(r.data); } }}
+                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 13 }}
+                >
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '30px 20px', background: 'var(--bg)', borderRadius: 12, border: '1px dashed var(--border)' }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>🏦</div>
+              <h4 style={{ color: '#fff', marginBottom: 8 }}>Link Your I&amp;M Bank Account</h4>
+              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20, maxWidth: 400, margin: '0 auto 20px' }}>
+                A secure browser will open I&amp;M digital banking. Log in manually — the app captures your session and keeps it alive so bank transfers execute automatically.
+              </p>
+              {imConnecting ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 36, height: 36, border: '3px solid rgba(99,102,241,0.2)', borderTop: '3px solid #6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                  <span style={{ color: '#6366f1', fontSize: 13 }}>Waiting for I&amp;M login...</span>
+                </div>
+              ) : (
+                <button
+                  onClick={handleConnectIm}
+                  style={{ padding: '14px 32px', borderRadius: 10, border: 'none', background: '#6366f1', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 15 }}
+                >
+                  Connect I&amp;M Bank
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* M-PESA Org Portal Connection — admin only */}
+      {activeSection === 'binance' && profile?.is_admin && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3 style={{ marginBottom: 4 }}>M-PESA Org Portal</h3>
+          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
+            Automates <strong style={{ color: '#e5e7eb' }}>org.ke.m-pesa.com</strong> to sweep funds from paybill 4041355 to your I&amp;M Bank account automatically when traders withdraw — <strong style={{ color: '#10b981' }}>completely free</strong>.
+          </p>
+          {profile?.mpesa_portal_connected ? (
+            <div className="name-verify-box match">
+              <h4>M-PESA Portal Connected</h4>
+              <p style={{ fontSize: 13, color: '#9ca3af', marginTop: 8 }}>
+                Session is active. Funds will sweep to I&amp;M Bank automatically on each trader withdrawal.
+              </p>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                <button
+                  onClick={handleConnectMpesa}
+                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #f59e0b', background: 'transparent', color: '#f59e0b', cursor: 'pointer', fontSize: 13 }}
+                >
+                  Re-connect (if session expired)
+                </button>
+                <button
+                  onClick={async () => { await api.post('/traders/disconnect-mpesa-portal'); if (onUpdate) { const r = await getProfile(); onUpdate(r.data); } }}
+                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 13 }}
+                >
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '30px 20px', background: 'var(--bg)', borderRadius: 12, border: '1px dashed var(--border)' }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📱</div>
+              <h4 style={{ color: '#fff', marginBottom: 8 }}>Connect M-PESA Org Portal</h4>
+              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20, maxWidth: 420, margin: '0 auto 20px' }}>
+                A browser tab will open <strong style={{ color: '#e5e7eb' }}>org.ke.m-pesa.com</strong>. Log in manually — the app will then automate fund sweeps from paybill 4041355 to your linked I&amp;M account at zero cost.
+              </p>
+              {mpesaConnecting ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 36, height: 36, border: '3px solid rgba(16,185,129,0.2)', borderTop: '3px solid #10b981', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                  <span style={{ color: '#10b981', fontSize: 13 }}>Waiting for M-PESA portal login...</span>
+                </div>
+              ) : (
+                <button
+                  onClick={handleConnectMpesa}
+                  style={{ padding: '14px 32px', borderRadius: 10, border: 'none', background: '#10b981', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 15 }}
+                >
+                  Connect M-PESA Portal
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {activeSection === 'settlement' && (
         <div className="card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -603,11 +849,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
                       </thead>
                       <tbody style={{ color: '#e5e7eb' }}>
                         {[
-                          ['KES 1,000 – 10,000', '0.1%'],
-                          ['KES 25,000', 'KES 30'],
-                          ['KES 50,000', 'KES 30'],
-                          ['KES 100,000', 'KES 50'],
-                          ['KES 100,001+', 'KES 60'],
+                          ['KES 1,000+', '0.05%'],
                         ].map(([range, fee]) => (
                           <tr key={range}>
                             <td style={{ padding: '2px 0' }}>{range}</td>
@@ -616,7 +858,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
                         ))}
                       </tbody>
                     </table>
-                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>Withdrawals only available at tier minimums</div>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>Flat 0.05% fee on all I&M Bank withdrawals</div>
                   </div>
                 </div>
               )}
@@ -638,14 +880,19 @@ export default function SettingsPanel({ profile, onUpdate }) {
                 ? profile.settlement_destination.replace(/^(.*)(.{4})$/, (_, start, end) => '*'.repeat(start.length) + end)
                 : 'No destination configured'}
             </div>
-            {profile?.settlement_cooldown_until && (
+            {profile?.settlement_cooldown_until && settleCooldown && (
               <div style={{
-                marginTop: 10, padding: 10, borderRadius: 8,
+                marginTop: 10, padding: 12, borderRadius: 8,
                 background: 'rgba(245,158,11,0.1)', border: '1px solid #f59e0b',
                 fontSize: 12, color: '#f59e0b',
               }}>
-                Due to security reasons, this payment method will be active for withdrawals after{' '}
-                {new Date(profile.settlement_cooldown_until).toLocaleString()}.
+                <div style={{ marginBottom: 6 }}>Security cooldown — active for withdrawals in:</div>
+                <div style={{ fontFamily: 'monospace', fontSize: 28, fontWeight: 700, letterSpacing: 2, color: '#f59e0b', textAlign: 'center' }}>
+                  {settleCooldown}
+                </div>
+                <div style={{ marginTop: 4, textAlign: 'center', fontSize: 10, color: '#9ca3af' }}>
+                  hh : mm : ss
+                </div>
               </div>
             )}
           </div>
@@ -663,7 +910,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
                 opacity: profile?.settlement_cooldown_until ? 0.6 : 1,
               }}
             >
-              {profile?.settlement_cooldown_until ? 'Change Blocked (48hr cooldown)' : 'Change Payment Method'}
+              {profile?.settlement_cooldown_until && settleCooldown ? `Locked — ${settleCooldown}` : 'Change Payment Method'}
             </button>
           ) : (
             <>
@@ -1077,6 +1324,97 @@ export default function SettingsPanel({ profile, onUpdate }) {
               {loading ? 'Saving...' : 'Save Trading Settings'}
             </button>
           </form>
+        </div>
+      )}
+      {/* Pause Bot 2FA Modal */}
+      {showPauseModal && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }}>
+          <div style={{ background: '#1a1d27', borderRadius: 16, padding: 28, maxWidth: 480, width: '100%', border: '1px solid rgba(255,255,255,0.1)' }}>
+
+            {pauseStep === 'warning' && (<>
+              <div style={{ fontSize: 32, marginBottom: 12, textAlign: 'center' }}>⚠️</div>
+              <h3 style={{ color: '#f59e0b', textAlign: 'center', marginBottom: 16 }}>Pause Bot — Security Notice</h3>
+              <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, padding: '14px 16px', marginBottom: 20, fontSize: 13, color: '#fca5a5', lineHeight: 1.7 }}>
+                <strong style={{ color: '#ef4444', display: 'block', marginBottom: 6 }}>Important: Understand the risks before proceeding.</strong>
+                Pausing the bot disables the automated lock on your Binance and I&M Bank browser sessions.
+                During this window, anyone with physical or remote access to this device could interact with
+                your trading and banking accounts directly.<br /><br />
+                <strong style={{ color: '#fca5a5' }}>We strongly recommend pausing only when absolutely necessary</strong> — for example, to update your
+                configuration or troubleshoot an issue — and resuming immediately once done. The system will
+                automatically resume and re-lock all sessions after <strong>30 seconds of inactivity</strong>.
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  onClick={() => setShowPauseModal(false)}
+                  style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 14 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRequestPauseOtp}
+                  disabled={pauseLoading}
+                  style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 14 }}
+                >
+                  {pauseLoading ? 'Sending OTP...' : 'I Understand — Proceed'}
+                </button>
+              </div>
+            </>)}
+
+            {pauseStep === 'otp' && (<>
+              <h3 style={{ color: '#fff', marginBottom: 6 }}>Verify Identity</h3>
+              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>Enter the OTP sent to your phone and your security answer to confirm.</p>
+
+              {pauseMsg && (
+                <div style={{ padding: '8px 12px', borderRadius: 8, marginBottom: 12, fontSize: 13,
+                  background: pauseMsg.includes('sent') ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)',
+                  color: pauseMsg.includes('sent') ? '#4ade80' : '#f87171',
+                  border: `1px solid ${pauseMsg.includes('sent') ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                }}>
+                  {pauseMsg}
+                </div>
+              )}
+
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>OTP Code</label>
+                <input
+                  type="text" maxLength={6} placeholder="6-digit code"
+                  value={pauseOtpCode} onChange={e => setPauseOtpCode(e.target.value)}
+                  className="adm-input" style={{ width: '100%' }}
+                />
+              </div>
+
+              {pauseSecQ && (
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>{pauseSecQ}</label>
+                  <input
+                    type="text" placeholder="Your answer"
+                    value={pauseSecAnswer} onChange={e => setPauseSecAnswer(e.target.value)}
+                    className="adm-input" style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  onClick={() => { setShowPauseModal(false); setPauseStep('warning'); }}
+                  style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 14 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmPause}
+                  disabled={pauseLoading}
+                  style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: 'none', background: '#ef4444', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 14 }}
+                >
+                  {pauseLoading ? 'Verifying...' : 'Confirm Pause'}
+                </button>
+              </div>
+            </>)}
+
+          </div>
         </div>
       )}
     </div>

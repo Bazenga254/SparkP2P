@@ -1,19 +1,55 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import SupportChat from '../components/SupportChat';
 
+const B2C_FEES = [
+  [1000,9],[1500,14],[2500,19],[3500,24],[5000,33],[7500,40],[10000,46],
+  [15000,55],[20000,60],[25000,65],[30000,70],[35000,80],[40000,96],[45000,100],[50000,105],[150000,105],
+];
+function mpesaB2CFee(amount) {
+  for (const [threshold, fee] of B2C_FEES) { if (amount <= threshold) return fee; }
+  return 105;
+}
+function getWithdrawalFee(method, amount) {
+  if (amount <= 0) return 0;
+  if (method === 'mpesa') return mpesaB2CFee(amount) + 25;
+  if (method === 'bank') return Math.round(amount * 0.0005 * 100) / 100;
+  return 0;
+}
+
 function SpreadCalculator() {
-  const [buyPrice, setBuyPrice] = useState('');
-  const [sellPrice, setSellPrice] = useState('');
+  const [buyPrice, setBuyPrice] = useState('130.00');
+  const [sellPrice, setSellPrice] = useState('130.50');
   const [volume, setVolume] = useState('500000');
+  const [withdrawMethod, setWithdrawMethod] = useState('mpesa');
+  const [withdrawAmount, setWithdrawAmount] = useState('');
   const [autoLoaded, setAutoLoaded] = useState(false);
+  const [adSource, setAdSource] = useState(''); // 'ads' | 'market' | ''
+  const [missingAd, setMissingAd] = useState(''); // 'buy' | 'sell' | ''
+  const [todayStats, setTodayStats] = useState(null); // 24h live stats from backend
+  const [statsLoading, setStatsLoading] = useState(true);
 
   useEffect(() => {
     const fetchPrices = async () => {
+      // First try trader's own ads
+      try {
+        const adRes = await getMyAdPrices();
+        const ad = adRes.data;
+        if (ad.connected && (ad.buy || ad.sell)) {
+          if (ad.buy) setBuyPrice(String(ad.buy));
+          if (ad.sell) setSellPrice(String(ad.sell));
+          setAutoLoaded(true);
+          setAdSource('ads');
+          setMissingAd(!ad.buy ? 'buy' : !ad.sell ? 'sell' : '');
+          return;
+        }
+      } catch (e) {}
+
+      // Fallback to market prices
       try {
         const res = await getMarketPrices();
         const d = res.data;
@@ -21,22 +57,80 @@ function SpreadCalculator() {
           setBuyPrice(String(d.best_buy));
           setSellPrice(String(d.best_sell));
           setAutoLoaded(true);
+          setAdSource('market');
         }
       } catch (e) {}
     };
     fetchPrices();
-    const interval = setInterval(fetchPrices, 60000);
-    return () => clearInterval(interval);
+    const priceInterval = setInterval(fetchPrices, 60000);
+
+    // Live update when the desktop bot pushes fresh Vision-scraped prices
+    const onAdPricesUpdated = (e) => {
+      const { buy: b, sell: s } = e.detail || {};
+      if (b && b > 50) { setBuyPrice(String(b)); setAutoLoaded(true); setAdSource('ads'); }
+      if (s && s > 50) { setSellPrice(String(s)); setAutoLoaded(true); setAdSource('ads'); }
+    };
+    window.addEventListener('ad-prices-updated', onAdPricesUpdated);
+
+    return () => {
+      clearInterval(priceInterval);
+      window.removeEventListener('ad-prices-updated', onAdPricesUpdated);
+    };
+  }, []);
+
+  // Fetch real 24h stats, reset at midnight EAT
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const res = await getTodayStats();
+        setTodayStats(res.data);
+      } catch (e) {
+        setTodayStats(null);
+      } finally {
+        setStatsLoading(false);
+      }
+    };
+    fetchStats();
+
+    // Refresh every 2 minutes so the dashboard stays live
+    const statsInterval = setInterval(fetchStats, 120000);
+
+    // Also schedule a refresh right after the next midnight EAT (UTC+3)
+    const nowEAT = new Date(Date.now() + 3 * 3600 * 1000);
+    const msToMidnightEAT =
+      (24 * 3600 - (nowEAT.getUTCHours() * 3600 + nowEAT.getUTCMinutes() * 60 + nowEAT.getUTCSeconds())) * 1000;
+    const midnightTimer = setTimeout(fetchStats, msToMidnightEAT + 2000); // +2s buffer
+
+    return () => {
+      clearInterval(statsInterval);
+      clearTimeout(midnightTimer);
+    };
   }, []);
 
   const buy = parseFloat(buyPrice) || 0;
   const sell = parseFloat(sellPrice) || 0;
   const vol = parseFloat(volume) || 0;
+  const wdAmt = parseFloat(withdrawAmount) || vol;
+
   const spread = sell - buy;
-  const spreadPct = buy > 0 ? ((spread / buy) * 100) : 0;
+  const spreadPct = buy > 0 ? (spread / buy) * 100 : 0;
   const usdtAmount = buy > 0 ? vol / buy : 0;
-  const profit = usdtAmount * spread;
+  const grossProfit = usdtAmount * spread;
   const profitable = spread > 0;
+
+  // Cash-out analysis
+  const wdFee = getWithdrawalFee(withdrawMethod, wdAmt);
+  const wdReceived = wdAmt - wdFee;             // What the trader actually receives
+  const netProfit = grossProfit - wdFee;         // Spread profit minus withdrawal fee
+  const netProfitable = netProfit > 0;
+  const netPct = wdAmt > 0 ? (netProfit / wdAmt) * 100 : 0;   // Net yield % on withdrawal
+  const feePct = wdAmt > 0 ? (wdFee / wdAmt) * 100 : 0;
+  // Break-even sell price needed to cover withdrawal fee
+  const breakEvenSpreadKES = usdtAmount > 0 ? wdFee / usdtAmount : 0;
+  const breakEvenSell = buy + breakEvenSpreadKES;
+  const breakEvenPct = buy > 0 ? (breakEvenSpreadKES / buy) * 100 : 0;
+
+  const fmtKES = (n) => 'KES ' + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
   return (
     <div className="card" style={{ marginBottom: 16 }}>
@@ -44,77 +138,216 @@ function SpreadCalculator() {
         <TrendingUp size={20} />
         <h3>Spread Calculator</h3>
         {autoLoaded && (
-          <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10b981', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10b981', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', animation: 'pulse-green 1.5s ease-in-out infinite' }} />
-            Live from Binance
+            {adSource === 'ads' ? 'Auto-filled from your ads' : 'Live market prices'}
+            {missingAd && (
+              <span style={{ color: '#f59e0b', marginLeft: 4 }}>
+                ⚠ No {missingAd} ad found — enter {missingAd} price manually
+              </span>
+            )}
           </span>
         )}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, padding: '12px 0' }}>
+
+      {/* Inputs */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, padding: '12px 0 0' }}>
         <div>
           <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Buy Price (KSh/USDT)</label>
-          <input
-            type="number" step="0.01" placeholder="130.23"
-            value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)}
-            style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}
-          />
+          <input type="number" step="0.01" placeholder="130.23" value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)}
+            style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }} />
         </div>
         <div>
           <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Sell Price (KSh/USDT)</label>
-          <input
-            type="number" step="0.01" placeholder="130.74"
-            value={sellPrice} onChange={(e) => setSellPrice(e.target.value)}
-            style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}
-          />
+          <input type="number" step="0.01" placeholder="130.74" value={sellPrice} onChange={(e) => setSellPrice(e.target.value)}
+            style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }} />
         </div>
         <div>
-          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Volume (KES)</label>
-          <input
-            type="number" step="1000" placeholder="500000"
-            value={volume} onChange={(e) => setVolume(e.target.value)}
-            style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}
-          />
+          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>
+            Simulation Size (KES)
+            <span style={{ marginLeft: 5, fontSize: 10, color: '#6b7280', fontWeight: 400 }}>— per trade estimate</span>
+          </label>
+          <input type="number" step="1000" placeholder="500000" value={volume} onChange={(e) => setVolume(e.target.value)}
+            style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }} />
         </div>
       </div>
 
+      {/* Spread % badge */}
       {buy > 0 && sell > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 8 }}>
-          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, color: '#9ca3af' }}>Spread</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: profitable ? '#10b981' : '#ef4444' }}>
-              KSh {spread.toFixed(2)}
-            </div>
-            <div style={{ fontSize: 11, color: '#6b7280' }}>{spreadPct.toFixed(2)}% per USDT</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0 4px' }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            background: profitable ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
+            border: `1px solid ${profitable ? '#10b981' : '#ef4444'}`,
+            borderRadius: 20, padding: '4px 14px',
+          }}>
+            <span style={{ fontSize: 12, color: '#9ca3af' }}>Buy</span>
+            <span style={{ fontWeight: 700, color: '#fff', fontSize: 14 }}>KSh {buy.toFixed(2)}</span>
+            <span style={{ fontSize: 12, color: '#6b7280' }}>→</span>
+            <span style={{ fontSize: 12, color: '#9ca3af' }}>Sell</span>
+            <span style={{ fontWeight: 700, color: '#fff', fontSize: 14 }}>KSh {sell.toFixed(2)}</span>
+            <span style={{ fontSize: 12, color: '#6b7280' }}>|</span>
+            <span style={{ fontWeight: 800, fontSize: 15, color: profitable ? '#10b981' : '#ef4444' }}>
+              {spreadPct >= 0 ? '+' : ''}{spreadPct.toFixed(3)}% margin
+            </span>
           </div>
-          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, color: '#9ca3af' }}>USDT Traded</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#f59e0b' }}>
-              {usdtAmount.toFixed(2)}
-            </div>
-            <div style={{ fontSize: 11, color: '#6b7280' }}>at KSh {buy}</div>
-          </div>
-          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, color: '#9ca3af' }}>Profit per Trade</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: profitable ? '#10b981' : '#ef4444' }}>
-              KSh {profit.toFixed(0)}
-            </div>
-            <div style={{ fontSize: 11, color: '#6b7280' }}>{profitable ? 'profit' : 'loss'}</div>
-          </div>
-          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, color: '#9ca3af' }}>Daily (5 trades)</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: profitable ? '#10b981' : '#ef4444' }}>
-              KSh {(profit * 5).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-            </div>
-            <div style={{ fontSize: 11, color: '#6b7280' }}>
-              Monthly: KSh {(profit * 5 * 30).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-            </div>
-          </div>
+          {!profitable && (
+            <span style={{ fontSize: 12, color: '#ef4444' }}>⚠ Sell below buy — you'd lose money</span>
+          )}
         </div>
       )}
 
-      {!profitable && buy > 0 && sell > 0 && (
-        <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 8, fontSize: 12, color: '#ef4444' }}>
-          Negative spread — you would lose money. Sell price must be higher than buy price.
+      {/* Stats row — left card is simulation, right 3 are real 24h data */}
+      {buy > 0 && sell > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 10 }}>
+
+          {/* Spread per USDT — calculated from inputs */}
+          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: '#9ca3af' }}>Spread per USDT</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: profitable ? '#10b981' : '#ef4444' }}>KSh {spread.toFixed(2)}</div>
+            <div style={{ fontSize: 11, color: '#6b7280' }}>{spreadPct.toFixed(3)}%</div>
+          </div>
+
+          {/* USDT Traded — real 24h */}
+          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)', position: 'relative' }}>
+            <div style={{ fontSize: 11, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 4 }}>
+              USDT Traded
+              <span style={{ fontSize: 9, background: 'rgba(16,185,129,0.15)', color: '#10b981', borderRadius: 4, padding: '1px 5px' }}>24h</span>
+            </div>
+            {statsLoading ? (
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#6b7280' }}>—</div>
+            ) : todayStats ? (
+              <>
+                <div style={{ fontSize: 18, fontWeight: 700, color: '#f59e0b' }}>{todayStats.usdt_traded.toFixed(2)}</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>KES {todayStats.kes_volume.toLocaleString(undefined, { maximumFractionDigits: 0 })} vol</div>
+              </>
+            ) : (
+              <div style={{ fontSize: 14, color: '#6b7280' }}>N/A</div>
+            )}
+          </div>
+
+          {/* Gross Profit — real 24h */}
+          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 4 }}>
+              Gross Profit
+              <span style={{ fontSize: 9, background: 'rgba(16,185,129,0.15)', color: '#10b981', borderRadius: 4, padding: '1px 5px' }}>24h</span>
+            </div>
+            {statsLoading ? (
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#6b7280' }}>—</div>
+            ) : todayStats ? (
+              <>
+                <div style={{ fontSize: 18, fontWeight: 700, color: todayStats.gross_profit >= 0 ? '#10b981' : '#ef4444' }}>
+                  {fmtKES(todayStats.gross_profit)}
+                </div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>from spread</div>
+              </>
+            ) : (
+              <div style={{ fontSize: 14, color: '#6b7280' }}>N/A</div>
+            )}
+          </div>
+
+          {/* Trades Today — real 24h */}
+          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 4 }}>
+              Trades Today
+              <span style={{ fontSize: 9, background: 'rgba(16,185,129,0.15)', color: '#10b981', borderRadius: 4, padding: '1px 5px' }}>24h</span>
+            </div>
+            {statsLoading ? (
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#6b7280' }}>—</div>
+            ) : todayStats ? (
+              <>
+                <div style={{ fontSize: 18, fontWeight: 700, color: '#a78bfa' }}>{todayStats.trades_count}</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>resets midnight EAT</div>
+              </>
+            ) : (
+              <div style={{ fontSize: 14, color: '#6b7280' }}>N/A</div>
+            )}
+          </div>
+
+        </div>
+      )}
+
+      {/* Cash-out analysis */}
+      {buy > 0 && sell > 0 && profitable && (
+        <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#9ca3af', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+            Cash-Out Analysis
+          </div>
+
+          {/* Inputs row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+            <div>
+              <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Withdrawal Method</label>
+              <select value={withdrawMethod} onChange={(e) => setWithdrawMethod(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}>
+                <option value="mpesa">M-Pesa</option>
+                <option value="bank">I&M Bank</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Amount to Withdraw (KES)</label>
+              <input type="number" step="1000" placeholder={`${vol.toLocaleString()} (simulation volume)`}
+                value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }} />
+            </div>
+          </div>
+
+          {/* Result cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+
+            {/* Card 1 — Withdrawal Fee */}
+            <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: '#9ca3af' }}>Withdrawal Fee</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>− {fmtKES(wdFee)}</div>
+              <div style={{ fontSize: 11, color: '#6b7280' }}>
+                {feePct > 0 ? `${feePct.toFixed(3)}% of amount` : withdrawMethod === 'mpesa' ? 'tiered rate' : '0.05% flat'}
+              </div>
+            </div>
+
+            {/* Card 2 — You Receive */}
+            <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: '#9ca3af' }}>You Receive</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>
+                {fmtKES(wdReceived)}
+              </div>
+              <div style={{ fontSize: 11, color: '#6b7280' }}>
+                after {withdrawMethod === 'mpesa' ? 'M-Pesa' : 'I&M Bank'} fee
+              </div>
+            </div>
+
+            {/* Card 3 — Net Profit / Loss */}
+            <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: `1px solid ${netProfitable ? '#10b981' : '#ef4444'}` }}>
+              <div style={{ fontSize: 11, color: '#9ca3af' }}>Net {netProfitable ? 'Profit' : 'Loss'}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: netProfitable ? '#10b981' : '#ef4444' }}>
+                {netProfitable ? '+' : '−'} {fmtKES(netProfit)}
+              </div>
+              <div style={{ fontSize: 11, color: netProfitable ? '#10b981' : '#ef4444' }}>
+                {netPct >= 0 ? '+' : ''}{netPct.toFixed(3)}% on withdrawal
+              </div>
+            </div>
+
+            {/* Card 4 — Break-even Sell */}
+            <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: '#9ca3af' }}>Break-even Sell</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#f59e0b' }}>KSh {breakEvenSell.toFixed(2)}</div>
+              <div style={{ fontSize: 11, color: '#6b7280' }}>min {breakEvenPct.toFixed(3)}% margin needed</div>
+            </div>
+
+          </div>
+
+          {/* Summary banner */}
+          <div style={{
+            marginTop: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+            background: netProfitable ? 'rgba(16,185,129,0.10)' : 'rgba(239,68,68,0.10)',
+            border: `1px solid ${netProfitable ? '#10b981' : '#ef4444'}`,
+            color: netProfitable ? '#10b981' : '#ef4444',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            {netProfitable
+              ? `✓ Profitable — you keep KES ${Math.abs(netProfit).toLocaleString(undefined, { maximumFractionDigits: 0 })} after ${withdrawMethod === 'mpesa' ? 'M-Pesa' : 'I&M Bank'} fees (+${netPct.toFixed(3)}%)`
+              : `✗ Not profitable — fees exceed spread earnings by KES ${Math.abs(netProfit).toLocaleString(undefined, { maximumFractionDigits: 0 })} (${netPct.toFixed(3)}%)`
+            }
+          </div>
         </div>
       )}
     </div>
@@ -208,6 +441,51 @@ export default function Dashboard() {
     window.addEventListener('identity-mismatch', handler);
     return () => window.removeEventListener('identity-mismatch', handler);
   }, []);
+
+  // Refresh profile when desktop app signals Binance or I&M connected
+  useEffect(() => {
+    const handler = async () => {
+      try {
+        const res = await getProfile();
+        setProfile(res.data);
+      } catch (_) {}
+    };
+    window.addEventListener('binance-connected', handler);
+    window.addEventListener('im-connected', handler);
+    window.addEventListener('gmail-connected', handler);
+    return () => {
+      window.removeEventListener('binance-connected', handler);
+      window.removeEventListener('im-connected', handler);
+      window.removeEventListener('gmail-connected', handler);
+    };
+  }, []);
+
+  const [setupMissing, setSetupMissing] = useState([]);
+  const [setupDismissed, setSetupDismissed] = useState(false);
+
+  // Listen for setup-incomplete / setup-complete events from desktop app
+  useEffect(() => {
+    const onIncomplete = (e) => { setSetupMissing(e.detail?.missing || []); setSetupDismissed(false); };
+    const onComplete = () => setSetupMissing([]);
+    window.addEventListener('setup-incomplete', onIncomplete);
+    window.addEventListener('setup-complete', onComplete);
+    return () => {
+      window.removeEventListener('setup-incomplete', onIncomplete);
+      window.removeEventListener('setup-complete', onComplete);
+    };
+  }, []);
+
+  // Also derive missing connections directly from profile (catches page refresh)
+  const missingConnections = (() => {
+    if (!profile) return [];
+    const m = [];
+    if (!profile.binance_connected) m.push('Binance');
+    if (!profile.gmail_connected) m.push('Gmail');
+    if (!profile.im_connected) m.push('I&M Bank');
+    return m;
+  })();
+  const showSetupBanner = (setupMissing.length > 0 || missingConnections.length > 0) && !setupDismissed;
+  const bannerMissing = setupMissing.length > 0 ? setupMissing : missingConnections;
 
   useEffect(() => {
     // Wait a tick to ensure token is stored after login redirect
@@ -427,7 +705,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="dashboard">
+    <div className="dashboard" style={showSetupBanner ? { paddingTop: 62 } : {}}>
       {/* Binance initial scan overlay */}
       {scanning && (
         <div style={{
@@ -460,6 +738,44 @@ export default function Dashboard() {
               }} />
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Setup incomplete banner */}
+      {showSetupBanner && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+          background: '#1c1a08', borderBottom: '2px solid #f59e0b',
+          padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 14,
+        }}>
+          <span style={{ fontSize: 22 }}>⚠️</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ color: '#fbbf24', fontWeight: 700, fontSize: 14 }}>
+              Bot Paused — Setup Incomplete
+            </div>
+            <div style={{ color: '#fcd34d', fontSize: 13, marginTop: 2 }}>
+              The following must be connected before trading can start:{' '}
+              {bannerMissing.map((m, i) => (
+                <span key={m}>
+                  <strong style={{ color: '#fff' }}>{m}</strong>
+                  {i < bannerMissing.length - 1 ? ', ' : ''}
+                </span>
+              ))}.
+              {' '}Go to <strong>Settings → Binance tab</strong> to connect them.
+            </div>
+          </div>
+          <button
+            onClick={() => setActiveTab('settings')}
+            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap' }}
+          >
+            Go to Settings
+          </button>
+          <button
+            onClick={() => setSetupDismissed(true)}
+            style={{ background: 'transparent', border: '1px solid #f59e0b', color: '#fbbf24', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}
+          >
+            Dismiss
+          </button>
         </div>
       )}
 

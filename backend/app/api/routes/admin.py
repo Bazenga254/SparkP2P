@@ -1574,3 +1574,66 @@ async def mark_withdrawal_pending(
     tx.processed_at = None
     await db.commit()
     return {"status": "pending"}
+
+
+# ── Auto-Sweep History ─────────────────────────────────────────────────────────
+
+@router.get("/sweeps")
+async def get_sweeps(
+    limit: int = Query(default=50, le=200),
+    status: str = Query(default=None),  # pending | completed | failed
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the auto-sweep history (M-Pesa paybill → I&M Bank)."""
+    from app.models.im_sweep import ImSweep
+
+    q = select(ImSweep).order_by(ImSweep.created_at.desc()).limit(limit)
+    if status:
+        q = q.where(ImSweep.status == status)
+
+    result = await db.execute(q)
+    sweeps = result.scalars().all()
+
+    return [
+        {
+            "id": s.id,
+            "trader_id": s.trader_id,
+            "amount": s.amount,
+            "status": s.status,
+            "sweep_paybill": s.sweep_paybill,
+            "sweep_account": s.sweep_account,
+            "mpesa_conversation_id": s.mpesa_conversation_id,
+            "failure_reason": s.failure_reason,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+        }
+        for s in sweeps
+    ]
+
+
+@router.post("/sweeps/{sweep_id}/retry")
+async def retry_sweep(
+    sweep_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually retry a failed sweep."""
+    from app.models.im_sweep import ImSweep
+    from app.services.sweep_service import trigger_im_sweep
+
+    q = await db.execute(select(ImSweep).where(ImSweep.id == sweep_id))
+    sweep = q.scalar_one_or_none()
+    if not sweep:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+    if sweep.status == "completed":
+        raise HTTPException(status_code=400, detail="Sweep already completed")
+
+    result = await trigger_im_sweep(
+        amount=sweep.amount,
+        trader_id=sweep.trader_id,
+        withdrawal_tx_id=sweep.withdrawal_tx_id,
+        reference=f"RETRY-{sweep_id}",
+        db=db,
+    )
+    return result

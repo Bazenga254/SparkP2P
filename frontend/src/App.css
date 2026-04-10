@@ -419,7 +419,7 @@ body {
 .alert-card { border-color: var(--red); }
 
 /* Settings */
-.settings-panel { max-width: 600px; }
+.settings-panel { max-width: 860px; width: 100%; }
 
 .settings-nav {
   display: flex;

@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, getAdminSweeps, retrySweep } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone } from 'lucide-react';
+import { getProfile } from '../services/api';
 
 const sidebarSections = [
   {
@@ -81,7 +82,17 @@ export default function Admin() {
   const [refreshing, setRefreshing] = useState(false);
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [auditPage, setAuditPage] = useState(1);
+  const AUDIT_PER_PAGE = 30;
+  const [ipWhitelist, setIpWhitelist] = useState([]);
+  const [ipWhitelistEnabled, setIpWhitelistEnabled] = useState(false);
+  const [ipInput, setIpInput] = useState('');
+  const [ipSaving, setIpSaving] = useState(false);
+  const [ipMsg, setIpMsg] = useState('');
+  const [myIp, setMyIp] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [smsBalance, setSmsBalance] = useState(null);
+  const [smsBalanceLoading, setSmsBalanceLoading] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState(null);
@@ -113,6 +124,129 @@ export default function Admin() {
   const [wdPage, setWdPage] = useState(1);
   const [wdLoading, setWdLoading] = useState(false);
   const [wdActionLoading, setWdActionLoading] = useState(null); // tx id being actioned
+
+  // Auto-Sweeps (M-Pesa paybill → I&M Bank)
+  const [sweeps, setSweeps] = useState([]);
+  const [sweepsLoading, setSweepsLoading] = useState(false);
+  const [sweepRetrying, setSweepRetrying] = useState(null); // sweep id being retried
+  const [sweepSubTab, setSweepSubTab] = useState('all'); // all | pending | completed | failed
+
+  // Connection status (desktop app sessions)
+  const [connProfile, setConnProfile] = useState(null);
+  const [imConnecting, setImConnecting] = useState(false);
+  const [mpesaConnecting, setMpesaConnecting] = useState(false);
+  const imConnPollRef = useRef(null);
+  const mpesaConnPollRef = useRef(null);
+
+  // Pause Bot 3FA modal
+  const [botPaused, setBotPaused] = useState(false);
+  const [showPauseModal, setShowPauseModal] = useState(false);
+  const [pauseStep, setPauseStep] = useState('warning'); // warning | verify
+  const [pauseOtpSent, setPauseOtpSent] = useState(false);
+  const [pauseOtp, setPauseOtp] = useState('');
+  const [pauseSecAnswer, setPauseSecAnswer] = useState('');
+  const [pauseTotp, setPauseTotp] = useState('');
+  const [pauseSecQ, setPauseSecQ] = useState('');
+  const [pauseLoading, setPauseLoading] = useState(false);
+  const [pauseMsg, setPauseMsg] = useState('');
+
+  const loadSweeps = async (statusFilter = sweepSubTab) => {
+    setSweepsLoading(true);
+    try {
+      const params = statusFilter !== 'all' ? { status: statusFilter } : {};
+      const res = await getAdminSweeps(params);
+      setSweeps(res.data);
+    } catch (e) {
+      console.error('Sweeps load error:', e);
+    } finally {
+      setSweepsLoading(false);
+    }
+  };
+
+  const handleRetrySweep = async (sweepId) => {
+    setSweepRetrying(sweepId);
+    try {
+      await retrySweep(sweepId);
+      loadSweeps();
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'Retry failed');
+    } finally {
+      setSweepRetrying(null);
+    }
+  };
+
+  // Load connection status on mount + listen for desktop app events
+  useEffect(() => {
+    getProfile().then(r => setConnProfile(r.data)).catch(() => {});
+    const onIm = async () => { const r = await getProfile(); setConnProfile(r.data); setImConnecting(false); };
+    const onMpesa = async () => { const r = await getProfile(); setConnProfile(r.data); setMpesaConnecting(false); };
+    window.addEventListener('im-connected', onIm);
+    window.addEventListener('mpesa-portal-connected', onMpesa);
+    return () => { window.removeEventListener('im-connected', onIm); window.removeEventListener('mpesa-portal-connected', onMpesa); };
+  }, []);
+
+  // Poll until I&M connected
+  useEffect(() => {
+    if (!imConnecting) return;
+    imConnPollRef.current = setInterval(async () => {
+      try { const r = await getProfile(); setConnProfile(r.data); if (r.data.im_connected) { setImConnecting(false); clearInterval(imConnPollRef.current); } } catch (_) {}
+    }, 3000);
+    return () => clearInterval(imConnPollRef.current);
+  }, [imConnecting]);
+
+  // Poll until M-PESA portal connected
+  useEffect(() => {
+    if (!mpesaConnecting) return;
+    mpesaConnPollRef.current = setInterval(async () => {
+      try { const r = await getProfile(); setConnProfile(r.data); if (r.data.mpesa_portal_connected) { setMpesaConnecting(false); clearInterval(mpesaConnPollRef.current); } } catch (_) {}
+    }, 3000);
+    return () => clearInterval(mpesaConnPollRef.current);
+  }, [mpesaConnecting]);
+
+  const handleAdminConnectIm = () => {
+    if (window.sparkp2p?.isDesktop) window.sparkp2p.connectIm();
+    setImConnecting(true);
+  };
+
+  const handleAdminConnectMpesa = () => {
+    if (window.sparkp2p?.isDesktop) window.sparkp2p.connectMpesa();
+    setMpesaConnecting(true);
+  };
+
+  // Check bot status on mount
+  useEffect(() => {
+    fetch('http://127.0.0.1:9223/status').then(r => r.json()).then(d => setBotPaused(d.paused)).catch(() => {});
+  }, []);
+
+  const handleRequestPauseOtp = async () => {
+    setPauseLoading(true); setPauseMsg('');
+    try {
+      const res = await api.post('/traders/pause-bot/request-otp');
+      setPauseSecQ(res.data.security_question || '');
+      setPauseOtpSent(true);
+      setPauseStep('verify');
+      setPauseMsg(res.data.message || 'OTP sent to your phone.');
+    } catch (err) {
+      setPauseMsg(err.response?.data?.detail || 'Failed to send OTP.');
+    }
+    setPauseLoading(false);
+  };
+
+  const handleConfirmPause = async () => {
+    if (!pauseOtp || !pauseSecAnswer || !pauseTotp) { setPauseMsg('All three fields are required.'); return; }
+    setPauseLoading(true); setPauseMsg('');
+    try {
+      await api.post('/traders/pause-bot/confirm', { otp_code: pauseOtp, security_answer: pauseSecAnswer, totp_code: pauseTotp });
+      const action = botPaused ? 'resume' : 'pause';
+      await fetch(`http://127.0.0.1:9223/${action}`).catch(() => {});
+      setBotPaused(!botPaused);
+      setShowPauseModal(false);
+      setPauseStep('warning'); setPauseOtp(''); setPauseSecAnswer(''); setPauseTotp(''); setPauseMsg(''); setPauseOtpSent(false);
+    } catch (err) {
+      setPauseMsg(err.response?.data?.detail || 'Verification failed.');
+    }
+    setPauseLoading(false);
+  };
 
   const loadTemplates = async () => {
     try {
@@ -330,7 +464,7 @@ export default function Admin() {
 
   useEffect(() => {
     if (activeTab === 'disputes') { setUnreadTicketCount(0); loadSupportTickets(ticketCategory, ticketPage); }
-    if (activeTab === 'withdrawals') loadWithdrawals();
+    if (activeTab === 'withdrawals') { loadWithdrawals(); loadSweeps('all'); }
   }, [activeTab]);
 
   useEffect(() => {
@@ -456,6 +590,87 @@ export default function Admin() {
 
   return (
     <div className="adm-layout">
+
+      {/* ── Pause Bot 3FA Modal ── */}
+      {showPauseModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: '#1a1d2e', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 16, padding: 28, width: '100%', maxWidth: 440, boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
+
+            {pauseStep === 'warning' && (
+              <>
+                <div style={{ fontSize: 32, textAlign: 'center', marginBottom: 12 }}>{botPaused ? '▶️' : '⏸️'}</div>
+                <h3 style={{ textAlign: 'center', marginBottom: 8, color: botPaused ? '#10b981' : '#ef4444' }}>
+                  {botPaused ? 'Resume Bot Trading?' : 'Pause Bot Trading?'}
+                </h3>
+                <p style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', marginBottom: 24 }}>
+                  {botPaused
+                    ? 'The bot will resume monitoring orders and executing trades automatically.'
+                    : 'All browser sessions will be locked. You will need to verify your identity with 3 factors to proceed.'}
+                </p>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button onClick={() => setShowPauseModal(false)} style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontWeight: 600 }}>Cancel</button>
+                  <button onClick={handleRequestPauseOtp} disabled={pauseLoading} style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: 'none', background: botPaused ? '#10b981' : '#ef4444', color: '#fff', cursor: 'pointer', fontWeight: 700 }}>
+                    {pauseLoading ? 'Sending OTP...' : 'Continue'}
+                  </button>
+                </div>
+                {pauseMsg && <p style={{ color: '#f59e0b', fontSize: 12, textAlign: 'center', marginTop: 10 }}>{pauseMsg}</p>}
+              </>
+            )}
+
+            {pauseStep === 'verify' && (
+              <>
+                <h3 style={{ marginBottom: 6, color: '#f59e0b' }}>3-Factor Verification</h3>
+                <p style={{ fontSize: 12, color: '#6b7280', marginBottom: 20 }}>All three factors are required to {botPaused ? 'resume' : 'pause'} the bot.</p>
+
+                {/* Factor 1: SMS OTP */}
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 5 }}>
+                    1. SMS OTP {pauseMsg && <span style={{ color: '#10b981' }}>— {pauseMsg}</span>}
+                  </label>
+                  <input
+                    type="text" inputMode="numeric" maxLength={6} placeholder="6-digit code from SMS"
+                    value={pauseOtp} onChange={e => setPauseOtp(e.target.value)}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', fontSize: 14, boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                {/* Factor 2: Security Answer */}
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 5 }}>
+                    2. Security Answer {pauseSecQ && <span style={{ color: '#6b7280' }}>— {pauseSecQ}</span>}
+                  </label>
+                  <input
+                    type="text" placeholder="Your security answer"
+                    value={pauseSecAnswer} onChange={e => setPauseSecAnswer(e.target.value)}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', fontSize: 14, boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                {/* Factor 3: Google Authenticator */}
+                <div style={{ marginBottom: 20 }}>
+                  <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 5 }}>3. Google Authenticator Code</label>
+                  <input
+                    type="text" inputMode="numeric" maxLength={6} placeholder="6-digit code from Google Authenticator"
+                    value={pauseTotp} onChange={e => setPauseTotp(e.target.value)}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', fontSize: 14, boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                {pauseMsg && <p style={{ color: '#ef4444', fontSize: 12, marginBottom: 12 }}>{pauseMsg}</p>}
+
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button onClick={() => { setShowPauseModal(false); setPauseStep('warning'); setPauseMsg(''); }} style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontWeight: 600 }}>Cancel</button>
+                  <button onClick={handleConfirmPause} disabled={pauseLoading} style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: 'none', background: botPaused ? '#10b981' : '#ef4444', color: '#fff', cursor: 'pointer', fontWeight: 700 }}>
+                    {pauseLoading ? 'Verifying...' : `Confirm ${botPaused ? 'Resume' : 'Pause'}`}
+                  </button>
+                </div>
+              </>
+            )}
+
+          </div>
+        </div>
+      )}
+
       {/* Mobile overlay */}
       {sidebarOpen && <div className="adm-overlay" onClick={() => setSidebarOpen(false)} />}
 
@@ -490,6 +705,59 @@ export default function Admin() {
             </div>
           ))}
         </nav>
+
+        {/* Bot Connections */}
+        <div style={{ padding: '12px 12px 4px', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+          <div className="adm-nav-label" style={{ marginBottom: 8 }}>CONNECTIONS</div>
+
+          {/* I&M Bank */}
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <Building2 size={13} color={connProfile?.im_connected ? '#10b981' : '#6b7280'} />
+              <span style={{ fontSize: 11, color: connProfile?.im_connected ? '#10b981' : '#6b7280', fontWeight: 600 }}>
+                I&amp;M Bank {connProfile?.im_connected ? '● Connected' : '○ Disconnected'}
+              </span>
+            </div>
+            <button
+              onClick={handleAdminConnectIm}
+              disabled={imConnecting}
+              style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: `1px solid ${connProfile?.im_connected ? 'rgba(245,158,11,0.4)' : 'rgba(99,102,241,0.5)'}`, background: 'transparent', color: connProfile?.im_connected ? '#f59e0b' : '#818cf8', cursor: 'pointer', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
+            >
+              {imConnecting ? (
+                <><div style={{ width: 10, height: 10, border: '2px solid rgba(99,102,241,0.3)', borderTop: '2px solid #6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} /> Connecting...</>
+              ) : connProfile?.im_connected ? 'Re-connect I&M' : 'Connect I&M Bank'}
+            </button>
+          </div>
+
+          {/* M-PESA Portal */}
+          <div style={{ marginBottom: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <Smartphone size={13} color={connProfile?.mpesa_portal_connected ? '#10b981' : '#6b7280'} />
+              <span style={{ fontSize: 11, color: connProfile?.mpesa_portal_connected ? '#10b981' : '#6b7280', fontWeight: 600 }}>
+                M-PESA Portal {connProfile?.mpesa_portal_connected ? '● Connected' : '○ Disconnected'}
+              </span>
+            </div>
+            <button
+              onClick={handleAdminConnectMpesa}
+              disabled={mpesaConnecting}
+              style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: `1px solid ${connProfile?.mpesa_portal_connected ? 'rgba(245,158,11,0.4)' : 'rgba(16,185,129,0.5)'}`, background: 'transparent', color: connProfile?.mpesa_portal_connected ? '#f59e0b' : '#10b981', cursor: 'pointer', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
+            >
+              {mpesaConnecting ? (
+                <><div style={{ width: 10, height: 10, border: '2px solid rgba(16,185,129,0.3)', borderTop: '2px solid #10b981', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} /> Connecting...</>
+              ) : connProfile?.mpesa_portal_connected ? 'Re-connect Portal' : 'Connect M-PESA'}
+            </button>
+          </div>
+        </div>
+
+        {/* Pause / Resume Bot */}
+        <div style={{ padding: '8px 12px 12px' }}>
+          <button
+            onClick={() => { setShowPauseModal(true); setPauseStep('warning'); setPauseMsg(''); }}
+            style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: `1px solid ${botPaused ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'}`, background: botPaused ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)', color: botPaused ? '#10b981' : '#ef4444', cursor: 'pointer', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+          >
+            {botPaused ? '▶ Resume Bot' : '⏸ Pause Bot'}
+          </button>
+        </div>
 
         <div className="adm-sidebar-footer">
           <button className="adm-logout-btn" onClick={logout}>
@@ -1229,8 +1497,6 @@ export default function Admin() {
                             ['Joined', t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'],
                             ['Last Login', t.last_login ? new Date(t.last_login).toLocaleString() : '—'],
                             ['Security Q', t.security_question || '—'],
-                            ['Settlement', t.settlement_method || '—'],
-                            ['Destination', t.settlement_destination || '—'],
                           ].map(([label, value]) => (
                             <div key={label}>
                               <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>{label}</div>
@@ -1295,6 +1561,109 @@ export default function Admin() {
                           </button>
                           {resetPwMsg && <div style={{ marginTop: 6, fontSize: 12, color: resetPwMsg.includes('Failed') ? '#ef4444' : '#10b981', textAlign: 'center' }}>{resetPwMsg}</div>}
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Withdrawal Method */}
+                    <div className="adm-card" style={{ marginBottom: 16 }}>
+                      <div className="adm-card-header">
+                        <h3>Withdrawal Method</h3>
+                        {t.settlement_changed_at && (
+                          <span className="adm-card-count">Changed {new Date(t.settlement_changed_at).toLocaleDateString()}</span>
+                        )}
+                      </div>
+                      <div style={{ padding: '16px 20px 20px' }}>
+                        {(() => {
+                          const method = (t.settlement_method || '').toString().toLowerCase();
+                          const methodLabel = method === 'mpesa' ? 'M-Pesa' : method === 'paybill' ? 'Paybill' : method === 'bank' ? 'I&M Bank' : method || '—';
+                          const methodColor = method === 'mpesa' ? '#10b981' : method === 'paybill' ? '#3b82f6' : method === 'bank' ? '#8b5cf6' : '#6b7280';
+
+                          const pendingMethod = (t.pending_settlement_method || '').toString().toLowerCase();
+                          const pendingLabel = pendingMethod === 'mpesa' ? 'M-Pesa' : pendingMethod === 'paybill' ? 'Paybill' : pendingMethod === 'bank' ? 'I&M Bank' : pendingMethod || '';
+
+                          return (
+                            <>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                                <span style={{ background: methodColor + '22', color: methodColor, padding: '4px 12px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>{methodLabel}</span>
+                                {pendingMethod && (
+                                  <span style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', padding: '4px 12px', borderRadius: 20, fontSize: 12 }}>
+                                    Pending change → {pendingLabel}
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 24px', fontSize: 13 }}>
+                                {method === 'mpesa' && t.settlement_phone && (
+                                  <div>
+                                    <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>M-Pesa Phone</div>
+                                    <div style={{ fontWeight: 600 }}>{t.settlement_phone}</div>
+                                  </div>
+                                )}
+                                {method === 'paybill' && t.settlement_paybill && (
+                                  <div>
+                                    <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Paybill Number</div>
+                                    <div style={{ fontWeight: 600 }}>{t.settlement_paybill}</div>
+                                  </div>
+                                )}
+                                {method === 'paybill' && t.settlement_account && (
+                                  <div>
+                                    <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Account Reference</div>
+                                    <div style={{ fontWeight: 600 }}>{t.settlement_account}</div>
+                                  </div>
+                                )}
+                                {method === 'bank' && t.settlement_account && (
+                                  <div>
+                                    <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Account Number</div>
+                                    <div style={{ fontWeight: 600 }}>{t.settlement_account}</div>
+                                  </div>
+                                )}
+                                {method === 'bank' && t.settlement_bank_name && (
+                                  <div>
+                                    <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Bank Name</div>
+                                    <div style={{ fontWeight: 600 }}>{t.settlement_bank_name}</div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {pendingMethod && (
+                                <div style={{ marginTop: 16, padding: '12px 14px', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)', background: 'rgba(245,158,11,0.05)' }}>
+                                  <div style={{ fontSize: 12, color: '#f59e0b', fontWeight: 700, marginBottom: 8 }}>Pending Change (48hr cooldown)</div>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', fontSize: 12 }}>
+                                    {pendingMethod === 'mpesa' && t.pending_settlement_phone && (
+                                      <div>
+                                        <div style={{ color: '#6b7280', fontSize: 11 }}>New Phone</div>
+                                        <div style={{ fontWeight: 600, color: '#fff' }}>{t.pending_settlement_phone}</div>
+                                      </div>
+                                    )}
+                                    {pendingMethod === 'paybill' && t.pending_settlement_paybill && (
+                                      <div>
+                                        <div style={{ color: '#6b7280', fontSize: 11 }}>New Paybill</div>
+                                        <div style={{ fontWeight: 600, color: '#fff' }}>{t.pending_settlement_paybill}</div>
+                                      </div>
+                                    )}
+                                    {pendingMethod === 'paybill' && t.pending_settlement_account && (
+                                      <div>
+                                        <div style={{ color: '#6b7280', fontSize: 11 }}>New Account Ref</div>
+                                        <div style={{ fontWeight: 600, color: '#fff' }}>{t.pending_settlement_account}</div>
+                                      </div>
+                                    )}
+                                    {pendingMethod === 'bank' && t.pending_settlement_account && (
+                                      <div>
+                                        <div style={{ color: '#6b7280', fontSize: 11 }}>New Account</div>
+                                        <div style={{ fontWeight: 600, color: '#fff' }}>{t.pending_settlement_account}</div>
+                                      </div>
+                                    )}
+                                    {pendingMethod === 'bank' && t.pending_settlement_bank_name && (
+                                      <div>
+                                        <div style={{ color: '#6b7280', fontSize: 11 }}>New Bank</div>
+                                        <div style={{ fontWeight: 600, color: '#fff' }}>{t.pending_settlement_bank_name}</div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
 
@@ -2008,11 +2377,21 @@ export default function Admin() {
                 setAuditLogs(res.data || []);
               }).catch(() => {}).finally(() => setAuditLoading(false));
             }
+            // Fetch IP whitelist + current IP
+            if (ipWhitelist.length === 0 && !ipWhitelistEnabled) {
+              api.get('/admin/ip-whitelist').then(res => {
+                setIpWhitelist(res.data.ips || []);
+                setIpWhitelistEnabled(res.data.enabled);
+              }).catch(() => {});
+            }
+            if (!myIp) {
+              api.get('/admin/my-ip').then(res => setMyIp(res.data.ip || '')).catch(() => {});
+            }
             const securityFeatures = [
               { label: 'Audit Trail', status: 'active', desc: 'All admin/employee access to trader PII is logged with IP and timestamp.' },
               { label: 'Data Masking', status: 'active', desc: 'Phone numbers are masked (07XX XXX 678) for non-admin roles.' },
               { label: 'Role Restrictions', status: 'active', desc: 'Employees cannot view settlement accounts, security answers, or full phone numbers.' },
-              { label: 'IP Restriction', status: 'config', desc: 'Set ALLOWED_ADMIN_IPS in .env to restrict admin access to specific IPs. Currently: allow all.' },
+              { label: 'IP Restriction', status: ipWhitelistEnabled ? 'active' : 'config', desc: ipWhitelistEnabled ? `Admin access restricted to: ${ipWhitelist.join(', ')}` : 'No IP restriction active — all IPs can access admin.' },
               { label: 'Session Timeout', status: 'active', desc: 'Users auto-logged out after 30 min of inactivity. Bot API calls also keep session alive.' },
               { label: 'Withdrawal OTP', status: 'active', desc: 'All withdrawals require a one-time SMS code before processing.' },
               { label: 'Login Lockout', status: 'active', desc: '3 failed login attempts locks account for 24 hours.' },
@@ -2046,6 +2425,91 @@ export default function Admin() {
                   </div>
                 </div>
 
+                {/* IP Whitelist Manager */}
+                <div className="adm-card" style={{ marginBottom: 20 }}>
+                  <div className="adm-card-header">
+                    <h3>IP Whitelist — Admin Access Control</h3>
+                    <span className="adm-card-count">{ipWhitelistEnabled ? `${ipWhitelist.length} IP(s) allowed` : 'Disabled — allow all'}</span>
+                  </div>
+                  <div style={{ padding: '16px 20px 20px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Your current IP address</div>
+                        <div style={{ fontFamily: 'monospace', fontWeight: 700, color: '#f59e0b', fontSize: 14 }}>{myIp || '…'}</div>
+                      </div>
+                      <button
+                        onClick={() => { if (myIp && !ipWhitelist.includes(myIp)) setIpWhitelist(prev => [...prev, myIp]); }}
+                        disabled={!myIp || ipWhitelist.includes(myIp)}
+                        style={{ padding: '7px 14px', borderRadius: 7, border: 'none', background: (!myIp || ipWhitelist.includes(myIp)) ? '#374151' : '#f59e0b', color: (!myIp || ipWhitelist.includes(myIp)) ? '#6b7280' : '#000', fontWeight: 700, fontSize: 12, cursor: (!myIp || ipWhitelist.includes(myIp)) ? 'default' : 'pointer' }}>
+                        {ipWhitelist.includes(myIp) ? '✓ Already added' : '+ Add My IP'}
+                      </button>
+                    </div>
+                    <p style={{ fontSize: 12, color: '#6b7280', marginBottom: 14 }}>
+                      Your current IP is always auto-included when saving — you cannot lock yourself out. Leave list empty to allow all IPs.
+                    </p>
+
+                    {/* Current IPs */}
+                    {ipWhitelist.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+                        {ipWhitelist.map(ip => (
+                          <div key={ip} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', borderRadius: 6, padding: '4px 10px', fontSize: 13 }}>
+                            <span style={{ fontFamily: 'monospace', color: '#10b981' }}>{ip}</span>
+                            <button onClick={() => setIpWhitelist(prev => prev.filter(x => x !== ip))}
+                              style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1 }}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Add IP input */}
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                      <input
+                        value={ipInput}
+                        onChange={e => setIpInput(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && ipInput.trim()) {
+                            setIpWhitelist(prev => prev.includes(ipInput.trim()) ? prev : [...prev, ipInput.trim()]);
+                            setIpInput('');
+                          }
+                        }}
+                        placeholder="e.g. 102.219.208.126"
+                        style={{ flex: 1, padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'monospace' }}
+                      />
+                      <button
+                        onClick={() => { if (ipInput.trim()) { setIpWhitelist(prev => prev.includes(ipInput.trim()) ? prev : [...prev, ipInput.trim()]); setIpInput(''); } }}
+                        style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: '#374151', color: '#fff', fontSize: 13, cursor: 'pointer' }}>
+                        + Add
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      <button
+                        disabled={ipSaving}
+                        onClick={async () => {
+                          setIpSaving(true); setIpMsg('');
+                          try {
+                            await api.post('/admin/ip-whitelist', { ips: ipWhitelist });
+                            setIpWhitelistEnabled(ipWhitelist.length > 0);
+                            setIpMsg(ipWhitelist.length > 0 ? `Saved — ${ipWhitelist.length} IP(s) whitelisted` : 'Saved — IP restriction disabled');
+                          } catch (e) {
+                            setIpMsg(e.response?.data?.detail || 'Failed to save');
+                          }
+                          setIpSaving(false);
+                        }}
+                        style={{ padding: '9px 22px', borderRadius: 8, border: 'none', background: ipSaving ? '#374151' : '#10b981', color: '#000', fontWeight: 700, fontSize: 13, cursor: ipSaving ? 'default' : 'pointer' }}>
+                        {ipSaving ? 'Saving...' : 'Save Whitelist'}
+                      </button>
+                      {ipWhitelist.length > 0 && (
+                        <button onClick={() => setIpWhitelist([])}
+                          style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', fontSize: 13, cursor: 'pointer' }}>
+                          Clear All
+                        </button>
+                      )}
+                      {ipMsg && <span style={{ fontSize: 12, color: ipMsg.includes('Failed') ? '#ef4444' : '#10b981' }}>{ipMsg}</span>}
+                    </div>
+                  </div>
+                </div>
+
                 {/* Audit Logs */}
                 <div className="adm-card">
                   <div className="adm-card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -2058,44 +2522,246 @@ export default function Admin() {
                     <div style={{ padding: 24, color: '#9ca3af', textAlign: 'center' }}>Loading...</div>
                   ) : auditLogs.length === 0 ? (
                     <div style={{ padding: 24, color: '#6b7280', textAlign: 'center', fontSize: 13 }}>No audit logs yet. Logs are recorded when admins/employees view trader data.</div>
-                  ) : (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table className="adm-table">
-                        <thead>
-                          <tr>
-                            <th>Time</th>
-                            <th>Actor (ID)</th>
-                            <th>Role</th>
-                            <th>Action</th>
-                            <th>Target Trader</th>
-                            <th>Detail</th>
-                            <th>IP Address</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {auditLogs.map(log => (
-                            <tr key={log.id}>
-                              <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{log.created_at ? new Date(log.created_at).toLocaleString() : '—'}</td>
-                              <td>#{log.actor_id}</td>
-                              <td><span style={{ background: log.actor_role === 'admin' ? '#7c3aed22' : '#0e3a5a', color: log.actor_role === 'admin' ? '#a78bfa' : '#38bdf8', borderRadius: 4, padding: '2px 7px', fontSize: 11, fontWeight: 600 }}>{log.actor_role}</span></td>
-                              <td style={{ fontSize: 12, color: '#f59e0b' }}>{log.action}</td>
-                              <td>{log.target_trader_id ? `#${log.target_trader_id}` : '—'}</td>
-                              <td style={{ fontSize: 11, color: '#9ca3af', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{log.detail || '—'}</td>
-                              <td style={{ fontSize: 12, fontFamily: 'monospace' }}>{log.ip_address || '—'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                  ) : (() => {
+                    const totalPages = Math.ceil(auditLogs.length / AUDIT_PER_PAGE);
+                    const pageLogs = auditLogs.slice((auditPage - 1) * AUDIT_PER_PAGE, auditPage * AUDIT_PER_PAGE);
+                    return (
+                      <>
+                        <div style={{ overflowX: 'auto' }}>
+                          <table className="adm-table">
+                            <thead>
+                              <tr>
+                                <th>Time</th>
+                                <th>Actor (ID)</th>
+                                <th>Role</th>
+                                <th>Action</th>
+                                <th>Target Trader</th>
+                                <th>Detail</th>
+                                <th>IP Address</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pageLogs.map(log => (
+                                <tr key={log.id}>
+                                  <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{log.created_at ? new Date(log.created_at).toLocaleString() : '—'}</td>
+                                  <td>#{log.actor_id}</td>
+                                  <td><span style={{ background: log.actor_role === 'admin' ? '#7c3aed22' : '#0e3a5a', color: log.actor_role === 'admin' ? '#a78bfa' : '#38bdf8', borderRadius: 4, padding: '2px 7px', fontSize: 11, fontWeight: 600 }}>{log.actor_role}</span></td>
+                                  <td style={{ fontSize: 12, color: '#f59e0b' }}>{log.action}</td>
+                                  <td>{log.target_trader_id ? `#${log.target_trader_id}` : '—'}</td>
+                                  <td style={{ fontSize: 11, color: '#9ca3af', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{log.detail || '—'}</td>
+                                  <td style={{ fontSize: 12, fontFamily: 'monospace' }}>{log.ip_address || '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {totalPages > 1 && (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+                            <span style={{ fontSize: 12, color: '#6b7280' }}>
+                              Showing {(auditPage - 1) * AUDIT_PER_PAGE + 1}–{Math.min(auditPage * AUDIT_PER_PAGE, auditLogs.length)} of {auditLogs.length} entries
+                            </span>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <button onClick={() => setAuditPage(p => Math.max(1, p - 1))} disabled={auditPage === 1}
+                                style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--border)', background: auditPage === 1 ? 'transparent' : 'var(--bg)', color: auditPage === 1 ? '#4b5563' : '#fff', cursor: auditPage === 1 ? 'default' : 'pointer', fontSize: 12 }}>
+                                ← Prev
+                              </button>
+                              <span style={{ padding: '5px 12px', fontSize: 12, color: '#9ca3af' }}>Page {auditPage} of {totalPages}</span>
+                              <button onClick={() => setAuditPage(p => Math.min(totalPages, p + 1))} disabled={auditPage === totalPages}
+                                style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--border)', background: auditPage === totalPages ? 'transparent' : 'var(--bg)', color: auditPage === totalPages ? '#4b5563' : '#fff', cursor: auditPage === totalPages ? 'default' : 'pointer', fontSize: 12 }}>
+                                Next →
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             );
           })()}
 
+          {/* ==================== AUTO-SWEEPS ==================== */}
+          {activeTab === 'withdrawals' && (
+            <div className="adm-card" style={{ marginTop: 20 }}>
+              <div className="adm-card-header" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 16 }}>⚡</span> Auto-Sweeps
+                  <span style={{ fontSize: 11, background: 'rgba(16,185,129,0.15)', color: '#10b981', borderRadius: 6, padding: '2px 8px', fontWeight: 400 }}>
+                    Paybill 4041355 → I&M Bank
+                  </span>
+                </h3>
+                {/* Status filter */}
+                <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)', marginLeft: 'auto' }}>
+                  {[['all','All'], ['pending','Pending'], ['completed','Completed'], ['failed','Failed']].map(([val, label]) => (
+                    <button key={val} onClick={() => { setSweepSubTab(val); loadSweeps(val); }}
+                      style={{ padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                        background: sweepSubTab === val ? (val === 'failed' ? '#ef4444' : val === 'completed' ? '#10b981' : '#f59e0b') : 'transparent',
+                        color: sweepSubTab === val ? '#000' : 'var(--text-muted)' }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <button onClick={() => loadSweeps(sweepSubTab)} style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text)', cursor: 'pointer', fontSize: 12 }}>
+                  ↺ Refresh
+                </button>
+              </div>
+
+              {sweepsLoading ? (
+                <div style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>Loading sweeps...</div>
+              ) : sweeps.length === 0 ? (
+                <div style={{ padding: 24, textAlign: 'center', color: '#6b7280', fontSize: 13 }}>
+                  No sweeps yet. Sweeps are triggered automatically when traders withdraw.
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid var(--border)', color: '#6b7280', fontSize: 11 }}>
+                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>ID</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>Amount</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>Status</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>Destination</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>M-Pesa Ref</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>Initiated</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>Completed</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left' }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sweeps.map(sw => (
+                        <tr key={sw.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                          <td style={{ padding: '10px 12px', color: '#6b7280' }}>#{sw.id}</td>
+                          <td style={{ padding: '10px 12px', fontWeight: 700, color: '#fff' }}>
+                            KES {sw.amount?.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          </td>
+                          <td style={{ padding: '10px 12px' }}>
+                            <span style={{
+                              fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
+                              background: sw.status === 'completed' ? 'rgba(16,185,129,0.15)' : sw.status === 'failed' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                              color: sw.status === 'completed' ? '#10b981' : sw.status === 'failed' ? '#ef4444' : '#f59e0b',
+                            }}>
+                              {sw.status}
+                            </span>
+                            {sw.status === 'failed' && sw.failure_reason && (
+                              <div style={{ fontSize: 10, color: '#ef4444', marginTop: 3 }}>{sw.failure_reason.substring(0, 60)}</div>
+                            )}
+                          </td>
+                          <td style={{ padding: '10px 12px', color: '#9ca3af', fontSize: 12 }}>
+                            Paybill {sw.sweep_paybill}<br />
+                            <span style={{ color: '#6b7280' }}>Acc: {sw.sweep_account}</span>
+                          </td>
+                          <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: '#6b7280' }}>
+                            {sw.mpesa_conversation_id ? sw.mpesa_conversation_id.substring(0, 20) + '...' : '—'}
+                          </td>
+                          <td style={{ padding: '10px 12px', color: '#6b7280', fontSize: 11 }}>
+                            {sw.created_at ? new Date(sw.created_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                          </td>
+                          <td style={{ padding: '10px 12px', color: '#6b7280', fontSize: 11 }}>
+                            {sw.completed_at ? new Date(sw.completed_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                          </td>
+                          <td style={{ padding: '10px 12px' }}>
+                            {sw.status === 'failed' && (
+                              <button
+                                onClick={() => handleRetrySweep(sw.id)}
+                                disabled={sweepRetrying === sw.id}
+                                style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, fontSize: 11, cursor: 'pointer', opacity: sweepRetrying === sw.id ? 0.6 : 1 }}>
+                                {sweepRetrying === sw.id ? '...' : 'Retry'}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ==================== SETTINGS ==================== */}
           {activeTab === 'settings' && (
             <div>
+              {smsBalance === null && !smsBalanceLoading && (() => { setSmsBalanceLoading(true); api.get('/admin/sms-balance').then(res => setSmsBalance(res.data)).catch(() => {}).finally(() => setSmsBalanceLoading(false)); return null; })()}
+              {/* SMS Credits */}
+              <div className="adm-card" style={{ marginBottom: 20 }}>
+                <div className="adm-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <MessageSquare size={18} /> SMS Credits — Advanta
+                  </h3>
+                  <button
+                    className="adm-btn-secondary"
+                    style={{ fontSize: 12, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
+                    disabled={smsBalanceLoading}
+                    onClick={() => {
+                      setSmsBalanceLoading(true);
+                      api.get('/admin/sms-balance').then(res => setSmsBalance(res.data)).catch(() => {}).finally(() => setSmsBalanceLoading(false));
+                    }}
+                  >
+                    <RefreshCw size={13} style={{ animation: smsBalanceLoading ? 'spin 1s linear infinite' : 'none' }} />
+                    {smsBalanceLoading ? 'Checking…' : 'Refresh'}
+                  </button>
+                </div>
+                <div style={{ padding: '0 16px 16px' }}>
+                  {/* Balance display */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16 }}>
+                    <div style={{
+                      fontSize: 36, fontWeight: 700, fontFamily: 'monospace',
+                      color: smsBalance === null ? '#6b7280'
+                        : smsBalance.credits < 50 ? '#ef4444'
+                        : smsBalance.credits < 100 ? '#f59e0b'
+                        : '#4ade80',
+                    }}>
+                      {smsBalance === null ? '—' : smsBalance.credits.toLocaleString()}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, color: '#9ca3af' }}>SMS credits remaining</div>
+                      {smsBalance !== null && (
+                        <div style={{
+                          fontSize: 12, marginTop: 2, fontWeight: 600,
+                          color: smsBalance.low ? '#f59e0b' : '#4ade80',
+                        }}>
+                          {smsBalance.low ? '⚠ Low balance — top up soon' : 'Balance OK'}
+                        </div>
+                      )}
+                    </div>
+                    {smsBalance === null && (
+                      <button
+                        className="adm-btn-secondary"
+                        style={{ fontSize: 12, padding: '6px 14px' }}
+                        onClick={() => {
+                          setSmsBalanceLoading(true);
+                          api.get('/admin/sms-balance').then(res => setSmsBalance(res.data)).catch(() => {}).finally(() => setSmsBalanceLoading(false));
+                        }}
+                      >
+                        Check Balance
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Top-up info */}
+                  <div style={{
+                    background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '12px 14px',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                  }}>
+                    <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>Top Up via M-Pesa</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 2 }}>Paybill Number</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: '#e5e7eb', fontFamily: 'monospace', letterSpacing: 1 }}>969610</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 2 }}>Account Number</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: '#e5e7eb', fontFamily: 'monospace', letterSpacing: 1 }}>SparkAI</div>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 8 }}>
+                      Use Paybill <strong style={{ color: '#9ca3af' }}>969610</strong>, Account <strong style={{ color: '#9ca3af' }}>SparkAI</strong> to top up Advanta SMS credits. Credits are added within minutes.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Create Employee */}
               <div className="adm-card" style={{ marginBottom: 20 }}>
                 <div className="adm-card-header">

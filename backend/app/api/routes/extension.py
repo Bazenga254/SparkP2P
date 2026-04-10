@@ -26,6 +26,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models import Order, OrderSide, OrderStatus, Trader, Payment, PaymentStatus
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
+from app.models.im_sweep import ImSweep
 from app.services.settlement.engine import SettlementEngine
 from app.api.deps import get_current_trader
 
@@ -542,6 +543,75 @@ async def get_market_prices(
     })
 
 
+@router.get("/my-ad-prices")
+async def get_my_ad_prices(
+    trader: Trader = Depends(get_current_trader),
+):
+    """
+    Return trader's current Binance P2P ad prices for the spread calculator.
+    Vision-scraped prices (updated every ~1 min by the desktop bot) take priority.
+    Falls back to Binance API if Vision prices are not available.
+    """
+    # Return Vision-scraped prices if they exist (fresh data from desktop bot)
+    if trader.ad_buy_price or trader.ad_sell_price:
+        return {
+            "buy": trader.ad_buy_price,
+            "sell": trader.ad_sell_price,
+            "connected": bool(trader.binance_connected),
+            "source": "vision",
+            "updated_at": trader.ad_prices_updated_at.isoformat() if trader.ad_prices_updated_at else None,
+        }
+
+    # Fallback: fetch via Binance API
+    if not trader.binance_connected or not trader.binance_cookies:
+        return {"buy": None, "sell": None, "connected": False}
+    try:
+        from app.services.binance.client import BinanceP2PClient, BinanceSessionExpired
+        client = BinanceP2PClient.from_trader(trader)
+        ads = await client.get_my_ads()
+        buy_price = None
+        sell_price = None
+        for ad in ads:
+            trade_type = (ad.get("tradeType") or ad.get("advType") or "").upper()
+            price = ad.get("price") or (ad.get("adv", {}) or {}).get("price")
+            try:
+                price = float(price) if price else None
+            except (ValueError, TypeError):
+                price = None
+            if price:
+                if trade_type == "BUY" and buy_price is None:
+                    buy_price = price
+                elif trade_type == "SELL" and sell_price is None:
+                    sell_price = price
+        return {"buy": buy_price, "sell": sell_price, "connected": True, "source": "api"}
+    except Exception as e:
+        return {"buy": None, "sell": None, "connected": True, "error": str(e)}
+
+
+class AdPricesReport(BaseModel):
+    buy: Optional[float] = None
+    sell: Optional[float] = None
+
+
+@router.post("/report-ad-prices")
+async def report_ad_prices(
+    data: AdPricesReport,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Called by the desktop bot every ~1 min after Vision-scraping the My Ads page.
+    Stores the trader's current buy/sell ad prices for the spread calculator.
+    """
+    if data.buy is not None:
+        trader.ad_buy_price = data.buy
+    if data.sell is not None:
+        trader.ad_sell_price = data.sell
+    trader.ad_prices_updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"ok": True, "buy": trader.ad_buy_price, "sell": trader.ad_sell_price}
+
+
 @router.get("/account-data")
 async def get_account_data(
     trader: Trader = Depends(get_current_trader),
@@ -902,3 +972,170 @@ async def _process_reported_buy_order(
         order.status = OrderStatus.PENDING
         await db.commit()
         return None
+
+
+# ─── I&M Bank withdrawal job queue ───────────────────────────────────────────
+
+@router.get("/pending-bank-withdrawals")
+async def get_pending_bank_withdrawals(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desktop app polls this to get pending I&M bank withdrawals queued for execution."""
+    if not trader.is_admin and trader.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    result = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.settlement_method == "bank",
+            WalletTransaction.status == "pending",
+            WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+        ).order_by(WalletTransaction.created_at)
+    )
+    txns = result.scalars().all()
+    jobs = []
+    for t in txns:
+        jobs.append({
+            "id": t.id,
+            "amount": abs(t.amount),
+            "destination": t.destination or "",
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        })
+    return {"jobs": jobs}
+
+
+class BankWithdrawalCompleteRequest(BaseModel):
+    tx_id: int
+    reference: Optional[str] = None  # I&M transaction reference if captured
+
+
+@router.post("/bank-withdrawal-complete")
+async def bank_withdrawal_complete(
+    data: BankWithdrawalCompleteRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desktop app calls this after successfully executing an I&M bank transfer."""
+    if not trader.is_admin and trader.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    result = await db.execute(
+        select(WalletTransaction).where(WalletTransaction.id == data.tx_id)
+    )
+    tx = result.scalar_one_or_none()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    tx.status = "completed"
+    tx.processed_by = f"auto:im_bot"
+    tx.processed_at = datetime.now(timezone.utc)
+    if data.reference:
+        tx.description = (tx.description or "") + f" | I&M ref: {data.reference}"
+    await db.commit()
+    return {"status": "ok", "tx_id": tx.id}
+
+
+@router.post("/bank-withdrawal-failed")
+async def bank_withdrawal_failed(
+    data: BankWithdrawalCompleteRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desktop app calls this if I&M transfer failed — requeues as pending for retry."""
+    if not trader.is_admin and trader.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    result = await db.execute(
+        select(WalletTransaction).where(WalletTransaction.id == data.tx_id)
+    )
+    tx = result.scalar_one_or_none()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    tx.status = "pending"
+    tx.processed_by = None
+    await db.commit()
+    return {"status": "requeued", "tx_id": tx.id}
+
+
+# ── Session flag reset — called on desktop app startup ───────────────────────
+
+@router.post("/reset-session-flags")
+async def reset_session_flags(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Desktop app calls this on startup before Chrome opens.
+    Resets all browser-session flags to False so the UI never shows
+    stale 'Connected' badges from the previous run.
+    Vision will re-confirm and set them back to True during this session.
+    """
+    trader.im_connected = False
+    trader.mpesa_portal_connected = False
+    # Clear gmail_cookies so gmail_connected also becomes False
+    trader.gmail_cookies = None
+    await db.commit()
+    return {"status": "ok", "reset": ["im_connected", "gmail_connected", "mpesa_portal_connected"]}
+
+
+# ── M-PESA Org Portal Sweep endpoints ────────────────────────────────────────
+
+@router.get("/pending-mpesa-sweeps")
+async def get_pending_mpesa_sweeps(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desktop app polls this to get pending M-PESA sweeps queued for execution."""
+    result = await db.execute(
+        select(ImSweep).where(
+            ImSweep.status == "pending",
+        ).order_by(ImSweep.created_at)
+    )
+    sweeps = result.scalars().all()
+    return {
+        "sweeps": [
+            {
+                "sweep_id": s.id,
+                "amount": s.amount,
+                "reference": f"WD{s.withdrawal_tx_id}" if s.withdrawal_tx_id else f"SW{s.id}",
+            }
+            for s in sweeps
+        ]
+    }
+
+
+class MpesaSweepResultRequest(BaseModel):
+    sweep_id: int
+    amount: Optional[float] = None
+    reference: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.post("/mpesa-sweep-complete")
+async def mpesa_sweep_complete(
+    data: MpesaSweepResultRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desktop app calls this after successfully submitting a M-PESA org portal sweep."""
+    result = await db.execute(select(ImSweep).where(ImSweep.id == data.sweep_id))
+    sweep = result.scalar_one_or_none()
+    if not sweep:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+    sweep.status = "completed"
+    sweep.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"status": "ok", "sweep_id": sweep.id}
+
+
+@router.post("/mpesa-sweep-failed")
+async def mpesa_sweep_failed(
+    data: MpesaSweepResultRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desktop app calls this if the M-PESA org portal sweep failed."""
+    result = await db.execute(select(ImSweep).where(ImSweep.id == data.sweep_id))
+    sweep = result.scalar_one_or_none()
+    if not sweep:
+        raise HTTPException(status_code=404, detail="Sweep not found")
+    sweep.status = "failed"
+    sweep.failure_reason = (data.error or "Unknown error")[:500]
+    await db.commit()
+    return {"status": "failed", "sweep_id": sweep.id}

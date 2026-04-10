@@ -51,32 +51,13 @@ def _safaricom_b2c_fee(amount: float) -> int:
 def get_bank_withdrawal_eligibility(amount: float) -> dict:
     """Check if amount is eligible for I&M bank withdrawal and return fee.
 
-    Minimum thresholds prevent partial withdrawals in mid-range tiers:
-      1,000 – 10,000  : any amount, fee 0.1%
-      10,001 – 24,999 : BLOCKED — must reach KES 25,000
-      25,000          : fee KES 30
-      25,001 – 49,999 : BLOCKED — must reach KES 50,000
-      50,000          : fee KES 30
-      50,001 – 99,999 : BLOCKED — must reach KES 100,000
-      100,000         : fee KES 50
-      100,001+        : any amount, fee KES 60
+    Flat 0.05% fee for all amounts from KES 1,000+.
 
     Returns dict with 'eligible' bool, 'fee', and 'reason' if blocked.
     """
     if amount < MIN_WITHDRAWAL:
         return {"eligible": False, "fee": 0, "reason": f"Minimum withdrawal is KES {MIN_WITHDRAWAL:,}"}
-    if amount <= 10_000:
-        return {"eligible": True, "fee": round(amount * 0.001, 2), "min_required": None}
-    if amount < 25_000:
-        return {"eligible": False, "fee": 30, "reason": "Minimum withdrawal for this tier is KES 25,000", "min_required": 25_000}
-    if amount < 50_000:
-        return {"eligible": False, "fee": 30, "reason": "Minimum withdrawal for this tier is KES 50,000", "min_required": 50_000}
-    if amount < 100_000:
-        return {"eligible": False, "fee": 50, "reason": "Minimum withdrawal for this tier is KES 100,000", "min_required": 100_000}
-    if amount == 100_000:
-        return {"eligible": True, "fee": 50, "min_required": None}
-    # 100,001+
-    return {"eligible": True, "fee": 60, "min_required": None}
+    return {"eligible": True, "fee": round(amount * 0.0005, 2), "min_required": None}
 
 
 def get_total_settlement_fee(trader, amount: float, is_manual_withdrawal: bool = True) -> tuple:

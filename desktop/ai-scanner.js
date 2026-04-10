@@ -1,19 +1,21 @@
 /**
- * AI-Powered Browser Scanner (GPT-4o Vision)
+ * AI-Powered Browser Scanner (Claude Vision)
  *
- * Takes screenshots of Binance pages → sends to GPT-4o → gets structured data.
+ * Takes screenshots of Binance pages → sends to Claude → gets structured data.
  * The "brain" of the bot — reads any page like a human would.
  */
 
-const OpenAI = require('openai');
+const Anthropic = require('@anthropic-ai/sdk');
+
+const MODEL = 'claude-haiku-4-5-20251001';
 
 let client = null;
 
 function initAI(apiKey) {
   if (!apiKey) return false;
   try {
-    client = new OpenAI({ apiKey });
-    console.log('[AI Scanner] GPT-4o initialized');
+    client = new Anthropic.default({ apiKey });
+    console.log('[AI Scanner] Claude initialized');
     return true;
   } catch (e) {
     console.error('[AI Scanner] Init failed:', e.message);
@@ -25,18 +27,18 @@ async function analyzeScreenshot(screenshotBuffer, prompt) {
   if (!client) return null;
   try {
     const base64 = screenshotBuffer.toString('base64');
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o',
+    const response = await client.messages.create({
+      model: MODEL,
       max_tokens: 1024,
       messages: [{
         role: 'user',
         content: [
-          { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}`, detail: 'low' } },
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
           { type: 'text', text: prompt + '\n\nRespond ONLY with valid JSON. No markdown, no explanation.' },
         ],
       }],
     });
-    const text = response.choices[0]?.message?.content || '';
+    const text = response.content[0]?.text || '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
   } catch (e) {
@@ -48,15 +50,15 @@ async function analyzeScreenshot(screenshotBuffer, prompt) {
 async function analyzeText(text, prompt) {
   if (!client) return null;
   try {
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o',
+    const response = await client.messages.create({
+      model: MODEL,
       max_tokens: 1024,
       messages: [{
         role: 'user',
         content: prompt + '\n\nPage text:\n' + text.substring(0, 8000) + '\n\nRespond ONLY with valid JSON. No markdown, no explanation.',
       }],
     });
-    const content = response.choices[0]?.message?.content || '';
+    const content = response.content[0]?.text || '';
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
   } catch (e) {

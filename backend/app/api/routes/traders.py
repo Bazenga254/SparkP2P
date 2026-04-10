@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from typing import Optional
-from sqlalchemy import select, update as sql_update
+from sqlalchemy import select, update as sql_update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -13,6 +13,7 @@ from app.core.database import get_db
 from app.core.security import encrypt_data, decode_access_token, create_access_token
 from app.models import Trader, SettlementMethod
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
+from app.models.order import Order, OrderStatus
 from app.services.binance.client import BinanceP2PClient
 from app.services.mpesa.client import mpesa_client
 from app.api.deps import get_current_trader
@@ -111,6 +112,9 @@ class TraderProfileResponse(BaseModel):
     settlement_cooldown_until: Optional[str] = None  # ISO datetime when cooldown ends
     password_change_cooldown_until: Optional[str] = None  # ISO datetime, 48hr after last pw change
     binance_verify_method: Optional[str] = None
+    im_connected: bool = False
+    gmail_connected: bool = False
+    mpesa_portal_connected: bool = False
 
 
 # In-memory store for phone verification results
@@ -355,6 +359,9 @@ async def get_profile(
             else None
         ),
         binance_verify_method=trader.binance_verify_method or "none",
+        im_connected=bool(trader.im_connected),
+        gmail_connected=bool(trader.gmail_cookies),
+        mpesa_portal_connected=bool(trader.mpesa_portal_connected),
     )
 
 
@@ -999,6 +1006,26 @@ async def request_withdrawal(
             detail=f"Balance too low to cover fees (KES {total_fee})",
         )
 
+    # ── Auto-Sweep: paybill 4041355 → I&M Bank ───────────────────────────────
+    # Fire BEFORE settlement so the I&M account has the funds ready.
+    # Sweep is for the GROSS amount (wallet.balance) — Daraja B2B is async so
+    # the result arrives via callback; settlement proceeds regardless.
+    from app.services.sweep_service import trigger_im_sweep
+    sweep_ref = f"WD-{trader.email[:20]}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    sweep_result = await trigger_im_sweep(
+        amount=wallet.balance,       # gross amount (before fees)
+        trader_id=trader.id,
+        withdrawal_tx_id=None,       # linked after settlement commits
+        reference=sweep_ref,
+        db=db,
+    )
+    if sweep_result.get("success"):
+        logger.info(f"[Sweep] Initiated for KES {wallet.balance:,.0f} — sweep_id={sweep_result.get('sweep_id')}")
+    elif not sweep_result.get("skipped"):
+        # Log the failure but don't block the trader's withdrawal
+        logger.error(f"[Sweep] Failed for trader {trader.id}: {sweep_result.get('error')}")
+    # ─────────────────────────────────────────────────────────────────────────
+
     engine = SettlementEngine(db)
     # Force withdraw — bypass batch threshold for manual withdrawals
     original_threshold = trader.batch_threshold
@@ -1014,10 +1041,15 @@ async def request_withdrawal(
 
     return {
         "status": "success",
-        "message": f"KES {net_amount:,.0f} sent to your M-Pesa",
+        "message": f"KES {net_amount:,.0f} sent to your account",
         "amount_sent": net_amount,
         "transaction_fee": total_fee,
         "wallet_deducted": wallet.balance + total_fee,
+        "sweep": {
+            "initiated": sweep_result.get("success", False),
+            "sweep_id": sweep_result.get("sweep_id"),
+            "skipped": sweep_result.get("skipped", False),
+        },
     }
 
 
@@ -1395,4 +1427,195 @@ async def get_gmail_credentials(
     """Check if Gmail session is active (synced from desktop app)."""
     return {
         "configured": bool(trader.gmail_cookies),
+    }
+
+
+class ImConnectRequest(BaseModel):
+    cookies: list  # Full cookie objects from desktop app Chrome session
+
+
+@router.post("/connect-im")
+async def connect_im(
+    data: ImConnectRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Store I&M Bank session cookies captured by desktop app after manual login."""
+    if not data.cookies or len(data.cookies) < 3:
+        raise HTTPException(status_code=400, detail="Not enough cookies — make sure you are fully logged in to I&M.")
+    trader.im_cookies = encrypt_data(json.dumps(data.cookies))
+    trader.im_connected = True
+    trader.last_extension_sync = datetime.now(timezone.utc)
+    await db.commit()
+    return {"status": "ok", "message": "I&M session saved.", "cookies_received": len(data.cookies)}
+
+
+@router.post("/pause-bot/request-otp")
+async def request_pause_otp(trader: Trader = Depends(get_current_trader)):
+    """Send OTP to trader's phone before allowing bot pause."""
+    import random
+    from app.api.routes.auth import _login_otp_codes
+    otp_code = str(random.randint(100000, 999999))
+    _login_otp_codes[f"pause_{trader.email}"] = otp_code
+    try:
+        from app.services.sms import sms_verification_code
+        sms_verification_code(trader.phone, otp_code)
+    except Exception:
+        pass
+    return {
+        "message": f"OTP sent to ***{trader.phone[-4:]}",
+        "security_question": trader.security_question or "What is your mother's maiden name?",
+    }
+
+
+class PauseBotRequest(BaseModel):
+    otp_code: str
+    security_answer: str
+    totp_code: Optional[str] = None  # Google Authenticator 6-digit code (required for admin)
+
+
+def _verify_totp(secret: str, code: str) -> bool:
+    """Verify a 6-digit TOTP code against a base32 secret (same algorithm as the desktop app)."""
+    import hmac, hashlib, struct, time, base64
+    try:
+        secret_clean = secret.upper().replace(' ', '').replace('=', '')
+        # Pad to multiple of 8
+        pad = (8 - len(secret_clean) % 8) % 8
+        key = base64.b32decode(secret_clean + '=' * pad)
+        counter = int(time.time()) // 30
+        # Check current window and ±1 for clock skew
+        for offset in [-1, 0, 1]:
+            msg = struct.pack('>Q', counter + offset)
+            h = hmac.new(key, msg, hashlib.sha1).digest()
+            o = h[19] & 0x0f
+            otp = ((h[o] & 0x7f) << 24 | h[o+1] << 16 | h[o+2] << 8 | h[o+3]) % 1_000_000
+            if str(otp).zfill(6) == code.strip():
+                return True
+        return False
+    except Exception:
+        return False
+
+
+@router.post("/pause-bot/confirm")
+async def confirm_pause_bot(data: PauseBotRequest, trader: Trader = Depends(get_current_trader)):
+    """Verify OTP + security answer + (for admin) Google Authenticator TOTP."""
+    from app.api.routes.auth import _login_otp_codes
+    from app.core.security import verify_password
+
+    stored = _login_otp_codes.get(f"pause_{trader.email}")
+    if not stored or stored != data.otp_code:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP code.")
+
+    if not trader.security_answer_hash or not verify_password(data.security_answer.strip().lower(), trader.security_answer_hash):
+        raise HTTPException(status_code=400, detail="Incorrect security answer.")
+
+    # Admin must also verify Google Authenticator
+    if trader.is_admin:
+        if not data.totp_code:
+            raise HTTPException(status_code=400, detail="Google Authenticator code is required.")
+        totp_secret = None
+        if trader.totp_secret:
+            from app.core.security import decrypt_data
+            try:
+                totp_secret = decrypt_data(trader.totp_secret)
+            except Exception:
+                totp_secret = trader.totp_secret
+        if not totp_secret or not _verify_totp(totp_secret, data.totp_code):
+            raise HTTPException(status_code=400, detail="Invalid Google Authenticator code.")
+
+    del _login_otp_codes[f"pause_{trader.email}"]
+    return {"authorized": True}
+
+
+@router.post("/disconnect-im")
+async def disconnect_im(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear I&M Bank session."""
+    trader.im_cookies = None
+    trader.im_connected = False
+    await db.commit()
+    return {"status": "ok"}
+
+
+class MpesaPortalConnectRequest(BaseModel):
+    connected: bool = True
+
+
+@router.post("/connect-mpesa-portal")
+async def connect_mpesa_portal(
+    data: MpesaPortalConnectRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desktop app calls this once M-PESA org portal login is confirmed."""
+    trader.mpesa_portal_connected = data.connected
+    await db.commit()
+    return {"status": "ok", "mpesa_portal_connected": data.connected}
+
+
+@router.post("/disconnect-mpesa-portal")
+async def disconnect_mpesa_portal(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear M-PESA org portal connection status."""
+    trader.mpesa_portal_connected = False
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.get("/stats/today")
+async def get_today_stats(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return 24-hour trading statistics that reset at midnight Kenyan time (EAT = UTC+3).
+    """
+    # Midnight today in EAT (UTC+3)
+    eat_offset = timedelta(hours=3)
+    now_eat = datetime.now(timezone.utc) + eat_offset
+    midnight_eat = now_eat.replace(hour=0, minute=0, second=0, microsecond=0)
+    midnight_utc = midnight_eat - eat_offset  # convert back to UTC for DB query
+
+    # Completed orders since midnight EAT
+    orders_q = await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.status == OrderStatus.COMPLETED,
+            Order.created_at >= midnight_utc,
+        )
+    )
+    orders_today = orders_q.scalars().all()
+
+    trades_count = len(orders_today)
+    usdt_traded = sum(o.crypto_amount for o in orders_today)
+    kes_volume = sum(o.fiat_amount for o in orders_today)
+
+    # Gross profit = KES received (sell credits) - KES paid (buy debits) since midnight EAT
+    txn_q = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.trader_id == trader.id,
+            WalletTransaction.transaction_type.in_([
+                TransactionType.SELL_CREDIT,
+                TransactionType.BUY_DEBIT,
+            ]),
+            WalletTransaction.created_at >= midnight_utc,
+        )
+    )
+    txns_today = txn_q.scalars().all()
+
+    sell_credits = sum(t.amount for t in txns_today if t.transaction_type == TransactionType.SELL_CREDIT)
+    buy_debits = sum(t.amount for t in txns_today if t.transaction_type == TransactionType.BUY_DEBIT)
+    # buy_debit amounts are negative; gross profit = net KES flow from trading
+    gross_profit = sell_credits + buy_debits
+
+    return {
+        "trades_count": trades_count,
+        "usdt_traded": round(usdt_traded, 4),
+        "kes_volume": round(kes_volume, 2),
+        "gross_profit": round(gross_profit, 2),
+        "reset_at": midnight_utc.isoformat(),
     }

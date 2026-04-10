@@ -606,18 +606,74 @@ async def paybill_balance_timeout(request: Request):
 # ── B2B Callbacks ─────────────────────────────────────────────────
 
 @router.post("/b2b/result")
-async def b2b_result(request: Request):
-    """B2B result callback — payment to bank/paybill/till completed."""
+async def b2b_result(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    B2B result callback — handles both sweep completions and regular B2B payments.
+    Daraja posts here after the async B2B transfer resolves.
+    """
+    from datetime import datetime, timezone
+    from app.models.im_sweep import ImSweep
+
     data = await request.json()
     logger.info(f"B2B Result: {data}")
+
+    try:
+        result = data.get("Result", data)
+        result_code = str(result.get("ResultCode", ""))
+        conversation_id = result.get("ConversationID") or result.get("OriginatorConversationID", "")
+        result_desc = result.get("ResultDesc", "")
+
+        if not conversation_id:
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+        # Find matching ImSweep by ConversationID
+        q = await db.execute(
+            select(ImSweep).where(ImSweep.mpesa_conversation_id == conversation_id)
+        )
+        sweep = q.scalar_one_or_none()
+
+        if sweep:
+            if result_code == "0":
+                sweep.status = "completed"
+                sweep.completed_at = datetime.now(timezone.utc)
+                logger.info(f"[Sweep] {sweep.id} completed — KES {sweep.amount:,.0f} → I&M Bank")
+            else:
+                sweep.status = "failed"
+                sweep.failure_reason = result_desc[:490]
+                logger.error(f"[Sweep] {sweep.id} failed: {result_desc}")
+            await db.commit()
+    except Exception as e:
+        logger.error(f"B2B result handler error: {e}")
+
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
 @router.post("/b2b/timeout")
-async def b2b_timeout(request: Request):
-    """B2B timeout callback."""
+async def b2b_timeout(request: Request, db: AsyncSession = Depends(get_db)):
+    """B2B timeout callback — mark sweep as failed so admin can retry."""
+    from app.models.im_sweep import ImSweep
+
     data = await request.json()
     logger.warning(f"B2B Timeout: {data}")
+
+    try:
+        conversation_id = (
+            data.get("ConversationID")
+            or data.get("OriginatorConversationID", "")
+        )
+        if conversation_id:
+            q = await db.execute(
+                select(ImSweep).where(ImSweep.mpesa_conversation_id == conversation_id)
+            )
+            sweep = q.scalar_one_or_none()
+            if sweep and sweep.status == "pending":
+                sweep.status = "failed"
+                sweep.failure_reason = "B2B timeout — Safaricom did not respond in time"
+                await db.commit()
+                logger.warning(f"[Sweep] {sweep.id} timed out")
+    except Exception as e:
+        logger.error(f"B2B timeout handler error: {e}")
+
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 

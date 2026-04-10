@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     IM_BANK_SENDER_NAME: str = "SparkP2P"
     IM_BANK_RSA_PUBLIC_KEY: str = ""  # Base64 RSA 2048 public key from I&M
 
+    # Auto-Sweep: M-Pesa Paybill → I&M Bank (triggered on every trader withdrawal)
+    # Set IM_SWEEP_PAYBILL to SparkP2P's I&M Bank M-Pesa paybill number (e.g. 400200)
+    # Set IM_SWEEP_ACCOUNT to SparkP2P's I&M account number that receives the sweep
+    IM_SWEEP_PAYBILL: str = ""   # I&M Bank's M-Pesa paybill for receiving B2B transfers
+    IM_SWEEP_ACCOUNT: str = ""   # SparkP2P's I&M Bank account number (credit destination)
+
     # Binance
     BINANCE_DEFAULT_USER_AGENT: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
