@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp } from '../services/api';
+import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
 
@@ -90,6 +91,13 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [sqAnswer, setSqAnswer] = useState('');
   const [savingSq, setSavingSq] = useState(false);
   const [sqJustSaved, setSqJustSaved] = useState(null); // question text right after save
+  // Google Authenticator (TOTP) setup
+  const [totpSetup, setTotpSetup] = useState(null); // { secret, uri }
+  const [totpLoading, setTotpLoading] = useState(false);
+  const [totpCode, setTotpCode] = useState('');
+  const [totpMsg, setTotpMsg] = useState('');
+  const [totpSaving, setTotpSaving] = useState(false);
+  const [totpEnabled, setTotpEnabled] = useState(false);
   // Change password
   const [cpStep, setCpStep] = useState(0); // 0=idle, 1=otp-sent, 2=done
   const [cpOtp, setCpOtp] = useState('');
@@ -122,6 +130,10 @@ export default function SettingsPanel({ profile, onUpdate }) {
   useEffect(() => {
     if (profile?.security_question) setSqJustSaved(profile.security_question);
   }, [profile?.security_question]);
+
+  useEffect(() => {
+    setTotpEnabled(!!profile?.has_totp);
+  }, [profile?.has_totp]);
 
   useEffect(() => {
     if (profile?.password_change_cooldown_until) {
@@ -1149,6 +1161,112 @@ export default function SettingsPanel({ profile, onUpdate }) {
                   {savingSq ? 'Saving...' : 'Save Security Question'}
                 </button>
               </form>
+            )}
+          </div>
+
+          {/* ── Google Authenticator (TOTP) ─────────────────── */}
+          <div className="card">
+            <h3 style={{ marginBottom: 4 }}>Google Authenticator</h3>
+            <p className="help-text" style={{ marginBottom: 16 }}>
+              Adds a 6-digit code from Google Authenticator as a third factor when pausing or resuming the bot.
+            </p>
+
+            {totpEnabled ? (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: 'rgba(16,185,129,0.08)', borderRadius: 10, border: '1px solid rgba(16,185,129,0.25)', marginBottom: 16 }}>
+                  <span style={{ fontSize: 20 }}>✅</span>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#10b981' }}>Google Authenticator is linked</div>
+                    <div style={{ fontSize: 12, color: '#6b7280' }}>Your account is protected with TOTP 2FA.</div>
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!confirm('Remove Google Authenticator from your account?')) return;
+                    await removeTotp();
+                    setTotpEnabled(false);
+                    setTotpSetup(null);
+                    if (onUpdate) { const r = await getProfile(); onUpdate(r.data); }
+                  }}
+                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.4)', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                  Remove Authenticator
+                </button>
+              </div>
+            ) : (
+              <div>
+                {!totpSetup ? (
+                  <button
+                    disabled={totpLoading}
+                    onClick={async () => {
+                      setTotpLoading(true); setTotpMsg('');
+                      try {
+                        const res = await getTotpSetup();
+                        setTotpSetup(res.data);
+                      } catch { setTotpMsg('Failed to generate QR code.'); }
+                      setTotpLoading(false);
+                    }}
+                    style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>
+                    {totpLoading ? 'Generating...' : 'Set Up Google Authenticator'}
+                  </button>
+                ) : (
+                  <div>
+                    <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
+                      Scan the QR code below with the <strong style={{ color: '#fff' }}>Google Authenticator</strong> app, then enter the 6-digit code to confirm.
+                    </p>
+
+                    {/* QR Code */}
+                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
+                      <div style={{ background: '#fff', padding: 16, borderRadius: 12 }}>
+                        <QRCodeSVG value={totpSetup.uri} size={180} />
+                      </div>
+                    </div>
+
+                    {/* Manual entry fallback */}
+                    <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 20 }}>
+                      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Can't scan? Enter this key manually in Google Authenticator:</div>
+                      <div style={{ fontFamily: 'monospace', fontSize: 14, color: '#f59e0b', letterSpacing: 2, wordBreak: 'break-all' }}>{totpSetup.secret}</div>
+                    </div>
+
+                    {/* Verify */}
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>Enter 6-digit code from Google Authenticator</label>
+                      <input
+                        type="text" inputMode="numeric" maxLength={6} placeholder="000000"
+                        value={totpCode} onChange={e => setTotpCode(e.target.value.replace(/\D/g, ''))}
+                        style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', fontSize: 18, letterSpacing: 6, textAlign: 'center', boxSizing: 'border-box' }}
+                      />
+                    </div>
+
+                    {totpMsg && <p style={{ fontSize: 12, color: totpMsg.includes('success') || totpMsg.includes('linked') ? '#10b981' : '#ef4444', marginBottom: 10 }}>{totpMsg}</p>}
+
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button onClick={() => { setTotpSetup(null); setTotpCode(''); setTotpMsg(''); }}
+                        style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+                        Cancel
+                      </button>
+                      <button
+                        disabled={totpSaving || totpCode.length !== 6}
+                        onClick={async () => {
+                          setTotpSaving(true); setTotpMsg('');
+                          try {
+                            await verifyAndSaveTotp({ secret: totpSetup.secret, code: totpCode });
+                            setTotpEnabled(true);
+                            setTotpSetup(null);
+                            setTotpCode('');
+                            setTotpMsg('Google Authenticator linked successfully!');
+                            if (onUpdate) { const r = await getProfile(); onUpdate(r.data); }
+                          } catch (err) {
+                            setTotpMsg(err.response?.data?.detail || 'Invalid code. Try again.');
+                          }
+                          setTotpSaving(false);
+                        }}
+                        style={{ flex: 1, padding: '10px 20px', borderRadius: 8, border: 'none', background: totpCode.length === 6 ? '#10b981' : '#374151', color: '#fff', fontWeight: 700, cursor: totpCode.length === 6 ? 'pointer' : 'not-allowed', fontSize: 13 }}>
+                        {totpSaving ? 'Verifying...' : 'Confirm & Link'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 

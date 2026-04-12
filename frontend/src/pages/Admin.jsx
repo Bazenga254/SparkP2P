@@ -252,7 +252,7 @@ export default function Admin() {
   };
 
   const handleConfirmPause = async () => {
-    if (!pauseOtp || !pauseSecAnswer || !pauseTotp) { setPauseMsg('All three fields are required.'); return; }
+    if (!pauseOtp || !pauseSecAnswer) { setPauseMsg('SMS OTP and security answer are required.'); return; }
     setPauseLoading(true); setPauseMsg('');
     try {
       await api.post('/traders/pause-bot/confirm', { otp_code: pauseOtp, security_answer: pauseSecAnswer, totp_code: pauseTotp });
@@ -666,13 +666,19 @@ export default function Admin() {
                   />
                 </div>
 
-                {/* Factor 3: Google Authenticator */}
+                {/* Factor 3: Google Authenticator — only if TOTP is configured */}
                 <div style={{ marginBottom: 20 }}>
-                  <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 5 }}>3. Google Authenticator Code</label>
+                  <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 5 }}>
+                    3. Google Authenticator Code
+                    {!connProfile?.has_totp && (
+                      <span style={{ marginLeft: 8, fontSize: 11, color: '#f59e0b' }}>— Not configured (optional)</span>
+                    )}
+                  </label>
                   <input
-                    type="text" inputMode="numeric" maxLength={6} placeholder="6-digit code from Google Authenticator"
+                    type="text" inputMode="numeric" maxLength={6} placeholder={connProfile?.has_totp ? "6-digit code from Google Authenticator" : "Not set up — skip or set up in Settings → Binance"}
                     value={pauseTotp} onChange={e => setPauseTotp(e.target.value)}
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', fontSize: 14, boxSizing: 'border-box' }}
+                    disabled={!connProfile?.has_totp}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: connProfile?.has_totp ? '#0d0f1e' : '#1a1c2e', color: connProfile?.has_totp ? '#fff' : '#4b5563', fontSize: 14, boxSizing: 'border-box', cursor: connProfile?.has_totp ? 'text' : 'not-allowed' }}
                   />
                 </div>
 

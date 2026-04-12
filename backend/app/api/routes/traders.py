@@ -115,6 +115,7 @@ class TraderProfileResponse(BaseModel):
     im_connected: bool = False
     gmail_connected: bool = False
     mpesa_portal_connected: bool = False
+    has_totp: bool = False
 
 
 # In-memory store for phone verification results
@@ -362,6 +363,7 @@ async def get_profile(
         im_connected=bool(trader.im_connected),
         gmail_connected=bool(trader.gmail_cookies),
         mpesa_portal_connected=bool(trader.mpesa_portal_connected),
+        has_totp=bool(trader.totp_secret),
     )
 
 
@@ -1468,6 +1470,50 @@ async def request_pause_otp(trader: Trader = Depends(get_current_trader)):
     }
 
 
+class SetupTotpVerifyRequest(BaseModel):
+    secret: str   # The generated secret to confirm
+    code: str     # 6-digit code user entered from Google Authenticator
+
+
+@router.get("/setup-totp")
+async def get_totp_setup(trader: Trader = Depends(get_current_trader)):
+    """Generate a new TOTP secret and return the otpauth URI for QR code display."""
+    import pyotp
+    secret = pyotp.random_base32()
+    app_name = "SparkP2P"
+    uri = pyotp.totp.TOTP(secret).provisioning_uri(name=trader.email, issuer_name=app_name)
+    return {"secret": secret, "uri": uri}
+
+
+@router.post("/setup-totp/verify")
+async def verify_and_save_totp(
+    data: SetupTotpVerifyRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verify the 6-digit code then save the TOTP secret to the trader's account."""
+    import pyotp
+    totp = pyotp.TOTP(data.secret)
+    if not totp.verify(data.code.strip(), valid_window=1):
+        raise HTTPException(status_code=400, detail="Invalid code. Make sure your phone's time is synced and try again.")
+    # Save encrypted secret
+    from app.core.security import encrypt_data
+    trader.totp_secret = encrypt_data(data.secret)
+    await db.commit()
+    return {"success": True, "message": "Google Authenticator linked successfully."}
+
+
+@router.delete("/setup-totp")
+async def remove_totp(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove Google Authenticator from this account."""
+    trader.totp_secret = None
+    await db.commit()
+    return {"success": True}
+
+
 class PauseBotRequest(BaseModel):
     otp_code: str
     security_answer: str
@@ -1509,17 +1555,16 @@ async def confirm_pause_bot(data: PauseBotRequest, trader: Trader = Depends(get_
     if not trader.security_answer_hash or not verify_password(data.security_answer.strip().lower(), trader.security_answer_hash):
         raise HTTPException(status_code=400, detail="Incorrect security answer.")
 
-    # Admin must also verify Google Authenticator
-    if trader.is_admin:
+    # Admin must also verify Google Authenticator — but only if TOTP is configured
+    if trader.is_admin and trader.totp_secret:
         if not data.totp_code:
             raise HTTPException(status_code=400, detail="Google Authenticator code is required.")
         totp_secret = None
-        if trader.totp_secret:
-            from app.core.security import decrypt_data
-            try:
-                totp_secret = decrypt_data(trader.totp_secret)
-            except Exception:
-                totp_secret = trader.totp_secret
+        from app.core.security import decrypt_data
+        try:
+            totp_secret = decrypt_data(trader.totp_secret)
+        except Exception:
+            totp_secret = trader.totp_secret
         if not totp_secret or not _verify_totp(totp_secret, data.totp_code):
             raise HTTPException(status_code=400, detail="Invalid Google Authenticator code.")
 

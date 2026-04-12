@@ -8,7 +8,10 @@ import {
   updateVerification,
   initiateSubscription,
   getSubscriptionStatus,
+  getTotpSetup,
+  verifyAndSaveTotp,
 } from '../services/api';
+import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import {
   Download,
@@ -44,6 +47,7 @@ const STEPS = [
   { key: 'binance', title: 'Connect Binance', icon: Link2 },
   { key: 'verification', title: 'Verification', icon: Shield },
   { key: 'settlement', title: 'Settlement', icon: Banknote },
+  { key: 'authenticator', title: '2FA Setup', icon: Smartphone },
 ];
 
 export default function Onboarding() {
@@ -87,6 +91,14 @@ export default function Onboarding() {
   const [settlementLoading, setSettlementLoading] = useState(false);
   const [settlementMsg, setSettlementMsg] = useState(null);
   const [settlementSaved, setSettlementSaved] = useState(false);
+
+  // Google Authenticator step
+  const [totpSetupData, setTotpSetupData] = useState(null); // { secret, uri }
+  const [totpSetupLoading, setTotpSetupLoading] = useState(false);
+  const [totpSetupCode, setTotpSetupCode] = useState('');
+  const [totpSetupMsg, setTotpSetupMsg] = useState('');
+  const [totpSetupSaving, setTotpSetupSaving] = useState(false);
+  const [totpSetupDone, setTotpSetupDone] = useState(false);
 
   // Subscribe step
   const [selectedPlan, setSelectedPlan] = useState(null);
@@ -845,10 +857,113 @@ export default function Onboarding() {
               </button>
               <button
                 className="onb-btn-primary"
-                onClick={() => setCompleted(true)}
+                onClick={() => {
+                  setCurrentStep(4);
+                  // Auto-generate QR on entering step
+                  if (!totpSetupData && !totpSetupDone) {
+                    setTotpSetupLoading(true);
+                    getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {}).finally(() => setTotpSetupLoading(false));
+                  }
+                }}
                 disabled={!canAdvanceStep3}
               >
-                Finish Setup
+                Continue
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 5: Google Authenticator ── */}
+        {currentStep === 4 && (
+          <div className="onb-step-content">
+            <div className="onb-step-header">
+              <Smartphone size={28} className="onb-step-icon" />
+              <h2>Set Up Google Authenticator</h2>
+              <p>Add a second layer of security to your account. This protects bot controls like Pause/Resume.</p>
+              <p style={{ fontSize: 13, color: '#f59e0b', marginTop: 4 }}>
+                You can skip this and set it up later in Settings → Profile &amp; Security.
+              </p>
+            </div>
+
+            {totpSetupDone ? (
+              <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
+                <h3 style={{ color: '#10b981', marginBottom: 8 }}>Google Authenticator Linked!</h3>
+                <p style={{ color: '#9ca3af', fontSize: 14 }}>Your account is now protected with 2FA.</p>
+              </div>
+            ) : (
+              <div>
+                {totpSetupLoading ? (
+                  <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>Generating QR code...</div>
+                ) : totpSetupData ? (
+                  <div>
+                    <p style={{ fontSize: 14, color: '#9ca3af', marginBottom: 20, textAlign: 'center' }}>
+                      Scan this QR code with <strong style={{ color: '#fff' }}>Google Authenticator</strong>, then enter the 6-digit code to confirm.
+                    </p>
+
+                    {/* QR Code */}
+                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
+                      <div style={{ background: '#fff', padding: 16, borderRadius: 12 }}>
+                        <QRCodeSVG value={totpSetupData.uri} size={200} />
+                      </div>
+                    </div>
+
+                    {/* Manual key fallback */}
+                    <div style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.04)', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 24, textAlign: 'center' }}>
+                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Can't scan? Enter this key manually:</div>
+                      <div style={{ fontFamily: 'monospace', fontSize: 15, color: '#f59e0b', letterSpacing: 3, wordBreak: 'break-all' }}>{totpSetupData.secret}</div>
+                    </div>
+
+                    {/* Code input */}
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 8, textAlign: 'center' }}>
+                        Enter the 6-digit code shown in Google Authenticator
+                      </label>
+                      <input
+                        type="text" inputMode="numeric" maxLength={6} placeholder="000000"
+                        value={totpSetupCode}
+                        onChange={e => setTotpSetupCode(e.target.value.replace(/\D/g, ''))}
+                        style={{ width: '100%', padding: '14px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', fontSize: 24, letterSpacing: 8, textAlign: 'center', boxSizing: 'border-box' }}
+                      />
+                    </div>
+
+                    {totpSetupMsg && (
+                      <p style={{ fontSize: 13, color: '#ef4444', textAlign: 'center', marginBottom: 12 }}>{totpSetupMsg}</p>
+                    )}
+
+                    <button
+                      className="onb-btn-primary"
+                      disabled={totpSetupSaving || totpSetupCode.length !== 6}
+                      style={{ width: '100%', opacity: totpSetupCode.length !== 6 ? 0.5 : 1 }}
+                      onClick={async () => {
+                        setTotpSetupSaving(true); setTotpSetupMsg('');
+                        try {
+                          await verifyAndSaveTotp({ secret: totpSetupData.secret, code: totpSetupCode });
+                          setTotpSetupDone(true);
+                        } catch (err) {
+                          setTotpSetupMsg(err.response?.data?.detail || 'Invalid code. Try again.');
+                        }
+                        setTotpSetupSaving(false);
+                      }}
+                    >
+                      {totpSetupSaving ? 'Verifying...' : 'Confirm & Link Authenticator'}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            )}
+
+            <div className="onb-actions" style={{ marginTop: 24 }}>
+              <button className="onb-btn-ghost" onClick={() => setCurrentStep(3)}>
+                <ChevronLeft size={18} />
+                Back
+              </button>
+              <button
+                className="onb-btn-primary"
+                onClick={() => setCompleted(true)}
+              >
+                {totpSetupDone ? 'Finish Setup' : 'Skip & Finish'}
                 <ChevronRight size={18} />
               </button>
             </div>

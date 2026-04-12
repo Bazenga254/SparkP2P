@@ -41,6 +41,9 @@ export const getWalletTransactions = (limit = 50) => api.get(`/traders/wallet/tr
 export const getSessionHealth = () => api.get('/traders/session-health');
 export const updateProfile = (data) => api.put('/traders/profile', data);
 export const setSecurityQuestion = (data) => api.post('/traders/security-question', data);
+export const getTotpSetup = () => api.get('/traders/setup-totp');
+export const verifyAndSaveTotp = (data) => api.post('/traders/setup-totp/verify', data);
+export const removeTotp = () => api.delete('/traders/setup-totp');
 export const requestChangePasswordOtp = () => api.post('/traders/change-password/request');
 export const changePassword = (otp_code, new_password) => api.post('/traders/change-password', { otp_code, new_password });
 export const getBinanceAccountData = () => api.get('/ext/account-data');
