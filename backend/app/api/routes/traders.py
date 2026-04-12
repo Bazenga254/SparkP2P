@@ -1515,6 +1515,28 @@ async def remove_totp(
     return {"success": True}
 
 
+class VerifyTotpRequest(BaseModel):
+    code: str
+
+@router.post("/verify-totp")
+async def verify_totp_code(
+    data: VerifyTotpRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verify a TOTP code for the current trader (used to unlock sensitive dashboard data)."""
+    if not trader.totp_secret:
+        raise HTTPException(status_code=400, detail="Google Authenticator not configured on this account.")
+    from app.core.security import decrypt_value
+    try:
+        secret = decrypt_value(trader.totp_secret)
+    except Exception:
+        secret = trader.totp_secret
+    if not _verify_totp(secret, data.code.strip()):
+        raise HTTPException(status_code=400, detail="Invalid code. Please try again.")
+    return {"success": True}
+
+
 class PauseBotRequest(BaseModel):
     otp_code: str
     security_answer: str

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock } from 'lucide-react';
 import { getProfile } from '../services/api';
 
 const sidebarSections = [
@@ -48,6 +48,12 @@ export default function Admin() {
   const [traders, setTraders] = useState([]);
   const [selectedTrader, setSelectedTrader] = useState(null);
   const [paybillBalance, setPaybillBalance] = useState(null);
+  // Dashboard privacy — hide sensitive values until TOTP verified
+  const [dashHidden, setDashHidden] = useState(true);
+  const [showDashTotpModal, setShowDashTotpModal] = useState(false);
+  const [dashTotpCode, setDashTotpCode] = useState('');
+  const [dashTotpError, setDashTotpError] = useState('');
+  const [dashTotpLoading, setDashTotpLoading] = useState(false);
   const [resetPwLoading, setResetPwLoading] = useState(false);
   const [resetPwMsg, setResetPwMsg] = useState('');
   const [resolveRef, setResolveRef] = useState('');
@@ -848,6 +854,56 @@ export default function Admin() {
           {/* ==================== DASHBOARD ==================== */}
           {activeTab === 'dashboard' && dashboard && (
             <>
+              {/* TOTP unlock modal */}
+              {showDashTotpModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ background: 'var(--card)', borderRadius: 16, padding: 32, width: 360, border: '1px solid var(--border)', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
+                    <div style={{ textAlign: 'center', marginBottom: 24 }}>
+                      <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', border: '2px solid #3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                        <Lock size={24} color="#3b82f6" />
+                      </div>
+                      <h3 style={{ fontWeight: 700, fontSize: 17, marginBottom: 6 }}>Verify Identity</h3>
+                      <p style={{ color: '#9ca3af', fontSize: 13 }}>Enter your Google Authenticator code to view sensitive dashboard data.</p>
+                    </div>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      placeholder="6-digit code"
+                      value={dashTotpCode}
+                      onChange={e => { setDashTotpCode(e.target.value.replace(/\D/g, '')); setDashTotpError(''); }}
+                      onKeyDown={async e => { if (e.key === 'Enter') { /* handled by button */ } }}
+                      style={{ width: '100%', padding: '12px 16px', borderRadius: 10, border: `1px solid ${dashTotpError ? '#ef4444' : '#374151'}`, background: '#111827', color: '#fff', fontSize: 20, letterSpacing: 8, textAlign: 'center', boxSizing: 'border-box', marginBottom: 8 }}
+                      autoFocus
+                    />
+                    {dashTotpError && <div style={{ color: '#ef4444', fontSize: 12, marginBottom: 10, textAlign: 'center' }}>{dashTotpError}</div>}
+                    <button
+                      disabled={dashTotpCode.length !== 6 || dashTotpLoading}
+                      onClick={async () => {
+                        setDashTotpLoading(true);
+                        try {
+                          await verifyTotp(dashTotpCode);
+                          setDashHidden(false);
+                          setShowDashTotpModal(false);
+                          setDashTotpCode('');
+                          setDashTotpError('');
+                        } catch (e) {
+                          setDashTotpError(e.response?.data?.detail || 'Invalid code. Try again.');
+                        }
+                        setDashTotpLoading(false);
+                      }}
+                      style={{ width: '100%', padding: '12px', borderRadius: 10, border: 'none', background: dashTotpCode.length === 6 ? '#3b82f6' : '#1f2937', color: dashTotpCode.length === 6 ? '#fff' : '#6b7280', fontWeight: 700, fontSize: 14, cursor: dashTotpCode.length === 6 ? 'pointer' : 'default', marginBottom: 10 }}
+                    >
+                      {dashTotpLoading ? 'Verifying…' : 'Unlock Dashboard'}
+                    </button>
+                    <button onClick={() => { setShowDashTotpModal(false); setDashTotpCode(''); setDashTotpError(''); }}
+                      style={{ width: '100%', padding: '10px', borderRadius: 10, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Row 1: Greeting + Online Traders */}
               <div className="adm-two-col" style={{ marginBottom: 16 }}>
                 <div className="adm-greeting-card">
@@ -859,11 +915,21 @@ export default function Admin() {
                       Today's platform earnings
                     </p>
                   </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--green)' }}>
-                      {fmtKES(analytics?.revenue?.today || dashboard.today.revenue)}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--green)' }}>
+                        {dashHidden ? '••••••' : fmtKES(analytics?.revenue?.today || dashboard.today.revenue)}
+                      </div>
+                      <p style={{ color: 'var(--text-dim)', fontSize: 12 }}>fees collected</p>
                     </div>
-                    <p style={{ color: 'var(--text-dim)', fontSize: 12 }}>fees collected</p>
+                    <button
+                      onClick={() => { if (dashHidden) { setShowDashTotpModal(true); } else { setDashHidden(true); } }}
+                      title={dashHidden ? 'Show dashboard data' : 'Hide dashboard data'}
+                      style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, padding: '8px 10px', cursor: 'pointer', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' }}
+                    >
+                      {dashHidden ? <Eye size={15} /> : <EyeOff size={15} />}
+                      {dashHidden ? 'Show' : 'Hide'}
+                    </button>
                   </div>
                 </div>
                 <div className="adm-greeting-card" style={{ flex: '0 0 auto', minWidth: 200 }}>
@@ -902,14 +968,14 @@ export default function Admin() {
                 <div className="adm-stat-card" style={{ '--card-accent': '#f59e0b' }}>
                   <div className="adm-stat-info">
                     <span className="adm-stat-label">Today's Revenue</span>
-                    <span className="adm-stat-value">{fmtKES(dashboard.today.revenue)}</span>
+                    <span className="adm-stat-value">{dashHidden ? '••••••' : fmtKES(dashboard.today.revenue)}</span>
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>
                     <TrendingUp size={22} />
                   </div>
                 </div>
                 <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4', cursor: 'pointer' }} onClick={async () => {
-                  try { await api.post('/payment/balance/refresh'); } catch(e) {}
+                  if (!dashHidden) { try { await api.post('/payment/balance/refresh'); } catch(e) {} }
                 }}>
                   <div className="adm-stat-info">
                     <span className="adm-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -917,10 +983,10 @@ export default function Admin() {
                       {paybillBalance?.updated_at && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite', boxShadow: '0 0 6px #10b981' }} />}
                     </span>
                     <span className="adm-stat-value">
-                      {paybillBalance?.available != null ? fmtKES(paybillBalance.available) : '—'}
+                      {dashHidden ? '••••••' : (paybillBalance?.available != null ? fmtKES(paybillBalance.available) : '—')}
                     </span>
-                    {paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Updated: {new Date(paybillBalance.updated_at).toLocaleTimeString()} · {paybillBalance.source === 'realtime' ? 'live' : 'Safaricom'}</span>}
-                    {!paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Click to refresh</span>}
+                    {!dashHidden && paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Updated: {new Date(paybillBalance.updated_at).toLocaleTimeString()} · {paybillBalance.source === 'realtime' ? 'live' : 'Safaricom'}</span>}
+                    {!dashHidden && !paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Click to refresh</span>}
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4' }}>
                     <Banknote size={22} />
@@ -933,7 +999,7 @@ export default function Admin() {
                 <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4' }}>
                   <div className="adm-stat-info">
                     <span className="adm-stat-label">Platform Float</span>
-                    <span className="adm-stat-value">{fmtKES(dashboard.platform.total_float)}</span>
+                    <span className="adm-stat-value">{dashHidden ? '••••••' : fmtKES(dashboard.platform.total_float)}</span>
                     <span style={{ fontSize: 10, color: '#6b7280' }}>Total trader wallet balances</span>
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4' }}>
@@ -961,7 +1027,7 @@ export default function Admin() {
                 <div className="adm-stat-card" style={{ '--card-accent': '#3b82f6' }}>
                   <div className="adm-stat-info">
                     <span className="adm-stat-label">Today's Volume</span>
-                    <span className="adm-stat-value">{fmtKES(dashboard.today.volume)}</span>
+                    <span className="adm-stat-value">{dashHidden ? '••••••' : fmtKES(dashboard.today.volume)}</span>
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
                     <Activity size={22} />
@@ -1638,15 +1704,15 @@ export default function Admin() {
                             {/* Summary cards */}
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
                               {[
-                                { label: 'Gross Revenue', value: s.revenue, color: '#10b981' },
-                                { label: 'Fees Paid', value: s.fees, color: '#ef4444' },
-                                { label: 'Net P&L', value: s.net, color: s.net >= 0 ? '#3b82f6' : '#ef4444' },
+                                { label: 'Gross Revenue', value: s.revenue, color: '#10b981', prefix: '+' },
+                                { label: 'Fees Paid', value: s.fees, color: '#ef4444', prefix: '-' },
+                                { label: 'Net P&L', value: s.net, color: s.net > 0 ? '#10b981' : s.net < 0 ? '#ef4444' : '#6b7280', prefix: s.net > 0 ? '+' : '' },
                                 { label: 'Sell Orders', value: s.trades, color: '#f59e0b', isCount: true },
-                              ].map(({ label, value, color, isCount }) => (
+                              ].map(({ label, value, color, isCount, prefix }) => (
                                 <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 14px', border: `1px solid ${color}33` }}>
                                   <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{label}</div>
                                   <div style={{ fontSize: 17, fontWeight: 700, color }}>
-                                    {isCount ? value : `KES ${value.toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+                                    {isCount ? value : `${prefix || ''}KES ${Math.abs(value).toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
                                   </div>
                                 </div>
                               ))}

@@ -44,6 +44,7 @@ export const setSecurityQuestion = (data) => api.post('/traders/security-questio
 export const getTotpSetup = () => api.get('/traders/setup-totp');
 export const verifyAndSaveTotp = (data) => api.post('/traders/setup-totp/verify', data);
 export const removeTotp = () => api.delete('/traders/setup-totp');
+export const verifyTotp = (code) => api.post('/traders/verify-totp', { code });
 export const requestChangePasswordOtp = () => api.post('/traders/change-password/request');
 export const changePassword = (otp_code, new_password) => api.post('/traders/change-password', { otp_code, new_password });
 export const getBinanceAccountData = () => api.get('/ext/account-data');
