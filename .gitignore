@@ -17,3 +17,11 @@ frontend/dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Desktop build artifacts (too large for GitHub)
+desktop/*.asar
+desktop/*.exe
+desktop/*.dmg
+desktop/*.AppImage
+desktop/dist/
+desktop/node_modules/
