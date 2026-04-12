@@ -315,11 +315,12 @@ async def get_profile(
         sub_status = sub.status.value
         sub_expires = sub.expires_at.isoformat() if sub.expires_at else None
 
-    # Compute onboarding status — Binance + settlement is enough
-    # Subscription is optional (shown as banner on dashboard)
+    # Compute onboarding status — Binance + settlement + security question + TOTP required
     onboarding_complete = (
         trader.binance_connected
         and trader.settlement_method is not None
+        and bool(trader.security_question)
+        and bool(trader.totp_secret)
     )
 
     return TraderProfileResponse(
