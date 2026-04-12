@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, getAdminSweeps, retrySweep } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, getAdminSweeps, retrySweep, getAdminPaybillTransactions } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone } from 'lucide-react';
@@ -13,6 +13,7 @@ const sidebarSections = [
       { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
       { key: 'transactions', icon: ArrowRightLeft, label: 'Transactions' },
       { key: 'withdrawals', icon: Wallet, label: 'Withdrawals' },
+      { key: 'paybill', icon: Banknote, label: 'Paybill Transactions' },
     ],
   },
   {
@@ -131,6 +132,12 @@ export default function Admin() {
   const [sweepRetrying, setSweepRetrying] = useState(null); // sweep id being retried
   const [sweepSubTab, setSweepSubTab] = useState('all'); // all | pending | completed | failed
 
+  // Paybill Transactions
+  const [paybillTxs, setPaybillTxs] = useState({ transactions: [], total: 0, pages: 1, summary: {} });
+  const [paybillPeriod, setPaybillPeriod] = useState('today');
+  const [paybillPage, setPaybillPage] = useState(1);
+  const [paybillLoading, setPaybillLoading] = useState(false);
+
   // Connection status (desktop app sessions)
   const [connProfile, setConnProfile] = useState(null);
   const [imConnecting, setImConnecting] = useState(false);
@@ -160,6 +167,18 @@ export default function Admin() {
       console.error('Sweeps load error:', e);
     } finally {
       setSweepsLoading(false);
+    }
+  };
+
+  const loadPaybillTxs = async (period = paybillPeriod, page = paybillPage) => {
+    setPaybillLoading(true);
+    try {
+      const res = await getAdminPaybillTransactions({ period, page, limit: 50 });
+      setPaybillTxs(res.data);
+    } catch (e) {
+      console.error('Paybill txs error:', e);
+    } finally {
+      setPaybillLoading(false);
     }
   };
 
@@ -465,6 +484,7 @@ export default function Admin() {
   useEffect(() => {
     if (activeTab === 'disputes') { setUnreadTicketCount(0); loadSupportTickets(ticketCategory, ticketPage); }
     if (activeTab === 'withdrawals') { loadWithdrawals(); loadSweeps('all'); }
+    if (activeTab === 'paybill') { loadPaybillTxs('today', 1); }
   }, [activeTab]);
 
   useEffect(() => {
@@ -2676,6 +2696,136 @@ export default function Admin() {
                   </table>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ==================== PAYBILL TRANSACTIONS ==================== */}
+          {activeTab === 'paybill' && (
+            <div>
+              {/* Summary Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 20 }}>
+                {[
+                  { label: 'Total In (C2B)', value: `KES ${(paybillTxs.summary?.total_in || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, count: paybillTxs.summary?.count_in || 0, color: '#10b981' },
+                  { label: 'Total Out (B2C/B2B)', value: `KES ${(paybillTxs.summary?.total_out || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, count: paybillTxs.summary?.count_out || 0, color: '#ef4444' },
+                  { label: 'Total Transactions', value: paybillTxs.summary?.total || 0, count: null, color: '#f59e0b' },
+                ].map(card => (
+                  <div key={card.label} className="adm-card" style={{ padding: '16px 20px' }}>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{card.label}</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: card.color }}>{card.value}</div>
+                    {card.count !== null && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>{card.count} transactions</div>}
+                  </div>
+                ))}
+              </div>
+
+              {/* Table */}
+              <div className="adm-card">
+                <div className="adm-card-header" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Banknote size={18} /> Paybill 4041355 — All Transactions
+                  </h3>
+                  {/* Period filter */}
+                  <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
+                    {[['today','Today'], ['week','This Week'], ['month','This Month'], ['year','This Year'], ['all','All Time']].map(([val, label]) => (
+                      <button key={val} onClick={() => { setPaybillPeriod(val); setPaybillPage(1); loadPaybillTxs(val, 1); }}
+                        style={{ padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                          background: paybillPeriod === val ? '#f59e0b' : 'transparent',
+                          color: paybillPeriod === val ? '#000' : 'var(--text-muted)' }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={() => loadPaybillTxs(paybillPeriod, paybillPage)}
+                    style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text)', cursor: 'pointer', fontSize: 12, marginLeft: 'auto' }}>
+                    ↺ Refresh
+                  </button>
+                </div>
+
+                {paybillLoading ? (
+                  <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>Loading...</div>
+                ) : paybillTxs.transactions.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>No transactions found for this period.</div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border)', color: '#6b7280', fontSize: 11 }}>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Date & Time</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Direction</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Amount (KES)</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Phone / Destination</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Name</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Trader</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>M-PESA Receipt</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Status</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Remarks</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {paybillTxs.transactions.map(tx => {
+                          const isIn = tx.direction === 'inbound';
+                          return (
+                            <tr key={tx.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                              <td style={{ padding: '10px 12px', color: '#9ca3af', fontSize: 11, whiteSpace: 'nowrap' }}>
+                                {tx.created_at ? new Date(tx.created_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                              </td>
+                              <td style={{ padding: '10px 12px' }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
+                                  background: isIn ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                                  color: isIn ? '#10b981' : '#ef4444' }}>
+                                  {isIn ? '↓ IN' : '↑ OUT'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '10px 12px', fontWeight: 700, color: isIn ? '#10b981' : '#ef4444' }}>
+                                {isIn ? '+' : '-'}KES {(tx.amount || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                              </td>
+                              <td style={{ padding: '10px 12px', color: '#9ca3af', fontSize: 12 }}>
+                                {isIn ? tx.phone : (tx.destination || tx.phone || '—')}
+                                {tx.bill_ref && <div style={{ fontSize: 10, color: '#6b7280' }}>Ref: {tx.bill_ref}</div>}
+                              </td>
+                              <td style={{ padding: '10px 12px', fontSize: 12, color: '#fff' }}>
+                                {tx.sender_name || '—'}
+                              </td>
+                              <td style={{ padding: '10px 12px', fontSize: 11, color: '#9ca3af' }}>
+                                {tx.trader_name || '—'}
+                              </td>
+                              <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: '#6b7280' }}>
+                                {tx.mpesa_receipt || '—'}
+                              </td>
+                              <td style={{ padding: '10px 12px' }}>
+                                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12,
+                                  background: tx.status === 'completed' ? 'rgba(16,185,129,0.15)' : tx.status === 'failed' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                                  color: tx.status === 'completed' ? '#10b981' : tx.status === 'failed' ? '#ef4444' : '#f59e0b' }}>
+                                  {tx.status || '—'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '10px 12px', fontSize: 11, color: '#6b7280', maxWidth: 180 }}>
+                                {tx.remarks || '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Pagination */}
+                {paybillTxs.pages > 1 && (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, padding: '16px 0', borderTop: '1px solid var(--border)' }}>
+                    <button onClick={() => { const p = Math.max(1, paybillPage - 1); setPaybillPage(p); loadPaybillTxs(paybillPeriod, p); }}
+                      disabled={paybillPage === 1}
+                      style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: paybillPage === 1 ? '#4b5563' : 'var(--text)', cursor: paybillPage === 1 ? 'not-allowed' : 'pointer' }}>
+                      ← Prev
+                    </button>
+                    <span style={{ color: '#6b7280', fontSize: 13 }}>Page {paybillPage} of {paybillTxs.pages}</span>
+                    <button onClick={() => { const p = Math.min(paybillTxs.pages, paybillPage + 1); setPaybillPage(p); loadPaybillTxs(paybillPeriod, p); }}
+                      disabled={paybillPage === paybillTxs.pages}
+                      style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: paybillPage === paybillTxs.pages ? '#4b5563' : 'var(--text)', cursor: paybillPage === paybillTxs.pages ? 'not-allowed' : 'pointer' }}>
+                      Next →
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

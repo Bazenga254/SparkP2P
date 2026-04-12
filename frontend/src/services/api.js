@@ -106,5 +106,6 @@ export const getTodayStats = () => api.get('/traders/stats/today');
 
 export const getAdminSweeps = (params = {}) => api.get('/admin/sweeps', { params });
 export const retrySweep = (sweepId) => api.post(`/admin/sweeps/${sweepId}/retry`);
+export const getAdminPaybillTransactions = (params = {}) => api.get('/admin/paybill-transactions', { params });
 
 export default api;

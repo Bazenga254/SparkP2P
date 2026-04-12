@@ -1637,3 +1637,127 @@ async def retry_sweep(
         db=db,
     )
     return result
+
+
+# ═══════════════════════════════════════════════════════════
+# PAYBILL TRANSACTIONS — Merged: webhook payments + portal scrape
+# ═══════════════════════════════════════════════════════════
+
+def _apply_period(q, model_col, period, now):
+    if period == "today":
+        return q.where(func.date(model_col) == now.date())
+    elif period == "week":
+        return q.where(model_col >= now - timedelta(days=7))
+    elif period == "month":
+        return q.where(model_col >= now - timedelta(days=30))
+    elif period == "year":
+        return q.where(model_col >= now - timedelta(days=365))
+    return q
+
+
+@router.get("/paybill-transactions")
+async def get_paybill_transactions(
+    period: str = Query("today"),   # today | week | month | year | all
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, le=100),
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """All paybill movements: webhook C2B/B2C payments + portal-scraped statement rows."""
+    from sqlalchemy import desc
+    from app.models.paybill_statement import PaybillStatement
+
+    now = datetime.now(timezone.utc)
+
+    # ── Source 1: payments table (webhook / bot-initiated) ──
+    pq = _apply_period(
+        select(Payment, Trader).outerjoin(Trader, Trader.id == Payment.trader_id),
+        Payment.created_at, period, now
+    )
+    payment_rows = (await db.execute(pq)).all()
+
+    webhook_refs = set()
+    rows_combined = []
+    for payment, trader in payment_rows:
+        ref = payment.mpesa_receipt_number or payment.mpesa_transaction_id or ''
+        webhook_refs.add(ref)
+        ts = payment.created_at
+        rows_combined.append({
+            "id": f"p-{payment.id}",
+            "source": "system",
+            "direction": payment.direction.value if payment.direction else "inbound",
+            "transaction_type": payment.transaction_type,
+            "amount": payment.amount,
+            "mpesa_receipt": ref or None,
+            "phone": payment.phone,
+            "sender_name": payment.sender_name,
+            "destination": payment.destination,
+            "remarks": payment.remarks,
+            "status": payment.status.value if payment.status else None,
+            "bill_ref": payment.bill_ref_number,
+            "trader_name": trader.full_name if trader else None,
+            "balance_after": None,
+            "created_at": ts.isoformat() if ts else None,
+            "_sort_ts": ts,
+        })
+
+    # ── Source 2: paybill_statement (portal scrape) ──
+    sq = _apply_period(
+        select(PaybillStatement),
+        PaybillStatement.transaction_at, period, now
+    )
+    stmt_rows = (await db.execute(sq)).scalars().all()
+
+    for s in stmt_rows:
+        # Skip if already captured by webhook (same ref)
+        if s.mpesa_ref and s.mpesa_ref in webhook_refs:
+            continue
+        ts = s.transaction_at or s.synced_at
+        rows_combined.append({
+            "id": f"s-{s.id}",
+            "source": "portal",
+            "direction": s.direction,
+            "transaction_type": s.transaction_type,
+            "amount": s.amount,
+            "mpesa_receipt": s.mpesa_ref,
+            "phone": s.phone,
+            "sender_name": s.counterparty_name,
+            "destination": s.phone if s.direction == "outbound" else None,
+            "remarks": s.remarks,
+            "status": "completed",
+            "bill_ref": None,
+            "trader_name": None,
+            "balance_after": s.balance_after,
+            "created_at": ts.isoformat() if ts else None,
+            "_sort_ts": ts,
+        })
+
+    # ── Sort all combined by timestamp desc ──
+    rows_combined.sort(key=lambda r: (r["_sort_ts"] or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+
+    # ── Summary ──
+    total_in = sum(r["amount"] for r in rows_combined if r["direction"] == "inbound")
+    total_out = sum(r["amount"] for r in rows_combined if r["direction"] == "outbound")
+    count_in = sum(1 for r in rows_combined if r["direction"] == "inbound")
+    count_out = sum(1 for r in rows_combined if r["direction"] == "outbound")
+    total = len(rows_combined)
+
+    # ── Paginate ──
+    start = (page - 1) * limit
+    page_rows = rows_combined[start:start + limit]
+    for r in page_rows:
+        r.pop("_sort_ts", None)
+
+    return {
+        "transactions": page_rows,
+        "total": total,
+        "pages": max(1, (total + limit - 1) // limit),
+        "page": page,
+        "summary": {
+            "total": total,
+            "total_in": round(total_in, 2),
+            "total_out": round(total_out, 2),
+            "count_in": count_in,
+            "count_out": count_out,
+        },
+    }

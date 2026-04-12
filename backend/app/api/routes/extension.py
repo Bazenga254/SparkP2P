@@ -1139,3 +1139,76 @@ async def mpesa_sweep_failed(
     sweep.failure_reason = (data.error or "Unknown error")[:500]
     await db.commit()
     return {"status": "failed", "sweep_id": sweep.id}
+
+
+# ═══════════════════════════════════════════════════════════
+# PAYBILL STATEMENT SYNC — Desktop pushes scraped transactions
+# ═══════════════════════════════════════════════════════════
+
+class PaybillTxItem(BaseModel):
+    mpesa_ref: str
+    direction: str            # inbound | outbound
+    amount: float
+    phone: Optional[str] = None
+    counterparty_name: Optional[str] = None
+    balance_after: Optional[float] = None
+    transaction_type: Optional[str] = None
+    remarks: Optional[str] = None
+    transaction_at: Optional[str] = None  # ISO string
+
+
+class SyncPaybillRequest(BaseModel):
+    transactions: List[PaybillTxItem]
+
+
+@router.post("/sync-paybill-statement")
+async def sync_paybill_statement(
+    data: SyncPaybillRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desktop app pushes scraped paybill statement rows. Upserts by mpesa_ref."""
+    from app.models.paybill_statement import PaybillStatement
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    inserted = 0
+    skipped = 0
+
+    for tx in data.transactions:
+        if not tx.mpesa_ref:
+            continue
+
+        # Check if already exists
+        existing = (await db.execute(
+            select(PaybillStatement).where(PaybillStatement.mpesa_ref == tx.mpesa_ref)
+        )).scalar_one_or_none()
+
+        if existing:
+            skipped += 1
+            continue
+
+        tx_at = None
+        if tx.transaction_at:
+            try:
+                tx_at = datetime.fromisoformat(tx.transaction_at.replace('Z', '+00:00'))
+            except Exception:
+                pass
+
+        stmt = PaybillStatement(
+            mpesa_ref=tx.mpesa_ref,
+            direction=tx.direction,
+            amount=tx.amount,
+            phone=tx.phone,
+            counterparty_name=tx.counterparty_name,
+            balance_after=tx.balance_after,
+            transaction_type=tx.transaction_type,
+            remarks=tx.remarks,
+            transaction_at=tx_at,
+            source='portal_sync',
+        )
+        db.add(stmt)
+        inserted += 1
+
+    await db.commit()
+    logger.info(f"[PaybillSync] Inserted {inserted}, skipped {skipped} duplicates")
+    return {"inserted": inserted, "skipped": skipped}

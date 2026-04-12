@@ -3914,6 +3914,7 @@ async function connectMpesaPortal() {
           clearInterval(check);
           console.log('[SparkP2P] M-PESA portal login confirmed! Starting keep-alive...');
           startMpesaOrgKeepAlive();
+          startPaybillSync();
           // Lock the tab — bot controls it
           await injectLockOverlay(mpesaOrgPage).catch(() => {});
           mpesaOrgPage.on('framenavigated', async (frame) => {
@@ -3957,6 +3958,127 @@ function startMpesaOrgKeepAlive() {
       console.log('[SparkP2P] M-PESA portal keep-alive sent');
     } catch (e) {}
   }, MPESA_ORG_KEEP_ALIVE_INTERVAL);
+}
+
+// ── Paybill Statement Scraper ─────────────────────────────────────────────────
+// Navigates to the M-PESA org portal statement/history page, uses Claude Vision
+// to extract all visible transactions, and pushes them to the backend.
+// Runs every 30 min when the portal is connected.
+
+const MPESA_ORG_STATEMENT_URL = 'https://org.ke.m-pesa.com/#/mainPage/transactionCenter/statement/statementQuery';
+let paybillSyncTimer = null;
+
+async function scrapePaybillStatement() {
+  if (!mpesaOrgPage || mpesaOrgPage.isClosed() || mpesaSweepRunning) return;
+  if (!anthropicApiKey) { console.log('[PaybillSync] No Anthropic key, skipping'); return; }
+  try {
+    console.log('[PaybillSync] Navigating to statement page...');
+    await mpesaOrgPage.goto(MPESA_ORG_STATEMENT_URL, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 4000));
+
+    // Use Vision to understand the page and extract transactions
+    const screenshot = await mpesaOrgPage.screenshot({ type: 'jpeg', quality: 80 });
+    const base64 = screenshot.toString('base64');
+
+    const visionRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2048,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+            { type: 'text', text: `This is the M-PESA Org Portal statement/transaction history page.
+Extract ALL visible transactions from the table. For each row extract:
+- mpesa_ref: the M-PESA reference/receipt number (e.g. "QGH1234XYZ")
+- direction: "inbound" if money came IN to the paybill (C2B, deposit), "outbound" if money went OUT (withdrawal, B2B, payment)
+- amount: numeric amount in KES (no commas)
+- phone: phone number or account involved
+- counterparty_name: name of the other party
+- balance_after: account balance after transaction (numeric, if shown)
+- transaction_type: e.g. "C2B", "B2B", "Withdrawal", "Settlement"
+- remarks: description or remarks column
+- transaction_at: date and time as ISO string (e.g. "2026-04-12T10:30:00+03:00")
+
+If this is a date filter/query form (not a results table), return {"transactions": [], "needs_query": true}.
+If no transactions visible, return {"transactions": []}.
+Return ONLY valid JSON: {"transactions": [...]}` }
+          ]
+        }]
+      })
+    });
+
+    const visionData = await visionRes.json();
+    const rawText = visionData?.content?.[0]?.text || '';
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) { console.log('[PaybillSync] No JSON from Vision'); return; }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    // If page is a query form, fill in date range and submit
+    if (parsed.needs_query) {
+      console.log('[PaybillSync] Statement page needs date query, attempting to fill...');
+      // Try to fill date range via page evaluation or clicking
+      const today = new Date().toISOString().split('T')[0];
+      const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      // Use Vision to find and click "Query" or "Search" button
+      await mpesaOrgPage.evaluate((start, end) => {
+        const inputs = Array.from(document.querySelectorAll('input[type="date"], input[placeholder*="date"], input[placeholder*="Date"]'));
+        if (inputs[0]) inputs[0].value = start;
+        if (inputs[1]) inputs[1].value = end;
+        const btn = Array.from(document.querySelectorAll('button')).find(b => /query|search|submit/i.test(b.textContent));
+        if (btn) btn.click();
+      }, monthAgo, today).catch(() => {});
+      await new Promise(r => setTimeout(r, 3000));
+
+      // Re-screenshot and extract
+      const ss2 = await mpesaOrgPage.screenshot({ type: 'jpeg', quality: 80 });
+      const b64_2 = ss2.toString('base64');
+      const res2 = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 2048,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64_2 } },
+            { type: 'text', text: 'Extract all M-PESA transactions visible in this table. Return JSON: {"transactions": [{"mpesa_ref":"...","direction":"inbound|outbound","amount":0,"phone":"...","counterparty_name":"...","balance_after":null,"transaction_type":"...","remarks":"...","transaction_at":"ISO string"}]}' }
+          ]}]
+        })
+      });
+      const d2 = await res2.json();
+      const t2 = d2?.content?.[0]?.text || '';
+      const m2 = t2.match(/\{[\s\S]*\}/);
+      if (m2) {
+        try { parsed.transactions = JSON.parse(m2[0]).transactions || []; } catch (_) {}
+      }
+    }
+
+    const transactions = (parsed.transactions || []).filter(t => t.mpesa_ref && t.amount);
+    if (transactions.length === 0) { console.log('[PaybillSync] No transactions extracted'); return; }
+
+    console.log(`[PaybillSync] Extracted ${transactions.length} transactions, pushing to backend...`);
+    const pushRes = await fetch(`${API_BASE}/ext/sync-paybill-statement`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ transactions }),
+    });
+    const pushData = await pushRes.json();
+    console.log(`[PaybillSync] Sync complete — inserted: ${pushData.inserted}, skipped: ${pushData.skipped}`);
+
+  } catch (e) {
+    console.error('[PaybillSync] Error:', e.message?.substring(0, 100));
+  }
+}
+
+function startPaybillSync() {
+  if (paybillSyncTimer) clearInterval(paybillSyncTimer);
+  // Run immediately, then every 30 min
+  scrapePaybillStatement();
+  paybillSyncTimer = setInterval(scrapePaybillStatement, 30 * 60 * 1000);
+  console.log('[PaybillSync] Statement sync started (every 30 min)');
 }
 
 // ── Shared helper: fill a form on the M-PESA org portal ──────────────────────
