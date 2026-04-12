@@ -51,6 +51,9 @@ class Trader(Base):
     security_answer_hash = Column(String(255), nullable=True)
     security_answer_plain = Column(String(255), nullable=True)  # Plain text for admin verification
 
+    # Google Authenticator TOTP
+    totp_secret = Column(String(255), nullable=True)   # Encrypted TOTP secret (None = not configured)
+
     # Settlement config (active — used for actual withdrawals)
     settlement_method = Column(Enum(SettlementMethod), default=SettlementMethod.MPESA)
     settlement_phone = Column(String(20), nullable=True)
