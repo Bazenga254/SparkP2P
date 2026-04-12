@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, getAdminSweeps, retrySweep, getAdminPaybillTransactions } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone } from 'lucide-react';
@@ -61,6 +61,9 @@ export default function Admin() {
   const [viewingTraderOrders, setViewingTraderOrders] = useState([]);
   const [viewingTraderLoading, setViewingTraderLoading] = useState(false);
   const [showSecurityAnswer, setShowSecurityAnswer] = useState(false);
+  const [traderPnl, setTraderPnl] = useState(null);
+  const [pnlPeriod, setPnlPeriod] = useState('today');
+  const [pnlLoading, setPnlLoading] = useState(false);
   const [txPage, setTxPage] = useState(1);
   const [ordersPage, setOrdersPage] = useState(1);
   const PAGE_SIZE = 15;
@@ -564,11 +567,22 @@ export default function Admin() {
     }
   };
 
+  const loadTraderPnl = async (traderId, period) => {
+    setPnlLoading(true);
+    try {
+      const r = await getTraderPnl(traderId, period);
+      setTraderPnl(r.data);
+    } catch (e) { console.error('PnL load error:', e); }
+    setPnlLoading(false);
+  };
+
   const openTraderPage = async (trader) => {
     setViewingTrader({ ...trader });
     setViewingTraderWallet(null);
     setViewingTraderTx([]);
     setViewingTraderOrders([]);
+    setTraderPnl(null);
+    setPnlPeriod('today');
     setViewingTraderLoading(true);
     setTxPage(1);
     setOrdersPage(1);
@@ -576,16 +590,18 @@ export default function Admin() {
     setShowSecurityAnswer(false);
     setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
     try {
-      const [detailRes, walletRes, txRes, ordersRes] = await Promise.all([
+      const [detailRes, walletRes, txRes, ordersRes, pnlRes] = await Promise.all([
         api.get(`/admin/traders/${trader.id}/detail`),
         api.get(`/admin/traders/${trader.id}/wallet`),
         api.get(`/admin/traders/${trader.id}/transactions?limit=60`),
         api.get(`/admin/traders/${trader.id}/orders?limit=60`),
+        getTraderPnl(trader.id, 'today'),
       ]);
       setViewingTrader(prev => ({ ...prev, ...(detailRes.data || {}) }));
       setViewingTraderWallet(walletRes.data);
       setViewingTraderTx(txRes.data || []);
       setViewingTraderOrders(ordersRes.data || []);
+      setTraderPnl(pnlRes.data);
     } catch (e) { console.error('Trader detail load error:', e); }
     setViewingTraderLoading(false);
   };
@@ -1588,6 +1604,88 @@ export default function Admin() {
                           {resetPwMsg && <div style={{ marginTop: 6, fontSize: 12, color: resetPwMsg.includes('Failed') ? '#ef4444' : '#10b981', textAlign: 'center' }}>{resetPwMsg}</div>}
                         </div>
                       </div>
+                    </div>
+
+                    {/* P&L Card */}
+                    <div className="adm-card" style={{ marginBottom: 16 }}>
+                      <div className="adm-card-header" style={{ flexWrap: 'wrap', gap: 8 }}>
+                        <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <TrendingUp size={16} style={{ color: '#10b981' }} />
+                          Profit & Loss
+                        </h3>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          {['today', 'week', 'month'].map(p => (
+                            <button
+                              key={p}
+                              onClick={async () => { setPnlPeriod(p); await loadTraderPnl(t.id, p); }}
+                              style={{
+                                padding: '4px 12px', borderRadius: 20, fontSize: 12, cursor: 'pointer', border: 'none',
+                                background: pnlPeriod === p ? '#10b981' : 'rgba(255,255,255,0.07)',
+                                color: pnlPeriod === p ? '#000' : '#9ca3af', fontWeight: pnlPeriod === p ? 700 : 400,
+                              }}
+                            >
+                              {p === 'today' ? 'Today' : p === 'week' ? '7 Days' : '30 Days'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {pnlLoading ? (
+                        <div style={{ padding: '24px', textAlign: 'center', color: '#6b7280', fontSize: 13 }}>Loading…</div>
+                      ) : traderPnl ? (() => {
+                        const s = traderPnl.summary;
+                        return (
+                          <div style={{ padding: '16px 20px 20px' }}>
+                            {/* Summary cards */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
+                              {[
+                                { label: 'Gross Revenue', value: s.revenue, color: '#10b981' },
+                                { label: 'Fees Paid', value: s.fees, color: '#ef4444' },
+                                { label: 'Net P&L', value: s.net, color: s.net >= 0 ? '#3b82f6' : '#ef4444' },
+                                { label: 'Sell Orders', value: s.trades, color: '#f59e0b', isCount: true },
+                              ].map(({ label, value, color, isCount }) => (
+                                <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 14px', border: `1px solid ${color}33` }}>
+                                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{label}</div>
+                                  <div style={{ fontSize: 17, fontWeight: 700, color }}>
+                                    {isCount ? value : `KES ${value.toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            {/* Daily breakdown table (hidden for today single-day) */}
+                            {traderPnl.daily.length > 1 && (
+                              <div className="adm-table-wrap">
+                                <table className="adm-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Date</th>
+                                      <th>Sell Orders</th>
+                                      <th style={{ textAlign: 'right' }}>Revenue</th>
+                                      <th style={{ textAlign: 'right' }}>Fees</th>
+                                      <th style={{ textAlign: 'right' }}>Net P&L</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {[...traderPnl.daily].reverse().map(row => (
+                                      <tr key={row.date}>
+                                        <td style={{ color: '#9ca3af' }}>{new Date(row.date + 'T00:00:00').toLocaleDateString('en-KE', { weekday: 'short', month: 'short', day: 'numeric' })}</td>
+                                        <td><span style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', padding: '2px 8px', borderRadius: 10, fontSize: 12, fontWeight: 600 }}>{row.trades}</span></td>
+                                        <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 600 }}>{row.revenue > 0 ? `+KES ${row.revenue.toLocaleString()}` : '—'}</td>
+                                        <td style={{ textAlign: 'right', color: '#ef4444' }}>{row.fees > 0 ? `-KES ${row.fees.toLocaleString()}` : '—'}</td>
+                                        <td style={{ textAlign: 'right', fontWeight: 700, color: row.net >= 0 ? '#3b82f6' : '#ef4444' }}>
+                                          {row.net !== 0 ? `${row.net >= 0 ? '+' : ''}KES ${row.net.toLocaleString()}` : '—'}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                            {traderPnl.daily.length === 1 && s.trades === 0 && (
+                              <div style={{ textAlign: 'center', color: '#4b5563', fontSize: 13, padding: '8px 0 4px' }}>No completed sell orders today.</div>
+                            )}
+                          </div>
+                        );
+                      })() : null}
                     </div>
 
                     {/* Withdrawal Method */}

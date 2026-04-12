@@ -1655,6 +1655,88 @@ def _apply_period(q, model_col, period, now):
     return q
 
 
+@router.get("/traders/{trader_id}/pnl")
+async def get_trader_pnl(
+    trader_id: int,
+    period: str = Query("today"),   # today | week | month
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """P&L breakdown for a trader: daily revenue, fees, and net profit."""
+    now = datetime.now(timezone.utc)
+
+    if period == "today":
+        since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        days = 1
+    elif period == "week":
+        since = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+        days = 7
+    elif period == "month":
+        since = (now - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
+        days = 30
+    else:
+        since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        days = 1
+
+    # Fetch all wallet transactions for trader in period
+    result = await db.execute(
+        select(WalletTransaction)
+        .where(
+            WalletTransaction.trader_id == trader_id,
+            WalletTransaction.created_at >= since,
+            WalletTransaction.status == "completed",
+        )
+        .order_by(WalletTransaction.created_at)
+    )
+    txns = result.scalars().all()
+
+    # Build per-day buckets
+    from collections import defaultdict
+    buckets: dict = defaultdict(lambda: {"revenue": 0.0, "fees": 0.0, "trades": 0})
+
+    REVENUE_TYPES = {TransactionType.SELL_CREDIT}
+    FEE_TYPES = {TransactionType.PLATFORM_FEE, TransactionType.SETTLEMENT_FEE, TransactionType.DAILY_VOLUME_FEE}
+    TRADE_TYPES = {TransactionType.SELL_CREDIT}  # Count one per sell-credit = one completed sell order
+
+    for t in txns:
+        day_key = t.created_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        if t.transaction_type in REVENUE_TYPES:
+            buckets[day_key]["revenue"] += t.amount
+            buckets[day_key]["trades"] += 1
+        elif t.transaction_type in FEE_TYPES:
+            buckets[day_key]["fees"] += abs(t.amount)
+
+    # Generate ordered day list
+    daily = []
+    for i in range(days):
+        d = (since + timedelta(days=i)).strftime("%Y-%m-%d")
+        b = buckets.get(d, {"revenue": 0.0, "fees": 0.0, "trades": 0})
+        net = round(b["revenue"] - b["fees"], 2)
+        daily.append({
+            "date": d,
+            "revenue": round(b["revenue"], 2),
+            "fees": round(b["fees"], 2),
+            "net": net,
+            "trades": b["trades"],
+        })
+
+    total_revenue = round(sum(d["revenue"] for d in daily), 2)
+    total_fees = round(sum(d["fees"] for d in daily), 2)
+    total_net = round(total_revenue - total_fees, 2)
+    total_trades = sum(d["trades"] for d in daily)
+
+    return {
+        "period": period,
+        "daily": daily,
+        "summary": {
+            "revenue": total_revenue,
+            "fees": total_fees,
+            "net": total_net,
+            "trades": total_trades,
+        },
+    }
+
+
 @router.get("/paybill-transactions")
 async def get_paybill_transactions(
     period: str = Query("today"),   # today | week | month | year | all

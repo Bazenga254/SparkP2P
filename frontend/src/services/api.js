@@ -107,6 +107,7 @@ export const markWithdrawalPending = (txId) => api.put(`/admin/withdrawals/${txI
 
 export const getTodayStats = () => api.get('/traders/stats/today');
 
+export const getTraderPnl = (traderId, period = 'today') => api.get(`/admin/traders/${traderId}/pnl?period=${period}`);
 export const getAdminSweeps = (params = {}) => api.get('/admin/sweeps', { params });
 export const retrySweep = (sweepId) => api.post(`/admin/sweeps/${sweepId}/retry`);
 export const getAdminPaybillTransactions = (params = {}) => api.get('/admin/paybill-transactions', { params });
