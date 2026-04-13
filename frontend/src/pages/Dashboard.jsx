@@ -110,20 +110,21 @@ function SpreadCalculator() {
   const buy = parseFloat(buyPrice) || 0;
   const sell = parseFloat(sellPrice) || 0;
   const vol = parseFloat(volume) || 0;
-  const wdAmt = parseFloat(withdrawAmount) || vol;
-
   const spread = sell - buy;
   const spreadPct = buy > 0 ? (spread / buy) * 100 : 0;
   const usdtAmount = buy > 0 ? vol / buy : 0;
   const grossProfit = usdtAmount * spread;
   const profitable = spread > 0;
 
-  // Cash-out analysis
+  // Cash-out analysis — use real 24h gross profit as base, fall back to simulated spread profit
+  const realProfit = todayStats?.gross_profit ?? null;
+  const baseProfit = realProfit !== null ? realProfit : grossProfit;
+  const wdAmt = parseFloat(withdrawAmount) || (baseProfit > 0 ? baseProfit : vol);
   const wdFee = getWithdrawalFee(withdrawMethod, wdAmt);
-  const wdReceived = wdAmt - wdFee;             // What the trader actually receives
-  const netProfit = grossProfit - wdFee;         // Spread profit minus withdrawal fee
+  const wdReceived = wdAmt - wdFee;
+  const netProfit = baseProfit - wdFee;
   const netProfitable = netProfit > 0;
-  const netPct = wdAmt > 0 ? (netProfit / wdAmt) * 100 : 0;   // Net yield % on withdrawal
+  const netPct = baseProfit > 0 ? (netProfit / baseProfit) * 100 : 0;
   const feePct = wdAmt > 0 ? (wdFee / wdAmt) * 100 : 0;
   // Break-even sell price needed to cover withdrawal fee
   const breakEvenSpreadKES = usdtAmount > 0 ? wdFee / usdtAmount : 0;
@@ -270,11 +271,21 @@ function SpreadCalculator() {
       {/* Cash-out analysis */}
       {buy > 0 && sell > 0 && profitable && (
         <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: '#9ca3af', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
-            Cash-Out Analysis
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 2 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>
+              Cash-Out Analysis
+            </div>
+            <div style={{ fontSize: 11, color: realProfit !== null ? '#10b981' : '#6b7280' }}>
+              {realProfit !== null ? '● Live — based on today\'s actual trades' : '○ Simulated — no trades yet today'}
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 12 }}>
+            {realProfit !== null
+              ? `Today's gross profit from ${todayStats.trades_count} trade${todayStats.trades_count !== 1 ? 's' : ''} (${fmtKES(todayStats.kes_volume)} volume) — minus your withdrawal fee.`
+              : 'Set your buy/sell prices above to see a profit estimate.'}
           </div>
 
-          {/* Inputs row */}
+          {/* Withdrawal method selector */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
             <div>
               <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Withdrawal Method</label>
@@ -285,8 +296,11 @@ function SpreadCalculator() {
               </select>
             </div>
             <div>
-              <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Amount to Withdraw (KES)</label>
-              <input type="number" step="1000" placeholder={`${vol.toLocaleString()} (simulation volume)`}
+              <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>
+                {realProfit !== null ? 'Profit to Withdraw (KES)' : 'Amount to Withdraw (KES)'}
+              </label>
+              <input type="number" step="100"
+                placeholder={baseProfit > 0 ? baseProfit.toFixed(0) : vol.toLocaleString()}
                 value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)}
                 style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }} />
             </div>
@@ -295,7 +309,14 @@ function SpreadCalculator() {
           {/* Result cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
 
-            {/* Card 1 — Withdrawal Fee */}
+            {/* Card 1 — Gross Profit */}
+            <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: '#9ca3af' }}>{realProfit !== null ? 'Today\'s Gross Profit' : 'Est. Gross Profit'}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#10b981' }}>+ {fmtKES(baseProfit)}</div>
+              <div style={{ fontSize: 11, color: '#6b7280' }}>{realProfit !== null ? 'from completed trades' : 'from spread × volume'}</div>
+            </div>
+
+            {/* Card 2 — Withdrawal Fee */}
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
               <div style={{ fontSize: 11, color: '#9ca3af' }}>Withdrawal Fee</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>− {fmtKES(wdFee)}</div>
@@ -304,52 +325,42 @@ function SpreadCalculator() {
               </div>
             </div>
 
-            {/* Card 2 — You Receive */}
-            <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-              <div style={{ fontSize: 11, color: '#9ca3af' }}>You Receive</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>
-                {fmtKES(wdReceived)}
-              </div>
-              <div style={{ fontSize: 11, color: '#6b7280' }}>
-                after {withdrawMethod === 'mpesa' ? 'M-Pesa' : 'I&M Bank'} fee
-              </div>
-            </div>
-
-            {/* Card 3 — Net Profit / Loss */}
+            {/* Card 3 — Net Profit after fees */}
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: `1px solid ${netProfitable ? '#10b981' : '#ef4444'}` }}>
-              <div style={{ fontSize: 11, color: '#9ca3af' }}>Net {netProfitable ? 'Profit' : 'Loss'}</div>
+              <div style={{ fontSize: 11, color: '#9ca3af' }}>Net Profit (after fees)</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: netProfitable ? '#10b981' : '#ef4444' }}>
                 {netProfitable ? '+' : '−'} {fmtKES(netProfit)}
               </div>
               <div style={{ fontSize: 11, color: netProfitable ? '#10b981' : '#ef4444' }}>
-                {netPct >= 0 ? '+' : ''}{netPct.toFixed(3)}% on withdrawal
+                {netPct >= 0 ? '+' : ''}{netPct.toFixed(2)}% of gross profit
               </div>
             </div>
 
             {/* Card 4 — Break-even Sell */}
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-              <div style={{ fontSize: 11, color: '#9ca3af' }}>Break-even Sell</div>
+              <div style={{ fontSize: 11, color: '#9ca3af' }}>Min. Sell Price</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: '#f59e0b' }}>KSh {breakEvenSell.toFixed(2)}</div>
-              <div style={{ fontSize: 11, color: '#6b7280' }}>min {breakEvenPct.toFixed(3)}% margin needed</div>
+              <div style={{ fontSize: 11, color: '#6b7280' }}>to cover fees ({breakEvenPct.toFixed(3)}% margin)</div>
             </div>
 
           </div>
 
           {/* Summary banner */}
-          <div style={{
-            marginTop: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
-            background: netProfitable ? 'rgba(16,185,129,0.10)' : 'rgba(239,68,68,0.10)',
-            border: `1px solid ${netProfitable ? '#10b981' : '#ef4444'}`,
-            color: netProfitable ? '#10b981' : '#ef4444',
-            display: 'flex', alignItems: 'center', gap: 8,
-          }}>
-            {netProfitable
-              ? `✓ Profitable — you keep KES ${Math.abs(netProfit).toLocaleString(undefined, { maximumFractionDigits: 0 })} after ${withdrawMethod === 'mpesa' ? 'M-Pesa' : 'I&M Bank'} fees (+${netPct.toFixed(3)}%)`
-              : `✗ Not profitable — fees exceed spread earnings by KES ${Math.abs(netProfit).toLocaleString(undefined, { maximumFractionDigits: 0 })} (${netPct.toFixed(3)}%)`
-            }
-          </div>
+          {baseProfit > 0 && (
+            <div style={{
+              marginTop: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+              background: netProfitable ? 'rgba(16,185,129,0.10)' : 'rgba(239,68,68,0.10)',
+              border: `1px solid ${netProfitable ? '#10b981' : '#ef4444'}`,
+              color: netProfitable ? '#10b981' : '#ef4444',
+            }}>
+              {netProfitable
+                ? `✓ You keep ${fmtKES(netProfit)} after ${withdrawMethod === 'mpesa' ? 'M-Pesa' : 'I&M Bank'} fees`
+                : `✗ Fees exceed profit by ${fmtKES(Math.abs(netProfit))} — increase your spread`}
+            </div>
+          )}
         </div>
       )}
+
     </div>
   );
 }
@@ -576,6 +587,12 @@ export default function Dashboard() {
 
   const handleWithdraw = async () => {
     if (!wallet || wallet.balance <= 0) return;
+
+    // Block if there's already a pending withdrawal being processed
+    if (wallet.pending_withdrawal) {
+      alert(`You already have a withdrawal of ${fmtKES(wallet.pending_withdrawal_amount)} being processed. Please wait for it to complete before requesting another.`);
+      return;
+    }
 
     // Get fee preview first
     try {
@@ -997,9 +1014,6 @@ export default function Dashboard() {
                     Reserved: {showBalance ? `KES ${wallet.reserved.toLocaleString()}` : 'KES ••••'}
                   </div>
                 )}
-                <div className="wallet-mini-stats">
-                  <span>Earned: {showBalance ? `KES ${wallet?.total_earned?.toLocaleString() || '0'}` : 'KES ••••'}</span>
-                </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                   <button
                     className="deposit-btn-mini"
@@ -1027,9 +1041,11 @@ export default function Dashboard() {
                   <button
                     className="withdraw-btn-mini"
                     onClick={handleWithdraw}
-                    disabled={withdrawing || !wallet || wallet.balance <= 0}
+                    disabled={withdrawing || !wallet || wallet.balance <= 0 || wallet.pending_withdrawal}
+                    title={wallet?.pending_withdrawal ? `Withdrawal of ${fmtKES(wallet.pending_withdrawal_amount)} is being processed` : ''}
+                    style={wallet?.pending_withdrawal ? { opacity: 0.6, cursor: 'not-allowed' } : {}}
                   >
-                    {withdrawing ? 'Processing...' : 'Withdraw'}
+                    {withdrawing ? 'Processing...' : wallet?.pending_withdrawal ? '⏳ Pending...' : 'Withdraw'}
                   </button>
                 </div>
               </div>
