@@ -373,6 +373,7 @@ export default function Dashboard() {
   const [scanStep, setScanStep] = useState(0);
   const scanPollRef = useRef(null);
   const scanStepRef = useRef(null);
+  const [appVersion, setAppVersion] = useState(null);
   const [profile, setProfile] = useState(null);
   const [wallet, setWallet] = useState(null);
   const [stats, setStats] = useState(null);
@@ -501,6 +502,8 @@ export default function Dashboard() {
   const bannerMissing = setupMissing.length > 0 ? setupMissing : missingConnections;
 
   useEffect(() => {
+    // Fetch desktop app version from local bot server
+    fetch('http://127.0.0.1:9223/status').then(r => r.json()).then(d => { if (d.version) setAppVersion(d.version); }).catch(() => {});
     // Wait a tick to ensure token is stored after login redirect
     const timer = setTimeout(() => {
       if (localStorage.getItem('token')) {
@@ -828,6 +831,11 @@ export default function Dashboard() {
         <div className="dash-header-left">
           <img src="/logo.png" alt="SparkP2P" className="header-logo" />
           <h1>SparkP2P</h1>
+          {appVersion && (
+            <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 500, letterSpacing: '0.02em', marginLeft: -2, marginTop: 2 }}>
+              v{appVersion}
+            </span>
+          )}
           <span className={`status-badge ${profile?.binance_connected ? 'connected' : 'disconnected'}`}>
             {profile?.binance_connected ? 'Binance Connected' : 'Binance Disconnected'}
           </span>

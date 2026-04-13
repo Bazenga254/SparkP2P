@@ -27,7 +27,7 @@ http.createServer(async (req, res) => {
     console.log('[SparkP2P] Bot RESUMED — Chrome locked back to bot');
     res.end(JSON.stringify({ ok: true, paused: false }));
   } else if (req.url === '/status') {
-    res.end(JSON.stringify({ paused: pauseNavigation, running: pollerRunning }));
+    res.end(JSON.stringify({ paused: pauseNavigation, running: pollerRunning, version: app.getVersion() }));
   } else {
     res.end(JSON.stringify({ ok: false }));
   }
@@ -5592,7 +5592,7 @@ ipcMain.handle('has-im-pin', () => ({ hasPin: !!imPin }));
 ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });
 ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; console.log('[SparkP2P] AI key set (legacy)'); return { ok: true }; });
 ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; saveAnthropicKey(key); aiScanner.initAI(key); console.log('[SparkP2P] Claude configured and saved to disk'); return { ok: true }; });
-ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasTOTP: !!totpSecret, hasAI: !!anthropicApiKey, hasVision: !!anthropicApiKey }));
+ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasTOTP: !!totpSecret, hasAI: !!anthropicApiKey, hasVision: !!anthropicApiKey, version: app.getVersion() }));
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
 ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
 ipcMain.handle('restart-app', () => { autoUpdater.quitAndInstall(); });
