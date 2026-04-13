@@ -5028,14 +5028,8 @@ async function connectMpesaPortal() {
           console.log('[SparkP2P] M-PESA portal login confirmed! Starting keep-alive...');
           startMpesaOrgKeepAlive();
           startPaybillSync();
-          // Lock the tab — bot controls it
-          await injectLockOverlay(mpesaOrgPage).catch(() => {});
-          mpesaOrgPage.on('framenavigated', async (frame) => {
-            if (frame === mpesaOrgPage.mainFrame() && browserLocked) {
-              await new Promise(r => setTimeout(r, 600));
-              await injectLockOverlay(mpesaOrgPage).catch(() => {});
-            }
-          });
+          // Lock ALL bot-controlled tabs (sets browserLocked = true and injects overlay on all pages)
+          await lockChromeBrowser().catch(() => {});
           connectingMpesa = false;
           // Mark connected in backend
           if (token) {
