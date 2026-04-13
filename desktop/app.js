@@ -491,16 +491,8 @@ async function onGmailConfirmed() {
   console.log('[SparkP2P] Gmail login confirmed! Syncing cookies...');
   await syncCookies();
   mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("gmail-connected"))').catch(() => {});
-  // Lock tab — bot controls it now
-  if (gmailPage && !gmailPage.isClosed()) {
-    await injectLockOverlay(gmailPage).catch(() => {});
-    gmailPage.on('framenavigated', async (frame) => {
-      if (frame === gmailPage.mainFrame() && browserLocked) {
-        await new Promise(r => setTimeout(r, 600));
-        await injectLockOverlay(gmailPage).catch(() => {});
-      }
-    });
-  }
+  // Lock ALL bot-controlled tabs (sets browserLocked = true)
+  await lockChromeBrowser().catch(() => {});
   // Re-check setup completeness
   const setup = await checkSetupComplete();
   if (setup.complete && !pollerRunning) {
