@@ -591,24 +591,36 @@ async function isLoggedIn() {
 async function injectLockOverlay(page) {
   await page.evaluate(() => {
     if (document.getElementById('sparkp2p-browser-lock')) return;
-    const el = document.createElement('div');
-    el.id = 'sparkp2p-browser-lock';
-    el.style.cssText = [
-      'position:fixed', 'top:0', 'left:0', 'width:100vw', 'height:100vh',
-      'background:transparent', 'z-index:2147483647',
-      'cursor:not-allowed', 'pointer-events:all', 'user-select:none',
-      'font-family:-apple-system,sans-serif',
-    ].join('!important;') + '!important';
-    el.innerHTML = `
-      <div style="position:fixed;bottom:16px;right:16px;display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(0,0,0,0.75);border:1px solid rgba(245,158,11,0.5);border-radius:20px;backdrop-filter:blur(4px)">
-        <span style="font-size:14px">🔒</span>
-        <span style="color:#f59e0b;font-size:12px;font-weight:600">SparkP2P Bot Active</span>
-      </div>`;
-    const block = e => { e.preventDefault(); e.stopImmediatePropagation(); };
-    ['click','mousedown','mouseup','dblclick','contextmenu',
-     'keydown','keyup','keypress','wheel','scroll','touchstart','touchend'
-    ].forEach(t => el.addEventListener(t, block, true));
-    document.body.appendChild(el);
+    const inject = () => {
+      if (document.getElementById('sparkp2p-browser-lock')) return;
+      const el = document.createElement('div');
+      el.id = 'sparkp2p-browser-lock';
+      el.style.cssText = [
+        'position:fixed', 'top:0', 'left:0', 'width:100vw', 'height:100vh',
+        'background:transparent', 'z-index:2147483647',
+        'cursor:not-allowed', 'pointer-events:all', 'user-select:none',
+        'font-family:-apple-system,sans-serif',
+      ].join('!important;') + '!important';
+      el.innerHTML = `
+        <div style="position:fixed;bottom:16px;right:16px;display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(0,0,0,0.75);border:1px solid rgba(245,158,11,0.5);border-radius:20px;backdrop-filter:blur(4px)">
+          <span style="font-size:14px">🔒</span>
+          <span style="color:#f59e0b;font-size:12px;font-weight:600">SparkP2P Bot Active</span>
+        </div>`;
+      const block = e => { e.preventDefault(); e.stopImmediatePropagation(); };
+      ['click','mousedown','mouseup','dblclick','contextmenu',
+       'keydown','keyup','keypress','wheel','scroll','touchstart','touchend'
+      ].forEach(t => el.addEventListener(t, block, true));
+      // Append to <html> not <body> — avoids CSS transform/fixed-position bugs in Gmail/IMBank
+      (document.documentElement || document.body).appendChild(el);
+    };
+    inject();
+    // MutationObserver: re-inject if the page removes our overlay (e.g. Gmail DOM reconciliation)
+    if (!window.__sparkLockObserver) {
+      window.__sparkLockObserver = new MutationObserver(() => {
+        if (!document.getElementById('sparkp2p-browser-lock')) inject();
+      });
+      window.__sparkLockObserver.observe(document.documentElement || document.body, { childList: true, subtree: false });
+    }
   }).catch(() => {});
 }
 
