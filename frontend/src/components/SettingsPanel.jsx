@@ -50,6 +50,19 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [pauseLoading, setPauseLoading] = useState(false);
   const [pauseMsg, setPauseMsg] = useState('');
 
+  // I&M PIN
+  const [imPinValue, setImPinValue] = useState('');
+  const [imPinSaved, setImPinSaved] = useState(false);
+  const [imPinSaving, setImPinSaving] = useState(false);
+  const [imPinMsg, setImPinMsg] = useState('');
+  // I&M PIN verification modal (2FA gate before setting/replacing PIN)
+  const [showImPinModal, setShowImPinModal] = useState(false);
+  const [imPinVerifStep, setImPinVerifStep] = useState('send'); // 'send' | 'verify' | 'enter'
+  const [imPinOtp, setImPinOtp] = useState('');
+  const [imPinTotp, setImPinTotp] = useState('');
+  const [imPinVerifLoading, setImPinVerifLoading] = useState(false);
+  const [imPinVerifMsg, setImPinVerifMsg] = useState('');
+
   // Binance
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
 
@@ -84,6 +97,15 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [verifySaved, setVerifySaved] = useState(
     !!(profile?.binance_verify_method && profile.binance_verify_method !== 'none')
   );
+
+  // Sync verification state when profile loads (profile starts null, arrives async)
+  useEffect(() => {
+    if (!profile?.binance_verify_method) return;
+    if (!verifySaved) {
+      setVerifyMethod(profile.binance_verify_method || 'none');
+      setVerifySaved(profile.binance_verify_method !== 'none');
+    }
+  }, [profile?.binance_verify_method]);
 
   // Security / Profile
   const [editName, setEditName] = useState(profile?.full_name || '');
@@ -124,6 +146,12 @@ export default function SettingsPanel({ profile, onUpdate }) {
     { label: '2 special chars (!@#$%...)', test: (p) => (p.match(/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/g) || []).length >= 2 },
   ];
 
+  // Sync batch settlement settings when profile loads
+  useEffect(() => {
+    if (profile?.batch_threshold) setBatchThreshold(profile.batch_threshold);
+    if (profile?.batch_settlement_enabled !== undefined) setBatchEnabled(profile.batch_settlement_enabled);
+  }, [profile?.batch_threshold, profile?.batch_settlement_enabled]);
+
   // Sync profile data into local state once profile loads (useState only runs once at mount)
   useEffect(() => {
     if (profile?.full_name) setEditName(profile.full_name);
@@ -136,6 +164,13 @@ export default function SettingsPanel({ profile, onUpdate }) {
   useEffect(() => {
     setTotpEnabled(!!profile?.has_totp);
   }, [profile?.has_totp]);
+
+  // Check if I&M PIN is already saved on this device
+  useEffect(() => {
+    if (window.sparkp2p?.hasImPin) {
+      window.sparkp2p.hasImPin().then(r => setImPinSaved(!!r?.hasPin));
+    }
+  }, []);
 
   useEffect(() => {
     if (profile?.password_change_cooldown_until) {
@@ -181,8 +216,8 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [autoPay, setAutoPay] = useState(profile?.auto_pay_enabled ?? true);
   const [dailyLimit, setDailyLimit] = useState(profile?.daily_trade_limit || 200);
   const [maxTrade, setMaxTrade] = useState(profile?.max_single_trade || 500000);
-  const [batchEnabled, setBatchEnabled] = useState(true);
-  const [batchThreshold, setBatchThreshold] = useState(50000);
+  const [batchEnabled, setBatchEnabled] = useState(profile?.batch_settlement_enabled ?? true);
+  const [batchThreshold, setBatchThreshold] = useState(profile?.batch_threshold || 50000);
 
   const showMsg = (msg) => {
     setMessage(msg);
@@ -314,6 +349,54 @@ export default function SettingsPanel({ profile, onUpdate }) {
     }, 3000);
     return () => clearInterval(imPollRef.current);
   }, [imConnecting]);
+
+  const handleOpenImPinModal = async () => {
+    setShowImPinModal(true);
+    setImPinVerifStep('send');
+    setImPinOtp(''); setImPinTotp(''); setImPinVerifMsg(''); setImPinValue('');
+    // Auto-send OTP
+    setImPinVerifLoading(true);
+    try {
+      await api.post('/traders/pause-bot/request-otp');
+      setImPinVerifStep('verify');
+      setImPinVerifMsg('OTP sent to your phone.');
+    } catch { setImPinVerifMsg('Failed to send OTP. Please try again.'); }
+    setImPinVerifLoading(false);
+  };
+
+  const handleVerifyImPin = async () => {
+    if (!imPinOtp) { setImPinVerifMsg('Enter the OTP sent to your phone.'); return; }
+    setImPinVerifLoading(true);
+    setImPinVerifMsg('');
+    try {
+      await api.post('/traders/verify-pin-change', { otp_code: imPinOtp, totp_code: imPinTotp || undefined });
+      setImPinVerifStep('enter');
+      setImPinVerifMsg('');
+    } catch (e) {
+      setImPinVerifMsg(e.response?.data?.detail || 'Verification failed. Check your codes and try again.');
+    }
+    setImPinVerifLoading(false);
+  };
+
+  const handleSaveImPin = async () => {
+    if (!imPinValue || imPinValue.length < 4) { setImPinVerifMsg('PIN must be at least 4 digits.'); return; }
+    if (!window.sparkp2p?.saveImPin) { setImPinVerifMsg('PIN can only be saved from the desktop app.'); return; }
+    setImPinSaving(true);
+    setImPinVerifMsg('');
+    try {
+      await window.sparkp2p.saveImPin(imPinValue);
+      setImPinSaved(true);
+      setImPinValue('');
+      setShowImPinModal(false);
+    } catch { setImPinVerifMsg('Failed to save PIN. Please try again.'); }
+    setImPinSaving(false);
+  };
+
+  const handleClearImPin = async () => {
+    if (!window.sparkp2p?.clearImPin) return;
+    await window.sparkp2p.clearImPin();
+    setImPinSaved(false);
+  };
 
   const handleConnectMpesa = () => {
     if (window.sparkp2p?.isDesktop) {
@@ -731,6 +814,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
                   Disconnect
                 </button>
               </div>
+
             </div>
           ) : (
             <div style={{ textAlign: 'center', padding: '30px 20px', background: 'var(--bg)', borderRadius: 12, border: '1px dashed var(--border)' }}>
@@ -754,6 +838,121 @@ export default function SettingsPanel({ profile, onUpdate }) {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* I&M PIN — always visible, stored encrypted on this device only */}
+      {activeSection === 'binance' && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3 style={{ marginBottom: 4 }}>I&amp;M Online Banking PIN</h3>
+          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
+            Used to authorise automated payments. Encrypted with your OS keychain — never stored on our servers.
+          </p>
+
+          {imPinSaved ? (
+            /* ── PIN is set — show big green tick ── */
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '24px 0 8px', gap: 12 }}>
+              <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'rgba(16,185,129,0.15)', border: '2px solid #10b981', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32 }}>✓</div>
+              <p style={{ color: '#10b981', fontWeight: 600, fontSize: 15, margin: 0 }}>PIN saved securely</p>
+              <p style={{ color: '#6b7280', fontSize: 12, margin: 0 }}>Encrypted with Windows Credential Store · Never transmitted</p>
+              <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                <button
+                  onClick={handleOpenImPinModal}
+                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #6366f1', background: 'transparent', color: '#6366f1', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+                >
+                  Replace PIN
+                </button>
+                <button
+                  onClick={handleClearImPin}
+                  style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 13 }}
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* ── PIN not set — show set button ── */
+            <div style={{ textAlign: 'center', padding: '16px 0' }}>
+              <p style={{ color: '#f59e0b', fontSize: 13, marginBottom: 16 }}>⚠️ PIN not set — automated payments will not work until you add your PIN.</p>
+              <button
+                onClick={handleOpenImPinModal}
+                style={{ padding: '12px 28px', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 14 }}
+              >
+                Set I&amp;M PIN
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* I&M PIN — 2FA verification modal */}
+      {showImPinModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#1a1d2e', borderRadius: 14, padding: 28, width: '100%', maxWidth: 420, border: '1px solid #2d3148' }}>
+            <h3 style={{ marginBottom: 6 }}>{imPinVerifStep === 'enter' ? 'Enter New PIN' : 'Verify Your Identity'}</h3>
+            <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20 }}>
+              {imPinVerifStep === 'enter' ? 'Your identity has been verified. Enter your new I&M PIN below.' : 'To protect your account, confirm your identity before changing the PIN.'}
+            </p>
+
+            {imPinVerifStep === 'send' && (
+              <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                <div style={{ width: 32, height: 32, border: '3px solid rgba(99,102,241,0.2)', borderTop: '3px solid #6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
+                <p style={{ color: '#9ca3af', fontSize: 13 }}>Sending OTP to your phone...</p>
+              </div>
+            )}
+
+            {imPinVerifStep === 'verify' && (
+              <>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>SMS OTP Code</label>
+                  <input type="text" maxLength={6} placeholder="6-digit code sent to your phone"
+                    value={imPinOtp} onChange={e => setImPinOtp(e.target.value)}
+                    className="adm-input" style={{ width: '100%' }} />
+                </div>
+                <div style={{ marginBottom: 20 }}>
+                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Google Authenticator Code</label>
+                  <input type="text" maxLength={6} placeholder="6-digit code from your app"
+                    value={imPinTotp} onChange={e => setImPinTotp(e.target.value)}
+                    className="adm-input" style={{ width: '100%' }} />
+                </div>
+                <button
+                  onClick={handleVerifyImPin} disabled={imPinVerifLoading}
+                  style={{ width: '100%', padding: '12px', borderRadius: 8, border: 'none', background: imPinVerifLoading ? '#374151' : '#6366f1', color: imPinVerifLoading ? '#6b7280' : '#fff', fontWeight: 700, cursor: imPinVerifLoading ? 'not-allowed' : 'pointer', fontSize: 14 }}
+                >
+                  {imPinVerifLoading ? 'Verifying...' : 'Verify Identity'}
+                </button>
+              </>
+            )}
+
+            {imPinVerifStep === 'enter' && (
+              <>
+                <div style={{ marginBottom: 20 }}>
+                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>New I&amp;M Online Banking PIN</label>
+                  <input type="password" maxLength={8} inputMode="numeric" placeholder="Enter PIN (dots only)"
+                    value={imPinValue} onChange={e => setImPinValue(e.target.value)}
+                    className="adm-input" style={{ width: '100%', letterSpacing: '0.3em' }}
+                    onKeyDown={e => e.key === 'Enter' && handleSaveImPin()} autoFocus />
+                </div>
+                <button
+                  onClick={handleSaveImPin} disabled={imPinSaving || !imPinValue}
+                  style={{ width: '100%', padding: '12px', borderRadius: 8, border: 'none', background: imPinSaving || !imPinValue ? '#374151' : '#10b981', color: imPinSaving || !imPinValue ? '#6b7280' : '#fff', fontWeight: 700, cursor: imPinSaving || !imPinValue ? 'not-allowed' : 'pointer', fontSize: 14 }}
+                >
+                  {imPinSaving ? 'Saving...' : 'Save PIN Securely'}
+                </button>
+              </>
+            )}
+
+            {imPinVerifMsg && (
+              <p style={{ fontSize: 12, marginTop: 12, color: imPinVerifMsg.includes('sent') ? '#10b981' : '#ef4444', textAlign: 'center' }}>{imPinVerifMsg}</p>
+            )}
+
+            <button
+              onClick={() => { setShowImPinModal(false); setImPinValue(''); setImPinOtp(''); setImPinTotp(''); setImPinVerifMsg(''); }}
+              style={{ width: '100%', marginTop: 12, padding: '10px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 
@@ -1531,16 +1730,14 @@ export default function SettingsPanel({ profile, onUpdate }) {
                 </div>
               )}
 
-              {profile?.has_totp && (
-                <div style={{ marginBottom: 16 }}>
-                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Google Authenticator Code</label>
-                  <input
-                    type="text" maxLength={6} placeholder="6-digit code from your app"
-                    value={pauseTotpCode} onChange={e => setPauseTotpCode(e.target.value)}
-                    className="adm-input" style={{ width: '100%' }}
-                  />
-                </div>
-              )}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Google Authenticator Code</label>
+                <input
+                  type="text" maxLength={6} placeholder="6-digit code from your app (if enabled)"
+                  value={pauseTotpCode} onChange={e => setPauseTotpCode(e.target.value)}
+                  className="adm-input" style={{ width: '100%' }}
+                />
+              </div>
 
               <div style={{ display: 'flex', gap: 10 }}>
                 <button

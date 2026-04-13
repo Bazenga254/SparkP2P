@@ -118,6 +118,8 @@ class TraderProfileResponse(BaseModel):
     gmail_connected: bool = False
     mpesa_portal_connected: bool = False
     has_totp: bool = False
+    batch_settlement_enabled: bool = True
+    batch_threshold: int = 50000
 
 
 # In-memory store for phone verification results
@@ -367,6 +369,8 @@ async def get_profile(
         gmail_connected=bool(trader.gmail_cookies),
         mpesa_portal_connected=bool(trader.mpesa_portal_connected),
         has_totp=bool(trader.totp_secret),
+        batch_settlement_enabled=bool(trader.batch_settlement_enabled),
+        batch_threshold=trader.batch_threshold or 50000,
     )
 
 
@@ -1012,7 +1016,7 @@ async def request_withdrawal(
             detail="No funds available for withdrawal",
         )
 
-    from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL, get_bank_withdrawal_eligibility
+    from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL, BANK_MIN_WITHDRAWAL, get_bank_withdrawal_eligibility
     if wallet.balance < MIN_WITHDRAWAL:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1092,7 +1096,7 @@ async def preview_withdrawal(
     db: AsyncSession = Depends(get_db),
 ):
     """Preview withdrawal fees before confirming."""
-    from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL, get_bank_withdrawal_eligibility
+    from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL, BANK_MIN_WITHDRAWAL, get_bank_withdrawal_eligibility
 
     result = await db.execute(select(Wallet).where(Wallet.trader_id == trader.id))
     wallet = result.scalar_one_or_none()

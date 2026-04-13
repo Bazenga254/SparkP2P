@@ -10,13 +10,15 @@ from app.models import (
     SettlementMethod,
 )
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
+from app.models.im_sweep import ImSweep
 from app.core.config import settings
 from app.services.mpesa.client import mpesa_client
 
 logger = logging.getLogger(__name__)
 
 
-MIN_WITHDRAWAL = 1000  # KES — minimum withdrawal amount
+MIN_WITHDRAWAL = 1000  # KES — minimum withdrawal amount (M-Pesa)
+BANK_MIN_WITHDRAWAL = 5000  # KES — minimum for I&M Bank withdrawals
 MPESA_PLATFORM_MARKUP = 25  # KES added on top of Safaricom fee for M-Pesa withdrawals
 
 # Safaricom B2C fee schedule (Business Bouquet Tariff)
@@ -51,12 +53,12 @@ def _safaricom_b2c_fee(amount: float) -> int:
 def get_bank_withdrawal_eligibility(amount: float) -> dict:
     """Check if amount is eligible for I&M bank withdrawal and return fee.
 
-    Flat 0.05% fee for all amounts from KES 1,000+.
+    Flat 0.05% fee for all amounts from KES 5,000+.
 
     Returns dict with 'eligible' bool, 'fee', and 'reason' if blocked.
     """
-    if amount < MIN_WITHDRAWAL:
-        return {"eligible": False, "fee": 0, "reason": f"Minimum withdrawal is KES {MIN_WITHDRAWAL:,}"}
+    if amount < BANK_MIN_WITHDRAWAL:
+        return {"eligible": False, "fee": 0, "reason": f"Minimum I&M Bank withdrawal is KES {BANK_MIN_WITHDRAWAL:,}", "min_required": BANK_MIN_WITHDRAWAL}
     return {"eligible": True, "fee": round(amount * 0.0005, 2), "min_required": None}
 
 
@@ -135,12 +137,27 @@ class SettlementEngine:
         - Platform markup (KES 25) — our profit per withdrawal
         - Total deducted from trader = safaricom_fee + platform_markup
         """
+        from app.models.wallet import WalletTransaction, TransactionType
+        from sqlalchemy import select as sa_select
+
         trader = await self._get_trader(trader_id)
         if not trader:
             return False
 
         wallet = await self._get_wallet(trader_id)
         if not wallet or wallet.balance <= 0:
+            return False
+
+        # Block if there is already a pending bank withdrawal for this trader
+        existing = await self.db.execute(
+            sa_select(WalletTransaction).where(
+                WalletTransaction.trader_id == trader_id,
+                WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+                WalletTransaction.status == "pending",
+            ).limit(1)
+        )
+        if existing.scalar_one_or_none():
+            logger.info(f"Trader {trader_id} already has a pending withdrawal — skipping new settlement")
             return False
 
         # Check threshold — don't withdraw below trader's configured threshold
@@ -166,14 +183,18 @@ class SettlementEngine:
             wallet.total_withdrawn += net_amount
             wallet.total_fees_paid += total_fee
 
-            # Record withdrawal
-            # I&M Bank (bank_paybill) withdrawals are processed manually by admin
-            # so they start as "pending" until admin marks them complete
+            # Record withdrawal.
+            # bank_paybill = automated via org portal + I&M Bank (desktop app picks up as "pending")
+            # mpesa = completed immediately via Daraja B2C
             is_bank = trader.settlement_method == SettlementMethod.BANK_PAYBILL
-            withdrawal_destination = (
-                trader.settlement_phone if trader.settlement_method == SettlementMethod.MPESA
-                else f"{trader.settlement_paybill} / {trader.settlement_account or ''}"
-            )
+            if is_bank:
+                # destination format expected by executeImWithdrawal: "AccountNumber"
+                # (I&M to I&M — desktop app uses this to fill the transfer form)
+                withdrawal_destination = trader.settlement_account or ""
+                settle_method_label = "bank_paybill"
+            else:
+                withdrawal_destination = trader.settlement_phone or ""
+                settle_method_label = trader.settlement_method.value
             txn = WalletTransaction(
                 trader_id=trader_id,
                 wallet_id=wallet.id,
@@ -183,7 +204,7 @@ class SettlementEngine:
                 description=f"Withdrawal: KES {net_amount:,.0f} to {trader.settlement_method.value}",
                 status="pending" if is_bank else "completed",
                 destination=withdrawal_destination,
-                settlement_method=trader.settlement_method.value,
+                settlement_method=settle_method_label,
             )
             self.db.add(txn)
 
@@ -325,14 +346,23 @@ class SettlementEngine:
                 )
 
             elif trader.settlement_method == SettlementMethod.BANK_PAYBILL:
-                # B2B to bank Paybill (KCB 522522, Equity 247247, etc.)
-                result = await mpesa_client.send_b2b(
-                    receiver_shortcode=trader.settlement_paybill,
+                # Queue org-portal sweep (M-Pesa paybill → I&M business account)
+                # then I&M transfer (I&M business → trader's account).
+                # Both are picked up by the desktop app via polling — no Daraja B2B needed.
+                sweep = ImSweep(
+                    trader_id=trader.id,
                     amount=amount,
-                    account_number=trader.settlement_account,
-                    remarks=remarks,
-                    command_id="BusinessPayBill",
+                    status="pending",
+                    sweep_paybill=trader.settlement_paybill,
+                    sweep_account=trader.settlement_account,
                 )
+                self.db.add(sweep)
+                logger.info(
+                    f"Queued org-portal sweep for trader {trader.id}: "
+                    f"KES {amount} → paybill {trader.settlement_paybill} / {trader.settlement_account}"
+                )
+                # No Daraja call — fall through to save payment record below
+                result = {"queued": True, "method": "org_portal_sweep", "amount": amount}
 
             elif trader.settlement_method == SettlementMethod.TILL:
                 # B2B to Till (Buy Goods)
