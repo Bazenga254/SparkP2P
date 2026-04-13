@@ -54,6 +54,23 @@ export default function Admin() {
   const [dashTotpCode, setDashTotpCode] = useState('');
   const [dashTotpError, setDashTotpError] = useState('');
   const [dashTotpLoading, setDashTotpLoading] = useState(false);
+  const dashLockTimer = useRef(null);
+  const DASH_LOCK_MS = 5 * 60 * 1000; // 5 minutes
+
+  const resetDashLockTimer = () => {
+    if (dashLockTimer.current) clearTimeout(dashLockTimer.current);
+    dashLockTimer.current = setTimeout(() => setDashHidden(true), DASH_LOCK_MS);
+  };
+
+  // Start lock timer when dashboard is unlocked; clear it when re-hidden
+  useEffect(() => {
+    if (!dashHidden) {
+      resetDashLockTimer();
+    } else {
+      if (dashLockTimer.current) clearTimeout(dashLockTimer.current);
+    }
+    return () => { if (dashLockTimer.current) clearTimeout(dashLockTimer.current); };
+  }, [dashHidden]);
   const [resetPwLoading, setResetPwLoading] = useState(false);
   const [resetPwMsg, setResetPwMsg] = useState('');
   const [resolveRef, setResolveRef] = useState('');
@@ -856,8 +873,8 @@ export default function Admin() {
             <>
               {/* TOTP unlock modal */}
               {showDashTotpModal && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <div style={{ background: 'var(--card)', borderRadius: 16, padding: 32, width: 360, border: '1px solid var(--border)', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+                  <div style={{ background: '#111827', borderRadius: 16, padding: 32, width: 360, border: '1px solid #1f2937', boxShadow: '0 20px 60px rgba(0,0,0,0.8)' }}>
                     <div style={{ textAlign: 'center', marginBottom: 24 }}>
                       <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', border: '2px solid #3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
                         <Lock size={24} color="#3b82f6" />
@@ -922,14 +939,19 @@ export default function Admin() {
                       </div>
                       <p style={{ color: 'var(--text-dim)', fontSize: 12 }}>fees collected</p>
                     </div>
-                    <button
-                      onClick={() => { if (dashHidden) { setShowDashTotpModal(true); } else { setDashHidden(true); } }}
-                      title={dashHidden ? 'Show dashboard data' : 'Hide dashboard data'}
-                      style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, padding: '8px 10px', cursor: 'pointer', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' }}
-                    >
-                      {dashHidden ? <Eye size={15} /> : <EyeOff size={15} />}
-                      {dashHidden ? 'Show' : 'Hide'}
-                    </button>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                      <button
+                        onClick={() => { if (dashHidden) { setShowDashTotpModal(true); } else { setDashHidden(true); } }}
+                        title={dashHidden ? 'Show dashboard data' : 'Hide dashboard data'}
+                        style={{ background: dashHidden ? 'rgba(255,255,255,0.07)' : 'rgba(16,185,129,0.12)', border: `1px solid ${dashHidden ? 'rgba(255,255,255,0.12)' : '#10b981'}`, borderRadius: 8, padding: '8px 10px', cursor: 'pointer', color: dashHidden ? '#9ca3af' : '#10b981', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' }}
+                      >
+                        {dashHidden ? <Eye size={15} /> : <EyeOff size={15} />}
+                        {dashHidden ? 'Show' : 'Hide'}
+                      </button>
+                      {!dashHidden && (
+                        <span style={{ fontSize: 10, color: '#6b7280' }}>Locks in 5 min</span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="adm-greeting-card" style={{ flex: '0 0 auto', minWidth: 200 }}>

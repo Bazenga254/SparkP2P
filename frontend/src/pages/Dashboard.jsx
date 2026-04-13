@@ -174,7 +174,7 @@ function SpreadCalculator() {
 
       {/* Spread % badge */}
       {buy > 0 && sell > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0 4px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, margin: '12px 0 4px' }}>
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 8,
             background: profitable ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
@@ -359,7 +359,9 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [scanning, setScanning] = useState(searchParams.get('scanning') === '1');
+  const [scanStep, setScanStep] = useState(0);
   const scanPollRef = useRef(null);
+  const scanStepRef = useRef(null);
   const [profile, setProfile] = useState(null);
   const [wallet, setWallet] = useState(null);
   const [stats, setStats] = useState(null);
@@ -529,26 +531,47 @@ export default function Dashboard() {
     }
   }, [profile]);
 
-  // Scanning overlay: poll until first extension sync received
+  // Scanning overlay: poll until bot confirms Binance connection
+  const SCAN_STEPS = [
+    'Connecting to your Binance account...',
+    'Loading your wallet balances...',
+    'Confirming your Binance identity...',
+    'Almost ready...',
+  ];
   useEffect(() => {
     if (!scanning) return;
-    // Clear the URL param without re-render
     setSearchParams({}, { replace: true });
+
+    // Cycle through status messages every 8 seconds
+    scanStepRef.current = setInterval(() => {
+      setScanStep(s => Math.min(s + 1, SCAN_STEPS.length - 1));
+    }, 8000);
+
+    // Poll profile until bot has synced and confirmed Binance username
     scanPollRef.current = setInterval(async () => {
       try {
         const res = await getProfile();
-        if (res.data.last_extension_sync) {
+        const { last_extension_sync } = res.data;
+        if (last_extension_sync) {
           clearInterval(scanPollRef.current);
+          clearInterval(scanStepRef.current);
           setScanning(false);
         }
       } catch (_) {}
     }, 3000);
-    // Safety timeout: remove overlay after 90s even if scan never signals
+
+    // Safety timeout: remove overlay after 2 minutes regardless
     const timeout = setTimeout(() => {
       clearInterval(scanPollRef.current);
+      clearInterval(scanStepRef.current);
       setScanning(false);
-    }, 90000);
-    return () => { clearInterval(scanPollRef.current); clearTimeout(timeout); };
+    }, 120000);
+
+    return () => {
+      clearInterval(scanPollRef.current);
+      clearInterval(scanStepRef.current);
+      clearTimeout(timeout);
+    };
   }, [scanning]);
 
   const handleWithdraw = async () => {
@@ -710,33 +733,22 @@ export default function Dashboard() {
       {scanning && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 9999,
-          background: 'rgba(10,12,28,0.92)',
+          background: '#000',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
-          gap: 24, cursor: 'wait',
+          gap: 32,
         }}>
           <div style={{
-            width: 72, height: 72,
-            border: '5px solid rgba(245,158,11,0.2)',
-            borderTop: '5px solid #f59e0b',
+            width: 56, height: 56,
+            border: '3px solid rgba(255,255,255,0.08)',
+            borderTop: '3px solid rgba(255,255,255,0.65)',
             borderRadius: '50%',
             animation: 'spin 0.9s linear infinite',
           }} />
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 20, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}>
-              Scanning Binance Orders...
+            <div style={{ fontSize: 15, color: 'rgba(255,255,255,0.75)', fontWeight: 500, letterSpacing: 0.2 }}>
+              {SCAN_STEPS[scanStep]}
             </div>
-            <div style={{ fontSize: 14, color: '#9ca3af', maxWidth: 300 }}>
-              Your bot is performing the initial scan. This may take up to a minute. Please wait.
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-            {[0, 1, 2].map(i => (
-              <div key={i} style={{
-                width: 8, height: 8, borderRadius: '50%', background: '#f59e0b',
-                animation: `bounce 1.2s ease-in-out ${i * 0.2}s infinite`,
-              }} />
-            ))}
           </div>
         </div>
       )}
@@ -745,15 +757,15 @@ export default function Dashboard() {
       {showSetupBanner && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
-          background: '#1c1a08', borderBottom: '2px solid #f59e0b',
+          background: '#1c0808', borderBottom: '2px solid #ef4444',
           padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 14,
         }}>
           <span style={{ fontSize: 22 }}>⚠️</span>
           <div style={{ flex: 1 }}>
-            <div style={{ color: '#fbbf24', fontWeight: 700, fontSize: 14 }}>
+            <div style={{ color: '#f87171', fontWeight: 700, fontSize: 14 }}>
               Bot Paused — Setup Incomplete
             </div>
-            <div style={{ color: '#fcd34d', fontSize: 13, marginTop: 2 }}>
+            <div style={{ color: '#fca5a5', fontSize: 13, marginTop: 2 }}>
               The following must be connected before trading can start:{' '}
               {bannerMissing.map((m, i) => (
                 <span key={m}>
@@ -766,13 +778,13 @@ export default function Dashboard() {
           </div>
           <button
             onClick={() => setActiveTab('settings')}
-            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap' }}
+            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#ef4444', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap' }}
           >
             Go to Settings
           </button>
           <button
             onClick={() => setSetupDismissed(true)}
-            style={{ background: 'transparent', border: '1px solid #f59e0b', color: '#fbbf24', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}
+            style={{ background: 'transparent', border: '1px solid #ef4444', color: '#f87171', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}
           >
             Dismiss
           </button>

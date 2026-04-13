@@ -15,16 +15,16 @@ http.createServer(async (req, res) => {
   if (req.url === '/pause') {
     pauseNavigation = true;
     scanningInProgress = false;
-    await lockChromeBrowser().catch(() => {});
+    await unlockChromeBrowser().catch(() => {}); // Give user access to Chrome
     startPauseInactivityTimer();
-    console.log('[SparkP2P] Bot PAUSED via local API — all windows locked, auto-resume in 30s');
+    console.log('[SparkP2P] Bot PAUSED — Chrome unlocked for manual use, auto-resume in 30s');
     res.end(JSON.stringify({ ok: true, paused: true }));
   } else if (req.url === '/resume') {
     pauseNavigation = false;
     clearPauseInactivityTimer();
-    await lockChromeBrowser().catch(() => {});
+    await lockChromeBrowser().catch(() => {}); // Bot takes Chrome back
     mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed"))').catch(() => {});
-    console.log('[SparkP2P] Bot RESUMED via local API');
+    console.log('[SparkP2P] Bot RESUMED — Chrome locked back to bot');
     res.end(JSON.stringify({ ok: true, paused: false }));
   } else if (req.url === '/status') {
     res.end(JSON.stringify({ paused: pauseNavigation, running: pollerRunning }));
@@ -79,8 +79,9 @@ let connectingBinance = false; // Prevents concurrent connectBinance() calls
 let scanningInProgress = false; // Prevents concurrent initialScan() calls
 let sessionStartTime = null;   // When Binance login was last confirmed
 let loggedOutStrikes = 0;      // Consecutive failed isLoggedIn() checks before re-login
-let activeOrderNumber = null;  // Order number currently being monitored (null = idle)
-let activeOrderFiatAmount = 0; // KES amount of the active order (for M-Pesa verification)
+let activeOrderNumber = null;     // Sell order currently being monitored (null = idle)
+let activeOrderFiatAmount = 0;    // KES amount of the active sell order
+let activeBuyOrderNumber = null;  // Buy order waiting for seller to release crypto (null = not waiting)
 let gmailPage = null;          // Persistent Gmail tab — opened alongside Binance, kept alive
 let imPage = null;             // Persistent I&M Bank tab — new tab in the main Binance browser
 let connectingIm = false;      // Prevents concurrent connectIm() calls
@@ -301,13 +302,15 @@ function createTray() {
         click: async () => {
           if (pauseNavigation) {
             pauseNavigation = false;
+            clearPauseInactivityTimer();
             await lockChromeBrowser();
             console.log('[SparkP2P] Bot RESUMED via tray');
           } else {
             pauseNavigation = true;
             scanningInProgress = false; // force-exit any running cycle immediately
-            await lockChromeBrowser();
-            console.log('[SparkP2P] Bot PAUSED via tray — all windows locked');
+            await unlockChromeBrowser();
+            startPauseInactivityTimer();
+            console.log('[SparkP2P] Bot PAUSED via tray — Chrome unlocked for manual use');
           }
           tray.setContextMenu(buildTrayMenu());
         },
@@ -323,13 +326,15 @@ function createTray() {
     globalShortcut.register('CommandOrControl+Shift+P', async () => {
       if (pauseNavigation) {
         pauseNavigation = false;
+        clearPauseInactivityTimer();
         await lockChromeBrowser();
         console.log('[SparkP2P] Bot RESUMED via shortcut');
       } else {
         pauseNavigation = true;
         scanningInProgress = false; // force-exit any running cycle immediately
-        await lockChromeBrowser();
-        console.log('[SparkP2P] Bot PAUSED via shortcut — all windows locked');
+        await unlockChromeBrowser();
+        startPauseInactivityTimer();
+        console.log('[SparkP2P] Bot PAUSED via shortcut — Chrome unlocked for manual use');
       }
       tray.setContextMenu(buildTrayMenu());
     });
@@ -1142,12 +1147,12 @@ async function readOrders() {
   // IMPORTANT: Use DOM text — NOT screenshots — for orders.
   // GPT Vision OCR misreads 18-20 digit order numbers causing duplicate DB records.
   // DOM text gives exact digits straight from the HTML.
-  if (!browser || _ordersTabOpen) return { sell: [], buy: [], cancelled: [] };
+  if (!browser || _ordersTabOpen) return { sell: [], buy: [], cancelled: [], completed_buy: [] };
 
   _ordersTabOpen = true;
   try {
     const page = await getPage();
-    if (!page) { _ordersTabOpen = false; return { sell: [], buy: [], cancelled: [] }; }
+    if (!page) { _ordersTabOpen = false; return { sell: [], buy: [], cancelled: [], completed_buy: [] }; }
 
     // ── Step 1: Read active/ongoing orders (tab=0) ──────────────────────────
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
@@ -1223,13 +1228,41 @@ async function readOrders() {
       }
     }
 
-    console.log(`[SparkP2P] Orders: ${sell.length} sell, ${buy.length} buy, ${cancelled.length} cancelled`);
-    return { sell, buy, cancelled };
+    // ── Step 3: Read recently completed BUY orders (tab=1, Completed filter) ──
+    // We're still on tab=1 — click the "Completed" filter to find completed buy orders
+    let completed_buy = [];
+    await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
+      const completedTab = tabs.find(el => el.textContent.trim() === 'Completed');
+      if (completedTab) completedTab.click();
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1500));
+
+    const completedText = await page.evaluate(() => document.body.innerText).catch(() => '');
+
+    if (completedText && anthropicApiKey && !completedText.includes('No records') && !completedText.includes('No data')) {
+      const aiResult = await aiScanner.analyzeText(completedText, `
+        This is text from a Binance P2P completed orders history page.
+        Extract order numbers of COMPLETED BUY orders from TODAY only (ignore SELL orders and older dates).
+        BUY orders are ones where YOU paid KES to a seller to receive crypto (USDT).
+        The order numbers are 18-20 digit integers — copy them EXACTLY as they appear, do NOT change any digits.
+        Return JSON: { "completed_buy_order_numbers": ["number1", "number2", ...] }
+        If none today, return {"completed_buy_order_numbers": []}.
+      `);
+      if (aiResult?.completed_buy_order_numbers) {
+        completed_buy = aiResult.completed_buy_order_numbers
+          .map(n => String(n).replace(/\D/g, ''))
+          .filter(n => n.length >= 15);
+      }
+    }
+
+    console.log(`[SparkP2P] Orders: ${sell.length} sell, ${buy.length} buy, ${cancelled.length} cancelled, ${completed_buy.length} completed buy`);
+    return { sell, buy, cancelled, completed_buy };
 
   } catch (e) {
     console.error('[SparkP2P] Read orders error:', e.message?.substring(0, 60));
     _ordersTabOpen = false;
-    return { sell: [], buy: [], cancelled: [] };
+    return { sell: [], buy: [], cancelled: [], completed_buy: [] };
   } finally {
     _ordersTabOpen = false;
   }
@@ -1349,6 +1382,7 @@ function stopPoller() {
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   activeOrderNumber = null;
   activeOrderFiatAmount = 0;
+  activeBuyOrderNumber = null;
   scanningInProgress = false;
 }
 
@@ -1577,8 +1611,11 @@ async function pollCycle() {
     if (!page) { scanningInProgress = false; return; }
 
     // ── Route: focused order monitoring vs. idle full scan ──
+    // Sell-side takes priority; buy-side monitoring runs when sell-side is idle
     if (activeOrderNumber) {
       await monitorActiveOrder(page);
+    } else if (activeBuyOrderNumber) {
+      await monitorActiveBuyOrder(page);
     } else {
       await idleScan(page);
     }
@@ -1598,6 +1635,84 @@ async function pollCycle() {
     scanningInProgress = false;
   }
 }
+
+// ── Buy order monitoring — runs each poll cycle while waiting for seller to release ──
+async function monitorActiveBuyOrder(page) {
+  console.log(`[SparkP2P] ── MONITORING BUY ORDER ${activeBuyOrderNumber} (waiting for seller release) ──`);
+
+  // Go directly to the order detail page — we know the order number
+  await page.goto(
+    `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${activeBuyOrderNumber}`,
+    { waitUntil: 'domcontentloaded', timeout: 15000 }
+  ).catch(() => {});
+  await new Promise(r => setTimeout(r, 3000));
+  if (pauseNavigation) return;
+
+  await takeScreenshot(`buy_monitor_${activeBuyOrderNumber}`, page);
+
+  // Vision check with retry
+  let info = { screen: 'unknown' };
+  for (let i = 1; i <= 3; i++) {
+    info = await analyzePageWithVision(page);
+    console.log(`[SparkP2P] Buy monitor Vision attempt ${i}: ${info.screen}`);
+    if (info.screen !== 'unknown') break;
+    await new Promise(r => setTimeout(r, 3000));
+  }
+
+  const screen = info.screen;
+
+  if (screen === 'order_complete') {
+    console.log(`[SparkP2P] ✅ Buy order ${activeBuyOrderNumber} COMPLETED — crypto received!`);
+    const orderNum = activeBuyOrderNumber;
+    activeBuyOrderNumber = null;
+
+    await fetch(`${API_BASE}/ext/report-buy-completed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ order_number: orderNum }),
+    }).catch(e => console.error('[SparkP2P] report-buy-completed failed:', e.message));
+
+    stats.actions++;
+    const balances = await scanWalletBalances(page);
+    await uploadBalances(balances);
+    return;
+  }
+
+  // DOM text fallback — Vision occasionally misses cancelled/expired/appeal states
+  const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
+  const lower = pageText.toLowerCase();
+
+  // Expired or appeal raised AFTER we already paid — we need to dispute
+  // These indicate we sent KES but the seller hasn't released crypto in time
+  if (lower.includes('appeal') || lower.includes('expired') || lower.includes('order expired')) {
+    console.log(`[SparkP2P] 🚨 Buy order ${activeBuyOrderNumber} EXPIRED after payment — opening dispute`);
+    const orderNum = activeBuyOrderNumber;
+    activeBuyOrderNumber = null;
+    await fetch(`${API_BASE}/ext/report-buy-expired`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ order_number: orderNum }),
+    }).catch(e => console.error('[SparkP2P] report-buy-expired failed:', e.message));
+    return;
+  }
+
+  // Cancelled BEFORE payment was sent (rare — VPS should have caught this before B2C)
+  if (lower.includes('cancelled') || lower.includes('canceled')) {
+    console.log(`[SparkP2P] Buy order ${activeBuyOrderNumber} CANCELLED while waiting for seller`);
+    const orderNum = activeBuyOrderNumber;
+    activeBuyOrderNumber = null;
+    await fetch(`${API_BASE}/ext/report-orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [orderNum] }),
+    }).catch(() => {});
+    return;
+  }
+
+  // Still waiting — log and come back next poll cycle
+  console.log(`[SparkP2P] Buy order ${activeBuyOrderNumber} — seller hasn't released yet (screen: ${screen})`);
+}
+
 
 // ── Idle full scan — runs when no active order ──────────────────────────────
 async function idleScan(page) {
@@ -1654,6 +1769,7 @@ async function idleScan(page) {
         sell_orders: orders.sell.map(norm),
         buy_orders: orders.buy.map(norm),
         cancelled_order_numbers: orders.cancelled || [],
+        completed_buy_order_numbers: orders.completed_buy || [],
         active_order_numbers: activeOrderNumber ? [activeOrderNumber] : [],
       }),
   }).catch(() => null);
@@ -3455,7 +3571,12 @@ async function execAction(action) {
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
           body: JSON.stringify({ order_number, success: verified }),
         });
-        if (verified) stats.actions++;
+        if (verified) {
+          stats.actions++;
+          // Start real-time Vision monitoring for seller release
+          activeBuyOrderNumber = order_number;
+          console.log(`[SparkP2P] 👀 Buy order ${order_number} marked as paid — monitoring for seller release`);
+        }
       } else {
         console.log('[SparkP2P] Payment button not found');
         await takeScreenshot(`Payment button not found: ${order_number}`);
@@ -4431,8 +4552,8 @@ ipcMain.handle('connect-im', () => { connectIm(); return { opened: true }; });
 ipcMain.handle('connect-mpesa', () => { connectMpesaPortal(); return { opened: true }; });
 ipcMain.handle('unlock-browser', async () => { await unlockChromeBrowser(); console.log('[SparkP2P] Browser manually unlocked'); return { ok: true }; });
 ipcMain.handle('lock-browser', async () => { const p = await getPage(); if (p) await lockChromeBrowser(); return { ok: true }; });
-ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await lockChromeBrowser(); console.log('[SparkP2P] Navigation PAUSED — all windows locked'); return { ok: true }; });
-ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED'); return { ok: true }; });
+ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED — Chrome unlocked for manual use'); return { ok: true }; });
+ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED — Chrome locked back to bot'); return { ok: true }; });
 ipcMain.handle('open-gmail-tab', async () => {
   // If Chrome is not running yet, launch it to Gmail directly
   if (!browser) {

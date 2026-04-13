@@ -26,6 +26,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [message, setMessage] = useState('');
   const [connecting, setConnecting] = useState(false);
   const connectPollRef = useRef(null);
+  const wasConnectingRef = useRef(false); // true once any connection was made this session
 
   // Gmail session
   const [gmailConfigured, setGmailConfigured] = useState(false);
@@ -45,6 +46,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [pauseOtpCode, setPauseOtpCode] = useState('');
   const [pauseSecQ, setPauseSecQ] = useState('');
   const [pauseSecAnswer, setPauseSecAnswer] = useState('');
+  const [pauseTotpCode, setPauseTotpCode] = useState('');
   const [pauseLoading, setPauseLoading] = useState(false);
   const [pauseMsg, setPauseMsg] = useState('');
 
@@ -191,13 +193,14 @@ export default function SettingsPanel({ profile, onUpdate }) {
     if (window.sparkp2p?.isDesktop) {
       window.sparkp2p.connectBinance();
     }
+    wasConnectingRef.current = true;
     setConnecting(true);
     if (!window.sparkp2p?.isDesktop) {
       setShowRemoteBrowser(true);
     }
   };
 
-  // Poll until binance_connected = true, then navigate to dashboard with scanning state
+  // Poll until binance_connected = true, then update profile
   useEffect(() => {
     if (!connecting) return;
     connectPollRef.current = setInterval(async () => {
@@ -206,7 +209,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
         if (res.data.binance_connected) {
           clearInterval(connectPollRef.current);
           setConnecting(false);
-          navigate('/dashboard?scanning=1');
+          if (onUpdate) onUpdate(res.data);
         }
       } catch (_) {}
     }, 3000);
@@ -237,6 +240,14 @@ export default function SettingsPanel({ profile, onUpdate }) {
     return () => window.removeEventListener('gmail-connected', checkGmail);
   }, []);
 
+  // Redirect to dashboard once all three accounts are connected
+  useEffect(() => {
+    if (!wasConnectingRef.current) return;
+    if (profile?.binance_connected && gmailConfigured && profile?.im_connected) {
+      navigate('/dashboard?scanning=1');
+    }
+  }, [profile?.binance_connected, gmailConfigured, profile?.im_connected]);
+
   // React to desktop app confirming M-PESA portal login
   useEffect(() => {
     const handler = async () => {
@@ -265,11 +276,15 @@ export default function SettingsPanel({ profile, onUpdate }) {
     if (!pauseOtpCode || !pauseSecAnswer) { setPauseMsg('Please fill in all fields.'); return; }
     setPauseLoading(true); setPauseMsg('');
     try {
-      await api.post('/traders/pause-bot/confirm', { otp_code: pauseOtpCode, security_answer: pauseSecAnswer });
-      // Authorized — actually pause the bot
-      await fetch('http://127.0.0.1:9223/pause').catch(() => {});
+      await api.post('/traders/pause-bot/confirm', { otp_code: pauseOtpCode, security_answer: pauseSecAnswer, totp_code: pauseTotpCode || undefined });
+      // Authorized — pause the bot via desktop IPC (no HTTP, no mixed-content issues)
+      if (window.sparkp2p?.pauseNavigation) {
+        await window.sparkp2p.pauseNavigation();
+      } else {
+        await fetch('http://127.0.0.1:9223/pause').catch(() => {});
+      }
       setShowPauseModal(false);
-      setPauseStep('warning'); setPauseOtpCode(''); setPauseSecAnswer(''); setPauseMsg('');
+      setPauseStep('warning'); setPauseOtpCode(''); setPauseSecAnswer(''); setPauseTotpCode(''); setPauseMsg('');
     } catch (err) {
       setPauseMsg(err.response?.data?.detail || 'Verification failed.');
     }
@@ -280,6 +295,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
     if (window.sparkp2p?.isDesktop) {
       window.sparkp2p.connectIm();
     }
+    wasConnectingRef.current = true;
     setImConnecting(true);
   };
 
@@ -510,7 +526,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
               </p>
               <button
                 onClick={() => {
-                  window.sparkp2p?.openGmailTab();
+                  wasConnectingRef.current = true; window.sparkp2p?.openGmailTab();
                 }}
                 style={{
                   marginTop: 12, padding: '10px 20px', borderRadius: 8,
@@ -535,7 +551,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
               <button
                 className="btn-primary"
                 onClick={() => {
-                  window.sparkp2p?.openGmailTab();
+                  wasConnectingRef.current = true; window.sparkp2p?.openGmailTab();
                 }}
               >
                 Connect Gmail
@@ -1505,7 +1521,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
               </div>
 
               {pauseSecQ && (
-                <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 12 }}>
                   <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>{pauseSecQ}</label>
                   <input
                     type="text" placeholder="Your answer"
@@ -1515,9 +1531,20 @@ export default function SettingsPanel({ profile, onUpdate }) {
                 </div>
               )}
 
+              {profile?.has_totp && (
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Google Authenticator Code</label>
+                  <input
+                    type="text" maxLength={6} placeholder="6-digit code from your app"
+                    value={pauseTotpCode} onChange={e => setPauseTotpCode(e.target.value)}
+                    className="adm-input" style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 10 }}>
                 <button
-                  onClick={() => { setShowPauseModal(false); setPauseStep('warning'); }}
+                  onClick={() => { setShowPauseModal(false); setPauseStep('warning'); setPauseOtpCode(''); setPauseSecAnswer(''); setPauseTotpCode(''); setPauseMsg(''); }}
                   style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 14 }}
                 >
                   Cancel

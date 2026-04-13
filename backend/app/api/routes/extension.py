@@ -57,8 +57,9 @@ class BinanceOrderData(BaseModel):
 class ReportOrdersRequest(BaseModel):
     sell_orders: list[BinanceOrderData] = []
     buy_orders: list[BinanceOrderData] = []
-    cancelled_order_numbers: list[str] = []  # Order numbers from Binance Cancelled history tab
-    active_order_numbers: list[str] = []     # Orders bot is actively processing (never auto-cancel these)
+    cancelled_order_numbers: list[str] = []       # Order numbers from Binance Cancelled history tab
+    completed_buy_order_numbers: list[str] = []   # BUY order numbers from Binance Completed history tab
+    active_order_numbers: list[str] = []          # Orders bot is actively processing (never auto-cancel these)
 
 
 class ActionItem(BaseModel):
@@ -123,6 +124,20 @@ async def report_orders(
         if cancelled_order:
             cancelled_order.status = OrderStatus.CANCELLED
             logger.info(f"Order {order_number} marked CANCELLED (from Binance history tab)")
+
+    # Mark completed buy orders (seller released crypto — from Binance Completed history tab)
+    for order_number in data.completed_buy_order_numbers:
+        comp_result = await db.execute(
+            select(Order).where(
+                Order.binance_order_number == order_number,
+                Order.trader_id == trader.id,
+                Order.side == OrderSide.BUY,
+                Order.status == OrderStatus.PAYMENT_SENT,
+            )
+        )
+        completed_order = comp_result.scalar_one_or_none()
+        if completed_order:
+            await _complete_buy_order(completed_order, trader, db)
 
     # Also auto-cancel PENDING orders absent from the active list for >3 minutes
     # (fallback in case the cancelled tab scan misses something)
@@ -270,6 +285,121 @@ async def report_message_sent(
         logger.info(f"Chat message sent for order {data.order_number} via extension")
     else:
         logger.warning(f"Failed to send chat message for order {data.order_number}")
+    return {"status": "ok"}
+
+
+class ReportBuyCompletedRequest(BaseModel):
+    order_number: str
+
+
+@router.post("/report-buy-completed")
+async def report_buy_completed(
+    data: ReportBuyCompletedRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Desktop app reports that a buy order has completed on Binance
+    (seller released crypto to buyer's wallet).
+    Can be called directly when the desktop app detects completion in real time,
+    as an alternative to waiting for the next idle scan.
+    """
+    result = await db.execute(
+        select(Order).where(
+            Order.binance_order_number == data.order_number,
+            Order.trader_id == trader.id,
+            Order.side == OrderSide.BUY,
+        )
+    )
+    order = result.scalar_one_or_none()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Buy order not found")
+
+    if order.status == OrderStatus.COMPLETED:
+        return {"status": "ok", "message": "Already completed"}
+
+    if order.status != OrderStatus.PAYMENT_SENT:
+        logger.warning(
+            f"report-buy-completed called for order {data.order_number} "
+            f"in unexpected status {order.status}"
+        )
+
+    await _complete_buy_order(order, trader, db)
+    await db.commit()
+
+    return {"status": "ok"}
+
+
+class ReportBuyExpiredRequest(BaseModel):
+    order_number: str
+
+
+@router.post("/report-buy-expired")
+async def report_buy_expired(
+    data: ReportBuyExpiredRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Desktop app reports that a buy order expired or was cancelled AFTER we already
+    sent KES to the seller — meaning we paid but never received crypto.
+    Marks the order DISPUTED and fires urgent alerts so the trader can appeal on Binance.
+    """
+    result = await db.execute(
+        select(Order).where(
+            Order.binance_order_number == data.order_number,
+            Order.trader_id == trader.id,
+            Order.side == OrderSide.BUY,
+        )
+    )
+    order = result.scalar_one_or_none()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Buy order not found")
+
+    if order.status == OrderStatus.DISPUTED:
+        return {"status": "ok", "message": "Already disputed"}
+
+    if order.status == OrderStatus.COMPLETED:
+        return {"status": "ok", "message": "Order already completed — no dispute needed"}
+
+    order.status = OrderStatus.DISPUTED
+    await db.commit()
+
+    logger.error(
+        f"🚨 Buy order {data.order_number} EXPIRED after payment — "
+        f"trader {trader.full_name} paid KES {order.fiat_amount:,.0f} but received no crypto!"
+    )
+
+    # Urgent in-app notification
+    try:
+        from app.api.routes.traders import add_notification
+        add_notification(
+            trader.id,
+            f"URGENT: Buy Order Expired — KES {order.fiat_amount:,.0f} at Risk",
+            (
+                f"Order {data.order_number}: You paid KES {order.fiat_amount:,.0f} "
+                f"but the seller did not release {order.crypto_amount} {order.crypto_currency}. "
+                f"Open a dispute on Binance P2P immediately."
+            ),
+            "dispute",
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send in-app notification for expired buy order: {e}")
+
+    # Urgent SMS
+    try:
+        from app.services.sms import send_sms
+        send_sms(
+            trader.phone,
+            f"URGENT SparkP2P: Buy order expired! You paid KES {order.fiat_amount:,.0f} "
+            f"but seller did NOT release {order.crypto_amount} {order.crypto_currency}. "
+            f"Open a dispute on Binance NOW. Ref: {data.order_number[-8:]}",
+        )
+    except Exception as e:
+        logger.warning(f"SMS failed for expired buy order {data.order_number}: {e}")
+
     return {"status": "ok"}
 
 
@@ -665,6 +795,48 @@ async def verify_identity(
 
 
 # ── Internal helpers ──────────────────────────────────────────────
+
+async def _complete_buy_order(order: Order, trader: Trader, db: AsyncSession) -> None:
+    """
+    Mark a buy order as completed — seller has released crypto to the buyer's Binance wallet.
+    Called when the desktop app reports the order in the Completed history tab.
+    The KES was already debited when B2C was sent, so no wallet changes are needed here.
+    """
+    order.status = OrderStatus.COMPLETED
+    order.settled_at = datetime.now(timezone.utc)
+
+    # Update trader lifetime stats
+    trader.total_trades += 1
+    trader.total_volume += order.fiat_amount
+
+    logger.info(
+        f"Buy order {order.binance_order_number} COMPLETED — "
+        f"{order.crypto_amount} {order.crypto_currency} received by trader {trader.full_name}"
+    )
+
+    # In-app notification
+    try:
+        from app.api.routes.traders import add_notification
+        add_notification(
+            trader.id,
+            f"Buy Complete: {order.crypto_amount} {order.crypto_currency} Received",
+            f"Order {order.binance_order_number} — Paid KES {order.fiat_amount:,.0f} at {order.exchange_rate:,.2f}",
+            "buy_complete",
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send in-app notification for buy order {order.binance_order_number}: {e}")
+
+    # SMS notification
+    try:
+        from app.services.sms import send_sms
+        send_sms(
+            trader.phone,
+            f"SparkP2P: Buy done! {order.crypto_amount} {order.crypto_currency} received on Binance. "
+            f"Paid KES {order.fiat_amount:,.0f}. Ref: {order.binance_order_number[-8:]}",
+        )
+    except Exception as e:
+        logger.warning(f"SMS failed for buy order completion {order.binance_order_number}: {e}")
+
 
 async def _process_reported_sell_order(
     order_data: BinanceOrderData,

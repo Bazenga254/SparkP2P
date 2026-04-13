@@ -280,7 +280,7 @@ export default function Onboarding() {
   };
 
   const handleGoToDashboard = () => {
-    navigate('/dashboard');
+    navigate('/dashboard?scanning=1');
   };
 
   const canAdvanceStep2 = profile?.binance_connected;
