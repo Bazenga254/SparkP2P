@@ -333,6 +333,9 @@ async def report_buy_completed(
 
 class ReportBuyExpiredRequest(BaseModel):
     order_number: str
+    seller_name: str = "Unknown"
+    amount: float = 0
+    minutes_waited: int = 0
 
 
 @router.post("/report-buy-expired")
@@ -399,6 +402,46 @@ async def report_buy_expired(
         )
     except Exception as e:
         logger.warning(f"SMS failed for expired buy order {data.order_number}: {e}")
+
+    # Email notification with full dispute details
+    try:
+        from app.services.email import send_email
+        seller = data.seller_name or "Unknown"
+        kes_amount = data.amount or (order.fiat_amount if order else 0)
+        crypto_amount = order.crypto_amount if order else "?"
+        crypto_currency = order.crypto_currency if order else "USDT"
+        mins = data.minutes_waited or 0
+        html = f"""
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
+          <h2 style="color:#ef4444">&#9888; Buy Order Dispute &mdash; Immediate Action Required</h2>
+          <p>Your SparkP2P bot has filed a dispute on Binance P2P. Please log in to your Binance account and resolve it.</p>
+          <table style="width:100%;border-collapse:collapse;margin:20px 0">
+            <tr style="background:#fef2f2"><td style="padding:10px;font-weight:bold">Order Number</td><td style="padding:10px">{data.order_number}</td></tr>
+            <tr><td style="padding:10px;font-weight:bold">Amount Sent</td><td style="padding:10px;color:#ef4444">KES {kes_amount:,.0f}</td></tr>
+            <tr style="background:#fef2f2"><td style="padding:10px;font-weight:bold">Crypto Expected</td><td style="padding:10px">{crypto_amount} {crypto_currency}</td></tr>
+            <tr><td style="padding:10px;font-weight:bold">Seller</td><td style="padding:10px">{seller}</td></tr>
+            <tr style="background:#fef2f2"><td style="padding:10px;font-weight:bold">Time Waited</td><td style="padding:10px">{mins} minutes</td></tr>
+          </table>
+          <p><strong>What happened:</strong> KES {kes_amount:,.0f} was sent to seller <strong>{seller}</strong> to purchase <strong>{crypto_amount} {crypto_currency}</strong>.
+          It has been <strong>{mins} minutes</strong> and the seller has not released the crypto.
+          The bot has automatically filed a dispute with Binance and paused your ad temporarily.</p>
+          <p style="background:#fef2f2;padding:15px;border-radius:8px">
+            <strong>Next steps:</strong><br>
+            1. Log into your Binance account<br>
+            2. Go to P2P Orders &rarr; find order {data.order_number}<br>
+            3. Follow the Binance dispute resolution process<br>
+            4. Once resolved, re-enable your ad in SparkP2P Settings
+          </p>
+          <hr style="margin:20px 0">
+          <p style="color:#9ca3af;font-size:12px">SparkP2P Automated Alert &middot; Do not reply to this email</p>
+        </div>"""
+        send_email(
+            trader.email,
+            f"URGENT: SparkP2P Buy Order Dispute — KES {kes_amount:,.0f} at Risk",
+            html,
+        )
+    except Exception as e:
+        logger.warning(f"Email failed for expired buy order {data.order_number}: {e}")
 
     return {"status": "ok"}
 
@@ -945,10 +988,10 @@ async def _process_reported_buy_order(
 
     order_number = order_data.orderNumber
 
-    # Enforce buy order minimum: KES 100,000
-    if order_data.totalPrice < 100000:
+    # Enforce buy order minimum: KES 1,000 (real floor enforced on Binance ad)
+    if order_data.totalPrice < 1000:
         logger.warning(
-            f"Buy order {order_number} below minimum (KES {order_data.totalPrice:,.0f} < KES 100,000). Skipping."
+            f"Buy order {order_number} below minimum (KES {order_data.totalPrice:,.0f} < KES 1,000). Skipping."
         )
         return None
 
@@ -1024,7 +1067,7 @@ async def _process_reported_buy_order(
         # Cannot auto-pay without seller payment info
         logger.warning(f"No seller payment info for buy order {order_number}, requesting details")
         await db.commit()
-        return {"action": "get_order_details", "order_number": order_number}
+        return {"action": "pay", "order_number": order_number}
 
     # ── Check if seller is on SparkP2P (internal transfer = FREE) ──
     from app.services.internal_transfer import find_trader_by_phone, transfer_between_wallets
@@ -1157,19 +1200,24 @@ async def get_pending_bank_withdrawals(
     if not trader.is_admin and trader.role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     result = await db.execute(
-        select(WalletTransaction).where(
-            WalletTransaction.settlement_method == "bank",
+        select(WalletTransaction, Trader).join(
+            Trader, Trader.id == WalletTransaction.trader_id
+        ).where(
+            WalletTransaction.settlement_method.in_(["bank", "bank_paybill"]),
             WalletTransaction.status == "pending",
             WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
         ).order_by(WalletTransaction.created_at)
     )
-    txns = result.scalars().all()
+    rows = result.all()
     jobs = []
-    for t in txns:
+    for t, tr in rows:
         jobs.append({
             "id": t.id,
             "amount": abs(t.amount),
             "destination": t.destination or "",
+            "destination_account": t.destination or "",
+            "destination_name": (tr.name or "").upper().strip(),
+            "trader_id": tr.id,
             "created_at": t.created_at.isoformat() if t.created_at else None,
         })
     return {"jobs": jobs}
