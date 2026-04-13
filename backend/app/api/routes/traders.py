@@ -82,6 +82,8 @@ class WalletResponse(BaseModel):
     total_fees_paid: float
     daily_volume: float
     daily_trades: int
+    pending_withdrawal: bool = False
+    pending_withdrawal_amount: float = 0.0
 
 
 class TraderProfileResponse(BaseModel):
@@ -928,6 +930,17 @@ async def get_wallet(
             daily_volume=0, daily_trades=0,
         )
 
+    # Check for any pending bank withdrawal
+    from app.models.wallet import WalletTransaction, TransactionType
+    pending_r = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.trader_id == trader.id,
+            WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+            WalletTransaction.status == "pending",
+        ).limit(1)
+    )
+    pending_txn = pending_r.scalar_one_or_none()
+
     return WalletResponse(
         balance=wallet.balance,
         reserved=wallet.reserved,
@@ -936,6 +949,8 @@ async def get_wallet(
         total_fees_paid=wallet.total_fees_paid,
         daily_volume=wallet.daily_volume,
         daily_trades=wallet.daily_trades,
+        pending_withdrawal=pending_txn is not None,
+        pending_withdrawal_amount=abs(pending_txn.amount) if pending_txn else 0.0,
     )
 
 
@@ -960,6 +975,21 @@ async def request_withdrawal(
     if not stored_otp or stored_otp != data.otp_code.strip():
         raise HTTPException(status_code=401, detail="Invalid or expired OTP code")
     del _withdraw_otp_codes[trader.email]
+
+    # Block if pending withdrawal already exists
+    from app.models.wallet import WalletTransaction, TransactionType
+    pending_r = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.trader_id == trader.id,
+            WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+            WalletTransaction.status == "pending",
+        ).limit(1)
+    )
+    if pending_r.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You have a pending withdrawal being processed. Please wait for it to complete before requesting another.",
+        )
 
     # Check 48-hour cooldown
     if trader.settlement_changed_at:
@@ -1527,7 +1557,7 @@ async def verify_totp_code(
     """Verify a TOTP code for the current trader (used to unlock sensitive dashboard data)."""
     if not trader.totp_secret:
         raise HTTPException(status_code=400, detail="Google Authenticator not configured on this account.")
-    from app.core.security import decrypt_value
+    from app.core.security import decrypt_data as decrypt_value
     try:
         secret = decrypt_value(trader.totp_secret)
     except Exception:
@@ -1687,3 +1717,32 @@ async def get_today_stats(
         "gross_profit": round(gross_profit, 2),
         "reset_at": midnight_utc.isoformat(),
     }
+
+
+class PinChangeVerifyRequest(BaseModel):
+    otp_code: str
+    totp_code: str = None
+
+
+@router.post("/verify-pin-change")
+async def verify_pin_change(data: PinChangeVerifyRequest, trader: Trader = Depends(get_current_trader)):
+    """Verify OTP + TOTP (no security answer) before allowing I&M PIN change."""
+    from app.api.routes.auth import _login_otp_codes
+
+    stored = _login_otp_codes.get(f"pause_{trader.email}")
+    if not stored or stored != data.otp_code:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP code.")
+
+    if trader.totp_secret:
+        if not data.totp_code:
+            raise HTTPException(status_code=400, detail="Google Authenticator code is required.")
+        from app.core.security import decrypt_data
+        try:
+            totp_secret = decrypt_data(trader.totp_secret)
+        except Exception:
+            totp_secret = trader.totp_secret
+        if not totp_secret or not _verify_totp(totp_secret, data.totp_code):
+            raise HTTPException(status_code=400, detail="Invalid Google Authenticator code.")
+
+    del _login_otp_codes[f"pause_{trader.email}"]
+    return {"authorized": True}
