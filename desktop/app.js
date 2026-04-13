@@ -596,54 +596,64 @@ async function isLoggedIn() {
 // ═══════════════════════════════════════════════════════════
 
 async function injectLockOverlay(page) {
-  await page.evaluate(() => {
-    if (document.getElementById('sparkp2p-browser-lock')) return;
+  // Bypass CSP in case the page blocks our script
+  await page.setBypassCSP(true).catch(() => {});
 
-    const inject = () => {
-      if (document.getElementById('sparkp2p-browser-lock')) return;
+  const result = await page.evaluate(() => {
+    try {
+      if (document.getElementById('sparkp2p-browser-lock')) return { ok: true, existing: true };
 
-      // Use <dialog showModal()> — it lives in the browser TOP LAYER.
-      // Top layer is above ALL CSS stacking contexts, transforms, and z-indexes.
-      // Gmail/I&M/M-Pesa transforms cannot affect it. Nothing can cover it.
-      const dlg = document.createElement('dialog');
-      dlg.id = 'sparkp2p-browser-lock';
-      dlg.style.cssText = [
-        'position:fixed', 'inset:0', 'width:100vw', 'height:100vh',
-        'background:transparent', 'border:none', 'padding:0', 'margin:0',
-        'max-width:100vw', 'max-height:100vh',
-        'pointer-events:all', 'cursor:not-allowed', 'outline:none',
-        'z-index:2147483647',
-      ].join('!important;') + '!important';
-      dlg.innerHTML = `
-        <div style="position:fixed;bottom:16px;right:16px;display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(0,0,0,0.82);border:1px solid rgba(245,158,11,0.5);border-radius:20px;backdrop-filter:blur(4px);pointer-events:none">
-          <span style="font-size:14px">🔒</span>
-          <span style="color:#f59e0b;font-size:12px;font-weight:600;font-family:-apple-system,sans-serif">SparkP2P Bot Active</span>
-        </div>`;
-      const block = e => { e.preventDefault(); e.stopImmediatePropagation(); };
-      ['click','mousedown','mouseup','dblclick','contextmenu',
-       'keydown','keyup','keypress','wheel','scroll','touchstart','touchend'
-      ].forEach(t => dlg.addEventListener(t, block, true));
-      // Prevent the page from closing our dialog
-      dlg.close = () => {};
-      document.documentElement.appendChild(dlg);
-      try { dlg.showModal(); } catch(e) {}
-    };
+      const inject = () => {
+        if (document.getElementById('sparkp2p-browser-lock')) return;
+        const dlg = document.createElement('dialog');
+        dlg.id = 'sparkp2p-browser-lock';
+        dlg.style.cssText = [
+          'position:fixed', 'inset:0', 'width:100vw', 'height:100vh',
+          'background:transparent', 'border:none', 'padding:0', 'margin:0',
+          'max-width:100vw', 'max-height:100vh',
+          'pointer-events:all', 'cursor:not-allowed', 'outline:none',
+          'z-index:2147483647',
+        ].join('!important;') + '!important';
+        dlg.innerHTML = `
+          <div style="position:fixed;bottom:16px;right:16px;display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(0,0,0,0.82);border:1px solid rgba(245,158,11,0.5);border-radius:20px;backdrop-filter:blur(4px);pointer-events:none">
+            <span style="font-size:14px">🔒</span>
+            <span style="color:#f59e0b;font-size:12px;font-weight:600;font-family:-apple-system,sans-serif">SparkP2P Bot Active</span>
+          </div>`;
+        const block = e => { e.preventDefault(); e.stopImmediatePropagation(); };
+        ['click','mousedown','mouseup','dblclick','contextmenu',
+         'keydown','keyup','keypress','wheel','scroll','touchstart','touchend'
+        ].forEach(t => dlg.addEventListener(t, block, true));
+        dlg.close = () => {};
+        document.documentElement.appendChild(dlg);
+        dlg.showModal();
+      };
 
-    inject();
+      inject();
 
-    // MutationObserver + setInterval: re-inject if the page somehow removes our dialog
-    if (!window.__sparkLockObserver) {
-      window.__sparkLockObserver = new MutationObserver(() => {
-        if (!document.getElementById('sparkp2p-browser-lock')) inject();
-      });
-      window.__sparkLockObserver.observe(document.documentElement, { childList: true, subtree: false });
+      if (!window.__sparkLockObserver) {
+        window.__sparkLockObserver = new MutationObserver(() => {
+          if (!document.getElementById('sparkp2p-browser-lock')) inject();
+        });
+        window.__sparkLockObserver.observe(document.documentElement, { childList: true, subtree: false });
+      }
+      if (!window.__sparkLockInterval) {
+        window.__sparkLockInterval = setInterval(() => {
+          if (!document.getElementById('sparkp2p-browser-lock')) inject();
+        }, 800);
+      }
+
+      const dlg = document.getElementById('sparkp2p-browser-lock');
+      return { ok: true, inDom: !!dlg, isOpen: dlg?.open, url: location.href.substring(0, 60) };
+    } catch(e) {
+      return { ok: false, error: e.toString() };
     }
-    if (!window.__sparkLockInterval) {
-      window.__sparkLockInterval = setInterval(() => {
-        if (!document.getElementById('sparkp2p-browser-lock')) inject();
-      }, 800);
-    }
-  }).catch(() => {});
+  }).catch(e => ({ ok: false, evalError: e.message?.substring(0, 100) }));
+
+  if (result?.ok) {
+    console.log('[SparkP2P] Lock overlay injected:', JSON.stringify(result));
+  } else {
+    console.error('[SparkP2P] Lock overlay FAILED:', JSON.stringify(result));
+  }
 }
 
 async function lockChromeBrowser() {
