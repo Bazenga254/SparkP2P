@@ -614,16 +614,26 @@ async function injectLockOverlay(page) {
           'pointer-events:all', 'cursor:not-allowed', 'outline:none',
           'z-index:2147483647',
         ].join('!important;') + '!important';
-        dlg.innerHTML = `
-          <div style="position:fixed;bottom:16px;right:16px;display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(0,0,0,0.82);border:1px solid rgba(245,158,11,0.5);border-radius:20px;backdrop-filter:blur(4px);pointer-events:none">
-            <span style="font-size:14px">🔒</span>
-            <span style="color:#f59e0b;font-size:12px;font-weight:600;font-family:-apple-system,sans-serif">SparkP2P Bot Active</span>
-          </div>`;
+
+        // Build badge with createElement — no innerHTML so Trusted Types (Gmail CSP) can't block it
+        const badge = document.createElement('div');
+        badge.style.cssText = 'position:fixed;bottom:16px;right:16px;display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(0,0,0,0.82);border:1px solid rgba(245,158,11,0.5);border-radius:20px;backdrop-filter:blur(4px);pointer-events:none';
+        const icon = document.createElement('span');
+        icon.style.fontSize = '14px';
+        icon.textContent = '\uD83D\uDD12'; // 🔒
+        const label = document.createElement('span');
+        label.style.cssText = 'color:#f59e0b;font-size:12px;font-weight:600;font-family:-apple-system,sans-serif';
+        label.textContent = 'SparkP2P Bot Active';
+        badge.appendChild(icon);
+        badge.appendChild(label);
+        dlg.appendChild(badge);
+
         const block = e => { e.preventDefault(); e.stopImmediatePropagation(); };
         ['click','mousedown','mouseup','dblclick','contextmenu',
          'keydown','keyup','keypress','wheel','scroll','touchstart','touchend'
         ].forEach(t => dlg.addEventListener(t, block, true));
         dlg.close = () => {};
+        // Append to DOM first, THEN showModal() — dialog must be in document before showModal
         document.documentElement.appendChild(dlg);
         dlg.showModal();
       };
