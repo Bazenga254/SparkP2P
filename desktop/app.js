@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -82,6 +82,10 @@ let loggedOutStrikes = 0;      // Consecutive failed isLoggedIn() checks before 
 let activeOrderNumber = null;     // Sell order currently being monitored (null = idle)
 let activeOrderFiatAmount = 0;    // KES amount of the active sell order
 let activeBuyOrderNumber = null;  // Buy order waiting for seller to release crypto (null = not waiting)
+let buyPaymentTime = null;        // Timestamp when we sent the I&M payment
+let buyReminderSent = false;      // Whether the 10-min reminder has been sent to seller
+let buyOrderDetails = null;       // { sellerName, amount, phone, method, orderNumber } for chat messages
+let buyPaymentScreenshot = null;  // Base64 screenshot of I&M success — uploaded to Binance chat
 let gmailPage = null;          // Persistent Gmail tab — opened alongside Binance, kept alive
 let imPage = null;             // Persistent I&M Bank tab — new tab in the main Binance browser
 let connectingIm = false;      // Prevents concurrent connectIm() calls
@@ -145,6 +149,36 @@ function loadAnthropicKey() {
   } catch (_) {}
 }
 loadAnthropicKey(); // Load immediately on startup
+
+// ── I&M Bank PIN — stored ONLY on this device using OS-level encryption ──
+// Uses Electron safeStorage (Windows Credential Store / macOS Keychain).
+// The PIN never leaves this machine and cannot be decrypted on any other device.
+let imPin = null;
+const IM_PIN_FILE = path.join(app.getPath('userData'), 'im_pin.enc');
+function saveImPin(pin) {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('safeStorage not available');
+    const encrypted = safeStorage.encryptString(pin);
+    fs.writeFileSync(IM_PIN_FILE, encrypted);
+    imPin = pin;
+    console.log('[SparkP2P] I&M PIN saved securely on this device');
+  } catch (e) { console.error('[SparkP2P] Failed to save I&M PIN:', e.message); }
+}
+function loadImPin() {
+  try {
+    if (!fs.existsSync(IM_PIN_FILE)) return;
+    if (!safeStorage.isEncryptionAvailable()) return;
+    const encrypted = fs.readFileSync(IM_PIN_FILE);
+    imPin = safeStorage.decryptString(encrypted);
+    console.log('[SparkP2P] I&M PIN loaded from secure storage');
+  } catch (e) { console.error('[SparkP2P] Failed to load I&M PIN:', e.message); }
+}
+function clearImPin() {
+  try { fs.unlinkSync(IM_PIN_FILE); } catch (_) {}
+  imPin = null;
+}
+// Load PIN on startup (after app is ready — safeStorage requires app to be ready)
+app.whenReady().then(() => loadImPin());
 function saveTokenToDisk(t) {
   try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token: t, savedAt: Date.now() })); } catch (e) {}
 }
@@ -226,8 +260,11 @@ function createMainWindow() {
     autoHideMenuBar: true,
   });
 
+  // Disable cache so frontend updates are always picked up immediately
+  mainWindow.webContents.session.clearCache().catch(() => {});
+
   const loadDashboard = (attempt = 1) => {
-    mainWindow.loadURL(DASHBOARD_URL).catch(() => {});
+    mainWindow.loadURL(DASHBOARD_URL + '?v=' + Date.now()).catch(() => {});
   };
 
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
@@ -1665,6 +1702,10 @@ async function monitorActiveBuyOrder(page) {
     console.log(`[SparkP2P] ✅ Buy order ${activeBuyOrderNumber} COMPLETED — crypto received!`);
     const orderNum = activeBuyOrderNumber;
     activeBuyOrderNumber = null;
+    buyPaymentTime = null;
+    buyReminderSent = false;
+    buyOrderDetails = null;
+    buyPaymentScreenshot = null;
 
     await fetch(`${API_BASE}/ext/report-buy-completed`, {
       method: 'POST',
@@ -1681,26 +1722,50 @@ async function monitorActiveBuyOrder(page) {
   // DOM text fallback — Vision occasionally misses cancelled/expired/appeal states
   const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
   const lower = pageText.toLowerCase();
+  const minutesWaiting = buyPaymentTime ? Math.floor((Date.now() - buyPaymentTime) / 60000) : 0;
 
-  // Expired or appeal raised AFTER we already paid — we need to dispute
-  // These indicate we sent KES but the seller hasn't released crypto in time
+  // ── Expired or appeal raised AFTER we already paid ──
   if (lower.includes('appeal') || lower.includes('expired') || lower.includes('order expired')) {
-    console.log(`[SparkP2P] 🚨 Buy order ${activeBuyOrderNumber} EXPIRED after payment — opening dispute`);
+    console.log(`[SparkP2P] 🚨 Buy order ${activeBuyOrderNumber} EXPIRED — filing dispute and notifying trader`);
     const orderNum = activeBuyOrderNumber;
+    const details = buyOrderDetails;
     activeBuyOrderNumber = null;
+    buyPaymentTime = null;
+    buyReminderSent = false;
+
+    // Try to click the Appeal button on Binance
+    try {
+      const allBtns = await page.$$('button');
+      for (const btn of allBtns) {
+        const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
+        if (txt.toLowerCase().includes('appeal')) { await btn.click(); console.log('[SparkP2P] Clicked Appeal button'); break; }
+      }
+    } catch (e) { console.log('[SparkP2P] Appeal click error:', e.message); }
+
+    await takeScreenshot(`Dispute filed: ${orderNum}`);
+
+    // Notify backend — this sends SMS + in-app notification to trader
     await fetch(`${API_BASE}/ext/report-buy-expired`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ order_number: orderNum }),
+      body: JSON.stringify({
+        order_number: orderNum,
+        seller_name: details?.sellerName || 'Unknown',
+        amount: details?.amount || 0,
+        minutes_waited: minutesWaiting,
+      }),
     }).catch(e => console.error('[SparkP2P] report-buy-expired failed:', e.message));
     return;
   }
 
-  // Cancelled BEFORE payment was sent (rare — VPS should have caught this before B2C)
+  // ── Cancelled ──
   if (lower.includes('cancelled') || lower.includes('canceled')) {
-    console.log(`[SparkP2P] Buy order ${activeBuyOrderNumber} CANCELLED while waiting for seller`);
+    console.log(`[SparkP2P] Buy order ${activeBuyOrderNumber} CANCELLED`);
     const orderNum = activeBuyOrderNumber;
     activeBuyOrderNumber = null;
+    buyPaymentTime = null;
+    buyReminderSent = false;
+    buyOrderDetails = null;
     await fetch(`${API_BASE}/ext/report-orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -1709,8 +1774,59 @@ async function monitorActiveBuyOrder(page) {
     return;
   }
 
-  // Still waiting — log and come back next poll cycle
-  console.log(`[SparkP2P] Buy order ${activeBuyOrderNumber} — seller hasn't released yet (screen: ${screen})`);
+  // ── Still waiting — check time and respond to chat ──
+
+  // At 10 minutes: send one polite reminder to seller
+  if (minutesWaiting >= 10 && !buyReminderSent) {
+    console.log(`[SparkP2P] ⏰ 10 minutes passed — sending reminder to seller`);
+    const reminderMsg = `Hi, just a friendly reminder — I sent the payment ${minutesWaiting} minutes ago. Could you please release the crypto when you get a chance? Thank you! 😊`;
+    await sendBinanceChatMessage(page, reminderMsg);
+    buyReminderSent = true;
+  }
+
+  // At 15 minutes: file dispute, pause ad, notify trader
+  if (minutesWaiting >= 15) {
+    console.log(`[SparkP2P] 🚨 15 minutes passed with no release — filing dispute`);
+    const orderNum = activeBuyOrderNumber;
+    const details = buyOrderDetails;
+    activeBuyOrderNumber = null;
+    buyPaymentTime = null;
+    buyReminderSent = false;
+
+    // Inform seller before appealing
+    await sendBinanceChatMessage(page, `I have been waiting ${minutesWaiting} minutes for the crypto release. I am now filing an appeal with Binance support. Please release the crypto to avoid any issues.`);
+    await new Promise(r => setTimeout(r, 1500));
+
+    // Click Appeal
+    try {
+      const allBtns = await page.$$('button');
+      for (const btn of allBtns) {
+        const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
+        if (txt.toLowerCase().includes('appeal')) { await btn.click(); console.log('[SparkP2P] Clicked Appeal'); break; }
+      }
+    } catch (e) { console.log('[SparkP2P] Appeal error:', e.message); }
+
+    await takeScreenshot(`15min dispute: ${orderNum}`);
+
+    await fetch(`${API_BASE}/ext/report-buy-expired`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        order_number: orderNum,
+        seller_name: details?.sellerName || 'Unknown',
+        amount: details?.amount || 0,
+        minutes_waited: minutesWaiting,
+      }),
+    }).catch(() => {});
+    return;
+  }
+
+  // ── Respond to seller chat messages using AI ──
+  if (buyOrderDetails && anthropicApiKey) {
+    await respondToBuyOrderChat(page, buyOrderDetails);
+  }
+
+  console.log(`[SparkP2P] Buy order ${activeBuyOrderNumber} — waiting ${minutesWaiting}m for seller release (screen: ${screen})`);
 }
 
 
@@ -3551,36 +3667,125 @@ async function execAction(action) {
       await takeScreenshot(`After release: order ${order_number}`);
 
     } else if (type === 'pay' || type === 'mark_as_paid') {
-      // Step 1: Click "Payment Done" / "Transferred, notify seller"
-      let clicked = await clickButton(page, 'transferred', 'payment done', 'i have paid', 'mark as paid', 'notify seller');
+      // ── Full buy-side payment automation ──
+      // 1. Extract payment details from Binance order page using Vision
+      // 2. Send money via I&M Bank
+      // 3. Upload receipt + notify seller on Binance
+      // 4. Start monitoring for seller release
 
+      // Step 1: Extract payment details via Vision
+      console.log(`[SparkP2P] Extracting payment details from order ${order_number}...`);
+      await new Promise(r => setTimeout(r, 2000));
+      const ss = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+      let paymentDetails = action.payment_details || null;
+
+      if (!paymentDetails && ss && anthropicApiKey) {
+        const extractRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 300,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+              { type: 'text', text: 'Extract the payment details from this Binance P2P buy order page. Return JSON only: {"method": "mpesa|bank|paybill", "phone": "07XXXXXXXX or null", "account_number": "null or account", "paybill": "null or paybill", "name": "recipient name", "amount": 1234, "network": "safaricom|airtel|null", "reference": "order number"}' },
+            ]}],
+          }),
+        }).catch(() => null);
+
+        if (extractRes?.ok) {
+          const extractData = await extractRes.json();
+          const jsonMatch = (extractData.content?.[0]?.text || '').match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            try { paymentDetails = JSON.parse(jsonMatch[0]); } catch (_) {}
+          }
+        }
+      }
+
+      // Fallback: use action fields if Vision extraction failed
+      if (!paymentDetails) {
+        paymentDetails = {
+          method: action.method || 'mpesa',
+          phone: action.phone || '',
+          name: action.seller_name || 'Seller',
+          amount: action.amount || 0,
+          network: action.network || 'safaricom',
+          reference: order_number,
+        };
+      }
+
+      console.log(`[SparkP2P] Payment details: ${JSON.stringify(paymentDetails)}`);
+
+      // Step 2: Execute I&M Bank payment
+      let imResult = { success: false, screenshot: null };
+      try {
+        imResult = await executeImPayment({
+          phone: paymentDetails.phone,
+          name: paymentDetails.name,
+          amount: paymentDetails.amount,
+          reference: paymentDetails.reference || order_number,
+          network: paymentDetails.network || 'safaricom',
+        });
+      } catch (e) {
+        console.error('[SparkP2P] I&M payment failed:', e.message);
+        await takeScreenshot(`I&M payment failed: ${e.message.substring(0, 40)}`);
+      }
+
+      if (!imResult.success) {
+        console.log('[SparkP2P] ⚠️ I&M payment may have failed — proceeding to notify Binance anyway');
+      }
+
+      // Store payment details for chat monitoring
+      buyOrderDetails = {
+        sellerName: paymentDetails.name,
+        amount: paymentDetails.amount,
+        phone: paymentDetails.phone,
+        method: paymentDetails.method || 'M-Pesa',
+        orderNumber: order_number,
+      };
+      buyPaymentScreenshot = imResult.screenshot;
+      buyPaymentTime = Date.now();
+      buyReminderSent = false;
+
+      // Step 3: Switch back to Binance order page
+      await page.bringToFront();
+      await page.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order_number}`, {
+        waitUntil: 'domcontentloaded', timeout: 15000,
+      }).catch(() => {});
+      await new Promise(r => setTimeout(r, 3000));
+
+      // Step 4: Send chat message to seller
+      const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+      const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}. Please check and release the crypto. Thank you! 🙏`;
+      await sendBinanceChatMessage(page, chatMsg);
+
+      // Step 5: Upload payment proof (I&M receipt screenshot)
+      if (imResult.screenshot) {
+        await new Promise(r => setTimeout(r, 1000));
+        await uploadPaymentProofToBinance(page, imResult.screenshot);
+      }
+
+      // Step 6: Click "Transferred, notify seller" / "Upload Payment Proof" → confirm on Binance
+      await new Promise(r => setTimeout(r, 2000));
+      let clicked = await clickButton(page, 'transferred', 'payment done', 'i have paid', 'mark as paid', 'notify seller', 'upload payment proof');
       if (clicked) {
         await new Promise(r => setTimeout(r, 2000));
-
-        // Step 2: Confirm dialog
         await clickButton(page, 'confirm', 'yes');
         await new Promise(r => setTimeout(r, 2000));
-
-        // Step 3: Handle verification
-        const verified = await handleSecurityVerification(page);
-
-        await takeScreenshot(`After payment confirm: order ${order_number}`);
-
-        await fetch(`${API_BASE}/ext/report-payment-sent`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ order_number, success: verified }),
-        });
-        if (verified) {
-          stats.actions++;
-          // Start real-time Vision monitoring for seller release
-          activeBuyOrderNumber = order_number;
-          console.log(`[SparkP2P] 👀 Buy order ${order_number} marked as paid — monitoring for seller release`);
-        }
-      } else {
-        console.log('[SparkP2P] Payment button not found');
-        await takeScreenshot(`Payment button not found: ${order_number}`);
+        await handleSecurityVerification(page);
       }
+
+      await takeScreenshot(`Buy payment complete: order ${order_number}`);
+
+      await fetch(`${API_BASE}/ext/report-payment-sent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number, success: true }),
+      }).catch(() => {});
+
+      stats.actions++;
+      activeBuyOrderNumber = order_number;
+      console.log(`[SparkP2P] 👀 Buy order ${order_number} — I&M paid, monitoring for seller release`);
 
     } else if (type === 'send_message') {
       // Find chat input and type message
@@ -3727,6 +3932,281 @@ function norm(o) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// BUY ORDER — I&M PAYMENT EXECUTION
+// Reads payment details from Binance, sends money via I&M Bank,
+// takes a screenshot of success, and uploads proof to Binance chat.
+// ═══════════════════════════════════════════════════════════
+
+async function executeImPayment({ phone, name, amount, reference, network = 'safaricom' }) {
+  if (!imPage || imPage.isClosed()) throw new Error('I&M Bank tab is not open. Please reconnect I&M Bank.');
+  if (!imPin) throw new Error('I&M PIN not set. Please save your PIN in Settings → Binance tab.');
+
+  console.log(`[SparkP2P] 💳 Starting I&M payment: KSh ${amount} → ${name} (${phone})`);
+
+  // Navigate to Send Money to Mobile form
+  await imPage.bringToFront();
+  await imPage.goto('https://digital.imbank.com/inm-retail/transfers/send-money-to-mobile/form', {
+    waitUntil: 'domcontentloaded', timeout: 20000,
+  });
+  await new Promise(r => setTimeout(r, 3000));
+
+  // ── Step 1: Select debit account ──
+  // Click the account dropdown and select the KES account
+  const accountDropdown = await imPage.$('select, [class*="account-select"], [placeholder*="account" i], [class*="dropdown"]');
+  if (accountDropdown) {
+    await accountDropdown.click();
+    await new Promise(r => setTimeout(r, 1000));
+    // Try to click an option containing "KES" or the account number ending in 050
+    const options = await imPage.$$('option, [role="option"], [class*="option"]');
+    for (const opt of options) {
+      const text = await imPage.evaluate(el => el.textContent, opt).catch(() => '');
+      if (text.includes('KES') || text.includes('050') || text.includes('BONITO')) {
+        await opt.click();
+        break;
+      }
+    }
+  }
+  await new Promise(r => setTimeout(r, 1000));
+
+  // ── Step 2: Select "One-off Beneficiary" ──
+  const oneOff = await imPage.$('[value*="one" i], [id*="one-off" i], label');
+  if (oneOff) {
+    const labels = await imPage.$$('label');
+    for (const lbl of labels) {
+      const txt = await imPage.evaluate(el => el.textContent, lbl).catch(() => '');
+      if (txt.toLowerCase().includes('one-off') || txt.toLowerCase().includes('one off')) {
+        await lbl.click();
+        break;
+      }
+    }
+  }
+  await new Promise(r => setTimeout(r, 800));
+
+  // ── Step 3: Enter phone number ──
+  // Strip leading 0 — I&M already shows +254 prefix
+  const cleanPhone = phone.replace(/^0/, '').replace(/\s/g, '');
+  const phoneInput = await imPage.$('input[placeholder*="phone" i], input[name*="phone" i], input[type="tel"]');
+  if (phoneInput) {
+    await phoneInput.click({ clickCount: 3 });
+    await phoneInput.type(cleanPhone, { delay: 80 });
+    console.log(`[SparkP2P] Entered phone: ${cleanPhone}`);
+    await new Promise(r => setTimeout(r, 1500)); // wait for name lookup
+  }
+
+  // ── Step 4: Select Safaricom/Airtel ──
+  const networkLabels = await imPage.$$('label, [role="radio"]');
+  for (const lbl of networkLabels) {
+    const txt = await imPage.evaluate(el => el.textContent, lbl).catch(() => '');
+    if (txt.toLowerCase().includes(network.toLowerCase())) {
+      await lbl.click();
+      break;
+    }
+  }
+  await new Promise(r => setTimeout(r, 800));
+
+  // ── Step 5: Enter amount ──
+  const amountInput = await imPage.$('input[placeholder*="amount" i], input[name*="amount" i], input[type="number"]');
+  if (amountInput) {
+    await amountInput.click({ clickCount: 3 });
+    await amountInput.type(String(amount), { delay: 80 });
+    console.log(`[SparkP2P] Entered amount: ${amount}`);
+  }
+  await new Promise(r => setTimeout(r, 500));
+
+  // ── Step 6: Enter payment reference (order number) ──
+  const refInput = await imPage.$('input[placeholder*="reference" i], input[name*="reference" i], textarea[placeholder*="reference" i]');
+  if (refInput) {
+    await refInput.click({ clickCount: 3 });
+    await refInput.type(String(reference).substring(0, 50), { delay: 60 });
+  }
+  await new Promise(r => setTimeout(r, 500));
+
+  // ── Step 7: Click Continue ──
+  const continueBtn = await imPage.$('button[type="submit"], button');
+  const allBtns = await imPage.$$('button');
+  for (const btn of allBtns) {
+    const txt = await imPage.evaluate(el => el.textContent, btn).catch(() => '');
+    if (txt.toLowerCase().includes('continue')) { await btn.click(); break; }
+  }
+  await new Promise(r => setTimeout(r, 3000));
+  console.log('[SparkP2P] Clicked Continue — waiting for review modal...');
+
+  // ── Step 8: Review modal — click Submit ──
+  const modalBtns = await imPage.$$('button');
+  let submitted = false;
+  for (const btn of modalBtns) {
+    const txt = await imPage.evaluate(el => el.textContent, btn).catch(() => '');
+    if (txt.toLowerCase().includes('submit')) {
+      await btn.click();
+      submitted = true;
+      console.log('[SparkP2P] Clicked Submit on review modal');
+      break;
+    }
+  }
+  if (!submitted) console.log('[SparkP2P] Submit button not found — may have auto-advanced');
+  await new Promise(r => setTimeout(r, 2000));
+
+  // ── Step 9: Identity Validation — enter PIN ──
+  const pinInput = await imPage.$('input[type="password"], input[placeholder*="pin" i], input[placeholder*="PIN" i]');
+  if (pinInput) {
+    await pinInput.click({ clickCount: 3 });
+    await pinInput.type(imPin, { delay: 120 });
+    console.log('[SparkP2P] Entered I&M PIN');
+    await new Promise(r => setTimeout(r, 500));
+
+    // Click Complete
+    const completeBtns = await imPage.$$('button');
+    for (const btn of completeBtns) {
+      const txt = await imPage.evaluate(el => el.textContent, btn).catch(() => '');
+      if (txt.toLowerCase().includes('complete')) {
+        await btn.click();
+        console.log('[SparkP2P] Clicked Complete — waiting for confirmation...');
+        break;
+      }
+    }
+  } else {
+    console.log('[SparkP2P] PIN input not found — may have already advanced');
+  }
+
+  // ── Step 10: Wait for success and take screenshot ──
+  await new Promise(r => setTimeout(r, 4000));
+  const screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
+
+  // Verify success via page text
+  const pageText = await imPage.evaluate(() => document.body.innerText).catch(() => '');
+  const success = pageText.toLowerCase().includes('success') ||
+                  pageText.toLowerCase().includes('transaction') ||
+                  pageText.toLowerCase().includes('submitted') ||
+                  pageText.toLowerCase().includes('processed');
+
+  console.log(`[SparkP2P] I&M payment ${success ? '✅ SUCCESS' : '⚠️ status unclear'}`);
+  return { success, screenshot };
+}
+
+async function sendBinanceChatMessage(page, message) {
+  try {
+    const chatInput = await page.$('[placeholder*="message" i], [placeholder*="Enter message" i], textarea');
+    if (!chatInput) { console.log('[SparkP2P] Chat input not found'); return false; }
+    await chatInput.click();
+    await new Promise(r => setTimeout(r, 400));
+    await chatInput.type(message, { delay: 30 });
+    await page.keyboard.press('Enter');
+    await new Promise(r => setTimeout(r, 1000));
+    console.log(`[SparkP2P] Chat message sent: ${message.substring(0, 60)}`);
+    return true;
+  } catch (e) {
+    console.log('[SparkP2P] Chat send error:', e.message);
+    return false;
+  }
+}
+
+async function uploadPaymentProofToBinance(page, screenshotBase64) {
+  try {
+    // Click the "Upload Payment Proof" button
+    const allBtns = await page.$$('button, [role="button"]');
+    let uploadBtn = null;
+    for (const btn of allBtns) {
+      const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
+      if (txt.toLowerCase().includes('upload') || txt.toLowerCase().includes('payment proof')) {
+        uploadBtn = btn;
+        break;
+      }
+    }
+
+    if (!uploadBtn) {
+      // Try the + attachment button in chat
+      uploadBtn = await page.$('[class*="attach" i], [title*="attach" i], [aria-label*="attach" i]');
+    }
+
+    if (!uploadBtn) { console.log('[SparkP2P] Upload button not found'); return false; }
+
+    // Write screenshot to temp file and upload via file input
+    const tmpPath = path.join(app.getPath('temp'), `im_receipt_${Date.now()}.png`);
+    const buf = Buffer.from(screenshotBase64, 'base64');
+    fs.writeFileSync(tmpPath, buf);
+
+    // Intercept file chooser
+    const [fileChooser] = await Promise.all([
+      page.waitForFileChooser({ timeout: 5000 }),
+      uploadBtn.click(),
+    ]);
+    await fileChooser.accept([tmpPath]);
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Click Send if there's a send button after file selection
+    const sendBtns = await page.$$('button');
+    for (const btn of sendBtns) {
+      const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
+      if (txt.toLowerCase() === 'send' || txt.toLowerCase().includes('send')) {
+        await btn.click();
+        break;
+      }
+    }
+
+    // Clean up temp file
+    fs.unlinkSync(tmpPath);
+    console.log('[SparkP2P] Payment proof uploaded to Binance chat');
+    return true;
+  } catch (e) {
+    console.log('[SparkP2P] Upload proof error:', e.message);
+    return false;
+  }
+}
+
+async function respondToBuyOrderChat(page, orderDetails) {
+  try {
+    // Get all chat messages visible on the page
+    const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
+
+    // Only respond if there are seller messages we haven't addressed
+    // Ask Claude to read the chat and generate a response if needed
+    const ss = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+    if (!ss || !anthropicApiKey) return;
+
+    const minutesSincePayment = buyPaymentTime ? Math.floor((Date.now() - buyPaymentTime) / 60000) : 0;
+    const prompt = `You are managing a Binance P2P buy order. You are the BUYER.
+
+Order details:
+- You sent KSh ${orderDetails.amount} to ${orderDetails.name} via ${orderDetails.method} (${orderDetails.phone || ''})
+- Payment was sent ${minutesSincePayment} minute(s) ago
+- Order number: ${orderDetails.orderNumber}
+
+Look at this Binance P2P order chat screenshot.
+1. Has the seller sent any NEW message that requires a response?
+2. If yes, what should the buyer reply? Be professional, friendly, and concise (max 2 sentences).
+3. If no response is needed, reply with "NO_REPLY_NEEDED".
+
+Reply in this JSON format: {"needs_reply": true/false, "message": "your reply here or NO_REPLY_NEEDED"}`;
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+          { type: 'text', text: prompt },
+        ]}],
+      }),
+    });
+
+    const data = await response.json();
+    const text = data.content?.[0]?.text || '';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return;
+
+    const result = JSON.parse(jsonMatch[0]);
+    if (result.needs_reply && result.message && result.message !== 'NO_REPLY_NEEDED') {
+      await sendBinanceChatMessage(page, result.message);
+      console.log(`[SparkP2P] AI replied to seller: ${result.message.substring(0, 60)}`);
+    }
+  } catch (e) {
+    console.log('[SparkP2P] Chat response error:', e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 // I&M BANK AUTOMATION
 // Opens as a new tab in the existing Binance browser — one browser, all tabs
 // ═══════════════════════════════════════════════════════════
@@ -3852,97 +4332,603 @@ function startImKeepAlive() {
 }
 
 async function executeImWithdrawal(job) {
-  // job = { id, amount, destination }
-  // destination format: "AccountNumber|BankCode" or "AccountNumber" (I&M to I&M)
+  // job = { id, amount, destination_account, destination_name }
+  // Transfers from SPARK FREELANCE SOLUTIONS (00108094726150) → trader's personal account
+  // Flow: dashboard → Money Transfer nav → Own Account Transfer → fill form → review → PIN → success
   if (imWithdrawalRunning) return;
   if (!imPage || imPage.isClosed()) {
     console.log('[SparkP2P] I&M page not open — cannot execute withdrawal');
     return;
   }
+  if (!imPin) {
+    console.log('[SparkP2P] I&M PIN not set — cannot execute withdrawal');
+    return;
+  }
   imWithdrawalRunning = true;
-  console.log(`[SparkP2P] Executing I&M withdrawal: KES ${job.amount} → ${job.destination}`);
+  const FROM_ACCOUNT = '00108094726150'; // SPARK FREELANCE SOLUTIONS (M-Pesa sweep destination)
+  const TO_ACCOUNT   = job.destination_account || '00108094726050'; // trader personal KES acc
+  const EXPECTED_NAME = (job.destination_name || '').toUpperCase();
+  console.log(`[SparkP2P] 💸 I&M own-account transfer: KES ${job.amount} → ${TO_ACCOUNT}`);
 
   try {
-    // Navigate to transfers page
-    await imPage.goto(IM_TRANSFERS_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    // ── STEP 1: Navigate to Own Account Transfer form ──────────────────────────
+    await imPage.goto(
+      'https://digital.imbank.com/inm-retail/transfers/own-account-transfer/form',
+      { waitUntil: 'networkidle2', timeout: 30000 }
+    );
     await imPage.waitForTimeout(2000);
+    console.log('[SparkP2P] I&M: Loaded own-account-transfer form');
 
-    // Use Claude Vision to navigate the transfer form
-    const screenshot = await imPage.screenshot({ encoding: 'base64' });
-    const prompt = `You are controlling an I&M Bank online banking portal to execute a bank transfer.
-Current screen shows the transfers/payments page.
-Task: Transfer KES ${job.amount} to account ${job.destination}.
-Describe what you see and what action to take next.
-Respond with JSON: { "action": "click|type|submit|wait|done|error", "selector": "css selector or null", "text": "text to type or null", "description": "what you see" }`;
-
-    let steps = 0;
-    const MAX_STEPS = 15;
-    let done = false;
-
-    while (steps < MAX_STEPS && !done) {
-      steps++;
-      const ss = await imPage.screenshot({ encoding: 'base64' });
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 500,
-          messages: [{ role: 'user', content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
-            { type: 'text', text: `Transfer KES ${job.amount} to ${job.destination}. Current step ${steps}/${MAX_STEPS}. Respond JSON only: { "action": "click|type|submit|wait|done|error", "selector": "css selector", "text": "text to type if action=type", "description": "brief description" }` },
-          ]}],
-        }),
-      });
-      const data = await response.json();
-      let instruction;
-      try { instruction = JSON.parse(data.content[0].text); } catch { break; }
-
-      console.log(`[SparkP2P] I&M Vision step ${steps}: ${instruction.action} — ${instruction.description}`);
-
-      if (instruction.action === 'done') { done = true; break; }
-      if (instruction.action === 'error') { console.log('[SparkP2P] I&M Vision error:', instruction.description); break; }
-      if (instruction.action === 'wait') { await imPage.waitForTimeout(2000); continue; }
-      if (instruction.action === 'click' && instruction.selector) {
-        await imPage.click(instruction.selector).catch(() => {});
-        await imPage.waitForTimeout(1000);
-      }
-      if (instruction.action === 'type' && instruction.selector && instruction.text) {
-        await imPage.click(instruction.selector).catch(() => {});
-        await imPage.type(instruction.selector, String(instruction.text), { delay: 50 }).catch(() => {});
-        await imPage.waitForTimeout(500);
-      }
-      if (instruction.action === 'submit') {
-        await imPage.keyboard.press('Enter').catch(() => {});
-        await imPage.waitForTimeout(2000);
+    // ── STEP 2: Select FROM account (SPARK FREELANCE SOLUTIONS) ───────────────
+    // Click the From dropdown
+    await imPage.waitForSelector('select, [class*="dropdown"], [class*="select"]', { timeout: 10000 }).catch(() => {});
+    // Use Claude Vision to identify and click the From dropdown, then select correct account
+    let ss = await imPage.screenshot({ encoding: 'base64' });
+    let fromDone = false;
+    // Try clicking the first dropdown (From) and selecting by account number text
+    const fromDropdowns = await imPage.$$('ng-select, app-select, select').catch(() => []);
+    if (fromDropdowns.length > 0) {
+      await fromDropdowns[0].click().catch(() => {});
+      await imPage.waitForTimeout(1000);
+      // Find option containing FROM_ACCOUNT number
+      const fromOption = await imPage.$x(`//*[contains(text(), '${FROM_ACCOUNT}') or contains(text(), 'SPARK FREELANCE')]`).catch(() => []);
+      if (fromOption.length > 0) {
+        await fromOption[0].click().catch(() => {});
+        fromDone = true;
+        console.log('[SparkP2P] I&M: Selected FROM account (Spark Freelance Solutions)');
       }
     }
+    if (!fromDone) {
+      // Fallback: use Vision to click From dropdown and select
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionClick(ss, `Click the "From" account dropdown and select the account with number ${FROM_ACCOUNT} (SPARK FREELANCE SOLUTIONS)`);
+    }
+    await imPage.waitForTimeout(1000);
 
-    if (done) {
-      console.log(`[SparkP2P] I&M withdrawal KES ${job.amount} completed`);
+    // ── STEP 3: Select TO account (trader's personal account) ─────────────────
+    const allDropdowns = await imPage.$$('ng-select, app-select, select').catch(() => []);
+    let toDone = false;
+    if (allDropdowns.length > 1) {
+      await allDropdowns[1].click().catch(() => {});
+      await imPage.waitForTimeout(1000);
+      const toOption = await imPage.$x(`//*[contains(text(), '${TO_ACCOUNT}') or contains(text(), 'BONITO')]`).catch(() => []);
+      if (toOption.length > 0) {
+        await toOption[0].click().catch(() => {});
+        toDone = true;
+        console.log('[SparkP2P] I&M: Selected TO account');
+      }
+    }
+    if (!toDone) {
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionClick(ss, `Click the "To" account dropdown and select the account with number ${TO_ACCOUNT}`);
+    }
+    await imPage.waitForTimeout(1000);
+
+    // ── STEP 4: Set currency to KES ────────────────────────────────────────────
+    // Click the currency dropdown and select KES
+    const currencyDropdown = await imPage.$('select[formcontrolname*="currency"], [class*="currency"] select, select').catch(() => null);
+    if (currencyDropdown) {
+      await imPage.select('select', 'KES').catch(() => {});
+    } else {
+      // Try clicking currency button and picking KES from list
+      const currencyBtn = await imPage.$x('//*[contains(text(), "KES") or contains(text(), "EUR") or contains(text(), "USD")]').catch(() => []);
+      if (currencyBtn.length > 0) {
+        await currencyBtn[0].click().catch(() => {});
+        await imPage.waitForTimeout(500);
+        const kesOption = await imPage.$x('//*[contains(text(), "KES")]').catch(() => []);
+        if (kesOption.length > 0) await kesOption[0].click().catch(() => {});
+      }
+    }
+    console.log('[SparkP2P] I&M: Currency set to KES');
+    await imPage.waitForTimeout(500);
+
+    // ── STEP 5: Enter amount ───────────────────────────────────────────────────
+    // Amount field — type the whole number part (cents field stays 00)
+    const amountWhole = Math.floor(job.amount).toString();
+    const amountInput = await imPage.$('input[type="number"], input[formcontrolname*="amount"], input[placeholder*="amount" i]').catch(() => null);
+    if (amountInput) {
+      await amountInput.click({ clickCount: 3 });
+      await amountInput.type(amountWhole, { delay: 50 });
+    } else {
+      // Vision fallback
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionType(ss, `Type ${amountWhole} in the Amount field`, amountWhole);
+    }
+    console.log(`[SparkP2P] I&M: Entered amount ${amountWhole}`);
+    await imPage.waitForTimeout(500);
+
+    // ── STEP 6: Enter description (optional) ──────────────────────────────────
+    const descInput = await imPage.$('textarea, input[formcontrolname*="description"], input[placeholder*="description" i]').catch(() => null);
+    if (descInput) {
+      await descInput.click();
+      await descInput.type(`SparkP2P withdrawal ${job.id}`, { delay: 30 });
+    }
+    await imPage.waitForTimeout(500);
+
+    // ── STEP 7: Click Continue ─────────────────────────────────────────────────
+    const continueBtn = await imPage.$x('//button[contains(text(), "Continue")]').catch(() => []);
+    if (continueBtn.length > 0) {
+      await continueBtn[0].click();
+    } else {
+      await imPage.click('button[type="submit"], button.btn-primary').catch(() => {});
+    }
+    console.log('[SparkP2P] I&M: Clicked Continue');
+    await imPage.waitForTimeout(3000);
+
+    // ── STEP 8: Review modal — verify account name then click Submit ───────────
+    // Use Claude Vision to read the beneficiary name shown in the review modal
+    ss = await imPage.screenshot({ encoding: 'base64' });
+    const reviewCheck = await imVisionVerify(
+      ss,
+      `This is the "Own Account Transfer - Review" confirmation modal.
+      Read the Account Name shown under "Beneficiary bank details".
+      Expected account name: "${EXPECTED_NAME || 'BONITO CHELUGET SAMOEI'}".
+      Does the account name in the modal match?
+      Respond JSON only: { "match": true/false, "found_name": "name you read", "description": "brief" }`
+    );
+
+    if (reviewCheck && reviewCheck.match === false) {
+      console.log(`[SparkP2P] ⚠️ I&M review: account name mismatch! Expected "${EXPECTED_NAME}", found "${reviewCheck.found_name}" — discarding`);
+      const discardBtn = await imPage.$x('//button[contains(text(), "Discard")] | //a[contains(text(), "Discard")]').catch(() => []);
+      if (discardBtn.length > 0) await discardBtn[0].click().catch(() => {});
+      throw new Error(`Account name mismatch: expected "${EXPECTED_NAME}", got "${reviewCheck.found_name}"`);
+    }
+    console.log(`[SparkP2P] I&M: Review verified (${reviewCheck?.found_name || 'name confirmed'}) — submitting`);
+
+    // Click Submit
+    const submitBtn = await imPage.$x('//button[contains(text(), "Submit")]').catch(() => []);
+    if (submitBtn.length > 0) {
+      await submitBtn[0].click();
+    } else {
+      await imPage.click('button[type="submit"]').catch(() => {});
+    }
+    await imPage.waitForTimeout(2000);
+    console.log('[SparkP2P] I&M: Clicked Submit');
+
+    // ── STEP 9: Identity Validation — enter PIN ────────────────────────────────
+    await imPage.waitForSelector('input[type="password"], input[placeholder*="PIN" i]', { timeout: 10000 });
+    const pinInput = await imPage.$('input[type="password"], input[placeholder*="PIN" i]').catch(() => null);
+    if (!pinInput) throw new Error('PIN input not found');
+    await pinInput.click();
+    await pinInput.type(imPin, { delay: 80 });
+    console.log('[SparkP2P] I&M: Entered PIN');
+    await imPage.waitForTimeout(500);
+
+    // Click Complete button
+    const completeBtn = await imPage.$x('//button[contains(text(), "Complete")]').catch(() => []);
+    if (completeBtn.length > 0) {
+      await completeBtn[0].click();
+    } else {
+      await imPage.click('button[type="submit"]').catch(() => {});
+    }
+    console.log('[SparkP2P] I&M: Clicked Complete');
+    await imPage.waitForTimeout(4000);
+
+    // ── STEP 10: Verify success screen ────────────────────────────────────────
+    ss = await imPage.screenshot({ encoding: 'base64' });
+    const successCheck = await imVisionVerify(
+      ss,
+      `Does this screen show "Payment Success" with a green checkmark?
+      Also extract the Reference ID number if visible.
+      Respond JSON only: { "success": true/false, "reference": "ref number or null", "description": "brief" }`
+    );
+
+    if (successCheck && successCheck.success) {
+      console.log(`[SparkP2P] ✅ I&M withdrawal KES ${job.amount} SUCCESS — ref: ${successCheck.reference || 'N/A'}`);
+      // Click Close to dismiss the success modal
+      const closeBtn = await imPage.$x('//button[contains(text(), "Close")]').catch(() => []);
+      if (closeBtn.length > 0) await closeBtn[0].click().catch(() => {});
+      await imPage.waitForTimeout(1000);
+
+      // Notify backend
       await fetch(`${API_BASE}/ext/bank-withdrawal-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ tx_id: job.id }),
+        body: JSON.stringify({ tx_id: job.id, reference: successCheck.reference }),
       });
     } else {
-      console.log(`[SparkP2P] I&M withdrawal did not complete within ${MAX_STEPS} steps — requeuing`);
-      await fetch(`${API_BASE}/ext/bank-withdrawal-failed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ tx_id: job.id }),
-      });
+      throw new Error(`Payment success screen not detected: ${successCheck?.description || 'unknown state'}`);
     }
+
   } catch (e) {
     console.log('[SparkP2P] I&M withdrawal error:', e.message);
     await fetch(`${API_BASE}/ext/bank-withdrawal-failed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ tx_id: job.id }),
+      body: JSON.stringify({ tx_id: job.id, error: e.message }),
     }).catch(() => {});
   } finally {
     imWithdrawalRunning = false;
-    await syncImCookies(); // refresh session after transfer
+    await syncImCookies();
+  }
+}
+
+// ── Claude Vision helpers for I&M automation ──────────────────────────────────
+async function imVisionClick(screenshotB64, instruction) {
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 300,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotB64 } },
+          { type: 'text', text: `${instruction}. Respond JSON only: { "selector": "css selector to click", "description": "what you see" }` },
+        ]}],
+      }),
+    });
+    const data = await res.json();
+    const result = JSON.parse(data.content[0].text);
+    if (result.selector) await imPage.click(result.selector).catch(() => {});
+    await imPage.waitForTimeout(1000);
+  } catch (e) { console.log('[SparkP2P] imVisionClick error:', e.message); }
+}
+
+async function imVisionType(screenshotB64, instruction, text) {
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 300,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotB64 } },
+          { type: 'text', text: `${instruction}. Respond JSON only: { "selector": "css selector of input field", "description": "what you see" }` },
+        ]}],
+      }),
+    });
+    const data = await res.json();
+    const result = JSON.parse(data.content[0].text);
+    if (result.selector) {
+      await imPage.click(result.selector, { clickCount: 3 }).catch(() => {});
+      await imPage.type(result.selector, text, { delay: 50 }).catch(() => {});
+    }
+    await imPage.waitForTimeout(500);
+  } catch (e) { console.log('[SparkP2P] imVisionType error:', e.message); }
+}
+
+async function imVisionVerify(screenshotB64, instruction) {
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 400,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotB64 } },
+          { type: 'text', text: instruction },
+        ]}],
+      }),
+    });
+    const data = await res.json();
+    return JSON.parse(data.content[0].text);
+  } catch (e) {
+    console.log('[SparkP2P] imVisionVerify error:', e.message);
+    return null;
+  }
+}
+
+// ── I&M Local Transfer (to any I&M account holder) ────────────────────────────
+// Used for all trader withdrawals to their I&M accounts
+async function executeImLocalTransfer(job) {
+  // job = { id, amount, destination_account, destination_name }
+  // Flow: local-transfers/form → select FROM → One-off Beneficiary → I&M Bank → enter account
+  //       → Validate → verify name → KES → amount → Import Payments → Continue
+  //       → review modal → Submit → PIN → success
+  if (imWithdrawalRunning) return;
+  if (!imPage || imPage.isClosed()) {
+    console.log('[SparkP2P] I&M page not open — cannot execute local transfer');
+    return;
+  }
+  if (!imPin) {
+    console.log('[SparkP2P] I&M PIN not set — cannot execute local transfer');
+    return;
+  }
+  imWithdrawalRunning = true;
+  const FROM_ACCOUNT  = '00108094726150'; // SPARK FREELANCE SOLUTIONS
+  const TO_ACCOUNT    = job.destination_account;
+  const EXPECTED_NAME = (job.destination_name || '').toUpperCase().trim();
+  console.log(`[SparkP2P] 💸 I&M local transfer: KES ${job.amount} → ${TO_ACCOUNT} (${EXPECTED_NAME})`);
+
+  try {
+    // ── STEP 1: Navigate to Local Transfers form ───────────────────────────────
+    await imPage.goto(
+      'https://digital.imbank.com/inm-retail/transfers/local-transfers/form',
+      { waitUntil: 'networkidle2', timeout: 30000 }
+    );
+    await imPage.waitForTimeout(2500);
+    console.log('[SparkP2P] I&M: Loaded local-transfers form');
+
+    // ── STEP 2: Select Debit Account (SPARK FREELANCE SOLUTIONS) ──────────────
+    // Click the Debit Account dropdown
+    let ss = await imPage.screenshot({ encoding: 'base64' });
+    // Try to find and click the debit account dropdown via XPath
+    const debitDropdown = await imPage.$x('//*[contains(text(), "Select an account") or contains(@placeholder, "Select an account")]').catch(() => []);
+    if (debitDropdown.length > 0) {
+      await debitDropdown[0].click();
+      await imPage.waitForTimeout(1000);
+    } else {
+      // Vision fallback: click the "Debit Account" dropdown
+      await imVisionClick(ss, 'Click the "Debit Account" or "Select an account" dropdown at the top of the form');
+      await imPage.waitForTimeout(1000);
+    }
+    // Select SPARK FREELANCE SOLUTIONS
+    const fromOption = await imPage.$x(`//*[contains(text(), '${FROM_ACCOUNT}') or contains(text(), 'SPARK FREELANCE')]`).catch(() => []);
+    if (fromOption.length > 0) {
+      await fromOption[0].click();
+      console.log('[SparkP2P] I&M: Selected FROM account (Spark Freelance Solutions)');
+    } else {
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionClick(ss, `Select the SPARK FREELANCE SOLUTIONS account (${FROM_ACCOUNT}) from the dropdown list`);
+    }
+    await imPage.waitForTimeout(1000);
+
+    // ── STEP 3: Click "One-off Beneficiary" tab ────────────────────────────────
+    const oneOffTab = await imPage.$x('//label[contains(text(), "One-off Beneficiary")] | //span[contains(text(), "One-off Beneficiary")] | //*[contains(text(), "One-off")]').catch(() => []);
+    if (oneOffTab.length > 0) {
+      await oneOffTab[0].click();
+      console.log('[SparkP2P] I&M: Clicked One-off Beneficiary tab');
+    } else {
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionClick(ss, 'Click the "One-off Beneficiary" radio button or tab');
+    }
+    await imPage.waitForTimeout(1000);
+
+    // ── STEP 4: Select Bank = I & M Bank Ltd ──────────────────────────────────
+    // Click the Bank name dropdown
+    const bankDropdown = await imPage.$x('//*[contains(text(), "Bank name") or @placeholder[contains(., "Bank")]]').catch(() => []);
+    // Try using ng-select or regular select for bank
+    const bankSelects = await imPage.$$('ng-select, app-select, select').catch(() => []);
+    let bankSelected = false;
+    for (const sel of bankSelects) {
+      const text = await imPage.evaluate(el => el.textContent || '', sel).catch(() => '');
+      if (text.includes('Bank') || text.includes('Select')) {
+        await sel.click().catch(() => {});
+        await imPage.waitForTimeout(800);
+        const imOption = await imPage.$x('//*[contains(text(), "I & M Bank") or contains(text(), "I&M Bank")]').catch(() => []);
+        if (imOption.length > 0) {
+          await imOption[0].click();
+          bankSelected = true;
+          console.log('[SparkP2P] I&M: Selected I & M Bank Ltd as destination bank');
+          break;
+        }
+      }
+    }
+    if (!bankSelected) {
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionClick(ss, 'Click the "Bank name" dropdown and select "I & M Bank Ltd" from the list');
+    }
+    await imPage.waitForTimeout(1000);
+
+    // ── STEP 5: Enter Account Number then click Validate ──────────────────────
+    const acctInput = await imPage.$('input[formcontrolname*="account"], input[placeholder*="Account number" i], input[name*="account" i]').catch(() => null);
+    if (acctInput) {
+      await acctInput.click({ clickCount: 3 });
+      await acctInput.type(TO_ACCOUNT, { delay: 60 });
+    } else {
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionType(ss, 'Type the account number in the "Account number" field', TO_ACCOUNT);
+    }
+    await imPage.waitForTimeout(500);
+
+    // Click Validate button
+    const validateBtn = await imPage.$x('//button[contains(text(), "Validate")]').catch(() => []);
+    if (validateBtn.length > 0) {
+      await validateBtn[0].click();
+      console.log('[SparkP2P] I&M: Clicked Validate — waiting for account name...');
+    } else {
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionClick(ss, 'Click the "Validate" button next to the account number field');
+    }
+    // Wait for the account name to auto-fill (API call)
+    await imPage.waitForTimeout(3000);
+
+    // ── STEP 6: Read auto-filled account name and verify ──────────────────────
+    // The "Account name" field should now be populated
+    let autoFilledName = '';
+    const acctNameInput = await imPage.$('input[formcontrolname*="name" i], input[placeholder*="Account name" i]').catch(() => null);
+    if (acctNameInput) {
+      autoFilledName = await imPage.evaluate(el => el.value || '', acctNameInput).catch(() => '');
+    }
+    if (!autoFilledName) {
+      // Vision fallback: read the account name from the page
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      const nameRead = await imVisionVerify(ss,
+        `The "Account name" field should now be auto-filled after Validate was clicked.
+        Read the text in the "Account name" input field.
+        Respond JSON only: { "account_name": "the name shown or empty string if blank", "description": "brief" }`
+      );
+      autoFilledName = nameRead?.account_name || '';
+    }
+    autoFilledName = autoFilledName.toUpperCase().trim();
+    console.log(`[SparkP2P] I&M: Validated account name = "${autoFilledName}"`);
+
+    // Verify name matches expected (if we have an expected name)
+    if (EXPECTED_NAME && autoFilledName && !autoFilledName.includes(EXPECTED_NAME.split(' ')[0])) {
+      console.log(`[SparkP2P] ⚠️ Account name mismatch! Expected "${EXPECTED_NAME}", got "${autoFilledName}" — aborting`);
+      throw new Error(`Account name mismatch: expected "${EXPECTED_NAME}", got "${autoFilledName}"`);
+    }
+    console.log(`[SparkP2P] I&M: Account name verified ✓`);
+
+    // ── STEP 7: Select Currency = KES ─────────────────────────────────────────
+    // The currency is a small dropdown (KES/EUR/USD/GBP)
+    const currencySelects = await imPage.$$('select').catch(() => []);
+    let currencySet = false;
+    for (const sel of currencySelects) {
+      try {
+        await imPage.evaluate(el => { el.value = 'KES'; el.dispatchEvent(new Event('change', { bubbles: true })); }, sel);
+        currencySet = true;
+        break;
+      } catch (_) {}
+    }
+    if (!currencySet) {
+      // Try clicking the currency "-" dropdown and picking KES
+      const currDrop = await imPage.$x('//*[text()="-" or text()="KES" or text()="EUR" or text()="USD"]').catch(() => []);
+      if (currDrop.length > 0) {
+        await currDrop[0].click();
+        await imPage.waitForTimeout(500);
+        const kesOpt = await imPage.$x('//*[text()="KES"]').catch(() => []);
+        if (kesOpt.length > 0) await kesOpt[0].click();
+      }
+    }
+    console.log('[SparkP2P] I&M: Currency set to KES');
+    await imPage.waitForTimeout(500);
+
+    // ── STEP 8: Enter Amount ───────────────────────────────────────────────────
+    const amountWhole = Math.floor(job.amount).toString();
+    // The amount field is a number input (whole part); there's a separate .00 field for cents
+    const amountInputs = await imPage.$$('input[type="number"], input[formcontrolname*="amount"]').catch(() => []);
+    let amountEntered = false;
+    for (const inp of amountInputs) {
+      const placeholder = await imPage.evaluate(el => el.placeholder || el.getAttribute('formcontrolname') || '', inp).catch(() => '');
+      if (!placeholder.includes('cent') && !placeholder.includes('00')) {
+        await inp.click({ clickCount: 3 });
+        await inp.type(amountWhole, { delay: 50 });
+        amountEntered = true;
+        break;
+      }
+    }
+    if (!amountEntered) {
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionType(ss, `Type ${amountWhole} in the Amount (whole number) field`, amountWhole);
+    }
+    console.log(`[SparkP2P] I&M: Entered amount ${amountWhole}`);
+    await imPage.waitForTimeout(500);
+
+    // ── STEP 9: Enter Payment Reference ───────────────────────────────────────
+    const refText = `SparkP2P ${job.id}`.substring(0, 50);
+    const refInput = await imPage.$('input[formcontrolname*="reference" i], input[placeholder*="Payment Description" i], input[placeholder*="description" i]').catch(() => null);
+    if (refInput) {
+      await refInput.click();
+      await refInput.type(refText, { delay: 30 });
+    }
+    await imPage.waitForTimeout(500);
+
+    // ── STEP 10: Select Payment Purpose = "Import Payments" ───────────────────
+    // Click the Payment Purpose dropdown and select "Import Payments"
+    const purposeSelect = await imPage.$('select[formcontrolname*="purpose" i]').catch(() => null);
+    let purposeSet = false;
+    if (purposeSelect) {
+      // Try setting by option text
+      const options = await imPage.evaluate(el => Array.from(el.options).map((o, i) => ({ i, text: o.text })), purposeSelect).catch(() => []);
+      const importOpt = options.find(o => o.text.toLowerCase().includes('import'));
+      if (importOpt !== undefined) {
+        await imPage.evaluate((el, idx) => { el.selectedIndex = idx; el.dispatchEvent(new Event('change', { bubbles: true })); }, purposeSelect, importOpt.i);
+        purposeSet = true;
+      }
+    }
+    if (!purposeSet) {
+      // Try ng-select / custom dropdown
+      const purposeDrop = await imPage.$x('//*[contains(text(), "Select payment purpose") or contains(text(), "Payment Purpose")]').catch(() => []);
+      if (purposeDrop.length > 0) {
+        await purposeDrop[0].click();
+        await imPage.waitForTimeout(800);
+        const importOpt = await imPage.$x('//*[contains(text(), "Import Payments")]').catch(() => []);
+        if (importOpt.length > 0) {
+          await importOpt[0].click();
+          purposeSet = true;
+        }
+      }
+    }
+    if (!purposeSet) {
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionClick(ss, 'Click the "Payment Purpose" dropdown and select "Import Payments" from the list');
+    }
+    console.log('[SparkP2P] I&M: Payment purpose set to Import Payments');
+    await imPage.waitForTimeout(500);
+
+    // ── STEP 11: Click Continue ────────────────────────────────────────────────
+    const continueBtn = await imPage.$x('//button[contains(text(), "Continue")]').catch(() => []);
+    if (continueBtn.length > 0) {
+      await continueBtn[0].click();
+    } else {
+      await imPage.click('button[type="submit"], button.btn-primary').catch(() => {});
+    }
+    console.log('[SparkP2P] I&M: Clicked Continue');
+    await imPage.waitForTimeout(3000);
+
+    // ── STEP 12: Review modal — verify beneficiary name then click Submit ──────
+    ss = await imPage.screenshot({ encoding: 'base64' });
+    const reviewCheck = await imVisionVerify(
+      ss,
+      `This is the "Local Transfer - Review" confirmation modal.
+      Read the Account Name shown under "Beneficiary bank details".
+      Expected account name contains: "${EXPECTED_NAME || autoFilledName}".
+      Does the Account Name in the modal match?
+      Respond JSON only: { "match": true/false, "found_name": "name you read", "description": "brief" }`
+    );
+
+    if (reviewCheck && reviewCheck.match === false) {
+      console.log(`[SparkP2P] ⚠️ Review modal name mismatch! Expected "${EXPECTED_NAME}", found "${reviewCheck.found_name}" — discarding`);
+      const discardBtn = await imPage.$x('//button[contains(text(), "Discard")]').catch(() => []);
+      if (discardBtn.length > 0) await discardBtn[0].click().catch(() => {});
+      throw new Error(`Account name mismatch at review: expected "${EXPECTED_NAME}", got "${reviewCheck.found_name}"`);
+    }
+    console.log(`[SparkP2P] I&M: Review verified (${reviewCheck?.found_name || 'confirmed'}) — submitting`);
+
+    // Click Submit
+    const submitBtn = await imPage.$x('//button[contains(text(), "Submit")]').catch(() => []);
+    if (submitBtn.length > 0) {
+      await submitBtn[0].click();
+    } else {
+      await imPage.click('button[type="submit"]').catch(() => {});
+    }
+    console.log('[SparkP2P] I&M: Clicked Submit');
+    await imPage.waitForTimeout(2000);
+
+    // ── STEP 13: Identity Validation — enter PIN then click Complete ───────────
+    await imPage.waitForSelector('input[type="password"], input[placeholder*="PIN" i]', { timeout: 10000 });
+    const pinInput = await imPage.$('input[type="password"], input[placeholder*="PIN" i]').catch(() => null);
+    if (!pinInput) throw new Error('PIN input not found');
+    await pinInput.click();
+    await pinInput.type(imPin, { delay: 80 });
+    console.log('[SparkP2P] I&M: Entered PIN');
+    await imPage.waitForTimeout(500);
+
+    const completeBtn = await imPage.$x('//button[contains(text(), "Complete")]').catch(() => []);
+    if (completeBtn.length > 0) {
+      await completeBtn[0].click();
+    } else {
+      await imPage.click('button[type="submit"]').catch(() => {});
+    }
+    console.log('[SparkP2P] I&M: Clicked Complete');
+    await imPage.waitForTimeout(4000);
+
+    // ── STEP 14: Verify success screen ────────────────────────────────────────
+    ss = await imPage.screenshot({ encoding: 'base64' });
+    const successCheck = await imVisionVerify(
+      ss,
+      `Does this screen show "Payment Success" or a green success confirmation?
+      Also extract the Reference ID or transaction number if visible.
+      Respond JSON only: { "success": true/false, "reference": "ref number or null", "description": "brief" }`
+    );
+
+    if (successCheck && successCheck.success) {
+      console.log(`[SparkP2P] ✅ I&M local transfer KES ${job.amount} → ${TO_ACCOUNT} SUCCESS — ref: ${successCheck.reference || 'N/A'}`);
+      const closeBtn = await imPage.$x('//button[contains(text(), "Close")]').catch(() => []);
+      if (closeBtn.length > 0) await closeBtn[0].click().catch(() => {});
+      await imPage.waitForTimeout(1000);
+
+      // Notify backend of success
+      await fetch(`${API_BASE}/ext/bank-withdrawal-complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ tx_id: job.id, reference: successCheck.reference }),
+      }).catch(() => {});
+    } else {
+      throw new Error(`Payment success not detected: ${successCheck?.description || 'unknown state'}`);
+    }
+
+  } catch (e) {
+    console.log('[SparkP2P] I&M local transfer error:', e.message);
+    await fetch(`${API_BASE}/ext/bank-withdrawal-failed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ tx_id: job.id, error: e.message }),
+    }).catch(() => {});
+  } finally {
+    imWithdrawalRunning = false;
+    await syncImCookies();
   }
 }
 
@@ -3957,7 +4943,13 @@ setInterval(async () => {
     const data = await res.json();
     if (data.jobs && data.jobs.length > 0) {
       console.log(`[SparkP2P] ${data.jobs.length} pending I&M withdrawal(s) found — executing first`);
-      await executeImWithdrawal(data.jobs[0]);
+      const job = data.jobs[0];
+      // Own-account transfer for owner's personal account; local transfer for all other traders
+      if (job.destination_account === '00108094726050' && !job.destination_name) {
+        await executeImWithdrawal(job);
+      } else {
+        await executeImLocalTransfer(job);
+      }
     }
   } catch (e) {}
 }, 30 * 1000);
@@ -4569,6 +5561,9 @@ ipcMain.handle('open-gmail-tab', async () => {
 });
 ipcMain.handle('set-token', (_, t) => { token = t; return { ok: true }; });
 ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] Fund password configured'); return { ok: true }; });
+ipcMain.handle('save-im-pin', (_, pin) => { saveImPin(pin); return { ok: true }; });
+ipcMain.handle('clear-im-pin', () => { clearImPin(); return { ok: true }; });
+ipcMain.handle('has-im-pin', () => ({ hasPin: !!imPin }));
 ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });
 ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; console.log('[SparkP2P] AI key set (legacy)'); return { ok: true }; });
 ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; saveAnthropicKey(key); aiScanner.initAI(key); console.log('[SparkP2P] Claude configured and saved to disk'); return { ok: true }; });
