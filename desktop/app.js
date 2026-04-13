@@ -491,8 +491,15 @@ async function onGmailConfirmed() {
   console.log('[SparkP2P] Gmail login confirmed! Syncing cookies...');
   await syncCookies();
   mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("gmail-connected"))').catch(() => {});
+  // Wait for Gmail to finish loading before locking — injecting too early lets Gmail's own JS remove the overlay
+  if (gmailPage && !gmailPage.isClosed()) {
+    console.log('[SparkP2P] Waiting for Gmail to finish loading before locking...');
+    await gmailPage.waitForNetworkIdle({ idleTime: 1500, timeout: 10000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1000)); // extra 1s buffer
+  }
   // Lock ALL bot-controlled tabs (sets browserLocked = true)
   await lockChromeBrowser().catch(() => {});
+  console.log('[SparkP2P] Gmail locked successfully');
   // Re-check setup completeness
   const setup = await checkSetupComplete();
   if (setup.complete && !pollerRunning) {
@@ -614,12 +621,18 @@ async function injectLockOverlay(page) {
       (document.documentElement || document.body).appendChild(el);
     };
     inject();
-    // MutationObserver: re-inject if the page removes our overlay (e.g. Gmail DOM reconciliation)
+    // MutationObserver: re-inject if the page removes our overlay anywhere in the DOM
     if (!window.__sparkLockObserver) {
       window.__sparkLockObserver = new MutationObserver(() => {
         if (!document.getElementById('sparkp2p-browser-lock')) inject();
       });
-      window.__sparkLockObserver.observe(document.documentElement || document.body, { childList: true, subtree: false });
+      window.__sparkLockObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    }
+    // setInterval backup: re-inject every 800ms if overlay disappeared (belt-and-suspenders)
+    if (!window.__sparkLockInterval) {
+      window.__sparkLockInterval = setInterval(() => {
+        if (!document.getElementById('sparkp2p-browser-lock')) inject();
+      }, 800);
     }
   }).catch(() => {});
 }
@@ -684,6 +697,9 @@ async function unlockChromeBrowser() {
     await page.evaluate(() => {
       const el = document.getElementById('sparkp2p-browser-lock');
       if (el) el.remove();
+      // Stop the re-inject interval and observer so they don't fight the unlock
+      if (window.__sparkLockInterval) { clearInterval(window.__sparkLockInterval); window.__sparkLockInterval = null; }
+      if (window.__sparkLockObserver) { window.__sparkLockObserver.disconnect(); window.__sparkLockObserver = null; }
     }).catch(() => {});
   };
 
