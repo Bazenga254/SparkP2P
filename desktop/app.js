@@ -4278,14 +4278,8 @@ async function connectIm() {
           console.log('[SparkP2P] I&M login confirmed by Vision! Syncing cookies...');
           await syncImCookies();
           startImKeepAlive();
-          // Lock the I&M tab immediately — bot controls it now
-          await injectLockOverlay(imPage).catch(() => {});
-          imPage.on('framenavigated', async (frame) => {
-            if (frame === imPage.mainFrame() && browserLocked) {
-              await new Promise(r => setTimeout(r, 600));
-              await injectLockOverlay(imPage).catch(() => {});
-            }
-          });
+          // Lock ALL bot-controlled tabs (sets browserLocked = true)
+          await lockChromeBrowser().catch(() => {});
           connectingIm = false;
           mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("im-connected"))').catch(() => {});
           // Re-check setup — if all 3 now connected, auto-start bot
@@ -4321,13 +4315,45 @@ async function syncImCookies() {
 function startImKeepAlive() {
   if (imKeepAliveTimer) clearInterval(imKeepAliveTimer);
   imKeepAliveTimer = setInterval(async () => {
-    if (!imPage || imPage.isClosed()) return;
+    if (!imPage || imPage.isClosed()) { imPage = null; return; }
     try {
-      // Silent ping — navigate to same page to refresh session timer
-      await imPage.evaluate(() => fetch('/api/ping').catch(() => {}));
+      const url = imPage.url();
+
+      // Detect session expiry — login/QR page means we've been logged out
+      if (url.includes('/openid-connect/') || url.includes('/auth/realms/') ||
+          url.includes('login') || url.includes('Login') ||
+          !url.includes('imbank.com')) {
+        console.log('[SparkP2P] I&M session expired — logged out detected');
+        imPage = null;
+        // Notify frontend to update status to disconnected
+        mainWindow?.webContents.executeJavaScript(
+          'window.dispatchEvent(new CustomEvent("im-disconnected"))'
+        ).catch(() => {});
+        if (token) {
+          await fetch(`${API_BASE}/traders/connect-im`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ cookies: [], disconnected: true }),
+          }).catch(() => {});
+        }
+        return;
+      }
+
+      // Skip keep-alive navigation if a withdrawal is currently running
+      if (imWithdrawalRunning) {
+        console.log('[SparkP2P] I&M keep-alive skipped — withdrawal in progress');
+        return;
+      }
+
+      // Navigate to dashboard to refresh the I&M session timer (SPA navigation)
+      await imPage.goto('https://digital.imbank.com/inm-retail/dashboard', {
+        waitUntil: 'domcontentloaded', timeout: 15000
+      }).catch(() => {});
       await syncImCookies();
-      console.log('[SparkP2P] I&M keep-alive ping sent');
-    } catch (e) {}
+      console.log('[SparkP2P] I&M keep-alive: navigated to dashboard, session refreshed');
+    } catch (e) {
+      console.log('[SparkP2P] I&M keep-alive error:', e.message);
+    }
   }, IM_KEEP_ALIVE_INTERVAL);
 }
 
