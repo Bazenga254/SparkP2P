@@ -4213,7 +4213,7 @@ Reply in this JSON format: {"needs_reply": true/false, "message": "your reply he
 
 const IM_URL = 'https://digital.imbank.com/inm-retail/select-context'; // entry point — redirects to login if not authenticated
 const IM_TRANSFERS_URL = 'https://digital.imbank.com/inm-retail/transfers';
-const IM_KEEP_ALIVE_INTERVAL = 5 * 60 * 1000; // ping every 5 min to prevent session timeout
+const IM_KEEP_ALIVE_INTERVAL = 60 * 1000; // ping every 1 min to prevent session timeout
 let imKeepAliveTimer = null;
 
 async function connectIm() {
@@ -4323,12 +4323,10 @@ function startImKeepAlive() {
       if (url.includes('/openid-connect/') || url.includes('/auth/realms/') ||
           url.includes('login') || url.includes('Login') ||
           !url.includes('imbank.com')) {
-        console.log('[SparkP2P] I&M session expired — logged out detected');
+        console.log('[SparkP2P] I&M session expired — auto-reconnecting...');
         imPage = null;
-        // Notify frontend to update status to disconnected
-        mainWindow?.webContents.executeJavaScript(
-          'window.dispatchEvent(new CustomEvent("im-disconnected"))'
-        ).catch(() => {});
+        if (imKeepAliveTimer) { clearInterval(imKeepAliveTimer); imKeepAliveTimer = null; }
+        // Clear backend connected flag
         if (token) {
           await fetch(`${API_BASE}/traders/connect-im`, {
             method: 'POST',
@@ -4336,6 +4334,9 @@ function startImKeepAlive() {
             body: JSON.stringify({ cookies: [], disconnected: true }),
           }).catch(() => {});
         }
+        // Auto-reconnect — re-opens the I&M tab and waits for QR scan
+        console.log('[SparkP2P] I&M auto-reconnect triggered — opening login page');
+        await connectIm().catch(() => {});
         return;
       }
 
