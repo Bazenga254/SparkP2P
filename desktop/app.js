@@ -465,6 +465,9 @@ async function launchChrome(url) {
   chromeProcess = execFile(chrome, [
     `--remote-debugging-port=${CDP_PORT}`,
     '--no-first-run', '--no-default-browser-check',
+    '--window-size=1280,800',       // Fixed size so Vision always sees the same layout
+    '--window-position=0,0',        // Consistent position
+    '--disable-features=MediaRouter', // Reduce noise
     '--user-data-dir=' + path.join(app.getPath('userData'), 'chrome-binance'),
     url || 'https://accounts.binance.com/en/login',
   ]);
@@ -492,7 +495,10 @@ async function launchChrome(url) {
 
 async function connectPuppeteer() {
   try {
-    browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${CDP_PORT}`, defaultViewport: null });
+    browser = await puppeteer.connect({
+      browserURL: `http://127.0.0.1:${CDP_PORT}`,
+      defaultViewport: { width: 1280, height: 800 },  // Match Chrome window size — Vision always sees 1280×800
+    });
     // When Chrome closes externally, immediately stop the bot (prevents auto-reopen)
     browser.on('disconnected', () => {
       if (browser) { browser = null; }
@@ -2003,13 +2009,16 @@ async function idleScan(page) {
 
     await takeScreenshot(`scan_sell_${order.orderNumber}`, page);
 
-    // DOM-based state detection — no vision, no API cost
-    let screen = await detectOrderState(page);
+    // Vision is primary — understands page context, not just text matching.
+    // DOM fallback if Vision unavailable (no API key).
+    let visionInfo = anthropicApiKey ? await analyzePageWithVision(page) : null;
+    let screen = visionInfo?.screen || await detectOrderState(page);
     if (screen === 'unknown') {
       await new Promise(r => setTimeout(r, 2000));
-      screen = await detectOrderState(page);
+      visionInfo = anthropicApiKey ? await analyzePageWithVision(page) : null;
+      screen = visionInfo?.screen || await detectOrderState(page);
     }
-    console.log(`[SparkP2P] Sell order ${order.orderNumber} state: ${screen}`);
+    console.log(`[SparkP2P] Sell order ${order.orderNumber} state: ${screen} (via ${visionInfo ? 'Vision' : 'DOM'})`);
     const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
     const lower = pageText.toLowerCase();
 
@@ -2209,13 +2218,15 @@ async function idleScan(page) {
 
     await takeScreenshot(`scan_buy_${order.orderNumber}`, page);
 
-    // DOM-based state detection — no vision
-    let buyScreen = await detectOrderState(page);
+    // Vision primary, DOM fallback
+    let buyVisionInfo = anthropicApiKey ? await analyzePageWithVision(page) : null;
+    let buyScreen = buyVisionInfo?.screen || await detectOrderState(page);
     if (buyScreen === 'unknown') {
       await new Promise(r => setTimeout(r, 2000));
-      buyScreen = await detectOrderState(page);
+      buyVisionInfo = anthropicApiKey ? await analyzePageWithVision(page) : null;
+      buyScreen = buyVisionInfo?.screen || await detectOrderState(page);
     }
-    console.log(`[SparkP2P] Buy order ${order.orderNumber} state: ${buyScreen}`);
+    console.log(`[SparkP2P] Buy order ${order.orderNumber} state: ${buyScreen} (via ${buyVisionInfo ? 'Vision' : 'DOM'})`);
     const buyText = await page.evaluate(() => document.body.innerText).catch(() => '');
     const buyLower = buyText.toLowerCase();
 
