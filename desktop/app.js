@@ -1835,14 +1835,20 @@ async function detectOrderState(page) {
     return 'confirm_release_modal';
   }
 
-  // Buyer has paid — SPECIFIC phrases Binance shows when buyer marks paid
-  // Do NOT use "confirm payment is received" — that button is always on the page
+  // Awaiting buyer payment — check BEFORE verify_payment to prevent false positives.
+  // If "awaiting" is on the page, buyer has NOT paid yet regardless of other button text.
+  if (lower.includes("awaiting buyer's payment") || lower.includes('awaiting payment') ||
+      lower.includes('waiting for buyer') || lower.includes('waiting for payment') ||
+      lower.includes('buyer to complete')) {
+    return 'awaiting_payment';
+  }
+
+  // Buyer has paid — only use phrases that are UNIQUE to the paid state.
+  // Removed: 'please check if you', 'confirm that you have received' — both appear on awaiting page too.
   if (lower.includes('buyer has completed the payment') ||
       lower.includes('buyer has paid') ||
       lower.includes('buyer paid') ||
-      lower.includes('has made payment') ||
-      lower.includes('please check if you') ||
-      lower.includes('confirm that you have received')) {
+      lower.includes('has made payment')) {
     return 'verify_payment';
   }
 
@@ -1862,13 +1868,6 @@ async function detectOrderState(page) {
   if (lower.includes("awaiting seller's release") || lower.includes('waiting for seller') ||
       lower.includes('seller to release')) {
     return 'awaiting_release';
-  }
-
-  // Awaiting buyer payment (sell side)
-  if (lower.includes("awaiting buyer's payment") || lower.includes('awaiting payment') ||
-      lower.includes('waiting for buyer') || lower.includes('waiting for payment') ||
-      lower.includes('buyer to complete')) {
-    return 'awaiting_payment';
   }
 
   return 'unknown';
