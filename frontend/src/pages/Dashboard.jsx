@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Wallet, TrendingUp, ArrowDownCircle, ArrowUpCircle, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import SupportChat from '../components/SupportChat';
 
@@ -1062,22 +1062,27 @@ export default function Dashboard() {
             {/* Row 2: Quick Stats */}
             <div className="overview-stats-row">
               <div className="mini-stat-card">
+                <Activity size={18} style={{ color: '#f59e0b', marginBottom: 4 }} />
                 <span className="mini-stat-value">{stats?.today?.total_trades || 0}</span>
                 <span className="mini-stat-label">Total Trades</span>
               </div>
               <div className="mini-stat-card sell-card">
+                <ArrowDown size={18} style={{ color: '#10b981', marginBottom: 4 }} />
                 <span className="mini-stat-value">{stats?.today?.sell_trades || 0}</span>
                 <span className="mini-stat-label">Sell Orders</span>
               </div>
               <div className="mini-stat-card buy-card">
+                <ArrowUp size={18} style={{ color: '#3b82f6', marginBottom: 4 }} />
                 <span className="mini-stat-value">{stats?.today?.buy_trades || 0}</span>
                 <span className="mini-stat-label">Buy Orders</span>
               </div>
               <div className="mini-stat-card">
+                <DollarSign size={18} style={{ color: '#f59e0b', marginBottom: 4 }} />
                 <span className="mini-stat-value">KES {(stats?.today?.volume || 0).toLocaleString()}</span>
                 <span className="mini-stat-label">Total Volume</span>
               </div>
               <div className="mini-stat-card">
+                <BarChart2 size={18} style={{ color: '#8b5cf6', marginBottom: 4 }} />
                 <span className="mini-stat-value">{stats?.limits?.remaining_today || 0}/{stats?.limits?.daily_limit || 0}</span>
                 <span className="mini-stat-label">Daily Limit</span>
               </div>
@@ -1089,7 +1094,7 @@ export default function Dashboard() {
               {/* Buying Summary */}
               <div className="card buysell-card buying">
                 <div className="buysell-header">
-                  <ArrowUpCircle size={20} />
+                  <ArrowUpCircle size={24} />
                   <h3>Buying</h3>
                 </div>
                 <div className="buysell-amount">
@@ -1108,7 +1113,7 @@ export default function Dashboard() {
               {/* Selling Summary */}
               <div className="card buysell-card selling">
                 <div className="buysell-header">
-                  <ArrowDownCircle size={20} />
+                  <ArrowDownCircle size={24} />
                   <h3>Selling</h3>
                 </div>
                 <div className="buysell-amount">
@@ -1127,7 +1132,7 @@ export default function Dashboard() {
               {/* Profit Summary */}
               <div className="card profit-card">
                 <div className="card-header">
-                  <TrendingUp size={20} />
+                  <TrendingUp size={24} style={{ color: '#10b981' }} />
                   <h3>Profit Breakdown</h3>
                 </div>
                 <div className="profit-amount">

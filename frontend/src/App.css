@@ -546,7 +546,7 @@ body {
 .withdraw-btn-mini:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Mini Stat Cards */
-.mini-stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; text-align: center; display: flex; flex-direction: column; gap: 4px; }
+.mini-stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .mini-stat-card .mini-stat-value { font-size: 20px; font-weight: 700; }
 .mini-stat-card .mini-stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
 .mini-stat-card.sell-card { border-top: 3px solid var(--green); }
