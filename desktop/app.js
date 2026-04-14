@@ -3908,6 +3908,28 @@ async function execAction(action) {
 
       console.log(`[SparkP2P] Payment details: ${JSON.stringify(paymentDetails)}`);
 
+      // ── Validate payment details before attempting ──────────────────────────
+      const missingPhone = !paymentDetails.phone || paymentDetails.phone.trim() === '';
+      const missingAmount = !paymentDetails.amount || paymentDetails.amount <= 0;
+      if (missingPhone || missingAmount) {
+        const reason = missingPhone ? 'phone number is missing' : 'amount is zero/missing';
+        console.error(`[SparkP2P] ❌ Buy order ${order_number} — cannot pay: ${reason}`);
+        await takeScreenshot(`Pay failed — ${reason}: ${order_number}`);
+        // Notify trader so they can intervene
+        await fetch(`${API_BASE}/ext/report-buy-expired`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            order_number,
+            seller_name: paymentDetails.name || 'Unknown',
+            amount: paymentDetails.amount || 0,
+            minutes_waited: 0,
+            reason: `Payment details incomplete — ${reason}. Manual intervention required.`,
+          }),
+        }).catch(() => {});
+        return; // Do NOT proceed — no money sent
+      }
+
       // Step 2: Execute I&M Bank payment
       let imResult = { success: false, screenshot: null };
       try {
@@ -3919,13 +3941,31 @@ async function execAction(action) {
           network: paymentDetails.network || 'safaricom',
         });
       } catch (e) {
-        console.error('[SparkP2P] I&M payment failed:', e.message);
-        await takeScreenshot(`I&M payment failed: ${e.message.substring(0, 40)}`);
+        console.error('[SparkP2P] I&M payment threw:', e.message);
+        await takeScreenshot(`I&M payment error: ${e.message.substring(0, 40)}`);
       }
 
+      // ── HARD STOP if payment failed — do NOT notify Binance ────────────────
       if (!imResult.success) {
-        console.log('[SparkP2P] ⚠️ I&M payment may have failed — proceeding to notify Binance anyway');
+        console.error(`[SparkP2P] ❌ I&M payment FAILED for order ${order_number} — aborting. NOT marking as paid on Binance.`);
+        await takeScreenshot(`I&M payment FAILED: ${order_number}`);
+        // Alert trader so they can pay manually
+        await fetch(`${API_BASE}/ext/report-buy-expired`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            order_number,
+            seller_name: paymentDetails.name || 'Unknown',
+            amount: paymentDetails.amount || 0,
+            minutes_waited: 0,
+            reason: 'I&M Bank payment failed. Please complete this buy order manually.',
+          }),
+        }).catch(() => {});
+        return; // STOP — money was NOT sent, do not touch Binance
       }
+
+      // Payment confirmed successful — proceed
+      console.log(`[SparkP2P] ✅ I&M payment successful for order ${order_number}`);
 
       // Store payment details per-order — supports multiple concurrent buy orders
       buyOrderDetailsMap[order_number] = {
@@ -3937,7 +3977,7 @@ async function execAction(action) {
       };
       buyPaymentScreenshot = imResult.screenshot;
       buyPaymentSentAt[order_number] = Date.now();
-      buyReminderSentOrders.delete(order_number); // reset reminder for this order
+      buyReminderSentOrders.delete(order_number);
 
       // Step 3: Switch back to Binance order page
       await page.bringToFront();
@@ -3946,7 +3986,7 @@ async function execAction(action) {
       }).catch(() => {});
       await new Promise(r => setTimeout(r, 3000));
 
-      // Step 4: Send chat message to seller
+      // Step 4: Send chat message to seller (only because we actually paid)
       const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
       const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}. Please check and release the crypto. Thank you! 🙏`;
       await sendBinanceChatMessage(page, chatMsg);
@@ -3957,7 +3997,7 @@ async function execAction(action) {
         await uploadPaymentProofToBinance(page, imResult.screenshot);
       }
 
-      // Step 6: Click "Transferred, notify seller" / "Upload Payment Proof" → confirm on Binance
+      // Step 6: Click "Transferred, notify seller" → confirm on Binance
       await new Promise(r => setTimeout(r, 2000));
       let clicked = await clickButton(page, 'transferred', 'payment done', 'i have paid', 'mark as paid', 'notify seller', 'upload payment proof');
       if (clicked) {
@@ -3976,7 +4016,7 @@ async function execAction(action) {
       }).catch(() => {});
 
       stats.actions++;
-      activeBuyOrderNumber = order_number; // kept for compat
+      activeBuyOrderNumber = order_number;
       console.log(`[SparkP2P] 👀 Buy order ${order_number} — I&M paid, idleScan will monitor for seller release`);
 
     } else if (type === 'send_message') {
@@ -4133,6 +4173,10 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   if (!imPage || imPage.isClosed()) throw new Error('I&M Bank tab is not open. Please reconnect I&M Bank.');
   if (!imPin) throw new Error('I&M PIN not set. Please save your PIN in Settings → Binance tab.');
 
+  // Hard validate inputs before touching I&M — prevents false "sent" reports
+  if (!phone || String(phone).trim() === '') throw new Error('Phone number is empty — cannot send payment');
+  if (!amount || Number(amount) <= 0) throw new Error(`Amount is invalid (${amount}) — cannot send payment`);
+
   imWithdrawalRunning = true; // Block keep-alive navigation during payment
   console.log(`[SparkP2P] 💳 Starting I&M payment: KSh ${amount} → ${name} (${phone})`);
 
@@ -4267,13 +4311,18 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
   // Verify success via page text
   const pageText = await imPage.evaluate(() => document.body.innerText).catch(() => '');
-  const success = pageText.toLowerCase().includes('success') ||
-                  pageText.toLowerCase().includes('transaction') ||
-                  pageText.toLowerCase().includes('submitted') ||
-                  pageText.toLowerCase().includes('processed');
+  const lowerText = pageText.toLowerCase();
+  // Must match a definitive success phrase — NOT generic words like "submitted" that appear in error pages
+  const success = lowerText.includes('transaction successful') ||
+                  lowerText.includes('transfer successful') ||
+                  lowerText.includes('payment successful') ||
+                  lowerText.includes('money sent') ||
+                  lowerText.includes('sent successfully') ||
+                  lowerText.includes('transaction complete') ||
+                  (lowerText.includes('success') && !lowerText.includes('error') && !lowerText.includes('failed') && !lowerText.includes('invalid'));
 
   imWithdrawalRunning = false; // Release lock — keep-alive can navigate again
-  console.log(`[SparkP2P] I&M payment ${success ? '✅ SUCCESS' : '⚠️ status unclear'}`);
+  console.log(`[SparkP2P] I&M payment result: ${success ? '✅ SUCCESS' : '❌ FAILED'} | Page snippet: ${pageText.substring(0, 120).replace(/\n/g, ' ')}`);
   return { success, screenshot };
 }
 
