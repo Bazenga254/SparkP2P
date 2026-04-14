@@ -1840,9 +1840,12 @@ async function detectOrderState(page) {
     return 'security_verification';
   }
 
-  // Confirm release modal
-  if (lower.includes('confirm release') || lower.includes('are you sure') ||
-      lower.includes('once released')) {
+  // Confirm release modal — "Received payment in your account?" dialog
+  // Exact title Binance shows after clicking "Payment Received" button.
+  // Also catches older wording as fallback.
+  if (lower.includes('received payment in your account') ||
+      lower.includes('confirm release') ||
+      lower.includes('i have verified that i received')) {
     return 'confirm_release_modal';
   }
 
@@ -1854,9 +1857,15 @@ async function detectOrderState(page) {
     return 'awaiting_payment';
   }
 
-  // Buyer has paid — only use phrases that are UNIQUE to the paid state.
-  // Removed: 'please check if you', 'confirm that you have received' — both appear on awaiting page too.
-  if (lower.includes('buyer has completed the payment') ||
+  // Buyer has paid — Binance shows "Verify Payment" page with header text.
+  // These phrases are UNIQUE to the sell-order payment verification state.
+  // IMPORTANT: checked BEFORE awaiting_payment_confirmation to prevent BUY-order
+  // phrases on the page (e.g. timeline text) from triggering the wrong branch.
+  if (lower.includes('verify payment') ||
+      lower.includes('confirm payment from buyer') ||
+      lower.includes('confirm payment is received') ||
+      lower.includes('payment received') ||
+      lower.includes('buyer has completed the payment') ||
       lower.includes('buyer has paid') ||
       lower.includes('buyer paid') ||
       lower.includes('has made payment')) {
@@ -1869,9 +1878,12 @@ async function detectOrderState(page) {
     return 'cancelled';
   }
 
-  // Buy order — we need to mark payment as sent to seller
-  if (lower.includes('transferred, notify seller') || lower.includes('notify seller') ||
-      lower.includes('i have transferred') || lower.includes('mark as paid')) {
+  // Buy order — we need to mark payment as sent to seller.
+  // Use the exact button label only — avoids matching timeline text on sell pages.
+  if (lower.includes("i've transferred, notify seller") ||
+      lower.includes("i have transferred, notify seller") ||
+      lower.includes('transferred, notify seller') ||
+      lower.includes('mark as paid')) {
     return 'awaiting_payment_confirmation';
   }
 
@@ -3698,17 +3710,35 @@ async function releaseWithVision(page, orderNumber, action) {
       }
       step++;
 
-      // ── DOM pre-check: catch modals Vision misses due to overlay ────────────
+      // ── DOM pre-check: catch all states without Vision ──────────────────────
       const domScreen = await page.evaluate(() => {
         const text = document.body.innerText || '';
+        // Order complete
+        if (text.includes('Sale Successful') || text.includes('Order Completed') || text.includes('Released'))
+          return 'order_complete';
+        // Confirm release modal — "Received payment in your account?" dialog
+        // Must check BEFORE verify_payment because modal overlays the Verify Payment page
+        if (text.includes('Received payment in your account') ||
+            text.includes('I have verified that I received') ||
+            text.includes('Confirm Release'))
+          return 'confirm_release_modal';
+        // Verify Payment page
+        if (text.includes('Verify Payment') ||
+            text.includes('Confirm payment from buyer') ||
+            text.includes('Confirm payment is received') ||
+            text.includes('Payment Received'))
+          return 'verify_payment';
+        // Passkey screen
         if (text.includes('My Passkeys Are Not Available') || text.includes('Passkeys Are Not Available'))
           return 'passkey_failed';
+        // Security verification
         if (text.includes('Security Verification') && (text.includes('0/2') || text.includes('1/2'))) {
           const progress = text.includes('1/2') ? '1/2' : '0/2';
           return `security_verification:${progress}`;
         }
-        if (text.includes('Sale Successful') || text.includes('Order Completed') || text.includes('Released'))
-          return 'order_complete';
+        // Awaiting payment
+        if (text.includes("Awaiting Buyer's Payment") || text.includes('Awaiting Payment'))
+          return 'awaiting_payment';
         return null;
       }).catch(() => null);
 
@@ -3790,31 +3820,59 @@ async function releaseWithVision(page, orderNumber, action) {
         continue;
       }
 
-      // ── Confirm release modal — checkbox + Confirm Release ──
+      // ── Confirm release modal — tick checkbox then click Confirm Release ──
+      // Modal title: "Received payment in your account?"
+      // Checkbox label: "I have verified that I received KSh [AMOUNT] from the buyer - [NAME]"
+      // "Confirm Release" button is greyed out until checkbox is ticked.
       if (screen === 'confirm_release_modal') {
-        // Tick the checkbox — try multiple selectors since Binance uses custom checkboxes
+        console.log('[Vision] Confirm release modal detected — ticking checkbox...');
+
         const cbClicked = await page.evaluate(() => {
-          const selectors = [
-            'input[type="checkbox"]',
-            '[class*="checkbox"]',
-            '[class*="Checkbox"]',
-            '[role="checkbox"]',
-          ];
+          // Strategy 1: find checkbox near "I have verified" text
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+          while (walker.nextNode()) {
+            const el = walker.currentNode;
+            const tag = el.tagName;
+            if (tag !== 'INPUT' && tag !== 'SPAN' && tag !== 'DIV' && tag !== 'LABEL') continue;
+            const t = (el.textContent || '').trim();
+            if (t.toLowerCase().includes('i have verified that i received')) {
+              // Click the element itself or the nearest input[type=checkbox] ancestor/sibling
+              const cb = el.querySelector('input[type="checkbox"]') ||
+                         el.closest('label')?.querySelector('input[type="checkbox"]');
+              if (cb) { cb.click(); return 'input-in-label'; }
+              el.click();
+              return 'verified-text-element';
+            }
+          }
+          // Strategy 2: any visible checkbox
+          const selectors = ['input[type="checkbox"]', '[role="checkbox"]', '[class*="checkbox"]'];
           for (const sel of selectors) {
-            const els = document.querySelectorAll(sel);
-            for (const el of els) {
-              const rect = el.getBoundingClientRect();
-              if (rect.width > 0 && rect.height > 0) {
-                el.click();
-                return sel;
-              }
+            for (const el of document.querySelectorAll(sel)) {
+              const r = el.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) { el.click(); return sel; }
             }
           }
           return null;
         });
-        console.log(`[Vision] Checkbox clicked via: ${cbClicked}`);
-        await new Promise(r => setTimeout(r, 1000));
-        await clickButton(page, 'Confirm Release', 'Confirm release', 'Confirm');
+
+        console.log(`[Vision] Checkbox ticked via: ${cbClicked}`);
+        await new Promise(r => setTimeout(r, 1200));
+
+        // Click Confirm Release — button enables after checkbox tick
+        const released = await page.evaluate(() => {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+          while (walker.nextNode()) {
+            const el = walker.currentNode;
+            if (el.tagName !== 'BUTTON') continue;
+            const t = (el.textContent || '').trim().toLowerCase();
+            if (t === 'confirm release' || t.startsWith('confirm release')) {
+              el.click();
+              return true;
+            }
+          }
+          return false;
+        });
+        console.log(`[Vision] Confirm Release clicked: ${released}`);
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
