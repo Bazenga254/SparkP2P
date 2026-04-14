@@ -1625,29 +1625,24 @@ Return ONLY valid JSON: {"found": true, "x": <number>, "y": <number>} or {"found
     const enlargedSS = await page.screenshot({ type: 'jpeg', quality: 95 });
     await takeScreenshot('payment_screenshot_enlarged', page);
 
-    // ── 5. Vision reads the enlarged screenshot, extracts code + close button ─
+    // ── 5. Vision reads the enlarged screenshot — extract M-Pesa code ─────────
     console.log('[Vision] Reading enlarged payment screenshot...');
     const readResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 300,
+        max_tokens: 200,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: enlargedSS.toString('base64') } },
-          { type: 'text', text: `This is a Binance P2P page with an image lightbox/viewer open showing a payment screenshot.
-
-Task 1 — Extract the M-Pesa transaction code from the payment image (OUTGOING/SENT payment).
+          { type: 'text', text: `This is a payment confirmation screenshot sent by a buyer on Binance P2P.
+Extract the M-Pesa transaction code from an OUTGOING/SENT payment message.
 M-Pesa format: "XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to [business name]..."
-The code is EXACTLY 10 uppercase alphanumeric characters at the START (e.g. UDE5J13AGR).
+The code is EXACTLY 10 uppercase alphanumeric characters at the START (e.g. UDE5J13AGR, QE1FXYZABC).
 
-Task 2 — Find the close (X) button of the lightbox viewer so it can be clicked to close it.
-The X button is usually a small icon near the top-right corner of the screen.
-
-Return ONLY valid JSON (no markdown):
-{"found": true, "code": "XXXXXXXXXX", "amount": <number_or_null>, "close_x": <x_pixels>, "close_y": <y_pixels>}
-or if no M-Pesa code:
-{"found": false, "reason": "blurry|not_mpesa|other", "close_x": <x_pixels>, "close_y": <y_pixels>}` },
+If you can clearly read the code: {"found": true, "code": "XXXXXXXXXX", "amount": <number>}
+If not: {"found": false, "reason": "blurry|not_mpesa|other"}
+Return ONLY valid JSON.` },
         ]}],
       }),
     });
@@ -1655,47 +1650,48 @@ or if no M-Pesa code:
     const readRaw = (readData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const readMatch = readRaw.match(/\{[\s\S]*\}/);
 
-    // Parse Vision read result (may be null if Vision failed to return valid JSON)
+    // Parse Vision read result
     let readResult = null;
     if (readMatch) {
       try { readResult = JSON.parse(readMatch[0]); } catch (_) {}
     }
     if (!readResult) console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80));
 
-    // ── 6. Close lightbox — ALWAYS runs after we clicked the image ─────────
-    // Use Vision-provided close button coordinates first (most reliable),
-    // then fall back to DOM strategies.
-    console.log('[Vision] Closing lightbox...');
-    let closedByVision = false;
-    if (readResult?.close_x && readResult?.close_y) {
-      console.log(`[Vision] Clicking close button at (${readResult.close_x}, ${readResult.close_y})`);
-      await page.mouse.click(readResult.close_x, readResult.close_y);
-      await new Promise(r => setTimeout(r, 1200));
-      closedByVision = true;
-    }
-    if (!closedByVision) {
-      // DOM fallback — Escape + remove large fixed overlays (skip bot's lock overlay)
-      const closeResult = await page.evaluate(() => {
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
-        let removed = 0;
-        const all = document.querySelectorAll('*');
-        for (let i = 0; i < all.length; i++) {
-          const el = all[i];
-          if (el.id === 'sparkp2p-browser-lock') continue;
-          try {
-            const s = window.getComputedStyle(el);
-            if (s.position === 'fixed' && parseInt(s.zIndex || 0) > 100) {
-              const r = el.getBoundingClientRect();
-              if (r.width > 400 && r.height > 400) { el.remove(); removed++; }
-            }
-          } catch (_) {}
-        }
-        return removed > 0 ? 'removed_overlay:' + removed : 'escape_dispatched';
+    // ── 6. Vision locates the X close button, DOM clicks it ───────────────────
+    // Dedicated call — focused on ONE task so Vision always returns coords.
+    console.log('[Vision] Locating lightbox close button...');
+    try {
+      const closeSS = await page.screenshot({ type: 'jpeg', quality: 85 });
+      const closeResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 60,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: closeSS.toString('base64') } },
+            { type: 'text', text: 'This Binance P2P page has an image lightbox open. Find the X or close button to close the lightbox. Return ONLY valid JSON, no explanation: {"x": <pixel_x>, "y": <pixel_y>}' },
+          ]}],
+        }),
       });
-      console.log('[Vision] Lightbox DOM fallback result:', closeResult);
-      await new Promise(r => setTimeout(r, 800));
+      const closeData = await closeResp.json();
+      const closeRaw = (closeData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+      const closeMatch = closeRaw.match(/\{[\s\S]*?\}/);
+      if (closeMatch) {
+        const closeCoords = JSON.parse(closeMatch[0]);
+        if (closeCoords.x && closeCoords.y) {
+          console.log(`[Vision] Clicking X close button at (${closeCoords.x}, ${closeCoords.y})`);
+          await page.mouse.click(closeCoords.x, closeCoords.y);
+          await new Promise(r => setTimeout(r, 1200));
+          console.log('[Vision] Lightbox close click done');
+        } else {
+          console.log('[Vision] Close button not found in response:', closeRaw.substring(0, 80));
+        }
+      }
+    } catch (closeErr) {
+      console.log('[Vision] Close button detection error:', closeErr.message?.substring(0, 60));
     }
+    await new Promise(r => setTimeout(r, 500));
 
     if (readResult?.found && readResult.code && /^[A-Z0-9]{10}$/.test(readResult.code)) {
       console.log(`[Vision] ✅ M-Pesa code extracted: ${readResult.code} (amount: KES ${readResult.amount})`);
