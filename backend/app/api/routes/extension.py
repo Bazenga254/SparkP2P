@@ -509,19 +509,21 @@ async def verify_payment(
     This prevents releasing crypto when a buyer fake-clicks "I have paid".
     """
     # ── Step 1: Try direct M-Pesa code lookup from buyer's chat message ──────
-    # If the bot extracted M-Pesa codes from the chat, check them against our
-    # Payment records first. This catches cases where the C2B callback arrived
-    # but the order status hasn't been updated yet.
+    # Query by transaction ID only — no status filter in WHERE because the DB
+    # stores status as uppercase ('COMPLETED') while the Python enum value is
+    # lowercase ('completed'), causing SQLAlchemy to produce an invalid enum
+    # comparison that silently returns no rows. Status is checked in Python.
     if data.mpesa_codes_from_chat:
         for code in data.mpesa_codes_from_chat:
             pay_result = await db.execute(
-                select(Payment).where(
-                    Payment.mpesa_transaction_id == code,
-                    Payment.status == PaymentStatus.COMPLETED,
-                )
+                select(Payment).where(Payment.mpesa_transaction_id == code)
             )
             direct_payment = pay_result.scalar_one_or_none()
             if direct_payment:
+                # Accept any completed-like status (handles DB/enum case mismatch)
+                status_val = str(direct_payment.status).upper().replace('PAYMENTSTATUS.', '')
+                if status_val not in ('COMPLETED', 'PAYMENT_RECEIVED'):
+                    continue
                 logger.info(f"M-Pesa code {code} matched directly in Payment table for order {data.binance_order_number}")
                 return {
                     "verified": True,
@@ -532,32 +534,34 @@ async def verify_payment(
                     "payer_name": direct_payment.sender_name,
                 }
 
-    # ── Step 2: Fiat-amount + time-window fallback ────────────────────────────
-    # If we have a chat code but it's not in our DB yet (Safaricom callback pending),
-    # also try matching by amount received in the last 30 minutes
-    if data.mpesa_codes_from_chat and data.fiat_amount:
-        window = datetime.now(timezone.utc) - timedelta(minutes=30)
+    # ── Step 2: Amount + time-window match against Payment table ─────────────
+    # Runs ALWAYS when fiat_amount is provided. No status filter in WHERE for
+    # same reason as Step 1 (DB/enum case mismatch). Extended to 24h window
+    # so payments made earlier in the day are still matched.
+    if data.fiat_amount:
+        window = datetime.now(timezone.utc) - timedelta(hours=24)
         amount_result = await db.execute(
             select(Payment).where(
                 Payment.trader_id == trader.id,
-                Payment.status == PaymentStatus.COMPLETED,
                 Payment.amount.between(data.fiat_amount - 5, data.fiat_amount + 5),
                 Payment.created_at >= window,
+                Payment.direction == PaymentDirection.INBOUND,
             ).order_by(Payment.id.desc())
         )
-        amount_payment = amount_result.scalar_one_or_none()
-        if amount_payment:
-            logger.info(f"M-Pesa payment matched by amount KES {data.fiat_amount} for order {data.binance_order_number}")
-            return {
-                "verified": True,
-                "reason": f"M-Pesa payment matched by amount KES {data.fiat_amount}",
-                "mpesa_receipt": amount_payment.mpesa_transaction_id,
-                "amount_received": amount_payment.amount,
-                "payer_phone": amount_payment.phone,
-                "payer_name": amount_payment.sender_name,
-            }
+        for row in amount_result.scalars().all():
+            status_val = str(row.status).upper().replace('PAYMENTSTATUS.', '')
+            if status_val in ('COMPLETED', 'PAYMENT_RECEIVED'):
+                logger.info(f"M-Pesa payment matched by amount KES {data.fiat_amount} for order {data.binance_order_number}")
+                return {
+                    "verified": True,
+                    "reason": f"M-Pesa payment matched by amount KES {data.fiat_amount}",
+                    "mpesa_receipt": row.mpesa_transaction_id,
+                    "amount_received": row.amount,
+                    "payer_phone": row.phone,
+                    "payer_name": row.sender_name,
+                }
 
-    # ── Step 3: Fall back to order-status check ───────────────────────────────
+    # ── Step 3: Order-status check ────────────────────────────────────────────
     result = await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,
@@ -570,39 +574,36 @@ async def verify_payment(
     if not order:
         return {
             "verified": False,
-            "reason": f"Order {data.binance_order_number} not found in our system. Cannot verify payment.",
+            "reason": f"Order {data.binance_order_number} not found in our system. No M-Pesa payment received.",
         }
 
-    # Check order status — PAYMENT_RECEIVED means M-Pesa C2B callback was received and matched
-    if order.status not in (OrderStatus.PAYMENT_RECEIVED, OrderStatus.RELEASED, OrderStatus.COMPLETED):
+    # If status is PAYMENT_RECEIVED/RELEASED/COMPLETED the C2B callback matched it
+    if order.status in (OrderStatus.PAYMENT_RECEIVED, OrderStatus.RELEASED, OrderStatus.COMPLETED):
+        pay_result = await db.execute(
+            select(Payment).where(
+                Payment.order_id == order.id,
+                Payment.status == PaymentStatus.COMPLETED,
+            ).order_by(Payment.id.desc())
+        )
+        payment = pay_result.scalar_one_or_none()
+        if payment and abs(payment.amount - data.fiat_amount) > 5:
+            return {
+                "verified": False,
+                "reason": f"Amount mismatch: expected KES {data.fiat_amount}, received KES {payment.amount}.",
+            }
         return {
-            "verified": False,
-            "reason": f"M-Pesa payment not confirmed yet. Order status: {order.status.value}. Waiting for Safaricom callback.",
+            "verified": True,
+            "reason": "M-Pesa payment confirmed by Safaricom C2B callback",
+            "mpesa_receipt": payment.mpesa_transaction_id if payment else None,
+            "amount_received": payment.amount if payment else order.fiat_amount,
+            "payer_phone": payment.phone if payment else None,
+            "payer_name": payment.sender_name if payment else None,
         }
 
-    # Fetch the linked payment record for receipt details
-    pay_result = await db.execute(
-        select(Payment).where(
-            Payment.order_id == order.id,
-            Payment.status == PaymentStatus.COMPLETED,
-        ).order_by(Payment.id.desc())
-    )
-    payment = pay_result.scalar_one_or_none()
-
-    # Verify amount matches (5 KES tolerance)
-    if payment and abs(payment.amount - data.fiat_amount) > 5:
-        return {
-            "verified": False,
-            "reason": f"Amount mismatch: expected KES {data.fiat_amount}, M-Pesa received KES {payment.amount}. Possible fraud.",
-        }
-
+    # Order exists but no payment matched — tell the bot to wait
     return {
-        "verified": True,
-        "reason": "M-Pesa payment confirmed by Safaricom",
-        "mpesa_receipt": payment.mpesa_transaction_id if payment else None,
-        "amount_received": payment.amount if payment else order.fiat_amount,
-        "payer_phone": payment.phone if payment else None,
-        "payer_name": payment.sender_name if payment else None,
+        "verified": False,
+        "reason": f"No M-Pesa payment received yet. Order status: {order.status.value}.",
     }
 
 
