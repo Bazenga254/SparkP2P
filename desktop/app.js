@@ -1909,25 +1909,26 @@ async function idleScan(page) {
       codeFallbackAskedOrders.delete(order.orderNumber);
 
     // ── Buyer has paid — verify M-Pesa and release ──────────────────────────
-    } else if (screen === 'verify_payment' ||
-               lower.includes('verify payment') || lower.includes('confirm payment')) {
-      console.log(`[SparkP2P] Order ${order.orderNumber} — buyer paid, verifying M-Pesa...`);
+    // IMPORTANT: rely on Vision ONLY for this branch. Do NOT use DOM text like
+    // "confirm payment" — Binance shows that button on EVERY sell order page
+    // even before the buyer has paid, causing false positives.
+    } else if (screen === 'verify_payment') {
+      console.log(`[SparkP2P] Order ${order.orderNumber} — Vision confirmed buyer paid, verifying M-Pesa...`);
 
-      const buyerAlreadySent = await page.evaluate(() => {
+      // Only acknowledge if buyer actually sent proof in chat (M-Pesa code or screenshot)
+      const buyerSentProof = await page.evaluate(() => {
         const vw = window.innerWidth;
-        const hasImage = Array.from(document.querySelectorAll('img')).some(img => {
-          const r = img.getBoundingClientRect();
-          return r.width > 60 && r.height > 60 && r.left > vw * 0.5 && r.top >= 0 && r.bottom <= window.innerHeight;
-        });
+        // Look for M-Pesa confirmation code pattern (10 alphanumeric chars) in chat messages
         const hasCode = Array.from(document.querySelectorAll('*')).some(el => {
           if (el.children.length > 0) return false;
           const r = el.getBoundingClientRect();
-          if (r.left < vw * 0.5 || r.width === 0) return false;
-          return /\b[A-Z0-9]{10}\b/.test(el.textContent || '');
+          // Must be in the right (chat) half and visible
+          if (r.left < vw * 0.55 || r.width === 0 || r.height === 0) return false;
+          return /\b[A-Z]{2}[A-Z0-9]{8}\b/.test(el.textContent || ''); // M-Pesa code format
         });
-        return hasImage || hasCode;
+        return hasCode;
       });
-      if (buyerAlreadySent && !codeFallbackAskedOrders.has(order.orderNumber)) {
+      if (buyerSentProof && !codeFallbackAskedOrders.has(order.orderNumber)) {
         await sendChatMessage(page, 'I can see that you have already made your payment, please wait as I verify this payment. Thank you!');
         await new Promise(r => setTimeout(r, 1000));
       }
@@ -2399,7 +2400,8 @@ async function monitorActiveOrder(page) {
       return;
     }
 
-    if (lower.includes('verify payment') || lower.includes('payment received') || lower.includes('confirm payment')) {
+    // NOTE: do NOT match 'confirm payment' — that button appears on ALL sell order pages
+    if (lower.includes('verify payment') || lower.includes('payment received')) {
       const verified = await verifyMpesaPayment(orderNum, activeOrderFiatAmount, page);
       if (verified) {
         await page.keyboard.press('Escape').catch(() => {});
