@@ -1650,13 +1650,42 @@ Return ONLY valid JSON.` },
     const readRaw = (readData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const readMatch = readRaw.match(/\{[\s\S]*\}/);
 
-    // ── 6. Close lightbox — Escape, then click top-left corner as fallback ──
+    // ── 6. Close lightbox — try multiple methods until it's gone ──────────────
     console.log('[Vision] Closing lightbox...');
+    // Method 1: Escape key
     await page.keyboard.press('Escape').catch(() => {});
-    await new Promise(r => setTimeout(r, 800));
-    // If Escape didn't work, click outside the image (top-left corner of viewport)
-    await page.mouse.click(10, 10).catch(() => {});
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 600));
+
+    // Method 2: Find and click a close button in the DOM (×, ✕, close icon)
+    const closedByButton = await page.evaluate(() => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+      while (walker.nextNode()) {
+        const el = walker.currentNode;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        const t = (el.textContent || '').trim();
+        const label = (el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase();
+        if (t === '×' || t === '✕' || t === '✖' || t === 'Close' ||
+            label.includes('close') || el.className?.toString().includes('close')) {
+          el.click();
+          return true;
+        }
+      }
+      return false;
+    }).catch(() => false);
+    if (closedByButton) {
+      console.log('[Vision] Lightbox closed via close button');
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Method 3: Click the overlay background (outside image center)
+    // Click top-right area which is usually the overlay, not the image
+    await page.mouse.click(50, 50).catch(() => {});
+    await new Promise(r => setTimeout(r, 400));
+
+    // Method 4: If still open, press Escape again
+    await page.keyboard.press('Escape').catch(() => {});
+    await new Promise(r => setTimeout(r, 400));
 
     if (!readMatch) { console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80)); return null; }
     const readResult = JSON.parse(readMatch[0]);
@@ -1670,7 +1699,11 @@ Return ONLY valid JSON.` },
 
   } catch (e) {
     console.error('[Vision] findAndReadPaymentScreenshot error:', e.message?.substring(0, 80));
-    await page.keyboard.press('Escape').catch(() => {}); // close any open lightbox
+    await page.keyboard.press('Escape').catch(() => {});
+    await new Promise(r => setTimeout(r, 400));
+    await page.mouse.click(50, 50).catch(() => {});
+    await new Promise(r => setTimeout(r, 400));
+    await page.keyboard.press('Escape').catch(() => {});
     return null;
   }
 }
