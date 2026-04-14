@@ -1302,6 +1302,7 @@ async function readOrders() {
             "type": "SELL" or "BUY",
             "amount_fiat": number (KES amount, exact),
             "amount_crypto": number (USDT amount, exact),
+            "price": number (exchange rate shown — KES per USDT, e.g. 129.9 or 130.24),
             "status": "Pending Payment" or "Paid" or "Appeal",
             "counterparty": "string"
           }]
@@ -1311,11 +1312,16 @@ async function readOrders() {
 
       if (aiResult?.orders) {
         for (const o of aiResult.orders) {
+          const fiat   = o.amount_fiat || 0;
+          const crypto = o.amount_crypto || 0;
+          // Prefer the actual displayed price; fall back to back-calculation only as last resort
+          const rate = o.price && o.price > 0 ? o.price : (crypto > 0 ? fiat / crypto : 0);
           const order = {
             orderNumber: String(o.order_number || '').replace(/\D/g, ''),
             tradeType: (o.type || '').toUpperCase() === 'BUY' ? 'BUY' : 'SELL',
-            totalPrice: o.amount_fiat || 0,
-            amount: o.amount_crypto || 0,
+            totalPrice: fiat,
+            amount: crypto,
+            price: rate,
             asset: 'USDT',
             status: o.status || 'PENDING',
             counterparty: o.counterparty || '',
@@ -4156,7 +4162,7 @@ function norm(o) {
     tradeType: o.tradeType || 'SELL',
     totalPrice: o.totalPrice || 0,
     amount: o.amount || 0,
-    price: o.totalPrice && o.amount ? o.totalPrice / o.amount : 130,
+    price: o.price && o.price > 0 ? o.price : (o.totalPrice && o.amount ? o.totalPrice / o.amount : 130),
     asset: o.asset || 'USDT',
     orderStatus: statusCode,
     buyerNickname: o.counterparty || null,
