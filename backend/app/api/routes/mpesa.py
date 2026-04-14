@@ -135,17 +135,18 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
     txn_id = data.get("TransID", "")
 
     # Route based on account reference prefix
-    # P2P-T0001        → direct wallet deposit (trader prefix only, no order suffix)
+    # P2PT0001         → direct wallet deposit (new format, no hyphens — I&M compatible)
+    # P2P-T0001        → direct wallet deposit (legacy format, still accepted)
     # P2P-T0001-98765  → P2P trade payment (trader prefix + Binance order number)
     # DEP-1            → legacy wallet deposit format (kept for backward compatibility)
-    if re.match(r'^P2P-T\d{4}$', bill_ref):
-        # Exact trader deposit reference: P2P-T0001 (no order number suffix)
+    if re.match(r'^P2P-?T\d{4}$', bill_ref):
+        # Exact trader deposit reference: P2PT0001 or P2P-T0001 (no order number suffix)
         try:
-            trader_id = int(bill_ref[5:])  # strip "P2P-T"
+            trader_id = int(re.sub(r'^P2P-?T', '', bill_ref))  # strip P2PT or P2P-T
             await _credit_wallet_deposit(trader_id, amount, txn_id, phone, sender_name, db)
         except (ValueError, IndexError):
             logger.error(f"Invalid P2P deposit reference: {bill_ref}")
-    elif bill_ref.startswith("P2P-"):
+    elif bill_ref.startswith("P2P-") or bill_ref.startswith("P2PT"):
         # This is a P2P trade payment (sell side — buyer pays us)
         engine = MatchingEngine(db)
         order = await engine.match_c2b_payment(
@@ -195,6 +196,21 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
     adjust_paybill_balance(amount, direction="in")
 
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+
+def _calculate_safaricom_bsc(amount: float) -> float:
+    """Safaricom Business Service Charge deducted from paybill on C2B receipts."""
+    bands = [
+        (49, 0), (100, 1), (150, 2), (250, 3), (500, 5),
+        (1000, 10), (1500, 14), (2500, 21), (3500, 28),
+        (5000, 35), (7500, 48), (10000, 61), (15000, 78),
+        (20000, 90), (25000, 100), (30000, 110), (35000, 117),
+    ]
+    for limit, fee in bands:
+        if amount <= limit:
+            return float(fee)
+    return round(amount * 0.0034, 2)
 
 
 async def _credit_wallet_deposit(
@@ -317,7 +333,7 @@ async def _credit_wallet_for_sell(order: Order, amount: float, db: AsyncSession)
         )
         db.add(credit_txn)
 
-        # Record fee transaction
+        # Record platform fee transaction
         if platform_fee > 0:
             fee_txn = WalletTransaction(
                 trader_id=order.trader_id,
@@ -589,7 +605,7 @@ async def paybill_balance_result(request: Request):
             logger.info(f"Paybill balance updated: KES {total_available}")
             _broadcast_balance()
         else:
-            logger.warning(f"Balance query failed: code={result_code}")
+            logger.warning(f"Balance query failed: code={result_code}, data={data}")
     except Exception as e:
         logger.error(f"Balance result parse error: {e}")
 
@@ -607,73 +623,146 @@ async def paybill_balance_timeout(request: Request):
 
 @router.post("/b2b/result")
 async def b2b_result(request: Request, db: AsyncSession = Depends(get_db)):
-    """
-    B2B result callback — handles both sweep completions and regular B2B payments.
-    Daraja posts here after the async B2B transfer resolves.
-    """
-    from datetime import datetime, timezone
-    from app.models.im_sweep import ImSweep
-
+    """B2B result callback — parse outcome and auto-refund wallet if transfer failed."""
     data = await request.json()
     logger.info(f"B2B Result: {data}")
-
     try:
         result = data.get("Result", data)
-        result_code = str(result.get("ResultCode", ""))
-        conversation_id = result.get("ConversationID") or result.get("OriginatorConversationID", "")
-        result_desc = result.get("ResultDesc", "")
+        result_code = int(result.get("ResultCode", -1))
+        conversation_id = result.get("ConversationID", "")
+        originator_id = result.get("OriginatorConversationID", "")
+        result_desc = result.get("ResultDesc", "unknown")
 
-        if not conversation_id:
+        # Find the matching outbound payment
+        payment = None
+        for cid in [conversation_id, originator_id]:
+            if not cid:
+                continue
+            r = await db.execute(select(Payment).where(Payment.mpesa_transaction_id == cid))
+            payment = r.scalar_one_or_none()
+            if payment:
+                break
+
+        if not payment:
+            logger.warning(f"B2B result: no payment found for ConversationID={conversation_id} / OriginatorID={originator_id}")
             return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
-        # Find matching ImSweep by ConversationID
-        q = await db.execute(
-            select(ImSweep).where(ImSweep.mpesa_conversation_id == conversation_id)
-        )
-        sweep = q.scalar_one_or_none()
+        if result_code == 0:
+            if payment.status != PaymentStatus.COMPLETED:
+                payment.status = PaymentStatus.COMPLETED
+                logger.info(f"B2B payment {payment.id} confirmed: KES {payment.amount} to {payment.destination}")
+        else:
+            if payment.status == PaymentStatus.FAILED:
+                # Already failed and refunded — skip to avoid double-refund on Daraja retry
+                logger.warning(f"B2B result: payment {payment.id} already FAILED, skipping duplicate refund")
+                return {"ResultCode": 0, "ResultDesc": "Accepted"}
+            payment.status = PaymentStatus.FAILED
+            logger.warning(
+                f"B2B payment {payment.id} FAILED (code {result_code}): {result_desc}. "
+                f"Refunding KES {payment.amount} to trader {payment.trader_id}"
+            )
+            await _refund_failed_withdrawal(
+                db, payment.trader_id, payment.amount,
+                f"Refund: failed B2B withdrawal — {result_desc}"
+            )
 
-        if sweep:
-            if result_code == "0":
-                sweep.status = "completed"
-                sweep.completed_at = datetime.now(timezone.utc)
-                logger.info(f"[Sweep] {sweep.id} completed — KES {sweep.amount:,.0f} → I&M Bank")
-            else:
-                sweep.status = "failed"
-                sweep.failure_reason = result_desc[:490]
-                logger.error(f"[Sweep] {sweep.id} failed: {result_desc}")
-            await db.commit()
+        await db.commit()
     except Exception as e:
         logger.error(f"B2B result handler error: {e}")
-
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+async def _refund_failed_withdrawal(db: AsyncSession, trader_id: int, amount: float, description: str):
+    """Credit back a trader's wallet after a failed B2B/B2C withdrawal.
+
+    Refunds the main withdrawal amount PLUS any platform/settlement fees that
+    were charged alongside it (within a 30-second window), since the transfer
+    never actually completed.
+    """
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import and_
+
+    wallet_r = await db.execute(select(Wallet).where(Wallet.trader_id == trader_id))
+    wallet = wallet_r.scalar_one_or_none()
+    if not wallet:
+        logger.error(f"Refund skipped: no wallet found for trader {trader_id}")
+        return
+
+    # Look for platform/settlement fees charged within 30s of the failed withdrawal
+    # (they are recorded immediately after the withdrawal debit)
+    now = datetime.now(timezone.utc)
+    fee_types = [TransactionType.PLATFORM_FEE, TransactionType.SETTLEMENT_FEE]
+    fee_r = await db.execute(
+        select(WalletTransaction).where(
+            and_(
+                WalletTransaction.trader_id == trader_id,
+                WalletTransaction.transaction_type.in_(fee_types),
+                WalletTransaction.created_at >= now - timedelta(seconds=30),
+            )
+        )
+    )
+    fee_txns = fee_r.scalars().all()
+    fee_total = sum(abs(t.amount) for t in fee_txns)
+    total_refund = amount + fee_total
+
+    # Mark the matching pending WITHDRAWAL wallet transaction as failed
+    withdrawal_r = await db.execute(
+        select(WalletTransaction).where(
+            and_(
+                WalletTransaction.trader_id == trader_id,
+                WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+                WalletTransaction.status == "pending",
+                WalletTransaction.created_at >= now - timedelta(seconds=30),
+            )
+        ).order_by(WalletTransaction.created_at.desc()).limit(1)
+    )
+    withdrawal_txn = withdrawal_r.scalar_one_or_none()
+    if withdrawal_txn:
+        withdrawal_txn.status = "failed"
+
+    wallet.balance += total_refund
+    if wallet.total_withdrawn >= amount:
+        wallet.total_withdrawn -= amount
+
+    txn = WalletTransaction(
+        trader_id=trader_id,
+        wallet_id=wallet.id,
+        transaction_type=TransactionType.ADJUSTMENT,
+        amount=total_refund,
+        balance_after=wallet.balance,
+        description=f"{description} (incl. KES {fee_total:.2f} fees)" if fee_total > 0 else description,
+        status="completed",
+    )
+    db.add(txn)
+    logger.info(f"Refunded KES {total_refund} (withdrawal={amount}, fees={fee_total}) to trader {trader_id}. New balance: {wallet.balance}")
 
 
 @router.post("/b2b/timeout")
 async def b2b_timeout(request: Request, db: AsyncSession = Depends(get_db)):
-    """B2B timeout callback — mark sweep as failed so admin can retry."""
-    from app.models.im_sweep import ImSweep
-
+    """B2B timeout — treat as failed and refund the trader's wallet."""
     data = await request.json()
     logger.warning(f"B2B Timeout: {data}")
-
     try:
-        conversation_id = (
-            data.get("ConversationID")
-            or data.get("OriginatorConversationID", "")
-        )
-        if conversation_id:
-            q = await db.execute(
-                select(ImSweep).where(ImSweep.mpesa_conversation_id == conversation_id)
+        originator_id = data.get("OriginatorConversationID", "")
+        conversation_id = data.get("ConversationID", "")
+        payment = None
+        for cid in [conversation_id, originator_id]:
+            if not cid:
+                continue
+            r = await db.execute(select(Payment).where(Payment.mpesa_transaction_id == cid))
+            payment = r.scalar_one_or_none()
+            if payment:
+                break
+        if payment and payment.status != PaymentStatus.FAILED:
+            payment.status = PaymentStatus.FAILED
+            await _refund_failed_withdrawal(
+                db, payment.trader_id, payment.amount,
+                "Refund: B2B payment timeout — Safaricom did not confirm transfer"
             )
-            sweep = q.scalar_one_or_none()
-            if sweep and sweep.status == "pending":
-                sweep.status = "failed"
-                sweep.failure_reason = "B2B timeout — Safaricom did not respond in time"
-                await db.commit()
-                logger.warning(f"[Sweep] {sweep.id} timed out")
+            await db.commit()
+            logger.warning(f"B2B timeout refund: KES {payment.amount} to trader {payment.trader_id}")
     except Exception as e:
         logger.error(f"B2B timeout handler error: {e}")
-
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
