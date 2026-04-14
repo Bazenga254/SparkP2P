@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models import Order, OrderSide, OrderStatus, Trader, Payment, PaymentStatus
+from app.models import Order, OrderSide, OrderStatus, Trader, Payment, PaymentStatus, PaymentDirection
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.im_sweep import ImSweep
 from app.services.settlement.engine import SettlementEngine
