@@ -2331,16 +2331,14 @@ async function idleScan(page) {
           await new Promise(r => setTimeout(r, 2500));
           if (pauseNavigation) break;
 
-          // ── Tell buyer payment is confirmed — AFTER page reload so chat is fully loaded ──
-          if (!verifiedMessageSentOrders.has(order.orderNumber)) {
-            verifiedMessageSentOrders.add(order.orderNumber);
-            console.log(`[SparkP2P] Step 2a: Sending verified message to buyer via Vision...`);
-            await sendChatMessage(page,
-              `Your payment of KES ${order.totalPrice} has been received and verified successfully. ` +
-              `Please wait while I release your crypto. Thank you!`
-            );
-            await new Promise(r => setTimeout(r, 1000));
-          }
+          // ── Tell buyer payment is confirmed — page is freshly loaded, chat is clean ──
+          console.log(`[SparkP2P] Step 2a: Sending verified message to buyer...`);
+          const msgSent = await sendChatMessage(page,
+            `Your payment of KES ${order.totalPrice} has been received and verified successfully. ` +
+            `Please wait while I release your crypto. Thank you!`
+          );
+          console.log(`[SparkP2P] Step 2a: Message sent = ${msgSent}`);
+          await new Promise(r => setTimeout(r, 1000));
 
           // Click the Payment Received button to open the confirmation modal
           const btnClicked = await page.evaluate(() => {
@@ -4211,19 +4209,9 @@ async function releaseWithVision(page, orderNumber, action) {
         continue;
       }
 
-      // ── Verify payment — send message first, then click Payment Received ──
+      // ── Verify payment — click Payment Received ─────────────────────────────
+      // Message to buyer is sent by the main loop BEFORE releaseWithVision is called.
       if (screen === 'verify_payment') {
-        // Send confirmation message to buyer before clicking Payment Received.
-        // Use tracking Set so we never spam the same buyer twice.
-        if (activeOrderFiatAmount > 0 && !verifiedMessageSentOrders.has(orderNumber)) {
-          verifiedMessageSentOrders.add(orderNumber);
-          console.log(`[Vision] Sending verified message to buyer before Payment Received...`);
-          await sendChatMessage(page,
-            `Your payment of KES ${activeOrderFiatAmount} has been received and verified successfully. ` +
-            `Please wait while I release your crypto. Thank you!`
-          );
-          await new Promise(r => setTimeout(r, 800));
-        }
         await clickButton(page, 'Payment Received', 'payment received');
         await new Promise(r => setTimeout(r, 2000));
         continue;
