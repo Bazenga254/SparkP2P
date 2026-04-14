@@ -1614,14 +1614,66 @@ Return ONLY valid JSON: {"found": true, "x": <number>, "y": <number>} or {"found
       console.log('[Vision] No payment screenshot found in chat');
       return null;
     }
-    console.log(`[Vision] Payment screenshot found at (${locate.x}, ${locate.y}) — clicking to enlarge...`);
 
-    // ── 3. DOM clicks the image at Vision-provided coordinates ─────────────
-    await page.mouse.click(locate.x, locate.y);
-    console.log('[Vision] Waiting 15s for lightbox to fully load...');
-    await new Promise(r => setTimeout(r, 15000)); // 15s — enough for lightbox + any lazy-load
+    // ── 3. Validate coordinates — fall back to DOM if Vision gave non-numbers ─
+    let clickX = typeof locate.x === 'number' && !isNaN(locate.x) ? locate.x : null;
+    let clickY = typeof locate.y === 'number' && !isNaN(locate.y) ? locate.y : null;
 
-    // ── 4. Screenshot the enlarged/lightbox view ───────────────────────────
+    if (!clickX || !clickY) {
+      console.log(`[Vision] Invalid coords (${locate.x}, ${locate.y}) — using DOM to find chat image...`);
+      // Find the first image element in the right half of the page (chat panel area)
+      const domCoords = await page.evaluate(() => {
+        const imgs = Array.from(document.querySelectorAll('img'));
+        for (const img of imgs) {
+          const r = img.getBoundingClientRect();
+          // Chat panel is right half of the 1280px viewport, image must be >50px and below nav
+          if (r.left > 640 && r.width > 50 && r.height > 50 && r.top > 80 && r.bottom < 760) {
+            return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+          }
+        }
+        return null;
+      });
+      if (!domCoords) { console.log('[Vision] DOM fallback: no image found in chat panel'); return null; }
+      clickX = domCoords.x;
+      clickY = domCoords.y;
+      console.log(`[Vision] DOM fallback found image at (${clickX}, ${clickY})`);
+    } else {
+      console.log(`[Vision] Payment screenshot found at (${clickX}, ${clickY}) — clicking to enlarge...`);
+    }
+
+    // ── 4. Click image and wait for lightbox to open ───────────────────────
+    await page.mouse.click(clickX, clickY);
+    console.log('[Vision] Clicked image — waiting 3s for lightbox to open...');
+    await new Promise(r => setTimeout(r, 3000));
+
+    // ── 5. Verify the lightbox actually opened ────────────────────────────
+    // Quick Vision check — if lightbox not open, stop immediately (don't waste 12 more seconds)
+    const checkSS = await page.screenshot({ type: 'jpeg', quality: 75 });
+    const checkResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 40,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: checkSS.toString('base64') } },
+          { type: 'text', text: 'Is an enlarged image lightbox/viewer currently open on this page? Return ONLY: {"open": true} or {"open": false}' },
+        ]}],
+      }),
+    });
+    const checkData = await checkResp.json();
+    const checkRaw = (checkData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const checkMatch = checkRaw.match(/\{[\s\S]*?\}/);
+    const lightboxOpen = checkMatch ? JSON.parse(checkMatch[0])?.open === true : false;
+
+    if (!lightboxOpen) {
+      console.log('[Vision] Lightbox did NOT open after click — aborting screenshot read');
+      return null;
+    }
+    console.log('[Vision] Lightbox confirmed open — waiting 12s for full load...');
+    await new Promise(r => setTimeout(r, 12000)); // remaining wait (total ~15s)
+
+    // ── 6. Screenshot the enlarged/lightbox view ───────────────────────────
     const enlargedSS = await page.screenshot({ type: 'jpeg', quality: 95 });
     await takeScreenshot('payment_screenshot_enlarged', page);
 
