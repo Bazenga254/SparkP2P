@@ -957,7 +957,7 @@ export default function Dashboard() {
               <div style={{ marginBottom: 10 }}>
                 <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Account Number</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, fontFamily: 'monospace' }}>P2P-T{String(profile?.id || 0).padStart(4, '0')}</span>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, fontFamily: 'monospace' }}>P2PT{String(profile?.id || 0).padStart(4, '0')}</span>
                   <button onClick={() => { navigator.clipboard.writeText(`P2PT${String(profile?.id || 0).padStart(4, '0')}`); setCopied('account'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'account' ? '#10b981' : '#9ca3af', padding: 2 }}>
                     <Copy size={14} />
                   </button>
@@ -1639,7 +1639,7 @@ export default function Dashboard() {
                 <span style={{ color: '#9ca3af' }}>Paybill Number</span>
                 <span style={{ color: '#fff', fontWeight: 600 }}>4041355</span>
                 <span style={{ color: '#9ca3af' }}>Account Number</span>
-                <span style={{ color: '#f59e0b', fontWeight: 600 }}>P2P-T{String(profile?.id || 0).padStart(4, '0')}</span>
+                <span style={{ color: '#f59e0b', fontWeight: 600 }}>P2PT{String(profile?.id || 0).padStart(4, '0')}</span>
               </div>
               <p style={{ fontSize: 11, color: '#6b7280', marginTop: 8, marginBottom: 0 }}>
                 Send any amount from M-Pesa, bank app, or agent. Your wallet will be credited automatically.
