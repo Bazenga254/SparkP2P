@@ -3469,91 +3469,62 @@ async function clickButton(page, ...textOptions) {
 }
 
 // ── Send a chat message on an order page ────────────────────────────────────
+// Strategy: click input → type → Tab to send button → Space to activate.
+// Tab navigation is layout-independent: works regardless of how Binance
+// restructures their page because it follows keyboard focus order, not
+// screen coordinates or CSS class names.
 async function sendChatMessage(page, message) {
   try {
-    // Step 1: Get the real screen coordinates of the chat input using Puppeteer
-    const inputCoords = await page.evaluate(() => {
-      const selectors = [
-        '[contenteditable="true"]',
-        '[placeholder*="message" i]',
-        'input[placeholder*="message" i]',
-        'textarea[placeholder]',
-      ];
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (!el) continue;
-        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        const r = el.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) {
-          return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel };
-        }
-      }
-      return null;
-    });
+    // Step 1: Find and click the chat input to give it focus
+    const inputEl = await page.$('[contenteditable="true"]') ||
+                    await page.$('[placeholder*="message" i]') ||
+                    await page.$('textarea[placeholder]');
 
-    if (!inputCoords) {
+    if (!inputEl) {
       console.log('[SparkP2P] sendChatMessage: chat input not found');
       return false;
     }
 
-    // Step 2: Click the input using real mouse coordinates to guarantee focus
-    await page.mouse.click(inputCoords.x, inputCoords.y);
+    await inputEl.scrollIntoView();
+    await inputEl.click();
     await new Promise(r => setTimeout(r, 300));
 
-    // Step 3: Clear any existing text (Ctrl+A then Delete)
+    // Step 2: Select all and delete any existing text
     await page.keyboard.down('Control');
     await page.keyboard.press('KeyA');
     await page.keyboard.up('Control');
-    await page.keyboard.press('Delete');
-    await new Promise(r => setTimeout(r, 200));
+    await page.keyboard.press('Backspace');
+    await new Promise(r => setTimeout(r, 150));
 
-    // Step 4: Type the message using real keyboard (most reliable — React sees every keystroke)
-    await page.keyboard.type(message, { delay: 20 });
-    await new Promise(r => setTimeout(r, 400));
+    // Step 3: Type the message — real keystrokes, React sees every character
+    await page.keyboard.type(message, { delay: 15 });
+    await new Promise(r => setTimeout(r, 300));
 
-    // Step 5: Find send button coordinates — look to the RIGHT of the input
-    const sendCoords = await page.evaluate((inputX, inputY) => {
-      // Walk up from the input, find the nearest container, look for a send button to its right
-      const input = document.querySelector('[contenteditable="true"]') ||
-                    document.querySelector('[placeholder*="message" i]');
-      if (!input) return null;
+    // Step 4: Tab once to move focus to the send button (next focusable element),
+    // then Space to activate it. This is layout-independent.
+    await page.keyboard.press('Tab');
+    await new Promise(r => setTimeout(r, 150));
+    await page.keyboard.press('Space');
+    await new Promise(r => setTimeout(r, 500));
 
-      let container = input.parentElement;
-      for (let i = 0; i < 6; i++) {
-        if (!container) break;
-        const allEls = Array.from(container.querySelectorAll('button, [role="button"], span, div'))
-          .filter(el => {
-            if (el.contains(input)) return false; // skip input's own wrapper
-            const r = el.getBoundingClientRect();
-            // Must be visible, to the RIGHT of the input, and in the same row (similar Y)
-            return r.width > 10 && r.height > 10
-              && r.left > inputX
-              && Math.abs((r.top + r.height / 2) - inputY) < 40;
-          });
-        if (allEls.length > 0) {
-          // Pick the leftmost one (closest to input)
-          allEls.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-          const r = allEls[0].getBoundingClientRect();
-          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-        }
-        container = container.parentElement;
-      }
-      return null;
-    }, inputCoords.x, inputCoords.y);
+    // Step 5: Verify message was sent — if input is empty, it worked.
+    // If input still has text, fall back to Enter key.
+    const inputStillHasText = await page.evaluate(() => {
+      const el = document.querySelector('[contenteditable="true"]');
+      return el ? (el.textContent || '').trim().length > 0 : false;
+    });
 
-    if (sendCoords) {
-      // Step 6a: Click send button with real mouse click
-      await page.mouse.click(sendCoords.x, sendCoords.y);
-      console.log(`[SparkP2P] Chat sent via mouse click at (${Math.round(sendCoords.x)},${Math.round(sendCoords.y)}): "${message.substring(0, 60)}"`);
-    } else {
-      // Step 6b: Fallback — re-focus input then press Enter
-      await page.mouse.click(inputCoords.x, inputCoords.y);
-      await new Promise(r => setTimeout(r, 200));
+    if (inputStillHasText) {
+      // Tab went somewhere else — re-focus input and try Enter
+      await inputEl.click();
+      await new Promise(r => setTimeout(r, 150));
       await page.keyboard.press('Enter');
-      console.log(`[SparkP2P] Chat sent via Enter fallback: "${message.substring(0, 60)}"`);
+      console.log(`[SparkP2P] Chat sent via Enter (Tab target was wrong): "${message.substring(0, 60)}"`);
+    } else {
+      console.log(`[SparkP2P] Chat sent via Tab+Space: "${message.substring(0, 60)}"`);
     }
 
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 800));
     return true;
   } catch (e) {
     console.error('[SparkP2P] sendChatMessage error:', e.message?.substring(0, 80));
