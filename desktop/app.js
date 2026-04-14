@@ -1581,25 +1581,19 @@ function stopPoller() {
 async function findAndReadPaymentScreenshot(page) {
   if (!anthropicApiKey) return null;
   try {
-    // ── 0. Scroll chat to bottom so the latest payment image is visible ────
+    // ── 0. Scroll chat panel to bottom so the latest payment image is visible ─
+    // Only scrolls within the chat container — does NOT press Escape or navigate.
     await page.evaluate(() => {
-      // Try common chat container selectors used by Binance P2P
       const sels = ['[class*="chat"]', '[class*="Chat"]', '[class*="message-list"]', '[class*="MessageList"]'];
       for (const sel of sels) {
         for (const el of document.querySelectorAll(sel)) {
-          if (el.scrollHeight > el.clientHeight + 10) {
-            el.scrollTop = el.scrollHeight;
-          }
+          if (el.scrollHeight > el.clientHeight + 10) el.scrollTop = el.scrollHeight;
         }
       }
     }).catch(() => {});
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 500));
 
-    // ── 1. Dismiss any unexpected dialogs before scanning ─────────────────
-    await page.keyboard.press('Escape').catch(() => {});
-    await new Promise(r => setTimeout(r, 400));
-
-    // ── 2. Full-page screenshot (viewport only, 1280×800) ─────────────────
+    // ── 1. Full-page screenshot (viewport only, 1280×800) ─────────────────
     console.log('[Vision] Taking screenshot to locate payment proof in chat...');
     const fullSS = await page.screenshot({ type: 'jpeg', quality: 90 });
     const fullB64 = fullSS.toString('base64');
