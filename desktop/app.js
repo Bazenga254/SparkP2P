@@ -1618,7 +1618,8 @@ Return ONLY valid JSON: {"found": true, "x": <number>, "y": <number>} or {"found
 
     // ── 3. DOM clicks the image at Vision-provided coordinates ─────────────
     await page.mouse.click(locate.x, locate.y);
-    await new Promise(r => setTimeout(r, 2000)); // wait for lightbox to open
+    console.log('[Vision] Waiting 15s for lightbox to fully load...');
+    await new Promise(r => setTimeout(r, 15000)); // 15s — enough for lightbox + any lazy-load
 
     // ── 4. Screenshot the enlarged/lightbox view ───────────────────────────
     const enlargedSS = await page.screenshot({ type: 'jpeg', quality: 95 });
@@ -1649,8 +1650,12 @@ Return ONLY valid JSON.` },
     const readRaw = (readData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const readMatch = readRaw.match(/\{[\s\S]*\}/);
 
-    // Close lightbox before returning
+    // ── 6. Close lightbox — Escape, then click top-left corner as fallback ──
+    console.log('[Vision] Closing lightbox...');
     await page.keyboard.press('Escape').catch(() => {});
+    await new Promise(r => setTimeout(r, 800));
+    // If Escape didn't work, click outside the image (top-left corner of viewport)
+    await page.mouse.click(10, 10).catch(() => {});
     await new Promise(r => setTimeout(r, 500));
 
     if (!readMatch) { console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80)); return null; }
