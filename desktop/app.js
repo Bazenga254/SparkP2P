@@ -2164,31 +2164,73 @@ async function idleScan(page) {
           order.orderNumber, order.totalPrice, null,
           { mpesaCodes: [mpesaCode], bankRefs: [] }
         );
+
         if (verified) {
-          console.log(`[SparkP2P] ✅ Step 1 COMPLETE — code ${mpesaCode} verified. Ready for Step 2.`);
-          // Step 2 (click Payment Received → modal → release) comes next — tell me and I'll add it
+          // ── STEP 1 COMPLETE: Payment confirmed ─────────────────────────────
+          console.log(`[SparkP2P] ✅ Step 1 COMPLETE — code ${mpesaCode} verified`);
+          // Tell buyer payment is confirmed and crypto is being released
+          await sendChatMessage(page,
+            `Your payment of KES ${order.totalPrice} has been received and verified successfully. ` +
+            `Please wait while I release your crypto. Thank you!`
+          );
+          await new Promise(r => setTimeout(r, 800));
+
+          // ── STEP 2: Navigate back (chat scroll may have moved page), click Payment Received ──
+          await page.goto(
+            `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+            { waitUntil: 'domcontentloaded', timeout: 15000 }
+          ).catch(() => {});
+          await new Promise(r => setTimeout(r, 2500));
+          if (pauseNavigation) break;
+
+          // Click the Payment Received button to open the confirmation modal
+          const btnClicked = await page.evaluate(() => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+            while (walker.nextNode()) {
+              const el = walker.currentNode;
+              if (el.tagName !== 'BUTTON') continue;
+              const t = (el.textContent || '').trim().toLowerCase();
+              if (t === 'payment received' || t.startsWith('payment received')) {
+                el.click(); return true;
+              }
+            }
+            return false;
+          });
+          console.log(`[SparkP2P] Step 2: Payment Received button clicked: ${btnClicked}`);
+          await new Promise(r => setTimeout(r, 2000));
+
+          // releaseWithVision handles: modal checkbox → Confirm Release → security verification
+          await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [mpesaCode], bankRefs: [] } });
+          activeOrderNumber = null;
+          activeOrderFiatAmount = 0;
+          delete orderFirstSeenAt[order.orderNumber];
+          codeFallbackAskedOrders.delete(order.orderNumber);
+          orderReminderSent.delete(order.orderNumber);
+          if (orderReminderSent._times) delete orderReminderSent._times[order.orderNumber + '_waiting_mpesa'];
+
         } else {
-          console.log(`[SparkP2P] ❌ Code ${mpesaCode} not in VPS records — asking buyer for correct message`);
+          // ── Payment code found but VPS can't match it ─────────────────────
+          console.log(`[SparkP2P] ❌ Code ${mpesaCode} not in VPS records`);
           if (!codeFallbackAskedOrders.has(order.orderNumber)) {
             codeFallbackAskedOrders.add(order.orderNumber);
             await sendChatMessage(page,
-              'Hello! I found your payment but could not verify it in our records. ' +
-              'Please TYPE your M-Pesa confirmation message exactly as received from Safaricom ' +
-              '(e.g: UDE5J13AGR Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE...). Thank you!'
+              'I was unable to verify your payment in our records. ' +
+              'Please TYPE your M-Pesa confirmation message exactly as received from Safaricom in this chat. ' +
+              'Example: "UDE5J13AGR Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE..." Thank you!'
             );
           }
         }
+
       } else {
-        // ── STEP 1d: Vision couldn't read — ask buyer to TYPE the M-Pesa message ─
+        // ── STEP 1d: No code found — ask buyer to TYPE the M-Pesa message ────
         // Send reminder every 60 seconds. Stay on this order page.
-        const waitKey = order.orderNumber + '_waiting_mpesa';
         if (!orderReminderSent._times) orderReminderSent._times = {};
+        const waitKey = order.orderNumber + '_waiting_mpesa';
         const lastAsked = orderReminderSent._times[waitKey] || 0;
         const secsSinceAsked = (Date.now() - lastAsked) / 1000;
         const isFirstAsk = lastAsked === 0;
 
         if (isFirstAsk || secsSinceAsked >= 60) {
-          orderReminderSent.add(waitKey);
           orderReminderSent._times[waitKey] = Date.now();
           if (isFirstAsk) {
             await sendChatMessage(page,
@@ -2204,7 +2246,7 @@ async function idleScan(page) {
         } else {
           console.log(`[SparkP2P] Waiting for buyer M-Pesa text (${Math.round(secsSinceAsked)}s since last reminder)`);
         }
-        // Do NOT break or move to next order — stay focused on this order
+        // Stay on this order — do not navigate away
       }
 
     // ── Mid-release state ───────────────────────────────────────────────────
