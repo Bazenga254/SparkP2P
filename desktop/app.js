@@ -87,6 +87,7 @@ let lockImFrameListener = null;
 let lockMpesaFrameListener = null;
 let chromeProcess = null; // Child process reference for killing Chrome on quit
 const codeFallbackAskedOrders = new Set(); // Order numbers we've already asked buyer to type M-Pesa code (avoid spamming)
+const verifiedMessageSentOrders = new Set(); // Order numbers where "payment verified" message was already sent to buyer
 let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for monitorActiveOrder compat)
 let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
 let connectingBinance = false; // Prevents concurrent connectBinance() calls
@@ -2261,6 +2262,7 @@ async function idleScan(page) {
       delete orderFirstSeenAt[order.orderNumber];
       orderReminderSent.delete(order.orderNumber);
       codeFallbackAskedOrders.delete(order.orderNumber);
+      verifiedMessageSentOrders.delete(order.orderNumber);
 
     // ── SELL ORDER: Buyer marked as paid — verify M-Pesa before releasing ──────
     } else if (screen === 'verify_payment') {
@@ -2321,21 +2323,25 @@ async function idleScan(page) {
           // ── STEP 1 COMPLETE: Payment confirmed ─────────────────────────────
           console.log(`[SparkP2P] ✅ Step 1 COMPLETE — code ${mpesaCode} verified`);
 
-          // ── STEP 2: Navigate back to order page (lightbox/scroll may have disrupted layout) ──
+          // ── Tell buyer NOW — chat is still loaded from this page visit ──────
+          // Do this BEFORE navigating so we don't have to re-find the chat input.
+          if (!verifiedMessageSentOrders.has(order.orderNumber)) {
+            verifiedMessageSentOrders.add(order.orderNumber);
+            console.log(`[SparkP2P] Step 1d: Sending verified message to buyer...`);
+            await sendChatMessage(page,
+              `Your payment of KES ${order.totalPrice} has been received and verified successfully. ` +
+              `Please wait while I release your crypto. Thank you!`
+            );
+            await new Promise(r => setTimeout(r, 800));
+          }
+
+          // ── STEP 2: Reload order page — resets scroll so Payment Received button is visible ──
           await page.goto(
             `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
             { waitUntil: 'domcontentloaded', timeout: 15000 }
           ).catch(() => {});
           await new Promise(r => setTimeout(r, 2500));
           if (pauseNavigation) break;
-
-          // ── Tell buyer payment is confirmed — Vision locates the chat input ──
-          console.log(`[SparkP2P] Step 2: Sending verified message to buyer via Vision...`);
-          await sendChatMessage(page,
-            `Your payment of KES ${order.totalPrice} has been received and verified successfully. ` +
-            `Please wait while I release your crypto. Thank you!`
-          );
-          await new Promise(r => setTimeout(r, 800));
 
           // Click the Payment Received button to open the confirmation modal
           const btnClicked = await page.evaluate(() => {
@@ -2359,6 +2365,7 @@ async function idleScan(page) {
           activeOrderFiatAmount = 0;
           delete orderFirstSeenAt[order.orderNumber];
           codeFallbackAskedOrders.delete(order.orderNumber);
+          verifiedMessageSentOrders.delete(order.orderNumber);
           orderReminderSent.delete(order.orderNumber);
           if (orderReminderSent._times) delete orderReminderSent._times[order.orderNumber + '_waiting_mpesa'];
 
@@ -2414,6 +2421,7 @@ async function idleScan(page) {
       activeOrderFiatAmount = 0;
       delete orderFirstSeenAt[order.orderNumber];
       codeFallbackAskedOrders.delete(order.orderNumber);
+      verifiedMessageSentOrders.delete(order.orderNumber);
       orderReminderSent.delete(order.orderNumber);
 
     // ── Awaiting buyer payment ──────────────────────────────────────────────
@@ -2483,6 +2491,7 @@ async function idleScan(page) {
           delete orderFirstSeenAt[order.orderNumber];
           orderReminderSent.delete(order.orderNumber);
           codeFallbackAskedOrders.delete(order.orderNumber);
+          verifiedMessageSentOrders.delete(order.orderNumber);
         } else {
           console.log(`[SparkP2P] Order ${order.orderNumber} — could not find Cancel button, will retry next cycle`);
         }
@@ -4104,6 +4113,11 @@ async function releaseWithVision(page, orderNumber, action) {
         // Order complete
         if (text.includes('Sale Successful') || text.includes('Order Completed') || text.includes('Released'))
           return 'order_complete';
+        // Passkey screen — MUST check before verify_payment because the passkey
+        // dialog overlays the order page which still has "Payment Received" in it
+        if (text.includes('My Passkeys Are Not Available') || text.includes('Passkeys Are Not Available') ||
+            text.includes('Verify with passkey') || text.includes('Verification failed'))
+          return 'passkey_failed';
         // Confirm release modal — "Received payment in your account?" dialog
         // Must check BEFORE verify_payment because modal overlays the Verify Payment page
         if (text.includes('Received payment in your account') ||
@@ -4116,9 +4130,6 @@ async function releaseWithVision(page, orderNumber, action) {
             text.includes('Confirm payment is received') ||
             text.includes('Payment Received'))
           return 'verify_payment';
-        // Passkey screen
-        if (text.includes('My Passkeys Are Not Available') || text.includes('Passkeys Are Not Available'))
-          return 'passkey_failed';
         // Security verification
         if (text.includes('Security Verification') && (text.includes('0/2') || text.includes('1/2'))) {
           const progress = text.includes('1/2') ? '1/2' : '0/2';
@@ -4201,8 +4212,19 @@ async function releaseWithVision(page, orderNumber, action) {
         continue;
       }
 
-      // ── Verify payment — click Payment Received ─────────────
+      // ── Verify payment — send message first, then click Payment Received ──
       if (screen === 'verify_payment') {
+        // Send confirmation message to buyer before clicking Payment Received.
+        // Use tracking Set so we never spam the same buyer twice.
+        if (activeOrderFiatAmount > 0 && !verifiedMessageSentOrders.has(orderNumber)) {
+          verifiedMessageSentOrders.add(orderNumber);
+          console.log(`[Vision] Sending verified message to buyer before Payment Received...`);
+          await sendChatMessage(page,
+            `Your payment of KES ${activeOrderFiatAmount} has been received and verified successfully. ` +
+            `Please wait while I release your crypto. Thank you!`
+          );
+          await new Promise(r => setTimeout(r, 800));
+        }
         await clickButton(page, 'Payment Received', 'payment received');
         await new Promise(r => setTimeout(r, 2000));
         continue;
