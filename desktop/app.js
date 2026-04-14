@@ -3470,101 +3470,95 @@ async function clickButton(page, ...textOptions) {
 
 // ── Send a chat message on an order page ────────────────────────────────────
 async function sendChatMessage(page, message) {
-  // Find the chat input — Binance uses a contenteditable div inside its own scroll container.
-  // Do NOT use window.scrollTo(body.scrollHeight) — that scrolls to the page footer (empty area),
-  // not the chat panel. Use scrollIntoView on the input element instead.
-  const inputFound = await page.evaluate((msg) => {
-    const selectors = [
-      '[contenteditable="true"]',
-      '[placeholder*="message" i]',
-      '[placeholder*="Enter message" i]',
-      'input[placeholder*="message" i]',
-      'textarea[placeholder]',
-    ];
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (!el) continue;
-      // Scroll the element into view within its own container (respects chat panel scroll)
-      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      el.click();
-      el.focus();
-      if (el.isContentEditable) {
-        // Clear existing content first
-        el.textContent = '';
-        el.dispatchEvent(new InputEvent('input', { bubbles: true }));
-        // execCommand fires beforeinput + input events that React's synthetic system picks up
-        document.execCommand('insertText', false, msg);
-        return `contenteditable:${sel}`;
-      } else {
-        // Regular input/textarea — use native setter to bypass React's read-only value prop
-        const proto = el.tagName === 'TEXTAREA'
-          ? window.HTMLTextAreaElement.prototype
-          : window.HTMLInputElement.prototype;
-        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-        if (nativeSetter) {
-          nativeSetter.call(el, msg);
-        } else {
-          el.value = msg;
+  try {
+    // Step 1: Get the real screen coordinates of the chat input using Puppeteer
+    const inputCoords = await page.evaluate(() => {
+      const selectors = [
+        '[contenteditable="true"]',
+        '[placeholder*="message" i]',
+        'input[placeholder*="message" i]',
+        'textarea[placeholder]',
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel };
         }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return `input:${sel}`;
-      }
-    }
-    // Debug: log all placeholder elements so we can identify the correct selector
-    const allPlaceholders = Array.from(document.querySelectorAll('[placeholder]'))
-      .map(e => `${e.tagName}[placeholder="${e.getAttribute('placeholder')}"]`);
-    console.log('[DEBUG] Elements with placeholder:', JSON.stringify(allPlaceholders));
-    return null;
-  }, message);
-
-  if (inputFound) {
-    await new Promise(r => setTimeout(r, 500));
-
-    // Click the send button (paper-plane / arrow icon) — Binance does NOT send on Enter.
-    // The send button sits immediately after the contenteditable input in the DOM.
-    const sent = await page.evaluate(() => {
-      // Strategy 1: button/div with an SVG child that is a sibling/cousin of the input
-      const input = document.querySelector('[contenteditable="true"]');
-      if (input) {
-        // Walk up to the chat-bar container, then look for a clickable send element
-        let container = input.parentElement;
-        for (let i = 0; i < 5; i++) {
-          if (!container) break;
-          // Find a button or clickable div with an SVG inside (the send icon)
-          const candidates = container.querySelectorAll('button, [role="button"], [style*="cursor: pointer"], span[class*="send"], div[class*="send"]');
-          for (const el of candidates) {
-            if (el.contains(input)) continue; // skip the input's own wrapper
-            if (el.querySelector('svg') || el.getAttribute('aria-label')?.toLowerCase().includes('send')) {
-              el.click();
-              return 'send-button';
-            }
-          }
-          container = container.parentElement;
-        }
-      }
-      // Strategy 2: any button whose aria-label or title mentions "send"
-      const allBtns = document.querySelectorAll('button, [role="button"]');
-      for (const btn of allBtns) {
-        const lbl = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').toLowerCase();
-        if (lbl.includes('send')) { btn.click(); return 'aria-send'; }
       }
       return null;
     });
 
-    if (sent) {
-      console.log(`[SparkP2P] Chat send button clicked (${sent}): "${message.substring(0, 60)}"`);
+    if (!inputCoords) {
+      console.log('[SparkP2P] sendChatMessage: chat input not found');
+      return false;
+    }
+
+    // Step 2: Click the input using real mouse coordinates to guarantee focus
+    await page.mouse.click(inputCoords.x, inputCoords.y);
+    await new Promise(r => setTimeout(r, 300));
+
+    // Step 3: Clear any existing text (Ctrl+A then Delete)
+    await page.keyboard.down('Control');
+    await page.keyboard.press('KeyA');
+    await page.keyboard.up('Control');
+    await page.keyboard.press('Delete');
+    await new Promise(r => setTimeout(r, 200));
+
+    // Step 4: Type the message using real keyboard (most reliable — React sees every keystroke)
+    await page.keyboard.type(message, { delay: 20 });
+    await new Promise(r => setTimeout(r, 400));
+
+    // Step 5: Find send button coordinates — look to the RIGHT of the input
+    const sendCoords = await page.evaluate((inputX, inputY) => {
+      // Walk up from the input, find the nearest container, look for a send button to its right
+      const input = document.querySelector('[contenteditable="true"]') ||
+                    document.querySelector('[placeholder*="message" i]');
+      if (!input) return null;
+
+      let container = input.parentElement;
+      for (let i = 0; i < 6; i++) {
+        if (!container) break;
+        const allEls = Array.from(container.querySelectorAll('button, [role="button"], span, div'))
+          .filter(el => {
+            if (el.contains(input)) return false; // skip input's own wrapper
+            const r = el.getBoundingClientRect();
+            // Must be visible, to the RIGHT of the input, and in the same row (similar Y)
+            return r.width > 10 && r.height > 10
+              && r.left > inputX
+              && Math.abs((r.top + r.height / 2) - inputY) < 40;
+          });
+        if (allEls.length > 0) {
+          // Pick the leftmost one (closest to input)
+          allEls.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+          const r = allEls[0].getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+        container = container.parentElement;
+      }
+      return null;
+    }, inputCoords.x, inputCoords.y);
+
+    if (sendCoords) {
+      // Step 6a: Click send button with real mouse click
+      await page.mouse.click(sendCoords.x, sendCoords.y);
+      console.log(`[SparkP2P] Chat sent via mouse click at (${Math.round(sendCoords.x)},${Math.round(sendCoords.y)}): "${message.substring(0, 60)}"`);
     } else {
-      // Fallback: Enter key
+      // Step 6b: Fallback — re-focus input then press Enter
+      await page.mouse.click(inputCoords.x, inputCoords.y);
+      await new Promise(r => setTimeout(r, 200));
       await page.keyboard.press('Enter');
-      console.log(`[SparkP2P] Chat sent via Enter (send button not found): "${message.substring(0, 60)}"`);
+      console.log(`[SparkP2P] Chat sent via Enter fallback: "${message.substring(0, 60)}"`);
     }
 
     await new Promise(r => setTimeout(r, 1000));
     return true;
+  } catch (e) {
+    console.error('[SparkP2P] sendChatMessage error:', e.message?.substring(0, 80));
+    return false;
   }
-  console.log('[SparkP2P] Chat input not found — check [DEBUG] log above for available inputs');
-  return false;
 }
 
 // ═══════════════════════════════════════════════════════════
