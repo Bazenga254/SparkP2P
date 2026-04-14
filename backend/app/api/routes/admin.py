@@ -843,7 +843,10 @@ async def admin_analytics(
         q1 = select(
             func.coalesce(func.sum(Order.platform_fee), 0),
             func.coalesce(func.sum(Order.settlement_fee), 0),
-        ).where(Order.created_at >= start)
+        ).where(
+            Order.created_at >= start,
+            Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
+        )
         r1 = await db.execute(q1)
         order_pf, order_sf = r1.one()
 
@@ -872,7 +875,7 @@ async def admin_analytics(
         select(
             func.coalesce(func.sum(Order.platform_fee), 0),
             func.coalesce(func.sum(Order.settlement_fee), 0),
-        )
+        ).where(Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]))
     )
     total_pf, total_sf = r.one()
 
