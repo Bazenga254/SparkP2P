@@ -1709,8 +1709,8 @@ Return ONLY valid JSON.` },
     }
     if (!readResult) console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80));
 
-    // ── 6. Vision locates the X close button, DOM clicks it ───────────────────
-    // Dedicated call — focused on ONE task so Vision always returns coords.
+    // ── 6. Vision locates the X close button, Puppeteer clicks it ────────────
+    // Dedicated focused call. Coordinates are validated as real numbers before clicking.
     console.log('[Vision] Locating lightbox close button...');
     try {
       const closeSS = await page.screenshot({ type: 'jpeg', quality: 85 });
@@ -1722,23 +1722,36 @@ Return ONLY valid JSON.` },
           max_tokens: 60,
           messages: [{ role: 'user', content: [
             { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: closeSS.toString('base64') } },
-            { type: 'text', text: 'This Binance P2P page has an image lightbox open. Find the X or close button to close the lightbox. Return ONLY valid JSON, no explanation: {"x": <pixel_x>, "y": <pixel_y>}' },
+            { type: 'text', text: 'This Binance P2P page has an image lightbox/viewer open. Find the X or close button pixel coordinates. Return ONLY valid JSON with integer numbers: {"x": 1234, "y": 56}' },
           ]}],
         }),
       });
       const closeData = await closeResp.json();
       const closeRaw = (closeData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
       const closeMatch = closeRaw.match(/\{[\s\S]*?\}/);
+      let closeClicked = false;
       if (closeMatch) {
-        const closeCoords = JSON.parse(closeMatch[0]);
-        if (closeCoords.x && closeCoords.y) {
-          console.log(`[Vision] Clicking X close button at (${closeCoords.x}, ${closeCoords.y})`);
-          await page.mouse.click(closeCoords.x, closeCoords.y);
-          await new Promise(r => setTimeout(r, 1200));
-          console.log('[Vision] Lightbox close click done');
-        } else {
-          console.log('[Vision] Close button not found in response:', closeRaw.substring(0, 80));
-        }
+        try {
+          const closeCoords = JSON.parse(closeMatch[0]);
+          // MUST be real finite numbers — Vision sometimes returns strings like "App" or "center"
+          const cx = typeof closeCoords.x === 'number' && isFinite(closeCoords.x) ? closeCoords.x : parseFloat(closeCoords.x);
+          const cy = typeof closeCoords.y === 'number' && isFinite(closeCoords.y) ? closeCoords.y : parseFloat(closeCoords.y);
+          if (isFinite(cx) && isFinite(cy) && cx > 0 && cy > 0) {
+            console.log(`[Vision] Clicking X close button at (${cx}, ${cy})`);
+            await page.mouse.click(cx, cy);
+            await new Promise(r => setTimeout(r, 1200));
+            console.log('[Vision] Lightbox close click done');
+            closeClicked = true;
+          } else {
+            console.log(`[Vision] Close coords invalid (${closeCoords.x}, ${closeCoords.y}) — using fallback`);
+          }
+        } catch (_) {}
+      }
+      if (!closeClicked) {
+        // Last resort: Escape key
+        await page.keyboard.press('Escape');
+        await new Promise(r => setTimeout(r, 800));
+        console.log('[Vision] Sent Escape as close fallback');
       }
     } catch (closeErr) {
       console.log('[Vision] Close button detection error:', closeErr.message?.substring(0, 60));
