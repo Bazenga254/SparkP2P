@@ -1581,12 +1581,31 @@ function stopPoller() {
 async function findAndReadPaymentScreenshot(page) {
   if (!anthropicApiKey) return null;
   try {
-    // ── 1. Full-page screenshot for Vision to locate the image ─────────────
+    // ── 0. Scroll chat to bottom so the latest payment image is visible ────
+    await page.evaluate(() => {
+      // Try common chat container selectors used by Binance P2P
+      const sels = ['[class*="chat"]', '[class*="Chat"]', '[class*="message-list"]', '[class*="MessageList"]'];
+      for (const sel of sels) {
+        for (const el of document.querySelectorAll(sel)) {
+          if (el.scrollHeight > el.clientHeight + 10) {
+            el.scrollTop = el.scrollHeight;
+          }
+        }
+      }
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 600));
+
+    // ── 1. Dismiss any unexpected dialogs before scanning ─────────────────
+    await page.keyboard.press('Escape').catch(() => {});
+    await new Promise(r => setTimeout(r, 400));
+
+    // ── 2. Full-page screenshot (viewport only, 1280×800) ─────────────────
     console.log('[Vision] Taking screenshot to locate payment proof in chat...');
     const fullSS = await page.screenshot({ type: 'jpeg', quality: 90 });
     const fullB64 = fullSS.toString('base64');
 
-    // ── 2. Ask Vision: is there a payment screenshot in the chat? ──────────
+    // ── 3. Ask Vision: is there a payment screenshot image in the chat? ────
+    // IMPORTANT: coordinates must be within the 1280×800 viewport.
     const locateResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
@@ -1595,12 +1614,15 @@ async function findAndReadPaymentScreenshot(page) {
         max_tokens: 150,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: fullB64 } },
-          { type: 'text', text: `This is a Binance P2P sell order page. The chat panel is on the RIGHT side.
-Look at the chat messages on the right side only.
-Is there a payment screenshot/image sent by the buyer in the chat? (M-Pesa confirmation, bank receipt, etc.)
-If YES: return the approximate pixel coordinates of the CENTER of that image.
-If NO: return found=false.
-Return ONLY valid JSON: {"found": true, "x": <number>, "y": <number>} or {"found": false}` },
+          { type: 'text', text: `This is a Binance P2P sell order page (browser viewport: 1280×800 pixels).
+The chat panel is on the RIGHT side of the page.
+Look ONLY at the chat messages on the right side.
+Is there a payment screenshot IMAGE (M-Pesa confirmation, bank receipt, etc.) sent by the buyer?
+
+IMPORTANT: x must be between 640-1280, y must be between 50-780. Do NOT return coords outside these ranges.
+Return ONLY valid JSON with INTEGER pixel coordinates:
+{"found": true, "x": <integer 640-1280>, "y": <integer 50-780>}
+or {"found": false}` },
         ]}],
       }),
     });
@@ -1615,19 +1637,24 @@ Return ONLY valid JSON: {"found": true, "x": <number>, "y": <number>} or {"found
       return null;
     }
 
-    // ── 3. Validate coordinates — fall back to DOM if Vision gave non-numbers ─
-    let clickX = typeof locate.x === 'number' && !isNaN(locate.x) ? locate.x : null;
-    let clickY = typeof locate.y === 'number' && !isNaN(locate.y) ? locate.y : null;
+    // ── 4. Validate coords are numbers AND within viewport bounds ──────────
+    // Vision sometimes returns strings ("cell", "App") or out-of-viewport coords.
+    // Out-of-viewport clicks (y>800) can accidentally hit page buttons!
+    let clickX = parseFloat(locate.x);
+    let clickY = parseFloat(locate.y);
+    const inViewport = isFinite(clickX) && isFinite(clickY) &&
+                       clickX >= 640 && clickX <= 1260 &&
+                       clickY >= 50  && clickY <= 780;
 
-    if (!clickX || !clickY) {
-      console.log(`[Vision] Invalid coords (${locate.x}, ${locate.y}) — using DOM to find chat image...`);
-      // Find the first image element in the right half of the page (chat panel area)
+    if (!inViewport) {
+      console.log(`[Vision] Coords (${locate.x}, ${locate.y}) out of bounds — using DOM fallback...`);
+      // Find image elements in the right-half chat panel within viewport
       const domCoords = await page.evaluate(() => {
         const imgs = Array.from(document.querySelectorAll('img'));
         for (const img of imgs) {
           const r = img.getBoundingClientRect();
-          // Chat panel is right half of the 1280px viewport, image must be >50px and below nav
-          if (r.left > 640 && r.width > 50 && r.height > 50 && r.top > 80 && r.bottom < 760) {
+          if (r.left > 640 && r.right < 1270 && r.width > 50 && r.height > 50 &&
+              r.top > 80 && r.bottom < 760) {
             return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
           }
         }
@@ -1636,18 +1663,18 @@ Return ONLY valid JSON: {"found": true, "x": <number>, "y": <number>} or {"found
       if (!domCoords) { console.log('[Vision] DOM fallback: no image found in chat panel'); return null; }
       clickX = domCoords.x;
       clickY = domCoords.y;
-      console.log(`[Vision] DOM fallback found image at (${clickX}, ${clickY})`);
+      console.log(`[Vision] DOM fallback: image at (${clickX}, ${clickY})`);
     } else {
-      console.log(`[Vision] Payment screenshot found at (${clickX}, ${clickY}) — clicking to enlarge...`);
+      console.log(`[Vision] Payment image at (${clickX}, ${clickY}) — clicking to enlarge...`);
     }
 
-    // ── 4. Click image and wait for lightbox to open ───────────────────────
+    // ── 5. Click the image thumbnail to open the lightbox ─────────────────
     await page.mouse.click(clickX, clickY);
-    console.log('[Vision] Clicked image — waiting 3s for lightbox to open...');
+    console.log('[Vision] Clicked — waiting 3s for lightbox to open...');
     await new Promise(r => setTimeout(r, 3000));
 
-    // ── 5. Verify the lightbox actually opened ────────────────────────────
-    // Quick Vision check — if lightbox not open, stop immediately (don't waste 12 more seconds)
+    // ── 6. Verify lightbox opened — must see an enlarged PAYMENT IMAGE ─────
+    // A warning dialog or text popup does NOT count as "lightbox open".
     const checkSS = await page.screenshot({ type: 'jpeg', quality: 75 });
     const checkResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1657,7 +1684,7 @@ Return ONLY valid JSON: {"found": true, "x": <number>, "y": <number>} or {"found
         max_tokens: 40,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: checkSS.toString('base64') } },
-          { type: 'text', text: 'Is an enlarged image lightbox/viewer currently open on this page? Return ONLY: {"open": true} or {"open": false}' },
+          { type: 'text', text: 'Is there an enlarged PAYMENT IMAGE (M-Pesa receipt, bank screenshot) filling most of the screen in an image viewer/lightbox? Answer true ONLY if you see a large payment image, NOT if you see a text dialog or warning message. Return ONLY: {"open": true} or {"open": false}' },
         ]}],
       }),
     });
