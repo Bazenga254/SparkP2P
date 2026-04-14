@@ -2032,13 +2032,33 @@ async function idleScan(page) {
     // M-Pesa verification happens INSIDE releaseWithVision's confirm_release_modal
     // handler: if verified → tick checkbox + Confirm Release; if not → Appeal.
     } else if (screen === 'verify_payment') {
-      console.log(`[SparkP2P] Order ${order.orderNumber} — buyer marked paid, reading chat BEFORE opening modal...`);
+      console.log(`[SparkP2P] Order ${order.orderNumber} — buyer marked paid`);
       activeOrderNumber = order.orderNumber;
       activeOrderFiatAmount = order.totalPrice;
-      // Read chat for M-Pesa codes/screenshots NOW — the modal covers the chat once opened.
+
+      // ── Step A: Read chat screenshots BEFORE opening modal ──────────────────
+      // The modal covers the chat panel once "Payment Received" is clicked.
       const preChatCodes = await extractMpesaCodesFromChat(page);
       console.log(`[SparkP2P] Pre-click chat scan: ${preChatCodes.mpesaCodes.length} M-Pesa codes, ${preChatCodes.bankRefs.length} bank refs`);
-      // Click the button — no chat message before this (page scroll breaks button)
+
+      // ── Step B: Send message to buyer BEFORE clicking button ────────────────
+      // After clicking "Payment Received" the modal overlays the chat — unreachable.
+      if (!orderReminderSent.has(order.orderNumber + '_verify')) {
+        await sendChatMessage(page, 'I have received your payment notification. Please wait while I verify and process the release.');
+        orderReminderSent.add(order.orderNumber + '_verify');
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      // ── Step C: Navigate back to order detail so button is visible ──────────
+      // sendChatMessage may scroll the page. Re-navigate to restore clean state.
+      await page.goto(
+        `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+        { waitUntil: 'domcontentloaded', timeout: 15000 }
+      ).catch(() => {});
+      await new Promise(r => setTimeout(r, 2500));
+      if (pauseNavigation) break;
+
+      // ── Step D: Click "Payment Received" to open the confirmation modal ─────
       const clicked = await page.evaluate(() => {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
         while (walker.nextNode()) {
@@ -3831,10 +3851,10 @@ async function releaseWithVision(page, orderNumber, action) {
           // Do NOT appeal on first failure — payment may be delayed or unmatched.
           // The next poll cycle will re-open the modal and try again.
           console.log(`[Vision] ❌ M-Pesa not confirmed yet for ${orderNumber} — closing modal, asking buyer`);
-          // Close the modal (Escape or click the X)
+          // Close the modal — chat message was already sent BEFORE the modal opened.
+          // (Modal covers chat panel so sendChatMessage is impossible here.)
           await page.keyboard.press('Escape').catch(() => {});
           await new Promise(r => setTimeout(r, 800));
-          // Also try clicking the × close button if Escape didn't work
           await page.evaluate(() => {
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
             while (walker.nextNode()) {
@@ -3844,16 +3864,8 @@ async function releaseWithVision(page, orderNumber, action) {
                 el.click(); return true;
               }
             }
-            return false;
           }).catch(() => {});
           await new Promise(r => setTimeout(r, 500));
-          // Ask buyer for M-Pesa code once per order
-          if (!codeFallbackAskedOrders.has(orderNumber)) {
-            codeFallbackAskedOrders.add(orderNumber);
-            await sendChatMessage(page,
-              'Hi! I need to verify your M-Pesa payment. Please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC) so I can confirm and release your crypto. Thank you!'
-            );
-          }
           return { success: false, error: 'mpesa_unverified_waiting' };
         }
         continue;
