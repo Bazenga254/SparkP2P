@@ -2323,25 +2323,24 @@ async function idleScan(page) {
           // ── STEP 1 COMPLETE: Payment confirmed ─────────────────────────────
           console.log(`[SparkP2P] ✅ Step 1 COMPLETE — code ${mpesaCode} verified`);
 
-          // ── Tell buyer NOW — chat is still loaded from this page visit ──────
-          // Do this BEFORE navigating so we don't have to re-find the chat input.
-          if (!verifiedMessageSentOrders.has(order.orderNumber)) {
-            verifiedMessageSentOrders.add(order.orderNumber);
-            console.log(`[SparkP2P] Step 1d: Sending verified message to buyer...`);
-            await sendChatMessage(page,
-              `Your payment of KES ${order.totalPrice} has been received and verified successfully. ` +
-              `Please wait while I release your crypto. Thank you!`
-            );
-            await new Promise(r => setTimeout(r, 800));
-          }
-
-          // ── STEP 2: Reload order page — resets scroll so Payment Received button is visible ──
+          // ── STEP 2: Reload order page — clears lightbox/scroll, chat is clean ──
           await page.goto(
             `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
             { waitUntil: 'domcontentloaded', timeout: 15000 }
           ).catch(() => {});
           await new Promise(r => setTimeout(r, 2500));
           if (pauseNavigation) break;
+
+          // ── Tell buyer payment is confirmed — AFTER page reload so chat is fully loaded ──
+          if (!verifiedMessageSentOrders.has(order.orderNumber)) {
+            verifiedMessageSentOrders.add(order.orderNumber);
+            console.log(`[SparkP2P] Step 2a: Sending verified message to buyer via Vision...`);
+            await sendChatMessage(page,
+              `Your payment of KES ${order.totalPrice} has been received and verified successfully. ` +
+              `Please wait while I release your crypto. Thank you!`
+            );
+            await new Promise(r => setTimeout(r, 1000));
+          }
 
           // Click the Payment Received button to open the confirmation modal
           const btnClicked = await page.evaluate(() => {
