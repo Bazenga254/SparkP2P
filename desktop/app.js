@@ -209,6 +209,33 @@ function clearImPin() {
   try { fs.unlinkSync(IM_PIN_FILE); } catch (_) {}
   imPin = null;
 }
+
+function saveGmailCredentials(email, appPassword) {
+  try {
+    const data = JSON.stringify({ email, appPassword });
+    const encrypted = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(data) : Buffer.from(data);
+    fs.writeFileSync(path.join(app.getPath('userData'), 'gmail-creds.enc'), encrypted);
+    console.log('[SparkP2P] Gmail credentials saved');
+  } catch (e) { console.error('[SparkP2P] saveGmailCredentials error:', e.message); }
+}
+
+function loadGmailCredentials() {
+  try {
+    const p = path.join(app.getPath('userData'), 'gmail-creds.enc');
+    if (!fs.existsSync(p)) return null;
+    const raw = fs.readFileSync(p);
+    const data = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(raw) : raw.toString();
+    return JSON.parse(data);
+  } catch (e) { return null; }
+}
+
+function clearGmailCredentials() {
+  try {
+    const p = path.join(app.getPath('userData'), 'gmail-creds.enc');
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  } catch (e) {}
+}
+
 // Load PIN on startup (after app is ready — safeStorage requires app to be ready)
 app.whenReady().then(() => loadImPin());
 function saveTokenToDisk(t) {
@@ -1776,6 +1803,77 @@ async function monitorActiveBuyOrder(_page) {
 }
 
 
+// ══════════════════════════════════════════════════════════════════
+// DOM-BASED ORDER STATE DETECTION — replaces analyzePageWithVision
+// Reads page text directly. No screenshots. No AI.
+// ══════════════════════════════════════════════════════════════════
+async function detectOrderState(page) {
+  const text = await page.evaluate(() => document.body.innerText).catch(() => '');
+  const lower = text.toLowerCase();
+
+  // Order complete / crypto released
+  if (lower.includes('sale successful') || lower.includes('order completed') ||
+      lower.includes('released to buyer') || lower.includes('crypto released') ||
+      lower.includes('you have released')) {
+    return 'order_complete';
+  }
+
+  // Passkey screen — check before security_verification
+  if (lower.includes('verify with passkey') || lower.includes('my passkeys are not available')) {
+    return 'passkey_required';
+  }
+
+  // Security verification in progress
+  if (lower.includes('authenticator') || lower.includes('google auth') ||
+      lower.includes('email verification code') || lower.includes('enter the code')) {
+    return 'security_verification';
+  }
+
+  // Confirm release modal
+  if (lower.includes('confirm release') || lower.includes('are you sure') ||
+      lower.includes('once released')) {
+    return 'confirm_release_modal';
+  }
+
+  // Buyer has paid — SPECIFIC phrases Binance shows when buyer marks paid
+  // Do NOT use "confirm payment is received" — that button is always on the page
+  if (lower.includes('buyer has completed the payment') ||
+      lower.includes('buyer has paid') ||
+      lower.includes('buyer paid') ||
+      lower.includes('has made payment') ||
+      lower.includes('please check if you') ||
+      lower.includes('confirm that you have received')) {
+    return 'verify_payment';
+  }
+
+  // Cancelled
+  if (lower.includes('order cancelled') || lower.includes('order canceled') ||
+      lower.includes('has been cancelled')) {
+    return 'cancelled';
+  }
+
+  // Buy order — we need to mark payment as sent to seller
+  if (lower.includes('transferred, notify seller') || lower.includes('notify seller') ||
+      lower.includes('i have transferred') || lower.includes('mark as paid')) {
+    return 'awaiting_payment_confirmation';
+  }
+
+  // Buy order — waiting for seller to release
+  if (lower.includes("awaiting seller's release") || lower.includes('waiting for seller') ||
+      lower.includes('seller to release')) {
+    return 'awaiting_release';
+  }
+
+  // Awaiting buyer payment (sell side)
+  if (lower.includes("awaiting buyer's payment") || lower.includes('awaiting payment') ||
+      lower.includes('waiting for buyer') || lower.includes('waiting for payment') ||
+      lower.includes('buyer to complete')) {
+    return 'awaiting_payment';
+  }
+
+  return 'unknown';
+}
+
 // ── Idle full scan — runs when no active order ──────────────────────────────
 async function idleScan(page) {
   console.log(`[SparkP2P] ── IDLE SCAN #${stats.polls + 1} ──`);
@@ -1884,14 +1982,13 @@ async function idleScan(page) {
 
     await takeScreenshot(`scan_sell_${order.orderNumber}`, page);
 
-    let orderInfo = { screen: 'unknown' };
-    for (let a = 1; a <= 3; a++) {
-      orderInfo = await analyzePageWithVision(page);
-      if (orderInfo.screen !== 'unknown') break;
+    // DOM-based state detection — no vision, no API cost
+    let screen = await detectOrderState(page);
+    if (screen === 'unknown') {
       await new Promise(r => setTimeout(r, 2000));
-      await takeScreenshot(`scan_sell_retry${a}_${order.orderNumber}`, page);
+      screen = await detectOrderState(page);
     }
-    const screen = orderInfo.screen;
+    console.log(`[SparkP2P] Sell order ${order.orderNumber} state: ${screen}`);
     const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
     const lower = pageText.toLowerCase();
 
@@ -2027,13 +2124,13 @@ async function idleScan(page) {
 
     await takeScreenshot(`scan_buy_${order.orderNumber}`, page);
 
-    let buyInfo = { screen: 'unknown' };
-    for (let a = 1; a <= 3; a++) {
-      buyInfo = await analyzePageWithVision(page);
-      if (buyInfo.screen !== 'unknown') break;
+    // DOM-based state detection — no vision
+    let buyScreen = await detectOrderState(page);
+    if (buyScreen === 'unknown') {
       await new Promise(r => setTimeout(r, 2000));
+      buyScreen = await detectOrderState(page);
     }
-    const buyScreen = buyInfo.screen;
+    console.log(`[SparkP2P] Buy order ${order.orderNumber} state: ${buyScreen}`);
     const buyText = await page.evaluate(() => document.body.innerText).catch(() => '');
     const buyLower = buyText.toLowerCase();
 
@@ -2757,6 +2854,73 @@ async function _readEmailOTPOnce(gmailPage, sentAfterMs) {
   return null;
 }
 
+// ══════════════════════════════════════════════════════════════════
+// IMAP EMAIL OTP — reads Binance verification code from Gmail via IMAP
+// No browser tab needed. Direct connection to Gmail.
+// Requires Gmail App Password configured in settings.
+// ══════════════════════════════════════════════════════════════════
+async function readEmailOTPviaIMAP(sentAfterMs = Date.now() - 120000) {
+  const creds = loadGmailCredentials();
+  if (!creds || !creds.email || !creds.appPassword) {
+    console.log('[SparkP2P] Gmail IMAP: credentials not configured');
+    return null;
+  }
+  let client = null;
+  try {
+    const { ImapFlow } = require('imapflow');
+    client = new ImapFlow({
+      host: 'imap.gmail.com',
+      port: 993,
+      secure: true,
+      auth: { user: creds.email, pass: creds.appPassword },
+      logger: false,
+    });
+    await client.connect();
+    await client.mailboxOpen('INBOX');
+
+    const since = new Date(sentAfterMs - 60000);
+    const uids = await client.search({ from: 'do-not-reply@binance.com', since }, { uid: true });
+
+    if (!uids || uids.length === 0) {
+      console.log('[SparkP2P] Gmail IMAP: no recent Binance emails found');
+      await client.logout();
+      return null;
+    }
+
+    const uid = uids[uids.length - 1];
+    let emailText = '';
+    for await (const msg of client.fetch(String(uid), { bodyParts: ['TEXT'], uid: true })) {
+      const part = msg.bodyParts?.get('text') || msg.bodyParts?.get('TEXT') || msg.bodyParts?.get('1');
+      if (part) emailText = Buffer.isBuffer(part) ? part.toString('utf8') : String(part);
+    }
+    await client.logout();
+
+    if (!emailText) { console.log('[SparkP2P] Gmail IMAP: empty email body'); return null; }
+
+    // Extract 6-digit code — prefer line near "code", "verification", "otp"
+    const lines = emailText.split(/[\r\n]+/);
+    let code = null;
+    for (const line of lines) {
+      const l = line.toLowerCase();
+      if (l.includes('verif') || l.includes('code') || l.includes('otp') || l.includes('security')) {
+        const m = line.match(/\b(\d{6})\b/);
+        if (m) { code = m[1]; break; }
+      }
+    }
+    if (!code) {
+      const m = emailText.match(/\b(\d{6})\b/);
+      if (m) code = m[1];
+    }
+    if (code) { console.log(`[SparkP2P] Gmail IMAP: OTP = ${code}`); return code; }
+    console.log('[SparkP2P] Gmail IMAP: no 6-digit code found');
+    return null;
+  } catch (e) {
+    console.error('[SparkP2P] Gmail IMAP error:', e.message?.substring(0, 80));
+    if (client) await client.logout().catch(() => {});
+    return null;
+  }
+}
+
 // ── Vision-based Gmail OTP reader ──────────────────────────────────────────────
 async function readEmailOTPWithVision(binancePage = null) {
   if (!browser) return null;
@@ -2869,10 +3033,19 @@ async function readEmailOTP(binancePage = null) {
 
   try {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      console.log(`[SparkP2P] Gmail OTP attempt ${attempt}/${MAX_ATTEMPTS}...`);
-      await gmailPage.bringToFront();
+      console.log(`[SparkP2P] Email OTP attempt ${attempt}/${MAX_ATTEMPTS}...`);
       await new Promise(r => setTimeout(r, attempt === 1 ? WAIT_FOR_EMAIL_MS : RESEND_WAIT_MS));
 
+      // Try IMAP first (fast, no browser tab)
+      const imapCode = await readEmailOTPviaIMAP(sentAt);
+      if (imapCode) {
+        if (binancePage) await binancePage.bringToFront().catch(() => {});
+        return imapCode;
+      }
+
+      // IMAP unavailable or no email yet — fall back to Gmail browser tab
+      console.log('[SparkP2P] IMAP: no code yet — trying Gmail browser tab...');
+      await gmailPage.bringToFront();
       const code = await _readEmailOTPOnce(gmailPage, sentAt);
       if (code) {
         // Switch back to Binance tab before returning
@@ -3015,6 +3188,48 @@ async function handleSecurityVerification(page) {
   await takeScreenshot('Security verification');
 
   try {
+    // Passkey bypass — click "My Passkeys Are Not Available" to get TOTP+email form
+    if (verification.hasPasskey && !verification.hasAuth && !verification.hasEmail) {
+      console.log('[SparkP2P] Passkey screen — attempting bypass...');
+      const bypassed = await page.evaluate(() => {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+        while (walker.nextNode()) {
+          const el = walker.currentNode;
+          if (el.children.length === 0) {
+            const t = el.textContent.trim();
+            if (t === 'My Passkeys Are Not Available' ||
+                t.toLowerCase().includes('passkeys are not available') ||
+                t.toLowerCase().includes('use another method') ||
+                t.toLowerCase().includes('try another way')) {
+              el.click();
+              return true;
+            }
+          }
+        }
+        return false;
+      });
+      if (bypassed) {
+        console.log('[SparkP2P] Passkey bypass clicked — waiting for TOTP/email form...');
+        await new Promise(r => setTimeout(r, 2500));
+        const recheck = await page.evaluate(() => {
+          const text = document.body.innerText.toLowerCase();
+          return {
+            hasEmail: text.includes('email verification') || text.includes('email code'),
+            hasAuth: text.includes('authenticator') || text.includes('google auth'),
+            hasFundPw: text.includes('fund password') || text.includes('trading password'),
+          };
+        });
+        if (recheck.hasAuth) verification.hasAuth = true;
+        if (recheck.hasEmail) verification.hasEmail = true;
+        if (recheck.hasFundPw) verification.hasFundPw = true;
+        console.log(`[SparkP2P] After bypass — email:${verification.hasEmail} auth:${verification.hasAuth}`);
+      } else {
+        console.log('[SparkP2P] Passkey bypass link not found');
+        await takeScreenshot('Passkey bypass failed');
+        return false;
+      }
+    }
+
     // ── Google Authenticator ──
     if (verification.hasAuth) {
       if (!totpSecret) {
@@ -3094,13 +3309,6 @@ async function handleSecurityVerification(page) {
         await inp.type(traderPin, { delay: 40 });
       }
       console.log('[SparkP2P] Fund password entered');
-    }
-
-    // Passkey — cannot automate
-    if (verification.hasPasskey && !verification.hasAuth && !verification.hasEmail) {
-      console.log('[SparkP2P] Passkey required — cannot automate');
-      await takeScreenshot('Passkey required');
-      return false;
     }
 
     // ── Submit — try clicking the button, then press Enter as backup ──
@@ -5836,6 +6044,9 @@ ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P]
 ipcMain.handle('save-im-pin', (_, pin) => { saveImPin(pin); return { ok: true }; });
 ipcMain.handle('clear-im-pin', () => { clearImPin(); return { ok: true }; });
 ipcMain.handle('has-im-pin', () => ({ hasPin: !!imPin }));
+ipcMain.handle('save-gmail-credentials', (_e, email, appPassword) => { saveGmailCredentials(email, appPassword); return true; });
+ipcMain.handle('load-gmail-credentials', () => { const c = loadGmailCredentials(); return c ? { email: c.email, hasPassword: !!c.appPassword } : null; });
+ipcMain.handle('clear-gmail-credentials', () => { clearGmailCredentials(); return true; });
 ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });
 ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; console.log('[SparkP2P] AI key set (legacy)'); return { ok: true }; });
 ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; saveAnthropicKey(key); aiScanner.initAI(key); console.log('[SparkP2P] Claude configured and saved to disk'); return { ok: true }; });
