@@ -1567,6 +1567,109 @@ function stopPoller() {
   scanningInProgress = false;
 }
 
+// ══════════════════════════════════════════════════════════════════
+// STEP 1 — Vision-directed M-Pesa screenshot extraction
+//
+// Flow:
+//  1. Take full-page screenshot
+//  2. Vision identifies if there is a payment screenshot in the chat
+//     and returns its approximate x,y coordinates
+//  3. DOM clicks those coordinates to open/enlarge the image
+//  4. Vision reads the enlarged screenshot and extracts the M-Pesa code
+//  5. Returns { code, method } or null if no screenshot found
+// ══════════════════════════════════════════════════════════════════
+async function findAndReadPaymentScreenshot(page) {
+  if (!anthropicApiKey) return null;
+  try {
+    // ── 1. Full-page screenshot for Vision to locate the image ─────────────
+    console.log('[Vision] Taking screenshot to locate payment proof in chat...');
+    const fullSS = await page.screenshot({ type: 'jpeg', quality: 90 });
+    const fullB64 = fullSS.toString('base64');
+
+    // ── 2. Ask Vision: is there a payment screenshot in the chat? ──────────
+    const locateResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 150,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: fullB64 } },
+          { type: 'text', text: `This is a Binance P2P sell order page. The chat panel is on the RIGHT side.
+Look at the chat messages on the right side only.
+Is there a payment screenshot/image sent by the buyer in the chat? (M-Pesa confirmation, bank receipt, etc.)
+If YES: return the approximate pixel coordinates of the CENTER of that image.
+If NO: return found=false.
+Return ONLY valid JSON: {"found": true, "x": <number>, "y": <number>} or {"found": false}` },
+        ]}],
+      }),
+    });
+    const locateData = await locateResp.json();
+    const locateRaw = (locateData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const locateMatch = locateRaw.match(/\{[\s\S]*\}/);
+    if (!locateMatch) { console.log('[Vision] Could not parse locate response:', locateRaw.substring(0, 80)); return null; }
+    const locate = JSON.parse(locateMatch[0]);
+
+    if (!locate.found) {
+      console.log('[Vision] No payment screenshot found in chat');
+      return null;
+    }
+    console.log(`[Vision] Payment screenshot found at (${locate.x}, ${locate.y}) — clicking to enlarge...`);
+
+    // ── 3. DOM clicks the image at Vision-provided coordinates ─────────────
+    await page.mouse.click(locate.x, locate.y);
+    await new Promise(r => setTimeout(r, 2000)); // wait for lightbox to open
+
+    // ── 4. Screenshot the enlarged/lightbox view ───────────────────────────
+    const enlargedSS = await page.screenshot({ type: 'jpeg', quality: 95 });
+    await takeScreenshot('payment_screenshot_enlarged', page);
+
+    // ── 5. Vision reads the enlarged screenshot and extracts the code ───────
+    console.log('[Vision] Reading enlarged payment screenshot...');
+    const readResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: enlargedSS.toString('base64') } },
+          { type: 'text', text: `This is a payment confirmation screenshot sent by a buyer.
+Extract the M-Pesa transaction code from an OUTGOING/SENT payment message.
+M-Pesa format: "XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to [business name]..."
+The code is EXACTLY 10 uppercase alphanumeric characters at the START (e.g. UDE5J13AGR, QE1FXYZABC).
+
+If you can clearly read the code: {"found": true, "code": "XXXXXXXXXX", "amount": <number>}
+If the image is blurry/unclear/not a payment confirmation: {"found": false, "reason": "blurry|not_mpesa|other"}
+Return ONLY valid JSON.` },
+        ]}],
+      }),
+    });
+    const readData = await readResp.json();
+    const readRaw = (readData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const readMatch = readRaw.match(/\{[\s\S]*\}/);
+
+    // Close lightbox before returning
+    await page.keyboard.press('Escape').catch(() => {});
+    await new Promise(r => setTimeout(r, 500));
+
+    if (!readMatch) { console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80)); return null; }
+    const readResult = JSON.parse(readMatch[0]);
+
+    if (readResult.found && readResult.code && /^[A-Z0-9]{10}$/.test(readResult.code)) {
+      console.log(`[Vision] ✅ M-Pesa code extracted: ${readResult.code} (amount: KES ${readResult.amount})`);
+      return { code: readResult.code, amount: readResult.amount, method: 'vision_screenshot' };
+    }
+    console.log(`[Vision] Could not read code: ${readResult.reason || 'unclear'}`);
+    return null;
+
+  } catch (e) {
+    console.error('[Vision] findAndReadPaymentScreenshot error:', e.message?.substring(0, 80));
+    await page.keyboard.press('Escape').catch(() => {}); // close any open lightbox
+    return null;
+  }
+}
+
 async function extractMpesaCodesFromChat(page) {
   if (!anthropicApiKey) {
     console.log('[SparkP2P] No API key — skipping chat M-Pesa extraction');
@@ -2035,62 +2138,74 @@ async function idleScan(page) {
       orderReminderSent.delete(order.orderNumber);
       codeFallbackAskedOrders.delete(order.orderNumber);
 
-    // ── Buyer has paid — click Payment Received to enter confirmation modal ───
-    // Binance shows "Verify Payment" ONLY after the buyer marks as paid on their side.
-    // We click "Payment Received" immediately — this just opens the modal.
-    // M-Pesa verification happens INSIDE releaseWithVision's confirm_release_modal
-    // handler: if verified → tick checkbox + Confirm Release; if not → Appeal.
+    // ── SELL ORDER: Buyer marked as paid — verify M-Pesa before releasing ──────
     } else if (screen === 'verify_payment') {
-      console.log(`[SparkP2P] Order ${order.orderNumber} — buyer marked paid`);
+      console.log(`[SparkP2P] ═══ Order ${order.orderNumber} — VERIFY PAYMENT (Step 1) ═══`);
       activeOrderNumber = order.orderNumber;
       activeOrderFiatAmount = order.totalPrice;
 
-      // ── Step A: Read chat screenshots BEFORE opening modal ──────────────────
-      // The modal covers the chat panel once "Payment Received" is clicked.
-      const preChatCodes = await extractMpesaCodesFromChat(page);
-      console.log(`[SparkP2P] Pre-click chat scan: ${preChatCodes.mpesaCodes.length} M-Pesa codes, ${preChatCodes.bankRefs.length} bank refs`);
+      // ── STEP 1: Vision finds screenshot in chat → DOM clicks → Vision reads code ──
+      console.log(`[SparkP2P] Step 1: Vision locating payment screenshot in chat...`);
+      const screenshotResult = await findAndReadPaymentScreenshot(page);
+      let mpesaCode = screenshotResult?.code || null;
 
-      // ── Step B: Send message to buyer BEFORE clicking button ────────────────
-      // After clicking "Payment Received" the modal overlays the chat — unreachable.
-      if (!orderReminderSent.has(order.orderNumber + '_verify')) {
-        await sendChatMessage(page, 'I have received your payment notification. Please wait while I verify and process the release.');
-        orderReminderSent.add(order.orderNumber + '_verify');
-        await new Promise(r => setTimeout(r, 500));
+      // ── STEP 1b: If no screenshot found, scan chat text for typed code ───────
+      if (!mpesaCode) {
+        console.log(`[SparkP2P] Step 1b: No screenshot code — scanning chat text...`);
+        const textScan = await extractMpesaCodesFromChat(page);
+        mpesaCode = textScan.mpesaCodes?.[0] || null;
+        if (mpesaCode) console.log(`[SparkP2P] Found typed code in chat: ${mpesaCode}`);
       }
 
-      // ── Step C: Navigate back to order detail so button is visible ──────────
-      // sendChatMessage may scroll the page. Re-navigate to restore clean state.
-      await page.goto(
-        `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
-        { waitUntil: 'domcontentloaded', timeout: 15000 }
-      ).catch(() => {});
-      await new Promise(r => setTimeout(r, 2500));
-      if (pauseNavigation) break;
-
-      // ── Step D: Click "Payment Received" to open the confirmation modal ─────
-      const clicked = await page.evaluate(() => {
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-        while (walker.nextNode()) {
-          const el = walker.currentNode;
-          if (el.tagName !== 'BUTTON') continue;
-          const t = (el.textContent || '').trim().toLowerCase();
-          if (t === 'payment received' || t.startsWith('payment received')) {
-            el.click();
-            return true;
+      if (mpesaCode) {
+        // ── STEP 1c: Send code to VPS to verify ────────────────────────────────
+        console.log(`[SparkP2P] Step 1c: Verifying code ${mpesaCode} with VPS...`);
+        const verified = await verifyMpesaPayment(
+          order.orderNumber, order.totalPrice, null,
+          { mpesaCodes: [mpesaCode], bankRefs: [] }
+        );
+        if (verified) {
+          console.log(`[SparkP2P] ✅ Step 1 COMPLETE — code ${mpesaCode} verified. Ready for Step 2.`);
+          // Step 2 (click Payment Received → modal → release) comes next — tell me and I'll add it
+        } else {
+          console.log(`[SparkP2P] ❌ Code ${mpesaCode} not in VPS records — asking buyer for correct message`);
+          if (!codeFallbackAskedOrders.has(order.orderNumber)) {
+            codeFallbackAskedOrders.add(order.orderNumber);
+            await sendChatMessage(page,
+              'Hello! I found your payment but could not verify it in our records. ' +
+              'Please TYPE your M-Pesa confirmation message exactly as received from Safaricom ' +
+              '(e.g: UDE5J13AGR Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE...). Thank you!'
+            );
           }
         }
-        return false;
-      });
-      console.log(`[SparkP2P] Payment Received button clicked: ${clicked}`);
-      await new Promise(r => setTimeout(r, 2000));
-      // Pass pre-extracted chat codes so releaseWithVision doesn't need to re-read
-      // the chat when the modal is covering it.
-      await releaseWithVision(page, order.orderNumber, { preChatCodes });
-      activeOrderNumber = null;
-      activeOrderFiatAmount = 0;
-      delete orderFirstSeenAt[order.orderNumber];
-      codeFallbackAskedOrders.delete(order.orderNumber);
-      orderReminderSent.delete(order.orderNumber);
+      } else {
+        // ── STEP 1d: Vision couldn't read — ask buyer to TYPE the M-Pesa message ─
+        // Send reminder every 60 seconds. Stay on this order page.
+        const waitKey = order.orderNumber + '_waiting_mpesa';
+        if (!orderReminderSent._times) orderReminderSent._times = {};
+        const lastAsked = orderReminderSent._times[waitKey] || 0;
+        const secsSinceAsked = (Date.now() - lastAsked) / 1000;
+        const isFirstAsk = lastAsked === 0;
+
+        if (isFirstAsk || secsSinceAsked >= 60) {
+          orderReminderSent.add(waitKey);
+          orderReminderSent._times[waitKey] = Date.now();
+          if (isFirstAsk) {
+            await sendChatMessage(page,
+              'Hello! I can see you sent a payment screenshot but I am unable to read it clearly. ' +
+              'Please TYPE your M-Pesa confirmation message exactly as received from Safaricom in this chat. ' +
+              'Example: "UDE5J13AGR Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE..." Thank you!'
+            );
+          } else {
+            await sendChatMessage(page,
+              'Hi, just a reminder — please TYPE your M-Pesa confirmation message in the chat so I can verify and release your crypto immediately. Thank you for your patience!'
+            );
+          }
+        } else {
+          console.log(`[SparkP2P] Waiting for buyer M-Pesa text (${Math.round(secsSinceAsked)}s since last reminder)`);
+        }
+        // Do NOT break or move to next order — stay focused on this order
+      }
 
     // ── Mid-release state ───────────────────────────────────────────────────
     } else if (['confirm_release_modal','security_verification','totp_input','email_otp_input','passkey_failed'].includes(screen)) {
