@@ -1625,24 +1625,29 @@ Return ONLY valid JSON: {"found": true, "x": <number>, "y": <number>} or {"found
     const enlargedSS = await page.screenshot({ type: 'jpeg', quality: 95 });
     await takeScreenshot('payment_screenshot_enlarged', page);
 
-    // ── 5. Vision reads the enlarged screenshot and extracts the code ───────
+    // ── 5. Vision reads the enlarged screenshot, extracts code + close button ─
     console.log('[Vision] Reading enlarged payment screenshot...');
     const readResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 200,
+        max_tokens: 300,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: enlargedSS.toString('base64') } },
-          { type: 'text', text: `This is a payment confirmation screenshot sent by a buyer.
-Extract the M-Pesa transaction code from an OUTGOING/SENT payment message.
-M-Pesa format: "XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to [business name]..."
-The code is EXACTLY 10 uppercase alphanumeric characters at the START (e.g. UDE5J13AGR, QE1FXYZABC).
+          { type: 'text', text: `This is a Binance P2P page with an image lightbox/viewer open showing a payment screenshot.
 
-If you can clearly read the code: {"found": true, "code": "XXXXXXXXXX", "amount": <number>}
-If the image is blurry/unclear/not a payment confirmation: {"found": false, "reason": "blurry|not_mpesa|other"}
-Return ONLY valid JSON.` },
+Task 1 — Extract the M-Pesa transaction code from the payment image (OUTGOING/SENT payment).
+M-Pesa format: "XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to [business name]..."
+The code is EXACTLY 10 uppercase alphanumeric characters at the START (e.g. UDE5J13AGR).
+
+Task 2 — Find the close (X) button of the lightbox viewer so it can be clicked to close it.
+The X button is usually a small icon near the top-right corner of the screen.
+
+Return ONLY valid JSON (no markdown):
+{"found": true, "code": "XXXXXXXXXX", "amount": <number_or_null>, "close_x": <x_pixels>, "close_y": <y_pixels>}
+or if no M-Pesa code:
+{"found": false, "reason": "blurry|not_mpesa|other", "close_x": <x_pixels>, "close_y": <y_pixels>}` },
         ]}],
       }),
     });
@@ -1658,48 +1663,39 @@ Return ONLY valid JSON.` },
     if (!readResult) console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80));
 
     // ── 6. Close lightbox — ALWAYS runs after we clicked the image ─────────
-    // Three strategies tried in order; runs regardless of read success/failure.
+    // Use Vision-provided close button coordinates first (most reliable),
+    // then fall back to DOM strategies.
     console.log('[Vision] Closing lightbox...');
-    const closeResult = await page.evaluate(() => {
-      // Strategy 1: find a visible close/dismiss button near the top of the screen
-      const closeSels = [
-        '[class*="close" i]', '[class*="dismiss" i]', '[class*="CloseBtn"]',
-        '[aria-label*="close" i]', '[aria-label*="Close"]',
-        'button[class*="modal"]', 'button[class*="viewer"]',
-      ];
-      for (const sel of closeSels) {
-        try {
-          const els = document.querySelectorAll(sel);
-          for (let i = 0; i < els.length; i++) {
-            const r = els[i].getBoundingClientRect();
-            if (r.width > 0 && r.height > 0 && r.top < 200) {
-              els[i].click();
-              return 'clicked_close_btn:' + sel;
+    let closedByVision = false;
+    if (readResult?.close_x && readResult?.close_y) {
+      console.log(`[Vision] Clicking close button at (${readResult.close_x}, ${readResult.close_y})`);
+      await page.mouse.click(readResult.close_x, readResult.close_y);
+      await new Promise(r => setTimeout(r, 1200));
+      closedByVision = true;
+    }
+    if (!closedByVision) {
+      // DOM fallback — Escape + remove large fixed overlays (skip bot's lock overlay)
+      const closeResult = await page.evaluate(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+        let removed = 0;
+        const all = document.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i];
+          if (el.id === 'sparkp2p-browser-lock') continue;
+          try {
+            const s = window.getComputedStyle(el);
+            if (s.position === 'fixed' && parseInt(s.zIndex || 0) > 100) {
+              const r = el.getBoundingClientRect();
+              if (r.width > 400 && r.height > 400) { el.remove(); removed++; }
             }
-          }
-        } catch (_) {}
-      }
-      // Strategy 2: Escape key to window + document
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
-      // Strategy 3: remove large fixed-position overlays that are NOT the bot's own lock overlay
-      let removed = 0;
-      const all = document.querySelectorAll('*');
-      for (let i = 0; i < all.length; i++) {
-        const el = all[i];
-        if (el.id === 'sparkp2p-browser-lock') continue; // never remove bot overlay
-        try {
-          const s = window.getComputedStyle(el);
-          if (s.position === 'fixed' && parseInt(s.zIndex || 0) > 100) {
-            const r = el.getBoundingClientRect();
-            if (r.width > 400 && r.height > 400) { el.remove(); removed++; }
-          }
-        } catch (_) {}
-      }
-      return removed > 0 ? 'removed_overlay:' + removed : 'escape_dispatched';
-    });
-    console.log('[Vision] Lightbox close result:', closeResult);
-    await new Promise(r => setTimeout(r, 800));
+          } catch (_) {}
+        }
+        return removed > 0 ? 'removed_overlay:' + removed : 'escape_dispatched';
+      });
+      console.log('[Vision] Lightbox DOM fallback result:', closeResult);
+      await new Promise(r => setTimeout(r, 800));
+    }
 
     if (readResult?.found && readResult.code && /^[A-Z0-9]{10}$/.test(readResult.code)) {
       console.log(`[Vision] ✅ M-Pesa code extracted: ${readResult.code} (amount: KES ${readResult.amount})`);
@@ -2194,6 +2190,34 @@ async function idleScan(page) {
       console.log(`[SparkP2P] Step 1: Vision locating payment screenshot in chat...`);
       const screenshotResult = await findAndReadPaymentScreenshot(page);
       let mpesaCode = screenshotResult?.code || null;
+
+      // ── Ensure lightbox is closed before we try to message buyer ────────────
+      // If lightbox is still open (close_x coords not provided or click failed),
+      // reload the SAME order page — this clears the lightbox while keeping the
+      // chat accessible. We stay on the order detail page throughout.
+      const lightboxStillOpen = await page.evaluate(() => {
+        const all = document.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+          const el = all[i];
+          if (el.id === 'sparkp2p-browser-lock') continue;
+          try {
+            const s = window.getComputedStyle(el);
+            if (s.position === 'fixed' && parseInt(s.zIndex || 0) > 100) {
+              const r = el.getBoundingClientRect();
+              if (r.width > 400 && r.height > 400 && el.querySelector('img')) return true;
+            }
+          } catch (_) {}
+        }
+        return false;
+      }).catch(() => false);
+      if (lightboxStillOpen) {
+        console.log('[SparkP2P] Lightbox still open — reloading order page to clear it...');
+        await page.goto(
+          `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+          { waitUntil: 'domcontentloaded', timeout: 15000 }
+        ).catch(() => {});
+        await new Promise(r => setTimeout(r, 2500));
+      }
 
       // ── STEP 1b: If no screenshot found, scan chat text for typed code ───────
       if (!mpesaCode) {
