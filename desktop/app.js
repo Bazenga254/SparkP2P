@@ -3521,9 +3521,47 @@ async function sendChatMessage(page, message) {
 
   if (inputFound) {
     await new Promise(r => setTimeout(r, 500));
-    await page.keyboard.press('Enter');
+
+    // Click the send button (paper-plane / arrow icon) — Binance does NOT send on Enter.
+    // The send button sits immediately after the contenteditable input in the DOM.
+    const sent = await page.evaluate(() => {
+      // Strategy 1: button/div with an SVG child that is a sibling/cousin of the input
+      const input = document.querySelector('[contenteditable="true"]');
+      if (input) {
+        // Walk up to the chat-bar container, then look for a clickable send element
+        let container = input.parentElement;
+        for (let i = 0; i < 5; i++) {
+          if (!container) break;
+          // Find a button or clickable div with an SVG inside (the send icon)
+          const candidates = container.querySelectorAll('button, [role="button"], [style*="cursor: pointer"], span[class*="send"], div[class*="send"]');
+          for (const el of candidates) {
+            if (el.contains(input)) continue; // skip the input's own wrapper
+            if (el.querySelector('svg') || el.getAttribute('aria-label')?.toLowerCase().includes('send')) {
+              el.click();
+              return 'send-button';
+            }
+          }
+          container = container.parentElement;
+        }
+      }
+      // Strategy 2: any button whose aria-label or title mentions "send"
+      const allBtns = document.querySelectorAll('button, [role="button"]');
+      for (const btn of allBtns) {
+        const lbl = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').toLowerCase();
+        if (lbl.includes('send')) { btn.click(); return 'aria-send'; }
+      }
+      return null;
+    });
+
+    if (sent) {
+      console.log(`[SparkP2P] Chat send button clicked (${sent}): "${message.substring(0, 60)}"`);
+    } else {
+      // Fallback: Enter key
+      await page.keyboard.press('Enter');
+      console.log(`[SparkP2P] Chat sent via Enter (send button not found): "${message.substring(0, 60)}"`);
+    }
+
     await new Promise(r => setTimeout(r, 1000));
-    console.log(`[SparkP2P] Chat message sent via "${inputFound}": "${message.substring(0, 60)}"`);
     return true;
   }
   console.log('[SparkP2P] Chat input not found — check [DEBUG] log above for available inputs');
