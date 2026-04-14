@@ -2030,9 +2030,8 @@ async function idleScan(page) {
       console.log(`[SparkP2P] Order ${order.orderNumber} — buyer marked paid, clicking Payment Received...`);
       activeOrderNumber = order.orderNumber;
       activeOrderFiatAmount = order.totalPrice;
-      await sendChatMessage(page, 'I can see you have marked the payment. Please wait while I verify and process the release.');
-      await new Promise(r => setTimeout(r, 1000));
-      // Click "Payment Received" to open the confirmation modal
+      // Click the button FIRST — sending a chat message before this causes the page
+      // to scroll/re-render and the button becomes unreachable.
       const clicked = await page.evaluate(() => {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
         while (walker.nextNode()) {
@@ -2049,7 +2048,7 @@ async function idleScan(page) {
       console.log(`[SparkP2P] Payment Received button clicked: ${clicked}`);
       await new Promise(r => setTimeout(r, 2000));
       // Now let releaseWithVision handle the modal + M-Pesa verification + security
-      await releaseWithVision(page, order.orderNumber, {});
+      await releaseWithVision(page, order.orderNumber, { message: 'I can see you have marked the payment. Please wait while I verify and process the release.' });
       activeOrderNumber = null;
       activeOrderFiatAmount = 0;
       delete orderFirstSeenAt[order.orderNumber];
