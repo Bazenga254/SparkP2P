@@ -1650,42 +1650,68 @@ Return ONLY valid JSON.` },
     const readRaw = (readData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const readMatch = readRaw.match(/\{[\s\S]*\}/);
 
-    // ── 6. Ask Vision where to click to close the lightbox ────────────────────
-    console.log('[Vision] Asking Vision where to click to close lightbox...');
-    const closeSS = await page.screenshot({ type: 'jpeg', quality: 80 });
-    const closeResp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 60,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: closeSS.toString('base64') } },
-          { type: 'text', text: 'A lightbox/modal is open showing a payment screenshot. Give me the pixel coordinates of a dark empty area OUTSIDE the image (the overlay background) that I can click to close it. Return ONLY: {"x": <number>, "y": <number>}' },
-        ]}],
-      }),
+    // Parse Vision read result (may be null if Vision failed to return valid JSON)
+    let readResult = null;
+    if (readMatch) {
+      try { readResult = JSON.parse(readMatch[0]); } catch (_) {}
+    }
+    if (!readResult) console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80));
+
+    // ── 6. Close lightbox — ALWAYS runs after we clicked the image ─────────
+    // Three strategies tried in order; runs regardless of read success/failure.
+    console.log('[Vision] Closing lightbox...');
+    const closeResult = await page.evaluate(() => {
+      // Strategy 1: find a visible close/dismiss button near the top of the screen
+      const closeSels = [
+        '[class*="close" i]', '[class*="dismiss" i]', '[class*="CloseBtn"]',
+        '[aria-label*="close" i]', '[aria-label*="Close"]',
+        'button[class*="modal"]', 'button[class*="viewer"]',
+      ];
+      for (const sel of closeSels) {
+        try {
+          const els = document.querySelectorAll(sel);
+          for (let i = 0; i < els.length; i++) {
+            const r = els[i].getBoundingClientRect();
+            if (r.width > 0 && r.height > 0 && r.top < 200) {
+              els[i].click();
+              return 'clicked_close_btn:' + sel;
+            }
+          }
+        } catch (_) {}
+      }
+      // Strategy 2: Escape key to window + document
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+      // Strategy 3: remove large fixed-position overlays that are NOT the bot's own lock overlay
+      let removed = 0;
+      const all = document.querySelectorAll('*');
+      for (let i = 0; i < all.length; i++) {
+        const el = all[i];
+        if (el.id === 'sparkp2p-browser-lock') continue; // never remove bot overlay
+        try {
+          const s = window.getComputedStyle(el);
+          if (s.position === 'fixed' && parseInt(s.zIndex || 0) > 100) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 400 && r.height > 400) { el.remove(); removed++; }
+          }
+        } catch (_) {}
+      }
+      return removed > 0 ? 'removed_overlay:' + removed : 'escape_dispatched';
     });
-    const closeData = await closeResp.json();
-    const closeRaw = (closeData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
-    const closeCoords = JSON.parse((closeRaw.match(/\{[\s\S]*\}/) || ['{"x":50,"y":50}'])[0]);
-    console.log(`[Vision] Closing lightbox by clicking (${closeCoords.x}, ${closeCoords.y})`);
-    await page.mouse.click(closeCoords.x, closeCoords.y);
+    console.log('[Vision] Lightbox close result:', closeResult);
     await new Promise(r => setTimeout(r, 800));
 
-    if (!readMatch) { console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80)); return null; }
-    const readResult = JSON.parse(readMatch[0]);
-
-    if (readResult.found && readResult.code && /^[A-Z0-9]{10}$/.test(readResult.code)) {
+    if (readResult?.found && readResult.code && /^[A-Z0-9]{10}$/.test(readResult.code)) {
       console.log(`[Vision] ✅ M-Pesa code extracted: ${readResult.code} (amount: KES ${readResult.amount})`);
       return { code: readResult.code, amount: readResult.amount, method: 'vision_screenshot' };
     }
-    console.log(`[Vision] Could not read code: ${readResult.reason || 'unclear'}`);
+    console.log(`[Vision] Could not read code: ${readResult?.reason || 'unclear'}`);
     return null;
 
   } catch (e) {
     console.error('[Vision] findAndReadPaymentScreenshot error:', e.message?.substring(0, 80));
-    await page.mouse.click(1240, 50).catch(() => {});
-    await new Promise(r => setTimeout(r, 500));
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2000));
     return null;
   }
 }
