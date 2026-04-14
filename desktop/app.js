@@ -82,7 +82,11 @@ let traderPin = null;    // Binance fund/trading password — stored in memory o
 let totpSecret = null;   // Google Authenticator base32 secret — stored in memory only
 let browserLocked = false;
 let lockFrameListener = null;
+let lockGmailFrameListener = null;
+let lockImFrameListener = null;
+let lockMpesaFrameListener = null;
 let chromeProcess = null; // Child process reference for killing Chrome on quit
+let codeFallbackAskedForOrder = null; // Order number we've already asked buyer to type their code for (avoid spamming)
 let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
 let connectingBinance = false; // Prevents concurrent connectBinance() calls
 let scanningInProgress = false; // Prevents concurrent initialScan() calls
@@ -620,9 +624,6 @@ async function isLoggedIn() {
 // ═══════════════════════════════════════════════════════════
 
 async function injectLockOverlay(page) {
-  // Bypass CSP in case the page blocks our script
-  await page.setBypassCSP(true).catch(() => {});
-
   const result = await page.evaluate(() => {
     try {
       if (document.getElementById('sparkp2p-browser-lock')) return { ok: true, existing: true };
@@ -684,7 +685,7 @@ async function injectLockOverlay(page) {
   }).catch(e => ({ ok: false, evalError: e.message?.substring(0, 100) }));
 
   if (result?.ok) {
-    console.log('[SparkP2P] Lock overlay injected:', JSON.stringify(result));
+    if (!result.existing) console.log('[SparkP2P] Lock overlay injected:', JSON.stringify(result));
   } else {
     console.error('[SparkP2P] Lock overlay FAILED:', JSON.stringify(result));
   }
@@ -710,34 +711,40 @@ async function lockChromeBrowser() {
   // Lock Gmail tab
   if (gmailPage && !gmailPage.isClosed()) {
     await injectLockOverlay(gmailPage);
-    gmailPage.on('framenavigated', async (frame) => {
+    if (lockGmailFrameListener) gmailPage.off('framenavigated', lockGmailFrameListener);
+    lockGmailFrameListener = async (frame) => {
       if (frame === gmailPage.mainFrame()) {
         await new Promise(r => setTimeout(r, 600));
         await injectLockOverlay(gmailPage).catch(() => {});
       }
-    });
+    };
+    gmailPage.on('framenavigated', lockGmailFrameListener);
   }
 
   // Lock I&M tab
   if (imPage && !imPage.isClosed()) {
     await injectLockOverlay(imPage);
-    imPage.on('framenavigated', async (frame) => {
+    if (lockImFrameListener) imPage.off('framenavigated', lockImFrameListener);
+    lockImFrameListener = async (frame) => {
       if (frame === imPage.mainFrame()) {
         await new Promise(r => setTimeout(r, 600));
         await injectLockOverlay(imPage).catch(() => {});
       }
-    });
+    };
+    imPage.on('framenavigated', lockImFrameListener);
   }
 
   // Lock M-PESA org portal tab
   if (mpesaOrgPage && !mpesaOrgPage.isClosed()) {
     await injectLockOverlay(mpesaOrgPage);
-    mpesaOrgPage.on('framenavigated', async (frame) => {
+    if (lockMpesaFrameListener) mpesaOrgPage.off('framenavigated', lockMpesaFrameListener);
+    lockMpesaFrameListener = async (frame) => {
       if (frame === mpesaOrgPage.mainFrame()) {
         await new Promise(r => setTimeout(r, 600));
         await injectLockOverlay(mpesaOrgPage).catch(() => {});
       }
-    });
+    };
+    mpesaOrgPage.on('framenavigated', lockMpesaFrameListener);
   }
 
   console.log('[SparkP2P] Chrome browser locked (Binance + Gmail + I&M + M-PESA)');
@@ -760,6 +767,15 @@ async function unlockChromeBrowser() {
   if (binancePage) {
     if (lockFrameListener) { binancePage.off('framenavigated', lockFrameListener); lockFrameListener = null; }
     await removeLock(binancePage);
+  }
+  if (gmailPage && !gmailPage.isClosed()) {
+    if (lockGmailFrameListener) { gmailPage.off('framenavigated', lockGmailFrameListener); lockGmailFrameListener = null; }
+  }
+  if (imPage && !imPage.isClosed()) {
+    if (lockImFrameListener) { imPage.off('framenavigated', lockImFrameListener); lockImFrameListener = null; }
+  }
+  if (mpesaOrgPage && !mpesaOrgPage.isClosed()) {
+    if (lockMpesaFrameListener) { mpesaOrgPage.off('framenavigated', lockMpesaFrameListener); lockMpesaFrameListener = null; }
   }
   await removeLock(gmailPage);
   await removeLock(imPage);
@@ -1493,6 +1509,7 @@ function stopPoller() {
   activeOrderNumber = null;
   activeOrderFiatAmount = 0;
   activeBuyOrderNumber = null;
+  codeFallbackAskedForOrder = null;
   scanningInProgress = false;
 }
 
@@ -2013,9 +2030,14 @@ async function idleScan(page) {
           console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed for ${order.orderNumber} — asking buyer`);
           activeOrderNumber = order.orderNumber;
           activeOrderFiatAmount = order.totalPrice;
-          await sendChatMessage(page,
-            'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa or bank please share your M-Pesa reference code so that I can confirm.'
-          );
+          if (codeFallbackAskedForOrder !== order.orderNumber) {
+            codeFallbackAskedForOrder = order.orderNumber;
+            await sendChatMessage(page,
+              'Hello! I can see you have made your payment but I\'m having trouble reading the screenshot. Could you please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC)? I will verify it immediately. Thank you!'
+            );
+          } else {
+            console.log(`[SparkP2P] Already asked buyer for code on order ${order.orderNumber} — waiting for response`);
+          }
           break;
         }
       } else if (orderInfo.screen === 'awaiting_payment' || orderInfo.screen === 'payment_processing') {
@@ -2253,14 +2275,20 @@ async function monitorActiveOrder(page) {
 
       // Continue the full release flow (confirm modal, TOTP, email OTP, etc.)
       await releaseWithVision(page, activeOrderNumber, {});
+      codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
       const balances = await scanWalletBalances(page);
       await uploadBalances(balances);
     } else {
       console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — asking buyer for payment method`);
-      await sendChatMessage(page,
-        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa or bank please share your M-Pesa reference code so that I can confirm.'
-      );
+      if (codeFallbackAskedForOrder !== activeOrderNumber) {
+        codeFallbackAskedForOrder = activeOrderNumber;
+        await sendChatMessage(page,
+          'Hello! I can see you have made your payment but I\'m having trouble reading the screenshot. Could you please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC)? I will verify it immediately. Thank you!'
+        );
+      } else {
+        console.log(`[SparkP2P] Already asked buyer for code — waiting silently for response`);
+      }
     }
     return;
   }
@@ -2294,12 +2322,18 @@ async function monitorActiveOrder(page) {
       await clickButton(page, 'Payment Received', 'payment received');
       await new Promise(r => setTimeout(r, 2000));
       await releaseWithVision(page, activeOrderNumber, {});
+      codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
     } else {
-      console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — asking buyer`);
-      await sendChatMessage(page,
-        'Sorry, I don\'t seem to be able to see your transaction. How did you make your payment? Through bank, M-Pesa or another method? If you paid through M-Pesa or bank please share your M-Pesa reference code so that I can confirm.'
-      );
+      console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed (DOM fallback) — asking buyer`);
+      if (codeFallbackAskedForOrder !== activeOrderNumber) {
+        codeFallbackAskedForOrder = activeOrderNumber;
+        await sendChatMessage(page,
+          'Hello! I can see you have made your payment but I\'m having trouble reading the screenshot. Could you please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC)? I will verify it immediately. Thank you!'
+        );
+      } else {
+        console.log(`[SparkP2P] Already asked buyer for code (DOM path) — waiting silently`);
+      }
     }
     return;
   }
@@ -3070,11 +3104,9 @@ async function clickButton(page, ...textOptions) {
 
 // ── Send a chat message on an order page ────────────────────────────────────
 async function sendChatMessage(page, message) {
-  // Scroll to bottom — chat input is at the bottom of the order page
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-  await new Promise(r => setTimeout(r, 800));
-
-  // Find the chat input — Binance uses a contenteditable div
+  // Find the chat input — Binance uses a contenteditable div inside its own scroll container.
+  // Do NOT use window.scrollTo(body.scrollHeight) — that scrolls to the page footer (empty area),
+  // not the chat panel. Use scrollIntoView on the input element instead.
   const inputFound = await page.evaluate((msg) => {
     const selectors = [
       '[contenteditable="true"]',
@@ -3086,6 +3118,8 @@ async function sendChatMessage(page, message) {
     for (const sel of selectors) {
       const el = document.querySelector(sel);
       if (!el) continue;
+      // Scroll the element into view within its own container (respects chat panel scroll)
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       el.click();
       el.focus();
       if (el.isContentEditable) {
@@ -4014,6 +4048,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   if (!imPage || imPage.isClosed()) throw new Error('I&M Bank tab is not open. Please reconnect I&M Bank.');
   if (!imPin) throw new Error('I&M PIN not set. Please save your PIN in Settings → Binance tab.');
 
+  imWithdrawalRunning = true; // Block keep-alive navigation during payment
   console.log(`[SparkP2P] 💳 Starting I&M payment: KSh ${amount} → ${name} (${phone})`);
 
   // Navigate to Send Money to Mobile form
@@ -4152,6 +4187,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
                   pageText.toLowerCase().includes('submitted') ||
                   pageText.toLowerCase().includes('processed');
 
+  imWithdrawalRunning = false; // Release lock — keep-alive can navigate again
   console.log(`[SparkP2P] I&M payment ${success ? '✅ SUCCESS' : '⚠️ status unclear'}`);
   return { success, screenshot };
 }
