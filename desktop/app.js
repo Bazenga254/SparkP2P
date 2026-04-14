@@ -2047,8 +2047,9 @@ async function idleScan(page) {
       });
       console.log(`[SparkP2P] Payment Received button clicked: ${clicked}`);
       await new Promise(r => setTimeout(r, 2000));
-      // Now let releaseWithVision handle the modal + M-Pesa verification + security
-      await releaseWithVision(page, order.orderNumber, { message: 'I can see you have marked the payment. Please wait while I verify and process the release.' });
+      // releaseWithVision handles: modal detection → M-Pesa verification → checkbox → Confirm Release → security
+      // No pre-emptive message — only send messages based on actual verification outcome
+      await releaseWithVision(page, order.orderNumber, {});
       activeOrderNumber = null;
       activeOrderFiatAmount = 0;
       delete orderFirstSeenAt[order.orderNumber];
@@ -3853,26 +3854,34 @@ async function releaseWithVision(page, orderNumber, action) {
           await new Promise(r => setTimeout(r, 2000));
 
         } else {
-          // M-Pesa NOT verified — appeal the order instead of releasing
-          console.log(`[Vision] ❌ M-Pesa NOT confirmed for ${orderNumber} — clicking Appeal`);
-          await sendChatMessage(page, 'I was unable to verify your M-Pesa payment in my account. I have raised an appeal so our team can review this order. Please provide your M-Pesa transaction code to resolve quickly.');
-          await new Promise(r => setTimeout(r, 1000));
-          const appealed = await page.evaluate(() => {
+          // M-Pesa NOT verified yet — close the modal and ask the buyer for their code.
+          // Do NOT appeal on first failure — payment may be delayed or unmatched.
+          // The next poll cycle will re-open the modal and try again.
+          console.log(`[Vision] ❌ M-Pesa not confirmed yet for ${orderNumber} — closing modal, asking buyer`);
+          // Close the modal (Escape or click the X)
+          await page.keyboard.press('Escape').catch(() => {});
+          await new Promise(r => setTimeout(r, 800));
+          // Also try clicking the × close button if Escape didn't work
+          await page.evaluate(() => {
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
             while (walker.nextNode()) {
               const el = walker.currentNode;
-              if (el.tagName !== 'BUTTON') continue;
-              const t = (el.textContent || '').trim().toLowerCase();
-              if (t === 'appeal' || t.startsWith('appeal after')) {
-                el.click();
-                return true;
+              const t = (el.textContent || '').trim();
+              if ((t === '×' || t === '✕' || t === 'Close') && el.getBoundingClientRect().width > 0) {
+                el.click(); return true;
               }
             }
             return false;
-          });
-          console.log(`[Vision] Appeal clicked: ${appealed}`);
-          await new Promise(r => setTimeout(r, 2000));
-          return { success: false, error: 'mpesa_unverified_appealed' };
+          }).catch(() => {});
+          await new Promise(r => setTimeout(r, 500));
+          // Ask buyer for M-Pesa code once per order
+          if (!codeFallbackAskedOrders.has(orderNumber)) {
+            codeFallbackAskedOrders.add(orderNumber);
+            await sendChatMessage(page,
+              'Hi! I need to verify your M-Pesa payment. Please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC) so I can confirm and release your crypto. Thank you!'
+            );
+          }
+          return { success: false, error: 'mpesa_unverified_waiting' };
         }
         continue;
       }
