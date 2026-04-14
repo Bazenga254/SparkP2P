@@ -69,7 +69,7 @@ class Order(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Fees
-    platform_fee = Column(Float, default=15.0)  # KES
+    platform_fee = Column(Float, default=0.0)
     settlement_fee = Column(Float, default=0.0)  # KES
 
     # AI fraud check

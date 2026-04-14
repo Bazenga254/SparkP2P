@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     # Platform
     PLATFORM_NAME: str = "SparkP2P"
-    PLATFORM_FEE_PER_TRADE: int = 15  # KES per trade
+    PLATFORM_FEE_PER_TRADE: int = 0
     MAX_AUTO_RELEASE_AMOUNT: int = 500000  # KES - flag above this
 
     # Brevo Email
