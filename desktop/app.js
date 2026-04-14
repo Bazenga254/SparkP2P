@@ -1650,9 +1650,26 @@ Return ONLY valid JSON.` },
     const readRaw = (readData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
     const readMatch = readRaw.match(/\{[\s\S]*\}/);
 
-    // ── 6. Close lightbox — click the × button (top-right, fixed 1280×800 window) ──
-    console.log('[Vision] Closing lightbox (clicking top-right ×)...');
-    await page.mouse.click(1240, 50);
+    // ── 6. Ask Vision where to click to close the lightbox ────────────────────
+    console.log('[Vision] Asking Vision where to click to close lightbox...');
+    const closeSS = await page.screenshot({ type: 'jpeg', quality: 80 });
+    const closeResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 60,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: closeSS.toString('base64') } },
+          { type: 'text', text: 'A lightbox/modal is open showing a payment screenshot. Give me the pixel coordinates of a dark empty area OUTSIDE the image (the overlay background) that I can click to close it. Return ONLY: {"x": <number>, "y": <number>}' },
+        ]}],
+      }),
+    });
+    const closeData = await closeResp.json();
+    const closeRaw = (closeData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const closeCoords = JSON.parse((closeRaw.match(/\{[\s\S]*\}/) || ['{"x":50,"y":50}'])[0]);
+    console.log(`[Vision] Closing lightbox by clicking (${closeCoords.x}, ${closeCoords.y})`);
+    await page.mouse.click(closeCoords.x, closeCoords.y);
     await new Promise(r => setTimeout(r, 800));
 
     if (!readMatch) { console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80)); return null; }
