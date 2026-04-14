@@ -1300,7 +1300,10 @@ async function navigateTo(url) {
 
 let _ordersTabOpen = false;
 
-async function readOrders() {
+// activeOnly=true skips the tab=1 history scan (cancelled/completed).
+// Use this when active orders are present so the page navigates directly
+// to order details without bouncing through history tabs first.
+async function readOrders(activeOnly = false) {
   // IMPORTANT: Use DOM text — NOT screenshots — for orders.
   // GPT Vision OCR misreads 18-20 digit order numbers causing duplicate DB records.
   // DOM text gives exact digits straight from the HTML.
@@ -1362,6 +1365,14 @@ async function readOrders() {
     }
 
     // ── Step 2: Read recently cancelled orders (tab=1, Cancelled filter) ───
+    // Skip history scan when activeOnly=true — avoids page bouncing when
+    // active orders are already detected and need immediate attention.
+    if (activeOnly) {
+      console.log('[SparkP2P] readOrders: activeOnly mode — skipping tab=1 history scan');
+      _ordersTabOpen = false;
+      return { sell, buy, cancelled: [], completed_buy: [] };
+    }
+
     let cancelled = [];
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 2000));
@@ -1885,27 +1896,27 @@ async function idleScan(page) {
   await new Promise(r => setTimeout(r, 3000));
   if (pauseNavigation) return;
 
-  // Read active orders from DOM
-  const orders = await readOrders();
+  // Read active orders only — skip history scan so the page stays on tab=0
+  // and goes straight to order details without bouncing through cancelled/completed tabs.
+  const orders = await readOrders(true); // activeOnly=true
   stats.orders = orders.sell.length + orders.buy.length;
-  console.log(`[SparkP2P] Orders found: ${orders.sell.length} sell, ${orders.buy.length} buy, ${orders.cancelled.length} cancelled`);
+  console.log(`[SparkP2P] Orders found: ${orders.sell.length} sell, ${orders.buy.length} buy`);
 
   const hasActiveOrders = orders.sell.length > 0 || orders.buy.length > 0;
 
-  // ── Step 2: No active orders — now safe to scan wallets + completed tab ────
+  // ── Step 2: No active orders — now safe to scan wallets + full history ────
   if (!hasActiveOrders) {
-    console.log('[SparkP2P] No active orders — scanning wallets...');
+    console.log('[SparkP2P] No active orders — scanning wallets + history...');
     const balances = await scanWalletBalances(page);
     await uploadBalances(balances);
     if (pauseNavigation) return;
 
-    console.log('[SparkP2P] Checking completed tab (tab=1)...');
-    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1',
-      { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 2000));
+    // Full readOrders scan (includes cancelled + completed history)
+    const fullOrders = await readOrders(false);
+    orders.cancelled = fullOrders.cancelled || [];
+    orders.completed_buy = fullOrders.completed_buy || [];
+    console.log(`[SparkP2P] History: ${orders.cancelled.length} cancelled, ${orders.completed_buy.length} completed buy`);
     if (pauseNavigation) return;
-    const cancelledOrders = await readOrders();
-    orders.cancelled = cancelledOrders.cancelled || [];
 
     // Scan My Ads prices (every ~1 min)
     const secsSinceLastScan = (Date.now() - lastAdPriceScan) / 1000;
@@ -1914,12 +1925,6 @@ async function idleScan(page) {
     } else {
       console.log(`[SparkP2P] Ad price scan skipped — last scan ${Math.round(secsSinceLastScan)}s ago`);
     }
-
-    // Navigate back to tab=0 so order-processing code below has the right page
-    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
-      { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 2000));
-    if (pauseNavigation) return;
   } else {
     console.log(`[SparkP2P] Active orders detected — skipping wallet scan, going straight to orders`);
   }
