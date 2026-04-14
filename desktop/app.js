@@ -2079,14 +2079,81 @@ async function idleScan(page) {
     // ── Awaiting buyer payment ──────────────────────────────────────────────
     } else if (screen === 'awaiting_payment' || screen === 'payment_processing' ||
                lower.includes('awaiting') || lower.includes('pending payment')) {
-      if (seenMins >= 1 && !orderReminderSent.has(order.orderNumber)) {
+
+      // ── Check countdown: if ≤ 2 minutes remaining, cancel the order ────────
+      const countdown = await page.evaluate(() => {
+        // Binance renders countdown as MM:SS text — find smallest visible timer
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const pattern = /^\d{1,2}:\d{2}$/;
+        let smallest = null;
+        while (walker.nextNode()) {
+          const t = walker.currentNode.textContent.trim();
+          if (pattern.test(t)) {
+            const [mm, ss] = t.split(':').map(Number);
+            const totalSecs = mm * 60 + ss;
+            if (smallest === null || totalSecs < smallest) smallest = totalSecs;
+          }
+        }
+        return smallest; // null if not found
+      }).catch(() => null);
+
+      if (countdown !== null) {
+        console.log(`[SparkP2P] Order ${order.orderNumber} countdown: ${Math.floor(countdown / 60)}:${String(countdown % 60).padStart(2, '0')} (${countdown}s remaining)`);
+      }
+
+      const nearExpiry = countdown !== null && countdown <= 120; // ≤ 2 minutes
+
+      if (nearExpiry) {
+        console.log(`[SparkP2P] ⏰ Order ${order.orderNumber} is about to expire (${countdown}s left) — cancelling`);
+        // Use TreeWalker to find and click the Cancel / Cancel Order button
+        const cancelled = await page.evaluate(() => {
+          const cancelPhrases = ['cancel order', 'cancel', 'cancel the order'];
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+          while (walker.nextNode()) {
+            const el = walker.currentNode;
+            if (el.tagName !== 'BUTTON' && el.tagName !== 'A') continue;
+            const t = (el.textContent || '').trim().toLowerCase();
+            if (cancelPhrases.some(p => t === p || t.startsWith(p))) {
+              el.click();
+              return true;
+            }
+          }
+          return false;
+        });
+        if (cancelled) {
+          console.log(`[SparkP2P] Order ${order.orderNumber} cancel clicked — waiting for confirmation dialog`);
+          await new Promise(r => setTimeout(r, 2000));
+          // Confirm the cancellation dialog if it appears
+          await page.evaluate(() => {
+            const phrases = ['confirm', 'yes', 'confirm cancel', 'yes, cancel'];
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+            while (walker.nextNode()) {
+              const el = walker.currentNode;
+              if (el.tagName !== 'BUTTON') continue;
+              const t = (el.textContent || '').trim().toLowerCase();
+              if (phrases.some(p => t === p || t.startsWith(p))) {
+                el.click();
+                return true;
+              }
+            }
+            return false;
+          });
+          await new Promise(r => setTimeout(r, 1000));
+          await takeScreenshot(`cancel_expired_${order.orderNumber}`, page);
+          delete orderFirstSeenAt[order.orderNumber];
+          orderReminderSent.delete(order.orderNumber);
+          codeFallbackAskedOrders.delete(order.orderNumber);
+        } else {
+          console.log(`[SparkP2P] Order ${order.orderNumber} — could not find Cancel button, will retry next cycle`);
+        }
+      } else if (seenMins >= 1 && !orderReminderSent.has(order.orderNumber)) {
         console.log(`[SparkP2P] Order ${order.orderNumber} — no payment after ${seenMins}m, sending reminder`);
         await sendChatMessage(page,
           'Hi, are you there? 😊 We\'re waiting for your payment. Please complete the transfer when you\'re ready. Let me know if you need any assistance!'
         );
         orderReminderSent.add(order.orderNumber);
       } else {
-        console.log(`[SparkP2P] Order ${order.orderNumber} — awaiting payment (${seenMins}m) — moving to next order`);
+        console.log(`[SparkP2P] Order ${order.orderNumber} — awaiting payment (${seenMins}m, ${countdown !== null ? countdown + 's left' : 'no timer'}) — moving to next order`);
       }
       // Move on — check other orders
 
