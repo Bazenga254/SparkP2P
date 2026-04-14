@@ -12,12 +12,21 @@ const { autoUpdater } = require('electron-updater');
 http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
+  if (req.url === '/activity' && req.method === 'POST') {
+    // Chrome page detected mouse/keyboard activity — reset the pause inactivity timer
+    resetPauseTimerOnActivity();
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
   if (req.url === '/pause') {
     pauseNavigation = true;
     scanningInProgress = false;
     await unlockChromeBrowser().catch(() => {}); // Give user access to Chrome
     startPauseInactivityTimer();
-    console.log('[SparkP2P] Bot PAUSED — Chrome unlocked for manual use, auto-resume in 30s');
+    // Attach activity listeners to all open Chrome pages so mouse movement resets the timer
+    const pages = browser ? await browser.pages().catch(() => []) : [];
+    for (const p of pages) attachActivityListenerToPage(p);
+    console.log('[SparkP2P] Bot PAUSED — Chrome unlocked for manual use, auto-resume in 60s');
     res.end(JSON.stringify({ ok: true, paused: true }));
   } else if (req.url === '/resume') {
     pauseNavigation = false;
@@ -94,13 +103,13 @@ let mpesaOrgPage = null;       // Persistent M-PESA org portal tab
 let connectingMpesa = false;   // Prevents concurrent connectMpesaPortal() calls
 let mpesaSweepRunning = false; // Prevents concurrent sweep executions
 let pauseInactivityTimer = null; // Auto-resume timer when bot is paused
-const PAUSE_AUTO_RESUME_MS = 30 * 1000; // 30 seconds
+const PAUSE_AUTO_RESUME_MS = 60 * 1000; // 60 seconds
 
 function startPauseInactivityTimer() {
   clearPauseInactivityTimer();
   pauseInactivityTimer = setTimeout(async () => {
     if (!pauseNavigation) return; // already resumed
-    console.log('[SparkP2P] 30s inactivity while paused — auto-resuming and locking all screens');
+    console.log('[SparkP2P] 60s inactivity while paused — auto-resuming and locking all screens');
     pauseNavigation = false;
     await lockChromeBrowser().catch(() => {});
     mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed", { detail: { reason: "inactivity" } }))').catch(() => {});
@@ -111,11 +120,26 @@ function clearPauseInactivityTimer() {
   if (pauseInactivityTimer) { clearTimeout(pauseInactivityTimer); pauseInactivityTimer = null; }
 }
 
-// Any mouse/keyboard activity on the Electron window resets the 30s timer
+// Any mouse/keyboard activity on the Electron window OR Chrome pages resets the 60s timer
 function resetPauseTimerOnActivity() {
   if (pauseNavigation && pauseInactivityTimer) {
-    startPauseInactivityTimer(); // reset the 30s countdown
+    startPauseInactivityTimer(); // reset the 60s countdown
   }
+}
+
+// Attach mouse-move listener to a Chrome page so user activity resets the pause timer
+function attachActivityListenerToPage(page) {
+  if (!page || page.isClosed()) return;
+  page.evaluate(() => {
+    if (window.__sparkActivityBound) return;
+    window.__sparkActivityBound = true;
+    ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'].forEach(evt => {
+      window.addEventListener(evt, () => {
+        // Post a message to the local bot server so Node.js can reset the timer
+        fetch('http://127.0.0.1:9223/activity', { method: 'POST' }).catch(() => {});
+      }, { passive: true });
+    });
+  }).catch(() => {});
 }
 const SESSION_GRACE_MS = 30 * 60 * 1000; // 30 min grace period before re-login is allowed
 const LOGOUT_STRIKES_NEEDED = 3;          // Require 3 consecutive failures before declaring session lost

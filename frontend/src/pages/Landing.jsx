@@ -172,7 +172,7 @@ export default function Landing() {
               </div>
               <h3>Windows</h3>
               <p>Windows 10 / 11</p>
-              <a href="https://github.com/Bazenga254/SparkP2P/releases/download/v1.1.7/SparkP2P.Setup.1.1.7.exe" className="land-download-btn" target="_blank" rel="noreferrer">Download .exe</a>
+              <a href="https://github.com/Bazenga254/SparkP2P/releases/download/v1.1.8/SparkP2P.Setup.1.1.8.exe" className="land-download-btn" target="_blank" rel="noreferrer">Download .exe</a>
             </div>
             <div className="land-download-card">
               <div className="land-download-icon">
@@ -193,7 +193,7 @@ export default function Landing() {
           </div>
           <div style={{ textAlign: 'center', marginTop: 24, maxWidth: 520, margin: '24px auto 0' }}>
             <p style={{ color: '#6b7280', fontSize: 13 }}>
-              v1.1.7 &middot; Auto-updates enabled &middot; Requires Google Chrome installed
+              v1.1.8 &middot; Auto-updates enabled &middot; Requires Google Chrome installed
             </p>
             <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
               If Chrome blocks the download, click the <strong style={{ color: '#e5e7eb' }}>&#8942;</strong> (three dots) next to the download and select <strong style={{ color: '#e5e7eb' }}>"Keep"</strong>. The file is safe — downloaded directly from our servers.
