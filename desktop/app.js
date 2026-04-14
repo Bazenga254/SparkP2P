@@ -1752,8 +1752,8 @@ async function pollCycle() {
     fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
     if (stats.polls % 5 === 0) await readMarketPrices().catch(() => {});
 
-    const nextIn = (activeOrderNumber ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE) / 1000;
-    console.log(`[SparkP2P] Poll complete. ${activeOrderNumber ? `Monitoring order ${activeOrderNumber}` : 'Idle'} — next in ${nextIn}s`);
+    const nextIn = POLL_INTERVAL_IDLE / 1000;
+    console.log(`[SparkP2P] Poll complete. ${activeOrderNumber ? `Monitoring order ${activeOrderNumber}` : (activeBuyOrderNumber ? `Buy order ${activeBuyOrderNumber}` : 'Idle')} — next in ${nextIn}s`);
 
   } catch (e) {
     stats.errors++;
@@ -1925,46 +1925,50 @@ async function idleScan(page) {
   console.log(`[SparkP2P] ── IDLE SCAN #${stats.polls + 1} ──`);
   if (pauseNavigation) return;
 
-  // ── Step 1: Wallet balances ──────────────────────────────────────────────
-  const balances = await scanWalletBalances(page);
-  await uploadBalances(balances);
-  if (pauseNavigation) return;
-
-  // ── Step 2: Go straight to Processing tab (tab=0) ───────────────────────
-  console.log('[SparkP2P] Step 2: Checking active orders (tab=0) with Claude Vision...');
+  // ── Step 1: Check active orders FIRST — skip wallet scan if an order needs attention ──
+  console.log('[SparkP2P] Step 1: Checking active orders (tab=0)...');
   await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
     { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
   await new Promise(r => setTimeout(r, 3000));
   if (pauseNavigation) return;
 
-  // Vision confirms what's on screen, DOM reads the order list
-  await takeScreenshot('idle_scan_orders_tab', page);
-  const visionInfo = await analyzePageWithVision(page);
-  console.log(`[SparkP2P] Vision sees: ${visionInfo.screen}`);
-
+  // Read active orders from DOM
   const orders = await readOrders();
   stats.orders = orders.sell.length + orders.buy.length;
-  console.log(`[SparkP2P] Orders: ${orders.sell.length} sell, ${orders.buy.length} buy, ${orders.cancelled.length} cancelled`);
+  console.log(`[SparkP2P] Orders found: ${orders.sell.length} sell, ${orders.buy.length} buy, ${orders.cancelled.length} cancelled`);
 
-  // ── Step 3: No active orders — check completed tab + scan My Ads prices ────
-  if (orders.sell.length === 0 && orders.buy.length === 0) {
-    console.log('[SparkP2P] Step 3: No active orders — checking completed tab (tab=1)...');
+  const hasActiveOrders = orders.sell.length > 0 || orders.buy.length > 0;
+
+  // ── Step 2: No active orders — now safe to scan wallets + completed tab ────
+  if (!hasActiveOrders) {
+    console.log('[SparkP2P] No active orders — scanning wallets...');
+    const balances = await scanWalletBalances(page);
+    await uploadBalances(balances);
+    if (pauseNavigation) return;
+
+    console.log('[SparkP2P] Checking completed tab (tab=1)...');
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1',
       { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 2000));
     if (pauseNavigation) return;
-    // Re-read cancelled orders from this tab
     const cancelledOrders = await readOrders();
     orders.cancelled = cancelledOrders.cancelled || [];
 
-    // ── Step 3b: Scan My Ads for current buy/sell prices (every 1 min) ───────
-    // Floating prices change frequently — Vision scrape to keep spread calculator live
+    // Scan My Ads prices (every ~1 min)
     const secsSinceLastScan = (Date.now() - lastAdPriceScan) / 1000;
     if (secsSinceLastScan >= 55) {
       await scanMyAdPrices();
     } else {
       console.log(`[SparkP2P] Ad price scan skipped — last scan ${Math.round(secsSinceLastScan)}s ago`);
     }
+
+    // Navigate back to tab=0 so order-processing code below has the right page
+    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
+      { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2000));
+    if (pauseNavigation) return;
+  } else {
+    console.log(`[SparkP2P] Active orders detected — skipping wallet scan, going straight to orders`);
   }
 
   // Report orders to VPS
@@ -2162,183 +2166,191 @@ async function navigateToOrderDetail(page, orderNumber) {
 }
 
 async function monitorActiveOrder(page) {
-  console.log(`[SparkP2P] ── MONITORING ORDER ${activeOrderNumber} ──`);
+  const orderNum = activeOrderNumber;
+  console.log(`[SparkP2P] ── FOCUSED ORDER MONITOR: ${orderNum} ──`);
 
-  // Navigate to the order detail page via the orders list (DOM click)
-  await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
-    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+  // Navigate DIRECTLY to the order detail page — do NOT go via the orders list
+  await page.goto(
+    `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNum}`,
+    { waitUntil: 'domcontentloaded', timeout: 15000 }
+  ).catch(() => {});
   await new Promise(r => setTimeout(r, 3000));
+  if (pauseNavigation || !pollerRunning) return;
 
-  const clicked = await clickOrderWithMouse(page, activeOrderNumber);
-  if (!clicked) {
-    console.log(`[SparkP2P] Order ${activeOrderNumber} not found on orders list — may be complete or cancelled`);
-    activeOrderNumber = null;
-    activeOrderFiatAmount = 0;
-    return;
-  }
+  // ── Persistent loop — stay on this page until the order resolves ────────────
+  // Bot never leaves the order page between checks. Reload every 15s.
+  // Max 25 minutes (P2P orders expire in 15 min, 10 min buffer for release steps).
+  const MAX_ORDER_MS   = 25 * 60 * 1000;
+  const CHECK_WAIT_MS  = 15 * 1000;
+  const loopStart = Date.now();
 
-  // Wait for order detail to load then use Claude Vision
-  await new Promise(r => setTimeout(r, 5000));
-  await takeScreenshot(`monitor_${activeOrderNumber}`, page);
+  while (Date.now() - loopStart < MAX_ORDER_MS) {
+    if (!pollerRunning || pauseNavigation) return;
 
-  // Vision with retry
-  let info = { screen: 'unknown' };
-  for (let i = 1; i <= 3; i++) {
-    info = await analyzePageWithVision(page);
-    console.log(`[SparkP2P] Monitor vision attempt ${i}: ${info.screen}`);
-    if (info.screen !== 'unknown') break;
-    await new Promise(r => setTimeout(r, 3000));
-  }
-
-  const screen = info.screen;
-
-  if (screen === 'order_complete') {
-    console.log(`[SparkP2P] Order ${activeOrderNumber} COMPLETED`);
-    activeOrderNumber = null; activeOrderFiatAmount = 0;
-    const balances = await scanWalletBalances(page);
-    await uploadBalances(balances);
-    return;
-  }
-
-  if (screen === 'awaiting_payment' || screen === 'payment_processing') {
-    console.log(`[SparkP2P] Order ${activeOrderNumber} still waiting for buyer payment`);
-    return; // Keep monitoring next poll
-  }
-
-  if (screen === 'verify_payment') {
-    console.log(`[SparkP2P] Order ${activeOrderNumber} PAID — verifying M-Pesa...`);
-
-    // Check if buyer already sent a screenshot or typed a code in chat
-    // If so, acknowledge it before starting verification so they don't think we're ignoring them
-    const buyerAlreadySent = await page.evaluate(() => {
-      const vw = window.innerWidth;
-      // Check for images in right side of screen (buyer's chat side)
-      const hasImage = Array.from(document.querySelectorAll('img')).some(img => {
-        const r = img.getBoundingClientRect();
-        return r.width > 60 && r.height > 60 && r.left > vw * 0.5
-          && r.top >= 0 && r.bottom <= window.innerHeight;
-      });
-      // Check for M-Pesa-like codes typed as text on right side
-      const hasCode = Array.from(document.querySelectorAll('*')).some(el => {
-        if (el.children.length > 0) return false;
-        const r = el.getBoundingClientRect();
-        if (r.left < vw * 0.5 || r.width === 0) return false;
-        return /\b[A-Z0-9]{10}\b/.test(el.textContent || '');
-      });
-      return hasImage || hasCode;
-    });
-
-    if (buyerAlreadySent) {
-      console.log(`[SparkP2P] Buyer already sent payment proof — acknowledging`);
-      await sendChatMessage(page, 'I can see that you have already made your payment, please wait as I verify this payment. Thank you!');
-      await new Promise(r => setTimeout(r, 1000));
+    // Take screenshot + Vision analysis (up to 3 attempts)
+    await takeScreenshot(`monitor_${orderNum}`, page);
+    let info = { screen: 'unknown' };
+    for (let i = 1; i <= 3; i++) {
+      info = await analyzePageWithVision(page);
+      console.log(`[SparkP2P] Order ${orderNum} vision (${i}/3): ${info.screen}`);
+      if (info.screen !== 'unknown') break;
+      await new Promise(r => setTimeout(r, 2000));
     }
 
-    const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount || info.fiat_amount_kes, page);
-    if (verified) {
-      console.log(`[SparkP2P] ✅ M-Pesa confirmed — clicking Payment Received`);
+    const screen = info.screen;
 
-      // Close any open lightbox first
-      await page.keyboard.press('Escape').catch(() => {});
-      await new Promise(r => setTimeout(r, 800));
-
-      // Confirm we are still on the order detail page (lightbox/Escape may have navigated away)
-      const currentUrl = page.url();
-      console.log(`[SparkP2P] Current URL after verification: ${currentUrl}`);
-
-      if (!currentUrl.includes('fiatOrderDetail')) {
-        // We navigated away — go back to orders list and re-click the order
-        console.log(`[SparkP2P] Not on order detail — navigating back and clicking order...`);
-        await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
-          { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 2500));
-        const reClicked = await clickOrderWithMouse(page, activeOrderNumber);
-        if (!reClicked) {
-          console.log(`[SparkP2P] Could not re-click order ${activeOrderNumber}`);
-          return;
-        }
-        await new Promise(r => setTimeout(r, 4000));
-      }
-
-      // Send confirmation message to buyer in chat
-      await sendChatMessage(page, 'I have received your payment. Releasing crypto in a short while.');
-      await new Promise(r => setTimeout(r, 1000));
-
-      // Scroll to bottom so Payment Received button is visible
-      await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
-      await new Promise(r => setTimeout(r, 1000));
-
-      // Click Payment Received directly on the order detail page
-      const clicked = await clickButton(page, 'Payment Received', 'payment received');
-      console.log(`[SparkP2P] Payment Received clicked: ${clicked}`);
-      await new Promise(r => setTimeout(r, 2000));
-
-      // Continue the full release flow (confirm modal, TOTP, email OTP, etc.)
-      await releaseWithVision(page, activeOrderNumber, {});
+    // ── ORDER COMPLETE ──────────────────────────────────────────────────────
+    if (screen === 'order_complete') {
+      console.log(`[SparkP2P] ✅ Order ${orderNum} COMPLETED`);
       codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
       const balances = await scanWalletBalances(page);
       await uploadBalances(balances);
-    } else {
-      console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed — asking buyer for payment method`);
-      if (codeFallbackAskedForOrder !== activeOrderNumber) {
-        codeFallbackAskedForOrder = activeOrderNumber;
-        await sendChatMessage(page,
-          'Hello! I can see you have made your payment but I\'m having trouble reading the screenshot. Could you please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC)? I will verify it immediately. Thank you!'
-        );
+      return;
+    }
+
+    // ── STILL WAITING FOR BUYER PAYMENT ─────────────────────────────────────
+    if (screen === 'awaiting_payment' || screen === 'payment_processing') {
+      const elapsed = Math.round((Date.now() - loopStart) / 1000);
+      console.log(`[SparkP2P] Order ${orderNum} — waiting for buyer (${elapsed}s elapsed)`);
+      await new Promise(r => setTimeout(r, CHECK_WAIT_MS));
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 2000));
+      continue;
+    }
+
+    // ── BUYER HAS PAID — VERIFY THEN RELEASE ───────────────────────────────
+    if (screen === 'verify_payment') {
+      console.log(`[SparkP2P] Order ${orderNum} shows VERIFY PAYMENT — checking M-Pesa...`);
+
+      // Acknowledge buyer if they already sent proof in chat
+      const buyerAlreadySent = await page.evaluate(() => {
+        const vw = window.innerWidth;
+        const hasImage = Array.from(document.querySelectorAll('img')).some(img => {
+          const r = img.getBoundingClientRect();
+          return r.width > 60 && r.height > 60 && r.left > vw * 0.5
+            && r.top >= 0 && r.bottom <= window.innerHeight;
+        });
+        const hasCode = Array.from(document.querySelectorAll('*')).some(el => {
+          if (el.children.length > 0) return false;
+          const r = el.getBoundingClientRect();
+          if (r.left < vw * 0.5 || r.width === 0) return false;
+          return /\b[A-Z0-9]{10}\b/.test(el.textContent || '');
+        });
+        return hasImage || hasCode;
+      });
+
+      if (buyerAlreadySent && codeFallbackAskedForOrder !== orderNum) {
+        await sendChatMessage(page, 'I can see that you have already made your payment, please wait as I verify this payment. Thank you!');
+        await new Promise(r => setTimeout(r, 1000));
+      }
+
+      const verified = await verifyMpesaPayment(orderNum, activeOrderFiatAmount || info.fiat_amount_kes, page);
+      if (verified) {
+        console.log(`[SparkP2P] ✅ M-Pesa confirmed — releasing`);
+        await page.keyboard.press('Escape').catch(() => {});
+        await new Promise(r => setTimeout(r, 800));
+
+        // Ensure we're still on the order detail page after verification
+        if (!page.url().includes('fiatOrderDetail')) {
+          await page.goto(
+            `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNum}`,
+            { waitUntil: 'domcontentloaded', timeout: 15000 }
+          ).catch(() => {});
+          await new Promise(r => setTimeout(r, 3000));
+        }
+
+        await sendChatMessage(page, 'I have received your payment. Releasing crypto in a short while.');
+        await new Promise(r => setTimeout(r, 1000));
+        await clickButton(page, 'Payment Received', 'payment received');
+        await new Promise(r => setTimeout(r, 2000));
+        await releaseWithVision(page, orderNum, {});
+        codeFallbackAskedForOrder = null;
+        activeOrderNumber = null; activeOrderFiatAmount = 0;
+        const balances = await scanWalletBalances(page);
+        await uploadBalances(balances);
+        return;
       } else {
-        console.log(`[SparkP2P] Already asked buyer for code — waiting silently for response`);
+        // Ask buyer for code once, then wait
+        if (codeFallbackAskedForOrder !== orderNum) {
+          codeFallbackAskedForOrder = orderNum;
+          await sendChatMessage(page,
+            'Hello! I can see you have made your payment but I\'m having trouble reading the screenshot. Could you please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC)? I will verify it immediately. Thank you!'
+          );
+        } else {
+          console.log(`[SparkP2P] Waiting for buyer to type M-Pesa code...`);
+        }
+        await new Promise(r => setTimeout(r, CHECK_WAIT_MS));
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
       }
     }
-    return;
-  }
 
-  // Mid-release states — jump straight into vision release loop
-  if (['confirm_release_modal','passkey_failed','security_verification','totp_input','email_otp_input'].includes(screen)) {
-    console.log(`[SparkP2P] Order ${activeOrderNumber} mid-release (${screen}) — continuing`);
-    await releaseWithVision(page, activeOrderNumber, {});
-    activeOrderNumber = null; activeOrderFiatAmount = 0;
-    return;
-  }
-
-  // DOM text fallback when vision returns unknown
-  const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
-  const lower = pageText.toLowerCase();
-  if (lower.includes('cancelled') || lower.includes('canceled')) {
-    console.log(`[SparkP2P] Order ${activeOrderNumber} CANCELLED`);
-    await fetch(`${API_BASE}/ext/report-orders`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [activeOrderNumber] }),
-    }).catch(() => {});
-    activeOrderNumber = null; activeOrderFiatAmount = 0;
-    return;
-  }
-  if (lower.includes('verify payment') || lower.includes('payment received') || lower.includes('confirm payment')) {
-    console.log(`[SparkP2P] DOM text indicates payment received — checking M-Pesa`);
-    const verified = await verifyMpesaPayment(activeOrderNumber, activeOrderFiatAmount, page);
-    if (verified) {
-      await page.keyboard.press('Escape').catch(() => {});
-      await new Promise(r => setTimeout(r, 1000));
-      await clickButton(page, 'Payment Received', 'payment received');
-      await new Promise(r => setTimeout(r, 2000));
-      await releaseWithVision(page, activeOrderNumber, {});
+    // ── MID-RELEASE STATES — continue vision loop immediately ───────────────
+    if (['confirm_release_modal','passkey_failed','security_verification','totp_input','email_otp_input'].includes(screen)) {
+      console.log(`[SparkP2P] Order ${orderNum} mid-release (${screen}) — continuing`);
+      await releaseWithVision(page, orderNum, {});
       codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
-    } else {
-      console.log(`[SparkP2P] ⚠️ M-Pesa NOT confirmed (DOM fallback) — asking buyer`);
-      if (codeFallbackAskedForOrder !== activeOrderNumber) {
-        codeFallbackAskedForOrder = activeOrderNumber;
-        await sendChatMessage(page,
-          'Hello! I can see you have made your payment but I\'m having trouble reading the screenshot. Could you please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC)? I will verify it immediately. Thank you!'
-        );
+      return;
+    }
+
+    // ── DOM TEXT FALLBACK (Vision returned unknown) ──────────────────────────
+    const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
+    const lower = pageText.toLowerCase();
+
+    if (lower.includes('cancelled') || lower.includes('canceled')) {
+      console.log(`[SparkP2P] Order ${orderNum} CANCELLED`);
+      await fetch(`${API_BASE}/ext/report-orders`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [orderNum] }),
+      }).catch(() => {});
+      codeFallbackAskedForOrder = null;
+      activeOrderNumber = null; activeOrderFiatAmount = 0;
+      return;
+    }
+
+    if (lower.includes('order completed') || lower.includes('sale successful') || lower.includes('released')) {
+      console.log(`[SparkP2P] Order ${orderNum} COMPLETED (DOM text)`);
+      codeFallbackAskedForOrder = null;
+      activeOrderNumber = null; activeOrderFiatAmount = 0;
+      const balances = await scanWalletBalances(page);
+      await uploadBalances(balances);
+      return;
+    }
+
+    if (lower.includes('verify payment') || lower.includes('payment received') || lower.includes('confirm payment')) {
+      const verified = await verifyMpesaPayment(orderNum, activeOrderFiatAmount, page);
+      if (verified) {
+        await page.keyboard.press('Escape').catch(() => {});
+        await new Promise(r => setTimeout(r, 1000));
+        await clickButton(page, 'Payment Received', 'payment received');
+        await new Promise(r => setTimeout(r, 2000));
+        await releaseWithVision(page, orderNum, {});
+        codeFallbackAskedForOrder = null;
+        activeOrderNumber = null; activeOrderFiatAmount = 0;
+        return;
       } else {
-        console.log(`[SparkP2P] Already asked buyer for code (DOM path) — waiting silently`);
+        if (codeFallbackAskedForOrder !== orderNum) {
+          codeFallbackAskedForOrder = orderNum;
+          await sendChatMessage(page,
+            'Hello! I can see you have made your payment but I\'m having trouble reading the screenshot. Could you please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC)? I will verify it immediately. Thank you!'
+          );
+        } else {
+          console.log(`[SparkP2P] Already asked buyer for code (DOM path) — waiting`);
+        }
       }
     }
-    return;
+
+    // Unknown state — wait and reload
+    console.log(`[SparkP2P] Order ${orderNum} state unclear (${screen}) — reloading in ${CHECK_WAIT_MS / 1000}s`);
+    await new Promise(r => setTimeout(r, CHECK_WAIT_MS));
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2000));
   }
 
-  console.log(`[SparkP2P] Order ${activeOrderNumber} screen: ${screen} — rechecking next poll`);
+  console.log(`[SparkP2P] ⚠️ Order ${orderNum} monitoring timed out after 25 min`);
 }
 
 // ═══════════════════════════════════════════════════════════
