@@ -4120,50 +4120,109 @@ async function releaseWithVision(page, orderNumber, action) {
         if (mpesaVerified) {
           console.log(`[Vision] ✅ M-Pesa confirmed — ticking checkbox and releasing...`);
 
-          // Tick the checkbox
-          const cbClicked = await page.evaluate(() => {
-            // Strategy 1: find element containing "I have verified that I received" and click it
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-            while (walker.nextNode()) {
-              const el = walker.currentNode;
-              const tag = el.tagName;
-              if (tag !== 'INPUT' && tag !== 'SPAN' && tag !== 'DIV' && tag !== 'LABEL') continue;
-              const t = (el.textContent || '').trim().toLowerCase();
-              if (t.includes('i have verified that i received')) {
-                const cb = el.querySelector('input[type="checkbox"]') ||
-                           el.closest('label')?.querySelector('input[type="checkbox"]');
-                if (cb) { cb.click(); return 'input-in-label'; }
-                el.click();
-                return 'verified-text-element';
-              }
+          // ── Vision-guided checkbox click ──────────────────────────────────
+          // DOM .click() doesn't trigger React synthetic events on Binance's checkbox.
+          // Use Vision to locate the checkbox visually and mouse.click() it.
+          const cbSS = await page.screenshot({ type: 'jpeg', quality: 90 });
+          let cbClicked = false;
+          try {
+            const cbResp = await anthropic.messages.create({
+              model: 'claude-opus-4-5',
+              max_tokens: 100,
+              messages: [{
+                role: 'user',
+                content: [{
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/jpeg', data: cbSS.toString('base64') }
+                }, {
+                  type: 'text',
+                  text: `This is a Binance P2P "Received payment in your account?" confirmation modal.
+Find the square CHECKBOX (the small tick-box, NOT the label text) next to the text "I have verified that I received".
+Return ONLY a JSON object with its center pixel coordinates:
+{"x": <number>, "y": <number>}
+The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no explanation.`
+                }]
+              }]
+            });
+            const cbRaw = (cbResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+            const cbCoords = JSON.parse(cbRaw);
+            const cbX = parseFloat(cbCoords.x);
+            const cbY = parseFloat(cbCoords.y);
+            if (isFinite(cbX) && isFinite(cbY) && cbX > 0 && cbX < 1280 && cbY > 0 && cbY < 800) {
+              await page.mouse.click(cbX, cbY);
+              console.log(`[Vision] Checkbox clicked via mouse at (${cbX}, ${cbY})`);
+              cbClicked = true;
+            } else {
+              console.log(`[Vision] Checkbox coords invalid (${cbCoords.x}, ${cbCoords.y}) — falling back to DOM`);
             }
-            // Strategy 2: any visible checkbox
-            for (const sel of ['input[type="checkbox"]', '[role="checkbox"]', '[class*="checkbox"]']) {
-              for (const el of document.querySelectorAll(sel)) {
-                const r = el.getBoundingClientRect();
-                if (r.width > 0 && r.height > 0) { el.click(); return sel; }
+          } catch (e) {
+            console.log(`[Vision] Checkbox Vision error: ${e.message?.substring(0, 60)} — falling back to DOM`);
+          }
+
+          // DOM fallback if Vision failed
+          if (!cbClicked) {
+            await page.evaluate(() => {
+              for (const sel of ['input[type="checkbox"]', '[role="checkbox"]', '[class*="checkbox"]']) {
+                for (const el of document.querySelectorAll(sel)) {
+                  const r = el.getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) { el.click(); return; }
+                }
               }
-            }
-            return null;
-          });
-          console.log(`[Vision] Checkbox ticked via: ${cbClicked}`);
+            });
+            console.log(`[Vision] Checkbox clicked via DOM fallback`);
+          }
           await new Promise(r => setTimeout(r, 1200));
 
-          // Click Confirm Release — enabled after checkbox tick
-          const released = await page.evaluate(() => {
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-            while (walker.nextNode()) {
-              const el = walker.currentNode;
-              if (el.tagName !== 'BUTTON') continue;
-              const t = (el.textContent || '').trim().toLowerCase();
-              if (t === 'confirm release' || t.startsWith('confirm release')) {
-                el.click();
-                return true;
-              }
+          // ── Vision-guided Confirm Release click ───────────────────────────
+          const relSS = await page.screenshot({ type: 'jpeg', quality: 90 });
+          let released = false;
+          try {
+            const relResp = await anthropic.messages.create({
+              model: 'claude-opus-4-5',
+              max_tokens: 100,
+              messages: [{
+                role: 'user',
+                content: [{
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/jpeg', data: relSS.toString('base64') }
+                }, {
+                  type: 'text',
+                  text: `This is a Binance P2P confirmation modal. Find the "Confirm Release" button.
+Return ONLY a JSON object with its center pixel coordinates:
+{"x": <number>, "y": <number>}
+The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no explanation.`
+                }]
+              }]
+            });
+            const relRaw = (relResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+            const relCoords = JSON.parse(relRaw);
+            const relX = parseFloat(relCoords.x);
+            const relY = parseFloat(relCoords.y);
+            if (isFinite(relX) && isFinite(relY) && relX > 0 && relX < 1280 && relY > 0 && relY < 800) {
+              await page.mouse.click(relX, relY);
+              console.log(`[Vision] Confirm Release clicked via mouse at (${relX}, ${relY})`);
+              released = true;
+            } else {
+              console.log(`[Vision] Confirm Release coords invalid — falling back to DOM`);
             }
-            return false;
-          });
-          console.log(`[Vision] Confirm Release clicked: ${released}`);
+          } catch (e) {
+            console.log(`[Vision] Confirm Release Vision error: ${e.message?.substring(0, 60)} — falling back to DOM`);
+          }
+
+          // DOM fallback
+          if (!released) {
+            await page.evaluate(() => {
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+              while (walker.nextNode()) {
+                const el = walker.currentNode;
+                if (el.tagName !== 'BUTTON') continue;
+                const t = (el.textContent || '').trim().toLowerCase();
+                if (t === 'confirm release' || t.startsWith('confirm release')) { el.click(); return; }
+              }
+            });
+            console.log(`[Vision] Confirm Release clicked via DOM fallback`);
+          }
+          console.log(`[Vision] Confirm Release step done`);
           await new Promise(r => setTimeout(r, 2000));
 
         } else {
