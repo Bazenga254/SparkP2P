@@ -2021,65 +2021,40 @@ async function idleScan(page) {
       orderReminderSent.delete(order.orderNumber);
       codeFallbackAskedOrders.delete(order.orderNumber);
 
-    // ── Buyer has paid — verify M-Pesa and release ──────────────────────────
-    // IMPORTANT: rely on Vision ONLY for this branch. Do NOT use DOM text like
-    // "confirm payment" — Binance shows that button on EVERY sell order page
-    // even before the buyer has paid, causing false positives.
+    // ── Buyer has paid — click Payment Received to enter confirmation modal ───
+    // Binance shows "Verify Payment" ONLY after the buyer marks as paid on their side.
+    // We click "Payment Received" immediately — this just opens the modal.
+    // M-Pesa verification happens INSIDE releaseWithVision's confirm_release_modal
+    // handler: if verified → tick checkbox + Confirm Release; if not → Appeal.
     } else if (screen === 'verify_payment') {
-      console.log(`[SparkP2P] Order ${order.orderNumber} — Vision confirmed buyer paid, verifying M-Pesa...`);
-
-      // Only acknowledge if buyer actually sent proof in chat (M-Pesa code or screenshot)
-      const buyerSentProof = await page.evaluate(() => {
-        const vw = window.innerWidth;
-        // Look for M-Pesa confirmation code pattern (10 alphanumeric chars) in chat messages
-        const hasCode = Array.from(document.querySelectorAll('*')).some(el => {
-          if (el.children.length > 0) return false;
-          const r = el.getBoundingClientRect();
-          // Must be in the right (chat) half and visible
-          if (r.left < vw * 0.55 || r.width === 0 || r.height === 0) return false;
-          return /\b[A-Z]{2}[A-Z0-9]{8}\b/.test(el.textContent || ''); // M-Pesa code format
-        });
-        return hasCode;
+      console.log(`[SparkP2P] Order ${order.orderNumber} — buyer marked paid, clicking Payment Received...`);
+      activeOrderNumber = order.orderNumber;
+      activeOrderFiatAmount = order.totalPrice;
+      await sendChatMessage(page, 'I can see you have marked the payment. Please wait while I verify and process the release.');
+      await new Promise(r => setTimeout(r, 1000));
+      // Click "Payment Received" to open the confirmation modal
+      const clicked = await page.evaluate(() => {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+        while (walker.nextNode()) {
+          const el = walker.currentNode;
+          if (el.tagName !== 'BUTTON') continue;
+          const t = (el.textContent || '').trim().toLowerCase();
+          if (t === 'payment received' || t.startsWith('payment received')) {
+            el.click();
+            return true;
+          }
+        }
+        return false;
       });
-      if (buyerSentProof && !codeFallbackAskedOrders.has(order.orderNumber)) {
-        await sendChatMessage(page, 'I can see that you have already made your payment, please wait as I verify this payment. Thank you!');
-        await new Promise(r => setTimeout(r, 1000));
-      }
-
-      const verified = await verifyMpesaPayment(order.orderNumber, order.totalPrice || orderInfo.fiat_amount_kes, page);
-      if (verified) {
-        console.log(`[SparkP2P] ✅ M-Pesa confirmed for ${order.orderNumber} — releasing`);
-        activeOrderNumber = order.orderNumber;
-        activeOrderFiatAmount = order.totalPrice;
-        await page.keyboard.press('Escape').catch(() => {});
-        await new Promise(r => setTimeout(r, 800));
-        if (!page.url().includes('fiatOrderDetail')) {
-          await page.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
-            { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-          await new Promise(r => setTimeout(r, 3000));
-        }
-        await sendChatMessage(page, 'I have received your payment. Releasing crypto in a short while.');
-        await new Promise(r => setTimeout(r, 1000));
-        await clickButton(page, 'Payment Received', 'payment received');
-        await new Promise(r => setTimeout(r, 2000));
-        await releaseWithVision(page, order.orderNumber, {});
-        activeOrderNumber = null;
-        activeOrderFiatAmount = 0;
-        delete orderFirstSeenAt[order.orderNumber];
-        codeFallbackAskedOrders.delete(order.orderNumber);
-        orderReminderSent.delete(order.orderNumber);
-      } else {
-        // Can't read screenshot — ask buyer once, then move on to other orders
-        if (!codeFallbackAskedOrders.has(order.orderNumber)) {
-          codeFallbackAskedOrders.add(order.orderNumber);
-          await sendChatMessage(page,
-            'Hello! I can see you have made your payment but I\'m having trouble reading the screenshot. Could you please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC)? I will verify it immediately. Thank you!'
-          );
-        } else {
-          console.log(`[SparkP2P] Already asked ${order.orderNumber} for code — checking other orders`);
-        }
-        // Continue to next order — don't block
-      }
+      console.log(`[SparkP2P] Payment Received button clicked: ${clicked}`);
+      await new Promise(r => setTimeout(r, 2000));
+      // Now let releaseWithVision handle the modal + M-Pesa verification + security
+      await releaseWithVision(page, order.orderNumber, {});
+      activeOrderNumber = null;
+      activeOrderFiatAmount = 0;
+      delete orderFirstSeenAt[order.orderNumber];
+      codeFallbackAskedOrders.delete(order.orderNumber);
+      orderReminderSent.delete(order.orderNumber);
 
     // ── Mid-release state ───────────────────────────────────────────────────
     } else if (['confirm_release_modal','security_verification','totp_input','email_otp_input','passkey_failed'].includes(screen)) {
@@ -3820,60 +3795,86 @@ async function releaseWithVision(page, orderNumber, action) {
         continue;
       }
 
-      // ── Confirm release modal — tick checkbox then click Confirm Release ──
+      // ── Confirm release modal — verify M-Pesa, tick checkbox, Confirm Release ──
       // Modal title: "Received payment in your account?"
-      // Checkbox label: "I have verified that I received KSh [AMOUNT] from the buyer - [NAME]"
-      // "Confirm Release" button is greyed out until checkbox is ticked.
+      // Checkbox: "I have verified that I received KSh [AMOUNT] from the buyer - [NAME]"
+      // Flow: verify M-Pesa → if confirmed tick + release; if not → Appeal
       if (screen === 'confirm_release_modal') {
-        console.log('[Vision] Confirm release modal detected — ticking checkbox...');
+        console.log(`[Vision] Confirm release modal — verifying M-Pesa for order ${orderNumber}...`);
 
-        const cbClicked = await page.evaluate(() => {
-          // Strategy 1: find checkbox near "I have verified" text
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-          while (walker.nextNode()) {
-            const el = walker.currentNode;
-            const tag = el.tagName;
-            if (tag !== 'INPUT' && tag !== 'SPAN' && tag !== 'DIV' && tag !== 'LABEL') continue;
-            const t = (el.textContent || '').trim();
-            if (t.toLowerCase().includes('i have verified that i received')) {
-              // Click the element itself or the nearest input[type=checkbox] ancestor/sibling
-              const cb = el.querySelector('input[type="checkbox"]') ||
-                         el.closest('label')?.querySelector('input[type="checkbox"]');
-              if (cb) { cb.click(); return 'input-in-label'; }
-              el.click();
-              return 'verified-text-element';
-            }
-          }
-          // Strategy 2: any visible checkbox
-          const selectors = ['input[type="checkbox"]', '[role="checkbox"]', '[class*="checkbox"]'];
-          for (const sel of selectors) {
-            for (const el of document.querySelectorAll(sel)) {
-              const r = el.getBoundingClientRect();
-              if (r.width > 0 && r.height > 0) { el.click(); return sel; }
-            }
-          }
-          return null;
-        });
+        const mpesaVerified = await verifyMpesaPayment(orderNumber, activeOrderFiatAmount, page);
 
-        console.log(`[Vision] Checkbox ticked via: ${cbClicked}`);
-        await new Promise(r => setTimeout(r, 1200));
+        if (mpesaVerified) {
+          console.log(`[Vision] ✅ M-Pesa confirmed — ticking checkbox and releasing...`);
 
-        // Click Confirm Release — button enables after checkbox tick
-        const released = await page.evaluate(() => {
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-          while (walker.nextNode()) {
-            const el = walker.currentNode;
-            if (el.tagName !== 'BUTTON') continue;
-            const t = (el.textContent || '').trim().toLowerCase();
-            if (t === 'confirm release' || t.startsWith('confirm release')) {
-              el.click();
-              return true;
+          // Tick the checkbox
+          const cbClicked = await page.evaluate(() => {
+            // Strategy 1: find element containing "I have verified that I received" and click it
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+            while (walker.nextNode()) {
+              const el = walker.currentNode;
+              const tag = el.tagName;
+              if (tag !== 'INPUT' && tag !== 'SPAN' && tag !== 'DIV' && tag !== 'LABEL') continue;
+              const t = (el.textContent || '').trim().toLowerCase();
+              if (t.includes('i have verified that i received')) {
+                const cb = el.querySelector('input[type="checkbox"]') ||
+                           el.closest('label')?.querySelector('input[type="checkbox"]');
+                if (cb) { cb.click(); return 'input-in-label'; }
+                el.click();
+                return 'verified-text-element';
+              }
             }
-          }
-          return false;
-        });
-        console.log(`[Vision] Confirm Release clicked: ${released}`);
-        await new Promise(r => setTimeout(r, 2000));
+            // Strategy 2: any visible checkbox
+            for (const sel of ['input[type="checkbox"]', '[role="checkbox"]', '[class*="checkbox"]']) {
+              for (const el of document.querySelectorAll(sel)) {
+                const r = el.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) { el.click(); return sel; }
+              }
+            }
+            return null;
+          });
+          console.log(`[Vision] Checkbox ticked via: ${cbClicked}`);
+          await new Promise(r => setTimeout(r, 1200));
+
+          // Click Confirm Release — enabled after checkbox tick
+          const released = await page.evaluate(() => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+            while (walker.nextNode()) {
+              const el = walker.currentNode;
+              if (el.tagName !== 'BUTTON') continue;
+              const t = (el.textContent || '').trim().toLowerCase();
+              if (t === 'confirm release' || t.startsWith('confirm release')) {
+                el.click();
+                return true;
+              }
+            }
+            return false;
+          });
+          console.log(`[Vision] Confirm Release clicked: ${released}`);
+          await new Promise(r => setTimeout(r, 2000));
+
+        } else {
+          // M-Pesa NOT verified — appeal the order instead of releasing
+          console.log(`[Vision] ❌ M-Pesa NOT confirmed for ${orderNumber} — clicking Appeal`);
+          await sendChatMessage(page, 'I was unable to verify your M-Pesa payment in my account. I have raised an appeal so our team can review this order. Please provide your M-Pesa transaction code to resolve quickly.');
+          await new Promise(r => setTimeout(r, 1000));
+          const appealed = await page.evaluate(() => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+            while (walker.nextNode()) {
+              const el = walker.currentNode;
+              if (el.tagName !== 'BUTTON') continue;
+              const t = (el.textContent || '').trim().toLowerCase();
+              if (t === 'appeal' || t.startsWith('appeal after')) {
+                el.click();
+                return true;
+              }
+            }
+            return false;
+          });
+          console.log(`[Vision] Appeal clicked: ${appealed}`);
+          await new Promise(r => setTimeout(r, 2000));
+          return { success: false, error: 'mpesa_unverified_appealed' };
+        }
         continue;
       }
 
