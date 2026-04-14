@@ -2050,7 +2050,12 @@ async function idleScan(page) {
         activeOrderFiatAmount = order.totalPrice;
         break;
       } else if (orderInfo.screen === 'order_complete') {
-        console.log(`[SparkP2P] Order ${order.orderNumber} already completed`);
+        console.log(`[SparkP2P] Order ${order.orderNumber} already completed — reporting release`);
+        await fetch(`${API_BASE}/ext/report-release`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ order_number: order.orderNumber, success: true }),
+        }).catch(() => {});
       } else if (orderInfo.screen === 'confirm_release_modal' || orderInfo.screen === 'security_verification' ||
                  orderInfo.screen === 'totp_input' || orderInfo.screen === 'email_otp_input' || orderInfo.screen === 'passkey_failed') {
         // Already mid-release — jump straight into vision loop
@@ -2201,7 +2206,12 @@ async function monitorActiveOrder(page) {
 
     // ── ORDER COMPLETE ──────────────────────────────────────────────────────
     if (screen === 'order_complete') {
-      console.log(`[SparkP2P] ✅ Order ${orderNum} COMPLETED`);
+      console.log(`[SparkP2P] ✅ Order ${orderNum} COMPLETED — reporting release`);
+      await fetch(`${API_BASE}/ext/report-release`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number: orderNum, success: true }),
+      }).catch(() => {});
       codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
       const balances = await scanWalletBalances(page);
@@ -2312,7 +2322,12 @@ async function monitorActiveOrder(page) {
     }
 
     if (lower.includes('order completed') || lower.includes('sale successful') || lower.includes('released')) {
-      console.log(`[SparkP2P] Order ${orderNum} COMPLETED (DOM text)`);
+      console.log(`[SparkP2P] Order ${orderNum} COMPLETED (DOM text) — reporting release`);
+      await fetch(`${API_BASE}/ext/report-release`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number: orderNum, success: true }),
+      }).catch(() => {});
       codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
       const balances = await scanWalletBalances(page);
