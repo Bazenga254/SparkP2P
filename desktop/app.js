@@ -1711,17 +1711,22 @@ Return ONLY valid JSON:
   }
 }
 
-async function verifyMpesaPayment(orderNumber, fiatAmount, page = null) {
+async function verifyMpesaPayment(orderNumber, fiatAmount, page = null, preExtracted = null) {
   if (!token) return false;
   try {
-    // Extract M-Pesa codes and bank refs from the chat panel if page is available
+    // Use pre-extracted codes if provided (e.g. read before modal covered the chat).
+    // Only re-scan the chat from page if no pre-extracted codes were supplied.
     let mpesaCodes = [], bankRefs = [];
-    if (page) {
+    if (preExtracted) {
+      mpesaCodes = preExtracted.mpesaCodes || [];
+      bankRefs = preExtracted.bankRefs || [];
+      console.log(`[SparkP2P] Using pre-extracted codes — M-Pesa: [${mpesaCodes.join(', ')}] Bank: [${bankRefs.join(', ')}]`);
+    } else if (page) {
       const extracted = await extractMpesaCodesFromChat(page);
       mpesaCodes = extracted.mpesaCodes || [];
       bankRefs = extracted.bankRefs || [];
-      if (mpesaCodes.length) console.log(`[SparkP2P] M-Pesa codes: ${mpesaCodes.join(', ')}`);
-      if (bankRefs.length) console.log(`[SparkP2P] Bank refs: ${bankRefs.join(', ')}`);
+      if (mpesaCodes.length) console.log(`[SparkP2P] M-Pesa codes from chat: ${mpesaCodes.join(', ')}`);
+      if (bankRefs.length) console.log(`[SparkP2P] Bank refs from chat: ${bankRefs.join(', ')}`);
     }
     const res = await fetch(`${API_BASE}/ext/verify-payment`, {
       method: 'POST',
@@ -2027,11 +2032,13 @@ async function idleScan(page) {
     // M-Pesa verification happens INSIDE releaseWithVision's confirm_release_modal
     // handler: if verified → tick checkbox + Confirm Release; if not → Appeal.
     } else if (screen === 'verify_payment') {
-      console.log(`[SparkP2P] Order ${order.orderNumber} — buyer marked paid, clicking Payment Received...`);
+      console.log(`[SparkP2P] Order ${order.orderNumber} — buyer marked paid, reading chat BEFORE opening modal...`);
       activeOrderNumber = order.orderNumber;
       activeOrderFiatAmount = order.totalPrice;
-      // Click the button FIRST — sending a chat message before this causes the page
-      // to scroll/re-render and the button becomes unreachable.
+      // Read chat for M-Pesa codes/screenshots NOW — the modal covers the chat once opened.
+      const preChatCodes = await extractMpesaCodesFromChat(page);
+      console.log(`[SparkP2P] Pre-click chat scan: ${preChatCodes.mpesaCodes.length} M-Pesa codes, ${preChatCodes.bankRefs.length} bank refs`);
+      // Click the button — no chat message before this (page scroll breaks button)
       const clicked = await page.evaluate(() => {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
         while (walker.nextNode()) {
@@ -2047,9 +2054,9 @@ async function idleScan(page) {
       });
       console.log(`[SparkP2P] Payment Received button clicked: ${clicked}`);
       await new Promise(r => setTimeout(r, 2000));
-      // releaseWithVision handles: modal detection → M-Pesa verification → checkbox → Confirm Release → security
-      // No pre-emptive message — only send messages based on actual verification outcome
-      await releaseWithVision(page, order.orderNumber, {});
+      // Pass pre-extracted chat codes so releaseWithVision doesn't need to re-read
+      // the chat when the modal is covering it.
+      await releaseWithVision(page, order.orderNumber, { preChatCodes });
       activeOrderNumber = null;
       activeOrderFiatAmount = 0;
       delete orderFirstSeenAt[order.orderNumber];
@@ -3801,8 +3808,9 @@ async function releaseWithVision(page, orderNumber, action) {
       // Flow: verify M-Pesa → if confirmed tick + release; if not → Appeal
       if (screen === 'confirm_release_modal') {
         console.log(`[Vision] Confirm release modal — verifying M-Pesa for order ${orderNumber}...`);
-
-        const mpesaVerified = await verifyMpesaPayment(orderNumber, activeOrderFiatAmount, page);
+        // Use codes extracted before the modal opened (modal covers chat panel).
+        // Pass null for page so it doesn't try to re-scan the hidden chat.
+        const mpesaVerified = await verifyMpesaPayment(orderNumber, activeOrderFiatAmount, null, action.preChatCodes || null);
 
         if (mpesaVerified) {
           console.log(`[Vision] ✅ M-Pesa confirmed — ticking checkbox and releasing...`);
