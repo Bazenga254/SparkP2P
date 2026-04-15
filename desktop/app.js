@@ -1757,60 +1757,13 @@ Return ONLY valid JSON.` },
     }
     if (!readResult) console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80));
 
-    // ── 7. Close the lightbox — Escape first (most reliable), Vision fallback ──
-    console.log('[Vision] Closing lightbox — pressing Escape...');
-    await page.keyboard.press('Escape');
-    await new Promise(r => setTimeout(r, 1500));
-
-    // Verify it closed — DOM check for large fixed overlay
-    const stillOpen = await page.evaluate(() => {
-      for (const el of document.querySelectorAll('*')) {
-        try {
-          const s = window.getComputedStyle(el);
-          if ((s.position === 'fixed' || s.position === 'absolute') && parseInt(s.zIndex || 0) > 50) {
-            const r = el.getBoundingClientRect();
-            if (r.width > window.innerWidth * 0.5 && r.height > window.innerHeight * 0.5) return true;
-          }
-        } catch (_) {}
-      }
-      return false;
-    }).catch(() => false);
-
-    if (stillOpen) {
-      console.log('[Vision] Lightbox still open — asking Vision for close button...');
-      try {
-        const closeSS = await page.screenshot({ type: 'jpeg', quality: 85 });
-        const closeResp = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({
-            model: 'claude-haiku-4-5-20251001',
-            max_tokens: 60,
-            messages: [{ role: 'user', content: [
-              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: closeSS.toString('base64') } },
-              { type: 'text', text: 'There is an image lightbox open. Find the X or close button coordinates. Return ONLY JSON: {"x": <integer>, "y": <integer>}' },
-            ]}],
-          }),
-        });
-        const closeData = await closeResp.json();
-        const closeRaw = (closeData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
-        const closeMatch = closeRaw.match(/\{[^}]*"x"\s*:\s*\d+[^}]*"y"\s*:\s*\d+[^}]*\}/);
-        if (closeMatch) {
-          const cc = JSON.parse(closeMatch[0]);
-          const cx = parseFloat(cc.x), cy = parseFloat(cc.y);
-          if (isFinite(cx) && isFinite(cy) && cx > 0 && cy > 0) {
-            console.log(`[Vision] Clicking close button at (${Math.round(cx)}, ${Math.round(cy)})`);
-            await page.mouse.click(cx, cy);
-            await new Promise(r => setTimeout(r, 1200));
-          }
-        }
-      } catch (_) {}
-      // Final fallback: Escape again
-      await page.keyboard.press('Escape');
-      await new Promise(r => setTimeout(r, 1000));
-    }
-    console.log('[Vision] Lightbox closed');
-    await new Promise(r => setTimeout(r, 500));
+    // ── 7. Close lightbox by reloading the page — most reliable approach ─────
+    // Escape is unreliable for Binance's lightbox. Page reload guarantees all
+    // overlays are destroyed and we get a clean DOM for the next steps.
+    console.log('[Vision] Closing lightbox — reloading page for clean state...');
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2000));
+    console.log('[Vision] Page reloaded — lightbox destroyed');
 
     if (readResult?.found && readResult.code && /^[A-Z0-9]{10}$/.test(readResult.code)) {
       console.log(`[Vision] ✅ M-Pesa code extracted: ${readResult.code} (amount: KES ${readResult.amount})`);
@@ -2336,26 +2289,9 @@ async function idleScan(page) {
         })();
         await new Promise(r => setTimeout(r, 1000)); // extra settle time
 
-        // 1. Send message to buyer — Midscene finds "Enter message here" and types
+        // 1. Send message to buyer — Vision finds "Enter message here" and types
         const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
-        try {
-          console.log(`[Midscene] Locating "Enter message here" box...`);
-          const agent = await getMidsceneAgent(page);
-          await agent.aiTap('the "Enter message here" input box at the bottom of the chat panel on the right side');
-          await new Promise(r => setTimeout(r, 800));
-          await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
-          await page.keyboard.press('Backspace');
-          await new Promise(r => setTimeout(r, 300));
-          clipboard.writeText(chatMsg);
-          await page.keyboard.down('Control'); await page.keyboard.press('KeyV'); await page.keyboard.up('Control');
-          await new Promise(r => setTimeout(r, 600));
-          await page.keyboard.press('Enter');
-          await new Promise(r => setTimeout(r, 1000));
-          console.log(`[Midscene] ✅ Message sent successfully`);
-        } catch (e) {
-          console.log(`[Midscene] ⚠ Chat error: ${e.message?.substring(0, 80)}`);
-          console.log(`[Midscene] Proceeding to release without sending message`);
-        }
+        await sendChatMessage(page, chatMsg);
         await new Promise(r => setTimeout(r, 500));
         if (pauseNavigation) break;
 
@@ -3912,7 +3848,7 @@ async function clickButton(page, ...textOptions) {
   return false;
 }
 
-// ── Send a chat message on an order page — Midscene handles Vision + click ───
+// ── Send a chat message on an order page — Midscene finds input, clipboard pastes ─
 async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); }
 async function sendChatMessage(page, message) {
   try {
@@ -3920,14 +3856,13 @@ async function sendChatMessage(page, message) {
     await page.keyboard.press('Escape').catch(() => {});
     await new Promise(r => setTimeout(r, 1000));
 
-    console.log(`[Midscene] Locating "Enter message here" box and typing message...`);
+    // Midscene uses Vision to find and click "Enter message here" on the right side
+    console.log('[Midscene] Locating "Enter message here" input box...');
     const agent = await getMidsceneAgent(page);
-
-    // Click the chat input
-    await agent.aiTap('the "Enter message here" input box at the bottom of the chat panel on the right side');
+    await agent.aiTap('the "Enter message here" input box at the bottom of the chat panel on the right side of the screen');
     await new Promise(r => setTimeout(r, 800));
 
-    // Clear and paste message via clipboard
+    // Paste via clipboard — most reliable for React controlled inputs
     await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
     await new Promise(r => setTimeout(r, 300));
@@ -4038,24 +3973,118 @@ async function analyzePageWithVision(page) {
   }
 }
 
+// ── Midscene ↔ Anthropic proxy ───────────────────────────────────────────────
+// Midscene only supports OpenAI SDK. This local HTTP proxy converts OpenAI-format
+// chat completion requests into Anthropic Messages API calls so Midscene can
+// use Claude with your existing API key — no OpenRouter needed.
+const MIDSCENE_PROXY_PORT = 9224;
+let _midsceneProxyServer = null;
+
+function startMidsceneAnthropicProxy() {
+  if (_midsceneProxyServer) return;
+  _midsceneProxyServer = http.createServer((req, res) => {
+    if (req.method !== 'POST' || !req.url.endsWith('/chat/completions')) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Not found', type: 'invalid_request_error' } }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString(); });
+    req.on('end', async () => {
+      try {
+        const oaiReq = JSON.parse(body);
+        // Extract system message and convert remaining messages
+        let systemContent = null;
+        const anthropicMessages = [];
+        for (const msg of oaiReq.messages || []) {
+          if (msg.role === 'system') {
+            systemContent = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+            continue;
+          }
+          let content = msg.content;
+          if (Array.isArray(content)) {
+            content = content.map(part => {
+              if (part.type === 'text') return { type: 'text', text: part.text };
+              if (part.type === 'image_url') {
+                // OpenAI vision format: data:image/jpeg;base64,...
+                const url = part.image_url?.url || '';
+                const m = url.match(/^data:([^;]+);base64,(.+)$/s);
+                if (m) return { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } };
+                return { type: 'text', text: `[Image: ${url.substring(0, 60)}]` };
+              }
+              return { type: 'text', text: typeof part === 'string' ? part : JSON.stringify(part) };
+            });
+          }
+          anthropicMessages.push({ role: msg.role === 'assistant' ? 'assistant' : 'user', content });
+        }
+        const anthropicReq = {
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: oaiReq.max_tokens || 2048,
+          messages: anthropicMessages,
+          ...(systemContent && { system: systemContent }),
+        };
+        const apiResp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify(anthropicReq),
+        });
+        const anthropicData = await apiResp.json();
+        if (anthropicData.error) {
+          res.writeHead(apiResp.status || 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: anthropicData.error.message || 'Anthropic error', type: 'api_error' } }));
+          return;
+        }
+        // Convert Anthropic response → OpenAI format
+        const oaiResp = {
+          id: `chatcmpl-${Date.now()}`,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: 'claude-haiku-4-5-20251001',
+          choices: [{ index: 0, message: { role: 'assistant', content: anthropicData.content?.[0]?.text || '' }, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: anthropicData.usage?.input_tokens || 0,
+            completion_tokens: anthropicData.usage?.output_tokens || 0,
+            total_tokens: (anthropicData.usage?.input_tokens || 0) + (anthropicData.usage?.output_tokens || 0),
+          },
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(oaiResp));
+      } catch (e) {
+        console.error('[MidsceneProxy] Error:', e.message?.substring(0, 80));
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: e.message, type: 'server_error' } }));
+      }
+    });
+  });
+  _midsceneProxyServer.listen(MIDSCENE_PROXY_PORT, '127.0.0.1', () => {
+    console.log(`[MidsceneProxy] ✅ OpenAI→Anthropic proxy on port ${MIDSCENE_PROXY_PORT}`);
+  });
+  _midsceneProxyServer.on('error', err => {
+    if (err.code === 'EADDRINUSE') console.log(`[MidsceneProxy] Port ${MIDSCENE_PROXY_PORT} already in use — OK`);
+    else console.error('[MidsceneProxy] Server error:', err.message);
+  });
+}
+
 // ── Midscene agent helper — Vision + Puppeteer collaboration ─────────────────
-// Returns a PuppeteerAgent bound to the given page, configured with our API key.
+// PuppeteerAgent routes calls through our local OpenAI→Anthropic proxy.
 // Usage: const agent = await getMidsceneAgent(page);
-//        await agent.aiTap('click "My Passkeys Are Not Available"');
-//        await agent.aiInput('type "hello" into the "Enter message here" box');
-//        const code = await agent.aiQuery('{code: string}');
+//        await agent.aiTap('"Enter message here" input box');
+//        await agent.aiTap('"My Passkeys Are Not Available" link');
 let _midsceneModule = null;
 async function getMidsceneAgent(page) {
   if (!_midsceneModule) {
+    startMidsceneAnthropicProxy();
     _midsceneModule = await import('@midscene/web/puppeteer');
+    const { overrideAIConfig } = _midsceneModule;
+    // Point Midscene's OpenAI SDK to our local proxy which speaks Anthropic internally
+    overrideAIConfig({
+      OPENAI_API_KEY: 'sk-midscene-proxy',          // dummy key — proxy handles auth
+      OPENAI_BASE_URL: `http://127.0.0.1:${MIDSCENE_PROXY_PORT}/v1`,
+      MIDSCENE_MODEL_NAME: 'claude-haiku-4-5-20251001',
+    });
+    console.log('[Midscene] Configured via local OpenAI→Anthropic proxy');
   }
-  const { PuppeteerAgent, overrideAIConfig } = _midsceneModule;
-  // Configure Midscene to use our Anthropic key + Haiku model
-  overrideAIConfig({
-    apiKey: anthropicApiKey,
-    model: 'claude-haiku-4-5-20251001',
-    provider: 'anthropic',
-  });
+  const { PuppeteerAgent } = _midsceneModule;
   return new PuppeteerAgent(page);
 }
 
@@ -4380,15 +4409,13 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
         continue;
       }
 
-      // ── Passkey failed — Vision clicks "My Passkeys Are Not Available" ────────
+      // ── Passkey failed — Midscene clicks "My Passkeys Are Not Available" ────────
       if (screen === 'passkey_failed') {
-        console.log('[Vision] Passkey screen detected — taking screenshot to locate "My Passkeys Are Not Available"...');
+        console.log('[Midscene] Passkey screen — clicking "My Passkeys Are Not Available"...');
         await new Promise(r => setTimeout(r, 800));
-
         try {
-          console.log('[Midscene] Creating agent to click "My Passkeys Are Not Available"...');
           const agent = await getMidsceneAgent(page);
-          await agent.aiTap('"My Passkeys Are Not Available" link in the passkey dialog');
+          await agent.aiTap('"My Passkeys Are Not Available" link or button in the passkey verification dialog');
           console.log('[Midscene] ✅ "My Passkeys Are Not Available" clicked');
         } catch (e) {
           console.log(`[Midscene] Passkey click error: ${e.message?.substring(0, 80)}`);
