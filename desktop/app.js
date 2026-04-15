@@ -2348,7 +2348,20 @@ Format: {"x": <integer>, "y": <integer>}`;
 
           console.log(`[Vision] Clicking chat input at (${Math.round(cx)}, ${Math.round(cy)})...`);
           await page.mouse.click(cx, cy);
-          await new Promise(r => setTimeout(r, 1500)); // wait for focus to settle
+          await new Promise(r => setTimeout(r, 800));
+
+          // Force focus via DOM — mouse.click alone doesn't always trigger React focus
+          const focused = await page.evaluate((x, y) => {
+            const el = document.elementFromPoint(x, y);
+            if (!el) return 'no-element';
+            el.focus();
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            const tag = el.tagName;
+            const ce = el.getAttribute('contenteditable');
+            return `${tag}${ce ? '[ce=' + ce + ']' : ''}`;
+          }, cx, cy);
+          console.log(`[Vision] Focused element: ${focused}`);
+          await new Promise(r => setTimeout(r, 700));
 
           console.log(`[Vision] Clearing any existing text...`);
           await page.keyboard.down('Control');
@@ -3947,7 +3960,21 @@ Format: {"x": <integer>, "y": <integer>}`;
 
     console.log(`[Vision] Clicking chat input at (${Math.round(cx)}, ${Math.round(cy)})...`);
     await page.mouse.click(cx, cy);
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 800));
+
+    // Force focus on the element at those coordinates via DOM
+    const focused = await page.evaluate((x, y) => {
+      const el = document.elementFromPoint(x, y);
+      if (!el) return 'no-element';
+      el.focus();
+      // For contenteditable, also dispatch a click event so React registers it
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      const tag = el.tagName;
+      const ce = el.getAttribute('contenteditable');
+      return `${tag}${ce ? '[ce=' + ce + ']' : ''}`;
+    }, cx, cy);
+    console.log(`[Vision] Focused element: ${focused}`);
+    await new Promise(r => setTimeout(r, 700));
 
     console.log(`[Vision] Clearing any existing text and typing message...`);
     await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
