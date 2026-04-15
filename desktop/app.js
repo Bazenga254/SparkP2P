@@ -2336,85 +2336,25 @@ async function idleScan(page) {
         })();
         await new Promise(r => setTimeout(r, 1000)); // extra settle time
 
-        // 1. Send message to buyer — Vision locates the chat input box, clicks it, pastes, Enter
+        // 1. Send message to buyer — Midscene finds "Enter message here" and types
         const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
-        let chatSent = false;
         try {
-          console.log(`[Vision] Taking screenshot to find "Enter message here" box...`);
-          const chatSS = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: false });
-          const chatSSBase64 = chatSS.toString('base64');
-
-          const visionPrompt = `You are looking at a Binance P2P order page (1280x800 viewport).
-The page is split: LEFT side has order details, RIGHT side has a chat panel.
-
-Find the box that says "Enter message here" at the bottom of the RIGHT-side chat panel.
-It is a wide horizontal input bar showing the placeholder text "Enter message here".
-
-CRITICAL CONSTRAINTS:
-- x coordinate MUST be greater than 640 (right half of screen only)
-- y coordinate should be in the lower portion of the screen (typically 550-780)
-- Do NOT return coordinates for any dialog, popup, or left-side element
-- If you cannot see the chat input clearly, still return the best estimate for bottom-right area
-
-Return ONLY JSON: {"x": <integer above 640>, "y": <integer>}`;
-
-          console.log(`[Vision] Asking Claude Vision to find "Enter message here" box...`);
-          const visionRaw = await visionAsk(chatSSBase64, visionPrompt, 300);
-          console.log(`[Vision] Raw response: ${visionRaw}`);
-
-          // Extract JSON even if Vision adds extra text
-          const jsonMatch = visionRaw.match(/\{[^}]*"x"\s*:\s*\d+[^}]*"y"\s*:\s*\d+[^}]*\}/);
-          if (!jsonMatch) throw new Error(`Vision did not return valid JSON: ${visionRaw.substring(0, 100)}`);
-
-          const coords = JSON.parse(jsonMatch[0]);
-          const cx = parseFloat(coords.x), cy = parseFloat(coords.y);
-          console.log(`[Vision] Located chat input at (${Math.round(cx)}, ${Math.round(cy)})`);
-
-          if (!isFinite(cx) || !isFinite(cy) || cx <= 0 || cy <= 0) {
-            throw new Error(`Vision returned invalid coordinates: x=${cx}, y=${cy}`);
-          }
-          if (cx < 640) {
-            throw new Error(`Vision returned left-side coordinates (x=${Math.round(cx)}) — likely a dialog is covering the screen`);
-          }
-
-          console.log(`[Vision] Clicking chat input at (${Math.round(cx)}, ${Math.round(cy)})...`);
-          await page.mouse.click(cx, cy);
+          console.log(`[Midscene] Locating "Enter message here" box...`);
+          const agent = await getMidsceneAgent(page);
+          await agent.aiTap('the "Enter message here" input box at the bottom of the chat panel on the right side');
           await new Promise(r => setTimeout(r, 800));
-
-          // Force focus via DOM — mouse.click alone doesn't always trigger React focus
-          const focused = await page.evaluate((x, y) => {
-            const el = document.elementFromPoint(x, y);
-            if (!el) return 'no-element';
-            el.focus();
-            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-            const tag = el.tagName;
-            const ce = el.getAttribute('contenteditable');
-            return `${tag}${ce ? '[ce=' + ce + ']' : ''}`;
-          }, cx, cy);
-          console.log(`[Vision] Focused element: ${focused}`);
-          await new Promise(r => setTimeout(r, 700));
-
-          // Clear existing text
-          await page.keyboard.down('Control');
-          await page.keyboard.press('KeyA');
-          await page.keyboard.up('Control');
+          await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
           await page.keyboard.press('Backspace');
           await new Promise(r => setTimeout(r, 300));
-
-          console.log(`[Vision] Copying message to clipboard and pasting...`);
           clipboard.writeText(chatMsg);
           await page.keyboard.down('Control'); await page.keyboard.press('KeyV'); await page.keyboard.up('Control');
           await new Promise(r => setTimeout(r, 600));
-
-          console.log(`[Vision] Pressing Enter to send...`);
           await page.keyboard.press('Enter');
-          await new Promise(r => setTimeout(r, 1200));
-
-          chatSent = true;
-          console.log(`[Vision] ✅ Message sent successfully`);
+          await new Promise(r => setTimeout(r, 1000));
+          console.log(`[Midscene] ✅ Message sent successfully`);
         } catch (e) {
-          console.log(`[Vision] ⚠ Chat Vision error: ${e.message}`);
-          console.log(`[Vision] Proceeding to release without sending message`);
+          console.log(`[Midscene] ⚠ Chat error: ${e.message?.substring(0, 80)}`);
+          console.log(`[Midscene] Proceeding to release without sending message`);
         }
         await new Promise(r => setTimeout(r, 500));
         if (pauseNavigation) break;
@@ -3972,89 +3912,36 @@ async function clickButton(page, ...textOptions) {
   return false;
 }
 
-// ── Send a chat message on an order page — Vision locates the input ─────────
+// ── Send a chat message on an order page — Midscene handles Vision + click ───
 async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); }
 async function sendChatMessage(page, message) {
   try {
-    // Press Escape first to dismiss any dialogs/overlays before screenshotting
+    // Press Escape first to dismiss any dialogs/overlays
     await page.keyboard.press('Escape').catch(() => {});
     await new Promise(r => setTimeout(r, 1000));
 
-    console.log(`[Vision] Taking screenshot to find "Enter message here" box...`);
-    const ss = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: false });
-    const ssBase64 = ss.toString('base64');
+    console.log(`[Midscene] Locating "Enter message here" box and typing message...`);
+    const agent = await getMidsceneAgent(page);
 
-    const visionPrompt = `You are looking at a Binance P2P order page (1280x800 viewport).
-The page is split: LEFT side has order details, RIGHT side has a chat panel.
-
-Find the box that says "Enter message here" at the bottom of the RIGHT-side chat panel.
-It is a wide horizontal input bar showing the placeholder text "Enter message here".
-
-CRITICAL CONSTRAINTS:
-- x coordinate MUST be greater than 640 (right half of screen only)
-- y coordinate should be in the lower portion of the screen (typically 550-780)
-- Do NOT return coordinates for any dialog, popup, or left-side element
-- If you cannot see the chat input clearly, still return the best estimate for bottom-right area
-
-Return ONLY JSON: {"x": <integer above 640>, "y": <integer>}`;
-
-    console.log(`[Vision] Asking Claude Vision to find "Enter message here" box...`);
-    const visionRaw = await visionAsk(ssBase64, visionPrompt, 300);
-    console.log(`[Vision] Raw response: ${visionRaw}`);
-
-    const jsonMatch = visionRaw.match(/\{[^}]*"x"\s*:\s*\d+[^}]*"y"\s*:\s*\d+[^}]*\}/);
-    if (!jsonMatch) throw new Error(`Vision did not return valid JSON: ${visionRaw.substring(0, 100)}`);
-
-    const coords = JSON.parse(jsonMatch[0]);
-    const cx = parseFloat(coords.x), cy = parseFloat(coords.y);
-    console.log(`[Vision] Located chat input at (${Math.round(cx)}, ${Math.round(cy)})`);
-
-    // Validate: chat panel is always on the right half (x > 640)
-    if (!isFinite(cx) || !isFinite(cy) || cx <= 0 || cy <= 0) {
-      throw new Error(`Vision returned invalid coordinates: x=${cx}, y=${cy}`);
-    }
-    if (cx < 640) {
-      throw new Error(`Vision returned left-side coordinates (x=${Math.round(cx)}) — chat panel is on right side. Likely a dialog is covering the screen.`);
-    }
-
-    console.log(`[Vision] Clicking chat input at (${Math.round(cx)}, ${Math.round(cy)})...`);
-    await page.mouse.click(cx, cy);
+    // Click the chat input
+    await agent.aiTap('the "Enter message here" input box at the bottom of the chat panel on the right side');
     await new Promise(r => setTimeout(r, 800));
 
-    // Force focus on the element at those coordinates via DOM
-    const focused = await page.evaluate((x, y) => {
-      const el = document.elementFromPoint(x, y);
-      if (!el) return 'no-element';
-      el.focus();
-      // For contenteditable, also dispatch a click event so React registers it
-      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      const tag = el.tagName;
-      const ce = el.getAttribute('contenteditable');
-      return `${tag}${ce ? '[ce=' + ce + ']' : ''}`;
-    }, cx, cy);
-    console.log(`[Vision] Focused element: ${focused}`);
-    await new Promise(r => setTimeout(r, 700));
-
-    // Clear existing text
+    // Clear and paste message via clipboard
     await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
     await new Promise(r => setTimeout(r, 300));
-
-    // Copy message to clipboard and paste — more reliable than keyboard.type() in React inputs
-    console.log(`[Vision] Copying message to clipboard and pasting...`);
     clipboard.writeText(message);
     await page.keyboard.down('Control'); await page.keyboard.press('KeyV'); await page.keyboard.up('Control');
     await new Promise(r => setTimeout(r, 600));
-
-    console.log(`[Vision] Pressing Enter to send...`);
     await page.keyboard.press('Enter');
-    await new Promise(r => setTimeout(r, 1200));
+    await new Promise(r => setTimeout(r, 1000));
 
-    console.log(`[Vision] ✅ Message sent: "${message.substring(0, 60)}"`);
+    console.log(`[Midscene] ✅ Message sent: "${message.substring(0, 60)}"`);
     return true;
 
   } catch (e) {
-    console.error(`[Vision] sendChatMessage error: ${e.message?.substring(0, 100)}`);
+    console.error(`[Midscene] sendChatMessage error: ${e.message?.substring(0, 100)}`);
     return false;
   }
 }
@@ -4149,6 +4036,27 @@ async function analyzePageWithVision(page) {
     console.error('[Vision] analyzePageWithVision error:', e.message?.substring(0, 80));
     return { screen: 'unknown' };
   }
+}
+
+// ── Midscene agent helper — Vision + Puppeteer collaboration ─────────────────
+// Returns a PuppeteerAgent bound to the given page, configured with our API key.
+// Usage: const agent = await getMidsceneAgent(page);
+//        await agent.aiTap('click "My Passkeys Are Not Available"');
+//        await agent.aiInput('type "hello" into the "Enter message here" box');
+//        const code = await agent.aiQuery('{code: string}');
+let _midsceneModule = null;
+async function getMidsceneAgent(page) {
+  if (!_midsceneModule) {
+    _midsceneModule = await import('@midscene/web/puppeteer');
+  }
+  const { PuppeteerAgent, overrideAIConfig } = _midsceneModule;
+  // Configure Midscene to use our Anthropic key + Haiku model
+  overrideAIConfig({
+    apiKey: anthropicApiKey,
+    model: 'claude-haiku-4-5-20251001',
+    provider: 'anthropic',
+  });
+  return new PuppeteerAgent(page);
 }
 
 // ── Vision API helper — consistent with rest of codebase (raw fetch, no SDK) ──
@@ -4477,30 +4385,14 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
         console.log('[Vision] Passkey screen detected — taking screenshot to locate "My Passkeys Are Not Available"...');
         await new Promise(r => setTimeout(r, 800));
 
-        let clicked = false;
         try {
-          const psSS = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: false });
-          const psRaw = await visionAsk(psSS.toString('base64'),
-            `This is a Binance P2P page showing a "Verify with passkey" dialog with "Verification failed".
-There is a yellow/orange link that says exactly "My Passkeys Are Not Available".
-Find its center pixel coordinates and return ONLY JSON: {"x": <integer>, "y": <integer>}
-No markdown, no explanation.`, 150);
-          console.log(`[Vision] Passkey raw response: ${psRaw}`);
-          const psMatch = psRaw.match(/\{[^}]*"x"\s*:\s*\d+[^}]*"y"\s*:\s*\d+[^}]*\}/);
-          if (psMatch) {
-            const pc = JSON.parse(psMatch[0]);
-            const px = parseFloat(pc.x), py = parseFloat(pc.y);
-            if (isFinite(px) && isFinite(py) && px > 0 && py > 0) {
-              console.log(`[Vision] ✅ "My Passkeys Are Not Available" at (${Math.round(px)}, ${Math.round(py)}) — clicking...`);
-              await page.mouse.click(px, py);
-              clicked = true;
-            }
-          }
+          console.log('[Midscene] Creating agent to click "My Passkeys Are Not Available"...');
+          const agent = await getMidsceneAgent(page);
+          await agent.aiTap('"My Passkeys Are Not Available" link in the passkey dialog');
+          console.log('[Midscene] ✅ "My Passkeys Are Not Available" clicked');
         } catch (e) {
-          console.log(`[Vision] Passkey Vision error: ${e.message?.substring(0, 60)}`);
+          console.log(`[Midscene] Passkey click error: ${e.message?.substring(0, 80)}`);
         }
-
-        if (!clicked) console.log('[Vision] Could not locate "My Passkeys Are Not Available" — will retry next poll');
         await new Promise(r => setTimeout(r, 1500));
         continue;
       }
