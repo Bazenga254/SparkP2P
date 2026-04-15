@@ -2303,14 +2303,34 @@ async function idleScan(page) {
         const vd = verifiedOrders.get(order.orderNumber);
         console.log(`[SparkP2P] ═══ Order ${order.orderNumber} — SECOND VISIT (release) ═══`);
 
-        // 1. Send message to buyer FIRST
-        console.log(`[SparkP2P] Sending verified message to buyer...`);
-        const msgSent = await sendChatMessage(page,
-          `Your payment of KES ${order.totalPrice} has been received and verified successfully. ` +
-          `Please wait while I release your crypto. Thank you!`
-        );
-        console.log(`[SparkP2P] Message sent = ${msgSent}`);
-        await new Promise(r => setTimeout(r, 1200));
+        // 1. Send message to buyer — Vision locates "Enter message here" box, clicks it, types, Enter
+        console.log(`[SparkP2P] SECOND VISIT — Vision locating chat input...`);
+        const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
+        try {
+          const ss = await page.screenshot({ type: 'jpeg', quality: 85 });
+          const raw = await visionAsk(ss.toString('base64'),
+            `This is a Binance P2P "Verify Payment" order page. Find the chat message input box — the text field that says "Enter message here" at the bottom right of the chat panel.
+Return ONLY JSON: {"x": <number>, "y": <number>}
+No markdown.`, 80);
+          const coords = JSON.parse(raw);
+          const mx = parseFloat(coords.x), my = parseFloat(coords.y);
+          console.log(`[SparkP2P] Vision chat input at (${Math.round(mx)}, ${Math.round(my)})`);
+          if (isFinite(mx) && isFinite(my) && mx > 0 && my > 0) {
+            await page.mouse.click(mx, my);
+            console.log(`[SparkP2P] Clicked chat input — waiting 2s...`);
+            await new Promise(r => setTimeout(r, 2000));
+            await page.keyboard.type(chatMsg, { delay: 10 });
+            await new Promise(r => setTimeout(r, 400));
+            await page.keyboard.press('Enter');
+            await new Promise(r => setTimeout(r, 800));
+            console.log(`[SparkP2P] ✅ Message sent: "${chatMsg.substring(0, 60)}..."`);
+          } else {
+            console.log(`[SparkP2P] Vision returned invalid coords (${mx}, ${my}) — skipping message`);
+          }
+        } catch (e) {
+          console.log(`[SparkP2P] Vision chat error: ${e.message?.substring(0, 60)}`);
+        }
+        await new Promise(r => setTimeout(r, 500));
         if (pauseNavigation) break;
 
         // 2. Click Payment Received
