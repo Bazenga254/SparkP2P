@@ -1611,7 +1611,7 @@ async function findAndReadPaymentScreenshot(page) {
     // ── Step 1: Midscene scrolls chat to bottom so latest image is visible ─
     console.log('[Midscene] Scrolling chat to bottom...');
     const agent = await getMidsceneAgent(page);
-    await agent.aiAction('scroll to the bottom of the chat messages panel on the right side of the page').catch(() => {});
+    await agent.aiScroll({ direction: 'down', scrollType: 'untilBottom', locate: 'the chat messages panel on the right side of the page' }).catch(() => {});
     await new Promise(r => setTimeout(r, 500));
 
     // ── Step 2: Midscene checks if a payment screenshot exists in the chat ─
@@ -3986,13 +3986,12 @@ function startMidsceneAnthropicProxy() {
 let _midsceneModule = null;
 async function getMidsceneAgent(page) {
   if (!_midsceneModule) {
-    // Midscene REQUIRES base URL to be set explicitly — it does not default.
-    // OPENAI_API_KEY is already loaded from .env earlier in this file.
-    process.env.MIDSCENE_MODEL_API_KEY  = process.env.OPENAI_API_KEY;
-    process.env.MIDSCENE_MODEL_BASE_URL = 'https://api.openai.com/v1';
-    process.env.MIDSCENE_MODEL_NAME     = 'gpt-4o';
+    // Use the documented env vars: OPENAI_API_KEY + OPENAI_BASE_URL + MIDSCENE_MODEL_NAME
+    // OPENAI_API_KEY is already loaded from .env — just add the base URL and model name
+    process.env.OPENAI_BASE_URL    = 'https://api.openai.com/v1';
+    process.env.MIDSCENE_MODEL_NAME = 'gpt-4o';
     _midsceneModule = await import('@midscene/web/puppeteer');
-    console.log('[Midscene] Configured with OpenAI GPT-4o (native)');
+    console.log(`[Midscene] Configured — OpenAI GPT-4o, key: ${process.env.OPENAI_API_KEY?.substring(0, 12)}...`);
   }
   const { PuppeteerAgent } = _midsceneModule;
   return new PuppeteerAgent(page);
