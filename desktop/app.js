@@ -3833,49 +3833,34 @@ async function clickButton(page, ...textOptions) {
   return false;
 }
 
-// ── Send a chat message on an order page — Midscene finds input, clipboard pastes ─
+// ── Send a chat message on an order page — 100% Midscene Vision, no DOM selectors ─
 async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); }
 async function sendChatMessage(page, message) {
   try {
-    // Press Escape first to dismiss any dialogs/overlays
+    // Dismiss any open dialogs/overlays first
     await page.keyboard.press('Escape').catch(() => {});
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 500));
 
-    // Step 1: Midscene Vision finds and clicks "Enter message here" on the right side
-    console.log('[Midscene] Locating "Enter message here" input box...');
     const agent = await getMidsceneAgent(page);
-    await agent.aiTap('the "Enter message here" input box at the bottom of the chat panel on the right side of the screen');
+
+    // Step 1: Midscene Vision locates and clicks the chat input box
+    console.log('[Midscene] Tapping chat input box...');
+    await agent.aiTap('the "Enter message here" chat input box at the bottom of the right-side chat panel');
     await new Promise(r => setTimeout(r, 600));
 
-    // Step 2: Re-confirm focus via DOM — aiTap click can lose focus on React re-renders.
-    // Explicitly find the contenteditable on the right side and call .focus() on it.
-    const focusGained = await page.evaluate(() => {
-      const els = Array.from(document.querySelectorAll('[contenteditable="true"]'));
-      const chatInput = els.find(el => {
-        const r = el.getBoundingClientRect();
-        return r.left > window.innerWidth * 0.4 && r.width > 50 && r.height > 5;
-      });
-      if (!chatInput) return false;
-      chatInput.focus();
-      chatInput.click();
-      return true;
-    }).catch(() => false);
-
-    if (!focusGained) {
-      console.log('[sendChatMessage] Could not find chat input via DOM — skipping message');
-      return false;
-    }
-    await new Promise(r => setTimeout(r, 400));
-
-    // Step 3: Clear any existing text, write to clipboard, paste, send
+    // Step 2: Paste message via clipboard — required for React controlled inputs
+    // Ctrl+A clears existing text, Ctrl+V pastes the new message
     await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 150));
     clipboard.writeText(message);
-    await new Promise(r => setTimeout(r, 100)); // ensure clipboard is ready
+    await new Promise(r => setTimeout(r, 150));
     await page.keyboard.down('Control'); await page.keyboard.press('KeyV'); await page.keyboard.up('Control');
-    await new Promise(r => setTimeout(r, 800));
-    await page.keyboard.press('Enter');
+    await new Promise(r => setTimeout(r, 600));
+
+    // Step 3: Midscene Vision clicks the Send button
+    console.log('[Midscene] Clicking Send button...');
+    await agent.aiTap('the Send button next to the chat message input');
     await new Promise(r => setTimeout(r, 1000));
 
     console.log(`[Midscene] ✅ Message sent: "${message.substring(0, 60)}"`);
