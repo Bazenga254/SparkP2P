@@ -3623,7 +3623,19 @@ Viewport 1280x800. No markdown.`, 80);
         console.log(`[SparkP2P] Passkey bypass Vision coords: (${px}, ${py})`);
         if (isFinite(px) && isFinite(py) && px > 0 && px < 1280 && py > 0 && py < 800) {
           await page.mouse.click(px, py);
-          console.log(`[SparkP2P] ✅ "My Passkeys Are Not Available" clicked via Vision at (${px}, ${py})`);
+          await page.evaluate((x, y) => {
+            const el = document.elementFromPoint(x, y);
+            if (el) {
+              el.click(); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+              let p = el.parentElement;
+              for (let i = 0; i < 4 && p; i++, p = p.parentElement) {
+                if (p.tagName === 'A' || p.tagName === 'BUTTON' || p.getAttribute('role') === 'button') {
+                  p.click(); p.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); break;
+                }
+              }
+            }
+          }, px, py).catch(() => {});
+          console.log(`[SparkP2P] ✅ "My Passkeys Are Not Available" clicked via Vision+elementFromPoint at (${px}, ${py})`);
           bypassed = true;
         }
       } catch (e) {
@@ -4188,7 +4200,19 @@ Viewport 1280x800. No markdown.`, 80);
             console.log(`[Vision] Passkey bypass inline coords: (${px2}, ${py2})`);
             if (isFinite(px2) && isFinite(py2) && px2 > 0 && px2 < 1280 && py2 > 0 && py2 < 800) {
               await page.mouse.click(px2, py2);
-              console.log(`[Vision] ✅ Passkey bypass inline Vision click at (${px2}, ${py2})`);
+              await page.evaluate((x, y) => {
+                const el = document.elementFromPoint(x, y);
+                if (el) {
+                  el.click(); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                  let p = el.parentElement;
+                  for (let i = 0; i < 4 && p; i++, p = p.parentElement) {
+                    if (p.tagName === 'A' || p.tagName === 'BUTTON' || p.getAttribute('role') === 'button') {
+                      p.click(); p.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); break;
+                    }
+                  }
+                }
+              }, px2, py2).catch(() => {});
+              console.log(`[Vision] ✅ Passkey bypass inline click at (${px2}, ${py2})`);
             }
           } catch (e) {
             console.log(`[Vision] Passkey bypass inline Vision error: ${e.message?.substring(0, 60)}`);
@@ -4336,15 +4360,32 @@ Viewport 1280x800. No markdown.`, 80);
           const px = parseFloat(coords.x), py = parseFloat(coords.y);
           console.log(`[Vision] Passkey bypass Vision coords: (${px}, ${py})`);
           if (isFinite(px) && isFinite(py) && px > 0 && px < 1280 && py > 0 && py < 800) {
+            // 1. CDP mouse click
             await page.mouse.click(px, py);
-            console.log(`[Vision] ✅ "My Passkeys Are Not Available" clicked via Vision at (${px}, ${py})`);
+            // 2. elementFromPoint — directly click the DOM element at those coords
+            await page.evaluate((x, y) => {
+              const el = document.elementFromPoint(x, y);
+              if (el) {
+                el.click();
+                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                // Walk up to find nearest anchor/button in case we hit a child span
+                let p = el.parentElement;
+                for (let i = 0; i < 4 && p; i++, p = p.parentElement) {
+                  if (p.tagName === 'A' || p.tagName === 'BUTTON' || p.getAttribute('role') === 'button') {
+                    p.click(); p.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                    break;
+                  }
+                }
+              }
+            }, px, py).catch(() => {});
+            console.log(`[Vision] ✅ "My Passkeys Are Not Available" clicked via Vision+elementFromPoint at (${px}, ${py})`);
             await new Promise(r => setTimeout(r, 1500));
             continue;
           }
         } catch (e) {
           console.log(`[Vision] Passkey Vision error: ${e.message?.substring(0, 60)}`);
         }
-        // DOM fallback
+        // DOM text fallback
         for (const frame of [page, ...page.frames()]) {
           try {
             const matched = await frame.evaluate(() => {
