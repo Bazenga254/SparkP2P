@@ -511,6 +511,12 @@ async function connectPuppeteer() {
     }
     // Set 80% zoom on the main tab and re-apply after every navigation
     if (pages[0]) {
+      // CSS zoom injected before every page renders (survives navigation)
+      await pages[0].evaluateOnNewDocument(() => {
+        document.addEventListener('DOMContentLoaded', () => {
+          document.documentElement.style.zoom = '80%';
+        });
+      }).catch(() => {});
       await setZoom80(pages[0]);
       pages[0].on('load', () => setZoom80(pages[0]).catch(() => {}));
     }
@@ -519,12 +525,21 @@ async function connectPuppeteer() {
   } catch (e) { return false; }
 }
 
+let _zoomSession = null;
 async function setZoom80(page) {
   try {
-    const session = await page.target().createCDPSession();
-    await session.send('Emulation.setPageScaleFactor', { pageScaleFactor: 0.8 });
-    await session.detach();
-  } catch (_) {}
+    // Keep CDP session alive — detaching resets the scale factor
+    if (!_zoomSession || !_zoomSession._connection) {
+      _zoomSession = await page.createCDPSession();
+    }
+    await _zoomSession.send('Emulation.setPageScaleFactor', { pageScaleFactor: 0.8 });
+  } catch (_) {
+    _zoomSession = null;
+    // CSS fallback — inject zoom directly into the page
+    try {
+      await page.evaluate(() => { document.documentElement.style.zoom = '80%'; });
+    } catch (__) {}
+  }
 }
 
 async function getPage(urlMatch) {
