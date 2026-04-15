@@ -2369,29 +2369,20 @@ async function idleScan(page) {
           }
 
         } else {
-          // No code found at all — ask buyer to TYPE the M-Pesa message
+          // No code found — ask buyer ONCE to type their M-Pesa code, then wait silently
           if (!orderReminderSent._times) orderReminderSent._times = {};
           const waitKey = order.orderNumber + '_waiting_mpesa';
-          const lastAsked = orderReminderSent._times[waitKey] || 0;
-          const secsSinceAsked = (Date.now() - lastAsked) / 1000;
-          const isFirstAsk = lastAsked === 0;
+          const alreadyAsked = orderReminderSent._times[waitKey] || 0;
 
-          if (isFirstAsk || secsSinceAsked >= 60) {
+          if (!alreadyAsked) {
             orderReminderSent._times[waitKey] = Date.now();
-            if (isFirstAsk) {
-              await sendChatMessage(page,
-                `Your funds of KES ${order.totalPrice} have NOT been received yet. ` +
-                'Please send us your M-Pesa confirmation message or bank statement that clearly shows the M-Pesa transaction code. ' +
-                'Example: "UDE5J13AGR Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE..." Thank you!'
-              );
-            } else {
-              await sendChatMessage(page,
-                `Reminder: Your funds of KES ${order.totalPrice} have not been confirmed yet. ` +
-                'Please TYPE your M-Pesa confirmation code in this chat so I can verify and release your crypto immediately. Thank you for your patience!'
-              );
-            }
+            await sendChatMessage(page,
+              `Your funds of KES ${order.totalPrice} have NOT been received yet. ` +
+              'Please send us your M-Pesa confirmation message or bank statement that clearly shows the M-Pesa transaction code. ' +
+              'Example: "UDE5J13AGR Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE..." Thank you!'
+            );
           } else {
-            console.log(`[SparkP2P] Waiting for buyer M-Pesa text (${Math.round(secsSinceAsked)}s since last reminder)`);
+            console.log(`[SparkP2P] Waiting for buyer M-Pesa code — already asked, staying silent`);
           }
         }
       } // end FIRST VISIT
