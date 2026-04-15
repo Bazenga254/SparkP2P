@@ -2315,7 +2315,26 @@ async function idleScan(page) {
           `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
           { waitUntil: 'domcontentloaded', timeout: 15000 }
         ).catch(() => {});
-        await new Promise(r => setTimeout(r, 2500));
+
+        // Wait for the chat panel to fully render before screenshotting
+        // React needs time to hydrate — poll DOM for contenteditable on the right side
+        console.log(`[SparkP2P] Waiting for chat panel to render...`);
+        const chatPanelReady = await (async () => {
+          for (let i = 0; i < 20; i++) {
+            const found = await page.evaluate(() => {
+              const els = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+              return els.some(el => {
+                const r = el.getBoundingClientRect();
+                return r.width > 50 && r.left > window.innerWidth * 0.3;
+              });
+            }).catch(() => false);
+            if (found) { console.log(`[SparkP2P] Chat panel ready (${(i+1)*500}ms)`); return true; }
+            await new Promise(r => setTimeout(r, 500));
+          }
+          console.log(`[SparkP2P] Chat panel not detected — proceeding anyway`);
+          return false;
+        })();
+        await new Promise(r => setTimeout(r, 1000)); // extra settle time
 
         // 1. Send message to buyer — Vision locates the chat input box, clicks it, pastes, Enter
         const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
@@ -2488,7 +2507,16 @@ Return ONLY JSON: {"x": <integer above 640>, "y": <integer>}`;
           `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
           { waitUntil: 'domcontentloaded', timeout: 15000 }
         ).catch(() => {});
-        await new Promise(r => setTimeout(r, 2500));
+        // Wait for chat panel to render before Vision screenshots it
+        for (let i = 0; i < 20; i++) {
+          const found = await page.evaluate(() => {
+            const els = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+            return els.some(el => { const r = el.getBoundingClientRect(); return r.width > 50 && r.left > window.innerWidth * 0.3; });
+          }).catch(() => false);
+          if (found) { console.log(`[SparkP2P] Chat panel ready (${(i+1)*500}ms)`); break; }
+          await new Promise(r => setTimeout(r, 500));
+        }
+        await new Promise(r => setTimeout(r, 1000));
 
         if (mpesaCode) {
           // Step 1c: Verify code with VPS
