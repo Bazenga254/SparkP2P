@@ -1740,8 +1740,15 @@ Extract the M-Pesa transaction code from an OUTGOING/SENT payment message.
 M-Pesa format: "XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to [business name]..."
 The code is EXACTLY 10 uppercase alphanumeric characters at the START (e.g. UDE5J13AGR, QE1FXYZABC).
 
-If you can clearly read the code: {"found": true, "code": "XXXXXXXXXX", "amount": <number>}
-If not: {"found": false, "reason": "blurry|not_mpesa|other"}
+CRITICAL OCR RULES — read character by character and do NOT guess:
+- The digit 1 (one) looks like the letter I (eye) — distinguish carefully by context
+- The digit 0 (zero) looks like the letter O — M-Pesa codes use uppercase letters and digits only
+- Count the characters: MUST be exactly 10. If you count 9 or 11, look again.
+- Do not add or remove characters to make it 10 — only return what you can clearly read
+- Common M-Pesa code patterns: starts with 2-3 uppercase letters, then digits and letters mixed
+
+If you can clearly read ALL 10 characters: {"found": true, "code": "XXXXXXXXXX", "amount": <number>}
+If the code is unclear, blurry, or you cannot count exactly 10 chars: {"found": false, "reason": "blurry|not_mpesa|other"}
 Return ONLY valid JSON.` },
         ]}],
       }),
@@ -2332,43 +2339,22 @@ async function idleScan(page) {
       // ════════════════════════════════════════════════════════════════════════
         console.log(`[SparkP2P] ═══ Order ${order.orderNumber} — FIRST VISIT (verify only) ═══`);
 
-        // Step 1: Vision finds screenshot in chat → reads M-Pesa code
-        console.log(`[SparkP2P] Step 1: Vision locating payment screenshot in chat...`);
-        const screenshotResult = await findAndReadPaymentScreenshot(page);
-        let mpesaCode = screenshotResult?.code || null;
+        let mpesaCode = null;
 
-        // Guarantee lightbox is fully closed before proceeding — Escape + wait
-        // (findAndReadPaymentScreenshot already closes it, but belt-and-suspenders)
-        console.log('[SparkP2P] Ensuring lightbox closed before chat/verify steps...');
-        await page.keyboard.press('Escape');
-        await new Promise(r => setTimeout(r, 2000));
-
-        // If a large overlay is still covering the screen, reload the page to clear it
-        const lightboxStillOpen = await page.evaluate(() => {
-          for (const el of document.querySelectorAll('*')) {
-            if (el.id === 'sparkp2p-browser-lock') continue;
-            try {
-              const s = window.getComputedStyle(el);
-              if ((s.position === 'fixed' || s.position === 'absolute') && parseInt(s.zIndex || 0) > 50) {
-                const r = el.getBoundingClientRect();
-                if (r.width > window.innerWidth * 0.5 && r.height > window.innerHeight * 0.5) return true;
-              }
-            } catch (_) {}
-          }
-          return false;
-        }).catch(() => false);
-        if (lightboxStillOpen) {
-          console.log('[SparkP2P] Overlay still visible — reloading page to clear...');
-          await page.goto(
-            `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
-            { waitUntil: 'domcontentloaded', timeout: 15000 }
-          ).catch(() => {});
-          await new Promise(r => setTimeout(r, 2500));
+        // Step 1: Scan payment screenshot — ONLY on the FIRST attempt per order.
+        // Once we've already asked the buyer to type the code, skip the expensive
+        // lightbox scan (12+ seconds) and go straight to checking chat text.
+        if (!codeFallbackAskedOrders.has(order.orderNumber)) {
+          console.log(`[SparkP2P] Step 1: Vision locating payment screenshot in chat...`);
+          const screenshotResult = await findAndReadPaymentScreenshot(page);
+          mpesaCode = screenshotResult?.code || null;
+          // findAndReadPaymentScreenshot reloads the page at the end — page is now
+          // at the order detail URL with no lightbox overlays.
         } else {
-          console.log('[SparkP2P] Screen clear — proceeding');
+          console.log(`[SparkP2P] Step 1: Skipping screenshot scan — already asked buyer to type code`);
         }
 
-        // Step 1b: If no screenshot code, scan chat text for typed code
+        // Step 1b: Check chat text — buyer may have typed code since last poll
         if (!mpesaCode) {
           console.log(`[SparkP2P] Step 1b: No screenshot code — scanning chat text...`);
           const textScan = await extractMpesaCodesFromChat(page);
@@ -2376,14 +2362,13 @@ async function idleScan(page) {
           if (mpesaCode) console.log(`[SparkP2P] Found typed code in chat: ${mpesaCode}`);
         }
 
-        // Reload the order page to guarantee all lightboxes are gone before chat message.
-        // Escape is too unreliable — Binance lightboxes sometimes ignore it.
-        console.log('[SparkP2P] Reloading order page to clear all lightboxes before chat message...');
+        // Reload page to guarantee a clean state before Midscene sends a chat message
+        console.log('[SparkP2P] Reloading order page for clean chat state...');
         await page.goto(
           `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
           { waitUntil: 'domcontentloaded', timeout: 15000 }
         ).catch(() => {});
-        // Wait for chat panel to render before Vision screenshots it
+        // Wait for React chat panel to render before Vision screenshots it
         for (let i = 0; i < 20; i++) {
           const found = await page.evaluate(() => {
             const els = Array.from(document.querySelectorAll('[contenteditable="true"]'));
