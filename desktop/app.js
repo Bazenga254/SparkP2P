@@ -1757,53 +1757,59 @@ Return ONLY valid JSON.` },
     }
     if (!readResult) console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80));
 
-    // ── 6. Vision locates the X close button, Puppeteer clicks it ────────────
-    // Dedicated focused call. Coordinates are validated as real numbers before clicking.
-    console.log('[Vision] Locating lightbox close button...');
-    try {
-      const closeSS = await page.screenshot({ type: 'jpeg', quality: 85 });
-      const closeResp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 60,
-          messages: [{ role: 'user', content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: closeSS.toString('base64') } },
-            { type: 'text', text: 'This Binance P2P page has an image lightbox/viewer open. Find the X or close button pixel coordinates. Return ONLY valid JSON with integer numbers: {"x": 1234, "y": 56}' },
-          ]}],
-        }),
-      });
-      const closeData = await closeResp.json();
-      const closeRaw = (closeData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
-      const closeMatch = closeRaw.match(/\{[\s\S]*?\}/);
-      let closeClicked = false;
-      if (closeMatch) {
+    // ── 7. Close the lightbox — Escape first (most reliable), Vision fallback ──
+    console.log('[Vision] Closing lightbox — pressing Escape...');
+    await page.keyboard.press('Escape');
+    await new Promise(r => setTimeout(r, 1500));
+
+    // Verify it closed — DOM check for large fixed overlay
+    const stillOpen = await page.evaluate(() => {
+      for (const el of document.querySelectorAll('*')) {
         try {
-          const closeCoords = JSON.parse(closeMatch[0]);
-          // MUST be real finite numbers — Vision sometimes returns strings like "App" or "center"
-          const cx = typeof closeCoords.x === 'number' && isFinite(closeCoords.x) ? closeCoords.x : parseFloat(closeCoords.x);
-          const cy = typeof closeCoords.y === 'number' && isFinite(closeCoords.y) ? closeCoords.y : parseFloat(closeCoords.y);
-          if (isFinite(cx) && isFinite(cy) && cx > 0 && cy > 0) {
-            console.log(`[Vision] Clicking X close button at (${cx}, ${cy})`);
-            await page.mouse.click(cx, cy);
-            await new Promise(r => setTimeout(r, 1200));
-            console.log('[Vision] Lightbox close click done');
-            closeClicked = true;
-          } else {
-            console.log(`[Vision] Close coords invalid (${closeCoords.x}, ${closeCoords.y}) — using fallback`);
+          const s = window.getComputedStyle(el);
+          if ((s.position === 'fixed' || s.position === 'absolute') && parseInt(s.zIndex || 0) > 50) {
+            const r = el.getBoundingClientRect();
+            if (r.width > window.innerWidth * 0.5 && r.height > window.innerHeight * 0.5) return true;
           }
         } catch (_) {}
       }
-      if (!closeClicked) {
-        // Last resort: Escape key
-        await page.keyboard.press('Escape');
-        await new Promise(r => setTimeout(r, 800));
-        console.log('[Vision] Sent Escape as close fallback');
-      }
-    } catch (closeErr) {
-      console.log('[Vision] Close button detection error:', closeErr.message?.substring(0, 60));
+      return false;
+    }).catch(() => false);
+
+    if (stillOpen) {
+      console.log('[Vision] Lightbox still open — asking Vision for close button...');
+      try {
+        const closeSS = await page.screenshot({ type: 'jpeg', quality: 85 });
+        const closeResp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 60,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: closeSS.toString('base64') } },
+              { type: 'text', text: 'There is an image lightbox open. Find the X or close button coordinates. Return ONLY JSON: {"x": <integer>, "y": <integer>}' },
+            ]}],
+          }),
+        });
+        const closeData = await closeResp.json();
+        const closeRaw = (closeData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+        const closeMatch = closeRaw.match(/\{[^}]*"x"\s*:\s*\d+[^}]*"y"\s*:\s*\d+[^}]*\}/);
+        if (closeMatch) {
+          const cc = JSON.parse(closeMatch[0]);
+          const cx = parseFloat(cc.x), cy = parseFloat(cc.y);
+          if (isFinite(cx) && isFinite(cy) && cx > 0 && cy > 0) {
+            console.log(`[Vision] Clicking close button at (${Math.round(cx)}, ${Math.round(cy)})`);
+            await page.mouse.click(cx, cy);
+            await new Promise(r => setTimeout(r, 1200));
+          }
+        }
+      } catch (_) {}
+      // Final fallback: Escape again
+      await page.keyboard.press('Escape');
+      await new Promise(r => setTimeout(r, 1000));
     }
+    console.log('[Vision] Lightbox closed');
     await new Promise(r => setTimeout(r, 500));
 
     if (readResult?.found && readResult.code && /^[A-Z0-9]{10}$/.test(readResult.code)) {
@@ -2410,27 +2416,35 @@ Format: {"x": <integer>, "y": <integer>}`;
         const screenshotResult = await findAndReadPaymentScreenshot(page);
         let mpesaCode = screenshotResult?.code || null;
 
-        // Ensure lightbox is fully closed before continuing
+        // Guarantee lightbox is fully closed before proceeding — Escape + wait
+        // (findAndReadPaymentScreenshot already closes it, but belt-and-suspenders)
+        console.log('[SparkP2P] Ensuring lightbox closed before chat/verify steps...');
+        await page.keyboard.press('Escape');
+        await new Promise(r => setTimeout(r, 2000));
+
+        // If a large overlay is still covering the screen, reload the page to clear it
         const lightboxStillOpen = await page.evaluate(() => {
           for (const el of document.querySelectorAll('*')) {
             if (el.id === 'sparkp2p-browser-lock') continue;
             try {
               const s = window.getComputedStyle(el);
-              if (s.position === 'fixed' && parseInt(s.zIndex || 0) > 100) {
+              if ((s.position === 'fixed' || s.position === 'absolute') && parseInt(s.zIndex || 0) > 50) {
                 const r = el.getBoundingClientRect();
-                if (r.width > 400 && r.height > 400 && el.querySelector('img')) return true;
+                if (r.width > window.innerWidth * 0.5 && r.height > window.innerHeight * 0.5) return true;
               }
             } catch (_) {}
           }
           return false;
         }).catch(() => false);
         if (lightboxStillOpen) {
-          console.log('[SparkP2P] Lightbox still open — reloading to clear...');
+          console.log('[SparkP2P] Overlay still visible — reloading page to clear...');
           await page.goto(
             `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
             { waitUntil: 'domcontentloaded', timeout: 15000 }
           ).catch(() => {});
           await new Promise(r => setTimeout(r, 2500));
+        } else {
+          console.log('[SparkP2P] Screen clear — proceeding');
         }
 
         // Step 1b: If no screenshot code, scan chat text for typed code
