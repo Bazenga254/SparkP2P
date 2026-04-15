@@ -4479,13 +4479,11 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
         await new Promise(r => setTimeout(r, 800));
 
         let clicked = false;
-
-        // Step 1: Vision locates the link by looking at the screenshot
         try {
           const psSS = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: false });
           const psRaw = await visionAsk(psSS.toString('base64'),
             `This is a Binance P2P page showing a "Verify with passkey" dialog with "Verification failed".
-There is a yellow/orange link or button that says exactly "My Passkeys Are Not Available".
+There is a yellow/orange link that says exactly "My Passkeys Are Not Available".
 Find its center pixel coordinates and return ONLY JSON: {"x": <integer>, "y": <integer>}
 No markdown, no explanation.`, 150);
           console.log(`[Vision] Passkey raw response: ${psRaw}`);
@@ -4494,7 +4492,7 @@ No markdown, no explanation.`, 150);
             const pc = JSON.parse(psMatch[0]);
             const px = parseFloat(pc.x), py = parseFloat(pc.y);
             if (isFinite(px) && isFinite(py) && px > 0 && py > 0) {
-              console.log(`[Vision] ✅ "My Passkeys Are Not Available" located at (${Math.round(px)}, ${Math.round(py)}) — clicking...`);
+              console.log(`[Vision] ✅ "My Passkeys Are Not Available" at (${Math.round(px)}, ${Math.round(py)}) — clicking...`);
               await page.mouse.click(px, py);
               clicked = true;
             }
@@ -4503,51 +4501,7 @@ No markdown, no explanation.`, 150);
           console.log(`[Vision] Passkey Vision error: ${e.message?.substring(0, 60)}`);
         }
 
-        // Step 2: XPath fallback
-        if (!clicked) {
-          const xpaths = [
-            '//*[normalize-space(text())="My Passkeys Are Not Available"]',
-            '//*[contains(text(),"Passkeys Are Not Available")]',
-            '//*[contains(text(),"passkeys are not available")]',
-          ];
-          for (const xpath of xpaths) {
-            try {
-              const [el] = await page.$x(xpath);
-              if (el) {
-                await el.click();
-                console.log(`[Vision] ✅ XPath clicked: ${xpath}`);
-                clicked = true;
-                break;
-              }
-            } catch (_) {}
-          }
-        }
-
-        // Step 3: DOM bbox fallback
-        if (!clicked) {
-          for (const frame of [page, ...page.frames()]) {
-            try {
-              const result = await frame.evaluate(() => {
-                for (const el of Array.from(document.querySelectorAll('*')).reverse()) {
-                  const t = (el.textContent || '').trim();
-                  if (!/passkey.*not.*available/i.test(t) || t.length > 100) continue;
-                  const r = el.getBoundingClientRect();
-                  if (r.width === 0 || r.height === 0) continue;
-                  return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName, text: t.substring(0, 50) };
-                }
-                return null;
-              });
-              if (result) {
-                console.log(`[Vision] DOM bbox: <${result.tag}> "${result.text}" at (${Math.round(result.x)}, ${Math.round(result.y)})`);
-                await page.mouse.click(result.x, result.y);
-                clicked = true;
-                break;
-              }
-            } catch (_) {}
-          }
-        }
-
-        if (!clicked) console.log('[Vision] Could not find "My Passkeys Are Not Available" — will retry');
+        if (!clicked) console.log('[Vision] Could not locate "My Passkeys Are Not Available" — will retry next poll');
         await new Promise(r => setTimeout(r, 1500));
         continue;
       }
