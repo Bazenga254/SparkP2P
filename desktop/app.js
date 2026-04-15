@@ -3608,26 +3608,27 @@ async function handleSecurityVerification(page) {
   await takeScreenshot('Security verification');
 
   try {
-    // Passkey bypass — click "My Passkeys Are Not Available" to get TOTP+email form
+    // Passkey bypass — Vision finds "My Passkeys Are Not Available" and clicks it
     if (verification.hasPasskey && !verification.hasAuth && !verification.hasEmail) {
-      console.log('[SparkP2P] Passkey screen — attempting bypass...');
-      const bypassed = await page.evaluate(() => {
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-        while (walker.nextNode()) {
-          const el = walker.currentNode;
-          if (el.children.length === 0) {
-            const t = el.textContent.trim();
-            if (t === 'My Passkeys Are Not Available' ||
-                t.toLowerCase().includes('passkeys are not available') ||
-                t.toLowerCase().includes('use another method') ||
-                t.toLowerCase().includes('try another way')) {
-              el.click();
-              return true;
-            }
-          }
+      console.log('[SparkP2P] Passkey screen — Vision clicking "My Passkeys Are Not Available"...');
+      const pss = await page.screenshot({ type: 'jpeg', quality: 85 });
+      let bypassed = false;
+      try {
+        const praw = await visionAsk(pss.toString('base64'),
+          `Binance passkey modal. Find the "My Passkeys Are Not Available" link — it is below the yellow "Try Again" button.
+Return ONLY JSON: {"x": <number>, "y": <number>}
+Viewport 1280x800. No markdown.`, 80);
+        const pc = JSON.parse(praw);
+        const px = parseFloat(pc.x), py = parseFloat(pc.y);
+        console.log(`[SparkP2P] Passkey bypass Vision coords: (${px}, ${py})`);
+        if (isFinite(px) && isFinite(py) && px > 0 && px < 1280 && py > 0 && py < 800) {
+          await page.mouse.click(px, py);
+          console.log(`[SparkP2P] ✅ "My Passkeys Are Not Available" clicked via Vision at (${px}, ${py})`);
+          bypassed = true;
         }
-        return false;
-      });
+      } catch (e) {
+        console.log(`[SparkP2P] Passkey Vision error: ${e.message?.substring(0, 60)}`);
+      }
       if (bypassed) {
         console.log('[SparkP2P] Passkey bypass clicked — waiting for TOTP/email form...');
         await new Promise(r => setTimeout(r, 2500));
@@ -3644,7 +3645,7 @@ async function handleSecurityVerification(page) {
         if (recheck.hasFundPw) verification.hasFundPw = true;
         console.log(`[SparkP2P] After bypass — email:${verification.hasEmail} auth:${verification.hasAuth}`);
       } else {
-        console.log('[SparkP2P] Passkey bypass link not found');
+        console.log('[SparkP2P] Passkey bypass: Vision could not locate link');
         await takeScreenshot('Passkey bypass failed');
         return false;
       }
