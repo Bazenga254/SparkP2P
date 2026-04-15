@@ -3836,25 +3836,19 @@ async function sendChatMessage(page, message) {
 
     const agent = await getMidsceneAgent(page);
 
-    // Step 1: Midscene Vision locates and clicks the chat input box
-    // Use a broad description so it works regardless of exact placeholder text
-    console.log('[Midscene] Tapping chat input box...');
-    await agent.aiTap('the text input area at the bottom of the right-side chat panel where messages to the buyer are typed — it is a narrow bar along the bottom of the chat section');
-    await new Promise(r => setTimeout(r, 800));
-
-    // Step 2: Paste message via clipboard — required for React controlled inputs
-    // Ctrl+A clears existing text, Ctrl+V pastes the new message
-    await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
-    await page.keyboard.press('Backspace');
-    await new Promise(r => setTimeout(r, 200));
+    // Step 1: Write message to clipboard BEFORE Midscene acts
+    // (clipboard is ready when aiAct fires the paste)
     clipboard.writeText(message);
     await new Promise(r => setTimeout(r, 200));
-    await page.keyboard.down('Control'); await page.keyboard.press('KeyV'); await page.keyboard.up('Control');
-    await new Promise(r => setTimeout(r, 800));
 
-    // Step 3: Midscene Vision clicks the Send button (paper plane / arrow icon)
-    console.log('[Midscene] Clicking Send button...');
-    await agent.aiTap('the Send button or paper plane icon to the right of the chat message input');
+    // Step 2: Single aiAct call — Midscene plans the full sequence:
+    // locate input → click → select all → paste → click send
+    console.log('[Midscene] Sending message via aiAct...');
+    await agent.aiAct(
+      'Click the chat message input box at the bottom of the right chat panel, ' +
+      'press Ctrl+A to select all, press Backspace to clear, ' +
+      'press Ctrl+V to paste, then click the Send button'
+    );
     await new Promise(r => setTimeout(r, 1200));
 
     console.log(`[Midscene] ✅ Message sent: "${message.substring(0, 60)}"`);
@@ -4052,22 +4046,18 @@ function startMidsceneAnthropicProxy() {
 
 // ── Midscene agent helper — Vision + Puppeteer collaboration ─────────────────
 // PuppeteerAgent routes calls through our local OpenAI→Anthropic proxy.
-// Usage: const agent = await getMidsceneAgent(page);
-//        await agent.aiTap('"Enter message here" input box');
-//        await agent.aiTap('"My Passkeys Are Not Available" link');
+// Config via MIDSCENE_MODEL_* env vars (official documented approach) set
+// on process.env BEFORE import so Midscene reads them at module load time.
 let _midsceneModule = null;
 async function getMidsceneAgent(page) {
   if (!_midsceneModule) {
     startMidsceneAnthropicProxy();
+    // Set BEFORE import — Midscene reads env vars during module initialisation
+    process.env.MIDSCENE_MODEL_API_KEY  = 'sk-midscene-proxy';  // dummy — proxy handles auth
+    process.env.MIDSCENE_MODEL_BASE_URL = `http://127.0.0.1:${MIDSCENE_PROXY_PORT}/v1`;
+    process.env.MIDSCENE_MODEL_NAME     = 'claude-haiku-4-5-20251001';
     _midsceneModule = await import('@midscene/web/puppeteer');
-    const { overrideAIConfig } = _midsceneModule;
-    // Point Midscene's OpenAI SDK to our local proxy which speaks Anthropic internally
-    overrideAIConfig({
-      OPENAI_API_KEY: 'sk-midscene-proxy',          // dummy key — proxy handles auth
-      OPENAI_BASE_URL: `http://127.0.0.1:${MIDSCENE_PROXY_PORT}/v1`,
-      MIDSCENE_MODEL_NAME: 'claude-haiku-4-5-20251001',
-    });
-    console.log('[Midscene] Configured via local OpenAI→Anthropic proxy');
+    console.log('[Midscene] Configured via local OpenAI→Anthropic proxy (env vars)');
   }
   const { PuppeteerAgent } = _midsceneModule;
   return new PuppeteerAgent(page);
