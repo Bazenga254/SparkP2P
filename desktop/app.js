@@ -2308,28 +2308,48 @@ async function idleScan(page) {
         const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
         try {
           const inputCoords = await page.evaluate(() => {
-            // Binance P2P chat uses a contenteditable div; also check textarea/input as fallback
-            const selectors = [
-              '[contenteditable="true"]',
+            const dbg = [];
+
+            // Pass 1: placeholder-based exact match (most reliable)
+            const placeholderSelectors = [
+              'textarea[placeholder*="Enter message"]',
+              'input[placeholder*="Enter message"]',
               'textarea[placeholder*="Enter"]',
               'input[placeholder*="Enter"]',
               'textarea[placeholder*="message"]',
               'input[placeholder*="message"]',
             ];
-            for (const sel of selectors) {
-              const els = Array.from(document.querySelectorAll(sel));
-              for (const el of els) {
+            for (const sel of placeholderSelectors) {
+              const el = document.querySelector(sel);
+              if (el) {
                 const r = el.getBoundingClientRect();
-                // Must be visible and in the lower portion of the page (chat input area)
-                if (r.width > 50 && r.height > 5 && r.top > window.innerHeight * 0.4 && r.bottom <= window.innerHeight + 5) {
-                  return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel };
-                }
+                if (r.width > 20) return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel };
               }
             }
-            return null;
+
+            // Pass 2: contenteditable on the right half of the page (chat panel is right-side)
+            const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+            dbg.push(`contenteditable count: ${editables.length}`);
+            for (const el of editables) {
+              const r = el.getBoundingClientRect();
+              dbg.push(`ce: x=${Math.round(r.left)} y=${Math.round(r.top)} w=${Math.round(r.width)} h=${Math.round(r.height)}`);
+              if (r.width > 50 && r.height > 5 && r.left > window.innerWidth * 0.4) {
+                return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel: '[contenteditable]' };
+              }
+            }
+
+            // Pass 3: any visible contenteditable regardless of position
+            for (const el of editables) {
+              const r = el.getBoundingClientRect();
+              if (r.width > 50 && r.height > 5) {
+                return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel: '[contenteditable-any]' };
+              }
+            }
+
+            return { found: false, dbg };
           });
 
-          if (inputCoords) {
+          if (inputCoords && inputCoords.x) {
             console.log(`[SparkP2P] Chat input found (${inputCoords.sel}) at (${Math.round(inputCoords.x)}, ${Math.round(inputCoords.y)})`);
             await page.mouse.click(inputCoords.x, inputCoords.y);
             await new Promise(r => setTimeout(r, 1000));
@@ -2343,7 +2363,7 @@ async function idleScan(page) {
             await new Promise(r => setTimeout(r, 1000));
             console.log(`[SparkP2P] ✅ Message sent`);
           } else {
-            console.log(`[SparkP2P] ⚠ Chat input not found via DOM — skipping message`);
+            console.log(`[SparkP2P] ⚠ Chat input not found — DOM debug: ${JSON.stringify(inputCoords?.dbg || [])}`);
           }
         } catch (e) {
           console.log(`[SparkP2P] Chat error: ${e.message}`);
