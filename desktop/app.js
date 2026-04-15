@@ -2375,20 +2375,57 @@ async function idleScan(page) {
           );
 
           if (verified) {
-            // Store verified state — second visit (next poll) will send message + release
-            verifiedOrders.set(order.orderNumber, { code: mpesaCode, totalPrice: order.totalPrice });
-            console.log(`[SparkP2P] ✅ FIRST VISIT DONE — code ${mpesaCode} verified. Releasing on next poll.`);
+            console.log(`[SparkP2P] ✅ Code ${mpesaCode} verified — sending message and releasing NOW`);
+
+            // 1. Tell buyer payment confirmed — generate a unique message
+            const chatCtx = await analyzeChatHistory(page);
+            const verifiedMsg = await generateUniqueMessage('payment_verified_releasing', chatCtx, { amount: order.totalPrice })
+              || `Your payment of KES ${order.totalPrice} has been received and verified. Releasing your crypto now!`;
+            console.log(`[SparkP2P] Sending: "${verifiedMsg}"`);
+            await sendChatMessage(page, verifiedMsg);
+            await new Promise(r => setTimeout(r, 500));
+            if (pauseNavigation) break;
+
+            // 2. Click Payment Received button
+            const btnClicked = await page.evaluate(() => {
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+              while (walker.nextNode()) {
+                const el = walker.currentNode;
+                if (el.tagName !== 'BUTTON') continue;
+                const t = (el.textContent || '').trim().toLowerCase();
+                if (t === 'payment received' || t.startsWith('payment received')) {
+                  el.click(); return true;
+                }
+              }
+              return false;
+            });
+            console.log(`[SparkP2P] Payment Received button clicked: ${btnClicked}`);
+            await new Promise(r => setTimeout(r, 2000));
+
+            // 3. Complete release via Vision (handles modal, security, TOTP etc.)
+            activeOrderNumber = order.orderNumber;
+            activeOrderFiatAmount = order.totalPrice;
+            await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [mpesaCode], bankRefs: [] } }, { skipNavigation: true });
+
+            // Cleanup
+            activeOrderNumber = null;
+            activeOrderFiatAmount = 0;
+            verifiedOrders.delete(order.orderNumber);
+            delete orderFirstSeenAt[order.orderNumber];
+            codeFallbackAskedOrders.delete(order.orderNumber);
+            orderReminderSent.delete(order.orderNumber);
+            if (orderReminderSent._times) delete orderReminderSent._times[order.orderNumber + '_waiting_mpesa'];
 
           } else {
             // Code found but not in VPS records — ask buyer to resend
             console.log(`[SparkP2P] ❌ Code ${mpesaCode} not in VPS records`);
             if (!codeFallbackAskedOrders.has(order.orderNumber)) {
               codeFallbackAskedOrders.add(order.orderNumber);
-              await sendChatMessage(page,
-                `Your funds of KES ${order.totalPrice} have NOT been received in our records. ` +
-                'Please send us your M-Pesa confirmation message or bank statement that clearly shows the M-Pesa transaction code. ' +
-                'Example: "UDE5J13AGR Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE..." Thank you!'
-              );
+              const chatCtx3 = await analyzeChatHistory(page);
+              const notFoundMsg = await generateUniqueMessage('need_mpesa_code', chatCtx3, { amount: order.totalPrice })
+                || `We could not match your payment of KES ${order.totalPrice} in our records. Please TYPE your M-Pesa code directly in this chat (e.g. "UDE5J13AGR") so we can verify manually.`;
+              console.log(`[SparkP2P] Sending: "${notFoundMsg}"`);
+              await sendChatMessage(page, notFoundMsg);
             }
           }
 
@@ -2400,11 +2437,11 @@ async function idleScan(page) {
 
           if (!alreadyAsked) {
             orderReminderSent._times[waitKey] = Date.now();
-            await sendChatMessage(page,
-              `Your funds of KES ${order.totalPrice} have NOT been received yet. ` +
-              'Please send us your M-Pesa confirmation message or bank statement that clearly shows the M-Pesa transaction code. ' +
-              'Example: "UDE5J13AGR Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE..." Thank you!'
-            );
+            const chatCtx2 = await analyzeChatHistory(page);
+            const needCodeMsg = await generateUniqueMessage('need_mpesa_code', chatCtx2, { amount: order.totalPrice })
+              || `Please TYPE your M-Pesa confirmation code in this chat (e.g. "UDE5J13AGR") so I can verify your payment of KES ${order.totalPrice} and release your crypto immediately.`;
+            console.log(`[SparkP2P] Sending: "${needCodeMsg}"`);
+            await sendChatMessage(page, needCodeMsg);
           } else {
             console.log(`[SparkP2P] Waiting for buyer M-Pesa code — already asked, staying silent`);
           }
@@ -3811,6 +3848,90 @@ async function clickButton(page, ...textOptions) {
   return false;
 }
 
+// ══════════════════════════════════════════════════════════════════
+// SMART CHAT — Vision reads chat history, generates unique messages
+// ══════════════════════════════════════════════════════════════════
+
+// Analyse the chat panel: who sent last, how long ago, conversation context
+async function analyzeChatHistory(page) {
+  if (!anthropicApiKey) return null;
+  try {
+    const ss = await page.screenshot({ type: 'jpeg', quality: 80 });
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') } },
+          { type: 'text', text: `Look at the chat panel on the RIGHT side of this Binance P2P order page.
+Analyse the conversation and return JSON:
+{
+  "last_sender": "bot" or "buyer" (bot messages are right-aligned/darker, buyer messages are left-aligned),
+  "last_message_preview": "first 60 chars of the last message",
+  "minutes_since_last": <estimated minutes as integer, or 0 if just now>,
+  "message_count": <total visible messages as integer>,
+  "conversation_summary": "one sentence describing what has been discussed so far"
+}
+If no chat is visible return: {"last_sender": null, "minutes_since_last": 999, "message_count": 0, "conversation_summary": "no chat visible"}
+Return ONLY valid JSON.` },
+        ]}],
+      }),
+    });
+    const data = await res.json();
+    const text = (data.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const m = text.match(/\{[\s\S]*\}/);
+    return m ? JSON.parse(m[0]) : null;
+  } catch (e) {
+    console.log('[SparkP2P] analyzeChatHistory error:', e.message?.substring(0, 60));
+    return null;
+  }
+}
+
+// Generate a unique, natural message based on the situation and chat context
+async function generateUniqueMessage(situation, chatContext, orderDetails = {}) {
+  if (!anthropicApiKey) return null;
+  try {
+    const contextInfo = chatContext
+      ? `Previous conversation: ${chatContext.conversation_summary}. Last message from: ${chatContext.last_sender}, ~${chatContext.minutes_since_last} min ago.`
+      : 'No prior context available.';
+
+    const situations = {
+      payment_verified_releasing: `The buyer's M-Pesa payment of KES ${orderDetails.amount || ''} has been verified. Tell them their payment is confirmed and you are releasing their crypto right now.`,
+      need_mpesa_code:            `You cannot read the buyer's payment screenshot clearly. Ask them to TYPE their M-Pesa confirmation code directly in the chat (e.g. "QE1FXYZABC"). Be polite.`,
+      payment_not_received:       `You have not received any M-Pesa payment for KES ${orderDetails.amount || ''} yet. Ask the buyer to send their payment and share the M-Pesa confirmation.`,
+      awaiting_code_reminder:     `You are still waiting for the buyer to type their M-Pesa code. Gently remind them.`,
+    };
+
+    const prompt = `You are a friendly, professional Binance P2P crypto seller.
+Situation: ${situations[situation] || situation}
+${contextInfo}
+
+Write ONE short, natural message to send to the buyer (max 2 sentences).
+- Sound human, not robotic
+- Vary wording — never repeat the same phrase twice
+- Be warm but professional
+- Do NOT include greetings like "Hello" or "Hi" if you've already been chatting
+Return ONLY the message text. No quotes, no JSON.`;
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 120,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    const data = await res.json();
+    return (data.content?.[0]?.text || '').trim().replace(/^["']|["']$/g, '');
+  } catch (e) {
+    console.log('[SparkP2P] generateUniqueMessage error:', e.message?.substring(0, 60));
+    return null;
+  }
+}
+
 // ── Send a chat message on an order page ─────────────────────────────────────────
 // Uses React-native input setter so React's onChange fires and the Send button activates.
 // Falls back to Midscene if the DOM approach can't find the input.
@@ -4311,90 +4432,53 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         if (mpesaVerified) {
           console.log(`[Vision] ✅ M-Pesa confirmed — ticking checkbox and releasing...`);
 
-          // ── Vision-guided checkbox click ──────────────────────────────────
-          // DOM .click() doesn't trigger React synthetic events on Binance's checkbox.
-          // Use Vision to locate the checkbox visually and mouse.click() it.
-          const cbSS = await page.screenshot({ type: 'jpeg', quality: 90 });
-          let cbClicked = false;
-          try {
-            const cbRaw = await visionAsk(cbSS.toString('base64'),
-              `This is a Binance P2P "Received payment in your account?" confirmation modal.
-Find the square CHECKBOX (the small tick-box, NOT the label text) next to the text "I have verified that I received".
-Return ONLY a JSON object with its center pixel coordinates:
-{"x": <number>, "y": <number>}
-The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no explanation.`, 100);
-            const cbCoords = JSON.parse(cbRaw);
-            const cbX = parseFloat(cbCoords.x);
-            const cbY = parseFloat(cbCoords.y);
-            if (isFinite(cbX) && isFinite(cbY) && cbX > 0 && cbX < 1280 && cbY > 0 && cbY < 800) {
-              await page.mouse.click(cbX, cbY);
-              console.log(`[Vision] Checkbox clicked via mouse at (${cbX}, ${cbY})`);
-              cbClicked = true;
-            } else {
-              console.log(`[Vision] Checkbox coords invalid (${cbCoords.x}, ${cbCoords.y}) — falling back to DOM`);
-            }
-          } catch (e) {
-            console.log(`[Vision] Checkbox Vision error: ${e.message?.substring(0, 60)} — falling back to DOM`);
-          }
-
-          // DOM — always run to ensure React synthetic event fires on the checkbox
-          await page.evaluate(() => {
-            for (const sel of ['input[type="checkbox"]', '[role="checkbox"]', '[class*="checkbox"]']) {
+          // ── Step 1: Tick the checkbox via DOM + mouse click ──────────────
+          console.log(`[Vision] Ticking confirm release checkbox...`);
+          const cbRect = await page.evaluate(() => {
+            const selectors = ['input[type="checkbox"]', '[role="checkbox"]', '[class*="checkbox"]'];
+            for (const sel of selectors) {
               for (const el of document.querySelectorAll(sel)) {
                 const r = el.getBoundingClientRect();
                 if (r.width > 0 && r.height > 0) {
+                  // Fire both synthetic events AND return coords for mouse click
                   el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
                   el.dispatchEvent(new Event('change', { bubbles: true }));
-                  console.log('[DOM] Checkbox dispatchEvent fired');
-                  return;
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
                 }
               }
             }
-          }).catch(() => {});
-          await new Promise(r => setTimeout(r, 1500));
+            return null;
+          }).catch(() => null);
 
-          // ── Vision-guided Confirm Release click ───────────────────────────
-          await new Promise(r => setTimeout(r, 800)); // extra wait after checkbox
-          const relSS = await page.screenshot({ type: 'jpeg', quality: 90 });
-          let released = false;
-          try {
-            const relRaw = await visionAsk(relSS.toString('base64'),
-              `This is a Binance P2P "Received payment in your account?" confirmation modal.
-Find the YELLOW/GOLDEN "Confirm Release" button — it is at the BOTTOM of the modal, a wide full-width yellow button.
-Return ONLY a JSON object with its center pixel coordinates:
-{"x": <number>, "y": <number>}
-The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no explanation.`, 100);
-            const relCoords = JSON.parse(relRaw);
-            const relX = parseFloat(relCoords.x);
-            const relY = parseFloat(relCoords.y);
-            console.log(`[Vision] Confirm Release Vision coords: (${relX}, ${relY})`);
-            if (isFinite(relX) && isFinite(relY) && relX > 0 && relX < 1280 && relY > 0 && relY < 800) {
-              await page.mouse.click(relX, relY);
-              console.log(`[Vision] Confirm Release clicked via mouse at (${relX}, ${relY})`);
-              released = true;
-            } else {
-              console.log(`[Vision] Confirm Release coords invalid — trying DOM`);
-            }
-          } catch (e) {
-            console.log(`[Vision] Confirm Release Vision error: ${e.message?.substring(0, 60)} — trying DOM`);
+          if (cbRect) {
+            // Also do a real mouse click at the element's screen coords
+            await page.mouse.click(cbRect.x, cbRect.y);
+            console.log(`[Vision] ✅ Checkbox clicked at (${Math.round(cbRect.x)}, ${Math.round(cbRect.y)})`);
+          } else {
+            console.log(`[Vision] Checkbox not found via DOM`);
           }
+          await new Promise(r => setTimeout(r, 1200));
 
-          // DOM click — always run after Vision to ensure React synthetic event fires
-          await page.evaluate(() => {
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-            while (walker.nextNode()) {
-              const el = walker.currentNode;
-              if (el.tagName !== 'BUTTON') continue;
-              const t = (el.textContent || '').trim().toLowerCase();
-              if (t === 'confirm release' || t.startsWith('confirm release')) {
-                el.scrollIntoView({ block: 'center' });
-                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                console.log('[DOM] Confirm Release dispatchEvent fired');
-                return;
+          // ── Step 2: Click Confirm Release button via DOM ──────────────────
+          console.log(`[Vision] Clicking Confirm Release button...`);
+          const released = await page.evaluate(() => {
+            const keywords = ['confirm release', 'confirmrelease', 'release'];
+            const allBtns = document.querySelectorAll('button, [role="button"]');
+            for (const btn of allBtns) {
+              const t = (btn.textContent || '').trim().toLowerCase().replace(/\s+/g, '');
+              if (keywords.some(k => t.includes(k.replace(/\s/g, '')))) {
+                btn.click();
+                return btn.textContent.trim();
               }
             }
-          }).catch(() => {});
-          console.log(`[Vision] Confirm Release step done`);
+            return null;
+          }).catch(() => null);
+
+          if (released) {
+            console.log(`[Vision] ✅ Confirm Release clicked: "${released}"`);
+          } else {
+            console.log(`[Vision] Confirm Release button not found via DOM`);
+          }
           await new Promise(r => setTimeout(r, 3000));
 
         } else {
