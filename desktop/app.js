@@ -1765,13 +1765,48 @@ async function extractMpesaCodesFromChat(page) {
     return { mpesaCodes: [], bankRefs: [] };
   }
   try {
-    // ── Step 1: Grab ALL text from the right half of the page (chat panel area) ─
-    // Don't filter by exact message position — buyer messages can appear anywhere
-    // in the chat panel depending on Binance's layout. Just grab all chat text and
-    // let the regex + Claude find the code.
+    // ── Step 0: Vision — ask Claude to read ONLY the most recent buyer message ──
+    // This avoids picking up old codes from previous orders still visible in chat.
+    try {
+      const ss = await page.screenshot({ type: 'jpeg', quality: 85 });
+      const vRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5',
+          max_tokens: 80,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') } },
+            { type: 'text', text: `Look at the chat panel on the RIGHT side of this Binance P2P order page.
+Find ONLY the most recent (last / bottom-most) message sent by the BUYER (left-aligned bubbles).
+Does it contain a 10-character alphanumeric M-Pesa code (e.g. QE1FXYZABC) or a bank reference number?
+Return ONLY JSON: {"mpesa_code": "CODE or null", "bank_ref": "REF or null"}
+IMPORTANT: ignore ALL older messages — only look at the single most recent buyer message.` },
+          ]}],
+        }),
+      });
+      const vData = await vRes.json();
+      const vText = (vData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+      const vMatch = vText.match(/\{[\s\S]*\}/);
+      if (vMatch) {
+        const vResult = JSON.parse(vMatch[0]);
+        const vCode = vResult.mpesa_code && /^[A-Z0-9]{10}$/i.test(vResult.mpesa_code) ? vResult.mpesa_code.toUpperCase() : null;
+        const vRef  = vResult.bank_ref  && /^[A-Z0-9]{6,20}$/i.test(vResult.bank_ref)  ? vResult.bank_ref.toUpperCase()   : null;
+        if (vCode || vRef) {
+          console.log(`[SparkP2P] Vision (latest message) — M-Pesa: ${vCode || 'none'} Bank: ${vRef || 'none'}`);
+          return { mpesaCodes: vCode ? [vCode] : [], bankRefs: vRef ? [vRef] : [] };
+        }
+      }
+    } catch (e) {
+      console.log(`[SparkP2P] Vision latest-message scan error: ${e.message?.substring(0, 60)}`);
+    }
+
+    // ── Step 1: DOM text scan — only bottom 50% of screen (recent messages) ──────
+    // Older messages at the top are skipped to avoid picking up codes from past orders.
     const chatText = await page.evaluate(() => {
       const vw = window.innerWidth;
-      // Collect text from all visible leaf nodes in the right 55% of the page
+      const vh = window.innerHeight;
+      // Collect text from visible leaf nodes in bottom half of right 55% of page
       const parts = [];
       const allEls = Array.from(document.querySelectorAll('*'));
       for (const el of allEls) {
@@ -1779,6 +1814,7 @@ async function extractMpesaCodesFromChat(page) {
         const rect = el.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) continue;
         if (rect.left < vw * 0.38) continue; // skip order-detail left panel
+        if (rect.top  < vh * 0.45) continue; // skip older messages at top of chat
         const text = (el.textContent || '').trim();
         if (text && text.length <= 500) parts.push(text);
       }
