@@ -4217,13 +4217,12 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         // Use BOTH innerText AND querySelectorAll — passkey modal may be in shadow DOM
         // and not appear in innerText.
         const passKeyTexts = ['My Passkeys Are Not Available', 'Passkeys Are Not Available', 'Verify with passkey', 'Verification failed'];
+        // Check innerText first
         const inInnerText = passKeyTexts.some(t => text.includes(t));
-        const inElements = !inInnerText && Array.from(document.querySelectorAll('a, button, span, div, p, h1, h2, h3')).some(el => {
-          if (el.children.length > 0) return false; // leaf nodes only
-          const t = (el.textContent || '').trim();
-          return passKeyTexts.some(pk => t.includes(pk));
-        });
-        if (inInnerText || inElements) return 'passkey_failed';
+        // Check ALL elements textContent (catches shadow DOM / portals that escape innerText)
+        const allTextContent = Array.from(document.querySelectorAll('*')).map(el => el.textContent || '').join(' ');
+        const inAllElements = passKeyTexts.some(t => allTextContent.includes(t));
+        if (inInnerText || inAllElements) return 'passkey_failed';
         // Confirm release modal — "Received payment in your account?" dialog
         // Must check BEFORE verify_payment because modal overlays the Verify Payment page
         if (text.includes('Received payment in your account') ||
