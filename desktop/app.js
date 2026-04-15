@@ -2366,18 +2366,11 @@ async function idleScan(page) {
         console.log('[SparkP2P] Reloading order page for clean chat state...');
         await page.goto(
           `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
-          { waitUntil: 'domcontentloaded', timeout: 15000 }
+          { waitUntil: 'load', timeout: 20000 }
         ).catch(() => {});
-        // Wait for React chat panel to render before Vision screenshots it
-        for (let i = 0; i < 20; i++) {
-          const found = await page.evaluate(() => {
-            const els = Array.from(document.querySelectorAll('[contenteditable="true"]'));
-            return els.some(el => { const r = el.getBoundingClientRect(); return r.width > 50 && r.left > window.innerWidth * 0.3; });
-          }).catch(() => false);
-          if (found) { console.log(`[SparkP2P] Chat panel ready (${(i+1)*500}ms)`); break; }
-          await new Promise(r => setTimeout(r, 500));
-        }
-        await new Promise(r => setTimeout(r, 1000));
+        // Extra wait for React to hydrate and render the full chat panel
+        await new Promise(r => setTimeout(r, 3000));
+        console.log('[SparkP2P] Chat panel ready — proceeding');
 
         if (mpesaCode) {
           // Step 1c: Verify code with VPS
@@ -3844,24 +3837,25 @@ async function sendChatMessage(page, message) {
     const agent = await getMidsceneAgent(page);
 
     // Step 1: Midscene Vision locates and clicks the chat input box
+    // Use a broad description so it works regardless of exact placeholder text
     console.log('[Midscene] Tapping chat input box...');
-    await agent.aiTap('the "Enter message here" chat input box at the bottom of the right-side chat panel');
-    await new Promise(r => setTimeout(r, 600));
+    await agent.aiTap('the text input area at the bottom of the right-side chat panel where messages to the buyer are typed — it is a narrow bar along the bottom of the chat section');
+    await new Promise(r => setTimeout(r, 800));
 
     // Step 2: Paste message via clipboard — required for React controlled inputs
     // Ctrl+A clears existing text, Ctrl+V pastes the new message
     await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
-    await new Promise(r => setTimeout(r, 150));
+    await new Promise(r => setTimeout(r, 200));
     clipboard.writeText(message);
-    await new Promise(r => setTimeout(r, 150));
+    await new Promise(r => setTimeout(r, 200));
     await page.keyboard.down('Control'); await page.keyboard.press('KeyV'); await page.keyboard.up('Control');
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 800));
 
-    // Step 3: Midscene Vision clicks the Send button
+    // Step 3: Midscene Vision clicks the Send button (paper plane / arrow icon)
     console.log('[Midscene] Clicking Send button...');
-    await agent.aiTap('the Send button next to the chat message input');
-    await new Promise(r => setTimeout(r, 1000));
+    await agent.aiTap('the Send button or paper plane icon to the right of the chat message input');
+    await new Promise(r => setTimeout(r, 1200));
 
     console.log(`[Midscene] ✅ Message sent: "${message.substring(0, 60)}"`);
     return true;
