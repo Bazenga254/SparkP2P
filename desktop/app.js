@@ -1628,8 +1628,9 @@ async function findAndReadPaymentScreenshot(page) {
     // ── Step 3: Midscene clicks the screenshot thumbnail to open lightbox ──
     console.log('[Midscene] Clicking payment screenshot thumbnail to enlarge...');
     await agent.aiTap(
-      'the payment image or photo thumbnail sent by the buyer in the chat messages on the right side — ' +
-      'click it to open the enlarged/lightbox view'
+      'the photo or image thumbnail inside the chat messages on the right panel — ' +
+      'it is a rectangular image sent by the buyer showing a phone screen or payment receipt, ' +
+      'located in the middle of the chat conversation area (not a button, not an icon)'
     );
     console.log('[Midscene] Clicked thumbnail — waiting 3s for lightbox to open...');
     await new Promise(r => setTimeout(r, 3000));
@@ -3775,14 +3776,21 @@ async function sendChatMessage(page, message) {
 
     const agent = await getMidsceneAgent(page);
 
-    // Step 1: aiInput — Midscene locates the chat input and types the message
+    // Step 1: aiInput — type message into the chat input bar
     console.log('[Midscene] Typing message into chat input...');
-    await agent.aiInput(message, 'the chat message input box at the bottom of the right-side chat panel');
+    await agent.aiInput(
+      message,
+      'the narrow rectangular text input bar at the very bottom of the right-side chat panel, ' +
+      'below all the chat messages, where it says "Enter message here" or similar placeholder text'
+    );
     await new Promise(r => setTimeout(r, 500));
 
-    // Step 2: aiKeyboardPress Enter — faster and more reliable than clicking Send button
+    // Step 2: aiKeyboardPress Enter to submit
     console.log('[Midscene] Pressing Enter to send...');
-    await agent.aiKeyboardPress('Enter', 'the chat message input box at the bottom of the right-side chat panel');
+    await agent.aiKeyboardPress(
+      'Enter',
+      'the narrow rectangular text input bar at the very bottom of the right-side chat panel'
+    );
     await new Promise(r => setTimeout(r, 1000));
 
     console.log(`[Midscene] ✅ Message sent: "${message.substring(0, 60)}"`);
