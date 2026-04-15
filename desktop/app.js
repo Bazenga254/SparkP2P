@@ -4173,31 +4173,24 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
       if (screen === 'verify_payment') {
         const clicked = await clickButton(page, 'Payment Received', 'payment received');
         if (!clicked) {
-          // Payment Received not found — passkey modal likely showing but outside innerText
-          // (shadow DOM / portal). Try passkey bypass inline across all frames.
-          console.log('[Vision] Payment Received not found — checking for passkey modal in DOM...');
-          const patterns = [/my passkeys are not available/i, /passkeys are not available/i, /use another method/i];
-          for (const frame of [page, ...page.frames()]) {
-            try {
-              const matched = await frame.evaluate((pats) => {
-                const allEls = Array.from(document.querySelectorAll('a, button, span, div, [role="button"], [role="link"]'));
-                for (let i = allEls.length - 1; i >= 0; i--) {
-                  const el = allEls[i];
-                  const t = (el.textContent || '').trim();
-                  if (!pats.some(p => new RegExp(p).test(t)) || t.length > 120) continue;
-                  const r = el.getBoundingClientRect();
-                  if (r.width === 0 || r.height === 0) continue;
-                  el.click();
-                  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                  return t;
-                }
-                return null;
-              }, patterns.map(p => p.source));
-              if (matched) {
-                console.log(`[Vision] ✅ Passkey bypass clicked inline from verify_payment: "${matched}"`);
-                break;
-              }
-            } catch (_) {}
+          // Payment Received not found — passkey modal likely showing (outside innerText).
+          // Use Vision to find and click "My Passkeys Are Not Available" fast.
+          console.log('[Vision] Payment Received not found — Vision passkey bypass...');
+          try {
+            const pss = await page.screenshot({ type: 'jpeg', quality: 85 });
+            const praw = await visionAsk(pss.toString('base64'),
+              `Binance passkey modal. Find the "My Passkeys Are Not Available" link below the yellow "Try Again" button.
+Return ONLY JSON: {"x": <number>, "y": <number>}
+Viewport 1280x800. No markdown.`, 80);
+            const pc = JSON.parse(praw);
+            const px2 = parseFloat(pc.x), py2 = parseFloat(pc.y);
+            console.log(`[Vision] Passkey bypass inline coords: (${px2}, ${py2})`);
+            if (isFinite(px2) && isFinite(py2) && px2 > 0 && px2 < 1280 && py2 > 0 && py2 < 800) {
+              await page.mouse.click(px2, py2);
+              console.log(`[Vision] ✅ Passkey bypass inline Vision click at (${px2}, ${py2})`);
+            }
+          } catch (e) {
+            console.log(`[Vision] Passkey bypass inline Vision error: ${e.message?.substring(0, 60)}`);
           }
         }
         await new Promise(r => setTimeout(r, 2000));
@@ -4328,46 +4321,48 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
         continue;
       }
 
-      // ── Passkey failed — DOM clicks "My Passkeys Are Not Available" ──────────
+      // ── Passkey failed — Vision clicks "My Passkeys Are Not Available" fast ──
       if (screen === 'passkey_failed') {
-        console.log('[Vision] Passkey screen — DOM clicking "My Passkeys Are Not Available"...');
-        await new Promise(r => setTimeout(r, 1000)); // let modal fully render
-
-        let clicked = false;
-
-        // Search all frames — directly .click() the element so the browser follows the link
+        console.log('[Vision] Passkey screen — Vision locating "My Passkeys Are Not Available"...');
+        await new Promise(r => setTimeout(r, 600)); // let modal render
+        const ss = await page.screenshot({ type: 'jpeg', quality: 85 });
+        try {
+          const raw = await visionAsk(ss.toString('base64'),
+            `Binance passkey modal. Find the "My Passkeys Are Not Available" link — it is a small underlined blue/grey text link below the "Try Again" yellow button.
+Return ONLY JSON: {"x": <number>, "y": <number>}
+Viewport 1280x800. No markdown.`, 80);
+          const coords = JSON.parse(raw);
+          const px = parseFloat(coords.x), py = parseFloat(coords.y);
+          console.log(`[Vision] Passkey bypass Vision coords: (${px}, ${py})`);
+          if (isFinite(px) && isFinite(py) && px > 0 && px < 1280 && py > 0 && py < 800) {
+            await page.mouse.click(px, py);
+            console.log(`[Vision] ✅ "My Passkeys Are Not Available" clicked via Vision at (${px}, ${py})`);
+            await new Promise(r => setTimeout(r, 1500));
+            continue;
+          }
+        } catch (e) {
+          console.log(`[Vision] Passkey Vision error: ${e.message?.substring(0, 60)}`);
+        }
+        // DOM fallback
         for (const frame of [page, ...page.frames()]) {
           try {
             const matched = await frame.evaluate(() => {
-              const patterns = [
-                /my passkeys are not available/i,
-                /passkeys are not available/i,
-                /use another method/i,
-                /try another way/i,
-              ];
-              const allEls = Array.from(document.querySelectorAll('a, button, span, div, p, [role="button"], [role="link"]'));
-              for (let i = allEls.length - 1; i >= 0; i--) {
-                const el = allEls[i];
-                const t = (el.textContent || '').trim();
-                if (!patterns.some(p => p.test(t)) || t.length > 120) continue;
+              const pats = [/my passkeys are not available/i, /passkeys are not available/i, /use another method/i];
+              const els = Array.from(document.querySelectorAll('a, button, span, div, [role="button"], [role="link"]'));
+              for (let i = els.length - 1; i >= 0; i--) {
+                const el = els[i]; const t = (el.textContent || '').trim();
+                if (!pats.some(p => p.test(t)) || t.length > 120) continue;
                 const r = el.getBoundingClientRect();
-                if (r.width === 0 || r.height === 0) continue;
-                el.click();
-                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                if (!r.width || !r.height) continue;
+                el.click(); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
                 return t;
               }
               return null;
             });
-            if (matched) {
-              console.log(`[Vision] ✅ "My Passkeys Are Not Available" DOM clicked (text: "${matched}")`);
-              clicked = true;
-              break;
-            }
+            if (matched) { console.log(`[Vision] ✅ Passkey bypass DOM clicked: "${matched}"`); break; }
           } catch (_) {}
         }
-
-        if (!clicked) console.log('[Vision] Could not find "My Passkeys Are Not Available" in DOM — will retry next step');
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 1500));
         continue;
       }
 
