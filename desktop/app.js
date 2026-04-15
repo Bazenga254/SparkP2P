@@ -2304,7 +2304,9 @@ async function idleScan(page) {
         await new Promise(r => setTimeout(r, 2000));
 
         // 3. Vision handles: modal checkbox → Confirm Release → security verification
-        await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [vd.code], bankRefs: [] } });
+        // skipNavigation=true — we're already on the order page with the modal open.
+        // Navigating away would close the modal and lose the state.
+        await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [vd.code], bankRefs: [] } }, { skipNavigation: true });
 
         // Cleanup
         activeOrderNumber = null;
@@ -4106,7 +4108,7 @@ async function analyzePageWithVision(page) {
   }
 }
 
-async function releaseWithVision(page, orderNumber, action) {
+async function releaseWithVision(page, orderNumber, action, { skipNavigation = false } = {}) {
   const MAX_STEPS = 60;  // Raised: buyer has up to 15 min, awaiting_payment uses DOM poll not steps
   let step = 0;
   let consecutiveUnknown = 0;  // Track back-to-back unknowns before reloading
@@ -4125,8 +4127,12 @@ async function releaseWithVision(page, orderNumber, action) {
   }
 
   try {
-    await navigateToOrderDetail(page, orderNumber);
-    await new Promise(r => setTimeout(r, 1500));
+    if (skipNavigation) {
+      console.log(`[Vision] Skipping navigation — already on order page with modal open`);
+    } else {
+      await navigateToOrderDetail(page, orderNumber);
+      await new Promise(r => setTimeout(r, 1500));
+    }
 
     // Send pre-release chat message if provided
     if (action.message) await sendChatMessage(page, action.message);
