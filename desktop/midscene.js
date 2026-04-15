@@ -11,7 +11,7 @@
  *   aiScroll({ direction, scrollType, locate }) — scroll element/page
  */
 
-const CLAUDE_MODEL  = 'claude-haiku-4-5-20251001';
+const CLAUDE_MODEL  = 'claude-sonnet-4-5';
 const OPENAI_MODEL  = 'gpt-4o';
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const OPENAI_URL    = 'https://api.openai.com/v1/chat/completions';
