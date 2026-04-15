@@ -4293,60 +4293,45 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
         continue;
       }
 
-      // ── Passkey failed — Vision finds "My Passkeys Are Not Available" and clicks it ──
+      // ── Passkey failed — DOM clicks "My Passkeys Are Not Available" ──────────
       if (screen === 'passkey_failed') {
-        console.log('[Vision] Passkey screen — Vision locating "My Passkeys Are Not Available" button...');
+        console.log('[Vision] Passkey screen — DOM clicking "My Passkeys Are Not Available"...');
         await new Promise(r => setTimeout(r, 1000)); // let modal fully render
 
         let clicked = false;
 
-        // ── Step 1: Vision-primary — take screenshot, ask Vision for button coords ──
-        try {
-          const ss = await page.screenshot({ type: 'jpeg', quality: 90 });
-          const raw = await visionAsk(ss.toString('base64'),
-            `This is a Binance "Verify with passkey" modal showing "Verification failed".
-Find the "My Passkeys Are Not Available" link/button — it is near the bottom of the modal, below the "Try Again" button.
-Return ONLY JSON with its center pixel coordinates: {"x": <number>, "y": <number>}
-Viewport is 1280x800. No markdown, no explanation.`, 100);
-          const coords = JSON.parse(raw);
-          const px = parseFloat(coords.x);
-          const py = parseFloat(coords.y);
-          if (isFinite(px) && isFinite(py) && px > 0 && px < 1280 && py > 0 && py < 800) {
-            await page.mouse.click(px, py);
-            console.log(`[Vision] ✅ "My Passkeys Are Not Available" clicked via Vision at (${px}, ${py})`);
-            clicked = true;
-          } else {
-            console.log(`[Vision] Vision coords invalid (${coords.x}, ${coords.y}) — trying DOM fallback`);
-          }
-        } catch (e) {
-          console.log(`[Vision] Passkey Vision error: ${e.message?.substring(0, 60)} — trying DOM fallback`);
-        }
-
-        // ── Step 2: DOM fallback — search all frames for the button text ──────────
-        if (!clicked) {
-          for (const frame of [page, ...page.frames()]) {
-            try {
-              const result = await frame.evaluate(() => {
-                for (const el of Array.from(document.querySelectorAll('*')).reverse()) {
-                  const t = el.textContent.trim();
-                  if (!/passkey.*not.*available/i.test(t) || t.length > 100) continue;
-                  const r = el.getBoundingClientRect();
-                  if (r.width === 0 || r.height === 0) continue;
-                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-                }
-                return null;
-              });
-              if (result) {
-                await page.mouse.click(result.x, result.y);
-                console.log(`[Vision] ✅ "My Passkeys Are Not Available" clicked via DOM at (${Math.round(result.x)}, ${Math.round(result.y)})`);
-                clicked = true;
-                break;
+        // Search all frames — directly .click() the element so the browser follows the link
+        for (const frame of [page, ...page.frames()]) {
+          try {
+            const matched = await frame.evaluate(() => {
+              const patterns = [
+                /my passkeys are not available/i,
+                /passkeys are not available/i,
+                /use another method/i,
+                /try another way/i,
+              ];
+              const allEls = Array.from(document.querySelectorAll('a, button, span, div, p, [role="button"], [role="link"]'));
+              for (let i = allEls.length - 1; i >= 0; i--) {
+                const el = allEls[i];
+                const t = (el.textContent || '').trim();
+                if (!patterns.some(p => p.test(t)) || t.length > 120) continue;
+                const r = el.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                el.click();
+                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                return t;
               }
-            } catch (_) {}
-          }
+              return null;
+            });
+            if (matched) {
+              console.log(`[Vision] ✅ "My Passkeys Are Not Available" DOM clicked (text: "${matched}")`);
+              clicked = true;
+              break;
+            }
+          } catch (_) {}
         }
 
-        if (!clicked) console.log('[Vision] Could not click "My Passkeys Are Not Available" — will retry next step');
+        if (!clicked) console.log('[Vision] Could not find "My Passkeys Are Not Available" in DOM — will retry next step');
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
