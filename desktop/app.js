@@ -509,9 +509,22 @@ async function connectPuppeteer() {
     for (let i = 1; i < pages.length; i++) {
       await pages[i].close().catch(() => {});
     }
-    console.log('[SparkP2P] Puppeteer connected');
+    // Set 80% zoom on the main tab and re-apply after every navigation
+    if (pages[0]) {
+      await setZoom80(pages[0]);
+      pages[0].on('load', () => setZoom80(pages[0]).catch(() => {}));
+    }
+    console.log('[SparkP2P] Puppeteer connected (zoom 80%)');
     return true;
   } catch (e) { return false; }
+}
+
+async function setZoom80(page) {
+  try {
+    const session = await page.target().createCDPSession();
+    await session.send('Emulation.setPageScaleFactor', { pageScaleFactor: 0.8 });
+    await session.detach();
+  } catch (_) {}
 }
 
 async function getPage(urlMatch) {
