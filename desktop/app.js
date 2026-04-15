@@ -4459,28 +4459,88 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         if (mpesaVerified) {
           console.log(`[Vision] ✅ M-Pesa confirmed — ticking checkbox and releasing...`);
 
-          // ── Step 1: SparkAgent taps the checkbox ────────────────────────────
-          console.log(`[Vision] SparkAgent tapping checkbox...`);
-          const agent = getMidsceneAgent(page);
-          try {
-            await agent.aiTap(
-              'the small square checkbox on the left side of the text "I have verified that I received" inside the confirmation modal'
-            );
-            console.log(`[Vision] ✅ Checkbox tapped via SparkAgent`);
-          } catch (e) {
-            console.log(`[Vision] SparkAgent checkbox failed: ${e.message?.substring(0, 80)}`);
+          // ── Step 1: Tick the checkbox — DOM first, Vision fallback ─────────────
+          console.log(`[Vision] Ticking confirm-release checkbox...`);
+          const checkboxClicked = await page.evaluate(() => {
+            // Binance uses Ant Design — try multiple selectors
+            const selectors = [
+              'input[type="checkbox"]',
+              '.ant-checkbox-input',
+              '.bn-checkbox-input',
+              '[class*="checkbox"] input',
+              '[class*="checkbox"]',
+            ];
+            for (const sel of selectors) {
+              const els = Array.from(document.querySelectorAll(sel));
+              for (const el of els) {
+                if (el.getBoundingClientRect().width > 0) {
+                  el.click();
+                  // also dispatch change event for React
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                  return true;
+                }
+              }
+            }
+            // Fallback: click the label text containing "I have verified"
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+            while (walker.nextNode()) {
+              const el = walker.currentNode;
+              const t = (el.textContent || '').trim().toLowerCase();
+              if (t.includes('i have verified') && el.getBoundingClientRect().width > 0) {
+                el.click();
+                return true;
+              }
+            }
+            return false;
+          }).catch(() => false);
+
+          if (checkboxClicked) {
+            console.log(`[Vision] ✅ Checkbox ticked via DOM`);
+          } else {
+            console.log(`[Vision] DOM checkbox failed — trying SparkAgent Vision...`);
+            const agent = getMidsceneAgent(page);
+            try {
+              await agent.aiTap(
+                'the small square checkbox on the left side of the text "I have verified that I received" inside the confirmation modal'
+              );
+              console.log(`[Vision] ✅ Checkbox tapped via SparkAgent`);
+            } catch (e) {
+              console.log(`[Vision] SparkAgent checkbox failed: ${e.message?.substring(0, 80)}`);
+            }
           }
           await new Promise(r => setTimeout(r, 1200));
 
-          // ── Step 2: SparkAgent taps Confirm Release button ───────────────────
-          console.log(`[Vision] SparkAgent tapping Confirm Release button...`);
-          try {
-            await agent.aiTap(
-              'the yellow or golden "Confirm Release" button at the bottom of the modal'
-            );
-            console.log(`[Vision] ✅ Confirm Release tapped via SparkAgent`);
-          } catch (e) {
-            console.log(`[Vision] SparkAgent Confirm Release failed: ${e.message?.substring(0, 80)}`);
+          // ── Step 2: Click Confirm Release — DOM first, Vision fallback ──────────
+          console.log(`[Vision] Clicking Confirm Release button...`);
+          const confirmClicked = await page.evaluate(() => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+            while (walker.nextNode()) {
+              const el = walker.currentNode;
+              const tag = el.tagName;
+              const t = (el.textContent || '').trim().toLowerCase();
+              if ((tag === 'BUTTON' || tag === 'A' || el.getAttribute('role') === 'button') &&
+                  t.includes('confirm') && t.includes('release') &&
+                  el.getBoundingClientRect().width > 0) {
+                el.click();
+                return true;
+              }
+            }
+            return false;
+          }).catch(() => false);
+
+          if (confirmClicked) {
+            console.log(`[Vision] ✅ Confirm Release clicked via DOM`);
+          } else {
+            console.log(`[Vision] DOM Confirm Release failed — trying SparkAgent Vision...`);
+            const agent2 = getMidsceneAgent(page);
+            try {
+              await agent2.aiTap(
+                'the yellow or golden "Confirm Release" button at the bottom of the modal'
+              );
+              console.log(`[Vision] ✅ Confirm Release tapped via SparkAgent`);
+            } catch (e) {
+              console.log(`[Vision] SparkAgent Confirm Release failed: ${e.message?.substring(0, 80)}`);
+            }
           }
           await new Promise(r => setTimeout(r, 3000));
 
