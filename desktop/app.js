@@ -1932,7 +1932,7 @@ Return ONLY valid JSON:
 }
 
 async function verifyMpesaPayment(orderNumber, fiatAmount, page = null, preExtracted = null) {
-  if (!token) return false;
+  if (!token) return { verified: false, reason: 'no token' };
   try {
     // Use pre-extracted codes if provided (e.g. read before modal covered the chat).
     // Only re-scan the chat from page if no pre-extracted codes were supplied.
@@ -1958,17 +1958,17 @@ async function verifyMpesaPayment(orderNumber, fiatAmount, page = null, preExtra
         bank_refs_from_chat: bankRefs.length ? bankRefs : null,
       }),
     });
-    if (!res.ok) return false;
+    if (!res.ok) return { verified: false, reason: 'VPS error' };
     const data = await res.json();
     if (data.verified) {
       console.log(`[SparkP2P] M-Pesa verified: receipt=${data.mpesa_receipt}, amount=KES ${data.amount_received}, from=${data.payer_name}`);
     } else {
       console.log(`[SparkP2P] M-Pesa NOT verified: ${data.reason}`);
     }
-    return data.verified === true;
+    return { verified: data.verified === true, reason: data.reason || '' };
   } catch (e) {
     console.error('[SparkP2P] verifyMpesaPayment error:', e.message?.substring(0, 60));
-    return false;
+    return { verified: false, reason: 'error' };
   }
 }
 
@@ -2369,7 +2369,7 @@ async function idleScan(page) {
         if (mpesaCode) {
           // Step 1c: Verify code with VPS
           console.log(`[SparkP2P] Step 1c: Verifying code ${mpesaCode} with VPS...`);
-          const verified = await verifyMpesaPayment(
+          const { verified, reason: verifyReason } = await verifyMpesaPayment(
             order.orderNumber, order.totalPrice, null,
             { mpesaCodes: [mpesaCode], bankRefs: [] }
           );
@@ -2858,7 +2858,7 @@ async function monitorActiveOrder(page) {
         await new Promise(r => setTimeout(r, 1000));
       }
 
-      const verified = await verifyMpesaPayment(orderNum, activeOrderFiatAmount || info.fiat_amount_kes, page);
+      const { verified: verified, reason: verifyReason2 } = await verifyMpesaPayment(orderNum, activeOrderFiatAmount || info.fiat_amount_kes, page);
       if (verified) {
         console.log(`[SparkP2P] ✅ M-Pesa confirmed — releasing`);
         await page.keyboard.press('Escape').catch(() => {});
@@ -2940,8 +2940,8 @@ async function monitorActiveOrder(page) {
 
     // NOTE: do NOT match 'confirm payment' — that button appears on ALL sell order pages
     if (lower.includes('verify payment') || lower.includes('payment received')) {
-      const verified = await verifyMpesaPayment(orderNum, activeOrderFiatAmount, page);
-      if (verified) {
+      const { verified: verified3, reason: verifyReason3 } = await verifyMpesaPayment(orderNum, activeOrderFiatAmount, page);
+      if (verified3) {
         await page.keyboard.press('Escape').catch(() => {});
         await new Promise(r => setTimeout(r, 1000));
         await clickButton(page, 'Payment Received', 'payment received');
@@ -4454,7 +4454,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         console.log(`[Vision] Confirm release modal — verifying M-Pesa for order ${orderNumber}...`);
         // Use codes extracted before the modal opened (modal covers chat panel).
         // Pass null for page so it doesn't try to re-scan the hidden chat.
-        const mpesaVerified = await verifyMpesaPayment(orderNumber, activeOrderFiatAmount, null, action.preChatCodes || null);
+        const { verified: mpesaVerified, reason: mpesaFailReason } = await verifyMpesaPayment(orderNumber, activeOrderFiatAmount, null, action.preChatCodes || null);
 
         if (mpesaVerified) {
           console.log(`[Vision] ✅ M-Pesa confirmed — ticking checkbox and releasing...`);
@@ -4545,12 +4545,8 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           await new Promise(r => setTimeout(r, 3000));
 
         } else {
-          // M-Pesa NOT verified yet — close the modal and ask the buyer for their code.
-          // Do NOT appeal on first failure — payment may be delayed or unmatched.
-          // The next poll cycle will re-open the modal and try again.
-          console.log(`[Vision] ❌ M-Pesa not confirmed yet for ${orderNumber} — closing modal, asking buyer`);
-          // Close the modal — chat message was already sent BEFORE the modal opened.
-          // (Modal covers chat panel so sendChatMessage is impossible here.)
+          console.log(`[Vision] ❌ M-Pesa not confirmed for ${orderNumber}: ${mpesaFailReason}`);
+          // Close the modal first — chat panel is hidden while modal is open
           await page.keyboard.press('Escape').catch(() => {});
           await new Promise(r => setTimeout(r, 800));
           await page.evaluate(() => {
@@ -4563,7 +4559,16 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
               }
             }
           }).catch(() => {});
-          await new Promise(r => setTimeout(r, 500));
+          await new Promise(r => setTimeout(r, 800));
+
+          // Build a professional message depending on the rejection reason
+          const alreadyUsed = mpesaFailReason && mpesaFailReason.toLowerCase().includes('already used');
+          const buyerMsg = alreadyUsed
+            ? `Thank you for your order. However, the M-Pesa receipt you provided has already been used on a previous transaction and cannot be applied again. Kindly send a new, valid M-Pesa receipt for this order. If you completed the payment via your bank, please share the M-Pesa reference number from your bank statement. We appreciate your understanding.`
+            : `Thank you for your order. We were unable to verify your payment using the receipt provided. Kindly ensure you share a valid M-Pesa transaction receipt for KES ${activeOrderFiatAmount || ''}. If you made the payment through your bank, please provide the M-Pesa reference number included in your bank transaction confirmation. We are happy to assist once a valid receipt is received.`;
+
+          await sendChatMessage(page, buyerMsg);
+          console.log(`[Vision] Sent invalid-receipt message to buyer`);
           return { success: false, error: 'mpesa_unverified_waiting' };
         }
         continue;
