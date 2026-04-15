@@ -1616,11 +1616,11 @@ async function findAndReadPaymentScreenshot(page) {
 
     // ── Step 2: Midscene checks if a payment screenshot exists in the chat ─
     console.log('[Midscene] Checking for payment screenshot image in chat...');
-    const check = await agent.aiQuery(
-      '{ hasPaymentImage: boolean } — look at the chat messages on the RIGHT side of the page. ' +
-      'Is there a photo or image thumbnail sent by the buyer (not icons, not system messages, an actual image/photo)?'
+    const hasImage = await agent.aiBoolean(
+      'Is there a photo or image thumbnail sent by the buyer in the chat messages on the RIGHT side of the page? ' +
+      '(Not icons, not system messages — an actual photo or screenshot of a payment receipt)'
     );
-    if (!check?.hasPaymentImage) {
+    if (!hasImage) {
       console.log('[Midscene] No payment screenshot found in chat');
       return null;
     }
@@ -3775,15 +3775,14 @@ async function sendChatMessage(page, message) {
 
     const agent = await getMidsceneAgent(page);
 
-    // Step 1: aiInput — Midscene finds the chat input and types the message
-    // aiInput is the correct Midscene API for filling text fields
+    // Step 1: aiInput — Midscene locates the chat input and types the message
     console.log('[Midscene] Typing message into chat input...');
     await agent.aiInput(message, 'the chat message input box at the bottom of the right-side chat panel');
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 500));
 
-    // Step 2: aiTap — Midscene finds and clicks the Send button
-    console.log('[Midscene] Clicking Send button...');
-    await agent.aiTap('the Send button to the right of the chat message input box');
+    // Step 2: aiKeyboardPress Enter — faster and more reliable than clicking Send button
+    console.log('[Midscene] Pressing Enter to send...');
+    await agent.aiKeyboardPress('Enter', 'the chat message input box at the bottom of the right-side chat panel');
     await new Promise(r => setTimeout(r, 1000));
 
     console.log(`[Midscene] ✅ Message sent: "${message.substring(0, 60)}"`);
@@ -3994,7 +3993,9 @@ async function getMidsceneAgent(page) {
     console.log(`[Midscene] Configured — OpenAI GPT-4o, key: ${process.env.OPENAI_API_KEY?.substring(0, 12)}...`);
   }
   const { PuppeteerAgent } = _midsceneModule;
-  return new PuppeteerAgent(page);
+  // Cache enabled — XPath of chat input, Send button, screenshot thumbnail
+  // are cached after the first GPT-4o call; repeat visits skip the AI lookup
+  return new PuppeteerAgent(page, { cache: { id: 'sparkp2p-binance' } });
 }
 
 // ── Vision API helper — consistent with rest of codebase (raw fetch, no SDK) ──
