@@ -4080,6 +4080,34 @@ async function analyzePageWithVision(page) {
     return { screen: 'unknown' };
   }
   try {
+    // ── DOM pre-check — definitive markers that Vision often misreads ──────────
+    const domScreen = await page.evaluate(() => {
+      const body = document.body.innerText || '';
+      const lower = body.toLowerCase();
+      // confirm_release_modal is unmistakable — has this exact phrase
+      if (lower.includes('received payment in your account') ||
+          lower.includes('i have verified that i received') ||
+          lower.includes('confirm release')) return 'confirm_release_modal';
+      // order_complete
+      if (lower.includes('order completed') || lower.includes('sale successful') ||
+          lower.includes('crypto released')) return 'order_complete';
+      // security_verification
+      if (lower.includes('security verification requirements')) return 'security_verification';
+      // totp_input
+      if (lower.includes('authenticator app') && document.querySelector('input[maxlength="6"], input[maxlength="8"]')) return 'totp_input';
+      // email_otp
+      if ((lower.includes('email verification') || lower.includes('email code')) &&
+          document.querySelector('input[maxlength="6"], input[maxlength="8"]')) return 'email_otp_input';
+      // passkey_failed — only if we explicitly see passkey failure text
+      if (lower.includes('verification failed') && lower.includes('passkey')) return 'passkey_failed';
+      return null; // let Vision decide
+    }).catch(() => null);
+
+    if (domScreen) {
+      console.log(`[Vision] DOM pre-check → ${domScreen}`);
+      return { screen: domScreen };
+    }
+
     const raw = await page.screenshot({ type: 'jpeg', quality: 85 });
     const b64 = raw.toString('base64');
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -4283,23 +4311,22 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         // Order complete
         if (text.includes('Sale Successful') || text.includes('Order Completed') || text.includes('Released'))
           return 'order_complete';
-        // Passkey screen — MUST check before verify_payment because the passkey
-        // dialog overlays the order page which still has "Payment Received" in it.
-        // Use BOTH innerText AND querySelectorAll — passkey modal may be in shadow DOM
-        // and not appear in innerText.
-        const passKeyTexts = ['My Passkeys Are Not Available', 'Passkeys Are Not Available', 'Verify with passkey', 'Verification failed'];
+        // Confirm release modal — check FIRST because the page behind the modal
+        // may contain passkey-related text that would cause false passkey_failed detection.
+        if (text.includes('Received payment in your account') ||
+            text.includes('I have verified that I received') ||
+            text.includes('Confirm Release'))
+          return 'confirm_release_modal';
+        // Passkey screen — only trigger on explicit failure/unavailability indicators,
+        // not on generic "Verify with passkey" which can appear as a background option.
+        // Use BOTH innerText AND querySelectorAll — passkey modal may be in shadow DOM.
+        const passKeyTexts = ['My Passkeys Are Not Available', 'Passkeys Are Not Available', 'Verification failed'];
         // Check innerText first
         const inInnerText = passKeyTexts.some(t => text.includes(t));
         // Check ALL elements textContent (catches shadow DOM / portals that escape innerText)
         const allTextContent = Array.from(document.querySelectorAll('*')).map(el => el.textContent || '').join(' ');
         const inAllElements = passKeyTexts.some(t => allTextContent.includes(t));
         if (inInnerText || inAllElements) return 'passkey_failed';
-        // Confirm release modal — "Received payment in your account?" dialog
-        // Must check BEFORE verify_payment because modal overlays the Verify Payment page
-        if (text.includes('Received payment in your account') ||
-            text.includes('I have verified that I received') ||
-            text.includes('Confirm Release'))
-          return 'confirm_release_modal';
         // Verify Payment page
         if (text.includes('Verify Payment') ||
             text.includes('Confirm payment from buyer') ||
@@ -4432,58 +4459,28 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         if (mpesaVerified) {
           console.log(`[Vision] ✅ M-Pesa confirmed — ticking checkbox and releasing...`);
 
-          // ── Step 1: Vision locates checkbox → Puppeteer clicks it ───────────
-          console.log(`[Vision] Locating checkbox with Vision...`);
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-              const cbSS = await page.screenshot({ type: 'jpeg', quality: 90 });
-              const viewport = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
-              const cbRaw = await visionAsk(cbSS.toString('base64'),
-                `This is a Binance P2P "Received payment in your account?" modal with a checkbox.
-Find the small SQUARE CHECKBOX (the tick-box itself, not the text label).
-It is usually on the left side of the text "I have verified that I received KSh...".
-Return ONLY JSON with the checkbox CENTER coordinates as fractions of image size (0.0-1.0):
-{"x": 0.42, "y": 0.61}
-No markdown, no explanation.`, 60);
-              const cbCoords = JSON.parse(cbRaw.match(/\{[^}]+\}/)[0]);
-              const cbX = Math.round(parseFloat(cbCoords.x) * viewport.w);
-              const cbY = Math.round(parseFloat(cbCoords.y) * viewport.h);
-              if (cbX > 0 && cbX < viewport.w && cbY > 0 && cbY < viewport.h) {
-                await page.mouse.click(cbX, cbY);
-                console.log(`[Vision] ✅ Checkbox clicked at (${cbX}, ${cbY}) attempt ${attempt}`);
-                break;
-              }
-            } catch (e) {
-              console.log(`[Vision] Checkbox Vision attempt ${attempt} failed: ${e.message?.substring(0, 60)}`);
-            }
-            await new Promise(r => setTimeout(r, 800));
+          // ── Step 1: SparkAgent taps the checkbox ────────────────────────────
+          console.log(`[Vision] SparkAgent tapping checkbox...`);
+          const agent = getMidsceneAgent(page);
+          try {
+            await agent.aiTap(
+              'the small square checkbox on the left side of the text "I have verified that I received" inside the confirmation modal'
+            );
+            console.log(`[Vision] ✅ Checkbox tapped via SparkAgent`);
+          } catch (e) {
+            console.log(`[Vision] SparkAgent checkbox failed: ${e.message?.substring(0, 80)}`);
           }
           await new Promise(r => setTimeout(r, 1200));
 
-          // ── Step 2: Vision locates Confirm Release button → Puppeteer clicks it ──
-          console.log(`[Vision] Locating Confirm Release button with Vision...`);
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-              const relSS = await page.screenshot({ type: 'jpeg', quality: 90 });
-              const viewport = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
-              const relRaw = await visionAsk(relSS.toString('base64'),
-                `This is a Binance P2P confirm release modal.
-Find the YELLOW/GOLDEN "Confirm Release" button at the bottom of the modal.
-Return ONLY JSON with the button CENTER coordinates as fractions of image size (0.0-1.0):
-{"x": 0.5, "y": 0.75}
-No markdown, no explanation.`, 60);
-              const relCoords = JSON.parse(relRaw.match(/\{[^}]+\}/)[0]);
-              const relX = Math.round(parseFloat(relCoords.x) * viewport.w);
-              const relY = Math.round(parseFloat(relCoords.y) * viewport.h);
-              if (relX > 0 && relX < viewport.w && relY > 0 && relY < viewport.h) {
-                await page.mouse.click(relX, relY);
-                console.log(`[Vision] ✅ Confirm Release clicked at (${relX}, ${relY}) attempt ${attempt}`);
-                break;
-              }
-            } catch (e) {
-              console.log(`[Vision] Confirm Release Vision attempt ${attempt} failed: ${e.message?.substring(0, 60)}`);
-            }
-            await new Promise(r => setTimeout(r, 800));
+          // ── Step 2: SparkAgent taps Confirm Release button ───────────────────
+          console.log(`[Vision] SparkAgent tapping Confirm Release button...`);
+          try {
+            await agent.aiTap(
+              'the yellow or golden "Confirm Release" button at the bottom of the modal'
+            );
+            console.log(`[Vision] ✅ Confirm Release tapped via SparkAgent`);
+          } catch (e) {
+            console.log(`[Vision] SparkAgent Confirm Release failed: ${e.message?.substring(0, 80)}`);
           }
           await new Promise(r => setTimeout(r, 3000));
 
