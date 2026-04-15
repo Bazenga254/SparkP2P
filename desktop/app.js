@@ -2303,32 +2303,50 @@ async function idleScan(page) {
         const vd = verifiedOrders.get(order.orderNumber);
         console.log(`[SparkP2P] ═══ Order ${order.orderNumber} — SECOND VISIT (release) ═══`);
 
-        // 1. Send message to buyer — Vision locates "Enter message here" box, clicks it, types, Enter
-        console.log(`[SparkP2P] SECOND VISIT — Vision locating chat input...`);
+        // 1. Send message to buyer — DOM locates chat input, clicks, types, Enter
+        console.log(`[SparkP2P] SECOND VISIT — locating chat input via DOM...`);
         const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
         try {
-          const ss = await page.screenshot({ type: 'jpeg', quality: 85 });
-          const raw = await visionAsk(ss.toString('base64'),
-            `This is a Binance P2P "Verify Payment" order page. Find the chat message input box — the text field that says "Enter message here" at the bottom right of the chat panel.
-Return ONLY JSON: {"x": <number>, "y": <number>}
-No markdown.`, 80);
-          const coords = JSON.parse(raw);
-          const mx = parseFloat(coords.x), my = parseFloat(coords.y);
-          console.log(`[SparkP2P] Vision chat input at (${Math.round(mx)}, ${Math.round(my)})`);
-          if (isFinite(mx) && isFinite(my) && mx > 0 && my > 0) {
-            await page.mouse.click(mx, my);
-            console.log(`[SparkP2P] Clicked chat input — waiting 2s...`);
-            await new Promise(r => setTimeout(r, 2000));
-            await page.keyboard.type(chatMsg, { delay: 10 });
-            await new Promise(r => setTimeout(r, 400));
+          const inputCoords = await page.evaluate(() => {
+            // Binance P2P chat uses a contenteditable div; also check textarea/input as fallback
+            const selectors = [
+              '[contenteditable="true"]',
+              'textarea[placeholder*="Enter"]',
+              'input[placeholder*="Enter"]',
+              'textarea[placeholder*="message"]',
+              'input[placeholder*="message"]',
+            ];
+            for (const sel of selectors) {
+              const els = Array.from(document.querySelectorAll(sel));
+              for (const el of els) {
+                const r = el.getBoundingClientRect();
+                // Must be visible and in the lower portion of the page (chat input area)
+                if (r.width > 50 && r.height > 5 && r.top > window.innerHeight * 0.4 && r.bottom <= window.innerHeight + 5) {
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel };
+                }
+              }
+            }
+            return null;
+          });
+
+          if (inputCoords) {
+            console.log(`[SparkP2P] Chat input found (${inputCoords.sel}) at (${Math.round(inputCoords.x)}, ${Math.round(inputCoords.y)})`);
+            await page.mouse.click(inputCoords.x, inputCoords.y);
+            await new Promise(r => setTimeout(r, 1000));
+            await page.keyboard.down('Control');
+            await page.keyboard.press('KeyA');
+            await page.keyboard.up('Control');
+            await page.keyboard.press('Backspace');
+            await page.keyboard.type(chatMsg, { delay: 20 });
+            await new Promise(r => setTimeout(r, 600));
             await page.keyboard.press('Enter');
-            await new Promise(r => setTimeout(r, 800));
-            console.log(`[SparkP2P] ✅ Message sent: "${chatMsg.substring(0, 60)}..."`);
+            await new Promise(r => setTimeout(r, 1000));
+            console.log(`[SparkP2P] ✅ Message sent`);
           } else {
-            console.log(`[SparkP2P] Vision returned invalid coords (${mx}, ${my}) — skipping message`);
+            console.log(`[SparkP2P] ⚠ Chat input not found via DOM — skipping message`);
           }
         } catch (e) {
-          console.log(`[SparkP2P] Vision chat error: ${e.message?.substring(0, 60)}`);
+          console.log(`[SparkP2P] Chat error: ${e.message}`);
         }
         await new Promise(r => setTimeout(r, 500));
         if (pauseNavigation) break;
