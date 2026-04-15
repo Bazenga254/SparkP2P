@@ -4308,92 +4308,67 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
         continue;
       }
 
-      // ── Passkey failed — skip to alternative method ─────────
+      // ── Passkey failed — Vision finds "My Passkeys Are Not Available" and clicks it ──
       if (screen === 'passkey_failed') {
-        // Wait up to 4s for "My Passkeys Are Not Available" to be visible and sized
-        try {
-          await page.waitForFunction(() => {
-            const all = Array.from(document.querySelectorAll('*'));
-            return all.some(e => {
-              const tc = e.textContent.trim();
-              if (!/passkey.*not.*available/i.test(tc) || tc.length >= 120) return false;
-              const r = e.getBoundingClientRect();
-              return r.width > 0 && r.height > 0;
-            });
-          }, { timeout: 4000 });
-        } catch (_) { /* didn't appear in time — try anyway */ }
+        console.log('[Vision] Passkey screen — Vision locating "My Passkeys Are Not Available" button...');
+        await new Promise(r => setTimeout(r, 1000)); // let modal fully render
 
-        // Search main frame + all iframes for the "My Passkeys Are Not Available" link.
-        // Returns debug info as return value (not console.log — that goes to browser console).
-        let passKeyCoords = null;
-        const allFrames = [page, ...page.frames()];
-        for (const frame of allFrames) {
-          try {
-            const result = await frame.evaluate(() => {
-              const all = Array.from(document.querySelectorAll('*'));
-              for (let i = all.length - 1; i >= 0; i--) {
-                const el = all[i];
-                const tc = el.textContent.trim();
-                if (!/passkey.*not.*available/i.test(tc) || tc.length >= 120) continue;
-                const rect = el.getBoundingClientRect();
-                if (rect.width === 0 || rect.height === 0) continue;
-                return { found: true, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, text: tc.substring(0, 60) };
-              }
-              // Return debug info so Node.js terminal can see it
-              const debugEls = all
-                .filter(e => /passkey/i.test(e.textContent) && e.textContent.trim().length < 150)
-                .map(e => {
-                  const r = e.getBoundingClientRect();
-                  return `${e.tagName}[${Math.round(r.width)}x${Math.round(r.height)}]="${e.textContent.trim().substring(0, 60)}"`;
-                });
-              return { found: false, debug: debugEls.slice(-10) }; // last 10 = most specific
-            });
-            if (result && result.found) {
-              passKeyCoords = result;
-              console.log(`[Vision] Passkey found in frame: "${result.text}"`);
-              break;
-            } else if (result && result.debug && result.debug.length > 0) {
-              console.log(`[DEBUG] Passkey DOM elements: ${JSON.stringify(result.debug)}`);
-            }
-          } catch (e) { /* cross-origin frame — skip */ }
+        let clicked = false;
+
+        // ── Step 1: Vision-primary — take screenshot, ask Vision for button coords ──
+        try {
+          const ss = await page.screenshot({ type: 'jpeg', quality: 90 });
+          const resp = await anthropic.messages.create({
+            model: 'claude-opus-4-5',
+            max_tokens: 100,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') } },
+              { type: 'text', text: `This is a Binance "Verify with passkey" modal showing "Verification failed".
+Find the "My Passkeys Are Not Available" link/button — it is near the bottom of the modal, below the "Try Again" button.
+Return ONLY JSON with its center pixel coordinates: {"x": <number>, "y": <number>}
+Viewport is 1280x800. No markdown, no explanation.` }
+            ]}]
+          });
+          const raw = (resp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+          const coords = JSON.parse(raw);
+          const px = parseFloat(coords.x);
+          const py = parseFloat(coords.y);
+          if (isFinite(px) && isFinite(py) && px > 0 && px < 1280 && py > 0 && py < 800) {
+            await page.mouse.click(px, py);
+            console.log(`[Vision] ✅ "My Passkeys Are Not Available" clicked via Vision at (${px}, ${py})`);
+            clicked = true;
+          } else {
+            console.log(`[Vision] Vision coords invalid (${coords.x}, ${coords.y}) — trying DOM fallback`);
+          }
+        } catch (e) {
+          console.log(`[Vision] Passkey Vision error: ${e.message?.substring(0, 60)} — trying DOM fallback`);
         }
 
-        if (passKeyCoords) {
-          await page.mouse.click(passKeyCoords.x, passKeyCoords.y);
-          console.log(`[Vision] Passkey button clicked at (${Math.round(passKeyCoords.x)},${Math.round(passKeyCoords.y)})`);
-        } else {
-          // Final fallback: ask Vision for exact pixel coordinates
-          console.log('[Vision] Passkey not found in DOM — asking Vision for coordinates');
-          try {
-            const ss = await page.screenshot({ type: 'jpeg', quality: 90 });
-            const resp = await fetch('https://api.anthropic.com/v1/messages', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-              body: JSON.stringify({
-                model: 'claude-haiku-4-5-20251001',
-                max_tokens: 100,
-                messages: [{ role: 'user', content: [
-                  { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') } },
-                  { type: 'text', text: `Find the "My Passkeys Are Not Available" link or button in this Binance passkey modal. Return its center pixel coordinates.\nReturn ONLY valid JSON: {"x": <number>, "y": <number>, "found": true}. If not visible return {"found": false}` },
-                ]}],
-              }),
-            });
-            const data = await resp.json();
-            const raw = (data.content?.[0]?.text || '').trim().replace(/```json|```/g, '');
-            const match = raw.match(/\{[\s\S]*\}/);
-            if (match) {
-              const parsed = JSON.parse(match[0]);
-              if (parsed.found && parsed.x && parsed.y) {
-                await page.mouse.click(parsed.x, parsed.y);
-                console.log(`[Vision] Passkey clicked via Vision coords (${parsed.x},${parsed.y})`);
-              } else {
-                console.log('[Vision] Vision could not locate passkey button');
+        // ── Step 2: DOM fallback — search all frames for the button text ──────────
+        if (!clicked) {
+          for (const frame of [page, ...page.frames()]) {
+            try {
+              const result = await frame.evaluate(() => {
+                for (const el of Array.from(document.querySelectorAll('*')).reverse()) {
+                  const t = el.textContent.trim();
+                  if (!/passkey.*not.*available/i.test(t) || t.length > 100) continue;
+                  const r = el.getBoundingClientRect();
+                  if (r.width === 0 || r.height === 0) continue;
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                }
+                return null;
+              });
+              if (result) {
+                await page.mouse.click(result.x, result.y);
+                console.log(`[Vision] ✅ "My Passkeys Are Not Available" clicked via DOM at (${Math.round(result.x)}, ${Math.round(result.y)})`);
+                clicked = true;
+                break;
               }
-            }
-          } catch (e) {
-            console.log('[Vision] Vision coordinate fallback error:', e.message?.substring(0, 60));
+            } catch (_) {}
           }
         }
+
+        if (!clicked) console.log('[Vision] Could not click "My Passkeys Are Not Available" — will retry next step');
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
