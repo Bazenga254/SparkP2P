@@ -5,6 +5,7 @@ const http = require('http');
 const { execFile, execSync } = require('child_process');
 const puppeteer = require('puppeteer-core');
 const aiScanner = require('./ai-scanner');
+const { SparkAgent } = require('./midscene');
 const { autoUpdater } = require('electron-updater');
 
 // ── Local control server on port 9223 ───────────────────────
@@ -80,6 +81,7 @@ let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 let traderPin = null;    // Binance fund/trading password — stored in memory only
 let totpSecret = null;   // Google Authenticator base32 secret — stored in memory only
+const DEV_UNLOCK = true; // ← set false to re-enable browser lock
 let browserLocked = false;
 let lockFrameListener = null;
 let lockGmailFrameListener = null;
@@ -597,7 +599,9 @@ async function onGmailConfirmed() {
   if (setup.complete && !pollerRunning) {
     pauseNavigation = false;
     mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
-    console.log('[SparkP2P] All connections established — bot ready to start');
+    console.log('[SparkP2P] All connections established — starting bot');
+    await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
+    startPoller();
   }
 }
 
@@ -688,6 +692,7 @@ async function isLoggedIn() {
 // ═══════════════════════════════════════════════════════════
 
 async function injectLockOverlay(page) {
+  if (DEV_UNLOCK) return { ok: true, dev: true };
   const result = await page.evaluate(() => {
     try {
       if (document.getElementById('sparkp2p-browser-lock')) return { ok: true, existing: true };
@@ -756,6 +761,7 @@ async function injectLockOverlay(page) {
 }
 
 async function lockChromeBrowser() {
+  if (DEV_UNLOCK) { console.log('[SparkP2P] DEV_UNLOCK — browser lock skipped'); return; }
   browserLocked = true;
 
   // Lock Binance tab
@@ -3767,37 +3773,95 @@ async function clickButton(page, ...textOptions) {
   return false;
 }
 
-// ── Send a chat message on an order page — 100% Midscene Vision, no DOM selectors ─
+// ── Send a chat message on an order page ─────────────────────────────────────────
+// Uses React-native input setter so React's onChange fires and the Send button activates.
+// Falls back to Midscene if the DOM approach can't find the input.
 async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); }
 async function sendChatMessage(page, message) {
   try {
     await page.keyboard.press('Escape').catch(() => {});
     await new Promise(r => setTimeout(r, 500));
 
-    const agent = await getMidsceneAgent(page);
+    // ── Step 1: Type message using React's native setter (so React registers the change) ──
+    const typed = await page.evaluate((msg) => {
+      const selectors = [
+        'textarea[placeholder*="message" i]',
+        'textarea[placeholder*="enter" i]',
+        'input[placeholder*="message" i]',
+        'textarea',
+      ];
+      let input = null;
+      for (const sel of selectors) {
+        const candidates = document.querySelectorAll(sel);
+        for (const el of candidates) {
+          if (el.offsetParent !== null && !el.disabled && !el.readOnly) { input = el; break; }
+        }
+        if (input) break;
+      }
+      if (!input) return false;
+      input.focus();
+      // Use React's native value setter so onChange fires
+      const proto = input.tagName === 'TEXTAREA'
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+      const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(input, msg);
+      } else {
+        input.value = msg;
+      }
+      input.dispatchEvent(new Event('input',  { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }, message).catch(() => false);
 
-    // Step 1: aiInput — type message into the chat input bar
-    console.log('[Midscene] Typing message into chat input...');
-    await agent.aiInput(
-      message,
-      'the narrow rectangular text input bar at the very bottom of the right-side chat panel, ' +
-      'below all the chat messages, where it says "Enter message here" or similar placeholder text'
-    );
-    await new Promise(r => setTimeout(r, 500));
+    if (!typed) {
+      // DOM input not found — fall back to Midscene
+      console.log('[SparkP2P] Chat input not found via DOM — trying Midscene...');
+      try {
+        const agent = await getMidsceneAgent(page);
+        await agent.aiInput(
+          message,
+          'the narrow rectangular text input bar at the very bottom of the right-side chat panel'
+        );
+      } catch (me) {
+        console.error(`[SparkP2P] sendChatMessage: both DOM and Midscene failed — ${me.message?.substring(0, 80)}`);
+        return false;
+      }
+    } else {
+      console.log('[SparkP2P] Message typed via DOM');
+    }
 
-    // Step 2: aiKeyboardPress Enter to submit
-    console.log('[Midscene] Pressing Enter to send...');
-    await agent.aiKeyboardPress(
-      'Enter',
-      'the narrow rectangular text input bar at the very bottom of the right-side chat panel'
-    );
+    await new Promise(r => setTimeout(r, 400));
+
+    // ── Step 2: Click the Send button (more reliable than pressing Enter in React apps) ──
+    const sendClicked = await page.evaluate(() => {
+      // Look for a Send button near the chat input
+      const input = document.querySelector(
+        'textarea[placeholder*="message" i], textarea[placeholder*="enter" i], input[placeholder*="message" i], textarea'
+      );
+      if (!input) return false;
+      // Walk up to find the chat panel container, then look for a submit button inside it
+      let container = input.parentElement;
+      for (let i = 0; i < 5 && container; i++) {
+        const btn = container.querySelector('button[type="submit"], button:not([disabled])');
+        if (btn && container.contains(input)) { btn.click(); return true; }
+        container = container.parentElement;
+      }
+      return false;
+    }).catch(() => false);
+
+    if (!sendClicked) {
+      // Fall back to Enter key
+      await page.keyboard.press('Enter');
+    }
+
     await new Promise(r => setTimeout(r, 1000));
-
-    console.log(`[Midscene] ✅ Message sent: "${message.substring(0, 60)}"`);
+    console.log(`[SparkP2P] ✅ Message sent: "${message.substring(0, 60)}"`);
     return true;
 
   } catch (e) {
-    console.error(`[Midscene] sendChatMessage error: ${e.message?.substring(0, 100)}`);
+    console.error(`[SparkP2P] sendChatMessage error: ${e.message?.substring(0, 100)}`);
     return false;
   }
 }
@@ -3990,20 +4054,13 @@ function startMidsceneAnthropicProxy() {
 // PuppeteerAgent routes calls through our local OpenAI→Anthropic proxy.
 // Config via MIDSCENE_MODEL_* env vars (official documented approach) set
 // on process.env BEFORE import so Midscene reads them at module load time.
-let _midsceneModule = null;
-async function getMidsceneAgent(page) {
-  if (!_midsceneModule) {
-    // Use the documented env vars: OPENAI_API_KEY + OPENAI_BASE_URL + MIDSCENE_MODEL_NAME
-    // OPENAI_API_KEY is already loaded from .env — just add the base URL and model name
-    process.env.OPENAI_BASE_URL    = 'https://api.openai.com/v1';
-    process.env.MIDSCENE_MODEL_NAME = 'gpt-4o';
-    _midsceneModule = await import('@midscene/web/puppeteer');
-    console.log(`[Midscene] Configured — OpenAI GPT-4o, key: ${process.env.OPENAI_API_KEY?.substring(0, 12)}...`);
-  }
-  const { PuppeteerAgent } = _midsceneModule;
-  // Cache enabled — XPath of chat input, Send button, screenshot thumbnail
-  // are cached after the first GPT-4o call; repeat visits skip the AI lookup
-  return new PuppeteerAgent(page, { cache: { id: 'sparkp2p-binance' } });
+function getMidsceneAgent(page) {
+  // SparkAgent — our custom Vision agent (Claude Haiku primary, GPT-4o fallback)
+  return new SparkAgent(page, {
+    anthropicApiKey: anthropicApiKey,
+    openaiApiKey:    process.env.OPENAI_API_KEY,
+    cache:           { id: 'sparkp2p-binance' },
+  });
 }
 
 // ── Vision API helper — consistent with rest of codebase (raw fetch, no SDK) ──
@@ -5288,7 +5345,9 @@ async function connectIm() {
           if (setup.complete && !pollerRunning) {
             pauseNavigation = false;
             mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
-            console.log('[SparkP2P] All connections established — bot ready to start');
+            console.log('[SparkP2P] All connections established — starting bot');
+            await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
+            startPoller();
           }
         }
       } catch (e) { verifying = false; }
