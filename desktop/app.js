@@ -3895,66 +3895,62 @@ async function clickButton(page, ...textOptions) {
   return false;
 }
 
-// ── Send a chat message on an order page ────────────────────────────────────
-// 1. DOM: find "Enter message here" input by placeholder → click → type → Enter
-// 2. Vision fallback: screenshot → Claude finds the input → click → type → Enter
+// ── Send a chat message on an order page — Vision locates the input ─────────
 async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); }
 async function sendChatMessage(page, message) {
   try {
-    // ── Step 1: DOM — find input by placeholder text ──────────────────────────
-    const domCoords = await page.evaluate(() => {
-      const selectors = [
-        'input[placeholder*="Enter message"]',
-        'textarea[placeholder*="Enter message"]',
-        'input[placeholder*="message"]',
-        'textarea[placeholder*="message"]',
-        '[contenteditable="true"]',
-      ];
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (!el) continue;
-        const r = el.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-      }
-      return null;
-    }).catch(() => null);
+    console.log(`[Vision] Taking screenshot to locate chat input box...`);
+    const ss = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: false });
+    const ssBase64 = ss.toString('base64');
 
-    let cx, cy;
-    if (domCoords) {
-      cx = domCoords.x; cy = domCoords.y;
-      console.log(`[SparkP2P] Chat input found via DOM at (${Math.round(cx)}, ${Math.round(cy)})`);
-    } else {
-      // ── Step 2: Vision fallback — ask Claude to find "Enter message here" box ─
-      console.log('[SparkP2P] Chat input not in DOM — asking Vision...');
-      const ss = await page.screenshot({ type: 'jpeg', quality: 85 });
-      const raw = await visionAsk(ss.toString('base64'),
-        `Binance P2P order page. Find the chat message input box — the text field with placeholder "Enter message here" at the bottom right of the screen.
-Return ONLY JSON: {"x": <number>, "y": <number>}
-No markdown.`, 80);
-      const coords = JSON.parse(raw);
-      cx = parseFloat(coords.x); cy = parseFloat(coords.y);
-      console.log(`[SparkP2P] Chat input found via Vision at (${Math.round(cx)}, ${Math.round(cy)})`);
-      if (!isFinite(cx) || !isFinite(cy) || cx <= 0 || cy <= 0) {
-        console.log('[SparkP2P] sendChatMessage: could not locate input');
-        return false;
-      }
+    const visionPrompt = `You are looking at a Binance P2P order page. On the RIGHT side of the screen there is a chat panel.
+At the BOTTOM of that chat panel is a text input box — it usually shows the placeholder text "Enter message here" or is an empty white input field.
+
+Your job: find the center pixel coordinates of that chat input box.
+
+Rules:
+- Look carefully at the bottom-right area of the screen
+- The input box is typically a wide horizontal bar at the very bottom of the chat section
+- It is NOT a button — it is an input field where you type messages
+- Return ONLY a JSON object with no extra text, no markdown, no explanation
+
+Format: {"x": <integer>, "y": <integer>}`;
+
+    console.log(`[Vision] Asking Claude Vision to locate the chat input box...`);
+    const visionRaw = await visionAsk(ssBase64, visionPrompt, 300);
+    console.log(`[Vision] Raw response: ${visionRaw}`);
+
+    const jsonMatch = visionRaw.match(/\{[^}]*"x"\s*:\s*\d+[^}]*"y"\s*:\s*\d+[^}]*\}/);
+    if (!jsonMatch) throw new Error(`Vision did not return valid JSON: ${visionRaw.substring(0, 100)}`);
+
+    const coords = JSON.parse(jsonMatch[0]);
+    const cx = parseFloat(coords.x), cy = parseFloat(coords.y);
+    console.log(`[Vision] Located chat input at (${Math.round(cx)}, ${Math.round(cy)})`);
+
+    if (!isFinite(cx) || !isFinite(cy) || cx <= 0 || cy <= 0) {
+      throw new Error(`Vision returned invalid coordinates: x=${cx}, y=${cy}`);
     }
 
-    // ── Step 3: Click input, type message, press Enter to send ───────────────
+    console.log(`[Vision] Clicking chat input at (${Math.round(cx)}, ${Math.round(cy)})...`);
     await page.mouse.click(cx, cy);
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 1500));
+
+    console.log(`[Vision] Clearing any existing text and typing message...`);
     await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
-    await new Promise(r => setTimeout(r, 100));
-    await page.keyboard.type(message, { delay: 10 });
-    await new Promise(r => setTimeout(r, 400));
-    await page.keyboard.press('Enter');
+    await new Promise(r => setTimeout(r, 300));
+    await page.keyboard.type(message, { delay: 25 });
     await new Promise(r => setTimeout(r, 600));
-    console.log(`[SparkP2P] ✅ Message sent: "${message.substring(0, 60)}"`);
+
+    console.log(`[Vision] Pressing Enter to send...`);
+    await page.keyboard.press('Enter');
+    await new Promise(r => setTimeout(r, 1200));
+
+    console.log(`[Vision] ✅ Message sent: "${message.substring(0, 60)}"`);
     return true;
 
   } catch (e) {
-    console.error('[SparkP2P] sendChatMessage error:', e.message?.substring(0, 80));
+    console.error(`[Vision] sendChatMessage error: ${e.message?.substring(0, 100)}`);
     return false;
   }
 }
