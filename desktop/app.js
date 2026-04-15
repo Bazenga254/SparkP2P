@@ -4063,10 +4063,17 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         if (text.includes('Sale Successful') || text.includes('Order Completed') || text.includes('Released'))
           return 'order_complete';
         // Passkey screen — MUST check before verify_payment because the passkey
-        // dialog overlays the order page which still has "Payment Received" in it
-        if (text.includes('My Passkeys Are Not Available') || text.includes('Passkeys Are Not Available') ||
-            text.includes('Verify with passkey') || text.includes('Verification failed'))
-          return 'passkey_failed';
+        // dialog overlays the order page which still has "Payment Received" in it.
+        // Use BOTH innerText AND querySelectorAll — passkey modal may be in shadow DOM
+        // and not appear in innerText.
+        const passKeyTexts = ['My Passkeys Are Not Available', 'Passkeys Are Not Available', 'Verify with passkey', 'Verification failed'];
+        const inInnerText = passKeyTexts.some(t => text.includes(t));
+        const inElements = !inInnerText && Array.from(document.querySelectorAll('a, button, span, div, p, h1, h2, h3')).some(el => {
+          if (el.children.length > 0) return false; // leaf nodes only
+          const t = (el.textContent || '').trim();
+          return passKeyTexts.some(pk => t.includes(pk));
+        });
+        if (inInnerText || inElements) return 'passkey_failed';
         // Confirm release modal — "Received payment in your account?" dialog
         // Must check BEFORE verify_payment because modal overlays the Verify Payment page
         if (text.includes('Received payment in your account') ||
@@ -4164,7 +4171,35 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
       // ── Verify payment — click Payment Received ─────────────────────────────
       // Message to buyer is sent by the main loop BEFORE releaseWithVision is called.
       if (screen === 'verify_payment') {
-        await clickButton(page, 'Payment Received', 'payment received');
+        const clicked = await clickButton(page, 'Payment Received', 'payment received');
+        if (!clicked) {
+          // Payment Received not found — passkey modal likely showing but outside innerText
+          // (shadow DOM / portal). Try passkey bypass inline across all frames.
+          console.log('[Vision] Payment Received not found — checking for passkey modal in DOM...');
+          const patterns = [/my passkeys are not available/i, /passkeys are not available/i, /use another method/i];
+          for (const frame of [page, ...page.frames()]) {
+            try {
+              const matched = await frame.evaluate((pats) => {
+                const allEls = Array.from(document.querySelectorAll('a, button, span, div, [role="button"], [role="link"]'));
+                for (let i = allEls.length - 1; i >= 0; i--) {
+                  const el = allEls[i];
+                  const t = (el.textContent || '').trim();
+                  if (!pats.some(p => new RegExp(p).test(t)) || t.length > 120) continue;
+                  const r = el.getBoundingClientRect();
+                  if (r.width === 0 || r.height === 0) continue;
+                  el.click();
+                  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                  return t;
+                }
+                return null;
+              }, patterns.map(p => p.source));
+              if (matched) {
+                console.log(`[Vision] ✅ Passkey bypass clicked inline from verify_payment: "${matched}"`);
+                break;
+              }
+            } catch (_) {}
+          }
+        }
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
