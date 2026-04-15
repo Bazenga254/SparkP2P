@@ -3841,19 +3841,40 @@ async function sendChatMessage(page, message) {
     await page.keyboard.press('Escape').catch(() => {});
     await new Promise(r => setTimeout(r, 1000));
 
-    // Midscene uses Vision to find and click "Enter message here" on the right side
+    // Step 1: Midscene Vision finds and clicks "Enter message here" on the right side
     console.log('[Midscene] Locating "Enter message here" input box...');
     const agent = await getMidsceneAgent(page);
     await agent.aiTap('the "Enter message here" input box at the bottom of the chat panel on the right side of the screen');
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 600));
 
-    // Paste via clipboard — most reliable for React controlled inputs
+    // Step 2: Re-confirm focus via DOM — aiTap click can lose focus on React re-renders.
+    // Explicitly find the contenteditable on the right side and call .focus() on it.
+    const focusGained = await page.evaluate(() => {
+      const els = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+      const chatInput = els.find(el => {
+        const r = el.getBoundingClientRect();
+        return r.left > window.innerWidth * 0.4 && r.width > 50 && r.height > 5;
+      });
+      if (!chatInput) return false;
+      chatInput.focus();
+      chatInput.click();
+      return true;
+    }).catch(() => false);
+
+    if (!focusGained) {
+      console.log('[sendChatMessage] Could not find chat input via DOM — skipping message');
+      return false;
+    }
+    await new Promise(r => setTimeout(r, 400));
+
+    // Step 3: Clear any existing text, write to clipboard, paste, send
     await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 200));
     clipboard.writeText(message);
+    await new Promise(r => setTimeout(r, 100)); // ensure clipboard is ready
     await page.keyboard.down('Control'); await page.keyboard.press('KeyV'); await page.keyboard.up('Control');
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 800));
     await page.keyboard.press('Enter');
     await new Promise(r => setTimeout(r, 1000));
 
