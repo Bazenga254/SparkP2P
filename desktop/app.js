@@ -1669,47 +1669,71 @@ async function findAndReadPaymentScreenshot(page) {
     await new Promise(r => setTimeout(r, 12000)); // remaining wait (total ~15s)
 
     // ── 6. Screenshot the enlarged/lightbox view ───────────────────────────
-    const enlargedSS = await page.screenshot({ type: 'jpeg', quality: 95 });
+    const enlargedSS = await page.screenshot({ type: 'png' }); // PNG for maximum OCR clarity
     await takeScreenshot('payment_screenshot_enlarged', page);
 
-    // ── 5. Vision reads the enlarged screenshot — extract M-Pesa code ─────────
-    console.log('[Vision] Reading enlarged payment screenshot...');
-    const readResp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 200,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: enlargedSS.toString('base64') } },
-          { type: 'text', text: `This is a payment confirmation screenshot sent by a buyer on Binance P2P.
-Extract the M-Pesa transaction code from an OUTGOING/SENT payment message.
-M-Pesa format: "XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to [business name]..."
-The code is EXACTLY 10 uppercase alphanumeric characters at the START (e.g. UDE5J13AGR, QE1FXYZABC).
+    // ── 7. Vision reads the enlarged screenshot — try up to 2 attempts ────────
+    console.log('[Vision] Reading enlarged payment screenshot (Sonnet)...');
 
-CRITICAL OCR RULES — read character by character and do NOT guess:
-- The digit 1 (one) looks like the letter I (eye) — distinguish carefully by context
-- The digit 0 (zero) looks like the letter O — M-Pesa codes use uppercase letters and digits only
-- Count the characters: MUST be exactly 10. If you count 9 or 11, look again.
-- Do not add or remove characters to make it 10 — only return what you can clearly read
-- Common M-Pesa code patterns: starts with 2-3 uppercase letters, then digits and letters mixed
+    const MPESA_OCR_PROMPT = `You are an OCR specialist reading an M-Pesa payment confirmation screenshot.
 
-If you can clearly read ALL 10 characters: {"found": true, "code": "XXXXXXXXXX", "amount": <number>}
-If the code is unclear, blurry, or you cannot count exactly 10 chars: {"found": false, "reason": "blurry|not_mpesa|other"}
-Return ONLY valid JSON.` },
-        ]}],
-      }),
-    });
-    const readData = await readResp.json();
-    const readRaw = (readData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
-    const readMatch = readRaw.match(/\{[\s\S]*\}/);
+Your job: find and return the M-Pesa transaction code.
 
-    // Parse Vision read result
+M-Pesa confirmation messages look like:
+  "QE1FXYZABC Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE on 15/4/26..."
+  "UDE5J13AGR Confirmed. KES 500 sent to ABC COMPANY..."
+
+The transaction code is the FIRST word — always exactly 10 characters, uppercase letters and digits only.
+
+READ EVERY CHARACTER individually. Do not skip or guess.
+Common confusions: I vs 1, O vs 0, B vs 8, S vs 5, Z vs 2. Use context (codes mix letters+digits).
+
+Also extract the KES amount sent (the number after "Ksh" or "KES").
+
+Return JSON:
+{"found": true, "code": "XXXXXXXXXX", "amount": 2000}
+OR if no M-Pesa confirmation is visible:
+{"found": false, "reason": "no_mpesa_message"}`;
+
     let readResult = null;
-    if (readMatch) {
-      try { readResult = JSON.parse(readMatch[0]); } catch (_) {}
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const readResp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-5',  // Sonnet for better OCR accuracy on this critical step
+            max_tokens: 150,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: enlargedSS.toString('base64') } },
+              { type: 'text', text: MPESA_OCR_PROMPT },
+            ]}],
+          }),
+        });
+        const readData = await readResp.json();
+        const readRaw = (readData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+        console.log(`[Vision] Attempt ${attempt} raw response: ${readRaw.substring(0, 120)}`);
+        const readMatch = readRaw.match(/\{[\s\S]*\}/);
+        if (readMatch) {
+          const parsed = JSON.parse(readMatch[0]);
+          if (parsed.found && parsed.code) {
+            // Accept 9-11 char codes — slight miscount is OK, VPS will validate
+            if (/^[A-Z0-9]{9,11}$/i.test(parsed.code)) {
+              readResult = { ...parsed, code: parsed.code.toUpperCase() };
+              console.log(`[Vision] Attempt ${attempt} ✅ code=${readResult.code} amount=${readResult.amount}`);
+              break;
+            } else {
+              console.log(`[Vision] Attempt ${attempt} rejected code "${parsed.code}" — unexpected format`);
+            }
+          } else {
+            console.log(`[Vision] Attempt ${attempt}: found=false reason=${parsed.reason}`);
+          }
+        }
+      } catch (e) {
+        console.log(`[Vision] Attempt ${attempt} error: ${e.message?.substring(0, 60)}`);
+      }
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
     }
-    if (!readResult) console.log('[Vision] Could not parse read response:', readRaw.substring(0, 80));
 
     // ── 7. Close lightbox by reloading the page — most reliable approach ─────
     // Escape is unreliable for Binance's lightbox. Page reload guarantees all
