@@ -2705,50 +2705,11 @@ async function clickOrderWithMouse(page, orderNumber) {
 // ── Focused order monitor — runs every 20s while an order is active ─────────
 async function navigateToOrderDetail(page, orderNumber) {
   if (pauseNavigation) { console.log('[SparkP2P] Navigation paused — skipping order navigation'); return false; }
-  console.log(`[SparkP2P] Navigating to order ${orderNumber} via orders list`);
-  await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
-    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-  await new Promise(r => setTimeout(r, 3000));
-
-  // Find the element containing the order number and get its screen coordinates
-  const box = await page.evaluate((orderNo) => {
-    // Look for <a> link or any element whose text contains the order number
-    const candidates = [
-      ...Array.from(document.querySelectorAll('a')),
-      ...Array.from(document.querySelectorAll('span, td, div')),
-    ];
-    for (const el of candidates) {
-      if (el.textContent.replace(/\s/g, '').includes(orderNo)) {
-        const rect = el.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }
-      }
-    }
-    // Fallback: find "Please release" text
-    const releaseEl = Array.from(document.querySelectorAll('*')).find(
-      el => el.children.length === 0 && el.textContent.trim() === 'Please release'
-    );
-    if (releaseEl) {
-      const rect = releaseEl.getBoundingClientRect();
-      if (rect.width > 0) return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    }
-    return null;
-  }, orderNumber);
-
-  if (!box) {
-    console.error(`[SparkP2P] Could not find order ${orderNumber} on page`);
-    return false;
-  }
-
-  console.log(`[SparkP2P] Moving mouse to order at (${Math.round(box.x)}, ${Math.round(box.y)}) and clicking`);
-  await page.mouse.move(box.x, box.y, { steps: 10 }); // smooth move
-  await new Promise(r => setTimeout(r, 300));
-  await page.mouse.click(box.x, box.y);
-  await new Promise(r => setTimeout(r, 3000));
-
-  const finalUrl = page.url();
-  console.log(`[SparkP2P] Now on: ${finalUrl}`);
+  const url = `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNumber}`;
+  console.log(`[SparkP2P] Navigating directly to order ${orderNumber}`);
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 2500));
+  console.log(`[SparkP2P] Now on: ${page.url()}`);
   return true;
 }
 
