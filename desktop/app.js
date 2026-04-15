@@ -2303,77 +2303,67 @@ async function idleScan(page) {
         const vd = verifiedOrders.get(order.orderNumber);
         console.log(`[SparkP2P] ═══ Order ${order.orderNumber} — SECOND VISIT (release) ═══`);
 
-        // 1. Send message to buyer — DOM locates chat input, clicks, types, Enter
-        console.log(`[SparkP2P] SECOND VISIT — locating chat input via DOM...`);
+        // 1. Send message to buyer — Vision locates the chat input box, clicks it, types, Enter
         const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
+        let chatSent = false;
         try {
-          const inputCoords = await page.evaluate(() => {
-            // Pass 1: placeholder attribute on textarea/input
-            const placeholderSelectors = [
-              'textarea[placeholder*="Enter message"]', 'input[placeholder*="Enter message"]',
-              'textarea[placeholder*="Enter"]', 'input[placeholder*="Enter"]',
-              'textarea[placeholder*="message"]', 'input[placeholder*="message"]',
-            ];
-            for (const sel of placeholderSelectors) {
-              const el = document.querySelector(sel);
-              if (el) {
-                const r = el.getBoundingClientRect();
-                if (r.width > 20) return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel };
-              }
-            }
+          console.log(`[Vision] Taking screenshot to locate chat input box...`);
+          const chatSS = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: false });
+          const chatSSBase64 = chatSS.toString('base64');
 
-            // Pass 2: data-placeholder on contenteditable
-            const dpEl = document.querySelector('[contenteditable="true"][data-placeholder]');
-            if (dpEl) {
-              const r = dpEl.getBoundingClientRect();
-              if (r.width > 20) return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel: '[contenteditable][data-placeholder]' };
-            }
+          const visionPrompt = `You are looking at a Binance P2P order page. On the RIGHT side of the screen there is a chat panel.
+At the BOTTOM of that chat panel is a text input box — it usually shows the placeholder text "Enter message here" or is an empty white input field.
 
-            // Log ALL contenteditable positions to help debug
-            const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
-            const dbg = editables.map(el => {
-              const r = el.getBoundingClientRect();
-              return `x=${Math.round(r.left)} y=${Math.round(r.top)} w=${Math.round(r.width)} h=${Math.round(r.height)}`;
-            });
+Your job: find the center pixel coordinates of that chat input box.
 
-            // Pass 3: contenteditable in right half AND lower half (chat panel)
-            const W = window.innerWidth, H = window.innerHeight;
-            for (const el of editables) {
-              const r = el.getBoundingClientRect();
-              if (r.width > 50 && r.height > 5 && r.left > W * 0.45 && r.top > H * 0.45) {
-                return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel: '[ce-right-bottom]', dbg };
-              }
-            }
+Rules:
+- Look carefully at the bottom-right area of the screen
+- The input box is typically a wide horizontal bar at the very bottom of the chat section
+- It is NOT a button — it is an input field where you type messages
+- Return ONLY a JSON object with no extra text, no markdown, no explanation
 
-            // Pass 4: contenteditable in right half only (any height)
-            for (const el of editables) {
-              const r = el.getBoundingClientRect();
-              if (r.width > 50 && r.height > 5 && r.left > W * 0.45) {
-                return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel: '[ce-right]', dbg };
-              }
-            }
+Format: {"x": <integer>, "y": <integer>}`;
 
-            return { found: false, dbg };
-          });
+          console.log(`[Vision] Asking Claude Vision to locate the chat input box...`);
+          const visionRaw = await visionAsk(chatSSBase64, visionPrompt, 300);
+          console.log(`[Vision] Raw response: ${visionRaw}`);
 
-          if (inputCoords && inputCoords.x) {
-            console.log(`[SparkP2P] Chat input found (${inputCoords.sel}) at (${Math.round(inputCoords.x)}, ${Math.round(inputCoords.y)})`);
-            await page.mouse.click(inputCoords.x, inputCoords.y);
-            await new Promise(r => setTimeout(r, 1000));
-            await page.keyboard.down('Control');
-            await page.keyboard.press('KeyA');
-            await page.keyboard.up('Control');
-            await page.keyboard.press('Backspace');
-            await page.keyboard.type(chatMsg, { delay: 20 });
-            await new Promise(r => setTimeout(r, 600));
-            await page.keyboard.press('Enter');
-            await new Promise(r => setTimeout(r, 1000));
-            console.log(`[SparkP2P] ✅ Message sent`);
-          } else {
-            console.log(`[SparkP2P] ⚠ Chat input not found — DOM debug: ${JSON.stringify(inputCoords?.dbg || [])}`);
+          // Extract JSON even if Vision adds extra text
+          const jsonMatch = visionRaw.match(/\{[^}]*"x"\s*:\s*\d+[^}]*"y"\s*:\s*\d+[^}]*\}/);
+          if (!jsonMatch) throw new Error(`Vision did not return valid JSON: ${visionRaw.substring(0, 100)}`);
+
+          const coords = JSON.parse(jsonMatch[0]);
+          const cx = parseFloat(coords.x), cy = parseFloat(coords.y);
+          console.log(`[Vision] Located chat input at (${Math.round(cx)}, ${Math.round(cy)})`);
+
+          if (!isFinite(cx) || !isFinite(cy) || cx <= 0 || cy <= 0) {
+            throw new Error(`Vision returned invalid coordinates: x=${cx}, y=${cy}`);
           }
+
+          console.log(`[Vision] Clicking chat input at (${Math.round(cx)}, ${Math.round(cy)})...`);
+          await page.mouse.click(cx, cy);
+          await new Promise(r => setTimeout(r, 1500)); // wait for focus to settle
+
+          console.log(`[Vision] Clearing any existing text...`);
+          await page.keyboard.down('Control');
+          await page.keyboard.press('KeyA');
+          await page.keyboard.up('Control');
+          await page.keyboard.press('Backspace');
+          await new Promise(r => setTimeout(r, 300));
+
+          console.log(`[Vision] Typing message: "${chatMsg.substring(0, 50)}..."`);
+          await page.keyboard.type(chatMsg, { delay: 25 });
+          await new Promise(r => setTimeout(r, 600));
+
+          console.log(`[Vision] Pressing Enter to send...`);
+          await page.keyboard.press('Enter');
+          await new Promise(r => setTimeout(r, 1200));
+
+          chatSent = true;
+          console.log(`[Vision] ✅ Message sent successfully`);
         } catch (e) {
-          console.log(`[SparkP2P] Chat error: ${e.message}`);
+          console.log(`[Vision] ⚠ Chat Vision error: ${e.message}`);
+          console.log(`[Vision] Proceeding to release without sending message`);
         }
         await new Promise(r => setTimeout(r, 500));
         if (pauseNavigation) break;
