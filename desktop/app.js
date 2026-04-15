@@ -1608,67 +1608,30 @@ function stopPoller() {
 async function findAndReadPaymentScreenshot(page) {
   if (!anthropicApiKey) return null;
   try {
-    // ── 0. Scroll chat panel to bottom so the latest payment image is visible ─
-    // Only scrolls within the chat container — does NOT press Escape or navigate.
-    await page.evaluate(() => {
-      const sels = ['[class*="chat"]', '[class*="Chat"]', '[class*="message-list"]', '[class*="MessageList"]'];
-      for (const sel of sels) {
-        for (const el of document.querySelectorAll(sel)) {
-          if (el.scrollHeight > el.clientHeight + 10) el.scrollTop = el.scrollHeight;
-        }
-      }
-    }).catch(() => {});
+    // ── Step 1: Midscene scrolls chat to bottom so latest image is visible ─
+    console.log('[Midscene] Scrolling chat to bottom...');
+    const agent = await getMidsceneAgent(page);
+    await agent.aiAction('scroll to the bottom of the chat messages panel on the right side of the page').catch(() => {});
     await new Promise(r => setTimeout(r, 500));
 
-    // ── 1. Full-page screenshot (viewport only, 1280×800) ─────────────────
-    console.log('[Vision] Taking screenshot to locate payment proof in chat...');
-    const fullSS = await page.screenshot({ type: 'jpeg', quality: 90 });
-    const fullB64 = fullSS.toString('base64');
-
-    // ── 3. Ask Vision: is there a payment screenshot image in the chat? ────
-    // IMPORTANT: coordinates must be within the 1280×800 viewport.
-    const locateResp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 150,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: fullB64 } },
-          { type: 'text', text: `This is a Binance P2P sell order page (browser viewport: 1280×800 pixels).
-The chat panel is on the RIGHT side of the page.
-Look ONLY at the chat messages on the right side.
-Is there a payment screenshot IMAGE (M-Pesa confirmation, bank receipt, etc.) sent by the buyer?
-
-IMPORTANT: x must be between 640-1280, y must be between 50-780. Do NOT return coords outside these ranges.
-Return ONLY valid JSON with INTEGER pixel coordinates:
-{"found": true, "x": <integer 640-1280>, "y": <integer 50-780>}
-or {"found": false}` },
-        ]}],
-      }),
-    });
-    const locateData = await locateResp.json();
-    const locateRaw = (locateData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
-    const locateMatch = locateRaw.match(/\{[\s\S]*\}/);
-    if (!locateMatch) { console.log('[Vision] Could not parse locate response:', locateRaw.substring(0, 80)); return null; }
-    const locate = JSON.parse(locateMatch[0]);
-
-    if (!locate.found) {
-      console.log('[Vision] No payment screenshot found in chat');
+    // ── Step 2: Midscene checks if a payment screenshot exists in the chat ─
+    console.log('[Midscene] Checking for payment screenshot image in chat...');
+    const check = await agent.aiQuery(
+      '{ hasPaymentImage: boolean } — look at the chat messages on the RIGHT side of the page. ' +
+      'Is there a photo or image thumbnail sent by the buyer (not icons, not system messages, an actual image/photo)?'
+    );
+    if (!check?.hasPaymentImage) {
+      console.log('[Midscene] No payment screenshot found in chat');
       return null;
     }
 
-    // ── 4. Use Midscene aiTap to click the screenshot thumbnail ───────────
-    // More reliable than raw coordinates — Midscene visually identifies the
-    // exact thumbnail in the chat and clicks it precisely.
-    console.log('[Vision] Using Midscene to click payment screenshot thumbnail...');
-    const agent = await getMidsceneAgent(page);
+    // ── Step 3: Midscene clicks the screenshot thumbnail to open lightbox ──
+    console.log('[Midscene] Clicking payment screenshot thumbnail to enlarge...');
     await agent.aiTap(
-      'the payment screenshot image thumbnail in the chat messages on the right side — ' +
-      'it is a photo or screenshot sent by the buyer showing an M-Pesa confirmation or bank receipt, ' +
-      'displayed as an image thumbnail in the chat'
+      'the payment image or photo thumbnail sent by the buyer in the chat messages on the right side — ' +
+      'click it to open the enlarged/lightbox view'
     );
-    console.log('[Vision] Clicked thumbnail — waiting 3s for lightbox to open...');
+    console.log('[Midscene] Clicked thumbnail — waiting 3s for lightbox to open...');
     await new Promise(r => setTimeout(r, 3000));
 
     // ── 6. Verify lightbox opened — must see an enlarged PAYMENT IMAGE ─────
