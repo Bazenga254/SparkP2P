@@ -4208,58 +4208,65 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
             console.log(`[Vision] Checkbox Vision error: ${e.message?.substring(0, 60)} — falling back to DOM`);
           }
 
-          // DOM fallback if Vision failed
-          if (!cbClicked) {
-            await page.evaluate(() => {
-              for (const sel of ['input[type="checkbox"]', '[role="checkbox"]', '[class*="checkbox"]']) {
-                for (const el of document.querySelectorAll(sel)) {
-                  const r = el.getBoundingClientRect();
-                  if (r.width > 0 && r.height > 0) { el.click(); return; }
+          // DOM — always run to ensure React synthetic event fires on the checkbox
+          await page.evaluate(() => {
+            for (const sel of ['input[type="checkbox"]', '[role="checkbox"]', '[class*="checkbox"]']) {
+              for (const el of document.querySelectorAll(sel)) {
+                const r = el.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) {
+                  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                  console.log('[DOM] Checkbox dispatchEvent fired');
+                  return;
                 }
               }
-            });
-            console.log(`[Vision] Checkbox clicked via DOM fallback`);
-          }
-          await new Promise(r => setTimeout(r, 1200));
+            }
+          }).catch(() => {});
+          await new Promise(r => setTimeout(r, 1500));
 
           // ── Vision-guided Confirm Release click ───────────────────────────
+          await new Promise(r => setTimeout(r, 800)); // extra wait after checkbox
           const relSS = await page.screenshot({ type: 'jpeg', quality: 90 });
           let released = false;
           try {
             const relRaw = await visionAsk(relSS.toString('base64'),
-              `This is a Binance P2P confirmation modal. Find the "Confirm Release" button.
+              `This is a Binance P2P "Received payment in your account?" confirmation modal.
+Find the YELLOW/GOLDEN "Confirm Release" button — it is at the BOTTOM of the modal, a wide full-width yellow button.
 Return ONLY a JSON object with its center pixel coordinates:
 {"x": <number>, "y": <number>}
 The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no explanation.`, 100);
             const relCoords = JSON.parse(relRaw);
             const relX = parseFloat(relCoords.x);
             const relY = parseFloat(relCoords.y);
+            console.log(`[Vision] Confirm Release Vision coords: (${relX}, ${relY})`);
             if (isFinite(relX) && isFinite(relY) && relX > 0 && relX < 1280 && relY > 0 && relY < 800) {
               await page.mouse.click(relX, relY);
               console.log(`[Vision] Confirm Release clicked via mouse at (${relX}, ${relY})`);
               released = true;
             } else {
-              console.log(`[Vision] Confirm Release coords invalid — falling back to DOM`);
+              console.log(`[Vision] Confirm Release coords invalid — trying DOM`);
             }
           } catch (e) {
-            console.log(`[Vision] Confirm Release Vision error: ${e.message?.substring(0, 60)} — falling back to DOM`);
+            console.log(`[Vision] Confirm Release Vision error: ${e.message?.substring(0, 60)} — trying DOM`);
           }
 
-          // DOM fallback
-          if (!released) {
-            await page.evaluate(() => {
-              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-              while (walker.nextNode()) {
-                const el = walker.currentNode;
-                if (el.tagName !== 'BUTTON') continue;
-                const t = (el.textContent || '').trim().toLowerCase();
-                if (t === 'confirm release' || t.startsWith('confirm release')) { el.click(); return; }
+          // DOM click — always run after Vision to ensure React synthetic event fires
+          await page.evaluate(() => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+            while (walker.nextNode()) {
+              const el = walker.currentNode;
+              if (el.tagName !== 'BUTTON') continue;
+              const t = (el.textContent || '').trim().toLowerCase();
+              if (t === 'confirm release' || t.startsWith('confirm release')) {
+                el.scrollIntoView({ block: 'center' });
+                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                console.log('[DOM] Confirm Release dispatchEvent fired');
+                return;
               }
-            });
-            console.log(`[Vision] Confirm Release clicked via DOM fallback`);
-          }
+            }
+          }).catch(() => {});
           console.log(`[Vision] Confirm Release step done`);
-          await new Promise(r => setTimeout(r, 2000));
+          await new Promise(r => setTimeout(r, 3000));
 
         } else {
           // M-Pesa NOT verified yet — close the modal and ask the buyer for their code.
