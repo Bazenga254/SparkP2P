@@ -970,9 +970,9 @@ async function fetchAndApplyCredentials() {
   }
 }
 
-// Check that Binance, Gmail, and I&M are all connected before allowing bot to start
+// Check that Binance + Gmail are connected (I&M is optional — buy-side only)
 async function checkSetupComplete() {
-  if (!token) return { complete: false, missing: ['binance', 'gmail', 'im'] };
+  if (!token) return { complete: false, missing: ['binance', 'gmail'] };
   try {
     const res = await fetch(`${API_BASE}/traders/me`, {
       headers: { 'Authorization': `Bearer ${token}` },
@@ -982,7 +982,7 @@ async function checkSetupComplete() {
     const missing = [];
     if (!profile.binance_connected) missing.push('Binance');
     if (!profile.gmail_connected) missing.push('Gmail');
-    if (!profile.im_connected) missing.push('I&M Bank');
+    // I&M Bank is optional — bot runs sell-side without it
     return { complete: missing.length === 0, missing };
   } catch (e) {
     return { complete: false, missing: [] };
