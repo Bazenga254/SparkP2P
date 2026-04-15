@@ -2309,7 +2309,15 @@ async function idleScan(page) {
         const vd = verifiedOrders.get(order.orderNumber);
         console.log(`[SparkP2P] ═══ Order ${order.orderNumber} — SECOND VISIT (release) ═══`);
 
-        // 1. Send message to buyer — Vision locates the chat input box, clicks it, types, Enter
+        // Reload the order page to guarantee a clean state (no lightboxes, no overlays)
+        console.log(`[SparkP2P] Reloading order page for clean state...`);
+        await page.goto(
+          `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+          { waitUntil: 'domcontentloaded', timeout: 15000 }
+        ).catch(() => {});
+        await new Promise(r => setTimeout(r, 2500));
+
+        // 1. Send message to buyer — Vision locates the chat input box, clicks it, pastes, Enter
         const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
         let chatSent = false;
         try {
