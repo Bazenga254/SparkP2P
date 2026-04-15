@@ -2328,8 +2328,8 @@ async function idleScan(page) {
           const visionPrompt = `You are looking at a Binance P2P order page (1280x800 viewport).
 The page is split: LEFT side has order details, RIGHT side has a chat panel.
 
-Find the chat message TEXT INPUT BOX at the bottom of the RIGHT-side chat panel.
-It is a wide horizontal input bar with placeholder "Enter message here".
+Find the box that says "Enter message here" at the bottom of the RIGHT-side chat panel.
+It is a wide horizontal input bar showing the placeholder text "Enter message here".
 
 CRITICAL CONSTRAINTS:
 - x coordinate MUST be greater than 640 (right half of screen only)
@@ -3959,8 +3959,8 @@ async function sendChatMessage(page, message) {
     const visionPrompt = `You are looking at a Binance P2P order page (1280x800 viewport).
 The page is split: LEFT side has order details, RIGHT side has a chat panel.
 
-Find the chat message TEXT INPUT BOX at the bottom of the RIGHT-side chat panel.
-It is a wide horizontal input bar with placeholder "Enter message here".
+Find the box that says "Enter message here" at the bottom of the RIGHT-side chat panel.
+It is a wide horizontal input bar showing the placeholder text "Enter message here".
 
 CRITICAL CONSTRAINTS:
 - x coordinate MUST be greater than 640 (right half of screen only)
