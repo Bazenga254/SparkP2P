@@ -466,8 +466,6 @@ async function launchChrome(url) {
   chromeProcess = execFile(chrome, [
     `--remote-debugging-port=${CDP_PORT}`,
     '--no-first-run', '--no-default-browser-check',
-    '--window-size=1280,800',       // Fixed size so Vision always sees the same layout
-    '--window-position=0,0',        // Consistent position
     '--disable-features=MediaRouter', // Reduce noise
     '--user-data-dir=' + path.join(app.getPath('userData'), 'chrome-binance'),
     url || 'https://accounts.binance.com/en/login',
@@ -498,7 +496,7 @@ async function connectPuppeteer() {
   try {
     browser = await puppeteer.connect({
       browserURL: `http://127.0.0.1:${CDP_PORT}`,
-      defaultViewport: { width: 1280, height: 800 },  // Match Chrome window size — Vision always sees 1280×800
+      defaultViewport: null,  // Use actual Chrome window size
     });
     // When Chrome closes externally, immediately stop the bot (prevents auto-reopen)
     browser.on('disconnected', () => {
