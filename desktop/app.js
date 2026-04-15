@@ -4314,34 +4314,56 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
         continue;
       }
 
-      // ── Passkey failed — find element by DOM text, get its bbox, mouse.click() it ──
+      // ── Passkey failed — XPath click on exact text ──────────────────────────
       if (screen === 'passkey_failed') {
-        console.log('[Vision] Passkey screen — finding "My Passkeys Are Not Available" via DOM bbox...');
+        console.log('[Vision] Passkey screen — XPath clicking "My Passkeys Are Not Available"...');
         await new Promise(r => setTimeout(r, 800));
 
         let clicked = false;
-        for (const frame of [page, ...page.frames()]) {
+
+        // XPath finds the element with this exact text and Puppeteer clicks it properly
+        const xpaths = [
+          '//*[normalize-space(text())="My Passkeys Are Not Available"]',
+          '//*[contains(text(),"Passkeys Are Not Available")]',
+          '//*[contains(text(),"passkeys are not available")]',
+        ];
+        for (const xpath of xpaths) {
           try {
-            const result = await frame.evaluate(() => {
-              for (const el of Array.from(document.querySelectorAll('*')).reverse()) {
-                const t = (el.textContent || '').trim();
-                if (!/passkey.*not.*available/i.test(t) || t.length > 100) continue;
-                const r = el.getBoundingClientRect();
-                if (r.width === 0 || r.height === 0) continue;
-                return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-              }
-              return null;
-            });
-            if (result) {
-              await page.mouse.click(result.x, result.y);
-              console.log(`[Vision] ✅ "My Passkeys Are Not Available" clicked at (${Math.round(result.x)}, ${Math.round(result.y)})`);
+            const [el] = await page.$x(xpath);
+            if (el) {
+              await el.click();
+              console.log(`[Vision] ✅ "My Passkeys Are Not Available" clicked via XPath: ${xpath}`);
               clicked = true;
               break;
             }
           } catch (_) {}
         }
 
-        if (!clicked) console.log('[Vision] Could not find "My Passkeys Are Not Available" in DOM — will retry');
+        // Fallback: bbox + mouse.click across all frames
+        if (!clicked) {
+          for (const frame of [page, ...page.frames()]) {
+            try {
+              const result = await frame.evaluate(() => {
+                for (const el of Array.from(document.querySelectorAll('*')).reverse()) {
+                  const t = (el.textContent || '').trim();
+                  if (!/passkey.*not.*available/i.test(t) || t.length > 100) continue;
+                  const r = el.getBoundingClientRect();
+                  if (r.width === 0 || r.height === 0) continue;
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName, text: t.substring(0, 50) };
+                }
+                return null;
+              });
+              if (result) {
+                console.log(`[Vision] Fallback bbox: <${result.tag}> "${result.text}" at (${Math.round(result.x)}, ${Math.round(result.y)})`);
+                await page.mouse.click(result.x, result.y);
+                clicked = true;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+
+        if (!clicked) console.log('[Vision] Could not find "My Passkeys Are Not Available" — will retry');
         await new Promise(r => setTimeout(r, 1500));
         continue;
       }
