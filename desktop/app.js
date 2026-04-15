@@ -3845,18 +3845,11 @@ async function sendChatMessage(page, message) {
     // ── Step 2: Vision reads page and finds the chat input ───────────────────
     console.log('[SparkP2P] Vision locating chat input...');
     const ss1 = await page.screenshot({ type: 'jpeg', quality: 88 });
-    const inputResp = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 100,
-      messages: [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss1.toString('base64') } },
-        { type: 'text', text: `Binance P2P order page. The chat panel is on the RIGHT side of the screen (right half).
+    const inputRaw = await visionAsk(ss1.toString('base64'),
+      `Binance P2P order page. The chat panel is on the RIGHT side of the screen (right half).
 Locate the MESSAGE INPUT BOX — the horizontal text field at the very bottom of the chat panel where the user types messages to the buyer.
 Return ONLY JSON: {"x": <number>, "y": <number>}
-Viewport: 1280x800. The input is in the right half (x: 640–1260) near the bottom (y: 620–790). No markdown.` }
-      ]}]
-    });
-    const inputRaw = (inputResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+Viewport: 1280x800. The input is in the right half (x: 640–1260) near the bottom (y: 620–790). No markdown.`, 100);
     const inputCoords = JSON.parse(inputRaw);
     const cx = parseFloat(inputCoords.x);
     const cy = parseFloat(inputCoords.y);
@@ -3883,18 +3876,11 @@ Viewport: 1280x800. The input is in the right half (x: 640–1260) near the bott
     // ── Step 5: Vision reads page again and finds the Send button ────────────
     console.log('[SparkP2P] Vision locating send button...');
     const ss2 = await page.screenshot({ type: 'jpeg', quality: 88 });
-    const sendResp = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 100,
-      messages: [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss2.toString('base64') } },
-        { type: 'text', text: `Binance P2P chat panel on the RIGHT side. A message has been typed in the input box at the bottom.
+    const sendRaw = await visionAsk(ss2.toString('base64'),
+      `Binance P2P chat panel on the RIGHT side. A message has been typed in the input box at the bottom.
 Find the SEND button — the icon (arrow pointing right, paper plane, or similar) immediately to the RIGHT of the message input box.
 Return ONLY JSON: {"x": <number>, "y": <number>}
-Viewport: 1280x800. Send button is in the right half (x: 640–1280) near the bottom (y: 580–800). No markdown.` }
-      ]}]
-    });
-    const sendRaw = (sendResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+Viewport: 1280x800. Send button is in the right half (x: 640–1280) near the bottom (y: 580–800). No markdown.`, 100);
     const sendCoords = JSON.parse(sendRaw);
     const bx = parseFloat(sendCoords.x);
     const by = parseFloat(sendCoords.y);
@@ -4013,6 +3999,24 @@ async function analyzePageWithVision(page) {
     console.error('[Vision] analyzePageWithVision error:', e.message?.substring(0, 80));
     return { screen: 'unknown' };
   }
+}
+
+// ── Vision API helper — consistent with rest of codebase (raw fetch, no SDK) ──
+async function visionAsk(imageBase64, prompt, maxTokens = 150) {
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: 'claude-opus-4-5',
+      max_tokens: maxTokens,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
+        { type: 'text', text: prompt },
+      ]}],
+    }),
+  });
+  const data = await resp.json();
+  return (data.content?.[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
 }
 
 async function releaseWithVision(page, orderNumber, action, { skipNavigation = false } = {}) {
@@ -4184,25 +4188,12 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           const cbSS = await page.screenshot({ type: 'jpeg', quality: 90 });
           let cbClicked = false;
           try {
-            const cbResp = await anthropic.messages.create({
-              model: 'claude-opus-4-5',
-              max_tokens: 100,
-              messages: [{
-                role: 'user',
-                content: [{
-                  type: 'image',
-                  source: { type: 'base64', media_type: 'image/jpeg', data: cbSS.toString('base64') }
-                }, {
-                  type: 'text',
-                  text: `This is a Binance P2P "Received payment in your account?" confirmation modal.
+            const cbRaw = await visionAsk(cbSS.toString('base64'),
+              `This is a Binance P2P "Received payment in your account?" confirmation modal.
 Find the square CHECKBOX (the small tick-box, NOT the label text) next to the text "I have verified that I received".
 Return ONLY a JSON object with its center pixel coordinates:
 {"x": <number>, "y": <number>}
-The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no explanation.`
-                }]
-              }]
-            });
-            const cbRaw = (cbResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no explanation.`, 100);
             const cbCoords = JSON.parse(cbRaw);
             const cbX = parseFloat(cbCoords.x);
             const cbY = parseFloat(cbCoords.y);
@@ -4235,24 +4226,11 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
           const relSS = await page.screenshot({ type: 'jpeg', quality: 90 });
           let released = false;
           try {
-            const relResp = await anthropic.messages.create({
-              model: 'claude-opus-4-5',
-              max_tokens: 100,
-              messages: [{
-                role: 'user',
-                content: [{
-                  type: 'image',
-                  source: { type: 'base64', media_type: 'image/jpeg', data: relSS.toString('base64') }
-                }, {
-                  type: 'text',
-                  text: `This is a Binance P2P confirmation modal. Find the "Confirm Release" button.
+            const relRaw = await visionAsk(relSS.toString('base64'),
+              `This is a Binance P2P confirmation modal. Find the "Confirm Release" button.
 Return ONLY a JSON object with its center pixel coordinates:
 {"x": <number>, "y": <number>}
-The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no explanation.`
-                }]
-              }]
-            });
-            const relRaw = (relResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no explanation.`, 100);
             const relCoords = JSON.parse(relRaw);
             const relX = parseFloat(relCoords.x);
             const relY = parseFloat(relCoords.y);
@@ -4318,18 +4296,11 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
         // ── Step 1: Vision-primary — take screenshot, ask Vision for button coords ──
         try {
           const ss = await page.screenshot({ type: 'jpeg', quality: 90 });
-          const resp = await anthropic.messages.create({
-            model: 'claude-opus-4-5',
-            max_tokens: 100,
-            messages: [{ role: 'user', content: [
-              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') } },
-              { type: 'text', text: `This is a Binance "Verify with passkey" modal showing "Verification failed".
+          const raw = await visionAsk(ss.toString('base64'),
+            `This is a Binance "Verify with passkey" modal showing "Verification failed".
 Find the "My Passkeys Are Not Available" link/button — it is near the bottom of the modal, below the "Try Again" button.
 Return ONLY JSON with its center pixel coordinates: {"x": <number>, "y": <number>}
-Viewport is 1280x800. No markdown, no explanation.` }
-            ]}]
-          });
-          const raw = (resp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+Viewport is 1280x800. No markdown, no explanation.`, 100);
           const coords = JSON.parse(raw);
           const px = parseFloat(coords.x);
           const py = parseFloat(coords.y);
