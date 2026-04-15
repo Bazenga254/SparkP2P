@@ -3770,26 +3770,21 @@ async function clickButton(page, ...textOptions) {
 async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); }
 async function sendChatMessage(page, message) {
   try {
-    // Dismiss any open dialogs/overlays first
     await page.keyboard.press('Escape').catch(() => {});
     await new Promise(r => setTimeout(r, 500));
 
     const agent = await getMidsceneAgent(page);
 
-    // Step 1: Write message to clipboard BEFORE Midscene acts
-    // (clipboard is ready when aiAct fires the paste)
-    clipboard.writeText(message);
-    await new Promise(r => setTimeout(r, 200));
+    // Step 1: aiInput — Midscene finds the chat input and types the message
+    // aiInput is the correct Midscene API for filling text fields
+    console.log('[Midscene] Typing message into chat input...');
+    await agent.aiInput(message, 'the chat message input box at the bottom of the right-side chat panel');
+    await new Promise(r => setTimeout(r, 600));
 
-    // Step 2: Single aiAct call — Midscene plans the full sequence:
-    // locate input → click → select all → paste → click send
-    console.log('[Midscene] Sending message via aiAct...');
-    await agent.aiAct(
-      'Click the chat message input box at the bottom of the right chat panel, ' +
-      'press Ctrl+A to select all, press Backspace to clear, ' +
-      'press Ctrl+V to paste, then click the Send button'
-    );
-    await new Promise(r => setTimeout(r, 1200));
+    // Step 2: aiTap — Midscene finds and clicks the Send button
+    console.log('[Midscene] Clicking Send button...');
+    await agent.aiTap('the Send button to the right of the chat message input box');
+    await new Promise(r => setTimeout(r, 1000));
 
     console.log(`[Midscene] ✅ Message sent: "${message.substring(0, 60)}"`);
     return true;
