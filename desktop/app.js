@@ -1740,43 +1740,66 @@ async function extractMpesaCodesFromChat(page) {
     return { mpesaCodes: [], bankRefs: [] };
   }
   try {
-    // ── Step 1: Scan buyer's TEXT messages for M-Pesa/bank codes ─────────────
-    // Buyer may type the code directly (e.g. "UD5IZBFOER") instead of sending a screenshot
-    const textCodes = await page.evaluate(() => {
+    // ── Step 1: Grab ALL text from the right half of the page (chat panel area) ─
+    // Don't filter by exact message position — buyer messages can appear anywhere
+    // in the chat panel depending on Binance's layout. Just grab all chat text and
+    // let the regex + Claude find the code.
+    const chatText = await page.evaluate(() => {
       const vw = window.innerWidth;
-      const mpesaPattern = /\b([A-Z0-9]{10})\b/g;
-      const bankRefPattern = /\b([A-Z0-9]{6,20})\b/g;
-      const found = { mpesaCodes: [], bankRefs: [] };
-
-      // Chat messages from buyer are on the RIGHT side of the chat panel (left > 50% viewport)
+      // Collect text from all visible leaf nodes in the right 55% of the page
+      const parts = [];
       const allEls = Array.from(document.querySelectorAll('*'));
       for (const el of allEls) {
-        if (el.children.length > 0) continue; // leaf nodes only (actual text)
+        if (el.children.length > 0) continue;
         const rect = el.getBoundingClientRect();
-        if (rect.left < vw * 0.45 || rect.width === 0 || rect.height === 0) continue;
+        if (rect.width === 0 || rect.height === 0) continue;
+        if (rect.left < vw * 0.38) continue; // skip order-detail left panel
         const text = (el.textContent || '').trim();
-        if (!text || text.length > 200) continue; // skip long blocks
-
-        // M-Pesa codes: exactly 10 uppercase alphanumeric
-        let m;
-        mpesaPattern.lastIndex = 0;
-        while ((m = mpesaPattern.exec(text)) !== null) {
-          const code = m[1];
-          if (!found.mpesaCodes.includes(code)) found.mpesaCodes.push(code);
-        }
-        // Bank refs: 6-20 chars (only if not already in mpesaCodes)
-        bankRefPattern.lastIndex = 0;
-        while ((m = bankRefPattern.exec(text)) !== null) {
-          const ref = m[1];
-          if (ref.length !== 10 && !found.bankRefs.includes(ref)) found.bankRefs.push(ref);
-        }
+        if (text && text.length <= 500) parts.push(text);
       }
-      return found;
+      return parts.join(' ');
     });
 
-    if (textCodes.mpesaCodes.length || textCodes.bankRefs.length) {
-      console.log(`[SparkP2P] Found in chat text — M-Pesa: ${textCodes.mpesaCodes.join(', ')} Bank: ${textCodes.bankRefs.join(', ')}`);
-      return textCodes;
+    // ── Regex scan — case-insensitive, then uppercase ─────────────────────────
+    const found = { mpesaCodes: [], bankRefs: [] };
+    // M-Pesa codes: exactly 10 alphanumeric (e.g. QE1FXYZABC)
+    const mpesaRe = /\b([A-Z0-9]{10})\b/gi;
+    // Bank refs: 6-20 alphanum
+    const bankRe  = /\b([A-Z0-9]{6,20})\b/gi;
+    let m;
+    while ((m = mpesaRe.exec(chatText)) !== null) {
+      const code = m[1].toUpperCase();
+      if (!found.mpesaCodes.includes(code)) found.mpesaCodes.push(code);
+    }
+    while ((m = bankRe.exec(chatText)) !== null) {
+      const ref = m[1].toUpperCase();
+      if (ref.length !== 10 && !found.bankRefs.includes(ref)) found.bankRefs.push(ref);
+    }
+
+    if (found.mpesaCodes.length || found.bankRefs.length) {
+      console.log(`[SparkP2P] Found in chat text — M-Pesa: ${found.mpesaCodes.join(', ')} Bank: ${found.bankRefs.join(', ')}`);
+      return found;
+    }
+
+    // ── Claude fallback — ask AI to read all chat text and extract codes ──────
+    if (chatText.length > 10) {
+      const aiResult = await aiScanner.analyzeText(chatText, `
+        This is text from a Binance P2P order chat between a seller and buyer.
+        The buyer may have typed an M-Pesa transaction code (exactly 10 alphanumeric characters, e.g. "QE1FXYZABC")
+        or a bank reference number (6-20 alphanumeric characters).
+        Extract any such codes from the buyer's messages.
+        Return JSON: {"mpesa_code": "CODE or null", "bank_ref": "REF or null"}
+      `);
+      if (aiResult?.mpesa_code && /^[A-Z0-9]{10}$/i.test(aiResult.mpesa_code)) {
+        const code = aiResult.mpesa_code.toUpperCase();
+        console.log(`[SparkP2P] Claude found M-Pesa code in chat: ${code}`);
+        return { mpesaCodes: [code], bankRefs: [] };
+      }
+      if (aiResult?.bank_ref && /^[A-Z0-9]{6,20}$/i.test(aiResult.bank_ref)) {
+        const ref = aiResult.bank_ref.toUpperCase();
+        console.log(`[SparkP2P] Claude found bank ref in chat: ${ref}`);
+        return { mpesaCodes: [], bankRefs: [ref] };
+      }
     }
 
     // ── Step 2: Find all <img> elements in the right half of the viewport (chat panel)
