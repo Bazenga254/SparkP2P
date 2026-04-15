@@ -1904,9 +1904,9 @@ async function extractMpesaCodesFromChat(page) {
         const bankRef = result.bank_ref;
         console.log(`[SparkP2P] Vision image ${i + 1}: mpesa_code=${code} bank_ref=${bankRef}`);
 
-        // Close lightbox before next attempt
+        // Close lightbox before next attempt — wait long enough for it to fully close
         await page.keyboard.press('Escape').catch(() => {});
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 1500));
 
         const mpesaFound = (code && /^[A-Z0-9]{10}$/.test(code)) ? code : null;
         const bankFound = (bankRef && /^[A-Z0-9]{6,20}$/i.test(bankRef.trim())) ? bankRef.trim().toUpperCase() : null;
@@ -2472,6 +2472,11 @@ Return ONLY JSON: {"x": <integer above 640>, "y": <integer>}`;
           mpesaCode = textScan.mpesaCodes?.[0] || null;
           if (mpesaCode) console.log(`[SparkP2P] Found typed code in chat: ${mpesaCode}`);
         }
+
+        // Ensure screen is clear after all lightbox operations before any chat message
+        console.log('[SparkP2P] Ensuring screen clear before sending chat message...');
+        await page.keyboard.press('Escape').catch(() => {});
+        await new Promise(r => setTimeout(r, 2000));
 
         if (mpesaCode) {
           // Step 1c: Verify code with VPS
