@@ -3841,83 +3841,61 @@ async function clickButton(page, ...textOptions) {
 }
 
 // ── Send a chat message on an order page ────────────────────────────────────
-// Vision-primary: Claude reads the screenshot, finds the input and send button
-// by understanding the page layout. DOM used only as absolute last resort.
-async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); } // alias kept for any legacy callers
+// 1. DOM: find "Enter message here" input by placeholder → click → type → Enter
+// 2. Vision fallback: screenshot → Claude finds the input → click → type → Enter
+async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); }
 async function sendChatMessage(page, message) {
   try {
-    // ── Step 1: Scroll right chat panel to bottom so input is visible ────────
-    await page.evaluate(() => {
-      const vw = window.innerWidth;
-      for (const el of document.querySelectorAll('*')) {
-        try {
-          const r = el.getBoundingClientRect();
-          if (r.left < vw * 0.45) continue;
-          if (el.scrollHeight > el.clientHeight + 30) el.scrollTop = el.scrollHeight;
-        } catch (_) {}
+    // ── Step 1: DOM — find input by placeholder text ──────────────────────────
+    const domCoords = await page.evaluate(() => {
+      const selectors = [
+        'input[placeholder*="Enter message"]',
+        'textarea[placeholder*="Enter message"]',
+        'input[placeholder*="message"]',
+        'textarea[placeholder*="message"]',
+        '[contenteditable="true"]',
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
-    }).catch(() => {});
-    await new Promise(r => setTimeout(r, 700));
+      return null;
+    }).catch(() => null);
 
-    // ── Step 2: Vision reads page and finds the chat input ───────────────────
-    console.log('[SparkP2P] Vision locating chat input...');
-    const ss1 = await page.screenshot({ type: 'jpeg', quality: 88 });
-    const inputRaw = await visionAsk(ss1.toString('base64'),
-      `Binance P2P order page. The chat panel is on the RIGHT side of the screen (right half).
-Locate the MESSAGE INPUT BOX — the horizontal text field at the very bottom of the chat panel where the user types messages to the buyer.
+    let cx, cy;
+    if (domCoords) {
+      cx = domCoords.x; cy = domCoords.y;
+      console.log(`[SparkP2P] Chat input found via DOM at (${Math.round(cx)}, ${Math.round(cy)})`);
+    } else {
+      // ── Step 2: Vision fallback — ask Claude to find "Enter message here" box ─
+      console.log('[SparkP2P] Chat input not in DOM — asking Vision...');
+      const ss = await page.screenshot({ type: 'jpeg', quality: 85 });
+      const raw = await visionAsk(ss.toString('base64'),
+        `Binance P2P order page. Find the chat message input box — the text field with placeholder "Enter message here" at the bottom right of the screen.
 Return ONLY JSON: {"x": <number>, "y": <number>}
-Viewport: 1280x800. The input is in the right half (x: 640–1260) near the bottom (y: 620–790). No markdown.`, 100);
-    const inputCoords = JSON.parse(inputRaw);
-    const cx = parseFloat(inputCoords.x);
-    const cy = parseFloat(inputCoords.y);
-    console.log(`[SparkP2P] Vision chat input: (${cx}, ${cy})`);
-
-    if (!isFinite(cx) || !isFinite(cy) || cx < 640 || cx > 1260 || cy < 580 || cy > 795) {
-      console.log(`[SparkP2P] Vision chat input coords out of range (${cx}, ${cy}) — aborting`);
-      return false;
+No markdown.`, 80);
+      const coords = JSON.parse(raw);
+      cx = parseFloat(coords.x); cy = parseFloat(coords.y);
+      console.log(`[SparkP2P] Chat input found via Vision at (${Math.round(cx)}, ${Math.round(cy)})`);
+      if (!isFinite(cx) || !isFinite(cy) || cx <= 0 || cy <= 0) {
+        console.log('[SparkP2P] sendChatMessage: could not locate input');
+        return false;
+      }
     }
 
-    // ── Step 3: Click the input to focus it ──────────────────────────────────
+    // ── Step 3: Click input, type message, press Enter to send ───────────────
     await page.mouse.click(cx, cy);
-    await new Promise(r => setTimeout(r, 400));
-
-    // ── Step 4: Clear any existing text, type the message ────────────────────
-    await page.keyboard.down('Control');
-    await page.keyboard.press('KeyA');
-    await page.keyboard.up('Control');
+    await new Promise(r => setTimeout(r, 300));
+    await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
-    await new Promise(r => setTimeout(r, 150));
-    await page.keyboard.type(message, { delay: 12 });
-    await new Promise(r => setTimeout(r, 600));
-
-    // ── Step 5: Vision reads page again and finds the Send button ────────────
-    console.log('[SparkP2P] Vision locating send button...');
-    const ss2 = await page.screenshot({ type: 'jpeg', quality: 88 });
-    const sendRaw = await visionAsk(ss2.toString('base64'),
-      `Binance P2P chat panel on the RIGHT side. A message has been typed in the input box at the bottom.
-Find the SEND button — the icon (arrow pointing right, paper plane, or similar) immediately to the RIGHT of the message input box.
-Return ONLY JSON: {"x": <number>, "y": <number>}
-Viewport: 1280x800. Send button is in the right half (x: 640–1280) near the bottom (y: 580–800). No markdown.`, 100);
-    const sendCoords = JSON.parse(sendRaw);
-    const bx = parseFloat(sendCoords.x);
-    const by = parseFloat(sendCoords.y);
-    console.log(`[SparkP2P] Vision send button: (${bx}, ${by})`);
-
-    if (isFinite(bx) && isFinite(by) && bx > 640 && bx < 1280 && by > 580 && by < 800) {
-      // ── Step 6: Click the send button ────────────────────────────────────
-      await page.mouse.click(bx, by);
-      await new Promise(r => setTimeout(r, 800));
-      console.log(`[SparkP2P] ✅ Chat sent via Vision (input:${cx},${cy} → send:${bx},${by}): "${message.substring(0, 60)}"`);
-      return true;
-    }
-
-    // ── Step 7: Send button out of range — press Enter as fallback ───────────
-    console.log(`[SparkP2P] Send button coords out of range (${bx},${by}) — pressing Enter`);
-    await page.mouse.click(cx, cy);
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 100));
+    await page.keyboard.type(message, { delay: 10 });
+    await new Promise(r => setTimeout(r, 400));
     await page.keyboard.press('Enter');
-    await new Promise(r => setTimeout(r, 800));
-    console.log(`[SparkP2P] ✅ Chat sent via Enter: "${message.substring(0, 60)}"`);
+    await new Promise(r => setTimeout(r, 600));
+    console.log(`[SparkP2P] ✅ Message sent: "${message.substring(0, 60)}"`);
     return true;
 
   } catch (e) {
