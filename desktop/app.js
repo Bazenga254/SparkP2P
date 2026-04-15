@@ -1658,40 +1658,17 @@ or {"found": false}` },
       return null;
     }
 
-    // ── 4. Validate coords are numbers AND within viewport bounds ──────────
-    // Vision sometimes returns strings ("cell", "App") or out-of-viewport coords.
-    // Out-of-viewport clicks (y>800) can accidentally hit page buttons!
-    let clickX = parseFloat(locate.x);
-    let clickY = parseFloat(locate.y);
-    const inViewport = isFinite(clickX) && isFinite(clickY) &&
-                       clickX >= 640 && clickX <= 1260 &&
-                       clickY >= 50  && clickY <= 780;
-
-    if (!inViewport) {
-      console.log(`[Vision] Coords (${locate.x}, ${locate.y}) out of bounds — using DOM fallback...`);
-      // Find image elements in the right-half chat panel within viewport
-      const domCoords = await page.evaluate(() => {
-        const imgs = Array.from(document.querySelectorAll('img'));
-        for (const img of imgs) {
-          const r = img.getBoundingClientRect();
-          if (r.left > 640 && r.right < 1270 && r.width > 50 && r.height > 50 &&
-              r.top > 80 && r.bottom < 760) {
-            return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-          }
-        }
-        return null;
-      });
-      if (!domCoords) { console.log('[Vision] DOM fallback: no image found in chat panel'); return null; }
-      clickX = domCoords.x;
-      clickY = domCoords.y;
-      console.log(`[Vision] DOM fallback: image at (${clickX}, ${clickY})`);
-    } else {
-      console.log(`[Vision] Payment image at (${clickX}, ${clickY}) — clicking to enlarge...`);
-    }
-
-    // ── 5. Click the image thumbnail to open the lightbox ─────────────────
-    await page.mouse.click(clickX, clickY);
-    console.log('[Vision] Clicked — waiting 3s for lightbox to open...');
+    // ── 4. Use Midscene aiTap to click the screenshot thumbnail ───────────
+    // More reliable than raw coordinates — Midscene visually identifies the
+    // exact thumbnail in the chat and clicks it precisely.
+    console.log('[Vision] Using Midscene to click payment screenshot thumbnail...');
+    const agent = await getMidsceneAgent(page);
+    await agent.aiTap(
+      'the payment screenshot image thumbnail in the chat messages on the right side — ' +
+      'it is a photo or screenshot sent by the buyer showing an M-Pesa confirmation or bank receipt, ' +
+      'displayed as an image thumbnail in the chat'
+    );
+    console.log('[Vision] Clicked thumbnail — waiting 3s for lightbox to open...');
     await new Promise(r => setTimeout(r, 3000));
 
     // ── 6. Verify lightbox opened — must see an enlarged PAYMENT IMAGE ─────
