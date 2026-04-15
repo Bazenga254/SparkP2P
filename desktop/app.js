@@ -2321,7 +2321,7 @@ async function idleScan(page) {
         const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
         let chatSent = false;
         try {
-          console.log(`[Vision] Taking screenshot to locate chat input box...`);
+          console.log(`[Vision] Taking screenshot to find "Enter message here" box...`);
           const chatSS = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: false });
           const chatSSBase64 = chatSS.toString('base64');
 
@@ -2339,7 +2339,7 @@ CRITICAL CONSTRAINTS:
 
 Return ONLY JSON: {"x": <integer above 640>, "y": <integer>}`;
 
-          console.log(`[Vision] Asking Claude Vision to locate the chat input box...`);
+          console.log(`[Vision] Asking Claude Vision to find "Enter message here" box...`);
           const visionRaw = await visionAsk(chatSSBase64, visionPrompt, 300);
           console.log(`[Vision] Raw response: ${visionRaw}`);
 
@@ -3952,7 +3952,7 @@ async function sendChatMessage(page, message) {
     await page.keyboard.press('Escape').catch(() => {});
     await new Promise(r => setTimeout(r, 1000));
 
-    console.log(`[Vision] Taking screenshot to locate chat input box...`);
+    console.log(`[Vision] Taking screenshot to find "Enter message here" box...`);
     const ss = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: false });
     const ssBase64 = ss.toString('base64');
 
@@ -3970,7 +3970,7 @@ CRITICAL CONSTRAINTS:
 
 Return ONLY JSON: {"x": <integer above 640>, "y": <integer>}`;
 
-    console.log(`[Vision] Asking Claude Vision to locate the chat input box...`);
+    console.log(`[Vision] Asking Claude Vision to find "Enter message here" box...`);
     const visionRaw = await visionAsk(ssBase64, visionPrompt, 300);
     console.log(`[Vision] Raw response: ${visionRaw}`);
 
