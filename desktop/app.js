@@ -4608,16 +4608,47 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         continue;
       }
 
-      // ── Passkey failed — Midscene clicks "My Passkeys Are Not Available" ────────
+      // ── Passkey failed — DOM clicks "My Passkeys Are Not Available" ──────────
       if (screen === 'passkey_failed') {
-        console.log('[Midscene] Passkey screen — clicking "My Passkeys Are Not Available"...');
+        console.log('[DOM] Passkey screen — clicking "My Passkeys Are Not Available"...');
         await new Promise(r => setTimeout(r, 800));
-        try {
-          const agent = await getMidsceneAgent(page);
-          await agent.aiTap('"My Passkeys Are Not Available" link or button in the passkey verification dialog');
-          console.log('[Midscene] ✅ "My Passkeys Are Not Available" clicked');
-        } catch (e) {
-          console.log(`[Midscene] Passkey click error: ${e.message?.substring(0, 80)}`);
+        const passKeyDomClicked = await page.evaluate(() => {
+          const phrases = ['my passkeys are not available', 'passkeys are not available', 'passkey is not available'];
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+          while (walker.nextNode()) {
+            const el = walker.currentNode;
+            const t = (el.textContent || '').trim().toLowerCase();
+            if (phrases.some(p => t === p || t.includes(p)) && el.getBoundingClientRect().width > 0) {
+              el.click();
+              return true;
+            }
+          }
+          return false;
+        }).catch(() => false);
+
+        if (passKeyDomClicked) {
+          console.log('[DOM] ✅ "My Passkeys Are Not Available" clicked');
+        } else {
+          console.log('[DOM] Could not find "My Passkeys Are Not Available" — trying all frames...');
+          // Try iframes in case Binance renders the passkey dialog in a frame
+          for (const frame of page.frames()) {
+            try {
+              const clicked = await frame.evaluate(() => {
+                const phrases = ['my passkeys are not available', 'passkeys are not available'];
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+                while (walker.nextNode()) {
+                  const el = walker.currentNode;
+                  const t = (el.textContent || '').trim().toLowerCase();
+                  if (phrases.some(p => t.includes(p)) && el.getBoundingClientRect().width > 0) {
+                    el.click();
+                    return true;
+                  }
+                }
+                return false;
+              });
+              if (clicked) { console.log('[DOM] ✅ Clicked in iframe'); break; }
+            } catch (_) {}
+          }
         }
         await new Promise(r => setTimeout(r, 1500));
         continue;
