@@ -4432,52 +4432,58 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         if (mpesaVerified) {
           console.log(`[Vision] ✅ M-Pesa confirmed — ticking checkbox and releasing...`);
 
-          // ── Step 1: Tick the checkbox via DOM + mouse click ──────────────
-          console.log(`[Vision] Ticking confirm release checkbox...`);
-          const cbRect = await page.evaluate(() => {
-            const selectors = ['input[type="checkbox"]', '[role="checkbox"]', '[class*="checkbox"]'];
-            for (const sel of selectors) {
-              for (const el of document.querySelectorAll(sel)) {
-                const r = el.getBoundingClientRect();
-                if (r.width > 0 && r.height > 0) {
-                  // Fire both synthetic events AND return coords for mouse click
-                  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-                }
+          // ── Step 1: Vision locates checkbox → Puppeteer clicks it ───────────
+          console.log(`[Vision] Locating checkbox with Vision...`);
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              const cbSS = await page.screenshot({ type: 'jpeg', quality: 90 });
+              const viewport = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+              const cbRaw = await visionAsk(cbSS.toString('base64'),
+                `This is a Binance P2P "Received payment in your account?" modal with a checkbox.
+Find the small SQUARE CHECKBOX (the tick-box itself, not the text label).
+It is usually on the left side of the text "I have verified that I received KSh...".
+Return ONLY JSON with the checkbox CENTER coordinates as fractions of image size (0.0-1.0):
+{"x": 0.42, "y": 0.61}
+No markdown, no explanation.`, 60);
+              const cbCoords = JSON.parse(cbRaw.match(/\{[^}]+\}/)[0]);
+              const cbX = Math.round(parseFloat(cbCoords.x) * viewport.w);
+              const cbY = Math.round(parseFloat(cbCoords.y) * viewport.h);
+              if (cbX > 0 && cbX < viewport.w && cbY > 0 && cbY < viewport.h) {
+                await page.mouse.click(cbX, cbY);
+                console.log(`[Vision] ✅ Checkbox clicked at (${cbX}, ${cbY}) attempt ${attempt}`);
+                break;
               }
+            } catch (e) {
+              console.log(`[Vision] Checkbox Vision attempt ${attempt} failed: ${e.message?.substring(0, 60)}`);
             }
-            return null;
-          }).catch(() => null);
-
-          if (cbRect) {
-            // Also do a real mouse click at the element's screen coords
-            await page.mouse.click(cbRect.x, cbRect.y);
-            console.log(`[Vision] ✅ Checkbox clicked at (${Math.round(cbRect.x)}, ${Math.round(cbRect.y)})`);
-          } else {
-            console.log(`[Vision] Checkbox not found via DOM`);
+            await new Promise(r => setTimeout(r, 800));
           }
           await new Promise(r => setTimeout(r, 1200));
 
-          // ── Step 2: Click Confirm Release button via DOM ──────────────────
-          console.log(`[Vision] Clicking Confirm Release button...`);
-          const released = await page.evaluate(() => {
-            const keywords = ['confirm release', 'confirmrelease', 'release'];
-            const allBtns = document.querySelectorAll('button, [role="button"]');
-            for (const btn of allBtns) {
-              const t = (btn.textContent || '').trim().toLowerCase().replace(/\s+/g, '');
-              if (keywords.some(k => t.includes(k.replace(/\s/g, '')))) {
-                btn.click();
-                return btn.textContent.trim();
+          // ── Step 2: Vision locates Confirm Release button → Puppeteer clicks it ──
+          console.log(`[Vision] Locating Confirm Release button with Vision...`);
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              const relSS = await page.screenshot({ type: 'jpeg', quality: 90 });
+              const viewport = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+              const relRaw = await visionAsk(relSS.toString('base64'),
+                `This is a Binance P2P confirm release modal.
+Find the YELLOW/GOLDEN "Confirm Release" button at the bottom of the modal.
+Return ONLY JSON with the button CENTER coordinates as fractions of image size (0.0-1.0):
+{"x": 0.5, "y": 0.75}
+No markdown, no explanation.`, 60);
+              const relCoords = JSON.parse(relRaw.match(/\{[^}]+\}/)[0]);
+              const relX = Math.round(parseFloat(relCoords.x) * viewport.w);
+              const relY = Math.round(parseFloat(relCoords.y) * viewport.h);
+              if (relX > 0 && relX < viewport.w && relY > 0 && relY < viewport.h) {
+                await page.mouse.click(relX, relY);
+                console.log(`[Vision] ✅ Confirm Release clicked at (${relX}, ${relY}) attempt ${attempt}`);
+                break;
               }
+            } catch (e) {
+              console.log(`[Vision] Confirm Release Vision attempt ${attempt} failed: ${e.message?.substring(0, 60)}`);
             }
-            return null;
-          }).catch(() => null);
-
-          if (released) {
-            console.log(`[Vision] ✅ Confirm Release clicked: "${released}"`);
-          } else {
-            console.log(`[Vision] Confirm Release button not found via DOM`);
+            await new Promise(r => setTimeout(r, 800));
           }
           await new Promise(r => setTimeout(r, 3000));
 
