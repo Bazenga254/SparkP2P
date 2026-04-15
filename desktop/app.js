@@ -3598,35 +3598,26 @@ async function handleSecurityVerification(page) {
     // Passkey bypass — Vision finds "My Passkeys Are Not Available" and clicks it
     if (verification.hasPasskey && !verification.hasAuth && !verification.hasEmail) {
       console.log('[SparkP2P] Passkey screen — Vision clicking "My Passkeys Are Not Available"...');
-      const pss = await page.screenshot({ type: 'jpeg', quality: 85 });
       let bypassed = false;
-      try {
-        const praw = await visionAsk(pss.toString('base64'),
-          `Binance passkey modal. Find the "My Passkeys Are Not Available" link — it is below the yellow "Try Again" button.
-Return ONLY JSON: {"x": <number>, "y": <number>}
-Viewport 1280x800. No markdown.`, 80);
-        const pc = JSON.parse(praw);
-        const px = parseFloat(pc.x), py = parseFloat(pc.y);
-        console.log(`[SparkP2P] Passkey bypass Vision coords: (${px}, ${py})`);
-        if (isFinite(px) && isFinite(py) && px > 0 && px < 1280 && py > 0 && py < 800) {
-          await page.mouse.click(px, py);
-          await page.evaluate((x, y) => {
-            const el = document.elementFromPoint(x, y);
-            if (el) {
-              el.click(); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-              let p = el.parentElement;
-              for (let i = 0; i < 4 && p; i++, p = p.parentElement) {
-                if (p.tagName === 'A' || p.tagName === 'BUTTON' || p.getAttribute('role') === 'button') {
-                  p.click(); p.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); break;
-                }
-              }
+      for (const frame of [page, ...page.frames()]) {
+        try {
+          const result = await frame.evaluate(() => {
+            for (const el of Array.from(document.querySelectorAll('*')).reverse()) {
+              const t = (el.textContent || '').trim();
+              if (!/passkey.*not.*available/i.test(t) || t.length > 100) continue;
+              const r = el.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) continue;
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
-          }, px, py).catch(() => {});
-          console.log(`[SparkP2P] ✅ "My Passkeys Are Not Available" clicked via Vision+elementFromPoint at (${px}, ${py})`);
-          bypassed = true;
-        }
-      } catch (e) {
-        console.log(`[SparkP2P] Passkey Vision error: ${e.message?.substring(0, 60)}`);
+            return null;
+          });
+          if (result) {
+            await page.mouse.click(result.x, result.y);
+            console.log(`[SparkP2P] ✅ "My Passkeys Are Not Available" clicked at (${Math.round(result.x)}, ${Math.round(result.y)})`);
+            bypassed = true;
+            break;
+          }
+        } catch (_) {}
       }
       if (bypassed) {
         console.log('[SparkP2P] Passkey bypass clicked — waiting for TOTP/email form...');
@@ -4173,31 +4164,26 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
       if (screen === 'verify_payment') {
         const clicked = await clickButton(page, 'Payment Received', 'payment received');
         if (!clicked) {
-          // Payment Received not found — Chrome native passkey dialog is showing.
-          // Use keyboard Tab navigation to reach "My Passkeys Are Not Available" and press Enter.
-          console.log('[Vision] Payment Received not found — Tab-navigating passkey bypass...');
-          let activated = false;
-          for (let t = 0; t < 12; t++) {
-            await page.keyboard.press('Tab');
-            await new Promise(r => setTimeout(r, 120));
-            const focusedText = await page.evaluate(() => {
-              const el = document.activeElement;
-              return el ? (el.textContent || el.value || '').trim() : '';
-            }).catch(() => '');
-            if (/passkey.*not.*available|not.*available/i.test(focusedText)) {
-              await page.keyboard.press('Enter');
-              console.log(`[Vision] ✅ Passkey bypass via Tab+Enter inline`);
-              activated = true;
-              break;
-            }
-          }
-          if (!activated) {
-            // Tab 3 times and Enter (link is typically 3rd focusable element in dialog)
-            await page.keyboard.press('Escape').catch(() => {});
-            await new Promise(r => setTimeout(r, 200));
-            for (let i = 0; i < 3; i++) { await page.keyboard.press('Tab'); await new Promise(r => setTimeout(r, 150)); }
-            await page.keyboard.press('Enter');
-            console.log('[Vision] Passkey bypass Tab x3 + Enter (fallback)');
+          // Payment Received not found — passkey modal showing. Find by DOM bbox + mouse.click().
+          console.log('[Vision] Payment Received not found — DOM bbox passkey bypass...');
+          for (const frame of [page, ...page.frames()]) {
+            try {
+              const result = await frame.evaluate(() => {
+                for (const el of Array.from(document.querySelectorAll('*')).reverse()) {
+                  const t = (el.textContent || '').trim();
+                  if (!/passkey.*not.*available/i.test(t) || t.length > 100) continue;
+                  const r = el.getBoundingClientRect();
+                  if (r.width === 0 || r.height === 0) continue;
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                }
+                return null;
+              });
+              if (result) {
+                await page.mouse.click(result.x, result.y);
+                console.log(`[Vision] ✅ Passkey bypass inline at (${Math.round(result.x)}, ${Math.round(result.y)})`);
+                break;
+              }
+            } catch (_) {}
           }
         }
         await new Promise(r => setTimeout(r, 2000));
@@ -4328,46 +4314,34 @@ The viewport is 1280x800. x must be 0-1280, y must be 0-800. No markdown, no exp
         continue;
       }
 
-      // ── Passkey failed — Tab to "My Passkeys Are Not Available" and press Enter ──
-      // This is Chrome's native WebAuthn UI — CDP mouse/DOM clicks don't reach it.
-      // Keyboard events via CDP DO reach native Chrome UI.
+      // ── Passkey failed — find element by DOM text, get its bbox, mouse.click() it ──
       if (screen === 'passkey_failed') {
-        console.log('[Vision] Passkey screen — Tab-navigating to "My Passkeys Are Not Available"...');
+        console.log('[Vision] Passkey screen — finding "My Passkeys Are Not Available" via DOM bbox...');
         await new Promise(r => setTimeout(r, 800));
 
-        // Tab through focusable elements, press Enter when we land on the right one
-        let activated = false;
-        for (let t = 0; t < 12; t++) {
-          await page.keyboard.press('Tab');
-          await new Promise(r => setTimeout(r, 120));
-          // Check focused element text (works for DOM elements)
-          const focusedText = await page.evaluate(() => {
-            const el = document.activeElement;
-            return el ? (el.textContent || el.value || el.getAttribute('aria-label') || '').trim() : '';
-          }).catch(() => '');
-          console.log(`[Vision] Tab ${t+1} — focused: "${focusedText.substring(0, 50)}"`);
-          if (/passkey.*not.*available|not.*available/i.test(focusedText)) {
-            await page.keyboard.press('Enter');
-            console.log(`[Vision] ✅ "My Passkeys Are Not Available" activated via Tab+Enter`);
-            activated = true;
-            break;
-          }
+        let clicked = false;
+        for (const frame of [page, ...page.frames()]) {
+          try {
+            const result = await frame.evaluate(() => {
+              for (const el of Array.from(document.querySelectorAll('*')).reverse()) {
+                const t = (el.textContent || '').trim();
+                if (!/passkey.*not.*available/i.test(t) || t.length > 100) continue;
+                const r = el.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+              }
+              return null;
+            });
+            if (result) {
+              await page.mouse.click(result.x, result.y);
+              console.log(`[Vision] ✅ "My Passkeys Are Not Available" clicked at (${Math.round(result.x)}, ${Math.round(result.y)})`);
+              clicked = true;
+              break;
+            }
+          } catch (_) {}
         }
 
-        if (!activated) {
-          // Fallback: Space/Enter on focused element after pressing Tab enough times to reach the link
-          // The link is typically the 3rd focusable element: [Try Again] [Passkey on App] [My Passkeys Not Available]
-          // Reset focus and tab 3 times
-          console.log('[Vision] Tab focus check failed — pressing Tab x3 then Enter (link is 3rd element)');
-          await page.keyboard.press('Escape').catch(() => {}); // reset focus
-          await new Promise(r => setTimeout(r, 200));
-          for (let i = 0; i < 3; i++) {
-            await page.keyboard.press('Tab');
-            await new Promise(r => setTimeout(r, 150));
-          }
-          await page.keyboard.press('Enter');
-          console.log('[Vision] Pressed Enter on 3rd Tab element (fallback)');
-        }
+        if (!clicked) console.log('[Vision] Could not find "My Passkeys Are Not Available" in DOM — will retry');
         await new Promise(r => setTimeout(r, 1500));
         continue;
       }
