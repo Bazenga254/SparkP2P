@@ -3829,57 +3829,146 @@ async function clickButton(page, ...textOptions) {
 // restructures their page because it follows keyboard focus order, not
 // screen coordinates or CSS class names.
 async function sendChatMessage(page, message) {
-  // Try Vision-guided first (more reliable on React apps), fall back to DOM
-  if (anthropicApiKey) {
-    const sent = await sendChatMessageVision(page, message);
-    if (sent) return true;
-    console.log('[SparkP2P] Vision chat failed — trying DOM fallback');
-  }
-  try {
-    // DOM fallback: find contenteditable or textarea
-    const inputEl = await page.$('[contenteditable="true"]') ||
-                    await page.$('[placeholder*="message" i]') ||
-                    await page.$('textarea[placeholder]');
+  // ── Step 1: Scroll the right-side chat panel to the bottom ──────────────
+  await page.evaluate(() => {
+    const vw = window.innerWidth;
+    for (const el of document.querySelectorAll('*')) {
+      try {
+        const r = el.getBoundingClientRect();
+        if (r.left < vw * 0.45) continue;
+        if (el.scrollHeight > el.clientHeight + 30) el.scrollTop = el.scrollHeight;
+      } catch (_) {}
+    }
+  }).catch(() => {});
+  await new Promise(r => setTimeout(r, 600));
 
-    if (!inputEl) {
-      console.log('[SparkP2P] sendChatMessage: chat input not found');
-      return false;
+  // ── Step 2: Find the chat input in the RIGHT half of the page ───────────
+  // Binance P2P chat input: contenteditable div in the right panel.
+  // We pick the one closest to the bottom-right of the viewport.
+  const inputCoords = await page.evaluate(() => {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const candidates = [];
+
+    // contenteditable divs
+    for (const el of document.querySelectorAll('[contenteditable="true"]')) {
+      const r = el.getBoundingClientRect();
+      if (r.left < vw * 0.45 || r.width < 50 || r.height < 10) continue;
+      if (r.top < 0 || r.bottom > vh + 50) continue;
+      candidates.push({ el, r, score: r.top + r.left * 0.1 }); // prefer lower on page
+    }
+    // textarea fallback
+    for (const el of document.querySelectorAll('textarea')) {
+      const r = el.getBoundingClientRect();
+      if (r.left < vw * 0.45 || r.width < 50) continue;
+      if (r.top < 0 || r.bottom > vh + 50) continue;
+      candidates.push({ el, r, score: r.top + r.left * 0.1 });
     }
 
-    await inputEl.scrollIntoView();
-    await inputEl.click();
-    await new Promise(r => setTimeout(r, 300));
+    if (!candidates.length) return null;
+    // Pick the one lowest on the page (highest top value, i.e. near bottom)
+    candidates.sort((a, b) => b.r.top - a.r.top);
+    const best = candidates[0];
+    return {
+      x: Math.round(best.r.left + best.r.width / 2),
+      y: Math.round(best.r.top + best.r.height / 2),
+    };
+  }).catch(() => null);
 
+  if (!inputCoords) {
+    console.log('[SparkP2P] sendChatMessage: chat input not found in DOM — trying Vision');
+    if (anthropicApiKey) return await sendChatMessageVision(page, message);
+    return false;
+  }
+
+  console.log(`[SparkP2P] Chat input found at (${inputCoords.x}, ${inputCoords.y}) — clicking`);
+
+  try {
+    // ── Step 3: Click the input ────────────────────────────────────────────
+    await page.mouse.click(inputCoords.x, inputCoords.y);
+    await new Promise(r => setTimeout(r, 400));
+
+    // ── Step 4: Clear any existing text, then type message ────────────────
     await page.keyboard.down('Control');
     await page.keyboard.press('KeyA');
     await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
     await new Promise(r => setTimeout(r, 150));
 
-    await page.keyboard.type(message, { delay: 15 });
-    await new Promise(r => setTimeout(r, 300));
+    await page.keyboard.type(message, { delay: 12 });
+    await new Promise(r => setTimeout(r, 400));
 
-    await page.keyboard.press('Tab');
-    await new Promise(r => setTimeout(r, 150));
-    await page.keyboard.press('Space');
-    await new Promise(r => setTimeout(r, 500));
+    // ── Step 5: Try Enter to send ──────────────────────────────────────────
+    await page.keyboard.press('Enter');
+    await new Promise(r => setTimeout(r, 800));
 
-    const inputStillHasText = await page.evaluate(() => {
-      const el = document.querySelector('[contenteditable="true"]');
-      return el ? (el.textContent || '').trim().length > 0 : false;
-    });
+    // ── Step 6: Verify message was sent (input should be empty) ───────────
+    const stillHasText = await page.evaluate(() => {
+      for (const el of document.querySelectorAll('[contenteditable="true"]')) {
+        const r = el.getBoundingClientRect();
+        if (r.left > window.innerWidth * 0.45 && r.width > 50) {
+          return (el.textContent || '').trim().length > 0;
+        }
+      }
+      return false;
+    }).catch(() => false);
 
-    if (inputStillHasText) {
-      await inputEl.click();
-      await new Promise(r => setTimeout(r, 150));
-      await page.keyboard.press('Enter');
-      console.log(`[SparkP2P] Chat sent via Enter fallback: "${message.substring(0, 60)}"`);
-    } else {
-      console.log(`[SparkP2P] Chat sent via Tab+Space: "${message.substring(0, 60)}"`);
+    if (!stillHasText) {
+      console.log(`[SparkP2P] ✅ Chat sent via DOM+Enter: "${message.substring(0, 60)}"`);
+      return true;
     }
 
-    await new Promise(r => setTimeout(r, 800));
-    return true;
+    // ── Step 7: Enter didn't send — find send button via DOM ──────────────
+    console.log('[SparkP2P] Enter did not send — looking for send button via DOM...');
+    const sendBtnClicked = await page.evaluate(() => {
+      const vw = window.innerWidth;
+      // Look for button/span near the chat input on the right side
+      for (const btn of document.querySelectorAll('button, [role="button"], span[class*="send"], div[class*="send"]')) {
+        const r = btn.getBoundingClientRect();
+        if (r.left < vw * 0.45 || r.width === 0 || r.height === 0) continue;
+        const txt = (btn.textContent || '').trim().toLowerCase();
+        const cls = (btn.className || '').toLowerCase();
+        if (txt === 'send' || cls.includes('send') || btn.querySelector('svg')) {
+          btn.click();
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (sendBtnClicked) {
+      await new Promise(r => setTimeout(r, 600));
+      console.log(`[SparkP2P] ✅ Chat sent via DOM send button: "${message.substring(0, 60)}"`);
+      return true;
+    }
+
+    // ── Step 8: Last resort — Vision finds send button ─────────────────────
+    if (anthropicApiKey) {
+      console.log('[SparkP2P] DOM send button not found — trying Vision for send button...');
+      const ss = await page.screenshot({ type: 'jpeg', quality: 85 });
+      const btnResp = await anthropic.messages.create({
+        model: 'claude-opus-4-5',
+        max_tokens: 80,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') } },
+          { type: 'text', text: `Binance P2P chat panel on the RIGHT side. A message has been typed in the input. Find the SEND button (arrow/paper plane icon) right next to the input box. Return ONLY JSON: {"x": <number>, "y": <number>}. No markdown.` }
+        ]}]
+      });
+      const btnRaw = (btnResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+      const btnCoords = JSON.parse(btnRaw);
+      const bx = parseFloat(btnCoords.x);
+      const by = parseFloat(btnCoords.y);
+      if (isFinite(bx) && isFinite(by) && bx > 640 && bx < 1280 && by > 0 && by < 800) {
+        await page.mouse.click(bx, by);
+        await new Promise(r => setTimeout(r, 600));
+        console.log(`[SparkP2P] ✅ Chat sent via Vision send button at (${bx},${by}): "${message.substring(0, 60)}"`);
+        return true;
+      }
+    }
+
+    console.log('[SparkP2P] ❌ All send methods failed');
+    return false;
+
   } catch (e) {
     console.error('[SparkP2P] sendChatMessage error:', e.message?.substring(0, 80));
     return false;
