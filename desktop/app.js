@@ -4051,13 +4051,13 @@ function startMidsceneAnthropicProxy() {
 let _midsceneModule = null;
 async function getMidsceneAgent(page) {
   if (!_midsceneModule) {
-    startMidsceneAnthropicProxy();
-    // Set BEFORE import — Midscene reads env vars during module initialisation
-    process.env.MIDSCENE_MODEL_API_KEY  = 'sk-midscene-proxy';  // dummy — proxy handles auth
-    process.env.MIDSCENE_MODEL_BASE_URL = `http://127.0.0.1:${MIDSCENE_PROXY_PORT}/v1`;
-    process.env.MIDSCENE_MODEL_NAME     = 'claude-haiku-4-5-20251001';
+    // Use OpenAI directly — Midscene was built for OpenAI, zero friction.
+    // OPENAI_API_KEY is already loaded from .env earlier in this file.
+    process.env.MIDSCENE_MODEL_API_KEY = process.env.OPENAI_API_KEY;
+    process.env.MIDSCENE_MODEL_NAME    = 'gpt-4o';  // GPT-4o has full vision support
+    // No MIDSCENE_MODEL_BASE_URL → Midscene uses OpenAI's default endpoint
     _midsceneModule = await import('@midscene/web/puppeteer');
-    console.log('[Midscene] Configured via local OpenAI→Anthropic proxy (env vars)');
+    console.log('[Midscene] Configured with OpenAI GPT-4o (native)');
   }
   const { PuppeteerAgent } = _midsceneModule;
   return new PuppeteerAgent(page);
