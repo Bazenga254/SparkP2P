@@ -2705,10 +2705,36 @@ async function clickOrderWithMouse(page, orderNumber) {
 // ── Focused order monitor — runs every 20s while an order is active ─────────
 async function navigateToOrderDetail(page, orderNumber) {
   if (pauseNavigation) { console.log('[SparkP2P] Navigation paused — skipping order navigation'); return false; }
-  const url = `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNumber}`;
-  console.log(`[SparkP2P] Navigating directly to order ${orderNumber}`);
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-  await new Promise(r => setTimeout(r, 2500));
+  console.log(`[SparkP2P] Navigating to order ${orderNumber} via orders list`);
+  await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
+    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 3000));
+
+  const box = await page.evaluate((orderNo) => {
+    const candidates = [
+      ...Array.from(document.querySelectorAll('a')),
+      ...Array.from(document.querySelectorAll('span, td, div')),
+    ];
+    for (const el of candidates) {
+      if (el.textContent.replace(/\s/g, '').includes(orderNo)) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        }
+      }
+    }
+    return null;
+  }, orderNumber);
+
+  if (!box) {
+    console.error(`[SparkP2P] Could not find order ${orderNumber} on page`);
+    return false;
+  }
+
+  await page.mouse.move(box.x, box.y, { steps: 10 });
+  await new Promise(r => setTimeout(r, 300));
+  await page.mouse.click(box.x, box.y);
+  await new Promise(r => setTimeout(r, 3000));
   console.log(`[SparkP2P] Now on: ${page.url()}`);
   return true;
 }
