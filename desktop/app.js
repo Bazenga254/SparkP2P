@@ -2363,15 +2363,16 @@ Format: {"x": <integer>, "y": <integer>}`;
           console.log(`[Vision] Focused element: ${focused}`);
           await new Promise(r => setTimeout(r, 700));
 
-          console.log(`[Vision] Clearing any existing text...`);
+          // Clear existing text
           await page.keyboard.down('Control');
           await page.keyboard.press('KeyA');
           await page.keyboard.up('Control');
           await page.keyboard.press('Backspace');
           await new Promise(r => setTimeout(r, 300));
 
-          console.log(`[Vision] Typing message: "${chatMsg.substring(0, 50)}..."`);
-          await page.keyboard.type(chatMsg, { delay: 25 });
+          console.log(`[Vision] Copying message to clipboard and pasting...`);
+          clipboard.writeText(chatMsg);
+          await page.keyboard.down('Control'); await page.keyboard.press('KeyV'); await page.keyboard.up('Control');
           await new Promise(r => setTimeout(r, 600));
 
           console.log(`[Vision] Pressing Enter to send...`);
@@ -3976,11 +3977,15 @@ Format: {"x": <integer>, "y": <integer>}`;
     console.log(`[Vision] Focused element: ${focused}`);
     await new Promise(r => setTimeout(r, 700));
 
-    console.log(`[Vision] Clearing any existing text and typing message...`);
+    // Clear existing text
     await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
     await new Promise(r => setTimeout(r, 300));
-    await page.keyboard.type(message, { delay: 25 });
+
+    // Copy message to clipboard and paste — more reliable than keyboard.type() in React inputs
+    console.log(`[Vision] Copying message to clipboard and pasting...`);
+    clipboard.writeText(message);
+    await page.keyboard.down('Control'); await page.keyboard.press('KeyV'); await page.keyboard.up('Control');
     await new Promise(r => setTimeout(r, 600));
 
     console.log(`[Vision] Pressing Enter to send...`);
