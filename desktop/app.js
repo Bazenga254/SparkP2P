@@ -3824,283 +3824,101 @@ async function clickButton(page, ...textOptions) {
 }
 
 // ── Send a chat message on an order page ────────────────────────────────────
-// Strategy: click input → type → Tab to send button → Space to activate.
-// Tab navigation is layout-independent: works regardless of how Binance
-// restructures their page because it follows keyboard focus order, not
-// screen coordinates or CSS class names.
+// Vision-primary: Claude reads the screenshot, finds the input and send button
+// by understanding the page layout. DOM used only as absolute last resort.
+async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); } // alias kept for any legacy callers
 async function sendChatMessage(page, message) {
-  // ── Step 1: Scroll the right-side chat panel to the bottom ──────────────
-  await page.evaluate(() => {
-    const vw = window.innerWidth;
-    for (const el of document.querySelectorAll('*')) {
-      try {
-        const r = el.getBoundingClientRect();
-        if (r.left < vw * 0.45) continue;
-        if (el.scrollHeight > el.clientHeight + 30) el.scrollTop = el.scrollHeight;
-      } catch (_) {}
-    }
-  }).catch(() => {});
-  await new Promise(r => setTimeout(r, 600));
-
-  // ── Step 2: Find the chat input in the RIGHT half of the page ───────────
-  // Binance P2P chat input: contenteditable div in the right panel.
-  // We pick the one closest to the bottom-right of the viewport.
-  const inputCoords = await page.evaluate(() => {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const candidates = [];
-
-    // contenteditable divs
-    for (const el of document.querySelectorAll('[contenteditable="true"]')) {
-      const r = el.getBoundingClientRect();
-      if (r.left < vw * 0.45 || r.width < 50 || r.height < 10) continue;
-      if (r.top < 0 || r.bottom > vh + 50) continue;
-      candidates.push({ el, r, score: r.top + r.left * 0.1 }); // prefer lower on page
-    }
-    // textarea fallback
-    for (const el of document.querySelectorAll('textarea')) {
-      const r = el.getBoundingClientRect();
-      if (r.left < vw * 0.45 || r.width < 50) continue;
-      if (r.top < 0 || r.bottom > vh + 50) continue;
-      candidates.push({ el, r, score: r.top + r.left * 0.1 });
-    }
-
-    if (!candidates.length) return null;
-    // Pick the one lowest on the page (highest top value, i.e. near bottom)
-    candidates.sort((a, b) => b.r.top - a.r.top);
-    const best = candidates[0];
-    return {
-      x: Math.round(best.r.left + best.r.width / 2),
-      y: Math.round(best.r.top + best.r.height / 2),
-    };
-  }).catch(() => null);
-
-  if (!inputCoords) {
-    console.log('[SparkP2P] sendChatMessage: chat input not found in DOM — trying Vision');
-    if (anthropicApiKey) return await sendChatMessageVision(page, message);
-    return false;
-  }
-
-  console.log(`[SparkP2P] Chat input found at (${inputCoords.x}, ${inputCoords.y}) — clicking`);
-
   try {
-    // ── Step 3: Click the input ────────────────────────────────────────────
-    await page.mouse.click(inputCoords.x, inputCoords.y);
+    // ── Step 1: Scroll right chat panel to bottom so input is visible ────────
+    await page.evaluate(() => {
+      const vw = window.innerWidth;
+      for (const el of document.querySelectorAll('*')) {
+        try {
+          const r = el.getBoundingClientRect();
+          if (r.left < vw * 0.45) continue;
+          if (el.scrollHeight > el.clientHeight + 30) el.scrollTop = el.scrollHeight;
+        } catch (_) {}
+      }
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 700));
+
+    // ── Step 2: Vision reads page and finds the chat input ───────────────────
+    console.log('[SparkP2P] Vision locating chat input...');
+    const ss1 = await page.screenshot({ type: 'jpeg', quality: 88 });
+    const inputResp = await anthropic.messages.create({
+      model: 'claude-opus-4-5',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss1.toString('base64') } },
+        { type: 'text', text: `Binance P2P order page. The chat panel is on the RIGHT side of the screen (right half).
+Locate the MESSAGE INPUT BOX — the horizontal text field at the very bottom of the chat panel where the user types messages to the buyer.
+Return ONLY JSON: {"x": <number>, "y": <number>}
+Viewport: 1280x800. The input is in the right half (x: 640–1260) near the bottom (y: 620–790). No markdown.` }
+      ]}]
+    });
+    const inputRaw = (inputResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+    const inputCoords = JSON.parse(inputRaw);
+    const cx = parseFloat(inputCoords.x);
+    const cy = parseFloat(inputCoords.y);
+    console.log(`[SparkP2P] Vision chat input: (${cx}, ${cy})`);
+
+    if (!isFinite(cx) || !isFinite(cy) || cx < 640 || cx > 1260 || cy < 580 || cy > 795) {
+      console.log(`[SparkP2P] Vision chat input coords out of range (${cx}, ${cy}) — aborting`);
+      return false;
+    }
+
+    // ── Step 3: Click the input to focus it ──────────────────────────────────
+    await page.mouse.click(cx, cy);
     await new Promise(r => setTimeout(r, 400));
 
-    // ── Step 4: Clear any existing text, then type message ────────────────
+    // ── Step 4: Clear any existing text, type the message ────────────────────
     await page.keyboard.down('Control');
     await page.keyboard.press('KeyA');
     await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
     await new Promise(r => setTimeout(r, 150));
-
     await page.keyboard.type(message, { delay: 12 });
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 600));
 
-    // ── Step 5: Try Enter to send ──────────────────────────────────────────
+    // ── Step 5: Vision reads page again and finds the Send button ────────────
+    console.log('[SparkP2P] Vision locating send button...');
+    const ss2 = await page.screenshot({ type: 'jpeg', quality: 88 });
+    const sendResp = await anthropic.messages.create({
+      model: 'claude-opus-4-5',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss2.toString('base64') } },
+        { type: 'text', text: `Binance P2P chat panel on the RIGHT side. A message has been typed in the input box at the bottom.
+Find the SEND button — the icon (arrow pointing right, paper plane, or similar) immediately to the RIGHT of the message input box.
+Return ONLY JSON: {"x": <number>, "y": <number>}
+Viewport: 1280x800. Send button is in the right half (x: 640–1280) near the bottom (y: 580–800). No markdown.` }
+      ]}]
+    });
+    const sendRaw = (sendResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
+    const sendCoords = JSON.parse(sendRaw);
+    const bx = parseFloat(sendCoords.x);
+    const by = parseFloat(sendCoords.y);
+    console.log(`[SparkP2P] Vision send button: (${bx}, ${by})`);
+
+    if (isFinite(bx) && isFinite(by) && bx > 640 && bx < 1280 && by > 580 && by < 800) {
+      // ── Step 6: Click the send button ────────────────────────────────────
+      await page.mouse.click(bx, by);
+      await new Promise(r => setTimeout(r, 800));
+      console.log(`[SparkP2P] ✅ Chat sent via Vision (input:${cx},${cy} → send:${bx},${by}): "${message.substring(0, 60)}"`);
+      return true;
+    }
+
+    // ── Step 7: Send button out of range — press Enter as fallback ───────────
+    console.log(`[SparkP2P] Send button coords out of range (${bx},${by}) — pressing Enter`);
+    await page.mouse.click(cx, cy);
+    await new Promise(r => setTimeout(r, 200));
     await page.keyboard.press('Enter');
     await new Promise(r => setTimeout(r, 800));
-
-    // ── Step 6: Verify message was sent (input should be empty) ───────────
-    const stillHasText = await page.evaluate(() => {
-      for (const el of document.querySelectorAll('[contenteditable="true"]')) {
-        const r = el.getBoundingClientRect();
-        if (r.left > window.innerWidth * 0.45 && r.width > 50) {
-          return (el.textContent || '').trim().length > 0;
-        }
-      }
-      return false;
-    }).catch(() => false);
-
-    if (!stillHasText) {
-      console.log(`[SparkP2P] ✅ Chat sent via DOM+Enter: "${message.substring(0, 60)}"`);
-      return true;
-    }
-
-    // ── Step 7: Enter didn't send — find send button via DOM ──────────────
-    console.log('[SparkP2P] Enter did not send — looking for send button via DOM...');
-    const sendBtnClicked = await page.evaluate(() => {
-      const vw = window.innerWidth;
-      // Look for button/span near the chat input on the right side
-      for (const btn of document.querySelectorAll('button, [role="button"], span[class*="send"], div[class*="send"]')) {
-        const r = btn.getBoundingClientRect();
-        if (r.left < vw * 0.45 || r.width === 0 || r.height === 0) continue;
-        const txt = (btn.textContent || '').trim().toLowerCase();
-        const cls = (btn.className || '').toLowerCase();
-        if (txt === 'send' || cls.includes('send') || btn.querySelector('svg')) {
-          btn.click();
-          return true;
-        }
-      }
-      return false;
-    });
-
-    if (sendBtnClicked) {
-      await new Promise(r => setTimeout(r, 600));
-      console.log(`[SparkP2P] ✅ Chat sent via DOM send button: "${message.substring(0, 60)}"`);
-      return true;
-    }
-
-    // ── Step 8: Last resort — Vision finds send button ─────────────────────
-    if (anthropicApiKey) {
-      console.log('[SparkP2P] DOM send button not found — trying Vision for send button...');
-      const ss = await page.screenshot({ type: 'jpeg', quality: 85 });
-      const btnResp = await anthropic.messages.create({
-        model: 'claude-opus-4-5',
-        max_tokens: 80,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') } },
-          { type: 'text', text: `Binance P2P chat panel on the RIGHT side. A message has been typed in the input. Find the SEND button (arrow/paper plane icon) right next to the input box. Return ONLY JSON: {"x": <number>, "y": <number>}. No markdown.` }
-        ]}]
-      });
-      const btnRaw = (btnResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
-      const btnCoords = JSON.parse(btnRaw);
-      const bx = parseFloat(btnCoords.x);
-      const by = parseFloat(btnCoords.y);
-      if (isFinite(bx) && isFinite(by) && bx > 640 && bx < 1280 && by > 0 && by < 800) {
-        await page.mouse.click(bx, by);
-        await new Promise(r => setTimeout(r, 600));
-        console.log(`[SparkP2P] ✅ Chat sent via Vision send button at (${bx},${by}): "${message.substring(0, 60)}"`);
-        return true;
-      }
-    }
-
-    console.log('[SparkP2P] ❌ All send methods failed');
-    return false;
+    console.log(`[SparkP2P] ✅ Chat sent via Enter: "${message.substring(0, 60)}"`);
+    return true;
 
   } catch (e) {
     console.error('[SparkP2P] sendChatMessage error:', e.message?.substring(0, 80));
-    return false;
-  }
-}
-
-// Vision-guided chat message sender
-// Uses Claude to locate the chat text box by coordinates, then types the message.
-// More reliable than DOM on Binance's React layout.
-async function sendChatMessageVision(page, message) {
-  try {
-    // ── Step 1: Scroll the right-side chat panel to the bottom ───────────────
-    // The message input is at the very bottom — scroll down so it's visible.
-    await page.evaluate(() => {
-      // Scroll any scrollable container on the right half of the screen
-      const vw = window.innerWidth;
-      const all = document.querySelectorAll('*');
-      for (const el of all) {
-        const r = el.getBoundingClientRect();
-        if (r.left < vw * 0.45) continue; // right panel only
-        if (el.scrollHeight > el.clientHeight + 30) {
-          el.scrollTop = el.scrollHeight;
-        }
-      }
-    }).catch(() => {});
-    await new Promise(r => setTimeout(r, 800));
-
-    // ── Step 2: Vision locates the chat input box ────────────────────────────
-    console.log('[SparkP2P] Vision locating chat input...');
-    const ss = await page.screenshot({ type: 'jpeg', quality: 85 });
-    const resp = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 120,
-      messages: [{
-        role: 'user',
-        content: [{
-          type: 'image',
-          source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') }
-        }, {
-          type: 'text',
-          text: `This is a Binance P2P order detail page. The chat panel is on the RIGHT side (x > 640).
-Find the chat MESSAGE INPUT BOX — the empty text area at the very BOTTOM of the chat panel where you type messages to the buyer. It is a horizontal bar near the bottom of the right panel.
-Return ONLY JSON with the center pixel coordinates of that input box:
-{"x": <number>, "y": <number>}
-Viewport is 1280x800. x must be 640-1260, y must be 600-790. No markdown.`
-        }]
-      }]
-    });
-
-    const raw = (resp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
-    const coords = JSON.parse(raw);
-    const cx = parseFloat(coords.x);
-    const cy = parseFloat(coords.y);
-    console.log(`[SparkP2P] Vision chat input coords: (${cx}, ${cy})`);
-
-    if (!isFinite(cx) || !isFinite(cy) || cx < 640 || cx > 1260 || cy < 550 || cy > 790) {
-      console.log(`[SparkP2P] Vision chat input coords invalid — aborting Vision send`);
-      return false;
-    }
-
-    // ── Step 3: Click the chat input to focus it ─────────────────────────────
-    await page.mouse.click(cx, cy);
-    await new Promise(r => setTimeout(r, 400));
-
-    // ── Step 4: Paste the message using clipboard (avoids slow key-by-key typing) ──
-    // Copy message to clipboard then Ctrl+V — fast and reliable for long messages.
-    await page.evaluate((msg) => { navigator.clipboard?.writeText(msg).catch(() => {}); }, message).catch(() => {});
-    await new Promise(r => setTimeout(r, 200));
-    await page.keyboard.down('Control');
-    await page.keyboard.press('KeyA'); // select any existing text
-    await page.keyboard.up('Control');
-    await page.keyboard.press('Backspace'); // clear it
-    await new Promise(r => setTimeout(r, 150));
-    // Type the message (reliable cross-platform)
-    await page.keyboard.type(message, { delay: 10 });
-    await new Promise(r => setTimeout(r, 500));
-
-    // ── Step 5: Vision locates the Send button ───────────────────────────────
-    console.log('[SparkP2P] Vision locating send button...');
-    const ss2 = await page.screenshot({ type: 'jpeg', quality: 85 });
-    const btnResp = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 80,
-      messages: [{
-        role: 'user',
-        content: [{
-          type: 'image',
-          source: { type: 'base64', media_type: 'image/jpeg', data: ss2.toString('base64') }
-        }, {
-          type: 'text',
-          text: `This Binance P2P chat panel has a message typed in the input box. Find the SEND button — it is an icon (arrow, paper plane, or similar) immediately to the RIGHT of the message input box, near the bottom-right of the chat panel.
-Return ONLY JSON: {"x": <number>, "y": <number>}. Viewport 1280x800. x must be 640-1280, y must be 550-800. No markdown.`
-        }]
-      }]
-    });
-
-    const btnRaw = (btnResp.content[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
-    const btnCoords = JSON.parse(btnRaw);
-    const bx = parseFloat(btnCoords.x);
-    const by = parseFloat(btnCoords.y);
-    console.log(`[SparkP2P] Vision send button coords: (${bx}, ${by})`);
-
-    if (isFinite(bx) && isFinite(by) && bx > 640 && bx < 1280 && by > 550 && by < 800) {
-      // ── Step 6: Click send ────────────────────────────────────────────────
-      await page.mouse.click(bx, by);
-      await new Promise(r => setTimeout(r, 800));
-      console.log(`[SparkP2P] ✅ Chat sent via Vision (input: ${cx},${cy} | send: ${bx},${by}): "${message.substring(0, 60)}"`);
-      return true;
-    }
-
-    // Send button not found by Vision — fall back to Enter key
-    console.log('[SparkP2P] Send button not found by Vision — trying Enter key');
-    await page.mouse.click(cx, cy); // re-focus input
-    await new Promise(r => setTimeout(r, 200));
-    await page.keyboard.press('Enter');
-    await new Promise(r => setTimeout(r, 800));
-
-    // Verify message cleared (sent)
-    const stillHasText = await page.evaluate(() => {
-      const el = document.querySelector('[contenteditable="true"]');
-      return el ? (el.textContent || '').trim().length > 0 : false;
-    });
-    if (!stillHasText) {
-      console.log(`[SparkP2P] ✅ Chat sent via Enter fallback: "${message.substring(0, 60)}"`);
-      return true;
-    }
-
-    console.log('[SparkP2P] Message still in input after Enter — send failed');
-    return false;
-
-  } catch (e) {
-    console.log(`[SparkP2P] sendChatMessageVision error: ${e.message?.substring(0, 80)}`);
     return false;
   }
 }
