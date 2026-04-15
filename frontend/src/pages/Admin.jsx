@@ -264,31 +264,31 @@ export default function Admin() {
   }, []);
 
   const handleRequestPauseOtp = async () => {
-    setPauseLoading(true); setPauseMsg('');
+    // DEV: skip OTP — pause/resume immediately
+    setPauseLoading(true);
     try {
-      const res = await api.post('/traders/pause-bot/request-otp');
-      setPauseSecQ(res.data.security_question || '');
-      setPauseOtpSent(true);
-      setPauseStep('verify');
-      setPauseMsg(res.data.message || 'OTP sent to your phone.');
+      const action = botPaused ? 'resume' : 'pause';
+      await fetch(`http://127.0.0.1:9223/${action}`).catch(() => {});
+      setBotPaused(!botPaused);
+      setShowPauseModal(false);
+      setPauseStep('warning');
     } catch (err) {
-      setPauseMsg(err.response?.data?.detail || 'Failed to send OTP.');
+      setPauseMsg('Failed.');
     }
     setPauseLoading(false);
   };
 
   const handleConfirmPause = async () => {
-    if (!pauseOtp || !pauseSecAnswer) { setPauseMsg('SMS OTP and security answer are required.'); return; }
-    setPauseLoading(true); setPauseMsg('');
+    // DEV: skip OTP — pause/resume immediately
+    setPauseLoading(true);
     try {
-      await api.post('/traders/pause-bot/confirm', { otp_code: pauseOtp, security_answer: pauseSecAnswer, totp_code: pauseTotp });
       const action = botPaused ? 'resume' : 'pause';
       await fetch(`http://127.0.0.1:9223/${action}`).catch(() => {});
       setBotPaused(!botPaused);
       setShowPauseModal(false);
       setPauseStep('warning'); setPauseOtp(''); setPauseSecAnswer(''); setPauseTotp(''); setPauseMsg(''); setPauseOtpSent(false);
     } catch (err) {
-      setPauseMsg(err.response?.data?.detail || 'Verification failed.');
+      setPauseMsg('Failed.');
     }
     setPauseLoading(false);
   };

@@ -330,25 +330,26 @@ export default function SettingsPanel({ profile, onUpdate }) {
   }, []);
 
   const handleRequestPauseOtp = async () => {
-    setPauseLoading(true); setPauseMsg('');
+    // DEV: skip OTP — pause immediately
+    setPauseLoading(true);
     try {
-      const res = await api.post('/traders/pause-bot/request-otp');
-      setPauseSecQ(res.data.security_question);
-      setPauseOtpSent(true);
-      setPauseStep('otp');
-      setPauseMsg(res.data.message);
+      if (window.sparkp2p?.pauseNavigation) {
+        await window.sparkp2p.pauseNavigation();
+      } else {
+        await fetch('http://127.0.0.1:9223/pause').catch(() => {});
+      }
+      setShowPauseModal(false);
+      setPauseStep('warning');
     } catch (err) {
-      setPauseMsg(err.response?.data?.detail || 'Failed to send OTP');
+      setPauseMsg('Failed to pause bot.');
     }
     setPauseLoading(false);
   };
 
   const handleConfirmPause = async () => {
-    if (!pauseOtpCode || !pauseSecAnswer) { setPauseMsg('Please fill in all fields.'); return; }
-    setPauseLoading(true); setPauseMsg('');
+    // DEV: skip OTP — pause immediately
+    setPauseLoading(true);
     try {
-      await api.post('/traders/pause-bot/confirm', { otp_code: pauseOtpCode, security_answer: pauseSecAnswer, totp_code: pauseTotpCode || undefined });
-      // Authorized — pause the bot via desktop IPC (no HTTP, no mixed-content issues)
       if (window.sparkp2p?.pauseNavigation) {
         await window.sparkp2p.pauseNavigation();
       } else {
@@ -357,7 +358,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
       setShowPauseModal(false);
       setPauseStep('warning'); setPauseOtpCode(''); setPauseSecAnswer(''); setPauseTotpCode(''); setPauseMsg('');
     } catch (err) {
-      setPauseMsg(err.response?.data?.detail || 'Verification failed.');
+      setPauseMsg('Failed to pause bot.');
     }
     setPauseLoading(false);
   };
