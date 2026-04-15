@@ -2308,16 +2308,11 @@ async function idleScan(page) {
         const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
         try {
           const inputCoords = await page.evaluate(() => {
-            const dbg = [];
-
-            // Pass 1: placeholder-based exact match (most reliable)
+            // Pass 1: placeholder attribute on textarea/input
             const placeholderSelectors = [
-              'textarea[placeholder*="Enter message"]',
-              'input[placeholder*="Enter message"]',
-              'textarea[placeholder*="Enter"]',
-              'input[placeholder*="Enter"]',
-              'textarea[placeholder*="message"]',
-              'input[placeholder*="message"]',
+              'textarea[placeholder*="Enter message"]', 'input[placeholder*="Enter message"]',
+              'textarea[placeholder*="Enter"]', 'input[placeholder*="Enter"]',
+              'textarea[placeholder*="message"]', 'input[placeholder*="message"]',
             ];
             for (const sel of placeholderSelectors) {
               const el = document.querySelector(sel);
@@ -2327,22 +2322,34 @@ async function idleScan(page) {
               }
             }
 
-            // Pass 2: contenteditable on the right half of the page (chat panel is right-side)
+            // Pass 2: data-placeholder on contenteditable
+            const dpEl = document.querySelector('[contenteditable="true"][data-placeholder]');
+            if (dpEl) {
+              const r = dpEl.getBoundingClientRect();
+              if (r.width > 20) return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel: '[contenteditable][data-placeholder]' };
+            }
+
+            // Log ALL contenteditable positions to help debug
             const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
-            dbg.push(`contenteditable count: ${editables.length}`);
+            const dbg = editables.map(el => {
+              const r = el.getBoundingClientRect();
+              return `x=${Math.round(r.left)} y=${Math.round(r.top)} w=${Math.round(r.width)} h=${Math.round(r.height)}`;
+            });
+
+            // Pass 3: contenteditable in right half AND lower half (chat panel)
+            const W = window.innerWidth, H = window.innerHeight;
             for (const el of editables) {
               const r = el.getBoundingClientRect();
-              dbg.push(`ce: x=${Math.round(r.left)} y=${Math.round(r.top)} w=${Math.round(r.width)} h=${Math.round(r.height)}`);
-              if (r.width > 50 && r.height > 5 && r.left > window.innerWidth * 0.4) {
-                return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel: '[contenteditable]' };
+              if (r.width > 50 && r.height > 5 && r.left > W * 0.45 && r.top > H * 0.45) {
+                return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel: '[ce-right-bottom]', dbg };
               }
             }
 
-            // Pass 3: any visible contenteditable regardless of position
+            // Pass 4: contenteditable in right half only (any height)
             for (const el of editables) {
               const r = el.getBoundingClientRect();
-              if (r.width > 50 && r.height > 5) {
-                return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel: '[contenteditable-any]' };
+              if (r.width > 50 && r.height > 5 && r.left > W * 0.45) {
+                return { x: r.left + r.width / 2, y: r.top + r.height / 2, sel: '[ce-right]', dbg };
               }
             }
 
