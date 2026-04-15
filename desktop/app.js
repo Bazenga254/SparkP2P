@@ -2473,10 +2473,14 @@ Return ONLY JSON: {"x": <integer above 640>, "y": <integer>}`;
           if (mpesaCode) console.log(`[SparkP2P] Found typed code in chat: ${mpesaCode}`);
         }
 
-        // Ensure screen is clear after all lightbox operations before any chat message
-        console.log('[SparkP2P] Ensuring screen clear before sending chat message...');
-        await page.keyboard.press('Escape').catch(() => {});
-        await new Promise(r => setTimeout(r, 2000));
+        // Reload the order page to guarantee all lightboxes are gone before chat message.
+        // Escape is too unreliable — Binance lightboxes sometimes ignore it.
+        console.log('[SparkP2P] Reloading order page to clear all lightboxes before chat message...');
+        await page.goto(
+          `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+          { waitUntil: 'domcontentloaded', timeout: 15000 }
+        ).catch(() => {});
+        await new Promise(r => setTimeout(r, 2500));
 
         if (mpesaCode) {
           // Step 1c: Verify code with VPS
