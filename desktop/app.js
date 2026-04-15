@@ -2317,18 +2317,19 @@ async function idleScan(page) {
           const chatSS = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: false });
           const chatSSBase64 = chatSS.toString('base64');
 
-          const visionPrompt = `You are looking at a Binance P2P order page. On the RIGHT side of the screen there is a chat panel.
-At the BOTTOM of that chat panel is a text input box — it usually shows the placeholder text "Enter message here" or is an empty white input field.
+          const visionPrompt = `You are looking at a Binance P2P order page (1280x800 viewport).
+The page is split: LEFT side has order details, RIGHT side has a chat panel.
 
-Your job: find the center pixel coordinates of that chat input box.
+Find the chat message TEXT INPUT BOX at the bottom of the RIGHT-side chat panel.
+It is a wide horizontal input bar with placeholder "Enter message here".
 
-Rules:
-- Look carefully at the bottom-right area of the screen
-- The input box is typically a wide horizontal bar at the very bottom of the chat section
-- It is NOT a button — it is an input field where you type messages
-- Return ONLY a JSON object with no extra text, no markdown, no explanation
+CRITICAL CONSTRAINTS:
+- x coordinate MUST be greater than 640 (right half of screen only)
+- y coordinate should be in the lower portion of the screen (typically 550-780)
+- Do NOT return coordinates for any dialog, popup, or left-side element
+- If you cannot see the chat input clearly, still return the best estimate for bottom-right area
 
-Format: {"x": <integer>, "y": <integer>}`;
+Return ONLY JSON: {"x": <integer above 640>, "y": <integer>}`;
 
           console.log(`[Vision] Asking Claude Vision to locate the chat input box...`);
           const visionRaw = await visionAsk(chatSSBase64, visionPrompt, 300);
@@ -2344,6 +2345,9 @@ Format: {"x": <integer>, "y": <integer>}`;
 
           if (!isFinite(cx) || !isFinite(cy) || cx <= 0 || cy <= 0) {
             throw new Error(`Vision returned invalid coordinates: x=${cx}, y=${cy}`);
+          }
+          if (cx < 640) {
+            throw new Error(`Vision returned left-side coordinates (x=${Math.round(cx)}) — likely a dialog is covering the screen`);
           }
 
           console.log(`[Vision] Clicking chat input at (${Math.round(cx)}, ${Math.round(cy)})...`);
@@ -3927,22 +3931,27 @@ async function clickButton(page, ...textOptions) {
 async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); }
 async function sendChatMessage(page, message) {
   try {
+    // Press Escape first to dismiss any dialogs/overlays before screenshotting
+    await page.keyboard.press('Escape').catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
+
     console.log(`[Vision] Taking screenshot to locate chat input box...`);
     const ss = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: false });
     const ssBase64 = ss.toString('base64');
 
-    const visionPrompt = `You are looking at a Binance P2P order page. On the RIGHT side of the screen there is a chat panel.
-At the BOTTOM of that chat panel is a text input box — it usually shows the placeholder text "Enter message here" or is an empty white input field.
+    const visionPrompt = `You are looking at a Binance P2P order page (1280x800 viewport).
+The page is split: LEFT side has order details, RIGHT side has a chat panel.
 
-Your job: find the center pixel coordinates of that chat input box.
+Find the chat message TEXT INPUT BOX at the bottom of the RIGHT-side chat panel.
+It is a wide horizontal input bar with placeholder "Enter message here".
 
-Rules:
-- Look carefully at the bottom-right area of the screen
-- The input box is typically a wide horizontal bar at the very bottom of the chat section
-- It is NOT a button — it is an input field where you type messages
-- Return ONLY a JSON object with no extra text, no markdown, no explanation
+CRITICAL CONSTRAINTS:
+- x coordinate MUST be greater than 640 (right half of screen only)
+- y coordinate should be in the lower portion of the screen (typically 550-780)
+- Do NOT return coordinates for any dialog, popup, or left-side element
+- If you cannot see the chat input clearly, still return the best estimate for bottom-right area
 
-Format: {"x": <integer>, "y": <integer>}`;
+Return ONLY JSON: {"x": <integer above 640>, "y": <integer>}`;
 
     console.log(`[Vision] Asking Claude Vision to locate the chat input box...`);
     const visionRaw = await visionAsk(ssBase64, visionPrompt, 300);
@@ -3955,8 +3964,12 @@ Format: {"x": <integer>, "y": <integer>}`;
     const cx = parseFloat(coords.x), cy = parseFloat(coords.y);
     console.log(`[Vision] Located chat input at (${Math.round(cx)}, ${Math.round(cy)})`);
 
+    // Validate: chat panel is always on the right half (x > 640)
     if (!isFinite(cx) || !isFinite(cy) || cx <= 0 || cy <= 0) {
       throw new Error(`Vision returned invalid coordinates: x=${cx}, y=${cy}`);
+    }
+    if (cx < 640) {
+      throw new Error(`Vision returned left-side coordinates (x=${Math.round(cx)}) — chat panel is on right side. Likely a dialog is covering the screen.`);
     }
 
     console.log(`[Vision] Clicking chat input at (${Math.round(cx)}, ${Math.round(cy)})...`);
