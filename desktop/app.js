@@ -4707,210 +4707,176 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         continue;
       }
 
-      // ── Security verification selector ──────────────────────
+      // ── Security verification — DOM clicks Authenticator App or Email ─────────
       if (screen === 'security_verification') {
-        // Ask Vision to identify which verifications are done/pending and where to click next.
-        // This avoids relying on fragile DOM "1/2" text which can change between checks.
-        try {
-          const ss = await page.screenshot({ type: 'jpeg', quality: 90 });
-          const resp = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5-20251001',
-              max_tokens: 150,
-              messages: [{ role: 'user', content: [
-                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') } },
-                { type: 'text', text: `This is a Binance "Security Verification Requirements" modal. Look for checkmarks (✓) next to completed items.
-Which item should I click NEXT (the first incomplete one without a checkmark)?
-- If "Authenticator App" has NO checkmark → click it
-- If "Authenticator App" has a checkmark (✓) AND "Email" has no checkmark → click "Email"
-Return ONLY JSON: {"next_action": "authenticator"|"email"|"done", "x": <number>, "y": <number>, "found": true}` },
-              ]}],
-            }),
-          });
-          const data = await resp.json();
-          const raw = (data.content?.[0]?.text || '').trim().replace(/```json|```/g, '');
-          const match = raw.match(/\{[\s\S]*\}/);
-          if (match) {
-            const sv = JSON.parse(match[0]);
-            console.log(`[Vision] Security verification next_action="${sv.next_action}" at (${sv.x},${sv.y})`);
-            if (sv.next_action === 'done') {
-              console.log('[Vision] Security verification complete — proceeding');
-            } else if (sv.found && sv.x && sv.y) {
-              await page.mouse.click(sv.x, sv.y);
-              console.log(`[Vision] Clicked "${sv.next_action}" at (${sv.x},${sv.y})`);
-            }
+        // DOM approach: find the first unchecked verification row and click it.
+        // A checked row has a green checkmark SVG or text like "✓"/"Verified".
+        // We prefer Authenticator App first, then Email.
+        const svClicked = await page.evaluate(() => {
+          function rowIsChecked(el) {
+            const t = (el.textContent || '').toLowerCase();
+            return t.includes('verified') || el.querySelector('svg[class*="check"], [class*="success"], [class*="checked"]') !== null;
           }
-        } catch (e) {
-          console.log('[Vision] Security verification Vision error:', e.message?.substring(0, 60));
+          function findAndClickRow(phrase) {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              const t = (node.textContent || '').trim().toLowerCase();
+              if (!t.includes(phrase)) continue;
+              // Walk up to a clickable row (div/li with reasonable size)
+              let el = node.parentElement;
+              for (let i = 0; i < 5; i++) {
+                if (!el) break;
+                const r = el.getBoundingClientRect();
+                if (r.width > 100 && r.height > 20) {
+                  if (!rowIsChecked(el)) {
+                    el.click();
+                    return `clicked:${phrase}:${Math.round(r.left + r.width/2)},${Math.round(r.top + r.height/2)}`;
+                  }
+                  return `already_checked:${phrase}`;
+                }
+                el = el.parentElement;
+              }
+            }
+            return null;
+          }
+          // Try Authenticator first, then Email
+          return findAndClickRow('authenticator') || findAndClickRow('email') || 'not_found';
+        }).catch(() => 'error');
+
+        console.log(`[DOM] Security verification: ${svClicked}`);
+        if (svClicked?.startsWith('clicked')) {
+          // Also do a real mouse click at those coords for React event
+          const coords = svClicked.split(':')[2]?.split(',');
+          if (coords?.length === 2) {
+            await page.mouse.click(Number(coords[0]), Number(coords[1]));
+          }
         }
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
 
-      // ── TOTP input — generate code, fill via nativeInputValueSetter, click Submit via Vision ──
+      // ── TOTP input — DOM fills input + clicks Submit ───────────────────────────
       if (screen === 'totp_input') {
         if (!totpSecret) {
-          console.error('[Vision] TOTP required but not configured');
+          console.error('[TOTP] Secret not configured');
           return { success: false, error: 'TOTP not configured' };
         }
         const code = generateTOTP(totpSecret);
-        console.log(`[Vision] Auto-filling TOTP: ${code}`);
+        console.log(`[TOTP] Generated code: ${code}`);
 
-        // Take one screenshot, ask Vision for BOTH the input field and Paste button coords,
-        // click input to focus, then click Paste — guaranteed to work like passkey/auth clicks did
-        const ss1 = await page.screenshot({ type: 'jpeg', quality: 90 });
-        let totpFilled = false;
-        try {
-          const resp1 = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5-20251001',
-              max_tokens: 120,
-              messages: [{ role: 'user', content: [
-                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss1.toString('base64') } },
-                { type: 'text', text: `In this Authenticator App Verification modal, find the text input field and the "Paste" button.\nReturn ONLY JSON: {"input_x": <number>, "input_y": <number>, "paste_x": <number>, "paste_y": <number>, "found": true}. If not found: {"found": false}` },
-              ]}],
-            }),
-          });
-          const d1 = await resp1.json();
-          const raw1 = (d1.content?.[0]?.text || '').trim().replace(/```json|```/g, '');
-          const m1 = raw1.match(/\{[\s\S]*\}/);
-          if (m1) {
-            const c1 = JSON.parse(m1[0]);
-            if (c1.found) {
-              // Write to Electron clipboard
-              clipboard.writeText(code);
-              // Click the input to focus it
-              await page.mouse.click(c1.input_x, c1.input_y);
-              await new Promise(r => setTimeout(r, 300));
-              // Click the Paste button
-              await page.mouse.click(c1.paste_x, c1.paste_y);
-              console.log(`[Vision] Clicked input at (${c1.input_x},${c1.input_y}), Paste at (${c1.paste_x},${c1.paste_y})`);
-              totpFilled = true;
-            }
-          }
-        } catch (e) {
-          console.log('[Vision] TOTP fill Vision error:', e.message?.substring(0, 60));
-        }
-        if (!totpFilled) {
-          // Fallback: type directly via keyboard
-          console.log('[Vision] TOTP Vision fill failed — typing directly');
+        // Fill via React native setter — works with any input regardless of position
+        const totpFilled = await page.evaluate((val) => {
+          const input = document.querySelector('input[maxlength="6"], input[maxlength="8"], input[type="tel"], input[type="number"], input[type="text"]');
+          if (!input) return false;
+          input.focus();
+          const proto = window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(input, val); else input.value = val;
+          input.dispatchEvent(new Event('input',  { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }, code).catch(() => false);
+
+        if (totpFilled) {
+          console.log('[TOTP] ✅ Code filled via DOM');
+        } else {
+          console.log('[TOTP] DOM fill failed — typing via keyboard');
           await page.keyboard.type(code, { delay: 80 });
         }
+        await new Promise(r => setTimeout(r, 400));
 
-        await new Promise(r => setTimeout(r, 500));
-
-        // Click Submit via Vision coordinates
-        try {
-          const ss = await page.screenshot({ type: 'jpeg', quality: 90 });
-          const resp = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5-20251001',
-              max_tokens: 80,
-              messages: [{ role: 'user', content: [
-                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') } },
-                { type: 'text', text: `Find the Submit or Confirm button in the Authenticator App verification modal. Return ONLY JSON: {"x": <number>, "y": <number>, "found": true}. If not visible: {"found": false}` },
-              ]}],
-            }),
-          });
-          const data = await resp.json();
-          const raw = (data.content?.[0]?.text || '').trim().replace(/```json|```/g, '');
-          const match = raw.match(/\{[\s\S]*\}/);
-          if (match) {
-            const coords = JSON.parse(match[0]);
-            if (coords.found && coords.x && coords.y) {
-              await page.mouse.click(coords.x, coords.y);
-              console.log(`[Vision] TOTP Submit clicked at (${coords.x},${coords.y})`);
+        // Click Submit via DOM text-node walker
+        const totpSubmitted = await page.evaluate(() => {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const t = (walker.currentNode.textContent || '').trim().toLowerCase();
+            if (t === 'submit' || t === 'confirm' || t === 'verify') {
+              const el = walker.currentNode.parentElement;
+              if (el && el.getBoundingClientRect().width > 0) { el.click(); return true; }
             }
           }
-        } catch (e) {
-          console.log('[Vision] TOTP Submit Vision error:', e.message?.substring(0, 60));
+          return false;
+        }).catch(() => false);
+
+        if (totpSubmitted) {
+          console.log('[TOTP] ✅ Submit clicked via DOM');
+        } else {
+          console.log('[TOTP] DOM submit failed — pressing Enter');
+          await page.keyboard.press('Enter');
         }
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
 
-      // ── Email OTP — Vision clicks Send Code, Gmail Vision extracts OTP ──
+      // ── Email OTP — DOM send + Gmail extract + DOM fill ───────────────────────
       if (screen === 'email_otp_input') {
-        // Step 1: Use Vision to find and click "Send Code" / "Get Code" button
-        try {
-          const ssSend = await page.screenshot({ type: 'jpeg', quality: 90 });
-          const rSend = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5-20251001', max_tokens: 80,
-              messages: [{ role: 'user', content: [
-                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ssSend.toString('base64') } },
-                { type: 'text', text: `Find the "Send Code" or "Get Code" button in the Email verification section. Return ONLY JSON: {"x":<number>,"y":<number>,"found":true}. If not visible: {"found":false}` },
-              ]}],
-            }),
-          });
-          const dSend = await rSend.json();
-          const mSend = (dSend.content?.[0]?.text || '').match(/\{[\s\S]*\}/);
-          if (mSend) {
-            const cSend = JSON.parse(mSend[0]);
-            if (cSend.found && cSend.x && cSend.y) {
-              await page.mouse.click(cSend.x, cSend.y);
-              console.log(`[Vision] Clicked "Send Code" at (${cSend.x},${cSend.y})`);
+        // Step 1: Click "Send Code" / "Get Code" via DOM text-node walker
+        const sendClicked = await page.evaluate(() => {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const t = (walker.currentNode.textContent || '').trim().toLowerCase();
+            if (t.includes('send code') || t.includes('get code') || t === 'send') {
+              const el = walker.currentNode.parentElement;
+              if (el && el.getBoundingClientRect().width > 0) { el.click(); return true; }
             }
           }
-        } catch (e) { console.log('[Vision] Send Code click error:', e.message?.substring(0, 50)); }
-        await new Promise(r => setTimeout(r, 3000)); // wait for email to arrive
+          return false;
+        }).catch(() => false);
+        console.log(`[Email OTP] Send Code clicked: ${sendClicked}`);
+        await new Promise(r => setTimeout(r, 4000)); // wait for email to arrive
 
-        // Step 2: Switch to Gmail, screenshot email, extract OTP via Vision
-        console.log('[Vision] Switching to Gmail to extract OTP via Vision...');
+        // Step 2: Read OTP from Gmail
+        console.log('[Email OTP] Reading OTP from Gmail...');
         const emailCode = await readEmailOTPWithVision(page);
         if (!emailCode) {
-          console.error('[Vision] Email OTP not found via Vision');
+          console.error('[Email OTP] OTP not found in Gmail');
           return { success: false, error: 'Email OTP not found' };
         }
-        console.log(`[Vision] Got OTP: ${emailCode} — switching back to Binance`);
+        console.log(`[Email OTP] Got OTP: ${emailCode} — filling into Binance`);
         await page.bringToFront();
         await new Promise(r => setTimeout(r, 1000));
 
-        // Step 3: Use clipboard + Vision to paste code into Email input and click Submit
-        clipboard.writeText(emailCode);
-        try {
-          const ssEmail = await page.screenshot({ type: 'jpeg', quality: 90 });
-          const rEmail = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5-20251001', max_tokens: 150,
-              messages: [{ role: 'user', content: [
-                { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ssEmail.toString('base64') } },
-                { type: 'text', text: `In the Email verification modal, find the text input field, the "Paste" button (if any), and the Submit/Confirm button.\nReturn ONLY JSON: {"input_x":<n>,"input_y":<n>,"paste_x":<n>,"paste_y":<n>,"submit_x":<n>,"submit_y":<n>,"has_paste":<bool>,"found":true}. If not found: {"found":false}` },
-              ]}],
-            }),
-          });
-          const dEmail = await rEmail.json();
-          const mEmail = (dEmail.content?.[0]?.text || '').match(/\{[\s\S]*\}/);
-          if (mEmail) {
-            const cEmail = JSON.parse(mEmail[0]);
-            if (cEmail.found) {
-              await page.mouse.click(cEmail.input_x, cEmail.input_y);
-              await new Promise(r => setTimeout(r, 300));
-              if (cEmail.has_paste && cEmail.paste_x) {
-                await page.mouse.click(cEmail.paste_x, cEmail.paste_y);
-                console.log(`[Vision] Email OTP pasted via Paste button`);
-              } else {
-                await page.keyboard.down('Control');
-                await page.keyboard.press('v');
-                await page.keyboard.up('Control');
-                console.log(`[Vision] Email OTP pasted via Ctrl+V`);
-              }
-              await new Promise(r => setTimeout(r, 500));
-              await page.mouse.click(cEmail.submit_x, cEmail.submit_y);
-              console.log(`[Vision] Email Submit clicked at (${cEmail.submit_x},${cEmail.submit_y})`);
+        // Step 3: Fill input via React native setter
+        const emailFilled = await page.evaluate((val) => {
+          const input = document.querySelector('input[maxlength="6"], input[maxlength="8"], input[type="tel"], input[type="number"], input[type="text"]');
+          if (!input) return false;
+          input.focus();
+          const proto = window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(input, val); else input.value = val;
+          input.dispatchEvent(new Event('input',  { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }, emailCode).catch(() => false);
+
+        if (emailFilled) {
+          console.log('[Email OTP] ✅ Code filled via DOM');
+        } else {
+          console.log('[Email OTP] DOM fill failed — typing via keyboard');
+          await page.keyboard.type(emailCode, { delay: 80 });
+        }
+        await new Promise(r => setTimeout(r, 400));
+
+        // Step 4: Click Submit via DOM
+        const emailSubmitted = await page.evaluate(() => {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const t = (walker.currentNode.textContent || '').trim().toLowerCase();
+            if (t === 'submit' || t === 'confirm' || t === 'verify') {
+              const el = walker.currentNode.parentElement;
+              if (el && el.getBoundingClientRect().width > 0) { el.click(); return true; }
             }
           }
-        } catch (e) { console.log('[Vision] Email OTP entry error:', e.message?.substring(0, 60)); }
+          return false;
+        }).catch(() => false);
+
+        if (emailSubmitted) {
+          console.log('[Email OTP] ✅ Submit clicked via DOM');
+        } else {
+          console.log('[Email OTP] DOM submit failed — pressing Enter');
+          await page.keyboard.press('Enter');
+        }
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
