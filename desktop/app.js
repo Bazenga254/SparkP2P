@@ -4649,24 +4649,34 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         console.log('[DOM] Passkey screen — locating "My Passkeys Are Not Available"...');
         await new Promise(r => setTimeout(r, 800));
 
-        // Search TEXT NODES directly — a text node has no children so its
-        // parentElement is always the exact clickable element, not a wrapper.
+        // Search including shadow DOM — Binance may render the dialog in a web component
         const passKeyCoords = await page.evaluate(() => {
           const phrases = ['my passkeys are not available', 'passkeys are not available', 'passkey is not available'];
-          // Walk all text nodes in the document
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-          while (walker.nextNode()) {
-            const node = walker.currentNode;
-            const t = (node.textContent || '').trim().toLowerCase();
-            if (!phrases.some(p => t.includes(p))) continue;
-            // Found the text node — click its parent element
-            const el = node.parentElement;
-            if (!el) continue;
-            const r = el.getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) continue;
-            return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName, text: t.substring(0, 60) };
+
+          function searchRoot(root) {
+            // Walk text nodes in this root
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              const t = (node.textContent || '').trim().toLowerCase();
+              if (!phrases.some(p => t.includes(p))) continue;
+              const el = node.parentElement;
+              if (!el) continue;
+              const r = el.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) continue;
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName, text: t.substring(0, 60) };
+            }
+            // Recurse into shadow roots
+            for (const el of root.querySelectorAll('*')) {
+              if (el.shadowRoot) {
+                const found = searchRoot(el.shadowRoot);
+                if (found) return found;
+              }
+            }
+            return null;
           }
-          return null;
+
+          return searchRoot(document.body);
         }).catch(() => null);
 
         if (passKeyCoords) {
@@ -4674,43 +4684,23 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           await page.mouse.click(passKeyCoords.x, passKeyCoords.y);
           console.log('[DOM] ✅ "My Passkeys Are Not Available" clicked');
         } else {
-          console.log('[DOM] Not found in main frame — trying iframes...');
-          let iframeClicked = false;
-          for (const frame of page.frames()) {
-            try {
-              const coords = await frame.evaluate(() => {
-                const phrases = ['my passkeys are not available', 'passkeys are not available'];
-                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-                while (walker.nextNode()) {
-                  const node = walker.currentNode;
-                  const t = (node.textContent || '').trim().toLowerCase();
-                  if (!phrases.some(p => t.includes(p))) continue;
-                  const el = node.parentElement;
-                  if (!el) continue;
-                  const r = el.getBoundingClientRect();
-                  if (r.width === 0 || r.height === 0) continue;
-                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-                }
-                return null;
-              });
-              if (coords) {
-                await page.mouse.click(coords.x, coords.y);
-                console.log('[DOM] ✅ Clicked in iframe');
-                iframeClicked = true;
-                break;
-              }
-            } catch (_) {}
-          }
-          if (!iframeClicked) {
-            // Last resort — SparkAgent Vision
-            console.log('[DOM] iframe search failed — falling back to SparkAgent Vision...');
-            try {
-              const agent = getMidsceneAgent(page);
-              await agent.aiTap('the link or text that says "My Passkeys Are Not Available" below the Try Again button in the passkey dialog');
-              console.log('[Vision] ✅ Passkey link tapped via SparkAgent');
-            } catch (e) {
-              console.log(`[Vision] SparkAgent passkey failed: ${e.message?.substring(0, 60)}`);
-            }
+          console.log('[DOM] Not found (incl. shadow DOM) — trying Tab keyboard navigation...');
+          // Keyboard fallback: Tab moves focus from "Try Again" → "My Passkeys Are Not Available" link
+          // Then Enter activates it. Much more reliable than DOM/Vision for modal dialogs.
+          await page.keyboard.press('Tab');
+          await new Promise(r => setTimeout(r, 300));
+          // Check if focused element text matches what we want
+          const focusedText = await page.evaluate(() => (document.activeElement?.textContent || '').trim().toLowerCase()).catch(() => '');
+          console.log(`[DOM] Tab focused: "${focusedText.substring(0, 60)}"`);
+          if (focusedText.includes('passkey') || focusedText.includes('not available')) {
+            await page.keyboard.press('Enter');
+            console.log('[DOM] ✅ Pressed Enter on focused passkey link');
+          } else {
+            // Tab again — dialog may have more focusable elements before the link
+            await page.keyboard.press('Tab');
+            await new Promise(r => setTimeout(r, 300));
+            await page.keyboard.press('Enter');
+            console.log('[DOM] ✅ Pressed Enter after second Tab');
           }
         }
         await new Promise(r => setTimeout(r, 1500));
