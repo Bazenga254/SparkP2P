@@ -4649,23 +4649,24 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         console.log('[DOM] Passkey screen — locating "My Passkeys Are Not Available"...');
         await new Promise(r => setTimeout(r, 800));
 
-        // Find the SMALLEST element containing the phrase — that's the actual link,
-        // not a wrapper div. Return its center coords for a real mouse.click().
+        // Search TEXT NODES directly — a text node has no children so its
+        // parentElement is always the exact clickable element, not a wrapper.
         const passKeyCoords = await page.evaluate(() => {
           const phrases = ['my passkeys are not available', 'passkeys are not available', 'passkey is not available'];
-          const all = Array.from(document.querySelectorAll('*'));
-          let best = null, bestArea = Infinity;
-          for (const el of all) {
-            const t = (el.textContent || '').trim().toLowerCase();
+          // Walk all text nodes in the document
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const t = (node.textContent || '').trim().toLowerCase();
             if (!phrases.some(p => t.includes(p))) continue;
+            // Found the text node — click its parent element
+            const el = node.parentElement;
+            if (!el) continue;
             const r = el.getBoundingClientRect();
             if (r.width === 0 || r.height === 0) continue;
-            const area = r.width * r.height;
-            if (area < bestArea) { bestArea = area; best = el; }
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName, text: t.substring(0, 60) };
           }
-          if (!best) return null;
-          const r = best.getBoundingClientRect();
-          return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: best.tagName, text: (best.textContent || '').trim().substring(0, 60) };
+          return null;
         }).catch(() => null);
 
         if (passKeyCoords) {
@@ -4679,19 +4680,18 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
             try {
               const coords = await frame.evaluate(() => {
                 const phrases = ['my passkeys are not available', 'passkeys are not available'];
-                const all = Array.from(document.querySelectorAll('*'));
-                let best = null, bestArea = Infinity;
-                for (const el of all) {
-                  const t = (el.textContent || '').trim().toLowerCase();
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                while (walker.nextNode()) {
+                  const node = walker.currentNode;
+                  const t = (node.textContent || '').trim().toLowerCase();
                   if (!phrases.some(p => t.includes(p))) continue;
+                  const el = node.parentElement;
+                  if (!el) continue;
                   const r = el.getBoundingClientRect();
                   if (r.width === 0 || r.height === 0) continue;
-                  const area = r.width * r.height;
-                  if (area < bestArea) { bestArea = area; best = el; }
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
                 }
-                if (!best) return null;
-                const r = best.getBoundingClientRect();
-                return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                return null;
               });
               if (coords) {
                 await page.mouse.click(coords.x, coords.y);
