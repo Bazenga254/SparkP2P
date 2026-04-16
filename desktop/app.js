@@ -4644,46 +4644,73 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         continue;
       }
 
-      // ── Passkey failed — DOM clicks "My Passkeys Are Not Available" ──────────
+      // ── Passkey failed — click "My Passkeys Are Not Available" ──────────────
       if (screen === 'passkey_failed') {
-        console.log('[DOM] Passkey screen — clicking "My Passkeys Are Not Available"...');
+        console.log('[DOM] Passkey screen — locating "My Passkeys Are Not Available"...');
         await new Promise(r => setTimeout(r, 800));
-        const passKeyDomClicked = await page.evaluate(() => {
-          const phrases = ['my passkeys are not available', 'passkeys are not available', 'passkey is not available'];
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-          while (walker.nextNode()) {
-            const el = walker.currentNode;
-            const t = (el.textContent || '').trim().toLowerCase();
-            if (phrases.some(p => t === p || t.includes(p)) && el.getBoundingClientRect().width > 0) {
-              el.click();
-              return true;
-            }
-          }
-          return false;
-        }).catch(() => false);
 
-        if (passKeyDomClicked) {
+        // Find the SMALLEST element containing the phrase — that's the actual link,
+        // not a wrapper div. Return its center coords for a real mouse.click().
+        const passKeyCoords = await page.evaluate(() => {
+          const phrases = ['my passkeys are not available', 'passkeys are not available', 'passkey is not available'];
+          const all = Array.from(document.querySelectorAll('*'));
+          let best = null, bestArea = Infinity;
+          for (const el of all) {
+            const t = (el.textContent || '').trim().toLowerCase();
+            if (!phrases.some(p => t.includes(p))) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            const area = r.width * r.height;
+            if (area < bestArea) { bestArea = area; best = el; }
+          }
+          if (!best) return null;
+          const r = best.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: best.tagName, text: (best.textContent || '').trim().substring(0, 60) };
+        }).catch(() => null);
+
+        if (passKeyCoords) {
+          console.log(`[DOM] Found "${passKeyCoords.text}" <${passKeyCoords.tag}> at (${Math.round(passKeyCoords.x)}, ${Math.round(passKeyCoords.y)}) — clicking`);
+          await page.mouse.click(passKeyCoords.x, passKeyCoords.y);
           console.log('[DOM] ✅ "My Passkeys Are Not Available" clicked');
         } else {
-          console.log('[DOM] Could not find "My Passkeys Are Not Available" — trying all frames...');
-          // Try iframes in case Binance renders the passkey dialog in a frame
+          console.log('[DOM] Not found in main frame — trying iframes...');
+          let iframeClicked = false;
           for (const frame of page.frames()) {
             try {
-              const clicked = await frame.evaluate(() => {
+              const coords = await frame.evaluate(() => {
                 const phrases = ['my passkeys are not available', 'passkeys are not available'];
-                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-                while (walker.nextNode()) {
-                  const el = walker.currentNode;
+                const all = Array.from(document.querySelectorAll('*'));
+                let best = null, bestArea = Infinity;
+                for (const el of all) {
                   const t = (el.textContent || '').trim().toLowerCase();
-                  if (phrases.some(p => t.includes(p)) && el.getBoundingClientRect().width > 0) {
-                    el.click();
-                    return true;
-                  }
+                  if (!phrases.some(p => t.includes(p))) continue;
+                  const r = el.getBoundingClientRect();
+                  if (r.width === 0 || r.height === 0) continue;
+                  const area = r.width * r.height;
+                  if (area < bestArea) { bestArea = area; best = el; }
                 }
-                return false;
+                if (!best) return null;
+                const r = best.getBoundingClientRect();
+                return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
               });
-              if (clicked) { console.log('[DOM] ✅ Clicked in iframe'); break; }
+              if (coords) {
+                await page.mouse.click(coords.x, coords.y);
+                console.log('[DOM] ✅ Clicked in iframe');
+                iframeClicked = true;
+                break;
+              }
             } catch (_) {}
+          }
+          if (!iframeClicked) {
+            // Last resort — SparkAgent Vision
+            console.log('[DOM] iframe search failed — falling back to SparkAgent Vision...');
+            try {
+              const agent = getMidsceneAgent(page);
+              await agent.aiTap('the link or text that says "My Passkeys Are Not Available" below the Try Again button in the passkey dialog');
+              console.log('[Vision] ✅ Passkey link tapped via SparkAgent');
+            } catch (e) {
+              console.log(`[Vision] SparkAgent passkey failed: ${e.message?.substring(0, 60)}`);
+            }
           }
         }
         await new Promise(r => setTimeout(r, 1500));
