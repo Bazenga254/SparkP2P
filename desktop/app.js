@@ -4381,33 +4381,36 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         // Order complete
         if (text.includes('Sale Successful') || text.includes('Order Completed') || text.includes('Released'))
           return 'order_complete';
-        // Confirm release modal — check FIRST because the page behind the modal
-        // may contain passkey-related text that would cause false passkey_failed detection.
+        // Confirm release modal — check FIRST
         if (text.includes('Received payment in your account') ||
             text.includes('I have verified that I received') ||
             text.includes('Confirm Release'))
           return 'confirm_release_modal';
-        // Passkey screen — only trigger on explicit failure/unavailability indicators,
-        // not on generic "Verify with passkey" which can appear as a background option.
-        // Use BOTH innerText AND querySelectorAll — passkey modal may be in shadow DOM.
-        const passKeyTexts = ['My Passkeys Are Not Available', 'Passkeys Are Not Available', 'Verification failed'];
-        // Check innerText first
-        const inInnerText = passKeyTexts.some(t => text.includes(t));
-        // Check ALL elements textContent (catches shadow DOM / portals that escape innerText)
-        const allTextContent = Array.from(document.querySelectorAll('*')).map(el => el.textContent || '').join(' ');
-        const inAllElements = passKeyTexts.some(t => allTextContent.includes(t));
-        if (inInnerText || inAllElements) return 'passkey_failed';
+        // Security Verification Requirements — check BEFORE passkey_failed because
+        // the security modal may contain "Verification failed" text from a previous step.
+        if (text.includes('Security Verification') || text.includes('Authenticator App')) {
+          const progress = text.includes('1/2') ? '1/2' : '0/2';
+          return `security_verification:${progress}`;
+        }
+        // TOTP input
+        if (text.includes('Authenticator App Verification') || text.includes('Google Authenticator'))
+          return 'totp_input';
+        // Email OTP input
+        if ((text.includes('Email Verification') || text.includes('email verification code')) &&
+            document.querySelector('input[maxlength="6"], input[maxlength="8"]'))
+          return 'email_otp_input';
+        // Passkey screen — require BOTH "passkey" AND explicit failure text together.
+        // "Verification failed" alone is too generic (appears on security_verification too).
+        const lower = text.toLowerCase();
+        const hasPasskeyLink = lower.includes('my passkeys are not available') || lower.includes('passkeys are not available');
+        const hasPasskeyFail = lower.includes('verify with passkey') || lower.includes('verification failed');
+        if (hasPasskeyLink || (hasPasskeyFail && lower.includes('passkey'))) return 'passkey_failed';
         // Verify Payment page
         if (text.includes('Verify Payment') ||
             text.includes('Confirm payment from buyer') ||
             text.includes('Confirm payment is received') ||
             text.includes('Payment Received'))
           return 'verify_payment';
-        // Security verification
-        if (text.includes('Security Verification') && (text.includes('0/2') || text.includes('1/2'))) {
-          const progress = text.includes('1/2') ? '1/2' : '0/2';
-          return `security_verification:${progress}`;
-        }
         // Awaiting payment
         if (text.includes("Awaiting Buyer's Payment") || text.includes('Awaiting Payment'))
           return 'awaiting_payment';
