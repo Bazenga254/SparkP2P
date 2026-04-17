@@ -1664,10 +1664,11 @@ async function findAndReadPaymentScreenshot(page) {
     // ── Step 2: Take screenshot → Vision finds the thumbnail coords ───────────
     console.log('[Screenshot] Taking screenshot to locate payment thumbnail...');
     const scanSS = await page.screenshot({ type: 'jpeg', quality: 85 });
-    const scanW = scanSS.readUInt32BE(16);
-    const scanH = scanSS.readUInt32BE(20);
-    const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
-    const dpr = scanW / vp.w;
+    const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 }));
+    const scanW = Math.round(vp.w * vp.dpr);
+    const scanH = Math.round(vp.h * vp.dpr);
+    const dpr = vp.dpr;
+    console.log(`[Screenshot] Viewport ${vp.w}×${vp.h} dpr=${dpr} → image ${scanW}×${scanH}`);
 
     const locateResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1739,24 +1740,16 @@ async function findAndReadPaymentScreenshot(page) {
     // ── Step 7: Vision reads the enlarged screenshot — up to 2 attempts ───────
     console.log('[Vision] Reading enlarged payment screenshot (Sonnet)...');
 
-    const MPESA_OCR_PROMPT = `You are an OCR specialist reading an M-Pesa payment confirmation screenshot.
+    const MPESA_OCR_PROMPT = `Read this M-Pesa payment screenshot and extract the transaction code.
 
-Your job: find and return the M-Pesa transaction code.
+M-Pesa confirmation format: "XXXXXXXXXX Confirmed. Ksh 2,000.00 sent to NAME on DATE..."
+The code is the FIRST word — exactly 10 uppercase alphanumeric characters (letters + digits).
 
-M-Pesa confirmation messages look like:
-  "QE1FXYZABC Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE on 15/4/26..."
-  "UDE5J13AGR Confirmed. KES 500 sent to ABC COMPANY..."
+Common OCR confusions: I↔1, O↔0, B↔8, S↔5, Z↔2.
 
-The transaction code is the FIRST word — always exactly 10 characters, uppercase letters and digits only.
-
-READ EVERY CHARACTER individually. Do not skip or guess.
-Common confusions: I vs 1, O vs 0, B vs 8, S vs 5, Z vs 2. Use context (codes mix letters+digits).
-
-Also extract the KES amount sent (the number after "Ksh" or "KES").
-
-Return JSON:
+Return ONLY this JSON with no other text:
 {"found": true, "code": "XXXXXXXXXX", "amount": 2000}
-OR if no M-Pesa confirmation is visible:
+OR if no M-Pesa confirmation visible:
 {"found": false, "reason": "no_mpesa_message"}`;
 
     let readResult = null;
@@ -1767,7 +1760,7 @@ OR if no M-Pesa confirmation is visible:
           headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
             model: 'claude-sonnet-4-5',  // Sonnet for better OCR accuracy on this critical step
-            max_tokens: 150,
+            max_tokens: 400,
             messages: [{ role: 'user', content: [
               { type: 'image', source: { type: 'base64', media_type: 'image/png', data: enlargedSS.toString('base64') } },
               { type: 'text', text: MPESA_OCR_PROMPT },
