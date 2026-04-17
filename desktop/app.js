@@ -1834,78 +1834,7 @@ IMPORTANT: ignore ALL older messages — only look at the single most recent buy
       console.log(`[SparkP2P] Vision latest-message scan error: ${e.message?.substring(0, 60)}`);
     }
 
-    // ── Step 1: DOM scan — ONLY buyer message bubbles (left-aligned in chat panel) ──
-    // We intentionally avoid broad page-text regex (picks up Binance nav like "LAUNCHPOOL").
-    // Only look at text nodes inside the buyer's chat bubbles.
-    const chatText = await page.evaluate(() => {
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const parts = [];
-      // Buyer messages are left-aligned bubbles in the right-side chat panel.
-      // They sit in the right 62% of the page and are NOT right-aligned (not the seller).
-      // Strategy: look for text nodes inside elements that look like message bubbles
-      // (short text, in chat area, not in navigation or headers).
-      const allEls = Array.from(document.querySelectorAll('*'));
-      for (const el of allEls) {
-        if (el.children.length > 0) continue; // leaf nodes only
-        const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) continue;
-        if (rect.left < vw * 0.38) continue;  // skip left order-detail panel
-        if (rect.top  < vh * 0.35) continue;  // skip header/nav
-        if (rect.top  > vh * 0.92) continue;  // skip footer/input area
-        if (rect.width > vw * 0.4) continue;  // skip wide elements (nav bars, headers)
-        const text = (el.textContent || '').trim();
-        // Only include short text typical of chat messages (not full paragraphs or nav menus)
-        if (text && text.length >= 6 && text.length <= 60) parts.push(text);
-      }
-      return parts.join(' ');
-    });
-
-    // ── Regex scan — strict: only match tokens that look like real codes ────────
-    // M-Pesa codes contain DIGITS mixed with letters (e.g. QE1FXYZABC, UDHS8ALAHE).
-    // Pure-alpha 10-char words (LAUNCHPOOL, PREDICTION) are navigation items — skip them.
-    const found = { mpesaCodes: [], bankRefs: [] };
-    const mpesaRe = /\b([A-Z0-9]{10})\b/gi;
-    const bankRe  = /\b([A-Z0-9]{6,20})\b/gi;
-    let m;
-    while ((m = mpesaRe.exec(chatText)) !== null) {
-      const code = m[1].toUpperCase();
-      // Require at least one digit — real M-Pesa codes always have digits
-      if (/\d/.test(code) && !found.mpesaCodes.includes(code)) found.mpesaCodes.push(code);
-    }
-    while ((m = bankRe.exec(chatText)) !== null) {
-      const ref = m[1].toUpperCase();
-      // Require at least one digit; skip pure-alpha navigation words
-      if (/\d/.test(ref) && ref.length !== 10 && !found.bankRefs.includes(ref)) found.bankRefs.push(ref);
-    }
-
-    if (found.mpesaCodes.length || found.bankRefs.length) {
-      console.log(`[SparkP2P] Found in chat text — M-Pesa: ${found.mpesaCodes.join(', ')} Bank: ${found.bankRefs.join(', ')}`);
-      return found;
-    }
-
-    // ── Claude fallback — ask AI to read all chat text and extract codes ──────
-    if (chatText.length > 10) {
-      const aiResult = await aiScanner.analyzeText(chatText, `
-        This is text from a Binance P2P order chat between a seller and buyer.
-        The buyer may have typed an M-Pesa transaction code (exactly 10 alphanumeric characters, e.g. "QE1FXYZABC")
-        or a bank reference number (6-20 alphanumeric characters).
-        Extract any such codes from the buyer's messages.
-        Return JSON: {"mpesa_code": "CODE or null", "bank_ref": "REF or null"}
-      `);
-      if (aiResult?.mpesa_code && /^[A-Z0-9]{10}$/i.test(aiResult.mpesa_code)) {
-        const code = aiResult.mpesa_code.toUpperCase();
-        console.log(`[SparkP2P] Claude found M-Pesa code in chat: ${code}`);
-        return { mpesaCodes: [code], bankRefs: [] };
-      }
-      if (aiResult?.bank_ref && /^[A-Z0-9]{6,20}$/i.test(aiResult.bank_ref)) {
-        const ref = aiResult.bank_ref.toUpperCase();
-        console.log(`[SparkP2P] Claude found bank ref in chat: ${ref}`);
-        return { mpesaCodes: [], bankRefs: [ref] };
-      }
-    }
-
-    // ── Step 2: Find all <img> elements in the right half of the viewport (chat panel)
+    // ── Step 1: Find all <img> elements in the right half of the viewport (chat panel)
     const chatImgHandles = await page.evaluateHandle(() => {
       const vw = window.innerWidth;
       return Array.from(document.querySelectorAll('img')).filter(img => {
