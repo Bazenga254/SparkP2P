@@ -938,6 +938,7 @@ async def _process_reported_sell_order(
 
     prefix = f"T{trader.id:04d}"
     account_ref = f"P2P-{prefix}-{order_number}"
+    display_account = f"P2P-{prefix}"  # What buyer types in M-Pesa — no order number
 
     order = Order(
         trader_id=trader.id,
@@ -961,7 +962,7 @@ async def _process_reported_sell_order(
     message = (
         f"Hi! Please send KES {amount:,.0f} to:\n"
         f"M-Pesa Paybill: {paybill}\n"
-        f"Account Number: {account_ref}\n"
+        f"Account Number: {display_account}\n"
         f"Account Holder: {trader.full_name}\n\n"
         f"You will receive a confirmation message once payment is received. "
         f"Your crypto will be released automatically."

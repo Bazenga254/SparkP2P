@@ -1834,40 +1834,49 @@ IMPORTANT: ignore ALL older messages — only look at the single most recent buy
       console.log(`[SparkP2P] Vision latest-message scan error: ${e.message?.substring(0, 60)}`);
     }
 
-    // ── Step 1: DOM text scan — only bottom 50% of screen (recent messages) ──────
-    // Older messages at the top are skipped to avoid picking up codes from past orders.
+    // ── Step 1: DOM scan — ONLY buyer message bubbles (left-aligned in chat panel) ──
+    // We intentionally avoid broad page-text regex (picks up Binance nav like "LAUNCHPOOL").
+    // Only look at text nodes inside the buyer's chat bubbles.
     const chatText = await page.evaluate(() => {
       const vw = window.innerWidth;
       const vh = window.innerHeight;
-      // Collect text from visible leaf nodes in bottom half of right 55% of page
       const parts = [];
+      // Buyer messages are left-aligned bubbles in the right-side chat panel.
+      // They sit in the right 62% of the page and are NOT right-aligned (not the seller).
+      // Strategy: look for text nodes inside elements that look like message bubbles
+      // (short text, in chat area, not in navigation or headers).
       const allEls = Array.from(document.querySelectorAll('*'));
       for (const el of allEls) {
-        if (el.children.length > 0) continue;
+        if (el.children.length > 0) continue; // leaf nodes only
         const rect = el.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) continue;
-        if (rect.left < vw * 0.38) continue; // skip order-detail left panel
-        if (rect.top  < vh * 0.45) continue; // skip older messages at top of chat
+        if (rect.left < vw * 0.38) continue;  // skip left order-detail panel
+        if (rect.top  < vh * 0.35) continue;  // skip header/nav
+        if (rect.top  > vh * 0.92) continue;  // skip footer/input area
+        if (rect.width > vw * 0.4) continue;  // skip wide elements (nav bars, headers)
         const text = (el.textContent || '').trim();
-        if (text && text.length <= 500) parts.push(text);
+        // Only include short text typical of chat messages (not full paragraphs or nav menus)
+        if (text && text.length >= 6 && text.length <= 60) parts.push(text);
       }
       return parts.join(' ');
     });
 
-    // ── Regex scan — case-insensitive, then uppercase ─────────────────────────
+    // ── Regex scan — strict: only match tokens that look like real codes ────────
+    // M-Pesa codes contain DIGITS mixed with letters (e.g. QE1FXYZABC, UDHS8ALAHE).
+    // Pure-alpha 10-char words (LAUNCHPOOL, PREDICTION) are navigation items — skip them.
     const found = { mpesaCodes: [], bankRefs: [] };
-    // M-Pesa codes: exactly 10 alphanumeric (e.g. QE1FXYZABC)
     const mpesaRe = /\b([A-Z0-9]{10})\b/gi;
-    // Bank refs: 6-20 alphanum
     const bankRe  = /\b([A-Z0-9]{6,20})\b/gi;
     let m;
     while ((m = mpesaRe.exec(chatText)) !== null) {
       const code = m[1].toUpperCase();
-      if (!found.mpesaCodes.includes(code)) found.mpesaCodes.push(code);
+      // Require at least one digit — real M-Pesa codes always have digits
+      if (/\d/.test(code) && !found.mpesaCodes.includes(code)) found.mpesaCodes.push(code);
     }
     while ((m = bankRe.exec(chatText)) !== null) {
       const ref = m[1].toUpperCase();
-      if (ref.length !== 10 && !found.bankRefs.includes(ref)) found.bankRefs.push(ref);
+      // Require at least one digit; skip pure-alpha navigation words
+      if (/\d/.test(ref) && ref.length !== 10 && !found.bankRefs.includes(ref)) found.bankRefs.push(ref);
     }
 
     if (found.mpesaCodes.length || found.bankRefs.length) {
