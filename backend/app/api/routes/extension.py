@@ -938,7 +938,7 @@ async def _process_reported_sell_order(
 
     prefix = f"T{trader.id:04d}"
     account_ref = f"P2P-{prefix}-{order_number}"
-    display_account = f"P2P-{prefix}"  # What buyer types in M-Pesa — no order number
+    display_account = f"P2P{prefix}"  # What buyer types in M-Pesa/bank — no hyphens
 
     order = Order(
         trader_id=trader.id,
