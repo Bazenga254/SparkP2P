@@ -1740,16 +1740,24 @@ async function findAndReadPaymentScreenshot(page) {
     // ── Step 7: Vision reads the enlarged screenshot — up to 2 attempts ───────
     console.log('[Vision] Reading enlarged payment screenshot (Sonnet)...');
 
-    const MPESA_OCR_PROMPT = `Read this M-Pesa payment screenshot and extract the transaction code.
+    const MPESA_OCR_PROMPT = `This screenshot may show one or more M-Pesa payment messages. Focus ONLY on the MOST RECENT (bottom-most) payment confirmation message.
 
-M-Pesa confirmation format: "XXXXXXXXXX Confirmed. Ksh 2,000.00 sent to NAME on DATE..."
-The code is the FIRST word — exactly 10 uppercase alphanumeric characters (letters + digits).
+There are two possible formats for the M-Pesa transaction code:
+
+FORMAT 1 — Safaricom SMS:
+"XXXXXXXXXX Confirmed. Ksh 2,000.00 sent to NAME on DATE..."
+The code is the FIRST word — exactly 10 uppercase alphanumeric characters.
+
+FORMAT 2 — I&M Bank / other bank SMS:
+"M-PESA transfer of KES 2,000.00 to A/C ... M-PESA Ref ID: XXXXXXXXXX"
+The code follows "M-PESA Ref ID:" — exactly 10 uppercase alphanumeric characters.
 
 Common OCR confusions: I↔1, O↔0, B↔8, S↔5, Z↔2.
+Ignore older messages higher up in the screenshot — only extract from the LAST/BOTTOM message.
 
 Return ONLY this JSON with no other text:
 {"found": true, "code": "XXXXXXXXXX", "amount": 2000}
-OR if no M-Pesa confirmation visible:
+OR if no M-Pesa confirmation visible in the bottom message:
 {"found": false, "reason": "no_mpesa_message"}`;
 
     let readResult = null;
