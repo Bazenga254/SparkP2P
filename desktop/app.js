@@ -88,6 +88,7 @@ let lockGmailFrameListener = null;
 let lockImFrameListener = null;
 let lockMpesaFrameListener = null;
 let chromeProcess = null; // Child process reference for killing Chrome on quit
+let chromeGeneration = 0; // Incremented each launch — old exit handlers check this to avoid nuking new connections
 const codeFallbackAskedOrders = new Set(); // Order numbers we've already asked buyer to type M-Pesa code (avoid spamming)
 const verifiedOrders = new Map(); // orderNumber → { code, totalPrice } — verified on first visit, released on second visit
 let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for monitorActiveOrder compat)
@@ -456,12 +457,47 @@ function findChrome() {
   return null;
 }
 
+async function killChromeOnPort(port) {
+  try {
+    // Parse netstat output directly (no shell pipe needed — works without shell:true)
+    const out = execSync('netstat -ano', { encoding: 'utf8' });
+    const pids = new Set();
+    for (const line of out.split('\n')) {
+      // Match lines with our port as local address (e.g. "  TCP  0.0.0.0:9222  ...")
+      if (line.includes(`:${port} `) || line.includes(`:${port}\t`)) {
+        const parts = line.trim().split(/\s+/);
+        const pid = parts[parts.length - 1];
+        if (pid && /^\d+$/.test(pid) && pid !== '0') pids.add(pid);
+      }
+    }
+    for (const pid of pids) {
+      try { execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' }); } catch (e) {}
+    }
+    if (pids.size > 0) {
+      console.log(`[SparkP2P] Killed ${pids.size} stale process(es) on port ${port}`);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  } catch (e) {}
+}
+
 async function launchChrome(url) {
   const chrome = findChrome();
   if (!chrome) { console.error('Chrome not found'); return false; }
 
-  // Clear previous session files to prevent Chrome from restoring old tabs
-  const sessionDir = path.join(app.getPath('userData'), 'chrome-binance', 'Default');
+  // Bump generation FIRST — any exit handler from a previous Chrome will see a stale generation
+  // and skip the browser.disconnect() call that would nuke our new connection
+  chromeGeneration++;
+  const myGeneration = chromeGeneration;
+
+  // Kill any existing process on the CDP port
+  await killChromeOnPort(CDP_PORT);
+
+  // Remove Chrome's singleton lock files so the new instance can start cleanly
+  const profileDir = path.join(app.getPath('userData'), 'chrome-binance');
+  const sessionDir = path.join(profileDir, 'Default');
+  ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].forEach(f => {
+    try { fs.unlinkSync(path.join(profileDir, f)); } catch(e) {}
+  });
   ['Current Session', 'Current Tabs', 'Last Session', 'Last Tabs'].forEach(f => {
     try { fs.unlinkSync(path.join(sessionDir, f)); } catch(e) {}
   });
@@ -469,29 +505,23 @@ async function launchChrome(url) {
   chromeProcess = execFile(chrome, [
     `--remote-debugging-port=${CDP_PORT}`,
     '--no-first-run', '--no-default-browser-check',
-    '--disable-features=MediaRouter', // Reduce noise
-    '--user-data-dir=' + path.join(app.getPath('userData'), 'chrome-binance'),
+    '--disable-features=MediaRouter',
+    '--user-data-dir=' + profileDir,
     url || 'https://accounts.binance.com/en/login',
   ]);
   chromeProcess.on('exit', () => {
-    // Chrome was closed externally — stop the bot, don't reopen
+    if (chromeGeneration !== myGeneration) {
+      console.log('[SparkP2P] Old Chrome process exited (ignored)');
+      return;
+    }
     console.log('[SparkP2P] Chrome closed by user');
     chromeProcess = null;
-    if (browser) { try { browser.disconnect(); } catch(e) {} browser = null; }
-    stopPoller();
-    browserLocked = false;
-    connectingBinance = false;
-    scanningInProgress = false;
-    if (lockFrameListener) { lockFrameListener = null; }
-    if (mainWindow) {
-      mainWindow.show();
-      mainWindow.webContents.executeJavaScript(
-        'window.dispatchEvent(new CustomEvent("binance-disconnected"))'
-      ).catch(() => {});
-    }
+    // Do NOT call browser.disconnect() here — Puppeteer fires 'disconnected' automatically
+    // when Chrome exits. Manually calling disconnect() races with the automatic event
+    // and can null out a connection that was already replaced by a new session.
   });
   console.log('[SparkP2P] Chrome launched');
-  await new Promise(r => setTimeout(r, 4000));
+  await new Promise(r => setTimeout(r, 8000)); // Give Chrome time to start and restore session
   return true;
 }
 
@@ -499,33 +529,35 @@ async function connectPuppeteer() {
   try {
     browser = await puppeteer.connect({
       browserURL: `http://127.0.0.1:${CDP_PORT}`,
-      defaultViewport: null,  // Use actual Chrome window size
+      defaultViewport: null,
     });
-    // When Chrome closes externally, immediately stop the bot (prevents auto-reopen)
+    // This is the SINGLE cleanup handler — fires automatically when Chrome exits or CDP drops
     browser.on('disconnected', () => {
-      if (browser) { browser = null; }
+      console.log('[SparkP2P] Binance Chrome disconnected');
+      browser = null;
+      chromeProcess = null;
       stopPoller();
       browserLocked = false;
+      connectingBinance = false;
+      scanningInProgress = false;
+      if (lockFrameListener) { lockFrameListener = null; }
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.webContents.executeJavaScript(
+          'window.dispatchEvent(new CustomEvent("binance-disconnected"))'
+        ).catch(() => {});
+      }
     });
-    // Close any extra tabs — keep only the first one
-    const pages = await browser.pages();
-    for (let i = 1; i < pages.length; i++) {
-      await pages[i].close().catch(() => {});
-    }
-    // Set 80% zoom on the main tab and re-apply after every navigation
-    if (pages[0]) {
-      // CSS zoom injected before every page renders (survives navigation)
-      await pages[0].evaluateOnNewDocument(() => {
-        document.addEventListener('DOMContentLoaded', () => {
-          document.documentElement.style.zoom = '80%';
-        });
-      }).catch(() => {});
-      await setZoom80(pages[0]);
-      pages[0].on('load', () => setZoom80(pages[0]).catch(() => {}));
-    }
-    console.log('[SparkP2P] Puppeteer connected (zoom 80%)');
+    // Log what pages are visible
+    const pages = await browser.pages().catch(() => []);
+    console.log(`[SparkP2P] Puppeteer connected — ${pages.length} page(s): ${pages.map(p => p.url().substring(0, 50)).join(' | ')}`);
+    if (!browser) return false;
+    // Zoom setup deferred — done after login detected to avoid triggering Chrome exit
     return true;
-  } catch (e) { return false; }
+  } catch (e) {
+    console.error('[SparkP2P] Puppeteer connect error:', e.message?.substring(0, 60));
+    return false;
+  }
 }
 
 let _zoomSession = null;
@@ -589,8 +621,8 @@ async function onGmailConfirmed() {
   // Wait for Gmail to finish loading before locking — injecting too early lets Gmail's own JS remove the overlay
   if (gmailPage && !gmailPage.isClosed()) {
     console.log('[SparkP2P] Waiting for Gmail to finish loading before locking...');
-    await gmailPage.waitForNetworkIdle({ idleTime: 1500, timeout: 10000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 1000)); // extra 1s buffer
+    await gmailPage.waitForNetworkIdle({ idleTime: 800, timeout: 4000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 500));
   }
   // Lock ALL bot-controlled tabs (sets browserLocked = true)
   await lockChromeBrowser().catch(() => {});
@@ -666,24 +698,23 @@ function startGmailLoginPoller() {
 
 async function isLoggedIn() {
   const page = await getPage('binance.com');
-  if (!page) return false;
+  if (!page) { console.log('[Login] No Binance page found'); return false; }
   try {
     const url = page.url();
-    // Definitely not logged in if on login/register/auth pages
+    console.log(`[Login] Checking URL: ${url.substring(0, 80)}`);
     if (url.includes('accounts.binance.com')) return false;
     if (/\/(login|register|forgot-password|security-verify)/.test(url)) return false;
-    // If we're on any binance.com page that's not the login page, user is authenticated
-    // (Binance redirects to login if not authenticated)
     if (url.includes('binance.com') && url.length > 20) {
-      // Double-check: make sure the page didn't silently redirect to a login form
       const hasLoginForm = await page.evaluate(() => {
         return !!(document.querySelector('input[type="password"][placeholder*="assword"]') ||
                   document.querySelector('button[data-bn-type="button"][type="submit"]') &&
                   document.querySelector('form') &&
                   document.querySelector('input[name="email"]'));
       }).catch(() => false);
+      console.log(`[Login] hasLoginForm=${hasLoginForm} → result=${!hasLoginForm}`);
       return !hasLoginForm;
     }
+    console.log('[Login] URL does not match binance.com pattern');
     return false;
   } catch (e) { return false; }
 }
@@ -871,7 +902,18 @@ async function connectBinance() {
     if (browser) { try { await browser.disconnect(); } catch(e) {} browser = null; }
     await launchChrome('https://accounts.binance.com/en/login');
     await connectPuppeteer();
-    if (!browser) return;
+    if (!browser) {
+      console.error('[SparkP2P] Could not connect to Chrome — try clicking Connect Binance again');
+      connectingBinance = false;
+      return;
+    }
+    console.log('[SparkP2P] Puppeteer OK — checking login state immediately');
+    if (await isLoggedIn()) {
+      console.log('[SparkP2P] Session already restored — starting bot');
+      await onLoginDetected();
+      return;
+    }
+    console.log('[SparkP2P] Not logged in yet — polling every 2s');
   }
 
   console.log('[SparkP2P] Waiting for login...');
@@ -888,59 +930,62 @@ async function connectBinance() {
       detected = true;
       clearInterval(check);
       console.log('[SparkP2P] Login detected!');
-      sessionStartTime = Date.now();
-      loggedOutStrikes = 0;
-
-      // Lock Chrome immediately so user cannot interact with Binance
-      await lockChromeBrowser();
-
-      // Bring SparkP2P dashboard to front
-      if (mainWindow) mainWindow.show();
-
-      // Send heartbeat immediately so dashboard shows "Connected"
-      if (token) {
-        fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
-      }
-
-      // Re-fetch credentials now that we're logged in (ensures Anthropic key is loaded)
-      await fetchAndApplyCredentials();
-
-      // Sync cookies immediately — don't block on Gmail
-      await syncCookies();
-      connectingBinance = false;
-
-      // Open Gmail tab in background — doesn't block connect flow
-      // If Chrome profile has Gmail logged in it will be ready for OTP scanning
-      openGmailTab().then(ok => {
-        if (ok) {
-          console.log('[SparkP2P] Gmail ready for OTP scanning');
-          syncCookies(); // Re-sync now that Gmail cookies are available
-        } else {
-          console.log('[SparkP2P] Gmail not detected — open Gmail in Chrome manually if needed');
-        }
-      }).catch(() => {});
-
-      // Block window.open() on all Binance pages to prevent popup tabs
-      const mainPage = await getPage();
-      if (mainPage) {
-        await mainPage.evaluateOnNewDocument(() => { window.open = () => null; }).catch(() => {});
-      }
-
-      // Verify all connections before starting bot
-      const setup = await checkSetupComplete();
-      if (!setup.complete) {
-        notifySetupIncomplete(setup.missing);
-        await lockChromeBrowser(); // lock browser so user can't browse freely
-        return;
-      }
-
-      // Run initial scan FIRST — poller would race on the same tab causing extra tabs
-      await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
-
-      // Start poller only after scan is done (no more tab conflicts)
-      startPoller();
+      await onLoginDetected();
     }
   }, 2000);
+}
+
+async function onLoginDetected() {
+  sessionStartTime = Date.now();
+  loggedOutStrikes = 0;
+  connectingBinance = false;
+
+  await lockChromeBrowser();
+  if (mainWindow) mainWindow.show();
+
+  if (token) {
+    fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
+  }
+
+  await fetchAndApplyCredentials();
+
+  // Close extra tabs — keep Binance page and Chrome internal pages (chrome://)
+  // IMPORTANT: pages[0] is not always Binance — Chrome internal popups can be index 0
+  const _pages = await browser.pages().catch(() => []);
+  const _binancePage = _pages.find(p => p.url().includes('binance.com'))
+    || _pages.find(p => !p.url().startsWith('chrome://') && p.url() !== 'about:blank');
+  for (const p of _pages) {
+    if (p !== _binancePage && !p.url().startsWith('chrome://')) {
+      await p.close().catch(() => {});
+    }
+  }
+  if (_binancePage) {
+    await _binancePage.evaluateOnNewDocument(() => {
+      document.addEventListener('DOMContentLoaded', () => { document.documentElement.style.zoom = '80%'; });
+    }).catch(() => {});
+    await setZoom80(_binancePage);
+    _binancePage.on('load', () => setZoom80(_binancePage).catch(() => {}));
+  }
+
+  // Sync Binance cookies immediately so backend marks binance_connected = true
+  await syncCookies();
+
+  // Open Gmail tab in the background — bot starts without waiting for it.
+  // onGmailConfirmed() will re-sync cookies with Gmail and dispatch gmail-connected.
+  openGmailTab().then(ok => {
+    if (ok) console.log('[SparkP2P] Gmail ready for OTP scanning');
+    else console.log('[SparkP2P] Gmail not detected — open Gmail in Chrome manually if needed');
+  }).catch(() => {});
+
+  // Suppress window.open() on Binance pages (prevents popup tabs)
+  const mainPage = await getPage();
+  if (mainPage) {
+    await mainPage.evaluateOnNewDocument(() => { window.open = () => null; }).catch(() => {});
+  }
+
+  console.log('[SparkP2P] Binance connected — starting bot');
+  await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
+  startPoller();
 }
 
 let lastActiveTime = Date.now();
@@ -954,12 +999,13 @@ async function fetchAndApplyCredentials() {
     });
     if (!res.ok) return;
     const { verify_method, fund_password, totp_secret, anthropic_api_key } = await res.json();
-    if (verify_method === 'fund_password' && fund_password) {
-      traderPin = fund_password;
-      console.log('[SparkP2P] Fund password loaded from backend');
-    } else if (verify_method === 'totp' && totp_secret) {
+    console.log(`[SparkP2P] Credentials: verify_method=${verify_method} has_totp=${!!totp_secret} has_pin=${!!fund_password}`);
+    if (totp_secret) {
       totpSecret = totp_secret.toUpperCase().replace(/\s/g, '');
       console.log('[SparkP2P] TOTP secret loaded from backend');
+    } else if (fund_password) {
+      traderPin = fund_password;
+      console.log('[SparkP2P] Fund password loaded from backend');
     }
     if (anthropic_api_key) {
       anthropicApiKey = anthropic_api_key;
@@ -1001,42 +1047,27 @@ function notifySetupIncomplete(missing) {
 }
 
 async function tryAutoStart() {
-  if (!token) return; // Don't do anything until user logs into SparkP2P
+  if (!token) return;
   if (browser) return; // Already connected
 
-  // Reset all browser-session flags — stale DB state from the previous run is
-  // misleading. Vision will re-confirm and set them back to true this session.
-  try {
-    await fetch(`${API_BASE}/ext/reset-session-flags`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
-    console.log('[SparkP2P] Session flags reset — awaiting Vision confirmation');
-  } catch (e) {}
+  await fetchAndApplyCredentials(); // Load TOTP/PIN from backend
 
-  await fetchAndApplyCredentials(); // Load PIN or TOTP from backend
-
-  // Check all connections before starting
-  const setup = await checkSetupComplete();
-  if (!setup.complete) {
-    notifySetupIncomplete(setup.missing);
-    // Don't launch Chrome — wait for user to connect missing services
-    return;
-  }
-
-  // Only try to reconnect to existing Chrome — don't launch new one
+  // Try to connect to an existing Chrome on port 9222 — no launch delay
   try {
     if (await connectPuppeteer()) {
       if (await isLoggedIn()) {
-        console.log('[SparkP2P] Auto-connected to existing Chrome session');
-        lastActiveTime = Date.now();
-        startPoller();
+        console.log('[SparkP2P] Auto-connected to existing Chrome — starting bot');
+        connectingBinance = true; // onLoginDetected() expects this to be true so it can reset it
+        await onLoginDetected();
         return;
       }
+      // Connected but not on Binance — disconnect cleanly
+      try { await browser.disconnect(); } catch(e) {}
+      browser = null;
     }
   } catch (e) {}
-  // Don't auto-launch Chrome — wait for user to click "Connect Binance"
-  console.log('[SparkP2P] No active Binance session. Click Connect Binance to start.');
+
+  console.log('[SparkP2P] No active Binance session — click Connect Binance to start');
 }
 
 function checkInactivityTimeout() {
@@ -4154,22 +4185,26 @@ async function analyzePageWithVision(page) {
     const domScreen = await page.evaluate(() => {
       const body = document.body.innerText || '';
       const lower = body.toLowerCase();
-      // confirm_release_modal is unmistakable — has this exact phrase
-      if (lower.includes('received payment in your account') ||
-          lower.includes('i have verified that i received') ||
-          lower.includes('confirm release')) return 'confirm_release_modal';
+      const hasOtpInput = !!document.querySelector('input[maxlength="6"], input[maxlength="8"]');
       // order_complete
       if (lower.includes('order completed') || lower.includes('sale successful') ||
           lower.includes('crypto released')) return 'order_complete';
-      // security_verification
-      if (lower.includes('security verification requirements')) return 'security_verification';
-      // totp_input
-      if (lower.includes('authenticator app') && document.querySelector('input[maxlength="6"], input[maxlength="8"]')) return 'totp_input';
+      // confirm_release_modal — unmistakable phrases
+      if (lower.includes('received payment in your account') ||
+          lower.includes('i have verified that i received') ||
+          lower.includes('confirm release')) return 'confirm_release_modal';
+      // totp_input — check BEFORE security_verification (shares "authenticator app" substring)
+      if (hasOtpInput && (lower.includes('authenticator app verification') || lower.includes('google authenticator')))
+        return 'totp_input';
       // email_otp
-      if ((lower.includes('email verification') || lower.includes('email code')) &&
-          document.querySelector('input[maxlength="6"], input[maxlength="8"]')) return 'email_otp_input';
+      if (hasOtpInput && (lower.includes('email verification') || lower.includes('email code')))
+        return 'email_otp_input';
+      // security_verification — only when no OTP input present
+      if (lower.includes('security verification') || (!hasOtpInput && lower.includes('authenticator app')))
+        return 'security_verification';
       // passkey_failed — only if we explicitly see passkey failure text
-      if (lower.includes('verification failed') && lower.includes('passkey')) return 'passkey_failed';
+      if ((lower.includes('verification failed') || lower.includes('verify with passkey')) && lower.includes('passkey'))
+        return 'passkey_failed';
       return null; // let Vision decide
     }).catch(() => null);
 
@@ -4338,6 +4373,381 @@ async function visionAsk(imageBase64, prompt, maxTokens = 150) {
   return (data.content?.[0]?.text || '').trim().replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
 }
 
+/**
+ * svClickViaOOPIF — finds the Security Verification row using Puppeteer frames,
+ * gets its exact coordinates from the DOM, then fires page.mouse.click() at those
+ * coordinates. page.mouse.click() sends a real CDP input event (isTrusted:true),
+ * so Binance accepts it — without any physical mouse movement.
+ */
+async function svClickViaOOPIF(page, targetText) {
+  try {
+    const frames = page.frames();
+    console.log(`[OOPIF] Puppeteer sees ${frames.length} frames:`);
+    frames.forEach(f => console.log(`  [OOPIF]   ${f.url().substring(0, 80)}`));
+
+    // JS to find the target row and return its center coordinates within the frame
+    const findCoordsJS = (target) => {
+      const allEls = Array.from(document.querySelectorAll('*'));
+
+      // Find the smallest element that contains the target text and is visible
+      const candidates = allEls.filter(el => {
+        const txt = (el.textContent || '').trim();
+        const r = el.getBoundingClientRect();
+        return txt.includes(target) && r.width > 10 && r.height > 5;
+      });
+      if (!candidates.length) return null;
+
+      // Pick the most specific (shortest text = least wrapping)
+      candidates.sort((a, b) => a.textContent.length - b.textContent.length);
+      const el = candidates[0];
+      const r = el.getBoundingClientRect();
+      return {
+        x: r.left + r.width / 2,
+        y: r.top + r.height / 2,
+        tag: el.tagName,
+        txt: el.textContent.trim().substring(0, 40),
+      };
+    };
+
+    // Search all frames — try cross-origin (binance) frames first, then main
+    const allFrames = [
+      ...frames.filter(f => f.url().includes('binance.com')),
+      ...frames.filter(f => !f.url().includes('binance.com')),
+    ];
+
+    for (const frame of allFrames) {
+      const url = frame.url();
+      console.log(`[OOPIF] Searching frame: ${url.substring(0, 80)}`);
+      let coords = null;
+      try {
+        coords = await frame.evaluate(findCoordsJS, targetText);
+      } catch (e) {
+        console.log(`[OOPIF]   eval error: ${e.message?.substring(0, 60)}`);
+        continue;
+      }
+      if (!coords) { console.log(`[OOPIF]   not found`); continue; }
+
+      console.log(`[OOPIF]   found: ${coords.tag} "${coords.txt}" at frame(${Math.round(coords.x)}, ${Math.round(coords.y)})`);
+
+      // coords are relative to the frame's own viewport.
+      // If this is a sub-frame, we need to add the iframe's offset in the main page.
+      let absX = coords.x;
+      let absY = coords.y;
+
+      if (frame !== page.mainFrame()) {
+        // Find the <iframe> element in the parent frame that hosts this frame
+        const iframeOffset = await frame.parentFrame()?.evaluate((frameUrl) => {
+          const iframes = Array.from(document.querySelectorAll('iframe'));
+          for (const el of iframes) {
+            // Match by src or just take the first visible iframe
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return { x: r.left, y: r.top };
+          }
+          return { x: 0, y: 0 };
+        }, url).catch(() => ({ x: 0, y: 0 }));
+
+        absX += (iframeOffset?.x || 0);
+        absY += (iframeOffset?.y || 0);
+        console.log(`[OOPIF]   iframe offset: (${Math.round(iframeOffset?.x||0)}, ${Math.round(iframeOffset?.y||0)}) → abs(${Math.round(absX)}, ${Math.round(absY)})`);
+      }
+
+      // page.mouse.click() sends a CDP Input.dispatchMouseEvent — isTrusted:true,
+      // accepted by Binance's security dialog, no physical mouse movement needed.
+      console.log(`[OOPIF]   CDP mouse click at (${Math.round(absX)}, ${Math.round(absY)})`);
+      await page.mouse.move(absX, absY);
+      await new Promise(r => setTimeout(r, 80));
+      await page.mouse.click(absX, absY);
+      return true;
+    }
+
+    console.log('[OOPIF] Target row not found in any frame');
+    return false;
+  } catch (e) {
+    console.log(`[OOPIF] Failed: ${e.message?.substring(0, 120)}`);
+    return false;
+  }
+}
+
+/**
+ * svClickAnchored — Anchor-based GPT-4o click strategy.
+ *
+ * 1. Find the Security Verification modal box in the main DOM (heading is accessible).
+ * 2. Take screenshot + tell GPT-4o the exact modal pixel bounds.
+ * 3. GPT-4o returns ABSOLUTE pixel coords of the target row (not guessed fractions).
+ * 4. page.mouse.click() fires a CDP input event — isTrusted:true, no physical mouse.
+ */
+async function svClickAnchored(page, targetText) {
+  try {
+    if (!anthropicApiKey) throw new Error('No Anthropic API key');
+
+    // ── Step 1: Locate the modal container in the main DOM ────────────────────
+    const modal = await page.evaluate(() => {
+      // Find the "Security Verification" heading text node — it IS in the main frame DOM
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const t = (walker.currentNode.textContent || '').trim();
+        if (t.includes('Security Verification')) {
+          const el = walker.currentNode.parentElement;
+          const r = el?.getBoundingClientRect();
+          if (r && r.width > 0 && r.height > 0) {
+            return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+          }
+        }
+      }
+      // Fallback: find the "0/2" or "1/2" leaf node
+      for (const el of document.querySelectorAll('*')) {
+        if (el.children.length > 0) continue;
+        const t = (el.textContent || '').trim();
+        if (t === '0/2' || t === '1/2') {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0) return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+        }
+      }
+      return null;
+    }).catch(() => null);
+
+    if (modal) {
+      console.log(`[Anchored] Modal found: (${modal.x}, ${modal.y}) ${modal.w}×${modal.h}`);
+    } else {
+      console.log('[Anchored] Modal not found in DOM — sending screenshot without anchor');
+    }
+
+    // ── Step 2: Screenshot + Claude Vision with modal context ─────────────────
+    const ss = await page.screenshot({ type: 'png' });
+    const ssW = ss.readUInt32BE(16);
+    const ssH = ss.readUInt32BE(20);
+    const vp  = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+    const dpr = ssW / vp.w;
+
+    // Save debug screenshot
+    try {
+      fs.writeFileSync(path.join(app.getPath('desktop'), 'sv_debug_screenshot.png'), ss);
+    } catch (_) {}
+
+    const modalHint = modal
+      ? `The "Security Verification Requirements" dialog heading is at pixel y=${Math.round(modal.y * dpr)} in the image (x center ≈ ${Math.round((modal.x + modal.w / 2) * dpr)}).\n` +
+        `The "Authenticator App" clickable row is approximately 60-80px BELOW the heading (it is the FIRST / TOP row in the list).\n` +
+        `The "Email" clickable row is approximately 110-130px BELOW the heading (it is the SECOND / BOTTOM row).\n`
+      : `The "Security Verification Requirements" dialog is floating near the center of the screen.\n`;
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 80,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss.toString('base64') } },
+            { type: 'text', text:
+              `This is a ${ssW}×${ssH} pixel screenshot of a Binance P2P trading platform.\n` +
+              modalHint +
+              `A "Security Verification Requirements" dialog is open. It lists two verification method rows stacked vertically, each spanning the full dialog width and containing an icon on the left, a label in the middle, and a right-pointing ">" arrow on the right:\n\n` +
+              `  ROW 1 (TOP ROW):    Label = "Authenticator App"  — has a shield or lock icon on the left side\n` +
+              `  ROW 2 (BOTTOM ROW): Label = "Email"              — has an envelope or email icon on the left side, positioned DIRECTLY BELOW Row 1\n\n` +
+              (targetText === 'Email'
+                ? `I need to click the EMAIL row (Row 2, the BOTTOM row with the envelope icon). ` +
+                  `The Email row is positioned BELOW the Authenticator App row. ` +
+                  `If the Authenticator App row already shows a checkmark or completed state, the Email row is the ONLY active/clickable row remaining.\n`
+                : `I need to click the AUTHENTICATOR APP row (Row 1, the TOP row with the shield icon).\n`) +
+              `Find the center pixel of the "${targetText}" row — click the middle of the row horizontally, and the vertical center of that specific row.\n` +
+              `Return ONLY a JSON object with absolute pixel coordinates — no explanation, no markdown:\n{"x": 640, "y": 334}` },
+          ],
+        }],
+      }),
+    });
+
+    const data = await res.json();
+    if (data.error) throw new Error(`Anthropic: ${data.error.message || JSON.stringify(data.error)}`);
+    const txt = ((data.content?.[0]?.text) || '').trim();
+    console.log(`[Anchored] Claude: ${txt.substring(0, 100)}`);
+
+    const m = txt.match(/\{[^}]+\}/);
+    if (!m) throw new Error('No JSON in response');
+    const coords = JSON.parse(m[0]);
+    if (!coords.x || !coords.y) throw new Error('Missing x/y');
+
+    // ── Step 3: Image pixels → CSS viewport pixels → CDP click ────────────────
+    const vpX = Math.round(coords.x / dpr);
+    const vpY = Math.round(coords.y / dpr);
+    console.log(`[Anchored] "${targetText}" image(${coords.x},${coords.y}) → viewport(${vpX},${vpY})`);
+
+    // page.mouse.click sends CDP Input.dispatchMouseEvent — isTrusted:true
+    await page.mouse.move(vpX, vpY);
+    await new Promise(r => setTimeout(r, 100));
+    await page.mouse.click(vpX, vpY);
+    console.log(`[Anchored] CDP click fired at viewport(${vpX}, ${vpY})`);
+    return { ok: true };
+  } catch (e) {
+    console.log(`[Anchored] Failed: ${e.message?.substring(0, 120)}`);
+    return { ok: false };
+  }
+}
+
+/**
+ * realMouseClick — physically moves the OS cursor to a viewport position and clicks.
+ * Uses Electron BrowserWindow.getContentBounds() for accurate coordinate mapping,
+ * then SetCursorPos + mouse_event via PowerShell for the actual click.
+ */
+async function realMouseClick(page, viewportX, viewportY) {
+  try {
+    const { screen: eScreen } = require('electron');
+    const sf = eScreen.getPrimaryDisplay().scaleFactor;
+
+    // Find the visible, on-screen BrowserWindow.
+    // After Playwright CDP connection, extra hidden windows may appear with bounds (-32000,-32000).
+    // Filter those out and pick the window with valid (on-screen) coordinates.
+    const allWins = BrowserWindow.getAllWindows().filter(w => !w.isDestroyed());
+    const bwin = allWins.find(w => {
+      const b = w.getContentBounds();
+      return b.x > -1000 && b.y > -1000 && b.width > 100;
+    }) || allWins[0];
+    if (!bwin) throw new Error('No BrowserWindow found');
+
+    const cb = bwin.getContentBounds();
+    let screenX, screenY;
+
+    if (cb.x > -1000 && cb.y > -1000) {
+      // Electron API path — reliable when window bounds are valid
+      screenX = Math.round((cb.x + viewportX) * sf);
+      screenY = Math.round((cb.y + viewportY) * sf);
+      console.log(`[RealClick] Electron bounds (${cb.x},${cb.y}) scale=${sf} → screen(${screenX},${screenY})`);
+    } else {
+      // Fallback: window.screenX/Y (CSS pixels) from inside the page
+      const win = await page.evaluate(() => ({
+        sx: window.screenX,    sy: window.screenY,
+        sl: window.screenLeft, st: window.screenTop,
+        ow: window.outerWidth, oh: window.outerHeight,
+        iw: window.innerWidth, ih: window.innerHeight,
+        dpr: window.devicePixelRatio,
+      }));
+      const chromeH = win.oh - win.ih;
+      // Use screenLeft/screenTop if available (more reliable on some systems)
+      const winX = win.sl ?? win.sx;
+      const winY = win.st ?? win.sy;
+      screenX = Math.round((winX + viewportX) * sf);
+      screenY = Math.round((winY + chromeH + viewportY) * sf);
+      console.log(`[RealClick] window fallback: pos=(${winX},${winY}) outer=${win.ow}x${win.oh} inner=${win.iw}x${win.ih} chromeH=${chromeH} pageDPR=${win.dpr} scale=${sf}`);
+      console.log(`[RealClick] → screen(${screenX},${screenY}) for viewport(${viewportX},${viewportY})`);
+    }
+
+    const script = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+public class RealMouse {
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(int dwFlags, int dx, int dy, int cButtons, int dwExtraInfo);
+  const int MOUSEEVENTF_LEFTDOWN = 0x0002;
+  const int MOUSEEVENTF_LEFTUP   = 0x0004;
+  public static void Click(int x, int y) {
+    SetCursorPos(x, y);
+    Thread.Sleep(120);
+    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+    Thread.Sleep(60);
+    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+  }
+}
+"@
+[RealMouse]::Click(${screenX}, ${screenY})
+Write-Host "done"
+`;
+    const tmpFile = require('path').join(require('os').tmpdir(), 'sp2p_realclick.ps1');
+    require('fs').writeFileSync(tmpFile, script, 'utf8');
+    const output = await new Promise(resolve => {
+      require('child_process').exec(
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`,
+        { timeout: 8000 },
+        (err, stdout) => resolve(stdout || err?.message || 'error')
+      );
+    });
+    console.log(`[RealClick] ${output.trim().substring(0, 60)}`);
+    return true;
+  } catch (e) {
+    console.log(`[RealClick] Failed: ${e.message?.substring(0, 60)}`);
+    return false;
+  }
+}
+
+/**
+ * uiAutomationClick — clicks an element at screen coordinates using Windows UI Automation.
+ * Uses AutomationElement.FromPoint() + InvokePattern.Invoke() via PowerShell.
+ * NO cursor movement — the mouse stays exactly where it is.
+ * Chromium/Electron supports UI Automation for all web content elements.
+ *
+ * @param {import('puppeteer-core').Page} page
+ * @param {number} viewportX  — X in viewport pixels
+ * @param {number} viewportY  — Y in viewport pixels
+ */
+async function uiAutomationClick(page, viewportX, viewportY) {
+  try {
+    // Convert viewport coords → logical screen coords
+    const win = await page.evaluate(() => ({
+      sx: window.screenX, sy: window.screenY,
+      ow: window.outerWidth, oh: window.outerHeight,
+      iw: window.innerWidth, ih: window.innerHeight,
+      dpr: window.devicePixelRatio || 1,
+    }));
+    const chromeH = win.oh - win.ih;
+    const chromeW = win.ow - win.iw;
+    const screenX = Math.round((win.sx + Math.floor(chromeW / 2) + viewportX) * win.dpr);
+    const screenY = Math.round((win.sy + chromeH + viewportY) * win.dpr);
+
+    console.log(`[UIAuto] viewport(${viewportX},${viewportY}) → physical screen(${screenX},${screenY})`);
+
+    // PowerShell: UI Automation click using inline C# (reliable assembly loading)
+    const script = `
+Add-Type -ReferencedAssemblies UIAutomationClient,UIAutomationTypes,WindowsBase,PresentationCore @"
+using System;
+using System.Windows;
+using System.Windows.Automation;
+public static class UiaClick {
+  public static string Do(int x, int y) {
+    var pt = new Point(x, y);
+    var el = AutomationElement.FromPoint(pt);
+    if (el == null) return "no-element";
+    Console.WriteLine("UIA found: [" + el.Current.ControlType.ProgrammaticName + "] '" + el.Current.Name + "'");
+    try {
+      var p = el.GetCurrentPattern(InvokePattern.Pattern) as InvokePattern;
+      if (p != null) { p.Invoke(); return "invoked"; }
+    } catch {}
+    try {
+      var p2 = el.GetCurrentPattern(LegacyIAccessiblePattern.Pattern) as LegacyIAccessiblePattern;
+      if (p2 != null) { p2.DoDefaultAction(); return "legacy-invoked"; }
+    } catch {}
+    return "no-pattern";
+  }
+}
+"@
+$result = [UiaClick]::Do(${screenX}, ${screenY})
+Write-Host "UIA result: $result"
+if ($result -eq "no-pattern") { exit 2 }
+if ($result -eq "no-element") { exit 1 }
+`;
+    const tmpFile = require('path').join(require('os').tmpdir(), 'sp2p_uia.ps1');
+    require('fs').writeFileSync(tmpFile, script, 'utf8');
+
+    const output = await new Promise((resolve, reject) => {
+      require('child_process').exec(
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`,
+        { timeout: 8000 },
+        (err, stdout) => resolve(stdout || (err?.message ?? 'error'))
+      );
+    });
+    console.log(`[UIAuto] ${output.trim().substring(0, 120)}`);
+    return output.includes('succeeded');
+  } catch (e) {
+    console.log(`[UIAuto] Failed: ${e.message?.substring(0, 80)}`);
+    return false;
+  }
+}
+
 async function releaseWithVision(page, orderNumber, action, { skipNavigation = false } = {}) {
   const MAX_STEPS = 60;  // Raised: buyer has up to 15 min, awaiting_payment uses DOM poll not steps
   let step = 0;
@@ -4376,44 +4786,68 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
       step++;
 
       // ── DOM pre-check: catch all states without Vision ──────────────────────
+      // ORDER MATTERS: more specific / modal states first; broader states last.
       const domScreen = await page.evaluate(() => {
         const text = document.body.innerText || '';
-        // Order complete
-        if (text.includes('Sale Successful') || text.includes('Order Completed') || text.includes('Released'))
+        const lower = text.toLowerCase();
+
+        // 1. Order complete — use specific multi-word phrases to avoid false positives
+        if (text.includes('Sale Successful') || text.includes('Order Completed') ||
+            text.includes('Order Complete') || text.includes('Crypto Released'))
           return 'order_complete';
-        // Confirm release modal — check FIRST
+
+        // 2. Confirm release modal — has unmistakable phrases unique to this modal
         if (text.includes('Received payment in your account') ||
             text.includes('I have verified that I received') ||
             text.includes('Confirm Release'))
           return 'confirm_release_modal';
-        // Security Verification Requirements — check BEFORE passkey_failed because
-        // the security modal may contain "Verification failed" text from a previous step.
-        if (text.includes('Security Verification') || text.includes('Authenticator App')) {
+
+        // 3. TOTP input — check BEFORE security_verification.
+        //    "Authenticator App Verification" contains "Authenticator App" so if security_verification
+        //    checked first with that substring it would falsely match the TOTP page.
+        //    Anchor: an OTP input field must be present on the page.
+        const hasOtpInput = !!document.querySelector('input[maxlength="6"], input[maxlength="8"]');
+        if (hasOtpInput && (text.includes('Authenticator App Verification') || text.includes('Google Authenticator')))
+          return 'totp_input';
+
+        // 4. Email OTP input — also requires the input field to be present
+        if (hasOtpInput && (text.includes('Email Verification') || text.includes('email verification code') ||
+            lower.includes('email code')))
+          return 'email_otp_input';
+
+        // 5. Security Verification Requirements (step-picker page — no code input).
+        //    Use "Security Verification" as anchor (unique to this page); also match
+        //    "Authenticator App" only when NO otp input is present (i.e. not on TOTP page).
+        if (text.includes('Security Verification') ||
+            (!hasOtpInput && text.includes('Authenticator App'))) {
           const progress = text.includes('1/2') ? '1/2' : '0/2';
           return `security_verification:${progress}`;
         }
-        // TOTP input
-        if (text.includes('Authenticator App Verification') || text.includes('Google Authenticator'))
-          return 'totp_input';
-        // Email OTP input
-        if ((text.includes('Email Verification') || text.includes('email verification code')) &&
-            document.querySelector('input[maxlength="6"], input[maxlength="8"]'))
-          return 'email_otp_input';
-        // Passkey screen — require BOTH "passkey" AND explicit failure text together.
-        // "Verification failed" alone is too generic (appears on security_verification too).
-        const lower = text.toLowerCase();
+
+        // 6. Passkey screen — text not always in innerText (native WebAuthn dialog),
+        //    so only match when we actually see the passkey-specific phrase.
         const hasPasskeyLink = lower.includes('my passkeys are not available') || lower.includes('passkeys are not available');
         const hasPasskeyFail = lower.includes('verify with passkey') || lower.includes('verification failed');
         if (hasPasskeyLink || (hasPasskeyFail && lower.includes('passkey'))) return 'passkey_failed';
-        // Verify Payment page
-        if (text.includes('Verify Payment') ||
-            text.includes('Confirm payment from buyer') ||
-            text.includes('Confirm payment is received') ||
-            text.includes('Payment Received'))
-          return 'verify_payment';
-        // Awaiting payment
+
+        // 7. Verify Payment page — only if the "Payment Received" button is actually clickable.
+        //    If the text is present but the button is gone, a dialog (passkey/auth) is covering
+        //    the page — return null so Vision can identify the true state.
+        if (text.includes('Verify Payment') || text.includes('Confirm payment from buyer') ||
+            text.includes('Confirm payment is received') || text.includes('Payment Received')) {
+          const hasPayBtn = !!Array.from(document.querySelectorAll('button, [role="button"]')).find(b => {
+            const t = (b.textContent || '').toLowerCase();
+            return (t.includes('payment received') || t.includes('received payment')) &&
+                   b.getBoundingClientRect().width > 0;
+          });
+          if (hasPayBtn) return 'verify_payment';
+          return null; // button absent — let Vision decide
+        }
+
+        // 8. Awaiting payment
         if (text.includes("Awaiting Buyer's Payment") || text.includes('Awaiting Payment'))
           return 'awaiting_payment';
+
         return null;
       }).catch(() => null);
 
@@ -4490,31 +4924,76 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
 
       // ── Verify payment — click Payment Received ─────────────────────────────
       // Message to buyer is sent by the main loop BEFORE releaseWithVision is called.
+      // IMPORTANT: Do NOT use clickButton() here — its AI fallback can mis-click "Appeal"
+      // when the passkey dialog is open and "Payment Received" is not visible.
       if (screen === 'verify_payment') {
-        const clicked = await clickButton(page, 'Payment Received', 'payment received');
-        if (!clicked) {
-          // Payment Received not found — passkey modal showing. Find by DOM bbox + mouse.click().
-          console.log('[Vision] Payment Received not found — DOM bbox passkey bypass...');
-          for (const frame of [page, ...page.frames()]) {
-            try {
-              const result = await frame.evaluate(() => {
-                for (const el of Array.from(document.querySelectorAll('*')).reverse()) {
-                  const t = (el.textContent || '').trim();
-                  if (!/passkey.*not.*available/i.test(t) || t.length > 100) continue;
+        // DOM-only: find and click "Payment Received" button (no AI fallback)
+        const clicked = await page.evaluate(() => {
+          const buttons = Array.from(document.querySelectorAll('button, a[role="button"], [class*="btn"], [role="button"]'));
+          const btn = buttons.find(b => {
+            const t = (b.textContent || '').toLowerCase().trim();
+            return t.includes('payment received') || t.includes('received payment');
+          });
+          if (btn && btn.getBoundingClientRect().width > 0) { btn.click(); return true; }
+          return false;
+        }).catch(() => false);
+
+        if (clicked) {
+          console.log('[Vision] ✅ Payment Received clicked via DOM');
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+
+        // Payment Received not found — passkey dialog is likely open (its text is not in
+        // document.body.innerText because WebAuthn renders outside the main DOM tree).
+        // Try to find and click the passkey bypass link via shadow DOM search + all frames.
+        console.log('[Vision] Payment Received not found — passkey dialog may be open, attempting bypass...');
+        const phrases = ['my passkeys are not available', 'passkeys are not available', 'passkey is not available'];
+        let passKeyHandled = false;
+
+        for (const frame of [page, ...page.frames()]) {
+          try {
+            const result = await frame.evaluate((phrases) => {
+              function searchRoot(root) {
+                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+                while (walker.nextNode()) {
+                  const node = walker.currentNode;
+                  const t = (node.textContent || '').trim().toLowerCase();
+                  if (!phrases.some(p => t.includes(p))) continue;
+                  const el = node.parentElement;
+                  if (!el) continue;
                   const r = el.getBoundingClientRect();
                   if (r.width === 0 || r.height === 0) continue;
                   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
                 }
+                for (const el of root.querySelectorAll('*')) {
+                  if (el.shadowRoot) {
+                    const found = searchRoot(el.shadowRoot);
+                    if (found) return found;
+                  }
+                }
                 return null;
-              });
-              if (result) {
-                await page.mouse.click(result.x, result.y);
-                console.log(`[Vision] ✅ Passkey bypass inline at (${Math.round(result.x)}, ${Math.round(result.y)})`);
-                break;
               }
-            } catch (_) {}
-          }
+              return searchRoot(document.body);
+            }, phrases);
+            if (result) {
+              await page.mouse.click(result.x, result.y);
+              console.log(`[Vision] ✅ Passkey bypass (frame) at (${Math.round(result.x)}, ${Math.round(result.y)})`);
+              passKeyHandled = true;
+              break;
+            }
+          } catch (_) {}
         }
+
+        if (!passKeyHandled) {
+          // Neither Payment Received nor passkey link found — use Vision to see true state.
+          // This prevents blind clicking (e.g. Appeal) in unexpected situations.
+          console.log('[Vision] No actionable button found — using Vision to identify current screen...');
+          const vInfo = await analyzePageWithVision(page);
+          console.log(`[Vision] Vision identified: ${vInfo.screen} — will handle next iteration`);
+          // Do NOT click anything. Next iteration will re-evaluate with fresh DOM + Vision.
+        }
+
         await new Promise(r => setTimeout(r, 2000));
         continue;
       }
@@ -4710,56 +5189,142 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         continue;
       }
 
-      // ── Security verification — DOM clicks Authenticator App or Email ─────────
+      // ── Security verification — click Authenticator App / Email row ───────────
+      // The rows ARE standard HTML elements (text visible in innerText).
+      // Strategy: DOM find + mouse.click() at element coords → Tab keyboard → Vision.
       if (screen === 'security_verification') {
-        // DOM approach: find the first unchecked verification row and click it.
-        // A checked row has a green checkmark SVG or text like "✓"/"Verified".
-        // We prefer Authenticator App first, then Email.
-        const svClicked = await page.evaluate(() => {
-          function rowIsChecked(el) {
-            const t = (el.textContent || '').toLowerCase();
-            return t.includes('verified') || el.querySelector('svg[class*="check"], [class*="success"], [class*="checked"]') !== null;
+        const svProgress = domScreen?.split(':')[1] || '0/2';
+        const authDone = svProgress === '1/2' || await page.evaluate(() =>
+          (document.body.innerText || '').includes('1/2')
+        ).catch(() => false);
+        const targetText = authDone ? 'Email' : 'Authenticator App';
+
+        console.log(`[SV] Security verification ${authDone ? '1/2' : '0/2'} — clicking "${targetText}" row...`);
+
+        // Wait for dialog open animation to settle
+        await new Promise(r => setTimeout(r, 800));
+
+        let advanced = false;
+
+        // Helper: detect that clicking a SV row actually advanced the page.
+        // After clicking "Authenticator App" → page shows TOTP screen ("Authenticator App Verification" heading).
+        // After clicking "Email"             → page shows Email OTP screen ("Email Verification" heading).
+        // These headings ARE in the main DOM even when the input box is in a cross-origin iframe.
+        // Also catches the progress badge transitioning to 1/2 or 2/2.
+        const svAdvanced = () => page.evaluate(() => {
+          const t = document.body.innerText || '';
+          return (
+            t.includes('1/2') || t.includes('2/2') ||
+            !!document.querySelector('input[maxlength="6"], input[maxlength="8"]') ||
+            t.includes('Authenticator App Verification') ||
+            t.includes('Google Authenticator') ||
+            t.includes('Email Verification') ||
+            t.includes('email verification code')
+          );
+        }).catch(() => false);
+
+        // Helper: when Auth App click is confirmed to have advanced the page,
+        // immediately mark this order as auth-done so the NEXT security_verification
+        // iteration targets Email instead of Auth App again.
+        const markAuthDone = () => {
+          if (!authDone) {
+            svAuthDoneOrders.add(orderNum);
+            console.log(`[SV] ✅ Auth App confirmed — order ${orderNum} marked auth-done, next SV targets Email`);
           }
-          function findAndClickRow(phrase) {
+        };
+
+        // ── Method 0: CDP OOPIF direct JS click (no screenshot, no mouse) ────────
+        console.log(`[SV] Method 0: OOPIF CDP click on "${targetText}"...`);
+        const oopifClicked = await svClickViaOOPIF(page, targetText);
+        if (oopifClicked) {
+          await new Promise(r => setTimeout(r, 1500));
+          advanced = await svAdvanced();
+          if (advanced) { console.log('[SV] ✅ OOPIF click advanced the page'); markAuthDone(); }
+          else console.log('[SV] OOPIF click fired but page did not advance — trying Claude Vision...');
+        }
+
+        // ── Method 1: Anchor-based Claude Vision → CDP click (no physical mouse) ─
+        if (!advanced) {
+          console.log(`[SV] Method 1: Anchor-based Claude Vision click on "${targetText}"...`);
+          const anchored = await svClickAnchored(page, targetText);
+          if (anchored.ok) {
+            await new Promise(r => setTimeout(r, 1500));
+            advanced = await svAdvanced();
+            if (advanced) { console.log('[SV] ✅ Anchored Claude Vision click advanced the page'); markAuthDone(); }
+          }
+        }
+
+        if (!advanced) {
+          // ── Method 2: DOM-anchored CDP click at fixed row offsets ────────────────
+          await page.bringToFront();
+          await new Promise(r => setTimeout(r, 500));
+
+          const dialogAnchor = await page.evaluate(() => {
+            const vw = document.documentElement.clientWidth;
+            // Priority 1: find the "0/2" or "1/2" leaf node — closest element to the rows
+            const all = Array.from(document.querySelectorAll('*'));
+            for (const el of all) {
+              if (el.children.length > 0) continue; // leaf only
+              const t = (el.textContent || '').trim();
+              if (t === '0/2' || t === '1/2') {
+                const r = el.getBoundingClientRect();
+                if (r.width > 0) return { y: Math.round(r.bottom), cx: Math.round(vw / 2), anchor: '0/2' };
+              }
+            }
+            // Priority 2: "Security Verification" heading
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
             while (walker.nextNode()) {
-              const node = walker.currentNode;
-              const t = (node.textContent || '').trim().toLowerCase();
-              if (!t.includes(phrase)) continue;
-              // Walk up to a clickable row (div/li with reasonable size)
-              let el = node.parentElement;
-              for (let i = 0; i < 5; i++) {
-                if (!el) break;
-                const r = el.getBoundingClientRect();
-                if (r.width > 100 && r.height > 20) {
-                  if (!rowIsChecked(el)) {
-                    el.click();
-                    return `clicked:${phrase}:${Math.round(r.left + r.width/2)},${Math.round(r.top + r.height/2)}`;
-                  }
-                  return `already_checked:${phrase}`;
-                }
-                el = el.parentElement;
+              const t = (walker.currentNode.textContent || '').trim();
+              if (t.includes('Security Verification')) {
+                const el = walker.currentNode.parentElement;
+                const r = el?.getBoundingClientRect();
+                if (r && r.width > 0) return { y: Math.round(r.bottom), cx: Math.round(vw / 2), anchor: 'heading' };
               }
             }
             return null;
-          }
-          // Try Authenticator first, then Email
-          return findAndClickRow('authenticator') || findAndClickRow('email') || 'not_found';
-        }).catch(() => 'error');
+          }).catch(() => null);
 
-        console.log(`[DOM] Security verification: ${svClicked}`);
-        if (svClicked?.startsWith('clicked')) {
-          // Also do a real mouse click at those coords for React event
-          const coords = svClicked.split(':')[2]?.split(',');
-          if (coords?.length === 2) {
-            await page.mouse.click(Number(coords[0]), Number(coords[1]));
+          let rowX, yGuesses;
+          if (dialogAnchor) {
+            rowX = dialogAnchor.cx;
+            const baseY = dialogAnchor.y;
+            const offset1 = dialogAnchor.anchor === '0/2' ? 28  : 80;
+            const offset2 = dialogAnchor.anchor === '0/2' ? 56  : 108;
+            const offset3 = dialogAnchor.anchor === '0/2' ? 84  : 136;
+            yGuesses = authDone
+              ? [baseY + offset2, baseY + offset3, baseY + offset1]  // Email = 2nd row
+              : [baseY + offset1, baseY + offset2, baseY + offset3]; // Auth App = 1st row
+            console.log(`[SV] Anchor "${dialogAnchor.anchor}" bottom y=${baseY} — trying y: ${yGuesses.join(', ')}`);
+          } else {
+            const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+            rowX = Math.round(vp.w / 2);
+            yGuesses = authDone ? [280, 320, 360, 240] : [220, 260, 300, 340];
+            console.log(`[SV] No anchor — scanning y range: ${yGuesses.join(', ')}`);
+          }
+
+          for (let attempt = 0; attempt < yGuesses.length && !advanced; attempt++) {
+            const rowY = yGuesses[attempt];
+            console.log(`[SV] CDP click attempt ${attempt + 1}: "${targetText}" at viewport (${rowX}, ${rowY})`);
+            await page.mouse.move(rowX, rowY);
+            await new Promise(r => setTimeout(r, 80));
+            await page.mouse.click(rowX, rowY);
+            await new Promise(r => setTimeout(r, 1200));
+            advanced = await svAdvanced();
+            if (advanced) { console.log(`[SV] ✅ Advanced after CDP click attempt ${attempt + 1}`); markAuthDone(); }
           }
         }
-        await new Promise(r => setTimeout(r, 2000));
+
+        // Final poll up to 6s — also checks if a previous click worked but detection was slow
+        for (let p = 0; p < 12 && !advanced; p++) {
+          await new Promise(r => setTimeout(r, 500));
+          advanced = await svAdvanced();
+          if (advanced) markAuthDone();
+        }
+        console.log(`[SV] Security verification advance: ${advanced ? '✅ progressed' : '⚠️ still on same screen'}`);
         continue;
       }
 
-      // ── TOTP input — DOM fills input + clicks Submit ───────────────────────────
+      // ── TOTP input — type code character by character + click Submit ──────────
       if (screen === 'totp_input') {
         if (!totpSecret) {
           console.error('[TOTP] Secret not configured');
@@ -4768,39 +5333,245 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         const code = generateTOTP(totpSecret);
         console.log(`[TOTP] Generated code: ${code}`);
 
-        // Fill via React native setter — works with any input regardless of position
-        const totpFilled = await page.evaluate((val) => {
-          const input = document.querySelector('input[maxlength="6"], input[maxlength="8"], input[type="tel"], input[type="number"], input[type="text"]');
-          if (!input) return false;
-          input.focus();
-          const proto = window.HTMLInputElement.prototype;
-          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-          if (setter) setter.call(input, val); else input.value = val;
-          input.dispatchEvent(new Event('input',  { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }, code).catch(() => false);
+        // Step 1: Find TOTP input across ALL frames (may be in cross-origin iframe),
+        // CDP-click to focus it, then paste via clipboard Ctrl+V.
+        let totpFilled = false;
+        const totpFrames = [page.mainFrame(), ...page.frames()];
+        for (const frame of totpFrames) {
+          try {
+            const coords = await frame.evaluate(() => {
+              const input = document.querySelector(
+                'input[maxlength="6"], input[maxlength="8"], input[type="tel"], input[type="number"]'
+              );
+              if (!input) return null;
+              const r = input.getBoundingClientRect();
+              if (r.width === 0) return null;
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            }).catch(() => null);
+            if (!coords) continue;
 
-        if (totpFilled) {
-          console.log('[TOTP] ✅ Code filled via DOM');
-        } else {
-          console.log('[TOTP] DOM fill failed — typing via keyboard');
-          await page.keyboard.type(code, { delay: 80 });
-        }
-        await new Promise(r => setTimeout(r, 400));
-
-        // Click Submit via DOM text-node walker
-        const totpSubmitted = await page.evaluate(() => {
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-          while (walker.nextNode()) {
-            const t = (walker.currentNode.textContent || '').trim().toLowerCase();
-            if (t === 'submit' || t === 'confirm' || t === 'verify') {
-              const el = walker.currentNode.parentElement;
-              if (el && el.getBoundingClientRect().width > 0) { el.click(); return true; }
+            // Get iframe offset if sub-frame
+            let absX = coords.x, absY = coords.y;
+            if (frame !== page.mainFrame()) {
+              const offset = await frame.parentFrame()?.evaluate(() => {
+                for (const el of document.querySelectorAll('iframe')) {
+                  const r = el.getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) return { x: r.left, y: r.top };
+                }
+                return { x: 0, y: 0 };
+              }).catch(() => ({ x: 0, y: 0 }));
+              absX += (offset?.x || 0);
+              absY += (offset?.y || 0);
             }
+
+            console.log(`[TOTP] Input found at (${Math.round(absX)}, ${Math.round(absY)}) in ${frame.url().substring(0, 50)}`);
+            clipboard.writeText(code);
+            await page.mouse.click(absX, absY); // CDP click — isTrusted:true, focuses input
+            await new Promise(r => setTimeout(r, 150));
+            // Clear any existing value first
+            await page.keyboard.down('Control');
+            await page.keyboard.press('a');
+            await page.keyboard.up('Control');
+            await page.keyboard.press('Backspace');
+            await new Promise(r => setTimeout(r, 80));
+            // Paste
+            await page.keyboard.down('Control');
+            await page.keyboard.press('v');
+            await page.keyboard.up('Control');
+            totpFilled = true;
+            console.log(`[TOTP] ✅ Code ${code} pasted via Ctrl+V`);
+            break;
+          } catch (e) {
+            console.log(`[TOTP] Frame error: ${e.message?.substring(0, 60)}`);
           }
-          return false;
-        }).catch(() => false);
+        }
+        if (!totpFilled) {
+          // Fallback: CDP keyboard events don't reach cross-origin iframe inputs.
+          // Strategy: Claude Vision finds the exact TOTP input box pixel coords,
+          // then CDP click focuses it, then clipboard Ctrl+V pastes the code.
+          // Uses Anthropic API (anthropicApiKey) — avoids GPT-4o content policy refusals
+          // on Binance security screenshots.
+          console.log('[TOTP] Using Claude Vision to locate TOTP input box...');
+          let totpInputVpX = null, totpInputVpY = null;
+
+          try {
+            if (!anthropicApiKey) throw new Error('No Anthropic API key for TOTP vision');
+
+            const ss = await page.screenshot({ type: 'png' });
+            const ssW = ss.readUInt32BE(16);
+            const ssH = ss.readUInt32BE(20);
+            const vp  = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+            const dpr = ssW / vp.w;
+
+            // Save debug screenshot
+            try { fs.writeFileSync(path.join(app.getPath('desktop'), 'totp_debug_screenshot.png'), ss); } catch (_) {}
+
+            // Find the "Authenticator App Verification" heading in the main DOM for a y-anchor
+            const headingAnchor = await page.evaluate(() => {
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const t = (walker.currentNode.textContent || '').trim();
+                if (t.includes('Authenticator App Verification') || t.includes('Google Authenticator')) {
+                  const el = walker.currentNode.parentElement;
+                  const r = el?.getBoundingClientRect();
+                  if (r && r.width > 0) return { y: Math.round(r.bottom), cx: Math.round(r.left + r.width / 2) };
+                }
+              }
+              return null;
+            }).catch(() => null);
+
+            const anchorHint = headingAnchor
+              ? `The "Authenticator App Verification" dialog heading ends at pixel y=${Math.round(headingAnchor.y * dpr)} (x center ≈ ${Math.round(headingAnchor.cx * dpr)}) in the image. The 6-digit TOTP input field is located approximately 40-80px BELOW this y coordinate, centered horizontally in the dialog.\n`
+              : `The "Authenticator App Verification" dialog is floating near the center of the screen. The 6-digit TOTP input field is inside this dialog, below the title text.\n`;
+
+            const res = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': anthropicApiKey,
+                'anthropic-version': '2023-06-01',
+              },
+              body: JSON.stringify({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 80,
+                messages: [{
+                  role: 'user',
+                  content: [
+                    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss.toString('base64') } },
+                    { type: 'text', text:
+                      `This is a ${ssW}×${ssH} pixel screenshot of a Binance P2P trading platform security verification dialog.\n` +
+                      anchorHint +
+                      `The dialog is titled "Authenticator App Verification" and asks the user to enter the 6-digit code shown in their Google Authenticator app.\n` +
+                      `The input area is a text field (either one wide input box, or 6 individual single-digit boxes side by side) where the user types the 6-digit TOTP code.\n` +
+                      `It is positioned BELOW the dialog title and ABOVE the Submit/Confirm button.\n` +
+                      `The input is currently empty (no digits yet) and has a visible border or underline.\n` +
+                      `Identify the center pixel of this input field (or the center of the leftmost digit box if there are 6 separate boxes).\n` +
+                      `Return ONLY a JSON object with the absolute pixel coordinates — no explanation, no markdown:\n{"x": 640, "y": 290}` },
+                  ],
+                }],
+              }),
+            });
+
+            const data = await res.json();
+            if (data.error) throw new Error(`Anthropic: ${data.error.message || JSON.stringify(data.error)}`);
+            const txt = ((data.content?.[0]?.text) || '').trim();
+            console.log(`[TOTP] Claude Vision: ${txt.substring(0, 100)}`);
+
+            const m = txt.match(/\{[^}]+\}/);
+            if (!m) throw new Error('No JSON in response');
+            const coords = JSON.parse(m[0]);
+            if (!coords.x || !coords.y) throw new Error('Missing x/y');
+
+            totpInputVpX = Math.round(coords.x / dpr);
+            totpInputVpY = Math.round(coords.y / dpr);
+            console.log(`[TOTP] Vision → image(${coords.x},${coords.y}) → viewport(${totpInputVpX},${totpInputVpY})`);
+          } catch (vErr) {
+            console.log(`[TOTP] Vision failed: ${vErr.message} — using center fallback`);
+          }
+
+          // If vision failed, use a safe center-screen fallback
+          if (!totpInputVpX) {
+            const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+            totpInputVpX = Math.round(vp.w / 2);
+            totpInputVpY = Math.round(vp.h * 0.42); // ~42% down = below title, above submit
+            console.log(`[TOTP] Using fallback coords (${totpInputVpX}, ${totpInputVpY})`);
+          }
+
+          // CDP click to focus the input (isTrusted:true), then clipboard paste
+          console.log(`[TOTP] CDP click at (${totpInputVpX}, ${totpInputVpY}) to focus input`);
+          await page.mouse.move(totpInputVpX, totpInputVpY);
+          await new Promise(r => setTimeout(r, 80));
+          await page.mouse.click(totpInputVpX, totpInputVpY);
+          await new Promise(r => setTimeout(r, 300));
+
+          // Try clipboard paste (Ctrl+V) first — works if input is in main frame
+          clipboard.writeText(code);
+          await page.keyboard.down('Control');
+          await page.keyboard.press('v');
+          await page.keyboard.up('Control');
+          await new Promise(r => setTimeout(r, 400));
+
+          // Check if paste landed in main frame
+          const pasteWorked = await page.evaluate((c) =>
+            Array.from(document.querySelectorAll('input')).some(i => i.value.length >= 3)
+          , code).catch(() => false);
+
+          if (pasteWorked) {
+            console.log('[TOTP] ✅ Ctrl+V paste confirmed in main frame input');
+          } else {
+            // Cross-origin iframe — Ctrl+V didn't reach. Fall back to OS keybd_event.
+            console.log('[TOTP] Ctrl+V did not land (cross-origin) — using OS keyboard fallback');
+            const psTypeScript = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+public class OsType {
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra);
+  public static void TypeDigits(string digits) {
+    Thread.Sleep(300);
+    foreach (char c in digits) {
+      byte vk = (byte)(0x30 + (c - '0'));
+      keybd_event(vk, 0, 0, 0);
+      Thread.Sleep(50);
+      keybd_event(vk, 0, 2, 0);
+      Thread.Sleep(50);
+    }
+  }
+}
+"@
+[OsType]::TypeDigits("${code}")
+Write-Host "done"`;
+            const psTmpFile = require('path').join(require('os').tmpdir(), 'sp2p_ostype.ps1');
+            require('fs').writeFileSync(psTmpFile, psTypeScript, 'utf8');
+            await new Promise(resolve => {
+              require('child_process').exec(
+                `powershell -NoProfile -ExecutionPolicy Bypass -File "${psTmpFile}"`,
+                { timeout: 6000 },
+                (err, stdout) => {
+                  console.log(`[TOTP] OS type: ${(stdout || '').trim()}`);
+                  resolve();
+                }
+              );
+            });
+            await new Promise(r => setTimeout(r, 400));
+          }
+
+          console.log('[TOTP] ✅ Code entry complete — proceeding to Submit');
+          totpFilled = true;
+        }
+        await new Promise(r => setTimeout(r, 600));
+
+        // Step 2: Click Submit button — search all frames, all button-like elements
+        let totpSubmitted = false;
+        const submitFrames = [page.mainFrame(), ...page.frames()];
+        for (const frame of submitFrames) {
+          try {
+            totpSubmitted = await frame.evaluate(() => {
+              const keywords = ['submit', 'confirm', 'verify', 'next'];
+              // Walk text nodes — catches any language variant
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const t = (walker.currentNode.textContent || '').trim().toLowerCase();
+                if (!keywords.some(k => t === k || t.startsWith(k))) continue;
+                const el = walker.currentNode.parentElement;
+                const r = el?.getBoundingClientRect();
+                if (r && r.width > 0 && r.height > 0) { el.click(); return true; }
+              }
+              // Also try querySelectorAll on common button selectors
+              const buttons = Array.from(document.querySelectorAll('button, [role="button"], [type="submit"], a[class*="btn"]'));
+              for (const btn of buttons) {
+                const t = (btn.textContent || '').trim().toLowerCase();
+                const r = btn.getBoundingClientRect();
+                if (keywords.some(k => t === k || t.startsWith(k)) && r.width > 0) {
+                  btn.click(); return true;
+                }
+              }
+              return false;
+            }).catch(() => false);
+            if (totpSubmitted) break;
+          } catch (_) {}
+        }
 
         if (totpSubmitted) {
           console.log('[TOTP] ✅ Submit clicked via DOM');
@@ -4808,7 +5579,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           console.log('[TOTP] DOM submit failed — pressing Enter');
           await page.keyboard.press('Enter');
         }
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 2500));
         continue;
       }
 
@@ -4840,39 +5611,76 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         await page.bringToFront();
         await new Promise(r => setTimeout(r, 1000));
 
-        // Step 3: Fill input via React native setter
-        const emailFilled = await page.evaluate((val) => {
-          const input = document.querySelector('input[maxlength="6"], input[maxlength="8"], input[type="tel"], input[type="number"], input[type="text"]');
-          if (!input) return false;
-          input.focus();
-          const proto = window.HTMLInputElement.prototype;
-          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-          if (setter) setter.call(input, val); else input.value = val;
-          input.dispatchEvent(new Event('input',  { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }, emailCode).catch(() => false);
+        // Step 3: Find input across ALL frames (may be in cross-origin iframe like risk.binance.com)
+        let emailFilled = false;
+        const emailFrames = [page.mainFrame(), ...page.frames()];
+        for (const frame of emailFrames) {
+          try {
+            const coords = await frame.evaluate(() => {
+              const input = document.querySelector('input[maxlength="6"], input[maxlength="8"], input[type="tel"], input[type="number"]');
+              if (!input) return null;
+              const r = input.getBoundingClientRect();
+              if (r.width === 0) return null;
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            }).catch(() => null);
+            if (!coords) continue;
 
-        if (emailFilled) {
-          console.log('[Email OTP] ✅ Code filled via DOM');
-        } else {
-          console.log('[Email OTP] DOM fill failed — typing via keyboard');
-          await page.keyboard.type(emailCode, { delay: 80 });
+            // Get iframe offset if sub-frame
+            let absX = coords.x, absY = coords.y;
+            if (frame !== page.mainFrame()) {
+              const offset = await frame.parentFrame()?.evaluate(() => {
+                for (const el of document.querySelectorAll('iframe')) {
+                  const r = el.getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) return { x: r.left, y: r.top };
+                }
+                return { x: 0, y: 0 };
+              }).catch(() => ({ x: 0, y: 0 }));
+              absX += (offset?.x || 0);
+              absY += (offset?.y || 0);
+            }
+
+            console.log(`[Email OTP] Input at frame(${frame.url().substring(0,50)}) abs(${Math.round(absX)},${Math.round(absY)})`);
+            // Copy code to clipboard then Ctrl+V — simplest and most reliable
+            clipboard.writeText(emailCode);
+            await page.mouse.click(absX, absY); // CDP click — isTrusted:true, focuses input
+            await new Promise(r => setTimeout(r, 200));
+            await page.keyboard.down('Control');
+            await page.keyboard.press('v');
+            await page.keyboard.up('Control');
+            emailFilled = true;
+            console.log(`[Email OTP] ✅ Pasted ${emailCode} via Ctrl+V`);
+            break;
+          } catch (e) {
+            console.log(`[Email OTP] Frame error: ${e.message?.substring(0, 60)}`);
+          }
+        }
+        if (!emailFilled) {
+          console.log('[Email OTP] Input not found in any frame — pasting at current focus');
+          clipboard.writeText(emailCode);
+          await page.keyboard.down('Control');
+          await page.keyboard.press('v');
+          await page.keyboard.up('Control');
         }
         await new Promise(r => setTimeout(r, 400));
 
-        // Step 4: Click Submit via DOM
-        const emailSubmitted = await page.evaluate(() => {
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-          while (walker.nextNode()) {
-            const t = (walker.currentNode.textContent || '').trim().toLowerCase();
-            if (t === 'submit' || t === 'confirm' || t === 'verify') {
-              const el = walker.currentNode.parentElement;
-              if (el && el.getBoundingClientRect().width > 0) { el.click(); return true; }
-            }
-          }
-          return false;
-        }).catch(() => false);
+        // Step 4: Click Submit — search all frames
+        let emailSubmitted = false;
+        for (const frame of emailFrames) {
+          try {
+            emailSubmitted = await frame.evaluate(() => {
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const t = (walker.currentNode.textContent || '').trim().toLowerCase();
+                if (t === 'submit' || t === 'confirm' || t === 'verify') {
+                  const el = walker.currentNode.parentElement;
+                  if (el && el.getBoundingClientRect().width > 0) { el.click(); return true; }
+                }
+              }
+              return false;
+            }).catch(() => false);
+            if (emailSubmitted) break;
+          } catch (_) {}
+        }
 
         if (emailSubmitted) {
           console.log('[Email OTP] ✅ Submit clicked via DOM');
