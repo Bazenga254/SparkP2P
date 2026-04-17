@@ -6,7 +6,7 @@ const { execFile, execSync } = require('child_process');
 const puppeteer = require('puppeteer-core');
 const aiScanner = require('./ai-scanner');
 const { SparkAgent } = require('./midscene');
-const { autoUpdater } = require('electron-updater');
+let autoUpdater = null; // lazy-loaded inside checkForUpdates() after app is ready
 
 // ── Local control server on port 9223 ───────────────────────
 // Lets the Settings panel pause/resume via fetch() — works even in packaged app
@@ -90,6 +90,7 @@ let lockMpesaFrameListener = null;
 let chromeProcess = null; // Child process reference for killing Chrome on quit
 let chromeGeneration = 0; // Incremented each launch — old exit handlers check this to avoid nuking new connections
 const codeFallbackAskedOrders = new Set(); // Order numbers we've already asked buyer to type M-Pesa code (avoid spamming)
+const svAuthDoneOrders = new Set(); // Orders where Auth App (TOTP) step completed — next SV targets Email
 const verifiedOrders = new Map(); // orderNumber → { code, totalPrice } — verified on first visit, released on second visit
 let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for monitorActiveOrder compat)
 let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
@@ -272,6 +273,7 @@ app.whenReady().then(() => {
 // ═══════════════════════════════════════════════════════════
 
 function checkForUpdates() {
+  try { autoUpdater = require('electron-updater').autoUpdater; } catch (e) { return; }
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
@@ -5194,7 +5196,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
       // Strategy: DOM find + mouse.click() at element coords → Tab keyboard → Vision.
       if (screen === 'security_verification') {
         const svProgress = domScreen?.split(':')[1] || '0/2';
-        const authDone = svProgress === '1/2' || await page.evaluate(() =>
+        const authDone = svAuthDoneOrders.has(orderNumber) || svProgress === '1/2' || await page.evaluate(() =>
           (document.body.innerText || '').includes('1/2')
         ).catch(() => false);
         const targetText = authDone ? 'Email' : 'Authenticator App';
@@ -5228,8 +5230,8 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         // iteration targets Email instead of Auth App again.
         const markAuthDone = () => {
           if (!authDone) {
-            svAuthDoneOrders.add(orderNum);
-            console.log(`[SV] ✅ Auth App confirmed — order ${orderNum} marked auth-done, next SV targets Email`);
+            svAuthDoneOrders.add(orderNumber);
+            console.log(`[SV] ✅ Auth App confirmed — order ${orderNumber} marked auth-done, next SV targets Email`);
           }
         };
 
@@ -5327,7 +5329,11 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
       // ── TOTP input — type code character by character + click Submit ──────────
       if (screen === 'totp_input') {
         if (!totpSecret) {
-          console.error('[TOTP] Secret not configured');
+          console.log('[TOTP] Secret not in memory — re-fetching credentials...');
+          await fetchAndApplyCredentials();
+        }
+        if (!totpSecret) {
+          console.error('[TOTP] Secret not configured — check your SparkP2P settings');
           return { success: false, error: 'TOTP not configured' };
         }
         const code = generateTOTP(totpSecret);
@@ -5580,6 +5586,9 @@ Write-Host "done"`;
           await page.keyboard.press('Enter');
         }
         await new Promise(r => setTimeout(r, 2500));
+        // Mark Auth App as done — next security_verification iteration targets Email
+        svAuthDoneOrders.add(orderNumber);
+        console.log(`[TOTP] ✅ Auth App step complete — order ${orderNumber} marked, next SV will target Email`);
         continue;
       }
 
@@ -5655,11 +5664,131 @@ Write-Host "done"`;
           }
         }
         if (!emailFilled) {
-          console.log('[Email OTP] Input not found in any frame — pasting at current focus');
+          // Cross-origin iframe — use Claude Vision to find input coords, then OS keyboard
+          console.log('[Email OTP] Frame search failed — using Claude Vision to locate input...');
+          let emailInputVpX = null, emailInputVpY = null;
+
+          try {
+            if (!anthropicApiKey) throw new Error('No Anthropic API key');
+            const ss = await page.screenshot({ type: 'png' });
+            const ssW = ss.readUInt32BE(16);
+            const ssH = ss.readUInt32BE(20);
+            const vp  = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+            const dpr = ssW / vp.w;
+
+            const headingAnchor = await page.evaluate(() => {
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const t = (walker.currentNode.textContent || '').trim();
+                if (t.includes('Email Verification')) {
+                  const el = walker.currentNode.parentElement;
+                  const r = el?.getBoundingClientRect();
+                  if (r && r.width > 0) return { y: Math.round(r.bottom), cx: Math.round(r.left + r.width / 2) };
+                }
+              }
+              return null;
+            }).catch(() => null);
+
+            const anchorHint = headingAnchor
+              ? `The "Email Verification" dialog heading ends at pixel y=${Math.round(headingAnchor.y * dpr)} in the image. The 6-digit code input is approximately 60-100px BELOW this y, centered horizontally.\n`
+              : `The "Email Verification" dialog is floating near the center of the screen.\n`;
+
+            const res = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+              body: JSON.stringify({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 80,
+                messages: [{ role: 'user', content: [
+                  { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss.toString('base64') } },
+                  { type: 'text', text:
+                    `This is a ${ssW}×${ssH} pixel screenshot of a Binance P2P "Email Verification" dialog.\n` +
+                    anchorHint +
+                    `There is a text input box for the 6-digit email verification code, next to a "Resend Code" button.\n` +
+                    `Find the center pixel of that input box. Return ONLY JSON — no explanation:\n{"x": 480, "y": 290}` },
+                ]}],
+              }),
+            });
+            const data = await res.json();
+            const txt = ((data.content?.[0]?.text) || '').trim();
+            console.log(`[Email OTP] Claude Vision: ${txt.substring(0, 80)}`);
+            const m = txt.match(/\{[^}]+\}/);
+            if (m) {
+              const coords = JSON.parse(m[0]);
+              if (coords.x && coords.y) {
+                emailInputVpX = Math.round(coords.x / dpr);
+                emailInputVpY = Math.round(coords.y / dpr);
+                console.log(`[Email OTP] Vision → viewport(${emailInputVpX},${emailInputVpY})`);
+              }
+            }
+          } catch (vErr) {
+            console.log(`[Email OTP] Vision failed: ${vErr.message?.substring(0, 60)}`);
+          }
+
+          if (!emailInputVpX) {
+            const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+            emailInputVpX = Math.round(vp.w / 2 - 60);
+            emailInputVpY = Math.round(vp.h * 0.42);
+            console.log(`[Email OTP] Using fallback coords (${emailInputVpX},${emailInputVpY})`);
+          }
+
+          // CDP click to focus input
+          await page.mouse.move(emailInputVpX, emailInputVpY);
+          await new Promise(r => setTimeout(r, 80));
+          await page.mouse.click(emailInputVpX, emailInputVpY);
+          await new Promise(r => setTimeout(r, 300));
+
+          // Try Ctrl+V first
           clipboard.writeText(emailCode);
           await page.keyboard.down('Control');
           await page.keyboard.press('v');
           await page.keyboard.up('Control');
+          await new Promise(r => setTimeout(r, 400));
+
+          const pasteWorked = await page.evaluate((c) =>
+            Array.from(document.querySelectorAll('input')).some(i => i.value.length >= 3)
+          , emailCode).catch(() => false);
+
+          if (pasteWorked) {
+            console.log('[Email OTP] ✅ Ctrl+V paste confirmed');
+          } else {
+            // Cross-origin iframe — fall back to OS keybd_event (same as TOTP)
+            console.log('[Email OTP] Ctrl+V did not land — using OS keyboard fallback');
+            const psTypeScript = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+public class OsTypeEmail {
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra);
+  public static void TypeDigits(string digits) {
+    Thread.Sleep(300);
+    foreach (char c in digits) {
+      byte vk = (byte)(0x30 + (c - '0'));
+      keybd_event(vk, 0, 0, 0);
+      Thread.Sleep(50);
+      keybd_event(vk, 0, 2, 0);
+      Thread.Sleep(50);
+    }
+  }
+}
+"@
+[OsTypeEmail]::TypeDigits("${emailCode}")
+Write-Host "done"`;
+            const psTmpFile = require('path').join(require('os').tmpdir(), 'sp2p_email_ostype.ps1');
+            require('fs').writeFileSync(psTmpFile, psTypeScript, 'utf8');
+            await new Promise(resolve => {
+              require('child_process').exec(
+                `powershell -NoProfile -ExecutionPolicy Bypass -File "${psTmpFile}"`,
+                { timeout: 6000 },
+                (err, stdout) => {
+                  console.log(`[Email OTP] OS type: ${(stdout || '').trim()}`);
+                  resolve();
+                }
+              );
+            });
+          }
+          emailFilled = true;
         }
         await new Promise(r => setTimeout(r, 400));
 
@@ -5685,8 +5814,51 @@ Write-Host "done"`;
         if (emailSubmitted) {
           console.log('[Email OTP] ✅ Submit clicked via DOM');
         } else {
-          console.log('[Email OTP] DOM submit failed — pressing Enter');
-          await page.keyboard.press('Enter');
+          // DOM submit failed (cross-origin iframe) — use Claude Vision to click Submit button
+          console.log('[Email OTP] DOM submit failed — using Claude Vision to click Submit...');
+          try {
+            const ss2 = await page.screenshot({ type: 'png' });
+            const ssW2 = ss2.readUInt32BE(16);
+            const ssH2 = ss2.readUInt32BE(20);
+            const vp2  = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+            const dpr2 = ssW2 / vp2.w;
+            const res2 = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+              body: JSON.stringify({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 80,
+                messages: [{ role: 'user', content: [
+                  { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss2.toString('base64') } },
+                  { type: 'text', text:
+                    `This is a ${ssW2}×${ssH2}px screenshot of a Binance "Email Verification" dialog.\n` +
+                    `There is a yellow/gold "Submit" button below the code input field.\n` +
+                    `Find the center pixel of the Submit button. Return ONLY JSON:\n{"x": 480, "y": 340}` },
+                ]}],
+              }),
+            });
+            const d2 = await res2.json();
+            const t2 = ((d2.content?.[0]?.text) || '').trim();
+            const m2 = t2.match(/\{[^}]+\}/);
+            if (m2) {
+              const c2 = JSON.parse(m2[0]);
+              if (c2.x && c2.y) {
+                const vpX2 = Math.round(c2.x / dpr2);
+                const vpY2 = Math.round(c2.y / dpr2);
+                console.log(`[Email OTP] Vision Submit at viewport(${vpX2},${vpY2})`);
+                await page.mouse.move(vpX2, vpY2);
+                await new Promise(r => setTimeout(r, 80));
+                await page.mouse.click(vpX2, vpY2);
+                emailSubmitted = true;
+              }
+            }
+          } catch (e2) {
+            console.log(`[Email OTP] Vision submit failed: ${e2.message?.substring(0, 60)}`);
+          }
+          if (!emailSubmitted) {
+            console.log('[Email OTP] Pressing Enter as last resort');
+            await page.keyboard.press('Enter');
+          }
         }
         await new Promise(r => setTimeout(r, 2000));
         continue;

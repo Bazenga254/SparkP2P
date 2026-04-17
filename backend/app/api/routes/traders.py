@@ -819,6 +819,13 @@ async def get_desktop_credentials(
             totp_secret = decrypt_data(trader.binance_2fa_secret)
     except Exception:
         pass
+    # Also check trader.totp_secret — set by the TOTP setup/verify flow
+    if not totp_secret:
+        try:
+            if trader.totp_secret:
+                totp_secret = decrypt_data(trader.totp_secret)
+        except Exception:
+            pass
     return {
         "verify_method": trader.binance_verify_method or "none",
         "fund_password": fund_password,
