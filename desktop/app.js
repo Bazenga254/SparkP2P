@@ -1648,35 +1648,65 @@ function stopPoller() {
 async function findAndReadPaymentScreenshot(page) {
   if (!anthropicApiKey) return null;
   try {
-    // ── Step 1: Midscene scrolls chat to bottom so latest image is visible ─
-    console.log('[Midscene] Scrolling chat to bottom...');
-    const agent = await getMidsceneAgent(page);
-    await agent.aiScroll({ direction: 'down', scrollType: 'untilBottom', locate: 'the chat messages panel on the right side of the page' }).catch(() => {});
-    await new Promise(r => setTimeout(r, 500));
+    // ── Step 1: Scroll chat panel to bottom via DOM ───────────────────────────
+    console.log('[Screenshot] Scrolling chat to bottom...');
+    await page.evaluate(() => {
+      // Try to find the chat scroll container and scroll it to the bottom
+      const all = Array.from(document.querySelectorAll('*'));
+      for (const el of all) {
+        if (el.scrollHeight > el.clientHeight + 50 && el.clientWidth > 200 && el.getBoundingClientRect().left > window.innerWidth * 0.4) {
+          el.scrollTop = el.scrollHeight;
+        }
+      }
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1500));
 
-    // ── Step 2: Midscene checks if a payment screenshot exists in the chat ─
-    console.log('[Midscene] Checking for payment screenshot image in chat...');
-    const hasImage = await agent.aiBoolean(
-      'Is there a photo or image thumbnail sent by the buyer in the chat messages on the RIGHT side of the page? ' +
-      '(Not icons, not system messages — an actual photo or screenshot of a payment receipt)'
-    );
-    if (!hasImage) {
-      console.log('[Midscene] No payment screenshot found in chat');
-      return null;
-    }
+    // ── Step 2: Take screenshot → Vision finds the thumbnail coords ───────────
+    console.log('[Screenshot] Taking screenshot to locate payment thumbnail...');
+    const scanSS = await page.screenshot({ type: 'jpeg', quality: 85 });
+    const scanW = scanSS.readUInt32BE(16);
+    const scanH = scanSS.readUInt32BE(20);
+    const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+    const dpr = scanW / vp.w;
 
-    // ── Step 3: Midscene clicks the screenshot thumbnail to open lightbox ──
-    console.log('[Midscene] Clicking payment screenshot thumbnail to enlarge...');
-    await agent.aiTap(
-      'the photo or image thumbnail inside the chat messages on the right panel — ' +
-      'it is a rectangular image sent by the buyer showing a phone screen or payment receipt, ' +
-      'located in the middle of the chat conversation area (not a button, not an icon)'
-    );
-    console.log('[Midscene] Clicked thumbnail — waiting 3s for lightbox to open...');
+    const locateResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 80,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: scanSS.toString('base64') } },
+          { type: 'text', text:
+            `This is a ${scanW}×${scanH}px screenshot of a Binance P2P order page.\n` +
+            `The RIGHT side of the page has a chat panel with messages.\n` +
+            `Is there an image/photo thumbnail sent by the buyer in that chat panel? ` +
+            `(It looks like a dark or colored rectangular thumbnail showing a phone screenshot or receipt — NOT an icon, NOT a button.)\n` +
+            `If yes, return the CENTER pixel coordinates of that thumbnail.\n` +
+            `If no thumbnail exists, return {"found": false}.\n` +
+            `Return ONLY JSON: {"found": true, "x": 640, "y": 400} or {"found": false}` },
+        ]}],
+      }),
+    });
+    const locateData = await locateResp.json();
+    const locateRaw = (locateData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    console.log(`[Screenshot] Vision locate: ${locateRaw.substring(0, 100)}`);
+    const locateMatch = locateRaw.match(/\{[\s\S]*?\}/);
+    if (!locateMatch) { console.log('[Screenshot] No JSON from Vision'); return null; }
+    const locateResult = JSON.parse(locateMatch[0]);
+    if (!locateResult.found) { console.log('[Screenshot] No payment thumbnail found in chat'); return null; }
+
+    // ── Step 3: CDP click at thumbnail coords to open lightbox ───────────────
+    const thumbVpX = Math.round(locateResult.x / dpr);
+    const thumbVpY = Math.round(locateResult.y / dpr);
+    console.log(`[Screenshot] Thumbnail at image(${locateResult.x},${locateResult.y}) → viewport(${thumbVpX},${thumbVpY}) — clicking...`);
+    await page.mouse.move(thumbVpX, thumbVpY);
+    await new Promise(r => setTimeout(r, 100));
+    await page.mouse.click(thumbVpX, thumbVpY);
+    console.log('[Screenshot] Clicked thumbnail — waiting 3s for lightbox...');
     await new Promise(r => setTimeout(r, 3000));
 
-    // ── 6. Verify lightbox opened — must see an enlarged PAYMENT IMAGE ─────
-    // A warning dialog or text popup does NOT count as "lightbox open".
+    // ── Step 5: Verify lightbox opened ───────────────────────────────────────
     const checkSS = await page.screenshot({ type: 'jpeg', quality: 75 });
     const checkResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1700,13 +1730,13 @@ async function findAndReadPaymentScreenshot(page) {
       return null;
     }
     console.log('[Vision] Lightbox confirmed open — waiting 12s for full load...');
-    await new Promise(r => setTimeout(r, 12000)); // remaining wait (total ~15s)
+    await new Promise(r => setTimeout(r, 12000));
 
-    // ── 6. Screenshot the enlarged/lightbox view ───────────────────────────
-    const enlargedSS = await page.screenshot({ type: 'png' }); // PNG for maximum OCR clarity
+    // ── Step 6: Screenshot the enlarged lightbox view ─────────────────────────
+    const enlargedSS = await page.screenshot({ type: 'png' });
     await takeScreenshot('payment_screenshot_enlarged', page);
 
-    // ── 7. Vision reads the enlarged screenshot — try up to 2 attempts ────────
+    // ── Step 7: Vision reads the enlarged screenshot — up to 2 attempts ───────
     console.log('[Vision] Reading enlarged payment screenshot (Sonnet)...');
 
     const MPESA_OCR_PROMPT = `You are an OCR specialist reading an M-Pesa payment confirmation screenshot.
