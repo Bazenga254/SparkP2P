@@ -2247,7 +2247,7 @@ async function idleScan(page) {
 
     // ── Complete ────────────────────────────────────────────────────────────
     if (screen === 'order_complete' ||
-        lower.includes('sale successful') || lower.includes('order completed') || lower.includes('released')) {
+        lower.includes('sale successful') || lower.includes('order completed') || lower.includes('crypto released')) {
       console.log(`[SparkP2P] ✅ Sell order ${order.orderNumber} COMPLETED — reporting release`);
       await fetch(`${API_BASE}/ext/report-release`, {
         method: 'POST',
