@@ -123,6 +123,7 @@ async def report_orders(
         cancelled_order = cancel_result.scalar_one_or_none()
         if cancelled_order:
             cancelled_order.status = OrderStatus.CANCELLED
+            cancelled_order.cancelled_at = datetime.now(timezone.utc)
             logger.info(f"Order {order_number} marked CANCELLED (from Binance history tab)")
 
     # Mark completed buy orders (seller released crypto — from Binance Completed history tab)
@@ -156,6 +157,7 @@ async def report_orders(
         if order.binance_order_number not in reported_numbers and \
            order.binance_order_number not in protected_numbers:
             order.status = OrderStatus.CANCELLED
+            order.cancelled_at = datetime.now(timezone.utc)
             logger.info(
                 f"Order {order.binance_order_number} auto-cancelled "
                 f"(absent from bot report for trader {trader.id})"
@@ -912,6 +914,8 @@ async def _process_reported_sell_order(
         if order_data.orderStatus in (5, 6):
             if existing.status == OrderStatus.PENDING:
                 existing.status = OrderStatus.CANCELLED if order_data.orderStatus == 5 else OrderStatus.EXPIRED
+                if order_data.orderStatus == 5:
+                    existing.cancelled_at = datetime.now(timezone.utc)
                 await db.commit()
                 logger.info(f"Order {order_number} marked {existing.status.value} from Binance status")
             return None

@@ -739,12 +739,52 @@ export default function Dashboard() {
     const colors = {
       pending: '#f59e0b',
       payment_received: '#3b82f6',
+      releasing: '#a78bfa',
       released: '#10b981',
       completed: '#10b981',
       disputed: '#ef4444',
+      expired: '#f97316',
       cancelled: '#6b7280',
     };
     return colors[status] || '#6b7280';
+  };
+
+  // Live clock — ticks every second so active order timers update in real time
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const formatDuration = (seconds) => {
+    if (seconds < 0) seconds = 0;
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  };
+
+  // Active statuses — timer keeps running until the order ends
+  const ACTIVE_STATUSES = new Set(['pending', 'payment_received', 'releasing', 'payment_sent', 'disputed']);
+
+  const getOrderDuration = (order) => {
+    const start = new Date(order.created_at).getTime();
+    // Released/completed — static duration to release time
+    if (order.released_at) {
+      return { secs: Math.floor((new Date(order.released_at) - start) / 1000), live: false, overdue: false };
+    }
+    // Cancelled — static duration to cancellation time (accurate if cancelled_at exists)
+    if (order.status === 'cancelled') {
+      const end = order.cancelled_at ? new Date(order.cancelled_at).getTime() : now;
+      return { secs: Math.floor((end - start) / 1000), live: false, overdue: false };
+    }
+    // Active or expired-but-still-running — live elapsed time
+    const secs = Math.floor((now - start) / 1000);
+    const overdue = order.status === 'expired';
+    const live = ACTIVE_STATUSES.has(order.status) || overdue;
+    return { secs, live, overdue };
   };
 
   return (
@@ -1331,10 +1371,13 @@ export default function Dashboard() {
                   <th>Status</th>
                   <th>Reference</th>
                   <th>Time</th>
+                  <th>Duration</th>
                 </tr>
               </thead>
               <tbody>
-                {orders.map((order) => (
+                {orders.map((order) => {
+                  const { secs, live, overdue } = getOrderDuration(order);
+                  return (
                   <tr key={order.id}>
                     <td className={`side-${order.side}`}>{order.side.toUpperCase()}</td>
                     <td>KES {order.fiat_amount.toLocaleString()}</td>
@@ -1345,8 +1388,19 @@ export default function Dashboard() {
                     </td>
                     <td className="mono">{order.account_reference || '-'}</td>
                     <td>{new Date(order.created_at).toLocaleString()}</td>
+                    <td style={{
+                      fontVariantNumeric: 'tabular-nums',
+                      color: overdue ? '#f97316' : live ? '#facc15' : '#9ca3af',
+                      fontWeight: live ? 600 : 400,
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {overdue && <span title="Binance timer expired — order still active" style={{ marginRight: 4 }}>⚠️</span>}
+                      {formatDuration(secs)}
+                      {live && <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.6 }}>●</span>}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

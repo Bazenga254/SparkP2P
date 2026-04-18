@@ -44,6 +44,7 @@ class OrderResponse(BaseModel):
     payment_confirmed_at: Optional[str]
     released_at: Optional[str]
     settled_at: Optional[str]
+    cancelled_at: Optional[str]
 
 
 @router.post("/", response_model=OrderResponse)
@@ -272,4 +273,5 @@ def _order_to_response(order: Order) -> OrderResponse:
         payment_confirmed_at=order.payment_confirmed_at.isoformat() if order.payment_confirmed_at else None,
         released_at=order.released_at.isoformat() if order.released_at else None,
         settled_at=order.settled_at.isoformat() if order.settled_at else None,
+        cancelled_at=order.cancelled_at.isoformat() if order.cancelled_at else None,
     )

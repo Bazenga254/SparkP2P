@@ -826,11 +826,13 @@ async def get_desktop_credentials(
                 totp_secret = decrypt_data(trader.totp_secret)
         except Exception:
             pass
+    account_number = f"P2PT{trader.id:04d}"
     return {
         "verify_method": trader.binance_verify_method or "none",
         "fund_password": fund_password,
         "totp_secret": totp_secret,
         "anthropic_api_key": settings.ANTHROPIC_API_KEY,
+        "account_number": account_number,
     }
 
 

@@ -66,6 +66,7 @@ class Order(Base):
     payment_sent_at = Column(DateTime(timezone=True), nullable=True)      # Buy side
     released_at = Column(DateTime(timezone=True), nullable=True)
     settled_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Fees
