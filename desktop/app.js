@@ -6440,26 +6440,32 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     if (triggerBox) {
       await imPage.mouse.click(triggerBox.x, triggerBox.y);
       console.log(`[I&M] Clicked debit account dropdown at (${Math.round(triggerBox.x)}, ${Math.round(triggerBox.y)})`);
-      await new Promise(r => setTimeout(r, 3000)); // wait for CDK overlay to render
 
-      // Get bounding boxes of mat-option rows (rendered in CDK overlay at end of <body>)
-      const boxes = await imPage.evaluate(() => {
-        const opts = Array.from(document.querySelectorAll('mat-option'));
-        return opts.map(o => {
-          const r = o.getBoundingClientRect();
-          return { text: o.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      // Retry up to 6 times (6s total) waiting for CDK overlay mat-option elements to appear
+      let boxes = [];
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        await new Promise(r => setTimeout(r, 1000));
+        boxes = await imPage.evaluate(() => {
+          const opts = Array.from(document.querySelectorAll('mat-option'));
+          return opts
+            .map(o => {
+              const r = o.getBoundingClientRect();
+              return { text: o.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            })
+            .filter(b => b.x > 0 && b.y > 0); // only visible ones
         });
-      });
-      console.log(`[I&M] Account options: ${boxes.map(b => b.text.substring(0, 30)).join(' | ')}`);
+        console.log(`[I&M] Account options (attempt ${attempt}): ${boxes.map(b => b.text.substring(0, 30)).join(' | ')}`);
+        if (boxes.length > 0) break;
+      }
 
       const target = boxes.find(b => b.text.includes('00108094726050'))
                   || boxes.find(b => b.text.includes('726050'))
                   || boxes[0];
-      if (target && target.x > 0) {
+      if (target) {
         await imPage.mouse.click(target.x, target.y);
         console.log(`[I&M] ✅ Clicked account: ${target.text.substring(0, 50)}`);
       } else {
-        console.log('[I&M] No account options found — dropdown may not have opened');
+        console.log('[I&M] No account options found after retries');
       }
       await new Promise(r => setTimeout(r, 1500));
     } else {
