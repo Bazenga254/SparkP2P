@@ -6429,27 +6429,36 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
   // ── Pre-Vision: handle Angular Material elements Vision can't click reliably ──
 
-  // Step A: Select debit account via mat-select (click trigger → wait for overlay → pick account)
+  // Step A: Select debit account via mat-select (click trigger → wait for CDK overlay → pick account)
   try {
     const matSelect = await imPage.$('mat-select');
     if (matSelect) {
       await matSelect.click();
-      await new Promise(r => setTimeout(r, 1500)); // wait for overlay panel to render
+      await new Promise(r => setTimeout(r, 2500)); // CDK overlay takes time to render
+
+      // CDK overlays render at end of <body> — try multiple selectors
       const opted = await imPage.evaluate(() => {
-        const options = Array.from(document.querySelectorAll('mat-option, [class*="mat-option"]'));
+        const selectors = ['mat-option', '.mat-option', '[class*="mat-option"]', '.cdk-overlay-container li', '.cdk-overlay-container [role="option"]'];
+        let options = [];
+        for (const sel of selectors) {
+          options = Array.from(document.querySelectorAll(sel));
+          if (options.length > 0) break;
+        }
+        // Prefer the KES account ending 050 (BONITO CHELUGET SAMOEI)
         for (const opt of options) {
           const txt = opt.textContent || '';
-          if (txt.includes('050') || txt.includes('726050') || txt.includes('KES') || txt.includes('Current')) {
+          if (txt.includes('726050') || txt.includes('BONITO') || txt.includes('KES ACC')) {
             opt.click();
-            return opt.textContent.trim().substring(0, 40);
+            return txt.trim().substring(0, 50);
           }
         }
-        // Fallback: click first option
-        if (options[0]) { options[0].click(); return options[0].textContent.trim().substring(0, 40); }
+        // Fallback: pick the option with the highest balance (second item usually)
+        if (options.length >= 2) { options[1].click(); return options[1].textContent.trim().substring(0, 50); }
+        if (options[0]) { options[0].click(); return options[0].textContent.trim().substring(0, 50); }
         return null;
       });
-      console.log(`[I&M] Debit account selected: ${opted || 'none found'}`);
-      await new Promise(r => setTimeout(r, 1000));
+      console.log(`[I&M] Debit account selected: ${opted || 'none found — dropdown may still be loading'}`);
+      await new Promise(r => setTimeout(r, 1200));
     }
   } catch (e) { console.log(`[I&M] Account select error: ${e.message}`); }
 
@@ -6629,6 +6638,12 @@ Return ONLY valid JSON, no other text.` },
 
       if (typed.found) {
         await new Promise(r => setTimeout(r, 300));
+        // Clear any existing value with Ctrl+A → Delete before typing
+        await imPage.keyboard.down('Control');
+        await imPage.keyboard.press('a');
+        await imPage.keyboard.up('Control');
+        await imPage.keyboard.press('Delete');
+        await new Promise(r => setTimeout(r, 150));
         await imPage.keyboard.type(String(action.value), { delay: 80 });
         // Trigger Angular change detection
         await imPage.keyboard.press('Tab');
@@ -6636,6 +6651,10 @@ Return ONLY valid JSON, no other text.` },
         await new Promise(r => setTimeout(r, 1200));
       } else {
         console.log(`[I&M Vision] Input for "${action.description}" not found — trying keyboard type`);
+        await imPage.keyboard.down('Control');
+        await imPage.keyboard.press('a');
+        await imPage.keyboard.up('Control');
+        await imPage.keyboard.press('Delete');
         await imPage.keyboard.type(String(action.value), { delay: 80 });
         await imPage.keyboard.press('Tab');
       }
