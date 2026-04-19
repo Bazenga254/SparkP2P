@@ -6496,14 +6496,15 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   let screenshot = null;
   let referenceId = null;
   let formFilled = false; // true once all fields are entered
+  let accountSelected = false; // true once debit account has been chosen
 
   while (step < IM_MAX_STEPS) {
     step++;
     await new Promise(r => setTimeout(r, 1500));
 
     // ── Account dropdown shortcut (Layer 1 → Layer 2) ───────────────────────
-    // Layer 1: scan ALL visible elements for account number text (broad search —
-    // I&M portal may use role="option", custom tags, or mat-option)
+    // Skip once account is already selected — avoids clicking the header repeatedly
+    if (!accountSelected) {
     const domCoords = await imPage.evaluate((acct) => {
       const search = acct || 'BONITO CHELUGET';
       const all = Array.from(document.querySelectorAll(
@@ -6526,9 +6527,11 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       await imPage.mouse.click(domCoords.x / imDpr, domCoords.y / imDpr);
       console.log(`[I&M] ✅ L1 clicked <${domCoords.tag}> "${domCoords.text}" at (${Math.round(domCoords.x / imDpr)}, ${Math.round(domCoords.y / imDpr)})`);
       await imPage.keyboard.press('Escape'); // close the dropdown
+      accountSelected = true;
       await new Promise(r => setTimeout(r, 2000));
       continue;
     }
+    } // end !accountSelected
 
     screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
     if (!screenshot) { console.log('[I&M Vision] Could not take screenshot'); continue; }
