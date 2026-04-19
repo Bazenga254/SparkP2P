@@ -83,6 +83,7 @@ let traderPin = null;    // Binance fund/trading password — stored in memory o
 let totpSecret = null;   // Google Authenticator base32 secret — stored in memory only
 let traderAccountNumber = null; // e.g. "P2PT0001" — used in paybill payment replies
 let traderPhoneNumber = null;  // Trader's own phone number — included in buy greeting message
+let traderImAccount = null;    // Trader's I&M settlement account number — used to select debit account
 const DEV_UNLOCK = true; // ← set false to re-enable browser lock
 let browserLocked = false;
 let lockFrameListener = null;
@@ -1004,9 +1005,10 @@ async function fetchAndApplyCredentials() {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (!res.ok) return;
-    const { verify_method, fund_password, totp_secret, anthropic_api_key, account_number, phone_number } = await res.json();
+    const { verify_method, fund_password, totp_secret, anthropic_api_key, account_number, phone_number, im_account } = await res.json();
     if (account_number) { traderAccountNumber = account_number; console.log(`[SparkP2P] Account number: ${traderAccountNumber}`); }
     if (phone_number) { traderPhoneNumber = phone_number; console.log(`[SparkP2P] Trader phone: ${traderPhoneNumber}`); }
+    if (im_account) { traderImAccount = im_account; console.log(`[SparkP2P] I&M debit account: ${traderImAccount}`); }
     console.log(`[SparkP2P] Credentials: verify_method=${verify_method} has_totp=${!!totp_secret} has_pin=${!!fund_password}`);
     if (totp_secret) {
       totpSecret = totp_secret.toUpperCase().replace(/\s/g, '');
@@ -6458,8 +6460,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
         if (boxes.length > 0) break;
       }
 
-      const target = boxes.find(b => b.text.includes('00108094726050'))
-                  || boxes.find(b => b.text.includes('726050'))
+      const target = (traderImAccount && boxes.find(b => b.text.includes(traderImAccount)))
                   || boxes[0];
       if (target) {
         await imPage.mouse.click(target.x, target.y);
@@ -6555,6 +6556,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshot } },
           { type: 'text', text: `You are controlling an I&M Bank portal to send M-Pesa money.
 Payment details: phone=+254${cleanPhone}, amount=${amountInt}, network=${network}, reference="${String(reference).substring(0,30)}"
+Debit account to use: ${traderImAccount || 'first available account'}
 
 Identify the current screen and return ONE action as JSON:
 

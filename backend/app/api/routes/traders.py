@@ -834,6 +834,7 @@ async def get_desktop_credentials(
         "anthropic_api_key": settings.ANTHROPIC_API_KEY,
         "account_number": account_number,
         "phone_number": trader.phone or "",
+        "im_account": trader.settlement_account or "",
     }
 
 
