@@ -2767,12 +2767,151 @@ async function idleScan(page) {
       console.log(`[SparkP2P] Buy order ${order.orderNumber} — waiting ${minsWaiting}m for release (${buyScreen})`);
 
     } else {
-      // Payment not yet sent — VPS will instruct via execAction response to report-orders
-      // Greeting is sent in execAction after payment method is confirmed (M-Pesa/PesaLink/etc.)
+      // Payment not yet sent — extract details from page and pay directly
       if (!orderFirstSeenAt[order.orderNumber]) {
         orderFirstSeenAt[order.orderNumber] = Date.now();
       }
-      console.log(`[SparkP2P] Buy order ${order.orderNumber} — awaiting payment instruction from VPS`);
+
+      // Extract payment details from the order page we are already on
+      let paymentDetails = null;
+      if (anthropicApiKey) {
+        const paySS = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+        if (paySS) {
+          const extractRes = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-haiku-4-5-20251001',
+              max_tokens: 300,
+              messages: [{ role: 'user', content: [
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: paySS } },
+                { type: 'text', text: 'Extract payment details from this Binance P2P buy order. Return JSON only: {"method":"mpesa|pesalink|bank","phone":"07XXXXXXXX or null","name":"recipient name","amount":1234,"network":"safaricom|airtel|null","reference":"order number"}' },
+              ]}],
+            }),
+          }).catch(() => null);
+          if (extractRes?.ok) {
+            const d = await extractRes.json();
+            const m = (d.content?.[0]?.text || '').match(/\{[\s\S]*\}/);
+            if (m) { try { paymentDetails = JSON.parse(m[0]); } catch (_) {} }
+          }
+        }
+      }
+
+      if (!paymentDetails || !paymentDetails.phone || !paymentDetails.amount) {
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} — could not extract payment details, will retry next cycle`);
+        continue;
+      }
+
+      const method = (paymentDetails.method || 'mpesa').toLowerCase();
+      if (method !== 'mpesa') {
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} — method "${method}" not yet automated, waiting for VPS`);
+        continue;
+      }
+
+      console.log(`[SparkP2P] 💳 Buy order ${order.orderNumber} — auto-paying KSh ${paymentDetails.amount} to ${paymentDetails.name} (${paymentDetails.phone}) via M-Pesa`);
+
+      // Send greeting (once)
+      if (!buyOrderDetailsMap[order.orderNumber]) {
+        const myPhone = traderPhoneNumber || '';
+        const greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment via M-Pesa${myPhone ? ` from ${myPhone}` : ''} shortly. Please be ready to release the crypto once you confirm receipt. Thank you! 🙏`;
+        await sendBinanceChatMessage(page, greetMsg);
+        console.log(`[SparkP2P] 👋 Greeting sent for buy order ${order.orderNumber}`);
+        await new Promise(r => setTimeout(r, 1000));
+      }
+
+      // Execute I&M payment
+      let imResult = { success: false, screenshot: null };
+      const IM_MAX_RETRIES = 3;
+      for (let attempt = 1; attempt <= IM_MAX_RETRIES; attempt++) {
+        try {
+          console.log(`[SparkP2P] I&M payment attempt ${attempt}/${IM_MAX_RETRIES}...`);
+          imResult = await executeImPayment({
+            phone: paymentDetails.phone,
+            name: paymentDetails.name,
+            amount: paymentDetails.amount,
+            reference: paymentDetails.reference || order.orderNumber,
+            network: paymentDetails.network || 'safaricom',
+          });
+          if (imResult.success) break;
+          console.log(`[SparkP2P] I&M attempt ${attempt} failed${attempt < IM_MAX_RETRIES ? ' — retrying in 8s...' : ''}`);
+        } catch (e) {
+          console.error(`[SparkP2P] I&M attempt ${attempt} threw: ${e.message}`);
+        }
+        if (attempt < IM_MAX_RETRIES) await new Promise(r => setTimeout(r, 8000));
+      }
+
+      if (!imResult.success) {
+        console.error(`[SparkP2P] ❌ I&M payment failed after ${IM_MAX_RETRIES} attempts for ${order.orderNumber}`);
+        await fetch(`${API_BASE}/ext/report-buy-expired`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            order_number: order.orderNumber,
+            seller_name: paymentDetails.name,
+            amount: paymentDetails.amount,
+            minutes_waited: 0,
+            reason: `I&M Bank payment failed after ${IM_MAX_RETRIES} attempts. This may be due to an incorrect PIN, expired session, or a network error. Please log into your I&M Bank account and complete the payment manually.`,
+          }),
+        }).catch(() => {});
+        continue;
+      }
+
+      // Payment succeeded — store details and switch back to Binance
+      buyOrderDetailsMap[order.orderNumber] = {
+        sellerName: paymentDetails.name,
+        amount: paymentDetails.amount,
+        phone: paymentDetails.phone,
+        method: 'M-Pesa',
+        orderNumber: order.orderNumber,
+        referenceId: imResult.referenceId || null,
+      };
+      buyPaymentSentAt[order.orderNumber] = Date.now();
+      buyReminderSentOrders.delete(order.orderNumber);
+
+      // Navigate back to Binance order page
+      await page.bringToFront();
+      await page.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+        { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 3000));
+
+      // Send post-payment chat message with reference
+      const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+      const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
+      await sendBinanceChatMessage(page,
+        `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`
+      );
+
+      // Upload payment proof screenshot
+      if (imResult.screenshot) {
+        await new Promise(r => setTimeout(r, 1000));
+        await uploadPaymentProofToBinance(page, imResult.screenshot);
+      }
+
+      // Click "Transferred, notify seller" — retry up to 3 times
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const clicked = await clickButton(page, 'transferred', 'payment done', 'i have paid', 'mark as paid', 'notify seller', 'transferred, notify seller');
+        if (clicked) {
+          await new Promise(r => setTimeout(r, 2000));
+          await clickButton(page, 'confirm', 'yes');
+          await new Promise(r => setTimeout(r, 2000));
+          await handleSecurityVerification(page);
+          break;
+        }
+        if (attempt < 3) {
+          await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+          await new Promise(r => setTimeout(r, 3000));
+        }
+      }
+
+      await takeScreenshot(`buy_paid_${order.orderNumber}`, page);
+      await fetch(`${API_BASE}/ext/report-payment-sent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number: order.orderNumber, success: true }),
+      }).catch(() => {});
+      stats.actions++;
+      console.log(`[SparkP2P] ✅ Buy order ${order.orderNumber} — paid and notified seller`);
     }
   }
 
