@@ -6485,10 +6485,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   await clickRadio('One-off Beneficiary');
   await new Promise(r => setTimeout(r, 1000));
 
-  // Scroll down so Vision can see phone, network, amount, reference fields
-  await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
-  await new Promise(r => setTimeout(r, 500));
-  console.log(`[I&M] Scrolled down — handing off to Vision loop`);
+  console.log(`[I&M] Pre-radios done — handing off to Vision loop (will scroll after account selected)`);
 
   // I&M amount field only accepts whole numbers — truncate decimals
   const amountInt = Math.floor(parseFloat(amount));
@@ -6531,7 +6528,11 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       console.log(`[I&M] ✅ L1 clicked <${domCoords.tag}> "${domCoords.text}" at (${Math.round(domCoords.x / imDpr)}, ${Math.round(domCoords.y / imDpr)})`);
       await imPage.keyboard.press('Escape'); // close the dropdown
       accountSelected = true;
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 1000));
+      // Scroll down now so Vision sees phone/amount/reference fields
+      await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
+      await new Promise(r => setTimeout(r, 500));
+      console.log('[I&M] Scrolled down after account selection');
       continue;
     }
     } // end !accountSelected
