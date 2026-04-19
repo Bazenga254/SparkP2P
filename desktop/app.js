@@ -6491,6 +6491,10 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
   console.log(`[I&M] Pre-steps done — handing off to Vision loop`);
 
+  // Get device pixel ratio once — screenshot pixels must be divided by DPR for CDP mouse clicks
+  const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
+  console.log(`[I&M Vision] DPR = ${imDpr}`);
+
   const IM_MAX_STEPS = 25;
   let step = 0;
   let screenshot = null;
@@ -6541,13 +6545,15 @@ SCREENS:
 - "other" = Something else
 
 ACTIONS (pick exactly one):
-- {"screen":"form","action":"click","description":"exact visible label or text of element to click"}
-- {"screen":"form","action":"type","description":"exact visible label of input field","value":"text to type"}
-- {"screen":"review","action":"click","description":"Submit"}
+- {"screen":"form","action":"click","description":"exact visible label or text","x":NNN,"y":NNN}
+- {"screen":"form","action":"type","description":"exact visible label of input","value":"text","x":NNN,"y":NNN}
+- {"screen":"review","action":"click","description":"Submit","x":NNN,"y":NNN}
 - {"screen":"pin","action":"type_pin","value":"****"}
-- {"screen":"pin","action":"click","description":"Complete"}
+- {"screen":"pin","action":"click","description":"Complete","x":NNN,"y":NNN}
 - {"screen":"dashboard","action":"navigate"}
 - {"screen":"success","action":"done"}
+
+IMPORTANT: For "click" and "type" actions you MUST include "x" and "y" — the pixel coordinates of the CENTER of the element in the screenshot. These are used for mouse clicks.
 
 FORM FILLING ORDER (do one action per response):
 NOTE: Debit account, Other Phone, and One-off Beneficiary are already selected — do NOT click them again.
@@ -6594,52 +6600,66 @@ Return ONLY valid JSON, no other text.` },
       continue;
     }
 
-    if (action.action === 'type' && action.description && action.value) {
-      // Use Angular's native value setter to bypass change-detection issues
-      const filled = await imPage.evaluate((desc, val) => {
+    if (action.action === 'type' && action.value) {
+      // Layer 1: Vision gave us coordinates — click to focus the field
+      if (action.x && action.y) {
+        await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
+        await new Promise(r => setTimeout(r, 400));
+        console.log(`[I&M Vision] Coord-clicked field at (${Math.round(action.x / imDpr)}, ${Math.round(action.y / imDpr)}) DPR=${imDpr}`);
+      }
+
+      // Layer 2: Angular native value setter on the focused active element
+      const filled = await imPage.evaluate((val) => {
+        const el = document.activeElement;
+        if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return { found: false, reason: 'no active input' };
         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
                           || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-
-        const setVal = (el) => {
-          el.focus();
-          el.click();
-          if (nativeSetter) {
-            nativeSetter.call(el, val);
-          } else {
-            el.value = val;
-          }
-          el.dispatchEvent(new Event('input',  { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-          el.dispatchEvent(new Event('blur',   { bubbles: true }));
-        };
-
-        // Try label match first
-        const labels = Array.from(document.querySelectorAll('label, [class*="label"], [class*="Label"]'));
-        for (const lbl of labels) {
-          if (lbl.textContent.toLowerCase().includes(desc.toLowerCase())) {
-            const forId = lbl.getAttribute('for');
-            const input = forId ? document.getElementById(forId)
-                        : lbl.querySelector('input, textarea')
-                       || lbl.nextElementSibling?.querySelector('input, textarea')
-                       || lbl.parentElement?.querySelector('input, textarea');
-            if (input) { setVal(input); return { found: true, method: 'label' }; }
-          }
-        }
-        // Fallback: first visible empty input
-        const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea'));
-        for (const inp of inputs) {
-          const r = inp.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) { setVal(inp); return { found: true, method: 'fallback' }; }
-        }
-        return { found: false };
-      }, action.description, String(action.value));
+        if (nativeSetter) nativeSetter.call(el, val);
+        else el.value = val;
+        el.dispatchEvent(new Event('input',  { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur',   { bubbles: true }));
+        return { found: true, tag: el.tagName, id: el.id || el.name || '' };
+      }, String(action.value));
 
       if (filled.found) {
         await imPage.keyboard.press('Tab');
-        console.log(`[I&M Vision] Set "${action.value}" into "${action.description}" via ${filled.method}`);
+        console.log(`[I&M Vision] ✅ Set "${action.value}" into <${filled.tag}#${filled.id}>`);
         await new Promise(r => setTimeout(r, 1200));
       } else {
-        console.log(`[I&M Vision] Input for "${action.description}" not found`);
+        // Fallback: label-text DOM search (no coordinates given)
+        console.log(`[I&M Vision] Active element not an input (${filled.reason}) — trying label fallback`);
+        const fallback = await imPage.evaluate((desc, val) => {
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          const setVal = (el) => {
+            el.focus(); el.click();
+            if (nativeSetter) nativeSetter.call(el, val); else el.value = val;
+            el.dispatchEvent(new Event('input',  { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('blur',   { bubbles: true }));
+          };
+          if (desc) {
+            const labels = Array.from(document.querySelectorAll('label, [class*="label"]'));
+            for (const lbl of labels) {
+              if (lbl.textContent.toLowerCase().includes(desc.toLowerCase())) {
+                const forId = lbl.getAttribute('for');
+                const inp = forId ? document.getElementById(forId)
+                          : lbl.querySelector('input, textarea')
+                         || lbl.nextElementSibling?.querySelector('input, textarea')
+                         || lbl.parentElement?.querySelector('input, textarea');
+                if (inp) { setVal(inp); return { found: true }; }
+              }
+            }
+          }
+          return { found: false };
+        }, action.description || '', String(action.value));
+        if (fallback.found) {
+          await imPage.keyboard.press('Tab');
+          console.log(`[I&M Vision] Set "${action.value}" via label fallback`);
+          await new Promise(r => setTimeout(r, 1200));
+        } else {
+          console.log(`[I&M Vision] ❌ Could not set "${action.value}" — field not found`);
+        }
       }
       continue;
     }
@@ -6660,26 +6680,33 @@ Return ONLY valid JSON, no other text.` },
     }
 
     if (action.action === 'click' && action.description) {
-      // Find element by visible text
-      const clicked = await imPage.evaluate((desc) => {
-        const candidates = Array.from(document.querySelectorAll('button, [role="button"], [role="option"], [role="radio"], label, a, li, div, span'));
-        for (const el of candidates) {
-          const txt = (el.textContent || '').trim();
-          if (txt.toLowerCase().includes(desc.toLowerCase()) && el.getBoundingClientRect().width > 0) {
-            el.click();
-            return true;
-          }
-        }
-        return false;
-      }, action.description);
+      const isTransition = ['continue', 'submit', 'complete'].some(w => action.description.toLowerCase().includes(w));
 
-      if (clicked) {
-        console.log(`[I&M Vision] Clicked "${action.description}"`);
-        // Longer wait after Continue/Submit since page transitions take time
-        const isTransition = ['continue', 'submit', 'complete'].some(w => action.description.toLowerCase().includes(w));
+      if (action.x && action.y) {
+        // Layer 1: Coordinate-based click (preferred — works for Angular overlays too)
+        await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
+        console.log(`[I&M Vision] Coord-clicked "${action.description}" at (${Math.round(action.x / imDpr)}, ${Math.round(action.y / imDpr)})`);
         await new Promise(r => setTimeout(r, isTransition ? 4000 : 1000));
       } else {
-        console.log(`[I&M Vision] Element "${action.description}" not found`);
+        // Layer 2 fallback: DOM text search
+        const clicked = await imPage.evaluate((desc) => {
+          const candidates = Array.from(document.querySelectorAll('button, [role="button"], [role="option"], [role="radio"], label, a, li, div, span'));
+          for (const el of candidates) {
+            const txt = (el.textContent || '').trim();
+            if (txt.toLowerCase().includes(desc.toLowerCase()) && el.getBoundingClientRect().width > 0) {
+              el.click();
+              return true;
+            }
+          }
+          return false;
+        }, action.description);
+
+        if (clicked) {
+          console.log(`[I&M Vision] DOM-clicked "${action.description}"`);
+          await new Promise(r => setTimeout(r, isTransition ? 4000 : 1000));
+        } else {
+          console.log(`[I&M Vision] ❌ Element "${action.description}" not found`);
+        }
       }
       continue;
     }
