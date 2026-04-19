@@ -6446,21 +6446,53 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     step++;
     await new Promise(r => setTimeout(r, 1500));
 
-    // ── Shortcut: if account dropdown is open, click the correct account directly ──
-    // Vision can't reliably distinguish open vs closed dropdown — DOM is more reliable here.
-    const matOptions = await imPage.evaluate((acct) => {
-      const opts = Array.from(document.querySelectorAll('mat-option'));
-      return opts.map(o => {
-        const r = o.getBoundingClientRect();
-        return { text: o.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
-      }).filter(b => b.x > 0 && b.y > 0);
-    }, traderImAccount).catch(() => []);
+    // ── Account dropdown shortcut (Layer 1 → Layer 2) ───────────────────────
+    // If the dropdown is open (mat-option elements exist), select the account
+    // before wasting a Vision API call on it.
+    const anyOption = await imPage.evaluate(() =>
+      document.querySelectorAll('mat-option, .mat-option').length
+    ).catch(() => 0);
 
-    if (matOptions.length > 0) {
-      const acctTarget = (traderImAccount && matOptions.find(b => b.text.includes(traderImAccount)))
-                      || matOptions[0];
-      await imPage.mouse.click(acctTarget.x / imDpr, acctTarget.y / imDpr);
-      console.log(`[I&M] ✅ DOM shortcut: clicked account "${acctTarget.text.substring(0, 50)}"`);
+    if (anyOption > 0) {
+      // Layer 1: DOM text search → getBoundingClientRect → CDP click
+      const domCoords = await imPage.evaluate((acct) => {
+        const opts = Array.from(document.querySelectorAll('mat-option, .mat-option'));
+        const target = opts.find(o => acct && o.textContent.includes(acct)) || opts[opts.length - 1];
+        if (!target) return null;
+        const r = target.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: target.textContent.trim().substring(0, 50) };
+      }, traderImAccount).catch(() => null);
+
+      if (domCoords && domCoords.x > 0 && domCoords.y > 0) {
+        await imPage.mouse.click(domCoords.x / imDpr, domCoords.y / imDpr);
+        console.log(`[I&M] ✅ L1 clicked account "${domCoords.text}" at (${Math.round(domCoords.x / imDpr)}, ${Math.round(domCoords.y / imDpr)})`);
+      } else {
+        // Layer 2: DOM gave zero coords — ask Vision for exact pixel position
+        console.log(`[I&M] L1 coords zero — falling back to Vision for account coordinates`);
+        const acctSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
+        if (acctSS && anthropicApiKey) {
+          const acctRes = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-haiku-4-5-20251001', max_tokens: 100,
+              messages: [{ role: 'user', content: [
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: acctSS } },
+                { type: 'text', text: `Find the account row containing "${traderImAccount || 'BONITO'}" in this dropdown list and return its center pixel coordinates as JSON: {"x":NNN,"y":NNN}` },
+              ]}],
+            }),
+          }).catch(() => null);
+          if (acctRes?.ok) {
+            const ad = await acctRes.json();
+            const am = (ad.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
+            let ac = null; try { if (am) ac = JSON.parse(am[0]); } catch (_) {}
+            if (ac?.x && ac?.y) {
+              await imPage.mouse.click(ac.x / imDpr, ac.y / imDpr);
+              console.log(`[I&M] ✅ L2 clicked account at (${Math.round(ac.x / imDpr)}, ${Math.round(ac.y / imDpr)})`);
+            }
+          }
+        }
+      }
       await new Promise(r => setTimeout(r, 2000));
       continue;
     }
