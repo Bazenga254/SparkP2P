@@ -6288,6 +6288,64 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   });
   await new Promise(r => setTimeout(r, 3000));
 
+  // ── Pre-Vision: handle Angular Material elements Vision can't click reliably ──
+
+  // Step A: Select debit account via mat-select (click trigger → wait for overlay → pick account)
+  try {
+    const matSelect = await imPage.$('mat-select');
+    if (matSelect) {
+      await matSelect.click();
+      await new Promise(r => setTimeout(r, 1500)); // wait for overlay panel to render
+      const opted = await imPage.evaluate(() => {
+        const options = Array.from(document.querySelectorAll('mat-option, [class*="mat-option"]'));
+        for (const opt of options) {
+          const txt = opt.textContent || '';
+          if (txt.includes('050') || txt.includes('726050') || txt.includes('KES') || txt.includes('Current')) {
+            opt.click();
+            return opt.textContent.trim().substring(0, 40);
+          }
+        }
+        // Fallback: click first option
+        if (options[0]) { options[0].click(); return options[0].textContent.trim().substring(0, 40); }
+        return null;
+      });
+      console.log(`[I&M] Debit account selected: ${opted || 'none found'}`);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  } catch (e) { console.log(`[I&M] Account select error: ${e.message}`); }
+
+  // Step B: Click "Other Phone" radio (not "Own Phone")
+  try {
+    const otherPhoneClicked = await imPage.evaluate(() => {
+      const labels = Array.from(document.querySelectorAll('label, mat-radio-button, [class*="radio"]'));
+      for (const lbl of labels) {
+        if ((lbl.textContent || '').trim().toLowerCase() === 'other phone') {
+          lbl.click();
+          return true;
+        }
+      }
+      return false;
+    });
+    console.log(`[I&M] Other Phone clicked: ${otherPhoneClicked}`);
+    await new Promise(r => setTimeout(r, 1000));
+  } catch (e) { console.log(`[I&M] Other Phone error: ${e.message}`); }
+
+  // Step C: Click "One-off Beneficiary" if it appears after selecting Other Phone
+  try {
+    await new Promise(r => setTimeout(r, 500));
+    await imPage.evaluate(() => {
+      const labels = Array.from(document.querySelectorAll('label, mat-radio-button, [class*="radio"]'));
+      for (const lbl of labels) {
+        const txt = (lbl.textContent || '').toLowerCase();
+        if (txt.includes('one-off') || txt.includes('one off')) { lbl.click(); return true; }
+      }
+      return false;
+    });
+    await new Promise(r => setTimeout(r, 800));
+  } catch (e) {}
+
+  console.log(`[I&M] Pre-steps done — handing off to Vision loop`);
+
   const IM_MAX_STEPS = 25;
   let step = 0;
   let screenshot = null;
@@ -6347,13 +6405,12 @@ ACTIONS (pick exactly one):
 - {"screen":"success","action":"done"}
 
 FORM FILLING ORDER (do one action per response):
-1. If debit account field is empty/unselected → click it and select account ending 050
-2. If "Other Phone" or "One-off Beneficiary" not selected → click it
-3. If phone field is empty → type phone number: ${cleanPhone}
-4. If network (Safaricom/Airtel) not selected → click ${network}
-5. If amount field is empty → type amount: ${amount}
-6. If reference field is empty → type reference: ${String(reference).substring(0,30)}
-7. All fields filled → click Continue
+NOTE: Debit account, Other Phone, and One-off Beneficiary are already selected — do NOT click them again.
+1. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
+2. If network (Safaricom/Airtel) not selected → click ${network}
+3. If amount field is empty or wrong → type amount: ${amount}
+4. If reference/narration field is empty → type reference: ${String(reference).substring(0,30)}
+5. All fields filled → click Continue
 
 Return ONLY valid JSON, no other text.` },
         ]}],
