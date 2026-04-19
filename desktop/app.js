@@ -2812,7 +2812,7 @@ async function idleScan(page) {
 
       // Send greeting (once)
       if (!buyOrderDetailsMap[order.orderNumber]) {
-        const greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment via M-Pesa shortly. Please be ready to release the crypto once you confirm receipt. Thank you! 🙏`;
+        const greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment of KES ${Math.floor(parseFloat(paymentDetails.amount))} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive the funds. Thank you! 🙏`;
         await sendBinanceChatMessage(page, greetMsg);
         console.log(`[SparkP2P] 👋 Greeting sent for buy order ${order.orderNumber}`);
         await new Promise(r => setTimeout(r, 1000));
@@ -6131,10 +6131,9 @@ async function execAction(action) {
       // Only greet once per order — orderFirstSeenAt is set when order is first polled
       if (!buyOrderDetailsMap[order_number]) {
         const method = (paymentDetails.method || 'mpesa').toLowerCase();
-        const myPhone = traderPhoneNumber || '';
         let greetMsg = '';
         if (method === 'mpesa') {
-          greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment via M-Pesa${myPhone ? ` from ${myPhone}` : ''} shortly. Please be ready to release the crypto once you confirm receipt. Thank you! 🙏`;
+          greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment of KES ${Math.floor(parseFloat(paymentDetails.amount))} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive the funds. Thank you! 🙏`;
         }
         // (PesaLink / I&M direct greetings will be added when those flows are built)
         if (greetMsg) {
