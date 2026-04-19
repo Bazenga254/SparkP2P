@@ -2759,24 +2759,11 @@ async function idleScan(page) {
 
     } else {
       // Payment not yet sent — VPS will instruct via execAction response to report-orders
-      console.log(`[SparkP2P] Buy order ${order.orderNumber} — awaiting payment instruction from VPS`);
-
-      // Send greeting message the FIRST time we see this buy order (before payment)
+      // Greeting is sent in execAction after payment method is confirmed (M-Pesa/PesaLink/etc.)
       if (!orderFirstSeenAt[order.orderNumber]) {
         orderFirstSeenAt[order.orderNumber] = Date.now();
-        try {
-          // Extract seller name from page for personalised greeting
-          const buyGreetText = await page.evaluate(() => document.body.innerText).catch(() => '');
-          const sellerMatch = buyGreetText.match(/seller[:\s]+([A-Za-z ]+)/i);
-          const sellerFirstName = sellerMatch ? sellerMatch[1].trim().split(' ')[0] : 'there';
-          const myPhone = traderPhoneNumber || '';
-          const greetMsg = `Hello ${sellerFirstName}, I am interested in buying USDT. I will send payment shortly via M-Pesa${myPhone ? ` from ${myPhone}` : ''}. Please be ready to release the crypto once you confirm receipt. Thank you! 🙏`;
-          await sendBinanceChatMessage(page, greetMsg);
-          console.log(`[SparkP2P] 👋 Sent greeting for buy order ${order.orderNumber}`);
-        } catch (e) {
-          console.log(`[SparkP2P] Greeting send failed: ${e.message}`);
-        }
       }
+      console.log(`[SparkP2P] Buy order ${order.orderNumber} — awaiting payment instruction from VPS`);
     }
   }
 
@@ -5979,7 +5966,6 @@ async function execAction(action) {
         const reason = missingPhone ? 'phone number is missing' : 'amount is zero/missing';
         console.error(`[SparkP2P] ❌ Buy order ${order_number} — cannot pay: ${reason}`);
         await takeScreenshot(`Pay failed — ${reason}: ${order_number}`);
-        // Notify trader so they can intervene
         await fetch(`${API_BASE}/ext/report-buy-expired`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -5991,29 +5977,53 @@ async function execAction(action) {
             reason: `Payment details incomplete — ${reason}. Manual intervention required.`,
           }),
         }).catch(() => {});
-        return; // Do NOT proceed — no money sent
+        return;
       }
 
-      // Step 2: Execute I&M Bank payment
+      // ── Step 1b: Send greeting now that payment method is confirmed ──────────
+      // Only greet once per order — orderFirstSeenAt is set when order is first polled
+      if (!buyOrderDetailsMap[order_number]) {
+        const method = (paymentDetails.method || 'mpesa').toLowerCase();
+        const myPhone = traderPhoneNumber || '';
+        let greetMsg = '';
+        if (method === 'mpesa') {
+          greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment via M-Pesa${myPhone ? ` from ${myPhone}` : ''} shortly. Please be ready to release the crypto once you confirm receipt. Thank you! 🙏`;
+        }
+        // (PesaLink / I&M direct greetings will be added when those flows are built)
+        if (greetMsg) {
+          await sendBinanceChatMessage(page, greetMsg);
+          console.log(`[SparkP2P] 👋 Greeting sent for buy order ${order_number} (method: ${method})`);
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      // ── Step 2: Execute I&M Bank payment — retry up to 3 times ─────────────
       let imResult = { success: false, screenshot: null };
-      try {
-        imResult = await executeImPayment({
-          phone: paymentDetails.phone,
-          name: paymentDetails.name,
-          amount: paymentDetails.amount,
-          reference: paymentDetails.reference || order_number,
-          network: paymentDetails.network || 'safaricom',
-        });
-      } catch (e) {
-        console.error('[SparkP2P] I&M payment threw:', e.message);
-        await takeScreenshot(`I&M payment error: ${e.message.substring(0, 40)}`);
+      const IM_MAX_RETRIES = 3;
+      for (let attempt = 1; attempt <= IM_MAX_RETRIES; attempt++) {
+        try {
+          console.log(`[SparkP2P] I&M payment attempt ${attempt}/${IM_MAX_RETRIES}...`);
+          imResult = await executeImPayment({
+            phone: paymentDetails.phone,
+            name: paymentDetails.name,
+            amount: paymentDetails.amount,
+            reference: paymentDetails.reference || order_number,
+            network: paymentDetails.network || 'safaricom',
+          });
+          if (imResult.success) break; // Payment succeeded — exit retry loop
+          console.log(`[SparkP2P] I&M payment attempt ${attempt} failed — ${attempt < IM_MAX_RETRIES ? 'retrying in 8s...' : 'giving up'}`);
+        } catch (e) {
+          console.error(`[SparkP2P] I&M payment attempt ${attempt} threw: ${e.message}`);
+          await takeScreenshot(`I&M attempt ${attempt} error: ${e.message.substring(0, 40)}`);
+        }
+        if (attempt < IM_MAX_RETRIES) await new Promise(r => setTimeout(r, 8000));
       }
 
-      // ── HARD STOP if payment failed — do NOT notify Binance ────────────────
+      // ── HARD STOP if all retries failed — do NOT notify Binance ─────────────
       if (!imResult.success) {
-        console.error(`[SparkP2P] ❌ I&M payment FAILED for order ${order_number} — aborting. NOT marking as paid on Binance.`);
-        await takeScreenshot(`I&M payment FAILED: ${order_number}`);
-        // Alert trader so they can pay manually
+        console.error(`[SparkP2P] ❌ I&M payment FAILED after ${IM_MAX_RETRIES} attempts for order ${order_number} — aborting`);
+        await takeScreenshot(`I&M payment FAILED x${IM_MAX_RETRIES}: ${order_number}`);
+        // Notify trader with a clear actionable message
         await fetch(`${API_BASE}/ext/report-buy-expired`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -6022,7 +6032,7 @@ async function execAction(action) {
             seller_name: paymentDetails.name || 'Unknown',
             amount: paymentDetails.amount || 0,
             minutes_waited: 0,
-            reason: 'I&M Bank payment failed. Please complete this buy order manually.',
+            reason: `I&M Bank payment failed after ${IM_MAX_RETRIES} attempts. This may be due to an incorrect PIN, expired session, or a network error. Please log into your I&M Bank account and complete the payment manually. There is a pending buy order awaiting payment.`,
           }),
         }).catch(() => {});
         return; // STOP — money was NOT sent, do not touch Binance
@@ -6064,13 +6074,30 @@ async function execAction(action) {
       }
 
       // Step 6: Click "Transferred, notify seller" → confirm on Binance
-      await new Promise(r => setTimeout(r, 2000));
-      let clicked = await clickButton(page, 'transferred', 'payment done', 'i have paid', 'mark as paid', 'notify seller', 'upload payment proof');
-      if (clicked) {
+      // Retry up to 3 times — reload page between attempts if button not found
+      const NOTIFY_MAX_RETRIES = 3;
+      let notifyClicked = false;
+      for (let attempt = 1; attempt <= NOTIFY_MAX_RETRIES; attempt++) {
         await new Promise(r => setTimeout(r, 2000));
-        await clickButton(page, 'confirm', 'yes');
-        await new Promise(r => setTimeout(r, 2000));
-        await handleSecurityVerification(page);
+        const clicked = await clickButton(page, 'transferred', 'payment done', 'i have paid', 'mark as paid', 'notify seller', 'transferred, notify seller');
+        if (clicked) {
+          notifyClicked = true;
+          console.log(`[SparkP2P] ✅ "Transferred, notify seller" clicked on attempt ${attempt}`);
+          await new Promise(r => setTimeout(r, 2000));
+          await clickButton(page, 'confirm', 'yes');
+          await new Promise(r => setTimeout(r, 2000));
+          await handleSecurityVerification(page);
+          break;
+        }
+        console.log(`[SparkP2P] "Transferred" button not found on attempt ${attempt}/${NOTIFY_MAX_RETRIES}${attempt < NOTIFY_MAX_RETRIES ? ' — reloading page...' : ''}`);
+        if (attempt < NOTIFY_MAX_RETRIES) {
+          await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+          await new Promise(r => setTimeout(r, 3000));
+        }
+      }
+      if (!notifyClicked) {
+        console.log(`[SparkP2P] ⚠️ Could not click "Transferred, notify seller" after ${NOTIFY_MAX_RETRIES} attempts — seller will release once they see the chat message`);
+        await takeScreenshot(`Transferred btn not found: ${order_number}`);
       }
 
       await takeScreenshot(`Buy payment complete: order ${order_number}`);
