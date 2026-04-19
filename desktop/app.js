@@ -6452,13 +6452,9 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       });
       console.log(`[I&M] Account options: ${boxes.map(b => b.text.substring(0, 30)).join(' | ')}`);
 
-      const target = boxes.find(b =>
-        b.text.toUpperCase().includes('BONITO') ||
-        b.text.toUpperCase().includes('CHELUGET') ||
-        b.text.toUpperCase().includes('SAMOEI') ||
-        b.text.includes('726150')
-      ) || boxes.find(b => !b.text.toUpperCase().includes('SPARK') && !b.text.toUpperCase().includes('FREELANCE'))
-        || boxes[0];
+      const target = boxes.find(b => b.text.includes('00108094726050'))
+                  || boxes.find(b => b.text.includes('726050'))
+                  || boxes[0];
       if (target && target.x > 0) {
         await imPage.mouse.click(target.x, target.y);
         console.log(`[I&M] ✅ Clicked account: ${target.text.substring(0, 50)}`);
