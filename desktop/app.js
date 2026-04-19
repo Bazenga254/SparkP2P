@@ -6427,14 +6427,22 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
   // ── Pre-Vision: handle Angular Material elements Vision can't click reliably ──
 
-  // Step A: Select debit account — click the dropdown arrow then use mouse to click the account row
+  // Step A: Select debit account — click trigger via coordinates, wait for CDK overlay, click option
   try {
-    const matSelect = await imPage.$('mat-select');
-    if (matSelect) {
-      await matSelect.click();
-      await new Promise(r => setTimeout(r, 2500));
+    // Click the mat-select trigger via coordinates (not element.click() — Angular ignores that)
+    const triggerBox = await imPage.evaluate(() => {
+      const sel = document.querySelector('mat-select, .mat-select, [role="combobox"]');
+      if (!sel) return null;
+      const r = sel.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    });
 
-      // Get bounding box of EACH mat-option and click it via page.mouse (avoids page-select side effects)
+    if (triggerBox) {
+      await imPage.mouse.click(triggerBox.x, triggerBox.y);
+      console.log(`[I&M] Clicked debit account dropdown at (${Math.round(triggerBox.x)}, ${Math.round(triggerBox.y)})`);
+      await new Promise(r => setTimeout(r, 3000)); // wait for CDK overlay to render
+
+      // Get bounding boxes of mat-option rows (rendered in CDK overlay at end of <body>)
       const boxes = await imPage.evaluate(() => {
         const opts = Array.from(document.querySelectorAll('mat-option'));
         return opts.map(o => {
@@ -6442,18 +6450,19 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
           return { text: o.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
         });
       });
-      console.log(`[I&M] Account options found: ${boxes.map(b => b.text.substring(0,30)).join(' | ')}`);
+      console.log(`[I&M] Account options: ${boxes.map(b => b.text.substring(0, 30)).join(' | ')}`);
 
-      // Pick account ending 726050 (BONITO KES ACC), fallback to last option
       const target = boxes.find(b => b.text.includes('726050') || b.text.includes('BONITO') || b.text.includes('KES ACC'))
                   || boxes[boxes.length - 1];
       if (target && target.x > 0) {
         await imPage.mouse.click(target.x, target.y);
-        console.log(`[I&M] Clicked account: ${target.text.substring(0, 50)}`);
+        console.log(`[I&M] ✅ Clicked account: ${target.text.substring(0, 50)}`);
       } else {
-        console.log('[I&M] No account option coordinates found');
+        console.log('[I&M] No account options found — dropdown may not have opened');
       }
-      await new Promise(r => setTimeout(r, 1200));
+      await new Promise(r => setTimeout(r, 1500));
+    } else {
+      console.log('[I&M] mat-select trigger not found on page');
     }
   } catch (e) { console.log(`[I&M] Account select error: ${e.message}`); }
 
@@ -6562,7 +6571,7 @@ ACTIONS (pick exactly one):
 IMPORTANT: For "click" and "type" actions you MUST include "x" and "y" — the pixel coordinates of the CENTER of the element in the screenshot. These are used for mouse clicks.
 
 FORM FILLING ORDER (do one action per response):
-NOTE: Debit account and Other Phone should already be selected. If "One-off Beneficiary" is NOT selected (i.e. "Saved Beneficiary" is selected), click "One-off Beneficiary" first before filling fields.
+NOTE: Debit account, Other Phone, and One-off Beneficiary are already pre-selected by the bot. If you see a green/filled radio button next to "One-off Beneficiary" it is already selected — do NOT click it again. Jump straight to filling the phone/amount/reference fields.
 1. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
 2. If network (Safaricom/Airtel) not selected → click ${network}
 3. If amount field is empty or wrong → type amount: ${amountInt}
