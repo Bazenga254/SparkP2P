@@ -6265,167 +6265,225 @@ function norm(o) {
 async function executeImPayment({ phone, name, amount, reference, network = 'safaricom' }) {
   if (!imPage || imPage.isClosed()) throw new Error('I&M Bank tab is not open. Please reconnect I&M Bank.');
   if (!imPin) throw new Error('I&M PIN not set. Please save your PIN in Settings → Binance tab.');
-
-  // Hard validate inputs before touching I&M — prevents false "sent" reports
+  if (!anthropicApiKey) throw new Error('Anthropic API key not set — Vision required for I&M payments.');
   if (!phone || String(phone).trim() === '') throw new Error('Phone number is empty — cannot send payment');
   if (!amount || Number(amount) <= 0) throw new Error(`Amount is invalid (${amount}) — cannot send payment`);
 
-  imWithdrawalRunning = true; // Block keep-alive navigation during payment
-  console.log(`[SparkP2P] 💳 Starting I&M payment: KSh ${amount} → ${name} (${phone})`);
+  imWithdrawalRunning = true;
+  const cleanPhone = String(phone).replace(/^0/, '').replace(/\s/g, ''); // strip leading 0
+  console.log(`[SparkP2P] 💳 Starting I&M Vision payment: KSh ${amount} → ${name} (+254${cleanPhone})`);
 
-  // Navigate to Send Money to Mobile form
   await imPage.bringToFront();
   await imPage.goto('https://digital.imbank.com/inm-retail/transfers/send-money-to-mobile/form', {
     waitUntil: 'domcontentloaded', timeout: 20000,
   });
   await new Promise(r => setTimeout(r, 3000));
 
-  // ── Step 1: Select debit account ──
-  // Click the account dropdown and select the KES account
-  const accountDropdown = await imPage.$('select, [class*="account-select"], [placeholder*="account" i], [class*="dropdown"]');
-  if (accountDropdown) {
-    await accountDropdown.click();
-    await new Promise(r => setTimeout(r, 1000));
-    // Try to click an option containing "KES" or the account number ending in 050
-    const options = await imPage.$$('option, [role="option"], [class*="option"]');
-    for (const opt of options) {
-      const text = await imPage.evaluate(el => el.textContent, opt).catch(() => '');
-      if (text.includes('KES') || text.includes('050') || text.includes('BONITO')) {
-        await opt.click();
-        break;
-      }
-    }
-  }
-  await new Promise(r => setTimeout(r, 1000));
-
-  // ── Step 2: Select "One-off Beneficiary" ──
-  const oneOff = await imPage.$('[value*="one" i], [id*="one-off" i], label');
-  if (oneOff) {
-    const labels = await imPage.$$('label');
-    for (const lbl of labels) {
-      const txt = await imPage.evaluate(el => el.textContent, lbl).catch(() => '');
-      if (txt.toLowerCase().includes('one-off') || txt.toLowerCase().includes('one off')) {
-        await lbl.click();
-        break;
-      }
-    }
-  }
-  await new Promise(r => setTimeout(r, 800));
-
-  // ── Step 3: Enter phone number ──
-  // Strip leading 0 — I&M already shows +254 prefix
-  const cleanPhone = phone.replace(/^0/, '').replace(/\s/g, '');
-  const phoneInput = await imPage.$('input[placeholder*="phone" i], input[name*="phone" i], input[type="tel"]');
-  if (phoneInput) {
-    await phoneInput.click({ clickCount: 3 });
-    await phoneInput.type(cleanPhone, { delay: 80 });
-    console.log(`[SparkP2P] Entered phone: ${cleanPhone}`);
-    await new Promise(r => setTimeout(r, 1500)); // wait for name lookup
-  }
-
-  // ── Step 4: Select Safaricom/Airtel ──
-  const networkLabels = await imPage.$$('label, [role="radio"]');
-  for (const lbl of networkLabels) {
-    const txt = await imPage.evaluate(el => el.textContent, lbl).catch(() => '');
-    if (txt.toLowerCase().includes(network.toLowerCase())) {
-      await lbl.click();
-      break;
-    }
-  }
-  await new Promise(r => setTimeout(r, 800));
-
-  // ── Step 5: Enter amount ──
-  const amountInput = await imPage.$('input[placeholder*="amount" i], input[name*="amount" i], input[type="number"]');
-  if (amountInput) {
-    await amountInput.click({ clickCount: 3 });
-    await amountInput.type(String(amount), { delay: 80 });
-    console.log(`[SparkP2P] Entered amount: ${amount}`);
-  }
-  await new Promise(r => setTimeout(r, 500));
-
-  // ── Step 6: Enter payment reference (order number) ──
-  const refInput = await imPage.$('input[placeholder*="reference" i], input[name*="reference" i], textarea[placeholder*="reference" i]');
-  if (refInput) {
-    await refInput.click({ clickCount: 3 });
-    await refInput.type(String(reference).substring(0, 50), { delay: 60 });
-  }
-  await new Promise(r => setTimeout(r, 500));
-
-  // ── Step 7: Click Continue ──
-  const continueBtn = await imPage.$('button[type="submit"], button');
-  const allBtns = await imPage.$$('button');
-  for (const btn of allBtns) {
-    const txt = await imPage.evaluate(el => el.textContent, btn).catch(() => '');
-    if (txt.toLowerCase().includes('continue')) { await btn.click(); break; }
-  }
-  await new Promise(r => setTimeout(r, 3000));
-  console.log('[SparkP2P] Clicked Continue — waiting for review modal...');
-
-  // ── Step 8: Review modal — click Submit ──
-  const modalBtns = await imPage.$$('button');
-  let submitted = false;
-  for (const btn of modalBtns) {
-    const txt = await imPage.evaluate(el => el.textContent, btn).catch(() => '');
-    if (txt.toLowerCase().includes('submit')) {
-      await btn.click();
-      submitted = true;
-      console.log('[SparkP2P] Clicked Submit on review modal');
-      break;
-    }
-  }
-  if (!submitted) console.log('[SparkP2P] Submit button not found — may have auto-advanced');
-  await new Promise(r => setTimeout(r, 2000));
-
-  // ── Step 9: Identity Validation — enter PIN ──
-  const pinInput = await imPage.$('input[type="password"], input[placeholder*="pin" i], input[placeholder*="PIN" i]');
-  if (pinInput) {
-    await pinInput.click({ clickCount: 3 });
-    await pinInput.type(imPin, { delay: 120 });
-    console.log('[SparkP2P] Entered I&M PIN');
-    await new Promise(r => setTimeout(r, 500));
-
-    // Click Complete
-    const completeBtns = await imPage.$$('button');
-    for (const btn of completeBtns) {
-      const txt = await imPage.evaluate(el => el.textContent, btn).catch(() => '');
-      if (txt.toLowerCase().includes('complete')) {
-        await btn.click();
-        console.log('[SparkP2P] Clicked Complete — waiting for confirmation...');
-        break;
-      }
-    }
-  } else {
-    console.log('[SparkP2P] PIN input not found — may have already advanced');
-  }
-
-  // ── Step 10: Wait for success and take screenshot ──
-  await new Promise(r => setTimeout(r, 4000));
-  const screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
-
-  // Verify success via page text
-  const pageText = await imPage.evaluate(() => document.body.innerText).catch(() => '');
-  const lowerText = pageText.toLowerCase();
-  // Must match a definitive success phrase — NOT generic words like "submitted" that appear in error pages
-  const success = lowerText.includes('transaction successful') ||
-                  lowerText.includes('transfer successful') ||
-                  lowerText.includes('payment successful') ||
-                  lowerText.includes('payment success') ||
-                  lowerText.includes('money sent') ||
-                  lowerText.includes('sent successfully') ||
-                  lowerText.includes('transaction complete') ||
-                  (lowerText.includes('success') && !lowerText.includes('error') && !lowerText.includes('failed') && !lowerText.includes('invalid'));
-
-  // Extract M-Pesa Reference ID from success page (e.g. "Reference ID number: QGH3EX6QKR")
+  const IM_MAX_STEPS = 25;
+  let step = 0;
+  let screenshot = null;
   let referenceId = null;
-  const refMatch = pageText.match(/reference\s*id\s*(?:number)?[:\s]+([A-Z0-9]{8,12})/i);
-  if (refMatch) {
-    referenceId = refMatch[1].trim();
-    console.log(`[SparkP2P] M-Pesa Reference ID extracted: ${referenceId}`);
+  let formFilled = false; // true once all fields are entered
+
+  while (step < IM_MAX_STEPS) {
+    step++;
+    await new Promise(r => setTimeout(r, 1500));
+    screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
+    if (!screenshot) { console.log('[I&M Vision] Could not take screenshot'); continue; }
+
+    const pageText = await imPage.evaluate(() => document.body.innerText).catch(() => '');
+    const lower = pageText.toLowerCase();
+
+    // ── Detect success ──────────────────────────────────────────────────────
+    const isSuccess = lower.includes('payment success') || lower.includes('transaction successful') ||
+                      lower.includes('transfer successful') || lower.includes('sent successfully') ||
+                      lower.includes('transaction complete') || lower.includes('money sent');
+    if (isSuccess) {
+      const refMatch = pageText.match(/reference\s*id\s*(?:number)?[:\s]+([A-Z0-9]{8,12})/i);
+      if (refMatch) { referenceId = refMatch[1].trim(); console.log(`[I&M Vision] ✅ Ref ID: ${referenceId}`); }
+      console.log(`[I&M Vision] ✅ Payment SUCCESS at step ${step}`);
+      imWithdrawalRunning = false;
+      return { success: true, screenshot, referenceId };
+    }
+
+    // ── Ask Claude what screen we are on and what to do ─────────────────────
+    const visionRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 400,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshot } },
+          { type: 'text', text: `You are controlling an I&M Bank portal to send M-Pesa money.
+Payment details: phone=+254${cleanPhone}, amount=${amount}, network=${network}, reference="${String(reference).substring(0,30)}"
+
+Identify the current screen and return ONE action as JSON:
+
+SCREENS:
+- "form" = Send Money to Mobile form (has fields: debit account, phone, amount, etc.)
+- "review" = Review/confirmation modal showing payment summary
+- "pin" = Identity Validation / PIN entry screen
+- "success" = Payment successful
+- "dashboard" = Back on dashboard (something went wrong)
+- "other" = Something else
+
+ACTIONS (pick exactly one):
+- {"screen":"form","action":"click","description":"exact visible label or text of element to click"}
+- {"screen":"form","action":"type","description":"exact visible label of input field","value":"text to type"}
+- {"screen":"review","action":"click","description":"Submit"}
+- {"screen":"pin","action":"type_pin","value":"****"}
+- {"screen":"pin","action":"click","description":"Complete"}
+- {"screen":"dashboard","action":"navigate"}
+- {"screen":"success","action":"done"}
+
+FORM FILLING ORDER (do one action per response):
+1. If debit account field is empty/unselected → click it and select account ending 050
+2. If "Other Phone" or "One-off Beneficiary" not selected → click it
+3. If phone field is empty → type phone number: ${cleanPhone}
+4. If network (Safaricom/Airtel) not selected → click ${network}
+5. If amount field is empty → type amount: ${amount}
+6. If reference field is empty → type reference: ${String(reference).substring(0,30)}
+7. All fields filled → click Continue
+
+Return ONLY valid JSON, no other text.` },
+        ]}],
+      }),
+    }).catch(() => null);
+
+    if (!visionRes?.ok) {
+      console.log(`[I&M Vision] API call failed at step ${step}`);
+      await new Promise(r => setTimeout(r, 3000));
+      continue;
+    }
+
+    const vData = await visionRes.json();
+    let action = null;
+    try {
+      const txt = vData.content?.[0]?.text || '';
+      const match = txt.match(/\{[\s\S]*\}/);
+      if (match) action = JSON.parse(match[0]);
+    } catch (_) {}
+
+    if (!action) { console.log(`[I&M Vision] Could not parse action at step ${step}`); continue; }
+    console.log(`[I&M Vision] Step ${step}: screen="${action.screen}" action="${action.action}" desc="${action.description || ''}" val="${action.value || ''}"`);
+
+    // ── Execute the action ───────────────────────────────────────────────────
+    if (action.screen === 'success' || action.action === 'done') {
+      // Handled above by text detection — but catch it here too
+      imWithdrawalRunning = false;
+      return { success: true, screenshot, referenceId };
+    }
+
+    if (action.screen === 'dashboard' || action.action === 'navigate') {
+      console.log('[I&M Vision] On dashboard — navigating back to form');
+      await imPage.goto('https://digital.imbank.com/inm-retail/transfers/send-money-to-mobile/form',
+        { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 3000));
+      continue;
+    }
+
+    if (action.action === 'type' && action.description && action.value) {
+      // Find input whose label text matches description
+      const typed = await imPage.evaluate((desc, val) => {
+        // Try to find label matching description, then find associated input
+        const labels = Array.from(document.querySelectorAll('label, [class*="label"], [class*="Label"]'));
+        for (const lbl of labels) {
+          if (lbl.textContent.toLowerCase().includes(desc.toLowerCase())) {
+            // Find the input associated with this label
+            const forId = lbl.getAttribute('for');
+            const input = forId ? document.getElementById(forId) :
+                          lbl.querySelector('input, textarea') ||
+                          lbl.nextElementSibling?.querySelector('input, textarea') ||
+                          lbl.parentElement?.querySelector('input, textarea');
+            if (input) {
+              input.focus();
+              input.click();
+              // Clear existing value
+              input.select?.();
+              document.execCommand('selectAll');
+              document.execCommand('delete');
+              input.value = '';
+              // Dispatch input events so Angular picks up the change
+              input.dispatchEvent(new Event('focus', { bubbles: true }));
+              return { found: true, tag: input.tagName };
+            }
+          }
+        }
+        // Fallback: find any visible unfilled input
+        const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea'));
+        for (const inp of inputs) {
+          const rect = inp.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0 && !inp.value) {
+            inp.focus(); inp.click();
+            return { found: true, fallback: true, tag: inp.tagName };
+          }
+        }
+        return { found: false };
+      }, action.description, action.value);
+
+      if (typed.found) {
+        await new Promise(r => setTimeout(r, 300));
+        await imPage.keyboard.type(String(action.value), { delay: 80 });
+        // Trigger Angular change detection
+        await imPage.keyboard.press('Tab');
+        console.log(`[I&M Vision] Typed "${action.value}" into "${action.description}"`);
+        await new Promise(r => setTimeout(r, 1200));
+      } else {
+        console.log(`[I&M Vision] Input for "${action.description}" not found — trying keyboard type`);
+        await imPage.keyboard.type(String(action.value), { delay: 80 });
+        await imPage.keyboard.press('Tab');
+      }
+      continue;
+    }
+
+    if (action.action === 'type_pin') {
+      // PIN field — find password input
+      const pinInput = await imPage.$('input[type="password"], input[maxlength="4"], input[maxlength="6"]');
+      if (pinInput) {
+        await pinInput.click({ clickCount: 3 });
+        await pinInput.type(imPin, { delay: 150 });
+        console.log('[I&M Vision] PIN entered');
+        await new Promise(r => setTimeout(r, 500));
+      } else {
+        console.log('[I&M Vision] PIN input not found — trying keyboard');
+        await imPage.keyboard.type(imPin, { delay: 150 });
+      }
+      continue;
+    }
+
+    if (action.action === 'click' && action.description) {
+      // Find element by visible text
+      const clicked = await imPage.evaluate((desc) => {
+        const candidates = Array.from(document.querySelectorAll('button, [role="button"], [role="option"], [role="radio"], label, a, li, div, span'));
+        for (const el of candidates) {
+          const txt = (el.textContent || '').trim();
+          if (txt.toLowerCase().includes(desc.toLowerCase()) && el.getBoundingClientRect().width > 0) {
+            el.click();
+            return true;
+          }
+        }
+        return false;
+      }, action.description);
+
+      if (clicked) {
+        console.log(`[I&M Vision] Clicked "${action.description}"`);
+        // Longer wait after Continue/Submit since page transitions take time
+        const isTransition = ['continue', 'submit', 'complete'].some(w => action.description.toLowerCase().includes(w));
+        await new Promise(r => setTimeout(r, isTransition ? 4000 : 1000));
+      } else {
+        console.log(`[I&M Vision] Element "${action.description}" not found`);
+      }
+      continue;
+    }
   }
 
-  imWithdrawalRunning = false; // Release lock — keep-alive can navigate again
-  console.log(`[SparkP2P] I&M payment result: ${success ? '✅ SUCCESS' : '❌ FAILED'} | Ref: ${referenceId || 'N/A'} | Page snippet: ${pageText.substring(0, 120).replace(/\n/g, ' ')}`);
-  return { success, screenshot, referenceId };
+  // Exceeded max steps
+  const finalText = await imPage.evaluate(() => document.body.innerText).catch(() => '');
+  screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
+  imWithdrawalRunning = false;
+  console.log(`[I&M Vision] ❌ Exceeded ${IM_MAX_STEPS} steps. Page: ${finalText.substring(0, 100)}`);
+  return { success: false, screenshot, referenceId: null };
 }
 
 // ── Pause buy ad and notify trader when seller hasn't released after payment ──
