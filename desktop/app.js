@@ -6457,45 +6457,49 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     }
   } catch (e) { console.log(`[I&M] Account select error: ${e.message}`); }
 
-  // Step B: Click "Other Phone" radio (not "Own Phone")
+  // Get DPR early — needed for coordinate clicks in pre-steps AND Vision loop
+  const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
+  console.log(`[I&M] DPR = ${imDpr}`);
+
+  // Helper: find radio/label by text and click via coordinates
+  const clickRadioByText = async (searchText) => {
+    const boxes = await imPage.evaluate((txt) => {
+      const els = Array.from(document.querySelectorAll('mat-radio-button, label, [role="radio"]'));
+      return els
+        .filter(el => (el.textContent || '').toLowerCase().includes(txt.toLowerCase()))
+        .map(el => {
+          const r = el.getBoundingClientRect();
+          return { text: el.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        });
+    }, searchText);
+    const target = boxes.find(b => b.x > 0 && b.y > 0);
+    if (target) {
+      await imPage.mouse.click(target.x / imDpr, target.y / imDpr);
+      console.log(`[I&M] Coord-clicked radio "${target.text.substring(0, 40)}" at (${Math.round(target.x / imDpr)}, ${Math.round(target.y / imDpr)})`);
+      return true;
+    }
+    console.log(`[I&M] Radio "${searchText}" not found`);
+    return false;
+  };
+
+  // Step B: Click "Other Phone" radio
   try {
-    const otherPhoneClicked = await imPage.evaluate(() => {
-      const labels = Array.from(document.querySelectorAll('label, mat-radio-button, [class*="radio"]'));
-      for (const lbl of labels) {
-        if ((lbl.textContent || '').trim().toLowerCase() === 'other phone') {
-          lbl.click();
-          return true;
-        }
-      }
-      return false;
-    });
-    console.log(`[I&M] Other Phone clicked: ${otherPhoneClicked}`);
-    await new Promise(r => setTimeout(r, 1000));
+    await clickRadioByText('Other Phone');
+    await new Promise(r => setTimeout(r, 1200));
   } catch (e) { console.log(`[I&M] Other Phone error: ${e.message}`); }
 
-  // Step C: Click "One-off Beneficiary" if it appears after selecting Other Phone
+  // Step C: Click "One-off Beneficiary" radio
   try {
     await new Promise(r => setTimeout(r, 500));
-    await imPage.evaluate(() => {
-      const labels = Array.from(document.querySelectorAll('label, mat-radio-button, [class*="radio"]'));
-      for (const lbl of labels) {
-        const txt = (lbl.textContent || '').toLowerCase();
-        if (txt.includes('one-off') || txt.includes('one off')) { lbl.click(); return true; }
-      }
-      return false;
-    });
-    await new Promise(r => setTimeout(r, 800));
-  } catch (e) {}
+    await clickRadioByText('One-off Beneficiary');
+    await new Promise(r => setTimeout(r, 1000));
+  } catch (e) { console.log(`[I&M] One-off Beneficiary error: ${e.message}`); }
 
   console.log(`[I&M] Pre-steps done — handing off to Vision loop`);
 
-  // I&M amount field only accepts whole numbers — round to nearest integer
+  // I&M amount field only accepts whole numbers — truncate decimals
   const amountInt = Math.floor(parseFloat(amount));
   console.log(`[I&M Vision] Amount rounded: ${amount} → ${amountInt}`);
-
-  // Get device pixel ratio once — screenshot pixels must be divided by DPR for CDP mouse clicks
-  const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
-  console.log(`[I&M Vision] DPR = ${imDpr}`);
 
   const IM_MAX_STEPS = 25;
   let step = 0;
@@ -6558,7 +6562,7 @@ ACTIONS (pick exactly one):
 IMPORTANT: For "click" and "type" actions you MUST include "x" and "y" — the pixel coordinates of the CENTER of the element in the screenshot. These are used for mouse clicks.
 
 FORM FILLING ORDER (do one action per response):
-NOTE: Debit account, Other Phone, and One-off Beneficiary are already selected — do NOT click them again.
+NOTE: Debit account and Other Phone should already be selected. If "One-off Beneficiary" is NOT selected (i.e. "Saved Beneficiary" is selected), click "One-off Beneficiary" first before filling fields.
 1. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
 2. If network (Safaricom/Airtel) not selected → click ${network}
 3. If amount field is empty or wrong → type amount: ${amountInt}
