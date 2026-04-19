@@ -2785,7 +2785,7 @@ async function idleScan(page) {
               max_tokens: 300,
               messages: [{ role: 'user', content: [
                 { type: 'image', source: { type: 'base64', media_type: 'image/png', data: paySS } },
-                { type: 'text', text: 'Extract payment details from this Binance P2P buy order. Return JSON only: {"method":"mpesa|pesalink|bank","phone":"07XXXXXXXX or null","name":"recipient name","amount":1234,"network":"safaricom|airtel|null","reference":"order number"}' },
+                { type: 'text', text: 'Extract payment details from this Binance P2P buy order. The "phone" field must be the SELLER\'S M-Pesa destination number (the number shown in the seller\'s payment method section — where you need to SEND money TO). Do NOT use any other phone number. Return JSON only: {"method":"mpesa|pesalink|bank","phone":"07XXXXXXXX or 254XXXXXXXXX — seller destination","name":"seller name","amount":1234,"network":"safaricom|airtel|null","reference":"order number"}' },
               ]}],
             }),
           }).catch(() => null);
@@ -6078,7 +6078,7 @@ async function execAction(action) {
             max_tokens: 300,
             messages: [{ role: 'user', content: [
               { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
-              { type: 'text', text: 'Extract the payment details from this Binance P2P buy order page. Return JSON only: {"method": "mpesa|bank|paybill", "phone": "07XXXXXXXX or null", "account_number": "null or account", "paybill": "null or paybill", "name": "recipient name", "amount": 1234, "network": "safaricom|airtel|null", "reference": "order number"}' },
+              { type: 'text', text: 'Extract the payment details from this Binance P2P buy order page. The "phone" field must be the SELLER\'S M-Pesa destination number shown in the payment method section — the number you need to SEND money TO. Do NOT use any other phone number on the page. Return JSON only: {"method": "mpesa|bank|paybill", "phone": "07XXXXXXXX or 254XXXXXXXXX — seller destination", "account_number": "null or account", "paybill": "null or paybill", "name": "seller name", "amount": 1234, "network": "safaricom|airtel|null", "reference": "order number"}' },
             ]}],
           }),
         }).catch(() => null);
