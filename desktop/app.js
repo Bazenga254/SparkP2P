@@ -6491,6 +6491,10 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
   console.log(`[I&M] Pre-steps done — handing off to Vision loop`);
 
+  // I&M amount field only accepts whole numbers — round to nearest integer
+  const amountInt = Math.round(parseFloat(amount));
+  console.log(`[I&M Vision] Amount rounded: ${amount} → ${amountInt}`);
+
   // Get device pixel ratio once — screenshot pixels must be divided by DPR for CDP mouse clicks
   const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
   console.log(`[I&M Vision] DPR = ${imDpr}`);
@@ -6532,7 +6536,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshot } },
           { type: 'text', text: `You are controlling an I&M Bank portal to send M-Pesa money.
-Payment details: phone=+254${cleanPhone}, amount=${amount}, network=${network}, reference="${String(reference).substring(0,30)}"
+Payment details: phone=+254${cleanPhone}, amount=${amountInt}, network=${network}, reference="${String(reference).substring(0,30)}"
 
 Identify the current screen and return ONE action as JSON:
 
@@ -6559,7 +6563,7 @@ FORM FILLING ORDER (do one action per response):
 NOTE: Debit account, Other Phone, and One-off Beneficiary are already selected — do NOT click them again.
 1. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
 2. If network (Safaricom/Airtel) not selected → click ${network}
-3. If amount field is empty or wrong → type amount: ${amount}
+3. If amount field is empty or wrong → type amount: ${amountInt}
 4. If reference/narration field is empty → type reference: ${String(reference).substring(0,30)}
 5. All fields filled → click Continue
 
