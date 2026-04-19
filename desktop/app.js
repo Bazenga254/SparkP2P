@@ -6447,52 +6447,27 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     await new Promise(r => setTimeout(r, 1500));
 
     // ── Account dropdown shortcut (Layer 1 → Layer 2) ───────────────────────
-    // If the dropdown is open (mat-option elements exist), select the account
-    // before wasting a Vision API call on it.
-    const anyOption = await imPage.evaluate(() =>
-      document.querySelectorAll('mat-option, .mat-option').length
-    ).catch(() => 0);
-
-    if (anyOption > 0) {
-      // Layer 1: DOM text search → getBoundingClientRect → CDP click
-      const domCoords = await imPage.evaluate((acct) => {
-        const opts = Array.from(document.querySelectorAll('mat-option, .mat-option'));
-        const target = opts.find(o => acct && o.textContent.includes(acct)) || opts[opts.length - 1];
-        if (!target) return null;
-        const r = target.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: target.textContent.trim().substring(0, 50) };
-      }, traderImAccount).catch(() => null);
-
-      if (domCoords && domCoords.x > 0 && domCoords.y > 0) {
-        await imPage.mouse.click(domCoords.x / imDpr, domCoords.y / imDpr);
-        console.log(`[I&M] ✅ L1 clicked account "${domCoords.text}" at (${Math.round(domCoords.x / imDpr)}, ${Math.round(domCoords.y / imDpr)})`);
-      } else {
-        // Layer 2: DOM gave zero coords — ask Vision for exact pixel position
-        console.log(`[I&M] L1 coords zero — falling back to Vision for account coordinates`);
-        const acctSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
-        if (acctSS && anthropicApiKey) {
-          const acctRes = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5-20251001', max_tokens: 100,
-              messages: [{ role: 'user', content: [
-                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: acctSS } },
-                { type: 'text', text: `Find the account row containing "${traderImAccount || 'BONITO'}" in this dropdown list and return its center pixel coordinates as JSON: {"x":NNN,"y":NNN}` },
-              ]}],
-            }),
-          }).catch(() => null);
-          if (acctRes?.ok) {
-            const ad = await acctRes.json();
-            const am = (ad.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
-            let ac = null; try { if (am) ac = JSON.parse(am[0]); } catch (_) {}
-            if (ac?.x && ac?.y) {
-              await imPage.mouse.click(ac.x / imDpr, ac.y / imDpr);
-              console.log(`[I&M] ✅ L2 clicked account at (${Math.round(ac.x / imDpr)}, ${Math.round(ac.y / imDpr)})`);
-            }
-          }
+    // Layer 1: scan ALL visible elements for account number text (broad search —
+    // I&M portal may use role="option", custom tags, or mat-option)
+    const domCoords = await imPage.evaluate((acct) => {
+      const search = acct || 'BONITO CHELUGET';
+      const all = Array.from(document.querySelectorAll(
+        'mat-option, .mat-option, [role="option"], li, div, span, td'
+      ));
+      for (const el of all) {
+        const txt = el.textContent.trim();
+        if (!txt.includes(search)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 0) {
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: txt.substring(0, 50), tag: el.tagName };
         }
       }
+      return null;
+    }, traderImAccount || '00108094726050').catch(() => null);
+
+    if (domCoords && domCoords.x > 0 && domCoords.y > 0) {
+      await imPage.mouse.click(domCoords.x / imDpr, domCoords.y / imDpr);
+      console.log(`[I&M] ✅ L1 clicked <${domCoords.tag}> "${domCoords.text}" at (${Math.round(domCoords.x / imDpr)}, ${Math.round(domCoords.y / imDpr)})`);
       await new Promise(r => setTimeout(r, 2000));
       continue;
     }
@@ -6531,6 +6506,7 @@ Debit account to use: ${traderImAccount || 'first available account'}
 Identify the current screen and return ONE action as JSON:
 
 SCREENS:
+- "account_list" = The debit account dropdown list is OPEN — you can see account rows like "SPARK FREELANCE SOLUTIONS" or "BONITO CHELUGET SAMOEI" listed below a Search box
 - "form" = Send Money to Mobile form (has fields: debit account, phone, amount, etc.)
 - "review" = Review/confirmation modal showing payment summary
 - "pin" = Identity Validation / PIN entry screen
@@ -6539,6 +6515,7 @@ SCREENS:
 - "other" = Something else
 
 ACTIONS (pick exactly one):
+- {"screen":"account_list","action":"click","description":"${traderImAccount || 'BONITO CHELUGET SAMOEI'}","x":NNN,"y":NNN}
 - {"screen":"form","action":"click","description":"exact visible label or text","x":NNN,"y":NNN}
 - {"screen":"form","action":"type","description":"exact visible label of input","value":"text","x":NNN,"y":NNN}
 - {"screen":"review","action":"click","description":"Submit","x":NNN,"y":NNN}
@@ -6550,8 +6527,9 @@ ACTIONS (pick exactly one):
 IMPORTANT: For "click" and "type" actions you MUST include "x" and "y" — the pixel coordinates of the CENTER of the element in the screenshot. These are used for mouse clicks.
 
 FORM FILLING ORDER — do ONE action per response, in this order:
-1. If debit account shows "Select an account" (not yet chosen) → click the ▼ dropdown arrow to open it
-2. If the account dropdown list is open → click account number ${traderImAccount || 'the first account in the list'}
+0. If you see an open account list (screen="account_list", rows like "SPARK FREELANCE" or "BONITO CHELUGET" visible) → click the row containing "${traderImAccount || 'BONITO CHELUGET SAMOEI'}" — return screen="account_list"
+1. If debit account shows "Select an account" and NO list is open → click the ▼ dropdown arrow to open it
+2. (account_list handled by step 0 above)
 3. If "Other Phone" radio is NOT filled/selected (green) → click the "Other Phone" radio circle
 4. If "One-off Beneficiary" radio is NOT filled/selected (green) → click the "One-off Beneficiary" radio circle
 5. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
