@@ -6414,33 +6414,43 @@ async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
     await page.goto(MY_ADS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 3000));
 
-    // Find the BUY ad row and click its Online/Offline toggle
-    // The toggle is a switch/button — locate rows containing "BUY" and click the switch in that row
+    // The My Ads page shows each ad as a table row with a Status column.
+    // Status shows "Online" text + a small icon right next to it — clicking
+    // that icon shows an "Offline" tooltip and toggles the ad offline.
+    // We find the BUY row, locate the element whose text is exactly "Online",
+    // then click the icon/span sitting immediately beside it.
     adPaused = await page.evaluate(() => {
-      const rows = Array.from(document.querySelectorAll('tr, [class*="row"], [class*="item"], [class*="card"]'));
-      for (const row of rows) {
-        const text = row.textContent || '';
-        if (!text.toLowerCase().includes('buy')) continue;
-        // Look for a toggle switch inside this row
-        const toggle = row.querySelector('[class*="switch"], [class*="toggle"], input[type="checkbox"], [role="switch"]');
-        if (toggle) {
-          const isChecked = toggle.checked || toggle.getAttribute('aria-checked') === 'true' ||
-                            toggle.classList.contains('checked') || toggle.classList.contains('active');
-          if (isChecked) { toggle.click(); return true; }
-        }
-        // Fallback: click any button labelled "Online" or containing a circle icon in this row
-        const btns = Array.from(row.querySelectorAll('button, [role="button"]'));
-        for (const btn of btns) {
-          if (btn.textContent.toLowerCase().includes('online')) { btn.click(); return true; }
-        }
+      // Walk every element looking for one whose direct text is "Online"
+      // that lives inside a row also containing the word "Buy"
+      const allEls = Array.from(document.querySelectorAll('*'));
+      for (const el of allEls) {
+        // Must have "Online" as its own visible text (not children text)
+        const directText = Array.from(el.childNodes)
+          .filter(n => n.nodeType === 3)
+          .map(n => n.textContent.trim())
+          .join('');
+        if (directText !== 'Online') continue;
+
+        // Confirm this element is inside the BUY ad row
+        const row = el.closest('tr') || el.closest('[class*="table-row"]') ||
+                    el.closest('[class*="adItem"]') || el.parentElement?.parentElement;
+        if (!row) continue;
+        if (!row.textContent.includes('Buy')) continue;
+
+        // The clickable offline icon is the next sibling element of the "Online" span
+        const icon = el.nextElementSibling || el.querySelector('span, svg, i');
+        if (icon) { icon.click(); return true; }
+        // Last resort — click the container of "Online"
+        el.parentElement?.click();
+        return true;
       }
       return false;
     });
 
     if (adPaused) {
-      console.log('[SparkP2P] ✅ Buy ad paused (toggled offline)');
+      console.log('[SparkP2P] ✅ Buy ad toggled offline');
     } else {
-      console.log('[SparkP2P] ⚠️  Could not find buy ad toggle — ad may already be offline or page structure changed');
+      console.log('[SparkP2P] ⚠️  Buy ad Online icon not found — may already be offline');
     }
     await new Promise(r => setTimeout(r, 1500));
   } catch (e) {
