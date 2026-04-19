@@ -6430,7 +6430,62 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   // Get DPR once — used for all coordinate-based clicks
   const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
   console.log(`[I&M] DPR = ${imDpr}`);
-  console.log(`[I&M] Handing off to Vision loop (Vision handles account selection + radios + form fields)`);
+  // Helper: click a radio button by label text — L1 DOM, L2 Vision fallback
+  const clickRadio = async (labelText) => {
+    // L1: scan all clickable elements for matching text, use bounding rect coords
+    const domCoords = await imPage.evaluate((txt) => {
+      const els = Array.from(document.querySelectorAll(
+        'mat-radio-button, [role="radio"], label, input[type="radio"]'
+      ));
+      for (const el of els) {
+        if (!(el.textContent || el.value || '').toLowerCase().includes(txt.toLowerCase())) continue;
+        // For input[type=radio], click its parent label or mat-radio-button
+        const target = el.closest('mat-radio-button, label') || el;
+        const r = target.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }
+      return null;
+    }, labelText).catch(() => null);
+
+    if (domCoords) {
+      await imPage.mouse.click(domCoords.x / imDpr, domCoords.y / imDpr);
+      console.log(`[I&M] ✅ L1 radio "${labelText}" at (${Math.round(domCoords.x / imDpr)}, ${Math.round(domCoords.y / imDpr)})`);
+      return true;
+    }
+    // L2: Vision screenshot → coordinates
+    const ss = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
+    if (!ss || !anthropicApiKey) return false;
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 100,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+          { type: 'text', text: `Find the "${labelText}" radio button on this form and return its center pixel coordinates as JSON: {"x":NNN,"y":NNN}` },
+        ]}],
+      }),
+    }).catch(() => null);
+    if (!res?.ok) return false;
+    const rd = await res.json();
+    const m = (rd.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
+    let coords = null; try { if (m) coords = JSON.parse(m[0]); } catch (_) {}
+    if (coords?.x && coords?.y) {
+      await imPage.mouse.click(coords.x / imDpr, coords.y / imDpr);
+      console.log(`[I&M] ✅ L2 radio "${labelText}" at (${Math.round(coords.x / imDpr)}, ${Math.round(coords.y / imDpr)})`);
+      return true;
+    }
+    console.log(`[I&M] ❌ Radio "${labelText}" not found via L1 or L2`);
+    return false;
+  };
+
+  // Click Other Phone + One-off Beneficiary before Vision loop
+  await clickRadio('Other Phone');
+  await new Promise(r => setTimeout(r, 1200));
+  await clickRadio('One-off Beneficiary');
+  await new Promise(r => setTimeout(r, 1000));
+
+  console.log(`[I&M] Pre-radios done — handing off to Vision loop`);
 
   // I&M amount field only accepts whole numbers — truncate decimals
   const amountInt = Math.floor(parseFloat(amount));
@@ -6456,7 +6511,9 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       ));
       for (const el of all) {
         const txt = el.textContent.trim();
+        // Must contain search term but NOT be the "Select an account" header/trigger
         if (!txt.includes(search)) continue;
+        if (txt.toLowerCase().includes('select an account')) continue;
         const r = el.getBoundingClientRect();
         if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 0) {
           return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: txt.substring(0, 50), tag: el.tagName };
@@ -6468,6 +6525,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     if (domCoords && domCoords.x > 0 && domCoords.y > 0) {
       await imPage.mouse.click(domCoords.x / imDpr, domCoords.y / imDpr);
       console.log(`[I&M] ✅ L1 clicked <${domCoords.tag}> "${domCoords.text}" at (${Math.round(domCoords.x / imDpr)}, ${Math.round(domCoords.y / imDpr)})`);
+      await imPage.keyboard.press('Escape'); // close the dropdown
       await new Promise(r => setTimeout(r, 2000));
       continue;
     }
