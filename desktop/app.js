@@ -6427,90 +6427,112 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   });
   await new Promise(r => setTimeout(r, 3000));
 
-  // ── Pre-Vision: handle Angular Material elements Vision can't click reliably ──
+  // Get DPR once — used for all coordinate-based clicks
+  const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
+  console.log(`[I&M] DPR = ${imDpr}`);
 
-  // Step A: Select debit account — click trigger via coordinates, wait for CDK overlay, click option
-  try {
-    // Click the mat-select trigger via coordinates (not element.click() — Angular ignores that)
-    const triggerBox = await imPage.evaluate(() => {
-      const sel = document.querySelector('mat-select, .mat-select, [role="combobox"]');
-      if (!sel) return null;
-      const r = sel.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    });
+  // ── Pre-steps via Vision: ask Claude to locate all Angular Material elements ──
+  // DOM-based clicks fail on Angular Material (mat-select, mat-radio-button). Instead
+  // we take one screenshot, ask Claude for the pixel coordinates of each element,
+  // then use page.mouse.click(x/DPR, y/DPR) — same strategy as sell-side Binance OTP.
 
-    if (triggerBox) {
-      await imPage.mouse.click(triggerBox.x, triggerBox.y);
-      console.log(`[I&M] Clicked debit account dropdown at (${Math.round(triggerBox.x)}, ${Math.round(triggerBox.y)})`);
+  const preStepSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
+  if (preStepSS && anthropicApiKey) {
+    const preRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: preStepSS } },
+          { type: 'text', text: `This is an I&M Bank "Send Money to Mobile" form. Find the pixel coordinates (center x,y) of these 3 elements:
+1. The Debit Account dropdown arrow/chevron (the ▼ button to open account selection)
+2. The "Other Phone" radio button circle
+3. The "One-off Beneficiary" radio button circle (may not be visible yet if Other Phone not selected)
 
-      // Retry up to 6 times (6s total) waiting for CDK overlay mat-option elements to appear
+Return JSON only: {"account_dropdown":{"x":NNN,"y":NNN},"other_phone":{"x":NNN,"y":NNN},"one_off":{"x":NNN,"y":NNN} or null if not visible}` },
+        ]}],
+      }),
+    }).catch(() => null);
+
+    let preCoords = null;
+    if (preRes?.ok) {
+      const pd = await preRes.json();
+      const m = (pd.content?.[0]?.text || '').match(/\{[\s\S]*\}/);
+      try { if (m) preCoords = JSON.parse(m[0]); } catch (_) {}
+    }
+    console.log(`[I&M] Pre-step coords: ${JSON.stringify(preCoords)}`);
+
+    // Step A: Click debit account dropdown, wait for CDK overlay, click correct account
+    if (preCoords?.account_dropdown?.x) {
+      const { x: dx, y: dy } = preCoords.account_dropdown;
+      await imPage.mouse.click(dx / imDpr, dy / imDpr);
+      console.log(`[I&M] Clicked account dropdown at (${Math.round(dx / imDpr)}, ${Math.round(dy / imDpr)})`);
+
       let boxes = [];
       for (let attempt = 1; attempt <= 6; attempt++) {
         await new Promise(r => setTimeout(r, 1000));
-        boxes = await imPage.evaluate(() => {
-          const opts = Array.from(document.querySelectorAll('mat-option'));
-          return opts
-            .map(o => {
-              const r = o.getBoundingClientRect();
-              return { text: o.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
-            })
-            .filter(b => b.x > 0 && b.y > 0); // only visible ones
-        });
-        console.log(`[I&M] Account options (attempt ${attempt}): ${boxes.map(b => b.text.substring(0, 30)).join(' | ')}`);
+        boxes = await imPage.evaluate(() =>
+          Array.from(document.querySelectorAll('mat-option')).map(o => {
+            const r = o.getBoundingClientRect();
+            return { text: o.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+          }).filter(b => b.x > 0 && b.y > 0)
+        );
+        console.log(`[I&M] Account options (attempt ${attempt}): ${boxes.map(b => b.text.substring(0, 35)).join(' | ')}`);
         if (boxes.length > 0) break;
       }
 
-      const target = (traderImAccount && boxes.find(b => b.text.includes(traderImAccount)))
-                  || boxes[0];
+      const target = (traderImAccount && boxes.find(b => b.text.includes(traderImAccount))) || boxes[0];
       if (target) {
-        await imPage.mouse.click(target.x, target.y);
-        console.log(`[I&M] ✅ Clicked account: ${target.text.substring(0, 50)}`);
+        await imPage.mouse.click(target.x / imDpr, target.y / imDpr);
+        console.log(`[I&M] ✅ Selected account: ${target.text.substring(0, 50)}`);
       } else {
         console.log('[I&M] No account options found after retries');
       }
       await new Promise(r => setTimeout(r, 1500));
-    } else {
-      console.log('[I&M] mat-select trigger not found on page');
     }
-  } catch (e) { console.log(`[I&M] Account select error: ${e.message}`); }
 
-  // Get DPR early — needed for coordinate clicks in pre-steps AND Vision loop
-  const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
-  console.log(`[I&M] DPR = ${imDpr}`);
-
-  // Helper: find radio/label by text and click via coordinates
-  const clickRadioByText = async (searchText) => {
-    const boxes = await imPage.evaluate((txt) => {
-      const els = Array.from(document.querySelectorAll('mat-radio-button, label, [role="radio"]'));
-      return els
-        .filter(el => (el.textContent || '').toLowerCase().includes(txt.toLowerCase()))
-        .map(el => {
-          const r = el.getBoundingClientRect();
-          return { text: el.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
-        });
-    }, searchText);
-    const target = boxes.find(b => b.x > 0 && b.y > 0);
-    if (target) {
-      await imPage.mouse.click(target.x / imDpr, target.y / imDpr);
-      console.log(`[I&M] Coord-clicked radio "${target.text.substring(0, 40)}" at (${Math.round(target.x / imDpr)}, ${Math.round(target.y / imDpr)})`);
-      return true;
+    // Step B: Click "Other Phone" radio
+    if (preCoords?.other_phone?.x) {
+      const { x: ox, y: oy } = preCoords.other_phone;
+      await imPage.mouse.click(ox / imDpr, oy / imDpr);
+      console.log(`[I&M] Clicked "Other Phone" at (${Math.round(ox / imDpr)}, ${Math.round(oy / imDpr)})`);
+      await new Promise(r => setTimeout(r, 1500));
     }
-    console.log(`[I&M] Radio "${searchText}" not found`);
-    return false;
-  };
 
-  // Step B: Click "Other Phone" radio
-  try {
-    await clickRadioByText('Other Phone');
-    await new Promise(r => setTimeout(r, 1200));
-  } catch (e) { console.log(`[I&M] Other Phone error: ${e.message}`); }
-
-  // Step C: Click "One-off Beneficiary" radio
-  try {
+    // Step C: Click "One-off Beneficiary" — re-screenshot since it appears after Other Phone
     await new Promise(r => setTimeout(r, 500));
-    await clickRadioByText('One-off Beneficiary');
-    await new Promise(r => setTimeout(r, 1000));
-  } catch (e) { console.log(`[I&M] One-off Beneficiary error: ${e.message}`); }
+    const postOtherSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
+    if (postOtherSS) {
+      const oneOffRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 150,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: postOtherSS } },
+            { type: 'text', text: 'Find the "One-off Beneficiary" radio button circle on this I&M Bank form. Return JSON only: {"x":NNN,"y":NNN} or {"x":null} if not visible.' },
+          ]}],
+        }),
+      }).catch(() => null);
+
+      if (oneOffRes?.ok) {
+        const od = await oneOffRes.json();
+        const om = (od.content?.[0]?.text || '').match(/\{[\s\S]*\}/);
+        let oneOffCoords = null;
+        try { if (om) oneOffCoords = JSON.parse(om[0]); } catch (_) {}
+        if (oneOffCoords?.x) {
+          await imPage.mouse.click(oneOffCoords.x / imDpr, oneOffCoords.y / imDpr);
+          console.log(`[I&M] Clicked "One-off Beneficiary" at (${Math.round(oneOffCoords.x / imDpr)}, ${Math.round(oneOffCoords.y / imDpr)})`);
+          await new Promise(r => setTimeout(r, 1000));
+        } else {
+          console.log('[I&M] One-off Beneficiary not found in screenshot');
+        }
+      }
+    }
+  }
 
   console.log(`[I&M] Pre-steps done — handing off to Vision loop`);
 
