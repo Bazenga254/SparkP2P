@@ -6492,7 +6492,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   console.log(`[I&M] Pre-steps done — handing off to Vision loop`);
 
   // I&M amount field only accepts whole numbers — round to nearest integer
-  const amountInt = Math.round(parseFloat(amount));
+  const amountInt = Math.floor(parseFloat(amount));
   console.log(`[I&M Vision] Amount rounded: ${amount} → ${amountInt}`);
 
   // Get device pixel ratio once — screenshot pixels must be divided by DPR for CDP mouse clicks
