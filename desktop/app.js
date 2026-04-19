@@ -6704,17 +6704,57 @@ Return ONLY valid JSON, no other text.` },
     }
 
     if (action.action === 'type_pin') {
-      // PIN field — find password input
+      // Enter PIN
       const pinInput = await imPage.$('input[type="password"], input[maxlength="4"], input[maxlength="6"]');
       if (pinInput) {
         await pinInput.click({ clickCount: 3 });
         await pinInput.type(imPin, { delay: 150 });
         console.log('[I&M Vision] PIN entered');
-        await new Promise(r => setTimeout(r, 500));
       } else {
         console.log('[I&M Vision] PIN input not found — trying keyboard');
         await imPage.keyboard.type(imPin, { delay: 150 });
       }
+      await new Promise(r => setTimeout(r, 600));
+
+      // Immediately click Complete after PIN — L1 DOM, L2 Vision
+      const completeBtn = await imPage.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
+        const btn = btns.find(b => (b.textContent || '').trim().toLowerCase() === 'complete');
+        if (!btn) return null;
+        const r = btn.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }).catch(() => null);
+
+      if (completeBtn && completeBtn.x > 0) {
+        await imPage.mouse.click(completeBtn.x / imDpr, completeBtn.y / imDpr);
+        console.log(`[I&M Vision] ✅ Clicked Complete at (${Math.round(completeBtn.x / imDpr)}, ${Math.round(completeBtn.y / imDpr)})`);
+      } else {
+        // L2: Vision coordinates
+        const pinSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
+        if (pinSS && anthropicApiKey) {
+          const pinRes = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-haiku-4-5-20251001', max_tokens: 80,
+              messages: [{ role: 'user', content: [
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: pinSS } },
+                { type: 'text', text: 'Find the "Complete" button and return its center coordinates as JSON: {"x":NNN,"y":NNN}' },
+              ]}],
+            }),
+          }).catch(() => null);
+          if (pinRes?.ok) {
+            const pd = await pinRes.json();
+            const pm = (pd.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
+            let pc = null; try { if (pm) pc = JSON.parse(pm[0]); } catch (_) {}
+            if (pc?.x && pc?.y) {
+              await imPage.mouse.click(pc.x / imDpr, pc.y / imDpr);
+              console.log(`[I&M Vision] ✅ L2 clicked Complete at (${Math.round(pc.x / imDpr)}, ${Math.round(pc.y / imDpr)})`);
+            }
+          }
+        }
+      }
+      await new Promise(r => setTimeout(r, 3000));
       continue;
     }
 
