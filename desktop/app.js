@@ -6430,111 +6430,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   // Get DPR once — used for all coordinate-based clicks
   const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
   console.log(`[I&M] DPR = ${imDpr}`);
-
-  // ── Pre-steps via Vision: ask Claude to locate all Angular Material elements ──
-  // DOM-based clicks fail on Angular Material (mat-select, mat-radio-button). Instead
-  // we take one screenshot, ask Claude for the pixel coordinates of each element,
-  // then use page.mouse.click(x/DPR, y/DPR) — same strategy as sell-side Binance OTP.
-
-  const preStepSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
-  if (preStepSS && anthropicApiKey) {
-    const preRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 300,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: preStepSS } },
-          { type: 'text', text: `This is an I&M Bank "Send Money to Mobile" form. Find the pixel coordinates (center x,y) of these 3 elements:
-1. The Debit Account dropdown arrow/chevron (the ▼ button to open account selection)
-2. The "Other Phone" radio button circle
-3. The "One-off Beneficiary" radio button circle (may not be visible yet if Other Phone not selected)
-
-Return JSON only: {"account_dropdown":{"x":NNN,"y":NNN},"other_phone":{"x":NNN,"y":NNN},"one_off":{"x":NNN,"y":NNN} or null if not visible}` },
-        ]}],
-      }),
-    }).catch(() => null);
-
-    let preCoords = null;
-    if (preRes?.ok) {
-      const pd = await preRes.json();
-      const m = (pd.content?.[0]?.text || '').match(/\{[\s\S]*\}/);
-      try { if (m) preCoords = JSON.parse(m[0]); } catch (_) {}
-    }
-    console.log(`[I&M] Pre-step coords: ${JSON.stringify(preCoords)}`);
-
-    // Step A: Click debit account dropdown, wait for CDK overlay, click correct account
-    if (preCoords?.account_dropdown?.x) {
-      const { x: dx, y: dy } = preCoords.account_dropdown;
-      await imPage.mouse.click(dx / imDpr, dy / imDpr);
-      console.log(`[I&M] Clicked account dropdown at (${Math.round(dx / imDpr)}, ${Math.round(dy / imDpr)})`);
-
-      let boxes = [];
-      for (let attempt = 1; attempt <= 6; attempt++) {
-        await new Promise(r => setTimeout(r, 1000));
-        boxes = await imPage.evaluate(() =>
-          Array.from(document.querySelectorAll('mat-option')).map(o => {
-            const r = o.getBoundingClientRect();
-            return { text: o.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
-          }).filter(b => b.x > 0 && b.y > 0)
-        );
-        console.log(`[I&M] Account options (attempt ${attempt}): ${boxes.map(b => b.text.substring(0, 35)).join(' | ')}`);
-        if (boxes.length > 0) break;
-      }
-
-      const target = (traderImAccount && boxes.find(b => b.text.includes(traderImAccount))) || boxes[0];
-      if (target) {
-        await imPage.mouse.click(target.x / imDpr, target.y / imDpr);
-        console.log(`[I&M] ✅ Selected account: ${target.text.substring(0, 50)}`);
-      } else {
-        console.log('[I&M] No account options found after retries');
-      }
-      await new Promise(r => setTimeout(r, 1500));
-    }
-
-    // Step B: Click "Other Phone" radio
-    if (preCoords?.other_phone?.x) {
-      const { x: ox, y: oy } = preCoords.other_phone;
-      await imPage.mouse.click(ox / imDpr, oy / imDpr);
-      console.log(`[I&M] Clicked "Other Phone" at (${Math.round(ox / imDpr)}, ${Math.round(oy / imDpr)})`);
-      await new Promise(r => setTimeout(r, 1500));
-    }
-
-    // Step C: Click "One-off Beneficiary" — re-screenshot since it appears after Other Phone
-    await new Promise(r => setTimeout(r, 500));
-    const postOtherSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
-    if (postOtherSS) {
-      const oneOffRes = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 150,
-          messages: [{ role: 'user', content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: postOtherSS } },
-            { type: 'text', text: 'Find the "One-off Beneficiary" radio button circle on this I&M Bank form. Return JSON only: {"x":NNN,"y":NNN} or {"x":null} if not visible.' },
-          ]}],
-        }),
-      }).catch(() => null);
-
-      if (oneOffRes?.ok) {
-        const od = await oneOffRes.json();
-        const om = (od.content?.[0]?.text || '').match(/\{[\s\S]*\}/);
-        let oneOffCoords = null;
-        try { if (om) oneOffCoords = JSON.parse(om[0]); } catch (_) {}
-        if (oneOffCoords?.x) {
-          await imPage.mouse.click(oneOffCoords.x / imDpr, oneOffCoords.y / imDpr);
-          console.log(`[I&M] Clicked "One-off Beneficiary" at (${Math.round(oneOffCoords.x / imDpr)}, ${Math.round(oneOffCoords.y / imDpr)})`);
-          await new Promise(r => setTimeout(r, 1000));
-        } else {
-          console.log('[I&M] One-off Beneficiary not found in screenshot');
-        }
-      }
-    }
-  }
-
-  console.log(`[I&M] Pre-steps done — handing off to Vision loop`);
+  console.log(`[I&M] Handing off to Vision loop (Vision handles account selection + radios + form fields)`);
 
   // I&M amount field only accepts whole numbers — truncate decimals
   const amountInt = Math.floor(parseFloat(amount));
@@ -6601,13 +6497,16 @@ ACTIONS (pick exactly one):
 
 IMPORTANT: For "click" and "type" actions you MUST include "x" and "y" — the pixel coordinates of the CENTER of the element in the screenshot. These are used for mouse clicks.
 
-FORM FILLING ORDER (do one action per response):
-NOTE: Debit account, Other Phone, and One-off Beneficiary are already pre-selected by the bot. If you see a green/filled radio button next to "One-off Beneficiary" it is already selected — do NOT click it again. Jump straight to filling the phone/amount/reference fields.
-1. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
-2. If network (Safaricom/Airtel) not selected → click ${network}
-3. If amount field is empty or wrong → type amount: ${amountInt}
-4. If reference/narration field is empty → type reference: ${String(reference).substring(0,30)}
-5. All fields filled → click Continue
+FORM FILLING ORDER — do ONE action per response, in this order:
+1. If debit account shows "Select an account" (not yet chosen) → click the ▼ dropdown arrow to open it
+2. If the account dropdown list is open → click account number ${traderImAccount || 'the first account in the list'}
+3. If "Other Phone" radio is NOT filled/selected (green) → click the "Other Phone" radio circle
+4. If "One-off Beneficiary" radio is NOT filled/selected (green) → click the "One-off Beneficiary" radio circle
+5. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
+6. If network (Safaricom/Airtel) not selected → click ${network}
+7. If amount field is empty or wrong → type amount: ${amountInt}
+8. If reference/narration field is empty → type reference: ${String(reference).substring(0,30)}
+9. All fields filled and radios selected → click Continue
 
 Return ONLY valid JSON, no other text.` },
         ]}],
