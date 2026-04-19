@@ -6445,6 +6445,26 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   while (step < IM_MAX_STEPS) {
     step++;
     await new Promise(r => setTimeout(r, 1500));
+
+    // ── Shortcut: if account dropdown is open, click the correct account directly ──
+    // Vision can't reliably distinguish open vs closed dropdown — DOM is more reliable here.
+    const matOptions = await imPage.evaluate((acct) => {
+      const opts = Array.from(document.querySelectorAll('mat-option'));
+      return opts.map(o => {
+        const r = o.getBoundingClientRect();
+        return { text: o.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }).filter(b => b.x > 0 && b.y > 0);
+    }, traderImAccount).catch(() => []);
+
+    if (matOptions.length > 0) {
+      const acctTarget = (traderImAccount && matOptions.find(b => b.text.includes(traderImAccount)))
+                      || matOptions[0];
+      await imPage.mouse.click(acctTarget.x / imDpr, acctTarget.y / imDpr);
+      console.log(`[I&M] ✅ DOM shortcut: clicked account "${acctTarget.text.substring(0, 50)}"`);
+      await new Promise(r => setTimeout(r, 2000));
+      continue;
+    }
+
     screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
     if (!screenshot) { console.log('[I&M Vision] Could not take screenshot'); continue; }
 
