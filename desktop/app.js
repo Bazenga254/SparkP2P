@@ -6599,9 +6599,9 @@ FORM FILLING ORDER — do ONE action per response, in this order:
 4. If "One-off Beneficiary" radio is NOT filled/selected (green) → click the "One-off Beneficiary" radio circle
 5. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
 6. If network (Safaricom/Airtel) not selected → click ${network}
-7. If amount field is empty or wrong → type amount: ${amountInt}
-8. If reference/narration field is empty → type reference: ${String(reference).substring(0,30)}
-9. All fields filled and radios selected → click Continue
+7. If amount field is empty or shows 0 → type amount: ${amountInt}. If it shows ANY non-zero number (e.g. 1,930 or 1930) treat it as correctly filled — do NOT retype it
+8. If reference/narration field is empty (shows 0/50 or nothing) → type reference: ${String(reference).substring(0,30)}
+9. All fields filled → click Continue
 
 Return ONLY valid JSON, no other text.` },
         ]}],
