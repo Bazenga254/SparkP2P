@@ -2710,14 +2710,9 @@ async function idleScan(page) {
       const orderNum = order.orderNumber;
       const details = buyOrderDetailsMap[orderNum] || {};
       const minsWaited = Math.floor((Date.now() - buyPaymentSentAt[orderNum]) / 60000);
-      console.log(`[SparkP2P] 🚨 Buy order ${orderNum} — dispute/expired after ${minsWaited}m — filing appeal`);
-      await fileAppealForBuyOrder(page, orderNum);
-      await takeScreenshot(`dispute appeal buy: ${orderNum}`);
-      await fetch(`${API_BASE}/ext/report-buy-expired`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ order_number: orderNum, seller_name: details.sellerName || 'Unknown', amount: details.amount || 0, minutes_waited: minsWaited }),
-      }).catch(() => {});
+      console.log(`[SparkP2P] 🚨 Buy order ${orderNum} — dispute/expired after ${minsWaited}m — pausing ad & notifying trader`);
+      await pauseBuyAdAndNotify(page, orderNum, buyOrderDetailsMap[orderNum]);
+      await takeScreenshot(`paused ad: buy order ${orderNum}`);
       delete buyPaymentSentAt[orderNum];
       buyReminderSentOrders.delete(orderNum);
       if (activeBuyOrderNumber === orderNum) activeBuyOrderNumber = null;
@@ -2740,18 +2735,13 @@ async function idleScan(page) {
       const details = buyOrderDetailsMap[order.orderNumber] || {};
 
       if (minsWaiting >= 15) {
-        console.log(`[SparkP2P] 🚨 Buy order ${order.orderNumber} — 15 min no release, filing appeal`);
+        console.log(`[SparkP2P] 🚨 Buy order ${order.orderNumber} — ${minsWaiting} min no release — pausing buy ad & notifying trader`);
         await sendBinanceChatMessage(page,
-          `I have been waiting ${minsWaiting} minutes for the crypto release. I am now filing an appeal with Binance support. Please release the crypto to avoid any issues.`
+          `Hi ${details.sellerName ? details.sellerName.split(' ')[0] : 'there'}, I sent KSh ${(details.amount || 0).toLocaleString()} ${minsWaiting} minutes ago and the crypto has not been released. I have notified the SparkP2P support team. Please release the crypto at the earliest to avoid a formal dispute. Thank you.`
         );
         await new Promise(r => setTimeout(r, 1500));
-        await fileAppealForBuyOrder(page, order.orderNumber);
-        await takeScreenshot(`15min appeal buy: ${order.orderNumber}`);
-        await fetch(`${API_BASE}/ext/report-buy-expired`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ order_number: order.orderNumber, seller_name: details.sellerName || 'Unknown', amount: details.amount || 0, minutes_waited: minsWaiting }),
-        }).catch(() => {});
+        await pauseBuyAdAndNotify(page, order.orderNumber, details);
+        await takeScreenshot(`15min pause buy: ${order.orderNumber}`);
         delete buyPaymentSentAt[order.orderNumber];
         buyReminderSentOrders.delete(order.orderNumber);
         if (activeBuyOrderNumber === order.orderNumber) activeBuyOrderNumber = null;
@@ -6411,87 +6401,69 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   return { success, screenshot, referenceId };
 }
 
-// ── File an appeal for a buy order where seller hasn't released ──────────────
-// Flow: click "Appeal" link → select "I have made a payment but the seller
-// has not released the crypto" → click the "Appeal" submit button.
-async function fileAppealForBuyOrder(page, orderNumber) {
+// ── Pause buy ad and notify trader when seller hasn't released after payment ──
+// The trader will manually handle the appeal on Binance.
+// Steps: navigate to My Ads → find the BUY ad → toggle it offline → notify trader.
+async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
+  const { sellerName = 'Unknown', amount = 0 } = orderDetails || {};
+  console.log(`[SparkP2P] ⏸️  Pausing buy ad for order ${orderNumber} — seller ${sellerName} has not released`);
+
+  // Step 1: Navigate to My Ads and take the BUY ad offline
+  let adPaused = false;
   try {
-    console.log(`[SparkP2P] 📣 Filing appeal for buy order ${orderNumber}...`);
+    await page.goto(MY_ADS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 3000));
 
-    // Step 1: Click the "Appeal" link/button on the order page
-    const allBtns = await page.$$('button, a, [role="button"]');
-    let appealClicked = false;
-    for (const btn of allBtns) {
-      const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
-      if (txt.trim().toLowerCase() === 'appeal' || txt.trim().toLowerCase().includes('file appeal')) {
-        await btn.click();
-        appealClicked = true;
-        console.log('[SparkP2P] Clicked Appeal link');
-        break;
-      }
-    }
-    if (!appealClicked) {
-      console.log('[SparkP2P] Appeal link not found — page may not have it yet');
-      return false;
-    }
-    await new Promise(r => setTimeout(r, 2500));
-
-    // Step 2: Select the correct reason from the modal
-    // Look for option text matching "I have made a payment but the seller has not released"
-    const TARGET_REASON = 'i have made a payment but the seller has not released';
-    let reasonSelected = false;
-
-    // Try radio buttons / clickable list items
-    const options = await page.$$('[role="radio"], [role="option"], label, li, div[class*="option"], div[class*="item"]');
-    for (const opt of options) {
-      const txt = await page.evaluate(el => el.textContent, opt).catch(() => '');
-      if (txt.toLowerCase().includes('made a payment') || txt.toLowerCase().includes('seller has not released')) {
-        await opt.click();
-        reasonSelected = true;
-        console.log('[SparkP2P] Selected appeal reason: payment made / not released');
-        break;
-      }
-    }
-
-    // Fallback: try select dropdown
-    if (!reasonSelected) {
-      const selects = await page.$$('select');
-      for (const sel of selects) {
-        const opts = await sel.$$('option');
-        for (const opt of opts) {
-          const txt = await page.evaluate(el => el.textContent, opt).catch(() => '');
-          if (txt.toLowerCase().includes('made a payment') || txt.toLowerCase().includes('not released')) {
-            await page.evaluate((el, val) => { el.value = val; el.dispatchEvent(new Event('change', {bubbles: true})); },
-              sel, await page.evaluate(el => el.value, opt));
-            reasonSelected = true;
-            console.log('[SparkP2P] Selected appeal reason via dropdown');
-            break;
-          }
+    // Find the BUY ad row and click its Online/Offline toggle
+    // The toggle is a switch/button — locate rows containing "BUY" and click the switch in that row
+    adPaused = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('tr, [class*="row"], [class*="item"], [class*="card"]'));
+      for (const row of rows) {
+        const text = row.textContent || '';
+        if (!text.toLowerCase().includes('buy')) continue;
+        // Look for a toggle switch inside this row
+        const toggle = row.querySelector('[class*="switch"], [class*="toggle"], input[type="checkbox"], [role="switch"]');
+        if (toggle) {
+          const isChecked = toggle.checked || toggle.getAttribute('aria-checked') === 'true' ||
+                            toggle.classList.contains('checked') || toggle.classList.contains('active');
+          if (isChecked) { toggle.click(); return true; }
         }
-        if (reasonSelected) break;
+        // Fallback: click any button labelled "Online" or containing a circle icon in this row
+        const btns = Array.from(row.querySelectorAll('button, [role="button"]'));
+        for (const btn of btns) {
+          if (btn.textContent.toLowerCase().includes('online')) { btn.click(); return true; }
+        }
       }
+      return false;
+    });
+
+    if (adPaused) {
+      console.log('[SparkP2P] ✅ Buy ad paused (toggled offline)');
+    } else {
+      console.log('[SparkP2P] ⚠️  Could not find buy ad toggle — ad may already be offline or page structure changed');
     }
-
-    await new Promise(r => setTimeout(r, 1000));
-
-    // Step 3: Click the final "Appeal" submit button at the bottom of the modal
-    const submitBtns = await page.$$('button, [role="button"]');
-    for (const btn of submitBtns) {
-      const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
-      const lower = txt.trim().toLowerCase();
-      if (lower === 'appeal' || lower === 'submit appeal' || lower === 'confirm appeal') {
-        await btn.click();
-        console.log('[SparkP2P] ✅ Clicked Appeal submit button');
-        await new Promise(r => setTimeout(r, 2000));
-        break;
-      }
-    }
-
-    console.log(`[SparkP2P] Appeal flow complete for order ${orderNumber}`);
-    return true;
+    await new Promise(r => setTimeout(r, 1500));
   } catch (e) {
-    console.log(`[SparkP2P] Appeal flow error for ${orderNumber}: ${e.message}`);
-    return false;
+    console.log(`[SparkP2P] pauseBuyAd navigation error: ${e.message}`);
+  }
+
+  // Step 2: Report to backend — triggers email, SMS, and in-app notification to trader
+  try {
+    await fetch(`${API_BASE}/ext/report-buy-expired`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        order_number: orderNumber,
+        seller_name: sellerName,
+        amount,
+        minutes_waited: buyPaymentSentAt[orderNumber]
+          ? Math.floor((Date.now() - buyPaymentSentAt[orderNumber]) / 60000)
+          : 15,
+      }),
+    }).catch(() => {});
+    console.log('[SparkP2P] Trader notified via backend (email + SMS + in-app)');
+  } catch (e) {
+    console.log(`[SparkP2P] Notification failed: ${e.message}`);
   }
 }
 

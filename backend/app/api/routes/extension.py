@@ -382,11 +382,11 @@ async def report_buy_expired(
         from app.api.routes.traders import add_notification
         add_notification(
             trader.id,
-            f"URGENT: Buy Order Expired — KES {order.fiat_amount:,.0f} at Risk",
+            f"⚠️ Action Required — Buy Order {data.order_number[-8:]}",
             (
-                f"Order {data.order_number}: You paid KES {order.fiat_amount:,.0f} "
-                f"but the seller did not release {order.crypto_amount} {order.crypto_currency}. "
-                f"Open a dispute on Binance P2P immediately."
+                f"Your bot has paused your buy ad. You sent KES {order.fiat_amount:,.0f} "
+                f"to {data.seller_name or 'the seller'} for {order.crypto_amount} {order.crypto_currency} "
+                f"but the crypto has not been released. Please log into Binance and resolve order {data.order_number}."
             ),
             "dispute",
         )
@@ -398,9 +398,9 @@ async def report_buy_expired(
         from app.services.sms import send_sms
         send_sms(
             trader.phone,
-            f"URGENT SparkP2P: Buy order expired! You paid KES {order.fiat_amount:,.0f} "
-            f"but seller did NOT release {order.crypto_amount} {order.crypto_currency}. "
-            f"Open a dispute on Binance NOW. Ref: {data.order_number[-8:]}",
+            f"SparkP2P ALERT: Your buy ad has been paused. You sent KES {order.fiat_amount:,.0f} "
+            f"to {data.seller_name or 'a seller'} but crypto was NOT released. "
+            f"Log into Binance & resolve order ...{data.order_number[-8:]}",
         )
     except Exception as e:
         logger.warning(f"SMS failed for expired buy order {data.order_number}: {e}")
@@ -414,32 +414,41 @@ async def report_buy_expired(
         crypto_currency = order.crypto_currency if order else "USDT"
         mins = data.minutes_waited or 0
         html = f"""
-        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
-          <h2 style="color:#ef4444">&#9888; Buy Order Dispute &mdash; Immediate Action Required</h2>
-          <p>Your SparkP2P bot has filed a dispute on Binance P2P. Please log in to your Binance account and resolve it.</p>
-          <table style="width:100%;border-collapse:collapse;margin:20px 0">
-            <tr style="background:#fef2f2"><td style="padding:10px;font-weight:bold">Order Number</td><td style="padding:10px">{data.order_number}</td></tr>
-            <tr><td style="padding:10px;font-weight:bold">Amount Sent</td><td style="padding:10px;color:#ef4444">KES {kes_amount:,.0f}</td></tr>
-            <tr style="background:#fef2f2"><td style="padding:10px;font-weight:bold">Crypto Expected</td><td style="padding:10px">{crypto_amount} {crypto_currency}</td></tr>
-            <tr><td style="padding:10px;font-weight:bold">Seller</td><td style="padding:10px">{seller}</td></tr>
-            <tr style="background:#fef2f2"><td style="padding:10px;font-weight:bold">Time Waited</td><td style="padding:10px">{mins} minutes</td></tr>
-          </table>
-          <p><strong>What happened:</strong> KES {kes_amount:,.0f} was sent to seller <strong>{seller}</strong> to purchase <strong>{crypto_amount} {crypto_currency}</strong>.
-          It has been <strong>{mins} minutes</strong> and the seller has not released the crypto.
-          The bot has automatically filed a dispute with Binance and paused your ad temporarily.</p>
-          <p style="background:#fef2f2;padding:15px;border-radius:8px">
-            <strong>Next steps:</strong><br>
-            1. Log into your Binance account<br>
-            2. Go to P2P Orders &rarr; find order {data.order_number}<br>
-            3. Follow the Binance dispute resolution process<br>
-            4. Once resolved, re-enable your ad in SparkP2P Settings
-          </p>
-          <hr style="margin:20px 0">
-          <p style="color:#9ca3af;font-size:12px">SparkP2P Automated Alert &middot; Do not reply to this email</p>
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px;background:#ffffff">
+          <div style="background:#f97316;padding:16px 20px;border-radius:8px 8px 0 0">
+            <h2 style="color:#ffffff;margin:0;font-size:18px">&#9888;&nbsp; SparkP2P — Your Buy Ad Has Been Paused</h2>
+          </div>
+          <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+            <p style="margin-top:0">Hi <strong>{trader.full_name}</strong>,</p>
+            <p>Your SparkP2P bot has detected that a buy order was not fulfilled after payment was sent.
+            To protect your funds, <strong>your buy ad has been automatically paused</strong> until you review and resolve this order.</p>
+
+            <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:14px">
+              <tr style="background:#fef3c7"><td style="padding:10px 14px;font-weight:600;width:40%">Order Number</td><td style="padding:10px 14px;font-family:monospace">{data.order_number}</td></tr>
+              <tr><td style="padding:10px 14px;font-weight:600">Amount Sent</td><td style="padding:10px 14px;color:#dc2626;font-weight:600">KES {kes_amount:,.0f}</td></tr>
+              <tr style="background:#fef3c7"><td style="padding:10px 14px;font-weight:600">Crypto Expected</td><td style="padding:10px 14px">{crypto_amount} {crypto_currency}</td></tr>
+              <tr><td style="padding:10px 14px;font-weight:600">Seller</td><td style="padding:10px 14px">{seller}</td></tr>
+              <tr style="background:#fef3c7"><td style="padding:10px 14px;font-weight:600">Time Elapsed</td><td style="padding:10px 14px">{mins} minutes without release</td></tr>
+            </table>
+
+            <div style="background:#fef2f2;border-left:4px solid #ef4444;padding:14px 18px;border-radius:4px;margin:20px 0">
+              <p style="margin:0 0 10px 0;font-weight:600;color:#991b1b">Required Action</p>
+              <ol style="margin:0;padding-left:18px;color:#374151;line-height:1.8">
+                <li>Log into your <strong>Binance account</strong></li>
+                <li>Navigate to <strong>P2P → Orders</strong> and locate order <code style="background:#fee2e2;padding:2px 6px;border-radius:3px">{data.order_number}</code></li>
+                <li>Click <strong>Appeal</strong> and select <em>"I have made a payment but the seller has not released the crypto"</em></li>
+                <li>Submit supporting evidence (your I&amp;M Bank payment receipt)</li>
+                <li>Once resolved, return to <strong>SparkP2P → Settings</strong> to re-enable your buy ad</li>
+              </ol>
+            </div>
+
+            <p style="color:#6b7280;font-size:13px">Your sell ad is still active. Only the buy ad has been paused to prevent additional exposure while this issue is being resolved.</p>
+          </div>
+          <p style="color:#9ca3af;font-size:11px;text-align:center;margin-top:16px">SparkP2P Automated Alert &middot; Do not reply to this email</p>
         </div>"""
         send_email(
             trader.email,
-            f"URGENT: SparkP2P Buy Order Dispute — KES {kes_amount:,.0f} at Risk",
+            f"[SparkP2P] Buy Ad Paused — Order {data.order_number[-8:]} Requires Your Attention",
             html,
         )
     except Exception as e:
