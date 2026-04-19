@@ -6429,35 +6429,32 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
   // ── Pre-Vision: handle Angular Material elements Vision can't click reliably ──
 
-  // Step A: Select debit account via mat-select (click trigger → wait for CDK overlay → pick account)
+  // Step A: Select debit account — click the dropdown arrow then use mouse to click the account row
   try {
     const matSelect = await imPage.$('mat-select');
     if (matSelect) {
       await matSelect.click();
-      await new Promise(r => setTimeout(r, 2500)); // CDK overlay takes time to render
+      await new Promise(r => setTimeout(r, 2500));
 
-      // CDK overlays render at end of <body> — try multiple selectors
-      const opted = await imPage.evaluate(() => {
-        const selectors = ['mat-option', '.mat-option', '[class*="mat-option"]', '.cdk-overlay-container li', '.cdk-overlay-container [role="option"]'];
-        let options = [];
-        for (const sel of selectors) {
-          options = Array.from(document.querySelectorAll(sel));
-          if (options.length > 0) break;
-        }
-        // Prefer the KES account ending 050 (BONITO CHELUGET SAMOEI)
-        for (const opt of options) {
-          const txt = opt.textContent || '';
-          if (txt.includes('726050') || txt.includes('BONITO') || txt.includes('KES ACC')) {
-            opt.click();
-            return txt.trim().substring(0, 50);
-          }
-        }
-        // Fallback: pick the option with the highest balance (second item usually)
-        if (options.length >= 2) { options[1].click(); return options[1].textContent.trim().substring(0, 50); }
-        if (options[0]) { options[0].click(); return options[0].textContent.trim().substring(0, 50); }
-        return null;
+      // Get bounding box of EACH mat-option and click it via page.mouse (avoids page-select side effects)
+      const boxes = await imPage.evaluate(() => {
+        const opts = Array.from(document.querySelectorAll('mat-option'));
+        return opts.map(o => {
+          const r = o.getBoundingClientRect();
+          return { text: o.textContent.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        });
       });
-      console.log(`[I&M] Debit account selected: ${opted || 'none found — dropdown may still be loading'}`);
+      console.log(`[I&M] Account options found: ${boxes.map(b => b.text.substring(0,30)).join(' | ')}`);
+
+      // Pick account ending 726050 (BONITO KES ACC), fallback to last option
+      const target = boxes.find(b => b.text.includes('726050') || b.text.includes('BONITO') || b.text.includes('KES ACC'))
+                  || boxes[boxes.length - 1];
+      if (target && target.x > 0) {
+        await imPage.mouse.click(target.x, target.y);
+        console.log(`[I&M] Clicked account: ${target.text.substring(0, 50)}`);
+      } else {
+        console.log('[I&M] No account option coordinates found');
+      }
       await new Promise(r => setTimeout(r, 1200));
     }
   } catch (e) { console.log(`[I&M] Account select error: ${e.message}`); }
@@ -6598,65 +6595,51 @@ Return ONLY valid JSON, no other text.` },
     }
 
     if (action.action === 'type' && action.description && action.value) {
-      // Find input whose label text matches description
-      const typed = await imPage.evaluate((desc, val) => {
-        // Try to find label matching description, then find associated input
+      // Use Angular's native value setter to bypass change-detection issues
+      const filled = await imPage.evaluate((desc, val) => {
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                          || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+
+        const setVal = (el) => {
+          el.focus();
+          el.click();
+          if (nativeSetter) {
+            nativeSetter.call(el, val);
+          } else {
+            el.value = val;
+          }
+          el.dispatchEvent(new Event('input',  { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur',   { bubbles: true }));
+        };
+
+        // Try label match first
         const labels = Array.from(document.querySelectorAll('label, [class*="label"], [class*="Label"]'));
         for (const lbl of labels) {
           if (lbl.textContent.toLowerCase().includes(desc.toLowerCase())) {
-            // Find the input associated with this label
             const forId = lbl.getAttribute('for');
-            const input = forId ? document.getElementById(forId) :
-                          lbl.querySelector('input, textarea') ||
-                          lbl.nextElementSibling?.querySelector('input, textarea') ||
-                          lbl.parentElement?.querySelector('input, textarea');
-            if (input) {
-              input.focus();
-              input.click();
-              // Clear existing value
-              input.select?.();
-              document.execCommand('selectAll');
-              document.execCommand('delete');
-              input.value = '';
-              // Dispatch input events so Angular picks up the change
-              input.dispatchEvent(new Event('focus', { bubbles: true }));
-              return { found: true, tag: input.tagName };
-            }
+            const input = forId ? document.getElementById(forId)
+                        : lbl.querySelector('input, textarea')
+                       || lbl.nextElementSibling?.querySelector('input, textarea')
+                       || lbl.parentElement?.querySelector('input, textarea');
+            if (input) { setVal(input); return { found: true, method: 'label' }; }
           }
         }
-        // Fallback: find any visible unfilled input
+        // Fallback: first visible empty input
         const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea'));
         for (const inp of inputs) {
-          const rect = inp.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0 && !inp.value) {
-            inp.focus(); inp.click();
-            return { found: true, fallback: true, tag: inp.tagName };
-          }
+          const r = inp.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) { setVal(inp); return { found: true, method: 'fallback' }; }
         }
         return { found: false };
-      }, action.description, action.value);
+      }, action.description, String(action.value));
 
-      if (typed.found) {
-        await new Promise(r => setTimeout(r, 300));
-        // Clear any existing value with Ctrl+A → Delete before typing
-        await imPage.keyboard.down('Control');
-        await imPage.keyboard.press('a');
-        await imPage.keyboard.up('Control');
-        await imPage.keyboard.press('Delete');
-        await new Promise(r => setTimeout(r, 150));
-        await imPage.keyboard.type(String(action.value), { delay: 80 });
-        // Trigger Angular change detection
+      if (filled.found) {
         await imPage.keyboard.press('Tab');
-        console.log(`[I&M Vision] Typed "${action.value}" into "${action.description}"`);
+        console.log(`[I&M Vision] Set "${action.value}" into "${action.description}" via ${filled.method}`);
         await new Promise(r => setTimeout(r, 1200));
       } else {
-        console.log(`[I&M Vision] Input for "${action.description}" not found — trying keyboard type`);
-        await imPage.keyboard.down('Control');
-        await imPage.keyboard.press('a');
-        await imPage.keyboard.up('Control');
-        await imPage.keyboard.press('Delete');
-        await imPage.keyboard.type(String(action.value), { delay: 80 });
-        await imPage.keyboard.press('Tab');
+        console.log(`[I&M Vision] Input for "${action.description}" not found`);
       }
       continue;
     }
