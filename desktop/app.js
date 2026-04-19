@@ -2812,8 +2812,7 @@ async function idleScan(page) {
 
       // Send greeting (once)
       if (!buyOrderDetailsMap[order.orderNumber]) {
-        const myPhone = traderPhoneNumber || '';
-        const greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment via M-Pesa${myPhone ? ` from ${myPhone}` : ''} shortly. Please be ready to release the crypto once you confirm receipt. Thank you! 🙏`;
+        const greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment via M-Pesa shortly. Please be ready to release the crypto once you confirm receipt. Thank you! 🙏`;
         await sendBinanceChatMessage(page, greetMsg);
         console.log(`[SparkP2P] 👋 Greeting sent for buy order ${order.orderNumber}`);
         await new Promise(r => setTimeout(r, 1000));
