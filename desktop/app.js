@@ -27,7 +27,7 @@ http.createServer(async (req, res) => {
     // Attach activity listeners to all open Chrome pages so mouse movement resets the timer
     const pages = browser ? await browser.pages().catch(() => []) : [];
     for (const p of pages) attachActivityListenerToPage(p);
-    console.log('[SparkP2P] Bot PAUSED — Chrome unlocked for manual use, auto-resume in 60s');
+    console.log('[SparkP2P] Bot PAUSED — Chrome unlocked for manual use, auto-resume in 3 minutes');
     res.end(JSON.stringify({ ok: true, paused: true }));
   } else if (req.url === '/resume') {
     pauseNavigation = false;
@@ -82,6 +82,7 @@ let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 let traderPin = null;    // Binance fund/trading password — stored in memory only
 let totpSecret = null;   // Google Authenticator base32 secret — stored in memory only
 let traderAccountNumber = null; // e.g. "P2PT0001" — used in paybill payment replies
+let traderPhoneNumber = null;  // Trader's own phone number — included in buy greeting message
 const DEV_UNLOCK = true; // ← set false to re-enable browser lock
 let browserLocked = false;
 let lockFrameListener = null;
@@ -120,13 +121,13 @@ let mpesaOrgPage = null;       // Persistent M-PESA org portal tab
 let connectingMpesa = false;   // Prevents concurrent connectMpesaPortal() calls
 let mpesaSweepRunning = false; // Prevents concurrent sweep executions
 let pauseInactivityTimer = null; // Auto-resume timer when bot is paused
-const PAUSE_AUTO_RESUME_MS = 60 * 1000; // 60 seconds
+const PAUSE_AUTO_RESUME_MS = 3 * 60 * 1000; // 3 minutes
 
 function startPauseInactivityTimer() {
   clearPauseInactivityTimer();
   pauseInactivityTimer = setTimeout(async () => {
     if (!pauseNavigation) return; // already resumed
-    console.log('[SparkP2P] 60s inactivity while paused — auto-resuming and locking all screens');
+    console.log('[SparkP2P] 3 minute pause elapsed — auto-resuming and locking all screens');
     pauseNavigation = false;
     await lockChromeBrowser().catch(() => {});
     mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed", { detail: { reason: "inactivity" } }))').catch(() => {});
@@ -1003,8 +1004,9 @@ async function fetchAndApplyCredentials() {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (!res.ok) return;
-    const { verify_method, fund_password, totp_secret, anthropic_api_key, account_number } = await res.json();
+    const { verify_method, fund_password, totp_secret, anthropic_api_key, account_number, phone_number } = await res.json();
     if (account_number) { traderAccountNumber = account_number; console.log(`[SparkP2P] Account number: ${traderAccountNumber}`); }
+    if (phone_number) { traderPhoneNumber = phone_number; console.log(`[SparkP2P] Trader phone: ${traderPhoneNumber}`); }
     console.log(`[SparkP2P] Credentials: verify_method=${verify_method} has_totp=${!!totp_secret} has_pin=${!!fund_password}`);
     if (totp_secret) {
       totpSecret = totp_secret.toUpperCase().replace(/\s/g, '');
@@ -2708,15 +2710,9 @@ async function idleScan(page) {
       const orderNum = order.orderNumber;
       const details = buyOrderDetailsMap[orderNum] || {};
       const minsWaited = Math.floor((Date.now() - buyPaymentSentAt[orderNum]) / 60000);
-      console.log(`[SparkP2P] 🚨 Buy order ${orderNum} — dispute/expired after ${minsWaited}m`);
-      try {
-        const allBtns = await page.$$('button');
-        for (const btn of allBtns) {
-          const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
-          if (txt.toLowerCase().includes('appeal')) { await btn.click(); break; }
-        }
-      } catch (e) {}
-      await takeScreenshot(`dispute buy: ${orderNum}`);
+      console.log(`[SparkP2P] 🚨 Buy order ${orderNum} — dispute/expired after ${minsWaited}m — filing appeal`);
+      await fileAppealForBuyOrder(page, orderNum);
+      await takeScreenshot(`dispute appeal buy: ${orderNum}`);
       await fetch(`${API_BASE}/ext/report-buy-expired`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -2744,19 +2740,13 @@ async function idleScan(page) {
       const details = buyOrderDetailsMap[order.orderNumber] || {};
 
       if (minsWaiting >= 15) {
-        console.log(`[SparkP2P] 🚨 Buy order ${order.orderNumber} — 15 min no release, filing dispute`);
+        console.log(`[SparkP2P] 🚨 Buy order ${order.orderNumber} — 15 min no release, filing appeal`);
         await sendBinanceChatMessage(page,
           `I have been waiting ${minsWaiting} minutes for the crypto release. I am now filing an appeal with Binance support. Please release the crypto to avoid any issues.`
         );
         await new Promise(r => setTimeout(r, 1500));
-        try {
-          const allBtns = await page.$$('button');
-          for (const btn of allBtns) {
-            const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
-            if (txt.toLowerCase().includes('appeal')) { await btn.click(); break; }
-          }
-        } catch (e) {}
-        await takeScreenshot(`15min dispute buy: ${order.orderNumber}`);
+        await fileAppealForBuyOrder(page, order.orderNumber);
+        await takeScreenshot(`15min appeal buy: ${order.orderNumber}`);
         await fetch(`${API_BASE}/ext/report-buy-expired`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -2780,6 +2770,23 @@ async function idleScan(page) {
     } else {
       // Payment not yet sent — VPS will instruct via execAction response to report-orders
       console.log(`[SparkP2P] Buy order ${order.orderNumber} — awaiting payment instruction from VPS`);
+
+      // Send greeting message the FIRST time we see this buy order (before payment)
+      if (!orderFirstSeenAt[order.orderNumber]) {
+        orderFirstSeenAt[order.orderNumber] = Date.now();
+        try {
+          // Extract seller name from page for personalised greeting
+          const buyGreetText = await page.evaluate(() => document.body.innerText).catch(() => '');
+          const sellerMatch = buyGreetText.match(/seller[:\s]+([A-Za-z ]+)/i);
+          const sellerFirstName = sellerMatch ? sellerMatch[1].trim().split(' ')[0] : 'there';
+          const myPhone = traderPhoneNumber || '';
+          const greetMsg = `Hello ${sellerFirstName}, I am interested in buying USDT. I will send payment shortly via M-Pesa${myPhone ? ` from ${myPhone}` : ''}. Please be ready to release the crypto once you confirm receipt. Thank you! 🙏`;
+          await sendBinanceChatMessage(page, greetMsg);
+          console.log(`[SparkP2P] 👋 Sent greeting for buy order ${order.orderNumber}`);
+        } catch (e) {
+          console.log(`[SparkP2P] Greeting send failed: ${e.message}`);
+        }
+      }
     }
   }
 
@@ -6041,6 +6048,7 @@ async function execAction(action) {
         phone: paymentDetails.phone,
         method: paymentDetails.method || 'M-Pesa',
         orderNumber: order_number,
+        referenceId: imResult.referenceId || null,
       };
       buyPaymentScreenshot = imResult.screenshot;
       buyPaymentSentAt[order_number] = Date.now();
@@ -6055,7 +6063,8 @@ async function execAction(action) {
 
       // Step 4: Send chat message to seller (only because we actually paid)
       const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
-      const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}. Please check and release the crypto. Thank you! 🙏`;
+      const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
+      const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`;
       await sendBinanceChatMessage(page, chatMsg);
 
       // Step 5: Upload payment proof (I&M receipt screenshot)
@@ -6383,14 +6392,107 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   const success = lowerText.includes('transaction successful') ||
                   lowerText.includes('transfer successful') ||
                   lowerText.includes('payment successful') ||
+                  lowerText.includes('payment success') ||
                   lowerText.includes('money sent') ||
                   lowerText.includes('sent successfully') ||
                   lowerText.includes('transaction complete') ||
                   (lowerText.includes('success') && !lowerText.includes('error') && !lowerText.includes('failed') && !lowerText.includes('invalid'));
 
+  // Extract M-Pesa Reference ID from success page (e.g. "Reference ID number: QGH3EX6QKR")
+  let referenceId = null;
+  const refMatch = pageText.match(/reference\s*id\s*(?:number)?[:\s]+([A-Z0-9]{8,12})/i);
+  if (refMatch) {
+    referenceId = refMatch[1].trim();
+    console.log(`[SparkP2P] M-Pesa Reference ID extracted: ${referenceId}`);
+  }
+
   imWithdrawalRunning = false; // Release lock — keep-alive can navigate again
-  console.log(`[SparkP2P] I&M payment result: ${success ? '✅ SUCCESS' : '❌ FAILED'} | Page snippet: ${pageText.substring(0, 120).replace(/\n/g, ' ')}`);
-  return { success, screenshot };
+  console.log(`[SparkP2P] I&M payment result: ${success ? '✅ SUCCESS' : '❌ FAILED'} | Ref: ${referenceId || 'N/A'} | Page snippet: ${pageText.substring(0, 120).replace(/\n/g, ' ')}`);
+  return { success, screenshot, referenceId };
+}
+
+// ── File an appeal for a buy order where seller hasn't released ──────────────
+// Flow: click "Appeal" link → select "I have made a payment but the seller
+// has not released the crypto" → click the "Appeal" submit button.
+async function fileAppealForBuyOrder(page, orderNumber) {
+  try {
+    console.log(`[SparkP2P] 📣 Filing appeal for buy order ${orderNumber}...`);
+
+    // Step 1: Click the "Appeal" link/button on the order page
+    const allBtns = await page.$$('button, a, [role="button"]');
+    let appealClicked = false;
+    for (const btn of allBtns) {
+      const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
+      if (txt.trim().toLowerCase() === 'appeal' || txt.trim().toLowerCase().includes('file appeal')) {
+        await btn.click();
+        appealClicked = true;
+        console.log('[SparkP2P] Clicked Appeal link');
+        break;
+      }
+    }
+    if (!appealClicked) {
+      console.log('[SparkP2P] Appeal link not found — page may not have it yet');
+      return false;
+    }
+    await new Promise(r => setTimeout(r, 2500));
+
+    // Step 2: Select the correct reason from the modal
+    // Look for option text matching "I have made a payment but the seller has not released"
+    const TARGET_REASON = 'i have made a payment but the seller has not released';
+    let reasonSelected = false;
+
+    // Try radio buttons / clickable list items
+    const options = await page.$$('[role="radio"], [role="option"], label, li, div[class*="option"], div[class*="item"]');
+    for (const opt of options) {
+      const txt = await page.evaluate(el => el.textContent, opt).catch(() => '');
+      if (txt.toLowerCase().includes('made a payment') || txt.toLowerCase().includes('seller has not released')) {
+        await opt.click();
+        reasonSelected = true;
+        console.log('[SparkP2P] Selected appeal reason: payment made / not released');
+        break;
+      }
+    }
+
+    // Fallback: try select dropdown
+    if (!reasonSelected) {
+      const selects = await page.$$('select');
+      for (const sel of selects) {
+        const opts = await sel.$$('option');
+        for (const opt of opts) {
+          const txt = await page.evaluate(el => el.textContent, opt).catch(() => '');
+          if (txt.toLowerCase().includes('made a payment') || txt.toLowerCase().includes('not released')) {
+            await page.evaluate((el, val) => { el.value = val; el.dispatchEvent(new Event('change', {bubbles: true})); },
+              sel, await page.evaluate(el => el.value, opt));
+            reasonSelected = true;
+            console.log('[SparkP2P] Selected appeal reason via dropdown');
+            break;
+          }
+        }
+        if (reasonSelected) break;
+      }
+    }
+
+    await new Promise(r => setTimeout(r, 1000));
+
+    // Step 3: Click the final "Appeal" submit button at the bottom of the modal
+    const submitBtns = await page.$$('button, [role="button"]');
+    for (const btn of submitBtns) {
+      const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
+      const lower = txt.trim().toLowerCase();
+      if (lower === 'appeal' || lower === 'submit appeal' || lower === 'confirm appeal') {
+        await btn.click();
+        console.log('[SparkP2P] ✅ Clicked Appeal submit button');
+        await new Promise(r => setTimeout(r, 2000));
+        break;
+      }
+    }
+
+    console.log(`[SparkP2P] Appeal flow complete for order ${orderNumber}`);
+    return true;
+  } catch (e) {
+    console.log(`[SparkP2P] Appeal flow error for ${orderNumber}: ${e.message}`);
+    return false;
+  }
 }
 
 async function sendBinanceChatMessage(page, message) {

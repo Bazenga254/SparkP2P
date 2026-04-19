@@ -833,6 +833,7 @@ async def get_desktop_credentials(
         "totp_secret": totp_secret,
         "anthropic_api_key": settings.ANTHROPIC_API_KEY,
         "account_number": account_number,
+        "phone_number": trader.phone or "",
     }
 
 
