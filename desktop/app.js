@@ -2718,7 +2718,16 @@ async function idleScan(page) {
       if (activeBuyOrderNumber === orderNum) activeBuyOrderNumber = null;
 
     // ── Cancelled ──────────────────────────────────────────────────────────
-    } else if (buyLower.includes('cancelled') || buyLower.includes('canceled')) {
+    // Use Vision screen OR definitive past-tense phrases only.
+    // "order will be cancelled in X mins" is a WARNING — not a cancellation.
+    } else if (
+      buyScreen === 'order_cancelled' ||
+      buyLower.includes('order has been cancelled') ||
+      buyLower.includes('order was cancelled') ||
+      buyLower.includes('order is cancelled') ||
+      buyLower.includes('has been canceled') ||
+      (buyLower.includes('cancelled') && buyLower.includes('order number') && !buyLower.includes('will be cancelled'))
+    ) {
       console.log(`[SparkP2P] Buy order ${order.orderNumber} CANCELLED`);
       await fetch(`${API_BASE}/ext/report-orders`, {
         method: 'POST',
