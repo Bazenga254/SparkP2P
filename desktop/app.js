@@ -2893,7 +2893,13 @@ async function idleScan(page) {
         await new Promise(r => setTimeout(r, 2000));
         const clicked = await clickButton(page, 'transferred', 'payment done', 'i have paid', 'mark as paid', 'notify seller', 'transferred, notify seller');
         if (clicked) {
-          await new Promise(r => setTimeout(r, 2000));
+          await new Promise(r => setTimeout(r, 2500));
+          // Check the "I have made the transfer" checkbox before confirming
+          await page.evaluate(() => {
+            const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+            checkboxes.forEach(cb => { if (!cb.checked) cb.click(); });
+          }).catch(() => {});
+          await new Promise(r => setTimeout(r, 800));
           await clickButton(page, 'confirm', 'yes');
           await new Promise(r => setTimeout(r, 2000));
           await handleSecurityVerification(page);
@@ -6231,7 +6237,13 @@ async function execAction(action) {
         if (clicked) {
           notifyClicked = true;
           console.log(`[SparkP2P] ✅ "Transferred, notify seller" clicked on attempt ${attempt}`);
-          await new Promise(r => setTimeout(r, 2000));
+          await new Promise(r => setTimeout(r, 2500));
+          // Check the "I have made the transfer" checkbox before confirming
+          await page.evaluate(() => {
+            const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+            checkboxes.forEach(cb => { if (!cb.checked) cb.click(); });
+          }).catch(() => {});
+          await new Promise(r => setTimeout(r, 800));
           await clickButton(page, 'confirm', 'yes');
           await new Promise(r => setTimeout(r, 2000));
           await handleSecurityVerification(page);
@@ -6920,7 +6932,7 @@ async function uploadPaymentProofToBinance(page, screenshotBase64) {
 
     // Intercept file chooser
     const [fileChooser] = await Promise.all([
-      page.waitForFileChooser({ timeout: 5000 }),
+      page.waitForFileChooser({ timeout: 12000 }),
       uploadBtn.click(),
     ]);
     await fileChooser.accept([tmpPath]);
