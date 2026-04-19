@@ -2736,6 +2736,10 @@ async function idleScan(page) {
 
       if (minsWaiting >= 15) {
         console.log(`[SparkP2P] 🚨 Buy order ${order.orderNumber} — ${minsWaiting} min no release — pausing buy ad & notifying trader`);
+        await sendBinanceChatMessage(page,
+          `Hi ${details.sellerName ? details.sellerName.split(' ')[0] : 'there'}, I sent KSh ${(details.amount || 0).toLocaleString()} ${minsWaiting} minutes ago and the crypto has not been released. I have notified the Binance support team. Please release the crypto at the earliest to avoid a formal dispute. Thank you.`
+        );
+        await new Promise(r => setTimeout(r, 1500));
         await pauseBuyAdAndNotify(page, order.orderNumber, details);
         await takeScreenshot(`15min pause buy: ${order.orderNumber}`);
         delete buyPaymentSentAt[order.orderNumber];
