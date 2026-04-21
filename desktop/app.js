@@ -7336,6 +7336,9 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       }).catch(() => {});
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Payment Purpose set to Other');
+      // Scroll to bottom so Continue button is visible for Vision
+      await imPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+      await new Promise(r => setTimeout(r, 800));
       console.log('[BankTransfer] Post-account L1 fill done — Vision handles Continue/review/PIN');
       continue;
     }
@@ -7417,22 +7420,15 @@ IMPORTANT: The following were already filled programmatically — do NOT re-fill
 - Pesalink radio: ALREADY SELECTED
 - Payment Purpose: ALREADY SET to "Other"
 
-FOLLOW THIS ORDER — do only the FIRST incomplete step you see:
-0. If "Debit Account" shows "Select an account" → click the dropdown arrow to open it
-1. SKIP — One-off Beneficiary already selected
-2. SKIP — Bank name already filled
-3. SKIP — Account number already filled
-4. SKIP — Validate already clicked
-5. If currency still shows "-" (not KES) → click the currency dropdown and select KES
-6. SKIP — Amount already filled
-7. SKIP — Reference already filled
-8. SKIP — Pesalink already selected
-9. SKIP — Payment Purpose already set
-10. If ALL visible fields look correct and no red errors → click the green "Continue" button
-11. On review screen → click "Submit" or "Confirm"
-12. On PIN screen → action="type_pin"
-13. After PIN → click "Complete"
-14. On success screen → action="done"
+ALL form fields have been filled. Your ONLY jobs are:
+1. If currency shows "-" → click the currency dropdown and select KES
+2. If you see a green "Continue" button → click it immediately
+3. On review/confirmation screen → click "Submit" or "Confirm"
+4. On PIN screen → action="type_pin"
+5. After PIN → click "Complete"
+6. On success screen → action="done"
+
+DO NOT click Validate, DO NOT re-enter any fields. Scroll down if Continue is not visible.
 
 Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"click|type|type_pin|done","description":"what you are doing","value":"text if typing","x":NNN,"y":NNN}` },
         ]}],
