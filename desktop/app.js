@@ -7214,74 +7214,34 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
       await new Promise(r => setTimeout(r, 800));
 
-      // KES currency — try native select first, then open dropdown + search for KES text
-      const kesNative = await imPage.evaluate(() => {
-        // Try native <select> element (hidden behind mat-select)
-        const selects = Array.from(document.querySelectorAll('select'));
-        for (const sel of selects) {
-          const opts = Array.from(sel.options).map(o => o.text.trim());
-          if (opts.includes('KES')) {
-            const ns = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
-            if (ns) ns.call(sel, 'KES');
-            else sel.value = 'KES';
-            sel.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
+      // KES currency — open mat-select then use type-ahead 'k' + Enter
+      const currTrigger = await imPage.evaluate(() => {
+        // Find the currency mat-select (shows "-" or "KES")
+        const matSelects = Array.from(document.querySelectorAll('mat-select'));
+        for (const ms of matSelects) {
+          const txt = (ms.textContent || '').trim();
+          if (txt === '-' || txt === '' || txt === 'KES') {
+            const r = ms.getBoundingClientRect();
+            if (r.width > 5 && r.width < 120 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
           }
         }
-        return false;
-      }).catch(() => false);
+        // Fallback: small element with text exactly "-"
+        const dash = Array.from(document.querySelectorAll('*')).find(e =>
+          (e.textContent || '').trim() === '-' && e.getBoundingClientRect().width > 5 && e.getBoundingClientRect().width < 80);
+        if (dash) { const r = dash.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+        return null;
+      }).catch(() => null);
 
-      if (kesNative) {
-        console.log('[BankTransfer] ✅ Currency set to KES (native select)');
+      if (currTrigger) {
+        // Click to open the dropdown
+        await imPage.mouse.click(currTrigger.x / imDpr, currTrigger.y / imDpr);
+        await new Promise(r => setTimeout(r, 1200));
+        // Type 'k' for mat-select type-ahead → jumps to KES, then Enter to confirm
+        await imPage.keyboard.type('k');
+        await new Promise(r => setTimeout(r, 400));
+        await imPage.keyboard.press('Enter');
         await new Promise(r => setTimeout(r, 600));
-      } else {
-        // Open the mat-select dropdown trigger
-        const currDropCoords = await imPage.evaluate(() => {
-          const matSelects = Array.from(document.querySelectorAll('mat-select'));
-          for (const ms of matSelects) {
-            const txt = (ms.textContent || '').trim();
-            if (txt === '-' || txt === '' || txt === 'KES') {
-              const r = ms.getBoundingClientRect();
-              if (r.width > 5 && r.width < 120 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-            }
-          }
-          const dash = Array.from(document.querySelectorAll('*')).find(e => (e.textContent || '').trim() === '-' && e.getBoundingClientRect().width > 5 && e.getBoundingClientRect().width < 80);
-          if (dash) { const r = dash.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
-          return null;
-        }).catch(() => null);
-
-        if (currDropCoords) {
-          await imPage.mouse.click(currDropCoords.x / imDpr, currDropCoords.y / imDpr);
-          await new Promise(r => setTimeout(r, 1500)); // wait for panel to render
-          // Broad search: any visible element with EXACTLY "KES" text
-          const kesCoords = await imPage.evaluate(() => {
-            const all = Array.from(document.querySelectorAll('*'));
-            const matches = all.filter(el => {
-              const txt = (el.textContent || '').trim();
-              if (txt !== 'KES') return false;
-              const r = el.getBoundingClientRect();
-              return r.width > 0 && r.height > 0 && r.width < 300 && r.height < 80;
-            });
-            // Pick smallest (most specific) element
-            matches.sort((a, b) => {
-              const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-              return (ra.width * ra.height) - (rb.width * rb.height);
-            });
-            if (matches[0]) { const r = matches[0].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
-            return null;
-          }).catch(() => null);
-
-          if (kesCoords) {
-            await imPage.mouse.click(kesCoords.x / imDpr, kesCoords.y / imDpr);
-            console.log('[BankTransfer] ✅ Currency set to KES (dropdown)');
-          } else {
-            await imPage.keyboard.press('ArrowDown');
-            await new Promise(r => setTimeout(r, 200));
-            await imPage.keyboard.press('Enter');
-            console.log('[BankTransfer] ✅ Currency set to KES (keyboard fallback)');
-          }
-          await new Promise(r => setTimeout(r, 800));
-        }
+        console.log('[BankTransfer] ✅ Currency set to KES (type-ahead)');
       }
 
       // Amount
