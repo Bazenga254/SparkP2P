@@ -7210,30 +7210,21 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         console.log('[BankTransfer] ⚠️ Account number input not found — skipped');
       }
 
-      // KES currency — BEFORE scroll so y>400 filter works correctly
+      // KES currency — find trigger by locating amount input and going left
       const currTrigger = await imPage.evaluate(() => {
         const vh = window.innerHeight;
-        // Find the currency mat-select — must be VISIBLE in the current viewport
-        const matSelects = Array.from(document.querySelectorAll('mat-select'));
-        for (const ms of matSelects) {
-          const txt = (ms.textContent || '').trim();
-          if (txt === '-' || txt === '' || txt === 'KES') {
-            const r = ms.getBoundingClientRect();
-            // Must be visible on screen (not hidden off-screen)
-            if (r.width > 5 && r.width < 120 && r.height > 0 && r.top >= 0 && r.top < vh) {
-              return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-            }
-          }
-        }
-        // Fallback: visible small element with text exactly "-"
-        const all = Array.from(document.querySelectorAll('*'));
-        const dash = all.find(e => {
-          const txt = (e.textContent || '').trim();
-          if (txt !== '-') return false;
-          const r = e.getBoundingClientRect();
-          return r.width > 5 && r.width < 80 && r.height > 0 && r.top >= 0 && r.top < vh;
+        // Find the amount input (formcontrolname contains 'amount')
+        const inputs = Array.from(document.querySelectorAll('input'));
+        const amtInput = inputs.find(i => {
+          const r = i.getBoundingClientRect();
+          const fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
+          return fc.includes('amount') && r.width > 100 && r.top >= 0 && r.top < vh;
         });
-        if (dash) { const r = dash.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+        if (amtInput) {
+          const ar = amtInput.getBoundingClientRect();
+          // Currency trigger is 50px to the left of the amount input, same vertical center
+          return { x: ar.left - 50, y: ar.top + ar.height / 2 };
+        }
         return null;
       }).catch(() => null);
 
@@ -7362,7 +7353,8 @@ Write-Host "done"`;
         const txt = (el.textContent || '').trim();
         if (txt !== 'KES') return false;
         const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && r.width < 200 && r.height < 60 && r.top > 400;
+        // Must be visible anywhere in viewport (no y floor — page may be scrolled)
+        return r.width > 0 && r.height > 0 && r.width < 200 && r.height < 60 && r.top > 50 && r.top < window.innerHeight;
       });
       if (leaf[0]) { const r = leaf[0].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
       return null;
