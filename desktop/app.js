@@ -7214,16 +7214,29 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
       await new Promise(r => setTimeout(r, 800));
 
-      // KES currency
-      const currClicked2 = await imPage.evaluate(() => {
+      // KES currency — open dropdown then mouse.click the KES option
+      const currDropCoords = await imPage.evaluate(() => {
         const dash = Array.from(document.querySelectorAll('*')).find(e => (e.textContent || '').trim() === '-' && e.getBoundingClientRect().width > 5 && e.getBoundingClientRect().width < 80);
-        if (dash) { dash.click(); return true; } return false;
-      }).catch(() => false);
-      if (currClicked2) {
+        if (dash) { const r = dash.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+        return null;
+      }).catch(() => null);
+      if (currDropCoords) {
+        await imPage.mouse.click(currDropCoords.x / imDpr, currDropCoords.y / imDpr);
+        await new Promise(r => setTimeout(r, 1000));
+        // Find KES option by coordinates and mouse.click it
+        const kesCoords = await imPage.evaluate(() => {
+          const opts = Array.from(document.querySelectorAll('[class*="option" i],[role="option"],li,option,mat-option'));
+          const kes = opts.find(o => (o.textContent || '').trim() === 'KES' && o.getBoundingClientRect().width > 0);
+          if (kes) { const r = kes.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+          return null;
+        }).catch(() => null);
+        if (kesCoords) {
+          await imPage.mouse.click(kesCoords.x / imDpr, kesCoords.y / imDpr);
+          console.log('[BankTransfer] ✅ Currency set to KES');
+        } else {
+          console.log('[BankTransfer] ⚠️ KES option not found in dropdown');
+        }
         await new Promise(r => setTimeout(r, 800));
-        await imPage.evaluate(() => { const kes = Array.from(document.querySelectorAll('[class*="option" i],[role="option"],li,option')).find(o => (o.textContent || '').trim() === 'KES'); if (kes) kes.click(); }).catch(() => {});
-        await new Promise(r => setTimeout(r, 500));
-        console.log('[BankTransfer] ✅ Currency set to KES');
       }
 
       // Amount
