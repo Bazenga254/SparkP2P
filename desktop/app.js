@@ -2836,7 +2836,22 @@ async function idleScan(page) {
               max_tokens: 300,
               messages: [{ role: 'user', content: [
                 { type: 'image', source: { type: 'base64', media_type: 'image/png', data: paySS } },
-                { type: 'text', text: 'Extract payment details from this Binance P2P buy order. The "phone" field must be the SELLER\'S M-Pesa destination number (the number shown in the seller\'s payment method section — where you need to SEND money TO). Do NOT use any other phone number. Return JSON only: {"method":"mpesa|pesalink|bank","phone":"07XXXXXXXX or 254XXXXXXXXX — seller destination","name":"seller name","amount":1234,"network":"safaricom|airtel|null","reference":"order number"}' },
+                { type: 'text', text: `Extract the payment details from this Binance P2P buy order page.
+Return JSON only (no other text):
+{
+  "method": "mpesa | im_bank | other_bank",
+  "phone": "07XXXXXXXX or 254XXXXXXXXX — phone number if M-Pesa, else null",
+  "account_number": "bank account number if paying to a bank account, else null",
+  "bank_name": "bank name e.g. 'I & M Bank', 'Equity Bank', 'KCB' — if bank transfer, else null",
+  "name": "seller full name",
+  "amount": 1234,
+  "network": "safaricom | airtel | null",
+  "reference": "order number"
+}
+Method selection rules:
+- "mpesa" → payment method is M-PESA / Safaricom (phone number shown)
+- "im_bank" → payment method is I&M Bank AND an ACCOUNT NUMBER is shown
+- "other_bank" → payment method is any other bank (Equity, KCB, Co-op, Absa, etc.) with an account number` },
               ]}],
             }),
           }).catch(() => null);
@@ -2848,27 +2863,34 @@ async function idleScan(page) {
         }
       }
 
-      if (!paymentDetails || !paymentDetails.phone || !paymentDetails.amount) {
+      const _localPm = (paymentDetails?.method || 'mpesa').toLowerCase();
+      const _localIsBank = _localPm === 'im_bank' || _localPm === 'other_bank';
+      const _localMissingPhone = !_localIsBank && (!paymentDetails?.phone || paymentDetails.phone.trim() === '');
+      const _localMissingAccount = _localIsBank && (!paymentDetails?.account_number || !paymentDetails?.bank_name);
+      if (!paymentDetails || !paymentDetails.amount || _localMissingPhone || _localMissingAccount) {
         console.log(`[SparkP2P] Buy order ${order.orderNumber} — could not extract payment details, will retry next cycle`);
         continue;
       }
 
-      const method = (paymentDetails.method || 'mpesa').toLowerCase();
-      if (method !== 'mpesa') {
-        console.log(`[SparkP2P] Buy order ${order.orderNumber} — method "${method}" not yet automated, waiting for VPS`);
-        continue;
-      }
-
-      console.log(`[SparkP2P] 💳 Buy order ${order.orderNumber} — auto-paying KSh ${paymentDetails.amount} to ${paymentDetails.name} (${paymentDetails.phone}) via M-Pesa`);
+      const method = _localPm;
+      const firstName = (paymentDetails.name || 'Seller').split(' ')[0];
+      const amt = Math.floor(parseFloat(paymentDetails.amount));
 
       // Send greeting (once per order)
       if (!buyGreetingSentOrders.has(order.orderNumber)) {
         buyGreetingSentOrders.add(order.orderNumber);
-        const greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment of KES ${Math.floor(parseFloat(paymentDetails.amount))} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive the funds. Thank you! 🙏`;
+        let greetMsg = '';
+        if (method === 'mpesa') {
+          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! 🙏`;
+        } else {
+          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you! 🙏`;
+        }
         await sendBinanceChatMessage(page, greetMsg);
-        console.log(`[SparkP2P] 👋 Greeting sent for buy order ${order.orderNumber}`);
+        console.log(`[SparkP2P] 👋 Greeting sent for buy order ${order.orderNumber} (method: ${method})`);
         await new Promise(r => setTimeout(r, 1000));
       }
+
+      console.log(`[SparkP2P] 💳 Buy order ${order.orderNumber} — paying KSh ${amt} to ${paymentDetails.name} via ${method}`);
 
       // Execute I&M payment — skip if already paid for this order (prevents double-charge on retry)
       let imResult = { success: false, screenshot: null };
@@ -2879,14 +2901,24 @@ async function idleScan(page) {
         const IM_MAX_RETRIES = 3;
         for (let attempt = 1; attempt <= IM_MAX_RETRIES; attempt++) {
           try {
-            console.log(`[SparkP2P] I&M payment attempt ${attempt}/${IM_MAX_RETRIES}...`);
-            imResult = await executeImPayment({
-              phone: paymentDetails.phone,
-              name: paymentDetails.name,
-              amount: paymentDetails.amount,
-              reference: order.orderNumber, // always use exact DOM order number — Vision OCR misreads 20-digit refs
-              network: paymentDetails.network || 'safaricom',
-            });
+            console.log(`[SparkP2P] I&M payment attempt ${attempt}/${IM_MAX_RETRIES} (method: ${method})...`);
+            if (method === 'im_bank' || method === 'other_bank') {
+              imResult = await executeImBankTransfer({
+                accountNumber: paymentDetails.account_number,
+                bankName: paymentDetails.bank_name,
+                name: paymentDetails.name,
+                amount: paymentDetails.amount,
+                reference: order.orderNumber,
+              });
+            } else {
+              imResult = await executeImPayment({
+                phone: paymentDetails.phone,
+                name: paymentDetails.name,
+                amount: paymentDetails.amount,
+                reference: order.orderNumber,
+                network: paymentDetails.network || 'safaricom',
+              });
+            }
             if (imResult.success) { imPaymentDoneMap[order.orderNumber] = { screenshot: imResult.screenshot, referenceId: imResult.referenceId }; savePaidOrder(order.orderNumber, { screenshot: imResult.screenshot, referenceId: imResult.referenceId }); break; }
             console.log(`[SparkP2P] I&M attempt ${attempt} failed${attempt < IM_MAX_RETRIES ? ' — retrying in 8s...' : ''}`);
           } catch (e) {
@@ -2916,10 +2948,13 @@ async function idleScan(page) {
       buyOrderDetailsMap[order.orderNumber] = {
         sellerName: paymentDetails.name,
         amount: paymentDetails.amount,
-        phone: paymentDetails.phone,
-        method: 'M-Pesa',
+        phone: paymentDetails.phone || null,
+        accountNumber: paymentDetails.account_number || null,
+        bankName: paymentDetails.bank_name || null,
+        method: _localIsBank ? (paymentDetails.bank_name || 'Bank Transfer') : 'M-Pesa',
         orderNumber: order.orderNumber,
         referenceId: imResult.referenceId || null,
+        screenshot: imResult.screenshot || null,
       };
       buyPaymentSentAt[order.orderNumber] = Date.now();
       buyReminderSentOrders.delete(order.orderNumber);
@@ -2934,10 +2969,15 @@ async function idleScan(page) {
       if (!buyPostPaymentMsgSentOrders.has(order.orderNumber)) {
         buyPostPaymentMsgSentOrders.add(order.orderNumber);
         const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
-        const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
-        await sendBinanceChatMessage(page,
-          `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`
-        );
+        let postPayMsg = '';
+        if (_localIsBank) {
+          const refPart = imResult.referenceId ? ` Ref: ${imResult.referenceId}.` : '';
+          postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`;
+        } else {
+          const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
+          postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`;
+        }
+        await sendBinanceChatMessage(page, postPayMsg);
       }
 
       // Check if already in "Pending the Seller to Release" state
