@@ -7344,17 +7344,47 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   if (purposeClicked) console.log('[BankTransfer] ✅ Payment Purpose set to Other');
   await new Promise(r => setTimeout(r, 800));
 
-  console.log('[BankTransfer] L1 pre-fill complete — Vision loop handles review/PIN/Complete');
+  console.log('[BankTransfer] L1 pre-fill complete — Vision loop handles remaining steps');
 
-  // ── Vision loop — review screen, PIN entry, Complete ─────────────────────
-  const IM_MAX_STEPS = 25;
+  // ── Vision loop ───────────────────────────────────────────────────────────
+  const IM_MAX_STEPS = 30;
   let step = 0;
   let screenshot = null;
   let referenceId = null;
+  let accountSelected = false;
 
   while (step < IM_MAX_STEPS) {
     step++;
     await new Promise(r => setTimeout(r, 1500));
+
+    // ── Account selection shortcut (same pattern as M-Pesa flow) ────────────
+    // Runs every step while dropdown is open — clicks the correct account row directly
+    if (!accountSelected) {
+      const acctClicked = await imPage.evaluate((preferred) => {
+        const search = (preferred || 'BONITO CHELUGET').toUpperCase();
+        const all = Array.from(document.querySelectorAll(
+          'mat-option, .mat-option, [role="option"], li, div, span, td'
+        ));
+        for (const el of all) {
+          const txt = (el.textContent || '').trim();
+          if (!txt.toUpperCase().includes(search)) continue;
+          if (txt.toLowerCase().includes('select an account')) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 100) {
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: txt.substring(0, 60), tag: el.tagName };
+          }
+        }
+        return null;
+      }, traderImAccount || 'BONITO CHELUGET').catch(() => null);
+
+      if (acctClicked) {
+        await imPage.mouse.click(acctClicked.x / imDpr, acctClicked.y / imDpr);
+        console.log(`[BankTransfer] ✅ Account clicked via loop L1: <${acctClicked.tag}> "${acctClicked.text}"`);
+        accountSelected = true;
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
+    }
 
     screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
     if (!screenshot) continue;
