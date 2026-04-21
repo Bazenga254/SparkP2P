@@ -7065,18 +7065,34 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   if (acctDropCoords) {
     await imPage.mouse.click(acctDropCoords.x / imDpr, acctDropCoords.y / imDpr);
     await new Promise(r => setTimeout(r, 1500));
-    // Use same search logic as M-Pesa Vision loop — search by traderImAccount in all option elements
+    // Search only inside the open dropdown panel — avoids matching page header text
     const picked = await imPage.evaluate((preferred) => {
       const search = preferred || 'BONITO CHELUGET';
-      const rows = Array.from(document.querySelectorAll(
-        'mat-option, .mat-option, [role="option"], [class*="option" i], li, div, span, td'
+      // Try dropdown panel containers first (Angular Material / CDK)
+      const panelSelectors = [
+        '.cdk-overlay-container', 'mat-autocomplete', '.mat-autocomplete-panel',
+        'ng-dropdown-panel', '.ng-dropdown-panel', '.dropdown-list',
+        '[class*="dropdown-panel"]', '[class*="overlay"]',
+      ];
+      let container = null;
+      for (const sel of panelSelectors) {
+        const el = document.querySelector(sel);
+        if (el && el.getBoundingClientRect().height > 20) { container = el; break; }
+      }
+      // Search within container if found, else restrict to option-like elements with KES balance
+      const scope = container || document;
+      const rows = Array.from(scope.querySelectorAll(
+        'mat-option, .mat-option, [role="option"], [class*="option" i], li'
       ));
       for (const el of rows) {
         const txt = (el.textContent || '').trim();
         if (!txt.toUpperCase().includes(search.toUpperCase())) continue;
         if (txt.toLowerCase().includes('select an account')) continue;
+        // Must look like an account row (contains KES balance or account number)
+        const hasBalance = txt.includes('KES') || /\d{10,}/.test(txt);
+        if (!hasBalance) continue;
         const r = el.getBoundingClientRect();
-        if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 0) {
+        if (r.width > 80 && r.height > 10 && r.height < 150 && r.top > 0) {
           el.click();
           return txt.substring(0, 80);
         }
