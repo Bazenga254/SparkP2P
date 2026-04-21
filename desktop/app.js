@@ -7065,44 +7065,27 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   if (acctDropCoords) {
     await imPage.mouse.click(acctDropCoords.x / imDpr, acctDropCoords.y / imDpr);
     await new Promise(r => setTimeout(r, 1500));
-    // Search only inside the open dropdown panel — avoids matching page header text
+    // Wait for Angular CDK overlay to render the dropdown options
+    await new Promise(r => setTimeout(r, 2000));
+    // Search ONLY inside Angular CDK overlay (mat-option rows) — never touches page header
     const picked = await imPage.evaluate((preferred) => {
       const search = preferred || 'BONITO CHELUGET';
-      // Try dropdown panel containers first (Angular Material / CDK)
-      const panelSelectors = [
-        '.cdk-overlay-container', 'mat-autocomplete', '.mat-autocomplete-panel',
-        'ng-dropdown-panel', '.ng-dropdown-panel', '.dropdown-list',
-        '[class*="dropdown-panel"]', '[class*="overlay"]',
-      ];
-      let container = null;
-      for (const sel of panelSelectors) {
-        const el = document.querySelector(sel);
-        if (el && el.getBoundingClientRect().height > 20) { container = el; break; }
-      }
-      // Search within container if found, else restrict to option-like elements with KES balance
-      const scope = container || document;
-      const rows = Array.from(scope.querySelectorAll(
-        'mat-option, .mat-option, [role="option"], [class*="option" i], li'
-      ));
-      for (const el of rows) {
-        const txt = (el.textContent || '').trim();
+      // Angular Material renders options inside .cdk-overlay-container
+      const overlay = document.querySelector('.cdk-overlay-container');
+      if (!overlay) return null;
+      const options = Array.from(overlay.querySelectorAll('mat-option, .mat-option, [role="option"]'));
+      for (const opt of options) {
+        const txt = (opt.textContent || '').trim();
         if (!txt.toUpperCase().includes(search.toUpperCase())) continue;
-        if (txt.toLowerCase().includes('select an account')) continue;
-        // Must look like an account row (contains KES balance or account number)
-        const hasBalance = txt.includes('KES') || /\d{10,}/.test(txt);
-        if (!hasBalance) continue;
-        const r = el.getBoundingClientRect();
-        if (r.width > 80 && r.height > 10 && r.height < 150 && r.top > 0) {
-          el.click();
-          return txt.substring(0, 80);
-        }
+        const r = opt.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) { opt.click(); return txt.substring(0, 80); }
       }
       return null;
     }, traderImAccount).catch(() => null);
     if (picked) {
       console.log(`[BankTransfer] ✅ Debit account: ${picked}`);
     } else {
-      console.log(`[BankTransfer] ⚠️ Could not find account matching "${traderImAccount}" — Vision will handle`);
+      console.log(`[BankTransfer] ⚠️ Account not found in CDK overlay — Vision will handle account selection`);
     }
     await new Promise(r => setTimeout(r, 1500));
   }
@@ -7381,28 +7364,35 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         model: 'claude-haiku-4-5-20251001', max_tokens: 300,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshot } },
-          { type: 'text', text: `I&M Bank Local Transfers. Fields were pre-filled via DOM. Take ONE action:
+          { type: 'text', text: `You are controlling I&M Bank Local Transfers form. Look at the screenshot carefully and take ONE action.
 
-STATE OF PRE-FILLED FIELDS:
-- Bank: ${targetBank} ✓
-- Account: ${accountNumber} ✓
-- Account name validated: "${validatedName || 'check form'}"
-- Amount: KES ${amountInt} ✓
-- Reference: ${refStr} ✓
-- Payment Mode: Pesalink ✓
-- Payment Purpose: Other ✓
+TARGET PAYMENT:
+- Debit account: ${traderImAccount || 'BONITO CHELUGET SAMOEI'} (choose account with higher KES balance)
+- Bank: ${targetBank}
+- Account number: ${accountNumber}
+- Amount: KES ${amountInt}
+- Reference: ${refStr}
+- Payment mode: Pesalink (radio button)
+- Payment purpose: Other
 
-YOUR JOB (check form and do ONE thing):
-1. If any field above is still empty/wrong on screen → fix it (type or click)
-2. If "Payment Purpose" dropdown still says "Select payment purpose" → click it and select "Other"
-3. If "Pesalink" radio is NOT selected → click it
-4. If form looks complete → click the green "Continue" button
-5. On review/confirmation screen → click "Submit" or "Confirm"
-6. On PIN/Identity Validation screen → type_pin
-7. After PIN → click "Complete"
-8. On success screen → return done
+FOLLOW THIS ORDER — do only the FIRST incomplete step you see:
+0. If "Debit Account" shows "Select an account" → click the dropdown arrow to open it, then click the "${traderImAccount || 'BONITO CHELUGET SAMOEI'}" row (the one with higher balance)
+1. If "One-off Beneficiary" radio is NOT selected → click it
+2. If Bank name field is empty → click it and type "${targetBank.substring(0, 5)}", then click "${targetBank}" from the dropdown list
+3. If Account number field is empty → click it and type "${accountNumber}"
+4. If "Validate" button is visible and account name is empty → click Validate
+5. If currency shows "-" → click it and select KES
+6. If Amount field shows 0 or is empty → click it and type "${amountInt}"
+7. If Reference/Description field is empty → click it and type the reference
+8. If "Pesalink" radio is NOT selected → click it
+9. If "Payment Purpose" shows "Select payment purpose" → click it, then click "Other"
+10. If ALL fields are filled and form is complete → click the green "Continue" button
+11. On review screen → click "Submit" or "Confirm"
+12. On PIN screen → action="type_pin"
+13. After PIN → click "Complete"
+14. On success screen → action="done"
 
-Return ONLY JSON: {"screen":"form|review|pin|success","action":"click|type|type_pin|done","description":"what you are doing","value":"text if typing","x":NNN,"y":NNN}` },
+Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"click|type|type_pin|done","description":"what you are doing","value":"text if typing","x":NNN,"y":NNN}` },
         ]}],
       }),
     }).catch(() => null);
@@ -7439,8 +7429,31 @@ Return ONLY JSON: {"screen":"form|review|pin|success","action":"click|type|type_
     }
     if (action.action === 'click' && action.x && action.y) {
       await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
-      const isTransition = ['continue', 'submit', 'confirm', 'complete'].some(w => (action.description || '').toLowerCase().includes(w));
-      await new Promise(r => setTimeout(r, isTransition ? 3500 : 1000)); continue;
+      const desc = (action.description || '').toLowerCase();
+      const isTransition = ['continue', 'submit', 'confirm', 'complete'].some(w => desc.includes(w));
+      // After clicking account dropdown row, try L1 CDK overlay selection before waiting
+      if (action.screen === 'account_list' || desc.includes('bonito') || desc.includes('account') && desc.includes('row')) {
+        await new Promise(r => setTimeout(r, 1500));
+        // Try L1 CDK click in case Vision coords weren't precise
+        const l1Picked = await imPage.evaluate((preferred) => {
+          const overlay = document.querySelector('.cdk-overlay-container');
+          if (!overlay) return null;
+          const opts = Array.from(overlay.querySelectorAll('mat-option, .mat-option, [role="option"]'));
+          for (const opt of opts) {
+            const txt = (opt.textContent || '').trim();
+            if (txt.toUpperCase().includes((preferred || 'BONITO CHELUGET').toUpperCase())) {
+              const r = opt.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) { opt.click(); return txt.substring(0, 60); }
+            }
+          }
+          return null;
+        }, traderImAccount).catch(() => null);
+        if (l1Picked) console.log(`[BankTransfer] ✅ L1 CDK account selected after Vision click: ${l1Picked}`);
+        await new Promise(r => setTimeout(r, 1500));
+      } else {
+        await new Promise(r => setTimeout(r, isTransition ? 3500 : 1000));
+      }
+      continue;
     }
   }
 
