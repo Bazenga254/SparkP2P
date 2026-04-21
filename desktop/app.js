@@ -6187,8 +6187,8 @@ async function execAction(action) {
               { type: 'text', text: `Extract the payment details from this Binance P2P buy order page.
 Return JSON only (no other text):
 {
-  "method": "mpesa | pesalink_phone | im_bank | other_bank",
-  "phone": "07XXXXXXXX or 254XXXXXXXXX — phone number to send to (M-Pesa or PesaLink)",
+  "method": "mpesa | im_bank | other_bank",
+  "phone": "07XXXXXXXX or 254XXXXXXXXX — phone number if M-Pesa, else null",
   "account_number": "bank account number if paying to a bank account, else null",
   "bank_name": "bank name e.g. 'I & M Bank', 'Equity Bank', 'KCB' — if bank transfer, else null",
   "name": "seller full name",
@@ -6199,7 +6199,6 @@ Return JSON only (no other text):
 
 Method selection rules:
 - "mpesa" → payment method is M-PESA / Safaricom (phone number shown)
-- "pesalink_phone" → payment method is a bank but only a PHONE NUMBER is shown (PesaLink by phone)
 - "im_bank" → payment method is I&M Bank AND an ACCOUNT NUMBER is shown
 - "other_bank" → payment method is any other bank (Equity, KCB, Co-op, Absa, etc.) with an account number` },
             ]}],
@@ -6259,8 +6258,6 @@ Method selection rules:
         const amt = Math.floor(parseFloat(paymentDetails.amount));
         if (method === 'mpesa') {
           greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! 🙏`;
-        } else if (method === 'pesalink_phone') {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your bank account via PesaLink to phone number ${paymentDetails.phone} shortly. Please check your bank. Thank you! 🙏`;
         } else if (method === 'im_bank' || method === 'other_bank') {
           greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you! 🙏`;
         }
@@ -6282,14 +6279,7 @@ Method selection rules:
         for (let attempt = 1; attempt <= IM_MAX_RETRIES; attempt++) {
           try {
             console.log(`[SparkP2P] I&M payment attempt ${attempt}/${IM_MAX_RETRIES} (method: ${payMethod})...`);
-            if (payMethod === 'pesalink_phone') {
-              imResult = await executeImPesaLinkByPhone({
-                phone: paymentDetails.phone,
-                name: paymentDetails.name,
-                amount: paymentDetails.amount,
-                reference: order_number,
-              });
-            } else if (payMethod === 'im_bank' || payMethod === 'other_bank') {
+            if (payMethod === 'im_bank' || payMethod === 'other_bank') {
               imResult = await executeImBankTransfer({
                 accountNumber: paymentDetails.account_number,
                 bankName: paymentDetails.bank_name,
@@ -7006,212 +6996,8 @@ Return ONLY valid JSON, no other text.` },
   return { success: false, screenshot, referenceId: null };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PESALINK TO PHONE — send to any Kenyan bank phone number via I&M PesaLink
-// Used when seller's payment method is a bank linked to their phone number
-// ═══════════════════════════════════════════════════════════════════════════
-async function executeImPesaLinkByPhone({ phone, name, amount, reference }) {
-  if (!imPage || imPage.isClosed()) throw new Error('I&M Bank tab is not open.');
-  if (!imPin) throw new Error('I&M PIN not set.');
-  if (!anthropicApiKey) throw new Error('Anthropic API key required for Vision.');
-  if (!phone) throw new Error('Phone number missing for PesaLink payment.');
-  if (!amount || Number(amount) <= 0) throw new Error(`Invalid amount: ${amount}`);
+// executeImPesaLinkByPhone — REMOVED. Use executeImBankTransfer for all bank transfers.
 
-  imWithdrawalRunning = true;
-  const cleanPhone = String(phone).replace(/^0/, '').replace(/\s/g, '');
-  const amountInt = Math.floor(parseFloat(amount));
-  const refStr = String(reference).substring(0, 30);
-  console.log(`[SparkP2P] 💳 PesaLink by Phone: KSh ${amountInt} → ${name} (+254${cleanPhone})`);
-
-  await imPage.bringToFront();
-  await imPage.goto('https://digital.imbank.com/inm-retail/transfers/pesalink-to-phone/form', {
-    waitUntil: 'domcontentloaded', timeout: 20000,
-  });
-  await new Promise(r => setTimeout(r, 3000));
-
-  const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
-
-  // Pre-click One-off Beneficiary via L1 DOM
-  await imPage.evaluate(() => {
-    const labels = Array.from(document.querySelectorAll('label, span, div'));
-    for (const el of labels) {
-      if ((el.textContent || '').trim().toLowerCase().includes('one-off beneficiary')) {
-        el.click(); return;
-      }
-    }
-  }).catch(() => {});
-  await new Promise(r => setTimeout(r, 1000));
-
-  const IM_MAX_STEPS = 25;
-  let step = 0;
-  let screenshot = null;
-  let referenceId = null;
-  let accountSelected = false;
-  let radiosConfirmed = true;
-
-  while (step < IM_MAX_STEPS) {
-    step++;
-    await new Promise(r => setTimeout(r, 1500));
-
-    // Account selection shortcut (same L1 logic as M-Pesa flow)
-    if (!accountSelected) {
-      const showingSelect = await imPage.evaluate(() =>
-        (document.body.innerText || '').includes('Select an account')
-      ).catch(() => false);
-
-      if (showingSelect) {
-        const domCoords = await imPage.evaluate((preferred) => {
-          const dropdown = Array.from(document.querySelectorAll('[class*="select" i], [class*="dropdown" i], [role="listbox"], ng-select'))
-            .find(el => (el.textContent || '').includes('Select an account'));
-          if (dropdown) {
-            const r = dropdown.getBoundingClientRect();
-            return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: 'dropdown', text: 'Select an account' };
-          }
-          return null;
-        }, traderImAccount).catch(() => null);
-        if (domCoords) {
-          await imPage.mouse.click(domCoords.x / imDpr, domCoords.y / imDpr);
-          await new Promise(r => setTimeout(r, 1500));
-        }
-        // Pick account row
-        const picked = await imPage.evaluate((preferred) => {
-          const rows = Array.from(document.querySelectorAll('[class*="option" i], [role="option"], [class*="item" i], li'));
-          const target = preferred
-            ? rows.find(r => (r.textContent || '').toUpperCase().includes(preferred.toUpperCase()))
-            : rows.find(r => r.getBoundingClientRect().width > 0);
-          if (target) { target.click(); return (target.textContent || '').trim().substring(0, 60); }
-          return null;
-        }, traderImAccount).catch(() => null);
-        if (picked) {
-          console.log(`[PesaLink] ✅ Account selected: ${picked}`);
-          accountSelected = true;
-          await new Promise(r => setTimeout(r, 1000));
-          await imPage.evaluate(() => window.scrollBy(0, 300)).catch(() => {});
-          await new Promise(r => setTimeout(r, 500));
-          continue;
-        }
-      }
-    }
-
-    screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
-    if (!screenshot) continue;
-
-    const pageText = await imPage.evaluate(() => document.body.innerText).catch(() => '');
-    const lower = pageText.toLowerCase();
-
-    // Success detection
-    const isSuccess = lower.includes('payment success') || lower.includes('transaction successful') ||
-                      lower.includes('transfer successful') || lower.includes('sent successfully') ||
-                      lower.includes('transaction complete') || lower.includes("you've sent");
-    if (isSuccess) {
-      const refMatch = pageText.match(/reference\s*id\s*(?:number)?[:\s]+([A-Z0-9]{8,12})/i);
-      if (refMatch) referenceId = refMatch[1].trim();
-      console.log(`[PesaLink] ✅ Payment SUCCESS — Ref: ${referenceId}`);
-      imWithdrawalRunning = false;
-      const receiptSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot);
-      return { success: true, screenshot: receiptSS, referenceId };
-    }
-
-    // Vision prompt for PesaLink to Phone
-    const vRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 400,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshot } },
-          { type: 'text', text: `You are controlling I&M Bank PesaLink to Phone form.
-Payment: phone=+254${cleanPhone}, amount=${amountInt}, reference="${refStr}"
-Debit account: ${traderImAccount || 'BONITO CHELUGET SAMOEI'}
-
-SCREENS: "form" | "account_list" | "review" | "pin" | "success" | "dashboard"
-
-FORM FILLING ORDER (ONE action per response):
-0. If account_list open → click row containing "${traderImAccount || 'BONITO CHELUGET SAMOEI'}"
-1. If debit account shows "Select an account" → click the dropdown to open it
-2. ⚠️ SKIP — "One-off Beneficiary" already clicked programmatically
-3. If phone field empty → type: ${cleanPhone}
-4. AUTOCOMPLETE: if suggestion dropdown appears after typing phone → press Tab (action="press_key", value="Tab")
-5. If amount field empty or 0 → type: ${amountInt}
-6. If reference/narration empty → type: ${refStr}
-7. When ALL fields filled → click Continue
-8. On review screen → click Submit or Confirm
-9. On PIN screen → type_pin with the PIN
-10. After PIN → click Complete
-
-Return ONLY JSON:
-{"screen":"...","action":"click|type|type_pin|press_key|done","description":"...","value":"...","x":NNN,"y":NNN}` },
-        ]}],
-      }),
-    }).catch(() => null);
-
-    if (!vRes?.ok) { await new Promise(r => setTimeout(r, 3000)); continue; }
-    const vData = await vRes.json();
-    let action = null;
-    try {
-      const txt = vData.content?.[0]?.text || '';
-      const m = txt.match(/\{[\s\S]*\}/);
-      if (m) action = JSON.parse(m[0]);
-    } catch (_) {}
-    if (!action) continue;
-
-    console.log(`[PesaLink] Step ${step}: screen="${action.screen}" action="${action.action}" desc="${action.description || ''}" val="${action.value || ''}"`);
-
-    if (action.screen === 'success' || action.action === 'done') {
-      const receiptSS2 = await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot);
-      imWithdrawalRunning = false;
-      return { success: true, screenshot: receiptSS2, referenceId };
-    }
-    if (action.screen === 'dashboard' || action.action === 'navigate') {
-      await imPage.goto('https://digital.imbank.com/inm-retail/transfers/pesalink-to-phone/form',
-        { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-      await new Promise(r => setTimeout(r, 3000)); continue;
-    }
-    if (action.action === 'press_key' && action.value) {
-      await imPage.keyboard.press(action.value);
-      await new Promise(r => setTimeout(r, 500)); continue;
-    }
-    if (action.action === 'type_pin') {
-      await imPage.evaluate(() => document.querySelectorAll('input[type="password"], input[type="tel"]').forEach(i => i.click())).catch(() => {});
-      await new Promise(r => setTimeout(r, 300));
-      for (const digit of String(imPin)) {
-        const pressed = await imPage.evaluate((d) => {
-          const inputs = Array.from(document.querySelectorAll('input[type="password"], input[type="tel"], input[maxlength="1"]'));
-          const empty = inputs.find(i => !i.value);
-          if (empty) { empty.click(); return true; }
-          return false;
-        }, digit).catch(() => false);
-        if (pressed) await imPage.keyboard.press(digit);
-        await new Promise(r => setTimeout(r, 150));
-      }
-      await new Promise(r => setTimeout(r, 1000)); continue;
-    }
-    if (action.action === 'type' && action.value) {
-      if (action.x && action.y) { await imPage.mouse.click(action.x / imDpr, action.y / imDpr); await new Promise(r => setTimeout(r, 400)); }
-      const filled = await imPage.evaluate((val) => {
-        const el = document.activeElement;
-        if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return false;
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-        if (nativeSetter) nativeSetter.call(el, val);
-        else el.value = val;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      }, String(action.value)).catch(() => false);
-      if (!filled) await imPage.keyboard.type(String(action.value), { delay: 40 });
-      await new Promise(r => setTimeout(r, 800)); continue;
-    }
-    if (action.action === 'click' && action.x && action.y) {
-      await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
-      const isTransition = ['continue', 'submit', 'confirm', 'complete'].some(w => (action.description || '').toLowerCase().includes(w));
-      await new Promise(r => setTimeout(r, isTransition ? 3500 : 1000)); continue;
-    }
-  }
-
-  imWithdrawalRunning = false;
-  console.log(`[PesaLink] ❌ Exceeded ${IM_MAX_STEPS} steps`);
-  return { success: false, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => null), referenceId: null };
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // I&M LOCAL TRANSFER — I&M → I&M or I&M → other bank by account number
@@ -7223,11 +7009,10 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   if (!anthropicApiKey) throw new Error('Anthropic API key required for Vision.');
   if (!accountNumber) throw new Error('Account number missing for bank transfer.');
   if (!amount || Number(amount) <= 0) throw new Error(`Invalid amount: ${amount}`);
-
   imWithdrawalRunning = true;
   const amountInt = Math.floor(parseFloat(amount));
-  const refStr = String(reference).substring(0, 30);
-  const targetBank = (bankName || 'I & M Bank').trim();
+  const refStr = String(reference).substring(0, 50);
+  const targetBank = (bankName || 'I & M Bank Ltd').trim();
   console.log(`[SparkP2P] 🏦 Bank Transfer: KSh ${amountInt} → ${name} (${targetBank} A/C ${accountNumber})`);
 
   await imPage.bringToFront();
@@ -7238,54 +7023,251 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
 
   const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
 
-  // Pre-click One-off Beneficiary via L1 DOM
-  await imPage.evaluate(() => {
-    const labels = Array.from(document.querySelectorAll('label, span, div'));
-    for (const el of labels) {
-      if ((el.textContent || '').trim().toLowerCase().includes('one-off beneficiary')) {
-        el.click(); return;
+  // ── L1 STEP 1: Select debit account ───────────────────────────────────────
+  const acctDropCoords = await imPage.evaluate(() => {
+    const el = Array.from(document.querySelectorAll('*')).find(e =>
+      (e.textContent || '').trim() === 'Select an account' && e.getBoundingClientRect().width > 100);
+    if (el) { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+    return null;
+  }).catch(() => null);
+  if (acctDropCoords) {
+    await imPage.mouse.click(acctDropCoords.x / imDpr, acctDropCoords.y / imDpr);
+    await new Promise(r => setTimeout(r, 1500));
+    const picked = await imPage.evaluate((preferred) => {
+      const rows = Array.from(document.querySelectorAll('[class*="option" i], [role="option"], li'));
+      const target = preferred
+        ? rows.find(r => (r.textContent || '').toUpperCase().includes(preferred.toUpperCase()))
+        : rows.find(r => r.getBoundingClientRect().width > 0);
+      if (target) { target.click(); return (target.textContent || '').trim().substring(0, 60); }
+      return null;
+    }, traderImAccount).catch(() => null);
+    if (picked) console.log(`[BankTransfer] ✅ Debit account: ${picked}`);
+    await new Promise(r => setTimeout(r, 1500));
+  }
+
+  // ── L1 STEP 2: Click One-off Beneficiary radio ────────────────────────────
+  const oneOffClicked = await imPage.evaluate(() => {
+    // Find the label/span with exact text "One-off Beneficiary" and click it
+    const all = Array.from(document.querySelectorAll('label, span, div'));
+    for (const el of all) {
+      if ((el.textContent || '').trim() === 'One-off Beneficiary' && el.getBoundingClientRect().width > 0) {
+        el.click(); return true;
       }
     }
-  }).catch(() => {});
-  await new Promise(r => setTimeout(r, 1000));
+    return false;
+  }).catch(() => false);
+  if (oneOffClicked) console.log('[BankTransfer] ✅ One-off Beneficiary selected');
+  await new Promise(r => setTimeout(r, 1500));
 
-  const IM_MAX_STEPS = 30;
+  // ── L1 STEP 3: Type bank name in searchable field → select from dropdown ──
+  // The Bank name field is a text input that filters a dropdown list
+  const bankTyped = await imPage.evaluate((bank) => {
+    const inputs = Array.from(document.querySelectorAll('input'));
+    // Find the bank name input (near "Bank name" label)
+    const bankInput = inputs.find(i =>
+      (i.placeholder || '').toLowerCase().includes('bank') ||
+      (i.getAttribute('formcontrolname') || '').toLowerCase().includes('bank') ||
+      (i.closest('[class*="bank" i]')) != null
+    );
+    if (bankInput) {
+      bankInput.click();
+      bankInput.focus();
+      // Use native setter to trigger Angular binding
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+      if (nativeSetter) nativeSetter.call(bankInput, bank.substring(0, 5));
+      bankInput.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    }
+    return false;
+  }, targetBank).catch(() => false);
+
+  if (bankTyped) {
+    await new Promise(r => setTimeout(r, 1200));
+    // Select matching option from dropdown
+    const bankSelected = await imPage.evaluate((bank) => {
+      const opts = Array.from(document.querySelectorAll('[class*="option" i], [role="option"], li, .ng-option, .dropdown-item'));
+      const match = opts.find(o => {
+        const t = (o.textContent || '').trim().toLowerCase();
+        return t.includes(bank.substring(0, 6).toLowerCase()) && o.getBoundingClientRect().width > 0;
+      });
+      if (match) { match.click(); return (match.textContent || '').trim(); }
+      return null;
+    }, targetBank).catch(() => null);
+    if (bankSelected) console.log(`[BankTransfer] ✅ Bank selected: ${bankSelected}`);
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  // ── L1 STEP 4: Type account number ───────────────────────────────────────
+  const acctTyped = await imPage.evaluate((acct) => {
+    const inputs = Array.from(document.querySelectorAll('input'));
+    const acctInput = inputs.find(i =>
+      (i.placeholder || '').toLowerCase().includes('account number') ||
+      (i.getAttribute('formcontrolname') || '').toLowerCase().includes('accountnumber') ||
+      (i.getAttribute('formcontrolname') || '').toLowerCase().includes('account')
+    );
+    if (acctInput) {
+      acctInput.click();
+      acctInput.value = '';
+      acctInput.focus();
+      return true;
+    }
+    return false;
+  }, accountNumber).catch(() => false);
+
+  if (acctTyped) {
+    await imPage.keyboard.type(String(accountNumber), { delay: 60 });
+    await new Promise(r => setTimeout(r, 800));
+    // Click Validate button (L1)
+    const validated = await imPage.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll('button')).find(b =>
+        (b.textContent || '').trim().toLowerCase() === 'validate' && !b.disabled);
+      if (btn) { btn.click(); return true; }
+      return false;
+    }).catch(() => false);
+    if (validated) {
+      console.log('[BankTransfer] ✅ Clicked Validate — waiting for account name...');
+      await new Promise(r => setTimeout(r, 3500));
+    }
+  }
+
+  // Read validated account name
+  let validatedName = await imPage.evaluate(() => {
+    const inputs = Array.from(document.querySelectorAll('input'));
+    const nameInput = inputs.find(i =>
+      (i.placeholder || '').toLowerCase().includes('account name') ||
+      (i.getAttribute('formcontrolname') || '').toLowerCase().includes('accountname'));
+    return nameInput ? nameInput.value.trim() : '';
+  }).catch(() => '');
+  if (validatedName) console.log(`[BankTransfer] ✅ Account name: "${validatedName}"`);
+
+  // ── L1 STEP 5: Select KES currency from "-" dropdown ─────────────────────
+  const currClicked = await imPage.evaluate(() => {
+    // Find the "-" currency dropdown and click it
+    const all = Array.from(document.querySelectorAll('*'));
+    const dash = all.find(e =>
+      (e.textContent || '').trim() === '-' &&
+      e.getBoundingClientRect().width > 5 && e.getBoundingClientRect().width < 80);
+    if (dash) { dash.click(); return true; }
+    return false;
+  }).catch(() => false);
+  if (currClicked) {
+    await new Promise(r => setTimeout(r, 800));
+    await imPage.evaluate(() => {
+      const opts = Array.from(document.querySelectorAll('[class*="option" i], [role="option"], li, option'));
+      const kes = opts.find(o => (o.textContent || '').trim() === 'KES');
+      if (kes) kes.click();
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 500));
+    console.log('[BankTransfer] ✅ Currency set to KES');
+  }
+
+  // ── L1 STEP 6: Type amount in whole number field ──────────────────────────
+  const amtTyped = await imPage.evaluate((amt) => {
+    // Amount field: number input showing "0" (the whole number part)
+    const inputs = Array.from(document.querySelectorAll('input[type="number"], input[type="text"]'));
+    const amtInput = inputs.find(i => {
+      const r = i.getBoundingClientRect();
+      return r.width > 100 && (i.value === '0' || i.value === '' || i.placeholder === '0');
+    });
+    if (amtInput) {
+      amtInput.click();
+      amtInput.select();
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+      if (nativeSetter) nativeSetter.call(amtInput, String(amt));
+      amtInput.dispatchEvent(new Event('input', { bubbles: true }));
+      amtInput.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+    return false;
+  }, amountInt).catch(() => false);
+  if (amtTyped) console.log(`[BankTransfer] ✅ Amount typed: ${amountInt}`);
+  await new Promise(r => setTimeout(r, 500));
+
+  // ── L1 STEP 7: Type Payment Reference ────────────────────────────────────
+  const refTyped = await imPage.evaluate((ref) => {
+    const inputs = Array.from(document.querySelectorAll('input, textarea'));
+    const refInput = inputs.find(i =>
+      (i.placeholder || '').toLowerCase().includes('payment description') ||
+      (i.placeholder || '').toLowerCase().includes('reference') ||
+      (i.getAttribute('formcontrolname') || '').toLowerCase().includes('reference') ||
+      (i.getAttribute('formcontrolname') || '').toLowerCase().includes('narration'));
+    if (refInput) {
+      refInput.click();
+      refInput.value = '';
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+      if (nativeSetter) nativeSetter.call(refInput, ref);
+      refInput.dispatchEvent(new Event('input', { bubbles: true }));
+      refInput.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+    return false;
+  }, refStr).catch(() => false);
+  if (refTyped) console.log(`[BankTransfer] ✅ Reference typed`);
+  await new Promise(r => setTimeout(r, 500));
+
+  // ── L1 STEP 8: Select Pesalink payment mode (immediate transfer) ──────────
+  const pesalinkClicked = await imPage.evaluate(() => {
+    const all = Array.from(document.querySelectorAll('label, span, div, input[type="radio"]'));
+    for (const el of all) {
+      if ((el.textContent || '').trim() === 'Pesalink' && el.getBoundingClientRect().width > 0) {
+        el.click(); return true;
+      }
+    }
+    // Try clicking the radio input directly
+    const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
+    for (const r of radios) {
+      const label = r.closest('label') || document.querySelector(`label[for="${r.id}"]`);
+      if (label && (label.textContent || '').toLowerCase().includes('pesalink')) {
+        r.click(); return true;
+      }
+    }
+    return false;
+  }).catch(() => false);
+  if (pesalinkClicked) console.log('[BankTransfer] ✅ Pesalink payment mode selected');
+  await new Promise(r => setTimeout(r, 500));
+
+  // ── L1 STEP 9: Select Payment Purpose = "Other" ───────────────────────────
+  const purposeClicked = await imPage.evaluate(() => {
+    // Click the "Select payment purpose" dropdown
+    const selects = Array.from(document.querySelectorAll('select'));
+    for (const sel of selects) {
+      if (Array.from(sel.options).some(o => o.text.toLowerCase().includes('other'))) {
+        const otherOpt = Array.from(sel.options).find(o => o.text.trim() === 'Other');
+        if (otherOpt) { sel.value = otherOpt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); return 'select'; }
+      }
+    }
+    // Angular dropdown fallback: click the dropdown then click "Other"
+    const dropdowns = Array.from(document.querySelectorAll('[class*="dropdown" i], ng-select, [class*="select" i]'));
+    for (const d of dropdowns) {
+      if ((d.textContent || '').toLowerCase().includes('select payment purpose') || (d.textContent || '').toLowerCase().includes('payment purpose')) {
+        d.click(); return 'clicked-dropdown';
+      }
+    }
+    return false;
+  }).catch(() => false);
+
+  if (purposeClicked === 'clicked-dropdown') {
+    await new Promise(r => setTimeout(r, 800));
+    await imPage.evaluate(() => {
+      const opts = Array.from(document.querySelectorAll('[class*="option" i], [role="option"], li, .ng-option'));
+      const other = opts.find(o => (o.textContent || '').trim() === 'Other');
+      if (other) other.click();
+    }).catch(() => {});
+  }
+  if (purposeClicked) console.log('[BankTransfer] ✅ Payment Purpose set to Other');
+  await new Promise(r => setTimeout(r, 800));
+
+  console.log('[BankTransfer] L1 pre-fill complete — Vision loop handles review/PIN/Complete');
+
+  // ── Vision loop — review screen, PIN entry, Complete ─────────────────────
+  const IM_MAX_STEPS = 25;
   let step = 0;
   let screenshot = null;
   let referenceId = null;
-  let accountSelected = false;
-  let bankChosen = false;
-  let acctValidated = false;
-  let validatedName = '';
 
   while (step < IM_MAX_STEPS) {
     step++;
     await new Promise(r => setTimeout(r, 1500));
-
-    // L1: Account selection shortcut
-    if (!accountSelected) {
-      const showingSelect = await imPage.evaluate(() =>
-        (document.body.innerText || '').includes('Select an account')
-      ).catch(() => false);
-      if (showingSelect) {
-        const dropdown = await imPage.evaluate(() => {
-          const el = Array.from(document.querySelectorAll('[class*="select" i], ng-select'))
-            .find(e => (e.textContent || '').includes('Select an account'));
-          if (el) { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
-          return null;
-        }).catch(() => null);
-        if (dropdown) { await imPage.mouse.click(dropdown.x / imDpr, dropdown.y / imDpr); await new Promise(r => setTimeout(r, 1500)); }
-        const picked = await imPage.evaluate((preferred) => {
-          const rows = Array.from(document.querySelectorAll('[class*="option" i], [role="option"], li'));
-          const target = preferred
-            ? rows.find(r => (r.textContent || '').toUpperCase().includes(preferred.toUpperCase()))
-            : rows.find(r => r.getBoundingClientRect().width > 0);
-          if (target) { target.click(); return (target.textContent || '').trim().substring(0, 60); }
-          return null;
-        }, traderImAccount).catch(() => null);
-        if (picked) { accountSelected = true; await new Promise(r => setTimeout(r, 1000)); await imPage.evaluate(() => window.scrollBy(0, 300)).catch(() => {}); continue; }
-      }
-    }
 
     screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
     if (!screenshot) continue;
@@ -7293,50 +7275,46 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
     const pageText = await imPage.evaluate(() => document.body.innerText).catch(() => '');
     const lower = pageText.toLowerCase();
 
-    // Success detection
     const isSuccess = lower.includes('payment success') || lower.includes('transaction successful') ||
                       lower.includes('transfer successful') || lower.includes('sent successfully') ||
                       lower.includes('transaction complete') || lower.includes("you've sent");
     if (isSuccess) {
       const refMatch = pageText.match(/reference\s*id\s*(?:number)?[:\s]+([A-Z0-9]{8,12})/i);
       if (refMatch) referenceId = refMatch[1].trim();
-      console.log(`[BankTransfer] ✅ Payment SUCCESS — Ref: ${referenceId}`);
+      console.log(`[BankTransfer] ✅ SUCCESS — Ref: ${referenceId}`);
       imWithdrawalRunning = false;
       return { success: true, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot), referenceId };
     }
 
-    // Vision prompt for local bank transfer
     const vRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 400,
+        model: 'claude-haiku-4-5-20251001', max_tokens: 300,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshot } },
-          { type: 'text', text: `You are controlling I&M Bank Local Transfer form (bank-to-bank).
-Payment: bank="${targetBank}", account=${accountNumber}, recipient="${name}", amount=${amountInt} KES, reference="${refStr}"
-Debit account: ${traderImAccount || 'BONITO CHELUGET SAMOEI'}
+          { type: 'text', text: `I&M Bank Local Transfers. Fields were pre-filled via DOM. Take ONE action:
 
-FORM FILLING ORDER (ONE action per response):
-0. If account_list open → click row for "${traderImAccount || 'BONITO CHELUGET SAMOEI'}"
-1. If debit account shows "Select an account" → click dropdown
-2. ⚠️ SKIP — "One-off Beneficiary" already clicked
-3. If bank dropdown shows "Select" or is empty → click it and select "${targetBank}"
-4. If account number field is empty → type: ${accountNumber}
-5. If "Validate" button visible → click it (fetches account name automatically)
-6. Wait for account name to auto-fill — if name field populated, verify it matches "${name}" (first word match ok)
-7. If currency dropdown shows "-" or is empty → select KES
-8. If amount field empty or 0 → type: ${amountInt}
-9. If reference/narration empty → type: ${refStr}
-10. When ALL fields filled and validated → click Continue
-11. On review screen → click Submit or Confirm
-12. On PIN screen → type_pin
-13. After PIN → click Complete
+STATE OF PRE-FILLED FIELDS:
+- Bank: ${targetBank} ✓
+- Account: ${accountNumber} ✓
+- Account name validated: "${validatedName || 'check form'}"
+- Amount: KES ${amountInt} ✓
+- Reference: ${refStr} ✓
+- Payment Mode: Pesalink ✓
+- Payment Purpose: Other ✓
 
-${acctValidated ? `Account validated: "${validatedName}" ✓ — skip steps 4-6` : ''}
+YOUR JOB (check form and do ONE thing):
+1. If any field above is still empty/wrong on screen → fix it (type or click)
+2. If "Payment Purpose" dropdown still says "Select payment purpose" → click it and select "Other"
+3. If "Pesalink" radio is NOT selected → click it
+4. If form looks complete → click the green "Continue" button
+5. On review/confirmation screen → click "Submit" or "Confirm"
+6. On PIN/Identity Validation screen → type_pin
+7. After PIN → click "Complete"
+8. On success screen → return done
 
-Return ONLY JSON:
-{"screen":"form|account_list|review|pin|success|dashboard","action":"click|type|type_pin|press_key|done","description":"...","value":"...","x":NNN,"y":NNN}` },
+Return ONLY JSON: {"screen":"form|review|pin|success","action":"click|type|type_pin|done","description":"what you are doing","value":"text if typing","x":NNN,"y":NNN}` },
         ]}],
       }),
     }).catch(() => null);
@@ -7344,11 +7322,7 @@ Return ONLY JSON:
     if (!vRes?.ok) { await new Promise(r => setTimeout(r, 3000)); continue; }
     const vData = await vRes.json();
     let action = null;
-    try {
-      const txt = vData.content?.[0]?.text || '';
-      const m = txt.match(/\{[\s\S]*\}/);
-      if (m) action = JSON.parse(m[0]);
-    } catch (_) {}
+    try { const m = (vData.content?.[0]?.text || '').match(/\{[\s\S]*\}/); if (m) action = JSON.parse(m[0]); } catch (_) {}
     if (!action) continue;
 
     console.log(`[BankTransfer] Step ${step}: screen="${action.screen}" action="${action.action}" desc="${action.description || ''}" val="${action.value || ''}"`);
@@ -7357,74 +7331,27 @@ Return ONLY JSON:
       imWithdrawalRunning = false;
       return { success: true, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot), referenceId };
     }
-    if (action.screen === 'dashboard' || action.action === 'navigate') {
-      await imPage.goto('https://digital.imbank.com/inm-retail/transfers/local-transfers/form',
-        { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-      await new Promise(r => setTimeout(r, 3000)); continue;
-    }
-    if (action.action === 'press_key' && action.value) {
-      await imPage.keyboard.press(action.value);
-      await new Promise(r => setTimeout(r, 500)); continue;
-    }
     if (action.action === 'type_pin') {
       for (const digit of String(imPin)) {
-        await imPage.evaluate((d) => {
+        await imPage.evaluate(() => {
           const inputs = Array.from(document.querySelectorAll('input[type="password"], input[type="tel"], input[maxlength="1"]'));
           const empty = inputs.find(i => !i.value);
-          if (empty) { empty.click(); }
-        }, digit).catch(() => {});
+          if (empty) empty.click();
+        }).catch(() => {});
         await imPage.keyboard.press(digit);
         await new Promise(r => setTimeout(r, 150));
       }
       await new Promise(r => setTimeout(r, 1000)); continue;
     }
-    if (action.action === 'type' && action.value) {
-      if (action.x && action.y) { await imPage.mouse.click(action.x / imDpr, action.y / imDpr); await new Promise(r => setTimeout(r, 400)); }
-      const filled = await imPage.evaluate((val) => {
-        const el = document.activeElement;
-        if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return false;
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-        if (nativeSetter) nativeSetter.call(el, val);
-        else el.value = val;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      }, String(action.value)).catch(() => false);
-      if (!filled) await imPage.keyboard.type(String(action.value), { delay: 40 });
-      // After account number typed, watch for Validate to appear
-      if (String(action.value) === accountNumber) {
-        await new Promise(r => setTimeout(r, 1500));
-        // Try L1 Validate click
-        const validated = await imPage.evaluate(() => {
-          const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim().toLowerCase() === 'validate');
-          if (btn) { btn.click(); return true; }
-          return false;
-        }).catch(() => false);
-        if (validated) {
-          console.log('[BankTransfer] ✅ Clicked Validate — waiting for name auto-fill...');
-          await new Promise(r => setTimeout(r, 3000));
-          validatedName = await imPage.evaluate(() => {
-            const inputs = Array.from(document.querySelectorAll('input'));
-            const nameInput = inputs.find(i => (i.placeholder || '').toLowerCase().includes('name') || (i.getAttribute('formcontrolname') || '').toLowerCase().includes('name'));
-            return nameInput ? nameInput.value : '';
-          }).catch(() => '');
-          if (validatedName) { acctValidated = true; console.log(`[BankTransfer] Account name: "${validatedName}"`); }
-        }
-      }
+    if (action.action === 'type' && action.value && action.x && action.y) {
+      await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
+      await new Promise(r => setTimeout(r, 400));
+      await imPage.keyboard.type(String(action.value), { delay: 40 });
       await new Promise(r => setTimeout(r, 800)); continue;
     }
     if (action.action === 'click' && action.x && action.y) {
       await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
-      const isTransition = ['continue', 'submit', 'confirm', 'complete', 'validate'].some(w => (action.description || '').toLowerCase().includes(w));
-      if ((action.description || '').toLowerCase().includes('validate')) {
-        await new Promise(r => setTimeout(r, 3000));
-        validatedName = await imPage.evaluate(() => {
-          const inputs = Array.from(document.querySelectorAll('input'));
-          const nameInput = inputs.find(i => (i.placeholder || '').toLowerCase().includes('name') || (i.getAttribute('formcontrolname') || '').toLowerCase().includes('name'));
-          return nameInput ? nameInput.value : '';
-        }).catch(() => '');
-        if (validatedName) { acctValidated = true; console.log(`[BankTransfer] Account name: "${validatedName}"`); }
-      }
+      const isTransition = ['continue', 'submit', 'confirm', 'complete'].some(w => (action.description || '').toLowerCase().includes(w));
       await new Promise(r => setTimeout(r, isTransition ? 3500 : 1000)); continue;
     }
   }
