@@ -7067,55 +7067,43 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
     await new Promise(r => setTimeout(r, 1500));
     // Wait for the inline dropdown list to render
     await new Promise(r => setTimeout(r, 2000));
-    // Search entire document for visible account rows — this dropdown renders inline, not in CDK overlay
+    // Pick the account with the HIGHEST KES balance — always the correct trading account
     const picked = await imPage.evaluate((preferred) => {
-      const search = (preferred || 'BONITO CHELUGET').toUpperCase();
-      // Cast a wide net: any element whose text includes the search term AND looks like an account row
       const candidates = Array.from(document.querySelectorAll(
-        'mat-option, .mat-option, [role="option"], li, tr, .account-item, [class*="account" i], [class*="item" i], [class*="row" i]'
+        'mat-option, .mat-option, [role="option"], li, tr, [class*="item" i], [class*="row" i], div'
       ));
-      for (const el of candidates) {
+      // Collect all visible account rows (must have KES + an account number)
+      const rows = candidates.map(el => {
         const txt = (el.textContent || '').trim();
-        if (!txt.toUpperCase().includes(search)) continue;
-        // Must be a visible account row (has KES balance text or 10-digit account number)
-        if (!txt.includes('KES') && !/\d{8,}/.test(txt)) continue;
         const r = el.getBoundingClientRect();
-        // Must be visible on screen (not header, not hidden)
-        if (r.width > 80 && r.height > 10 && r.height < 200 && r.top > 200 && r.top < window.innerHeight) {
-          el.click();
-          return txt.substring(0, 80);
-        }
+        if (!txt.includes('KES') || !/\d{8,}/.test(txt)) return null;
+        if (r.width < 80 || r.height < 10 || r.height > 200 || r.top < 100 || r.top > window.innerHeight) return null;
+        // Extract KES balance number
+        const m = txt.match(/KES\s*([\d,]+\.?\d*)/);
+        const balance = m ? parseFloat(m[1].replace(/,/g, '')) : 0;
+        return { el, txt, balance, top: r.top };
+      }).filter(Boolean);
+
+      if (!rows.length) return null;
+
+      // If trader's preferred account is set and matches a row, use it
+      if (preferred) {
+        const match = rows.find(r => r.txt.toUpperCase().includes(preferred.toUpperCase()));
+        if (match) { match.el.click(); return match.txt.substring(0, 80); }
       }
-      return null;
+
+      // Otherwise pick highest balance (the main trading account)
+      rows.sort((a, b) => b.balance - a.balance);
+      rows[0].el.click();
+      return rows[0].txt.substring(0, 80);
     }, traderImAccount).catch(() => null);
 
     if (picked) {
       console.log(`[BankTransfer] ✅ Debit account selected: ${picked}`);
-      await new Promise(r => setTimeout(r, 1500));
     } else {
-      // Fallback: use mouse coordinates — BONITO CHELUGET row is always the second option
-      console.log(`[BankTransfer] ⚠️ DOM search failed — trying coordinate click on second account row`);
-      const rowCoords = await imPage.evaluate(() => {
-        // Find all visible rows that contain KES balance text inside the open dropdown area
-        const all = Array.from(document.querySelectorAll('*'));
-        const rows = all.filter(el => {
-          const txt = (el.textContent || '').trim();
-          const r = el.getBoundingClientRect();
-          return txt.includes('KES') && /\d{8,}/.test(txt) &&
-                 r.width > 80 && r.height > 10 && r.height < 120 && r.top > 200;
-        });
-        // Sort by y-position — pick the LAST row (highest balance = BONITO CHELUGET, typically last)
-        rows.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-        const target = rows[rows.length - 1]; // last = BONITO CHELUGET
-        if (target) { const r = target.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
-        return null;
-      }).catch(() => null);
-      if (rowCoords) {
-        await imPage.mouse.click(rowCoords.x / imDpr, rowCoords.y / imDpr);
-        console.log(`[BankTransfer] ✅ Coordinate-clicked second account row at (${Math.round(rowCoords.x / imDpr)}, ${Math.round(rowCoords.y / imDpr)})`);
-      }
-      await new Promise(r => setTimeout(r, 1500));
+      console.log(`[BankTransfer] ⚠️ Could not select account via DOM — Vision will handle`);
     }
+    await new Promise(r => setTimeout(r, 1500));
   }
 
   // ── L1 STEP 2: Click One-off Beneficiary radio ────────────────────────────
