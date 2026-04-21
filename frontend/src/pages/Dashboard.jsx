@@ -518,7 +518,7 @@ export default function Dashboard() {
     return () => { clearTimeout(timer); clearInterval(interval); };
   }, []);
 
-  // Fast wallet poll every 5s for real-time balance updates
+  // Fast wallet poll every 5s for real-time KES balance updates
   useEffect(() => {
     const walletPoll = setInterval(async () => {
       if (!localStorage.getItem('token')) return;
@@ -536,6 +536,18 @@ export default function Dashboard() {
       } catch (e) {}
     }, 5000);
     return () => clearInterval(walletPoll);
+  }, []);
+
+  // Poll Binance account data (wallet balances) every 30s so the display stays current
+  useEffect(() => {
+    const binancePoll = setInterval(async () => {
+      if (!localStorage.getItem('token')) return;
+      try {
+        const res = await getBinanceAccountData();
+        if (res.data) setBinanceData(res.data);
+      } catch (e) {}
+    }, 30000);
+    return () => clearInterval(binancePoll);
   }, []);
 
   // Redirect to onboarding if not complete (only for traders, not admin/employees)

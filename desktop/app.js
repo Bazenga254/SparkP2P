@@ -68,6 +68,26 @@ console.error = (...a) => { fs.appendFileSync(logFile, `[${new Date().toISOStrin
 
 const API_BASE = 'https://sparkp2p.com/api';
 const DASHBOARD_URL = 'https://sparkp2p.com/dashboard';
+
+// ── Persistent paid-orders store — survives bot restarts ────────────────────
+const paidOrdersFile = path.join(logDir, 'paid_orders.json');
+function loadPaidOrders() {
+  try { return JSON.parse(fs.readFileSync(paidOrdersFile, 'utf8')); } catch (e) { return {}; }
+}
+function savePaidOrder(orderNum, data) {
+  try {
+    const store = loadPaidOrders();
+    store[orderNum] = { ...data, paidAt: Date.now() };
+    fs.writeFileSync(paidOrdersFile, JSON.stringify(store, null, 2));
+  } catch (e) { console.error('[SparkP2P] Could not save paid order:', e.message); }
+}
+function removePaidOrder(orderNum) {
+  try {
+    const store = loadPaidOrders();
+    delete store[orderNum];
+    fs.writeFileSync(paidOrdersFile, JSON.stringify(store, null, 2));
+  } catch (e) {}
+}
 const CDP_PORT = 9222;
 const POLL_INTERVAL_ACTIVE = 60000; // 1 minute — cycle through all active orders
 const POLL_INTERVAL_IDLE   = 30000; // 30 seconds — no orders, scan faster
@@ -113,6 +133,20 @@ const orderLastBotReplyAt = {};      // orderNum → timestamp (ms) of last bot 
 const buyPaymentSentAt = {};        // { orderNum: timestamp } — when I&M payment was sent for this buy order
 const buyReminderSentOrders = new Set(); // buy orderNums where we sent the 10-min reminder to seller
 const buyOrderDetailsMap = {};       // { orderNum: { sellerName, amount, phone, method } } — for chat/dispute
+const imPaymentDoneMap = {};         // { orderNum: { screenshot, referenceId } } — I&M payment done, skip on retry
+const buyGreetingSentOrders = new Set();    // orderNums where greeting was already sent
+const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent KSh..." was already sent
+// Restore paid orders from disk on startup (survives bot restarts)
+{
+  const _paidOnDisk = loadPaidOrders();
+  const _nums = Object.keys(_paidOnDisk);
+  _nums.forEach(num => {
+    imPaymentDoneMap[num] = _paidOnDisk[num];
+    buyGreetingSentOrders.add(num);
+    buyPostPaymentMsgSentOrders.add(num);
+  });
+  if (_nums.length) console.log(`[SparkP2P] Restored ${_nums.length} paid order(s) from disk: ${_nums.join(', ')}`);
+}
 let buyPaymentScreenshot = null;  // Base64 screenshot of I&M success — uploaded to Binance chat
 let gmailPage = null;          // Persistent Gmail tab — opened alongside Binance, kept alive
 let imPage = null;             // Persistent I&M Bank tab — new tab in the main Binance browser
@@ -2230,6 +2264,10 @@ async function idleScan(page) {
       delete buyPaymentSentAt[num];
       buyReminderSentOrders.delete(num);
       delete buyOrderDetailsMap[num];
+      delete imPaymentDoneMap[num];
+      buyGreetingSentOrders.delete(num);
+      buyPostPaymentMsgSentOrders.delete(num);
+      removePaidOrder(num);
       delete partialPayments[num];
       delete lastDeficitSent[num];
     }
@@ -2673,6 +2711,7 @@ async function idleScan(page) {
     await new Promise(r => setTimeout(r, 3000));
     if (pauseNavigation) break;
 
+    await dismissBinanceModals(page);
     await takeScreenshot(`scan_buy_${order.orderNumber}`, page);
 
     // Vision primary, DOM fallback
@@ -2701,14 +2740,24 @@ async function idleScan(page) {
       delete buyPaymentSentAt[orderNum];
       buyReminderSentOrders.delete(orderNum);
       delete buyOrderDetailsMap[orderNum];
+      delete imPaymentDoneMap[orderNum];
+      buyGreetingSentOrders.delete(orderNum);
+      buyPostPaymentMsgSentOrders.delete(orderNum);
+      removePaidOrder(orderNum);
       if (activeBuyOrderNumber === orderNum) activeBuyOrderNumber = null;
       stats.actions++;
       const balances = await scanWalletBalances(page);
       await uploadBalances(balances);
 
     // ── Dispute / expired after we paid ────────────────────────────────────
-    } else if (buyPaymentSentAt[order.orderNumber] &&
-               (buyLower.includes('appeal') || buyLower.includes('expired') || buyLower.includes('order expired'))) {
+    // "appeal" text appears normally on Binance after payment confirmed — only treat it as
+    // a dispute if the seller hasn't released after 20 minutes. "order expired" fires immediately.
+    } else if (buyPaymentSentAt[order.orderNumber] && (() => {
+        const minsWaited = Math.floor((Date.now() - buyPaymentSentAt[order.orderNumber]) / 60000);
+        const hardExpired = buyLower.includes('order expired') || buyLower.includes('order has expired');
+        const appealTimeout = buyLower.includes('appeal') && minsWaited >= 20;
+        return hardExpired || appealTimeout;
+      })()) {
       const orderNum = order.orderNumber;
       const details = buyOrderDetailsMap[orderNum] || {};
       const minsWaited = Math.floor((Date.now() - buyPaymentSentAt[orderNum]) / 60000);
@@ -2812,37 +2861,43 @@ async function idleScan(page) {
 
       console.log(`[SparkP2P] 💳 Buy order ${order.orderNumber} — auto-paying KSh ${paymentDetails.amount} to ${paymentDetails.name} (${paymentDetails.phone}) via M-Pesa`);
 
-      // Send greeting (once)
-      if (!buyOrderDetailsMap[order.orderNumber]) {
+      // Send greeting (once per order)
+      if (!buyGreetingSentOrders.has(order.orderNumber)) {
+        buyGreetingSentOrders.add(order.orderNumber);
         const greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment of KES ${Math.floor(parseFloat(paymentDetails.amount))} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive the funds. Thank you! 🙏`;
         await sendBinanceChatMessage(page, greetMsg);
         console.log(`[SparkP2P] 👋 Greeting sent for buy order ${order.orderNumber}`);
         await new Promise(r => setTimeout(r, 1000));
       }
 
-      // Execute I&M payment
+      // Execute I&M payment — skip if already paid for this order (prevents double-charge on retry)
       let imResult = { success: false, screenshot: null };
-      const IM_MAX_RETRIES = 3;
-      for (let attempt = 1; attempt <= IM_MAX_RETRIES; attempt++) {
-        try {
-          console.log(`[SparkP2P] I&M payment attempt ${attempt}/${IM_MAX_RETRIES}...`);
-          imResult = await executeImPayment({
-            phone: paymentDetails.phone,
-            name: paymentDetails.name,
-            amount: paymentDetails.amount,
-            reference: paymentDetails.reference || order.orderNumber,
-            network: paymentDetails.network || 'safaricom',
-          });
-          if (imResult.success) break;
-          console.log(`[SparkP2P] I&M attempt ${attempt} failed${attempt < IM_MAX_RETRIES ? ' — retrying in 8s...' : ''}`);
-        } catch (e) {
-          console.error(`[SparkP2P] I&M attempt ${attempt} threw: ${e.message}`);
+      if (imPaymentDoneMap[order.orderNumber]) {
+        console.log(`[SparkP2P] ⚠️ I&M payment already sent for ${order.orderNumber} — skipping to Transferred button`);
+        imResult = { success: true, ...imPaymentDoneMap[order.orderNumber] };
+      } else {
+        const IM_MAX_RETRIES = 3;
+        for (let attempt = 1; attempt <= IM_MAX_RETRIES; attempt++) {
+          try {
+            console.log(`[SparkP2P] I&M payment attempt ${attempt}/${IM_MAX_RETRIES}...`);
+            imResult = await executeImPayment({
+              phone: paymentDetails.phone,
+              name: paymentDetails.name,
+              amount: paymentDetails.amount,
+              reference: order.orderNumber, // always use exact DOM order number — Vision OCR misreads 20-digit refs
+              network: paymentDetails.network || 'safaricom',
+            });
+            if (imResult.success) { imPaymentDoneMap[order.orderNumber] = { screenshot: imResult.screenshot, referenceId: imResult.referenceId }; savePaidOrder(order.orderNumber, { screenshot: imResult.screenshot, referenceId: imResult.referenceId }); break; }
+            console.log(`[SparkP2P] I&M attempt ${attempt} failed${attempt < IM_MAX_RETRIES ? ' — retrying in 8s...' : ''}`);
+          } catch (e) {
+            console.error(`[SparkP2P] I&M attempt ${attempt} threw: ${e.message}`);
+          }
+          if (attempt < IM_MAX_RETRIES) await new Promise(r => setTimeout(r, 8000));
         }
-        if (attempt < IM_MAX_RETRIES) await new Promise(r => setTimeout(r, 8000));
       }
 
       if (!imResult.success) {
-        console.error(`[SparkP2P] ❌ I&M payment failed after ${IM_MAX_RETRIES} attempts for ${order.orderNumber}`);
+        console.error(`[SparkP2P] ❌ I&M payment failed after 3 attempts for ${order.orderNumber}`);
         await fetch(`${API_BASE}/ext/report-buy-expired`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -2875,39 +2930,60 @@ async function idleScan(page) {
         { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
       await new Promise(r => setTimeout(r, 3000));
 
-      // Send post-payment chat message with reference
-      const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
-      const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
-      await sendBinanceChatMessage(page,
-        `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`
-      );
-
-      // Upload payment proof screenshot
-      if (imResult.screenshot) {
-        await new Promise(r => setTimeout(r, 1000));
-        await uploadPaymentProofToBinance(page, imResult.screenshot);
+      // Send post-payment chat message (once only)
+      if (!buyPostPaymentMsgSentOrders.has(order.orderNumber)) {
+        buyPostPaymentMsgSentOrders.add(order.orderNumber);
+        const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+        const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
+        await sendBinanceChatMessage(page,
+          `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`
+        );
       }
 
-      // Click "Transferred, notify seller" — retry up to 3 times
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        await new Promise(r => setTimeout(r, 2000));
-        const clicked = await clickButton(page, 'transferred', 'payment done', 'i have paid', 'mark as paid', 'notify seller', 'transferred, notify seller');
-        if (clicked) {
-          await new Promise(r => setTimeout(r, 2500));
-          // Check the "I have made the transfer" checkbox before confirming
-          await page.evaluate(() => {
-            const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
-            checkboxes.forEach(cb => { if (!cb.checked) cb.click(); });
-          }).catch(() => {});
-          await new Promise(r => setTimeout(r, 800));
-          await clickButton(page, 'confirm', 'yes');
+      // Check if already in "Pending the Seller to Release" state
+      const alreadyPending2 = await page.evaluate(() => {
+        const body = document.body.innerText || '';
+        return body.toLowerCase().includes('pending the seller to release') ||
+               body.toLowerCase().includes('seller to release');
+      }).catch(() => false);
+      if (alreadyPending2) {
+        console.log(`[SparkP2P] ✅ Order ${order.orderNumber} already in "Pending Seller Release" — skipping upload & Transferred`);
+      }
+
+      // Upload payment proof + handle confirmation
+      let proofConfirmed = alreadyPending2;
+      if (!alreadyPending2 && imResult.screenshot) {
+        await new Promise(r => setTimeout(r, 1500));
+        const uploadResult = await uploadPaymentProofToBinance(page, imResult.screenshot);
+        proofConfirmed = uploadResult.confirmed;
+      }
+
+      // If upload didn't complete confirmation, fall back to "Transferred, notify seller"
+      if (!proofConfirmed) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          await dismissBinanceModals(page);
           await new Promise(r => setTimeout(r, 2000));
-          await handleSecurityVerification(page);
-          break;
-        }
-        if (attempt < 3) {
-          await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-          await new Promise(r => setTimeout(r, 3000));
+          const nowPending2 = await page.evaluate(() =>
+            (document.body.innerText || '').toLowerCase().includes('seller to release')
+          ).catch(() => false);
+          if (nowPending2) { console.log(`[SparkP2P] ✅ Page moved to "Pending Release"`); break; }
+          const clicked = await clickButton(page, 'transferred', 'notify seller', 'transferred, notify seller', 'payment done', 'i have paid');
+          if (clicked) {
+            await new Promise(r => setTimeout(r, 2500));
+            await page.evaluate(() => {
+              const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+              checkboxes.forEach(cb => { if (!cb.checked) cb.click(); });
+            }).catch(() => {});
+            await new Promise(r => setTimeout(r, 800));
+            await clickButton(page, 'confirm', 'yes');
+            await new Promise(r => setTimeout(r, 2000));
+            await handleSecurityVerification(page);
+            break;
+          }
+          if (attempt < 3) {
+            await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+            await new Promise(r => setTimeout(r, 3000));
+          }
         }
       }
 
@@ -4027,6 +4103,27 @@ async function handleSecurityVerification(page) {
   } catch (e) {
     console.error('[SparkP2P] PIN entry error:', e.message?.substring(0, 60));
     return false;
+  }
+}
+
+// ── Dismiss any Binance info/warning modals that block the order page ────────
+// Handles: "Payment Completed?" → "I Understand", generic OK/Got It dialogs
+async function dismissBinanceModals(page) {
+  const dismissed = await page.evaluate(() => {
+    const keywords = ['i understand', 'got it', 'ok', 'okay', 'close'];
+    const btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
+    for (const btn of btns) {
+      const txt = (btn.textContent || '').trim().toLowerCase();
+      if (keywords.includes(txt)) {
+        btn.click();
+        return txt;
+      }
+    }
+    return null;
+  }).catch(() => null);
+  if (dismissed) {
+    console.log(`[SparkP2P] Dismissed modal — clicked "${dismissed}"`);
+    await new Promise(r => setTimeout(r, 800));
   }
 }
 
@@ -6072,6 +6169,7 @@ async function execAction(action) {
       // 4. Start monitoring for seller release
 
       // Step 1: Extract payment details via Vision
+      await dismissBinanceModals(page); // dismiss "Payment Completed?" or similar popups first
       console.log(`[SparkP2P] Extracting payment details from order ${order_number}...`);
       await new Promise(r => setTimeout(r, 2000));
       const ss = await page.screenshot({ encoding: 'base64' }).catch(() => null);
@@ -6135,15 +6233,14 @@ async function execAction(action) {
         return;
       }
 
-      // ── Step 1b: Send greeting now that payment method is confirmed ──────────
-      // Only greet once per order — orderFirstSeenAt is set when order is first polled
-      if (!buyOrderDetailsMap[order_number]) {
+      // ── Step 1b: Send greeting once per order ────────────────────────────────
+      if (!buyGreetingSentOrders.has(order_number)) {
+        buyGreetingSentOrders.add(order_number);
         const method = (paymentDetails.method || 'mpesa').toLowerCase();
         let greetMsg = '';
         if (method === 'mpesa') {
           greetMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I will be sending payment of KES ${Math.floor(parseFloat(paymentDetails.amount))} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive the funds. Thank you! 🙏`;
         }
-        // (PesaLink / I&M direct greetings will be added when those flows are built)
         if (greetMsg) {
           await sendBinanceChatMessage(page, greetMsg);
           console.log(`[SparkP2P] 👋 Greeting sent for buy order ${order_number} (method: ${method})`);
@@ -6151,26 +6248,31 @@ async function execAction(action) {
         }
       }
 
-      // ── Step 2: Execute I&M Bank payment — retry up to 3 times ─────────────
+      // ── Step 2: Execute I&M Bank payment — skip if already paid for this order ─
       let imResult = { success: false, screenshot: null };
-      const IM_MAX_RETRIES = 3;
-      for (let attempt = 1; attempt <= IM_MAX_RETRIES; attempt++) {
-        try {
-          console.log(`[SparkP2P] I&M payment attempt ${attempt}/${IM_MAX_RETRIES}...`);
-          imResult = await executeImPayment({
-            phone: paymentDetails.phone,
-            name: paymentDetails.name,
-            amount: paymentDetails.amount,
-            reference: paymentDetails.reference || order_number,
-            network: paymentDetails.network || 'safaricom',
-          });
-          if (imResult.success) break; // Payment succeeded — exit retry loop
-          console.log(`[SparkP2P] I&M payment attempt ${attempt} failed — ${attempt < IM_MAX_RETRIES ? 'retrying in 8s...' : 'giving up'}`);
-        } catch (e) {
-          console.error(`[SparkP2P] I&M payment attempt ${attempt} threw: ${e.message}`);
-          await takeScreenshot(`I&M attempt ${attempt} error: ${e.message.substring(0, 40)}`);
+      if (imPaymentDoneMap[order_number]) {
+        console.log(`[SparkP2P] ⚠️ I&M payment already sent for ${order_number} — skipping to Transferred button`);
+        imResult = { success: true, ...imPaymentDoneMap[order_number] };
+      } else {
+        const IM_MAX_RETRIES = 3;
+        for (let attempt = 1; attempt <= IM_MAX_RETRIES; attempt++) {
+          try {
+            console.log(`[SparkP2P] I&M payment attempt ${attempt}/${IM_MAX_RETRIES}...`);
+            imResult = await executeImPayment({
+              phone: paymentDetails.phone,
+              name: paymentDetails.name,
+              amount: paymentDetails.amount,
+              reference: order_number, // always use exact DOM order number — Vision OCR misreads 20-digit refs
+              network: paymentDetails.network || 'safaricom',
+            });
+            if (imResult.success) { imPaymentDoneMap[order_number] = { screenshot: imResult.screenshot, referenceId: imResult.referenceId }; savePaidOrder(order_number, { screenshot: imResult.screenshot, referenceId: imResult.referenceId }); break; }
+            console.log(`[SparkP2P] I&M payment attempt ${attempt} failed — ${attempt < IM_MAX_RETRIES ? 'retrying in 8s...' : 'giving up'}`);
+          } catch (e) {
+            console.error(`[SparkP2P] I&M payment attempt ${attempt} threw: ${e.message}`);
+            await takeScreenshot(`I&M attempt ${attempt} error: ${e.message.substring(0, 40)}`);
+          }
+          if (attempt < IM_MAX_RETRIES) await new Promise(r => setTimeout(r, 8000));
         }
-        if (attempt < IM_MAX_RETRIES) await new Promise(r => setTimeout(r, 8000));
       }
 
       // ── HARD STOP if all retries failed — do NOT notify Binance ─────────────
@@ -6214,50 +6316,79 @@ async function execAction(action) {
         waitUntil: 'domcontentloaded', timeout: 15000,
       }).catch(() => {});
       await new Promise(r => setTimeout(r, 3000));
+      await dismissBinanceModals(page);
 
-      // Step 4: Send chat message to seller (only because we actually paid)
-      const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
-      const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
-      const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`;
-      await sendBinanceChatMessage(page, chatMsg);
-
-      // Step 5: Upload payment proof (I&M receipt screenshot)
-      if (imResult.screenshot) {
-        await new Promise(r => setTimeout(r, 1000));
-        await uploadPaymentProofToBinance(page, imResult.screenshot);
+      // Step 4: Send post-payment chat message (once only — guard against retries)
+      if (!buyPostPaymentMsgSentOrders.has(order_number)) {
+        buyPostPaymentMsgSentOrders.add(order_number);
+        const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+        const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
+        const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`;
+        await sendBinanceChatMessage(page, chatMsg);
       }
 
-      // Step 6: Click "Transferred, notify seller" → confirm on Binance
-      // Retry up to 3 times — reload page between attempts if button not found
-      const NOTIFY_MAX_RETRIES = 3;
-      let notifyClicked = false;
-      for (let attempt = 1; attempt <= NOTIFY_MAX_RETRIES; attempt++) {
-        await new Promise(r => setTimeout(r, 2000));
-        const clicked = await clickButton(page, 'transferred', 'payment done', 'i have paid', 'mark as paid', 'notify seller', 'transferred, notify seller');
-        if (clicked) {
-          notifyClicked = true;
-          console.log(`[SparkP2P] ✅ "Transferred, notify seller" clicked on attempt ${attempt}`);
-          await new Promise(r => setTimeout(r, 2500));
-          // Check the "I have made the transfer" checkbox before confirming
-          await page.evaluate(() => {
-            const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
-            checkboxes.forEach(cb => { if (!cb.checked) cb.click(); });
-          }).catch(() => {});
-          await new Promise(r => setTimeout(r, 800));
-          await clickButton(page, 'confirm', 'yes');
+      // Step 5: Check if already in "Pending the Seller to Release" state (order already marked as paid)
+      const alreadyPendingRelease = await page.evaluate(() => {
+        const body = document.body.innerText || '';
+        return body.toLowerCase().includes('pending the seller to release') ||
+               body.toLowerCase().includes('waiting for seller to release') ||
+               body.toLowerCase().includes('seller to release');
+      }).catch(() => false);
+
+      if (alreadyPendingRelease) {
+        console.log(`[SparkP2P] ✅ Order ${order_number} already in "Pending Seller Release" state — skipping upload & Transferred button`);
+      }
+
+      // Step 5b: Upload payment proof (I&M receipt screenshot) + handle confirmation
+      let proofConfirmed = alreadyPendingRelease; // if already pending release, treat as confirmed
+      if (!alreadyPendingRelease && imResult.screenshot) {
+        await new Promise(r => setTimeout(r, 1500));
+        const uploadResult = await uploadPaymentProofToBinance(page, imResult.screenshot);
+        proofConfirmed = uploadResult.confirmed;
+      }
+
+      // Step 6: If upload didn't complete the confirmation, click "Transferred, notify seller"
+      // This handles the case where there was no screenshot or the upload failed
+      if (!proofConfirmed) {
+        const NOTIFY_MAX_RETRIES = 3;
+        let notifyClicked = false;
+        for (let attempt = 1; attempt <= NOTIFY_MAX_RETRIES; attempt++) {
+          await dismissBinanceModals(page);
           await new Promise(r => setTimeout(r, 2000));
-          await handleSecurityVerification(page);
-          break;
+          // Re-check if page transitioned to "Pending Release" during retries
+          const nowPending = await page.evaluate(() =>
+            (document.body.innerText || '').toLowerCase().includes('pending the seller to release') ||
+            (document.body.innerText || '').toLowerCase().includes('seller to release')
+          ).catch(() => false);
+          if (nowPending) {
+            console.log(`[SparkP2P] ✅ Page moved to "Pending Release" — no need to click Transferred`);
+            notifyClicked = true; break;
+          }
+          const clicked = await clickButton(page, 'transferred', 'notify seller', 'transferred, notify seller', 'payment done', 'i have paid');
+          if (clicked) {
+            notifyClicked = true;
+            console.log(`[SparkP2P] ✅ "Transferred, notify seller" clicked on attempt ${attempt}`);
+            await new Promise(r => setTimeout(r, 2500));
+            await page.evaluate(() => {
+              const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+              checkboxes.forEach(cb => { if (!cb.checked) cb.click(); });
+            }).catch(() => {});
+            await new Promise(r => setTimeout(r, 800));
+            await clickButton(page, 'confirm', 'yes');
+            await new Promise(r => setTimeout(r, 2000));
+            await handleSecurityVerification(page);
+            break;
+          }
+          console.log(`[SparkP2P] "Transferred" button not found on attempt ${attempt}/${NOTIFY_MAX_RETRIES}${attempt < NOTIFY_MAX_RETRIES ? ' — reloading page...' : ''}`);
+          if (attempt < NOTIFY_MAX_RETRIES) {
+            await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+            await new Promise(r => setTimeout(r, 3000));
+          }
         }
-        console.log(`[SparkP2P] "Transferred" button not found on attempt ${attempt}/${NOTIFY_MAX_RETRIES}${attempt < NOTIFY_MAX_RETRIES ? ' — reloading page...' : ''}`);
-        if (attempt < NOTIFY_MAX_RETRIES) {
-          await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-          await new Promise(r => setTimeout(r, 3000));
+        if (!notifyClicked) {
+          console.log(`[SparkP2P] ⚠️ Could not confirm payment after ${NOTIFY_MAX_RETRIES} attempts — seller will release once they see the chat message`);
+          await takeScreenshot(`Transferred btn not found: ${order_number}`);
         }
-      }
-      if (!notifyClicked) {
-        console.log(`[SparkP2P] ⚠️ Could not click "Transferred, notify seller" after ${NOTIFY_MAX_RETRIES} attempts — seller will release once they see the chat message`);
-        await takeScreenshot(`Transferred btn not found: ${order_number}`);
       }
 
       await takeScreenshot(`Buy payment complete: order ${order_number}`);
@@ -6509,6 +6640,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   let referenceId = null;
   let formFilled = false; // true once all fields are entered
   let accountSelected = false; // true once debit account has been chosen
+  let radiosConfirmed = true; // L1 pre-radio clicks already set Other Phone + One-off Beneficiary
 
   while (step < IM_MAX_STEPS) {
     step++;
@@ -6558,13 +6690,15 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     // ── Detect success ──────────────────────────────────────────────────────
     const isSuccess = lower.includes('payment success') || lower.includes('transaction successful') ||
                       lower.includes('transfer successful') || lower.includes('sent successfully') ||
-                      lower.includes('transaction complete') || lower.includes('money sent');
+                      lower.includes('transaction complete') || lower.includes('money sent') ||
+                      lower.includes("you've sent") || lower.includes('you have sent');
     if (isSuccess) {
       const refMatch = pageText.match(/reference\s*id\s*(?:number)?[:\s]+([A-Z0-9]{8,12})/i);
       if (refMatch) { referenceId = refMatch[1].trim(); console.log(`[I&M Vision] ✅ Ref ID: ${referenceId}`); }
       console.log(`[I&M Vision] ✅ Payment SUCCESS at step ${step}`);
+      const receiptSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot);
       imWithdrawalRunning = false;
-      return { success: true, screenshot, referenceId };
+      return { success: true, screenshot: receiptSS, referenceId };
     }
 
     // ── Ask Claude what screen we are on and what to do ─────────────────────
@@ -6603,17 +6737,18 @@ ACTIONS (pick exactly one):
 
 IMPORTANT: For "click" and "type" actions you MUST include "x" and "y" — the pixel coordinates of the CENTER of the element in the screenshot. These are used for mouse clicks.
 
-FORM FILLING ORDER — do ONE action per response, in this order:
+FORM FILLING ORDER — do ONE action per response, strictly in this order:
 0. If you see an open account list (screen="account_list", rows like "SPARK FREELANCE" or "BONITO CHELUGET" visible) → click the row containing "${traderImAccount || 'BONITO CHELUGET SAMOEI'}" — return screen="account_list"
 1. If debit account shows "Select an account" and NO list is open → click the ▼ dropdown arrow to open it
 2. (account_list handled by step 0 above)
-3. If "Other Phone" radio is NOT filled/selected (green) → click the "Other Phone" radio circle
-4. If "One-off Beneficiary" radio is NOT filled/selected (green) → click the "One-off Beneficiary" radio circle
+3. ${radiosConfirmed ? '⚠️ SKIP THIS STEP — "Other Phone" and "One-off Beneficiary" were already clicked programmatically before this loop. They ARE selected. Do NOT click them again under any circumstances.' : 'CRITICAL — Check the "Own Phone" / "Other Phone" radio buttons. If "Own Phone" is selected (its circle is filled/green) → click the "Other Phone" radio circle IMMEDIATELY.'}
+4. ${radiosConfirmed ? '⚠️ SKIP THIS STEP — already handled.' : 'If "One-off Beneficiary" radio is NOT filled/selected (green) → click the "One-off Beneficiary" radio circle.'}
 5. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
+5b. AUTOCOMPLETE — After typing the phone, if a dropdown suggestion list appears below the phone field (showing contact names like "Bonito Cheluget Samoei"), press Tab (action="press_key", value="Tab") to dismiss it and move to the next field.
 6. If network (Safaricom/Airtel) not selected → click ${network}
 7. If amount field is empty or shows 0 → type amount: ${amountInt}. If it shows ANY non-zero number (e.g. 1,930 or 1930) treat it as correctly filled — do NOT retype it
 8. If reference/narration field is empty (shows 0/50 or nothing) → type reference: ${String(reference).substring(0,30)}
-9. All fields filled → click Continue
+9. ONLY click Continue when ALL of the above are done: Other Phone selected, phone=${cleanPhone}, network selected, amount=${amountInt}, reference filled. If ANY field is missing, fix it first.
 
 Return ONLY valid JSON, no other text.` },
         ]}],
@@ -6637,11 +6772,21 @@ Return ONLY valid JSON, no other text.` },
     if (!action) { console.log(`[I&M Vision] Could not parse action at step ${step}`); continue; }
     console.log(`[I&M Vision] Step ${step}: screen="${action.screen}" action="${action.action}" desc="${action.description || ''}" val="${action.value || ''}"`);
 
+    // ── Guard: block Vision from re-clicking radio buttons already set by L1 ──
+    if (radiosConfirmed && action.action === 'click') {
+      const desc = (action.description || '').toLowerCase();
+      if (desc.includes('other phone') || desc.includes('one-off') || desc.includes('one off') || desc.includes('beneficiary')) {
+        console.log(`[I&M Vision] ⛔ Blocked redundant radio click "${action.description}" — radios already confirmed`);
+        continue; // skip this step, take fresh screenshot next iteration
+      }
+    }
+
     // ── Execute the action ───────────────────────────────────────────────────
     if (action.screen === 'success' || action.action === 'done') {
       // Handled above by text detection — but catch it here too
+      const receiptSS2 = await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot);
       imWithdrawalRunning = false;
-      return { success: true, screenshot, referenceId };
+      return { success: true, screenshot: receiptSS2, referenceId };
     }
 
     if (action.screen === 'dashboard' || action.action === 'navigate') {
@@ -6713,6 +6858,13 @@ Return ONLY valid JSON, no other text.` },
           console.log(`[I&M Vision] ❌ Could not set "${action.value}" — field not found`);
         }
       }
+      continue;
+    }
+
+    if (action.action === 'press_key' && action.value) {
+      await imPage.keyboard.press(action.value);
+      console.log(`[I&M Vision] Pressed key: ${action.value}`);
+      await new Promise(r => setTimeout(r, 500));
       continue;
     }
 
@@ -6890,8 +7042,14 @@ async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
 
 async function sendBinanceChatMessage(page, message) {
   try {
-    const chatInput = await page.$('[placeholder*="message" i], [placeholder*="Enter message" i], textarea');
-    if (!chatInput) { console.log('[SparkP2P] Chat input not found'); return false; }
+    // Wait up to 10s for the chat panel to render
+    let chatInput = null;
+    for (let i = 0; i < 5; i++) {
+      chatInput = await page.$('[placeholder*="message" i], [placeholder*="Enter message" i], [placeholder*="Type" i], textarea');
+      if (chatInput) break;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    if (!chatInput) { console.log('[SparkP2P] Chat input not found after retries'); return false; }
     await chatInput.click();
     await new Promise(r => setTimeout(r, 400));
     await chatInput.type(message, { delay: 30 });
@@ -6905,90 +7063,438 @@ async function sendBinanceChatMessage(page, message) {
   }
 }
 
+// Returns { uploaded: bool, confirmed: bool }
+// Flow: "Upload Payment Proof" btn → Payment Confirmation modal opens →
+//       click circular upload icon inside modal → file picker → upload →
+//       check "I have made the transfer" checkbox → Confirm
 async function uploadPaymentProofToBinance(page, screenshotBase64) {
+  const result = { uploaded: false, confirmed: false };
+  let tmpPath = null;
   try {
-    // Click the "Upload Payment Proof" button
-    const allBtns = await page.$$('button, [role="button"]');
-    let uploadBtn = null;
-    for (const btn of allBtns) {
-      const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
-      if (txt.toLowerCase().includes('upload') || txt.toLowerCase().includes('payment proof')) {
-        uploadBtn = btn;
-        break;
+    tmpPath = path.join(app.getPath('temp'), `im_receipt_${Date.now()}.jpg`);
+    // Resize to 480px wide JPEG — fits any mobile screen without horizontal scrolling
+    try {
+      const { nativeImage } = require('electron');
+      const img = nativeImage.createFromBuffer(Buffer.from(screenshotBase64, 'base64'));
+      const size = img.getSize();
+      const targetW = Math.min(480, size.width);
+      const scale = targetW / size.width;
+      const resized = img.resize({ width: targetW, height: Math.round(size.height * scale), quality: 'good' });
+      fs.writeFileSync(tmpPath, resized.toJPEG(88));
+      console.log(`[SparkP2P] Receipt: ${size.width}x${size.height} → ${targetW}x${Math.round(size.height * scale)} JPEG`);
+    } catch (e) {
+      console.log('[SparkP2P] nativeImage resize failed, using original:', e.message);
+      tmpPath = path.join(app.getPath('temp'), `im_receipt_${Date.now()}.png`);
+      fs.writeFileSync(tmpPath, Buffer.from(screenshotBase64, 'base64'));
+    }
+
+    // ── Step A: Open the Payment Confirmation modal if not already open ──────
+    const modalAlreadyOpen = await page.evaluate(() =>
+      !!document.querySelector('[class*="modal" i], [class*="dialog" i], [role="dialog"]') &&
+      document.body.innerText.toLowerCase().includes('payment confirmation')
+    ).catch(() => false);
+
+    if (!modalAlreadyOpen) {
+      const allBtns = await page.$$('button, [role="button"]');
+      let uploadBtn = null;
+      for (const btn of allBtns) {
+        const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
+        if (txt.toLowerCase().includes('upload') || txt.toLowerCase().includes('payment proof')) {
+          uploadBtn = btn; break;
+        }
+      }
+      if (!uploadBtn) { console.log('[SparkP2P] "Upload Payment Proof" button not found'); return result; }
+      await uploadBtn.click();
+      console.log('[SparkP2P] Clicked "Upload Payment Proof" — waiting for modal...');
+      await new Promise(r => setTimeout(r, 2500));
+    } else {
+      console.log('[SparkP2P] Payment Confirmation modal already open');
+    }
+
+    // ── Step B: Click the "Upload" icon INSIDE the modal → FileChooser ────────
+    // Must use FileChooser (not direct uploadFile) so React event handlers fire
+    // and Binance shows the proof preview before Confirm becomes active.
+    let uploaded = false;
+    try {
+      // Get coords of the upload icon inside modal via DOM, then use mouse.click()
+      const uploadIconCoords = await page.evaluate(() => {
+        const selectors = [
+          '[role="dialog"] label', '[role="dialog"] button',
+          '[class*="modal" i] label', '[class*="modal" i] button',
+          '[class*="upload" i]',
+        ];
+        for (const sel of selectors) {
+          for (const el of Array.from(document.querySelectorAll(sel))) {
+            const txt = (el.textContent || '').trim().toLowerCase();
+            if ((txt === 'upload' || (txt.includes('upload') && txt.length < 15)) &&
+                !txt.includes('proof') && !txt.includes('confirm')) {
+              const r = el.getBoundingClientRect();
+              if (r.width > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            }
+          }
+        }
+        return null;
+      }).catch(() => null);
+
+      if (uploadIconCoords) {
+        const [fileChooser] = await Promise.all([
+          page.waitForFileChooser({ timeout: 8000 }),
+          page.mouse.click(uploadIconCoords.x, uploadIconCoords.y),
+        ]);
+        await fileChooser.accept([tmpPath]);
+        uploaded = true;
+        console.log('[SparkP2P] ✅ Upload icon clicked — file accepted via FileChooser');
+      } else {
+        console.log('[SparkP2P] Upload icon not found inside modal');
+      }
+    } catch (e) {
+      console.log('[SparkP2P] Modal FileChooser error:', e.message);
+    }
+
+    if (!uploaded) { console.log('[SparkP2P] Could not upload inside modal'); return result; }
+    result.uploaded = true;
+
+    // ── Step C: Wait for preview, then click checkbox via mouse coords + Confirm ─
+    await new Promise(r => setTimeout(r, 3000));
+
+    // ── Checkbox click: Layer 1 DOM → Layer 2 Vision ────────────────────────
+    const pageDpr = await page.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
+    let cbClicked = false;
+
+    // Layer 1: DOM — find the small visible checkbox square element
+    const cbCoords = await page.evaluate(() => {
+      // Try small square spans used by Ant Design / Binance checkboxes
+      const squares = Array.from(document.querySelectorAll(
+        '[class*="checkbox-inner"], [class*="checkmark"], [class*="check-inner"]'
+      ));
+      for (const el of squares) {
+        const r = el.getBoundingClientRect();
+        if (r.width >= 12 && r.width <= 32 && r.height >= 12 && r.top > 100)
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }
+      // Try immediate parent of hidden checkbox input
+      for (const cb of document.querySelectorAll('input[type="checkbox"]')) {
+        const p = cb.parentElement;
+        if (p) {
+          const r = p.getBoundingClientRect();
+          if (r.width >= 12 && r.width <= 40 && r.height >= 12 && r.top > 100)
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+      }
+      return null;
+    }).catch(() => null);
+
+    if (cbCoords) {
+      await page.mouse.click(cbCoords.x, cbCoords.y);
+      console.log('[SparkP2P] ✅ Checkbox clicked via Layer 1 DOM');
+      cbClicked = true;
+      await new Promise(r => setTimeout(r, 600));
+    }
+
+    // Layer 2: Vision — take screenshot and ask Claude Haiku for exact checkbox coordinates
+    if (!cbClicked && anthropicApiKey) {
+      const cbSS = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+      if (cbSS) {
+        const cbRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 100,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: cbSS } },
+              { type: 'text', text: 'Find the small unchecked checkbox square (empty square box) in the Payment Confirmation modal next to the text "I have made the transfer". Return ONLY the center pixel coordinates of that checkbox square as JSON: {"x": number, "y": number}' },
+            ]}],
+          }),
+        }).catch(() => null);
+        if (cbRes?.ok) {
+          const cbData = await cbRes.json();
+          const match = (cbData.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
+          if (match) {
+            try {
+              const { x, y } = JSON.parse(match[0]);
+              if (x > 0 && y > 0) {
+                await page.mouse.click(x / pageDpr, y / pageDpr);
+                console.log(`[SparkP2P] ✅ Checkbox clicked via Layer 2 Vision at (${x}/${pageDpr}, ${y}/${pageDpr})`);
+                cbClicked = true;
+                await new Promise(r => setTimeout(r, 600));
+              }
+            } catch (_) {}
+          }
+        }
       }
     }
 
-    if (!uploadBtn) {
-      // Try the + attachment button in chat
-      uploadBtn = await page.$('[class*="attach" i], [title*="attach" i], [aria-label*="attach" i]');
+    if (!cbClicked) console.log('[SparkP2P] ⚠️ Checkbox not found — confirming anyway');
+
+    // ── Confirm button: Layer 1 DOM → Layer 2 Vision ─────────────────────────
+    let confirmClicked = false;
+
+    // Layer 1: DOM — find Confirm button inside the modal by text
+    const confirmCoords = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+      for (const btn of btns) {
+        const txt = (btn.textContent || '').trim().toLowerCase();
+        if (txt === 'confirm' || txt === 'submit' || txt === 'yes') {
+          const r = btn.getBoundingClientRect();
+          if (r.width > 0 && r.top > 100) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+      }
+      return null;
+    }).catch(() => null);
+
+    if (confirmCoords) {
+      await page.mouse.click(confirmCoords.x, confirmCoords.y);
+      console.log('[SparkP2P] ✅ Confirm clicked via Layer 1 DOM');
+      confirmClicked = true;
     }
 
-    if (!uploadBtn) { console.log('[SparkP2P] Upload button not found'); return false; }
-
-    // Write screenshot to temp file and upload via file input
-    const tmpPath = path.join(app.getPath('temp'), `im_receipt_${Date.now()}.png`);
-    const buf = Buffer.from(screenshotBase64, 'base64');
-    fs.writeFileSync(tmpPath, buf);
-
-    // Intercept file chooser
-    const [fileChooser] = await Promise.all([
-      page.waitForFileChooser({ timeout: 12000 }),
-      uploadBtn.click(),
-    ]);
-    await fileChooser.accept([tmpPath]);
-    await new Promise(r => setTimeout(r, 2000));
-
-    // Click Send if there's a send button after file selection
-    const sendBtns = await page.$$('button');
-    for (const btn of sendBtns) {
-      const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
-      if (txt.toLowerCase() === 'send' || txt.toLowerCase().includes('send')) {
-        await btn.click();
-        break;
+    // Layer 2: Vision — screenshot → Claude Haiku finds the Confirm button
+    if (!confirmClicked && anthropicApiKey) {
+      const cfSS = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+      if (cfSS) {
+        const cfRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 100,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: cfSS } },
+              { type: 'text', text: 'Find the yellow "Confirm" button in the Payment Confirmation modal. Return ONLY its center pixel coordinates as JSON: {"x": number, "y": number}' },
+            ]}],
+          }),
+        }).catch(() => null);
+        if (cfRes?.ok) {
+          const cfData = await cfRes.json();
+          const match = (cfData.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
+          if (match) {
+            try {
+              const { x, y } = JSON.parse(match[0]);
+              if (x > 0 && y > 0) {
+                await page.mouse.click(x / pageDpr, y / pageDpr);
+                console.log(`[SparkP2P] ✅ Confirm clicked via Layer 2 Vision at (${x}/${pageDpr}, ${y}/${pageDpr})`);
+                confirmClicked = true;
+              }
+            } catch (_) {}
+          }
+        }
       }
     }
 
-    // Clean up temp file
-    fs.unlinkSync(tmpPath);
-    console.log('[SparkP2P] Payment proof uploaded to Binance chat');
-    return true;
+    if (confirmClicked) {
+      result.confirmed = true;
+      console.log('[SparkP2P] ✅ Payment proof uploaded and Confirmed');
+      await new Promise(r => setTimeout(r, 2000));
+      await handleSecurityVerification(page);
+    } else {
+      console.log('[SparkP2P] ⚠️ Could not click Confirm button');
+    }
+
+    return result;
   } catch (e) {
     console.log('[SparkP2P] Upload proof error:', e.message);
+    return result;
+  } finally {
+    if (tmpPath) { try { fs.unlinkSync(tmpPath); } catch (_) {} }
+  }
+}
+
+const buyLastSellerMsg = {}; // orderNum → last seller message text we replied to (prevents duplicate replies)
+
+// Send an image file directly in the Binance P2P chat (not via the Payment Proof modal)
+async function sendImageInBinanceChat(page, screenshotBase64) {
+  let tmpPath = null;
+  try {
+    // Resize to 480px wide JPEG — fits any mobile screen without horizontal scrolling
+    tmpPath = path.join(app.getPath('temp'), `chat_img_${Date.now()}.jpg`);
+    try {
+      const { nativeImage } = require('electron');
+      const img = nativeImage.createFromBuffer(Buffer.from(screenshotBase64, 'base64'));
+      const size = img.getSize();
+      const targetW = Math.min(480, size.width);
+      const scale = targetW / size.width;
+      const resized = img.resize({ width: targetW, height: Math.round(size.height * scale), quality: 'good' });
+      fs.writeFileSync(tmpPath, resized.toJPEG(88));
+      console.log(`[SparkP2P] Chat img: ${size.width}x${size.height} → ${targetW}x${Math.round(size.height * scale)} JPEG`);
+    } catch (e) {
+      tmpPath = path.join(app.getPath('temp'), `chat_img_${Date.now()}.png`);
+      fs.writeFileSync(tmpPath, Buffer.from(screenshotBase64, 'base64'));
+    }
+
+    // Find the image/attachment button in the chat input area
+    // Binance chat has a small image icon (📷) to the left of the text input
+    const pageDpr = await page.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
+
+    const attachCoords = await page.evaluate(() => {
+      // Look for image/attachment button near the chat input area
+      const selectors = [
+        'label[for*="upload" i]', 'label[for*="image" i]', 'label[for*="file" i]',
+        'input[type="file"] + label', '[class*="chat" i] label',
+        '[class*="upload" i]:not([class*="modal" i]):not([class*="dialog" i])',
+        '[class*="attach" i]', '[class*="image-upload" i]',
+        'svg[class*="camera" i]', 'svg[class*="photo" i]',
+      ];
+      for (const sel of selectors) {
+        const els = Array.from(document.querySelectorAll(sel));
+        for (const el of els) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.width < 60 && r.height > 0 && r.height < 60) {
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+          }
+        }
+      }
+      // Fallback: find any small clickable element next to the chat textarea
+      const textarea = document.querySelector('[placeholder*="message" i], [placeholder*="Enter message" i], textarea');
+      if (!textarea) return null;
+      const tr = textarea.getBoundingClientRect();
+      // Look for small elements (icons) in the same row as the textarea
+      const candidates = Array.from(document.querySelectorAll('button, label, [role="button"], svg'));
+      for (const el of candidates) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 5 && r.width < 50 && Math.abs(r.top - tr.top) < 40 && r.left < tr.left) {
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+      }
+      return null;
+    }).catch(() => null);
+
+    if (attachCoords) {
+      // Click the attachment button and intercept the FileChooser
+      const [fileChooser] = await Promise.all([
+        page.waitForFileChooser({ timeout: 5000 }),
+        page.mouse.click(attachCoords.x / pageDpr, attachCoords.y / pageDpr),
+      ]).catch(() => [null]);
+
+      if (fileChooser) {
+        await fileChooser.accept([tmpPath]);
+        await new Promise(r => setTimeout(r, 2000));
+        // Press Enter to send (some Binance versions auto-send, some need confirmation)
+        await page.keyboard.press('Enter').catch(() => {});
+        await new Promise(r => setTimeout(r, 1500));
+        console.log('[SparkP2P] ✅ Screenshot sent directly in chat');
+        return true;
+      }
+    }
+
+    // Vision fallback: ask Claude to find the image/camera icon in the chat
+    const chatSS = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+    if (chatSS && anthropicApiKey) {
+      const vRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 80,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: chatSS } },
+            { type: 'text', text: 'Find the image/camera/attachment icon in the chat input area (NOT the upload proof button — the small icon next to the message text box at the bottom of the page). Return its center coordinates as JSON: {"x":NNN,"y":NNN}. If not found return {"x":0,"y":0}' },
+          ]}],
+        }),
+      }).catch(() => null);
+      if (vRes?.ok) {
+        const vd = await vRes.json();
+        const vm = (vd.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
+        let vc = null; try { if (vm) vc = JSON.parse(vm[0]); } catch (_) {}
+        if (vc?.x && vc?.y && vc.x > 0) {
+          const [fileChooser2] = await Promise.all([
+            page.waitForFileChooser({ timeout: 5000 }),
+            page.mouse.click(vc.x / pageDpr, vc.y / pageDpr),
+          ]).catch(() => [null]);
+          if (fileChooser2) {
+            await fileChooser2.accept([tmpPath]);
+            await new Promise(r => setTimeout(r, 2000));
+            await page.keyboard.press('Enter').catch(() => {});
+            await new Promise(r => setTimeout(r, 1500));
+            console.log('[SparkP2P] ✅ Screenshot sent in chat via Vision');
+            return true;
+          }
+        }
+      }
+    }
+
+    console.log('[SparkP2P] ⚠️ Could not find chat image button — screenshot not sent in chat');
     return false;
+  } catch (e) {
+    console.log('[SparkP2P] sendImageInBinanceChat error:', e.message);
+    return false;
+  } finally {
+    if (tmpPath) { try { fs.unlinkSync(tmpPath); } catch (_) {} }
   }
 }
 
 async function respondToBuyOrderChat(page, orderDetails) {
   try {
-    // Get all chat messages visible on the page
-    const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
+    // Extract ALL seller messages from DOM (not just the last) to understand the conversation
+    const chatContext = await page.evaluate(() => {
+      const msgs = Array.from(document.querySelectorAll('[class*="chat" i] [class*="message" i], [class*="msg" i]'));
+      const result = [];
+      for (const m of msgs) {
+        const txt = (m.textContent || '').trim();
+        if (txt.length < 5 || txt.length > 500) continue;
+        if (txt.includes('NEVER release cryptocurrency')) continue;
+        // Detect side: buyer messages are right-aligned
+        const style = window.getComputedStyle(m);
+        const isRight = style.textAlign === 'right' || m.closest('[class*="right" i]') || m.closest('[class*="self" i]') || m.closest('[class*="mine" i]');
+        result.push({ from: isRight ? 'buyer' : 'seller', text: txt.substring(0, 200) });
+      }
+      return result;
+    }).catch(() => []);
 
-    // Only respond if there are seller messages we haven't addressed
-    // Ask Claude to read the chat and generate a response if needed
+    const sellerMsgs = chatContext.filter(m => m.from === 'seller');
+    if (!sellerMsgs.length) return;
+
+    const lastSellerText = sellerMsgs[sellerMsgs.length - 1].text;
+    const orderNum = orderDetails.orderNumber;
+    if (buyLastSellerMsg[orderNum] === lastSellerText) return; // already replied to this
+
     const ss = await page.screenshot({ encoding: 'base64' }).catch(() => null);
     if (!ss || !anthropicApiKey) return;
 
-    const minutesSincePayment = buyPaymentTime ? Math.floor((Date.now() - buyPaymentTime) / 60000) : 0;
-    const prompt = `You are managing a Binance P2P buy order. You are the BUYER.
+    const minutesSincePayment = buyPaymentSentAt[orderNum]
+      ? Math.floor((Date.now() - buyPaymentSentAt[orderNum]) / 60000) : 0;
 
-Order details:
-- You sent KSh ${orderDetails.amount} to ${orderDetails.name} via ${orderDetails.method} (${orderDetails.phone || ''})
-- Payment was sent ${minutesSincePayment} minute(s) ago
-- Order number: ${orderDetails.orderNumber}
+    const conversationSummary = chatContext.slice(-6).map(m => `${m.from.toUpperCase()}: ${m.text}`).join('\n');
 
-Look at this Binance P2P order chat screenshot.
-1. Has the seller sent any NEW message that requires a response?
-2. If yes, what should the buyer reply? Be professional, friendly, and concise (max 2 sentences).
-3. If no response is needed, reply with "NO_REPLY_NEEDED".
+    const prompt = `You are an AI managing a Binance P2P buy order on behalf of the BUYER.
 
-Reply in this JSON format: {"needs_reply": true/false, "message": "your reply here or NO_REPLY_NEEDED"}`;
+Payment details:
+- Sent: KSh ${orderDetails.amount} to ${orderDetails.name} (${orderDetails.phone || ''})
+- Via: ${orderDetails.method || 'M-Pesa'}
+- M-Pesa Ref: ${orderDetails.referenceId || 'N/A'}
+- Payment sent: ${minutesSincePayment} minute(s) ago
+
+Recent chat (last 6 messages):
+${conversationSummary}
+
+The seller's LATEST message: "${lastSellerText}"
+
+Decide what action to take. Be professional, warm, and concise (max 2 sentences for text replies).
+
+Return JSON with this exact structure:
+{
+  "action": "reply" | "resend_screenshot" | "reply_and_resend" | "none",
+  "message": "text to send (empty string if action is none or resend_screenshot only)"
+}
+
+Rules:
+- "resend_screenshot" if seller says screenshot is unclear/blurry/can't see/not visible → set message to "Okay, let me send you a clearer screenshot." then the bot will re-upload
+- "reply_and_resend" if they want both a text explanation AND a new screenshot
+- "reply" for any other question (amount, reference, waiting status, etc.)
+- "none" if no response needed (seller said thank you, already released, or message is a system notification)
+
+For "reply" cases:
+- Screenshot unclear → action: "resend_screenshot", message: "Okay, let me send you a clearer screenshot."
+- Asking for proof/confirmation → "I have sent the payment. M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} for KSh ${orderDetails.amount}. Please confirm and release."
+- Asking about amount/ref → provide the details above
+- Asking how long / still waiting → "I sent the payment ${minutesSincePayment} minute(s) ago. Ref: ${orderDetails.referenceId || 'N/A'}. Kindly check and release. Thank you!"
+- Seller greeting/hello → "Hello! I have sent KSh ${orderDetails.amount}. Ref: ${orderDetails.referenceId || 'N/A'}. Please release when confirmed. 🙏"`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 200,
+        max_tokens: 250,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
           { type: 'text', text: prompt },
@@ -7002,10 +7508,45 @@ Reply in this JSON format: {"needs_reply": true/false, "message": "your reply he
     if (!jsonMatch) return;
 
     const result = JSON.parse(jsonMatch[0]);
-    if (result.needs_reply && result.message && result.message !== 'NO_REPLY_NEEDED') {
-      await sendBinanceChatMessage(page, result.message);
-      console.log(`[SparkP2P] AI replied to seller: ${result.message.substring(0, 60)}`);
+    const action = result.action || 'none';
+    const replyMsg = (result.message || '').trim();
+
+    console.log(`[SparkP2P] Chat AI decision: action="${action}" msg="${replyMsg.substring(0, 60)}"`);
+
+    if (action === 'none') {
+      buyLastSellerMsg[orderNum] = lastSellerText;
+      return;
     }
+
+    // Send text reply first if there is one
+    if ((action === 'reply' || action === 'reply_and_resend') && replyMsg) {
+      await sendBinanceChatMessage(page, replyMsg);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    // Re-send screenshot directly in chat if needed
+    if (action === 'resend_screenshot' || action === 'reply_and_resend') {
+      // Send the "let me send you a clearer screenshot" message first
+      if (action === 'resend_screenshot' && replyMsg) {
+        await sendBinanceChatMessage(page, replyMsg);
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      // Get the stored I&M screenshot for this order
+      const storedScreenshot = imPaymentDoneMap[orderNum]?.screenshot || null;
+      if (storedScreenshot) {
+        const sent = await sendImageInBinanceChat(page, storedScreenshot);
+        if (sent) {
+          console.log(`[SparkP2P] ✅ Re-sent payment screenshot in chat for order ${orderNum}`);
+        } else {
+          // If image send failed, fall back to sending reference details as text
+          await sendBinanceChatMessage(page, `M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} | Amount: KSh ${orderDetails.amount} | To: ${orderDetails.name} (${orderDetails.phone || ''}). Please check your M-Pesa and release. 🙏`);
+        }
+      } else {
+        await sendBinanceChatMessage(page, `M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} | Amount: KSh ${orderDetails.amount} | To: ${orderDetails.name} (${orderDetails.phone || ''}). Please check and release. 🙏`);
+      }
+    }
+
+    buyLastSellerMsg[orderNum] = lastSellerText;
   } catch (e) {
     console.log('[SparkP2P] Chat response error:', e.message);
   }
