@@ -7212,18 +7212,27 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
 
       // KES currency — BEFORE scroll so y>400 filter works correctly
       const currTrigger = await imPage.evaluate(() => {
-        // Find the currency mat-select (shows "-" or "KES")
+        const vh = window.innerHeight;
+        // Find the currency mat-select — must be VISIBLE in the current viewport
         const matSelects = Array.from(document.querySelectorAll('mat-select'));
         for (const ms of matSelects) {
           const txt = (ms.textContent || '').trim();
           if (txt === '-' || txt === '' || txt === 'KES') {
             const r = ms.getBoundingClientRect();
-            if (r.width > 5 && r.width < 120 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            // Must be visible on screen (not hidden off-screen)
+            if (r.width > 5 && r.width < 120 && r.height > 0 && r.top >= 0 && r.top < vh) {
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            }
           }
         }
-        // Fallback: small element with text exactly "-"
-        const dash = Array.from(document.querySelectorAll('*')).find(e =>
-          (e.textContent || '').trim() === '-' && e.getBoundingClientRect().width > 5 && e.getBoundingClientRect().width < 80);
+        // Fallback: visible small element with text exactly "-"
+        const all = Array.from(document.querySelectorAll('*'));
+        const dash = all.find(e => {
+          const txt = (e.textContent || '').trim();
+          if (txt !== '-') return false;
+          const r = e.getBoundingClientRect();
+          return r.width > 5 && r.width < 80 && r.height > 0 && r.top >= 0 && r.top < vh;
+        });
         if (dash) { const r = dash.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
         return null;
       }).catch(() => null);
