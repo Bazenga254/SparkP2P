@@ -7092,29 +7092,39 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   await new Promise(r => setTimeout(r, 1500));
 
   // ── L1 STEP 3: Type bank name in searchable field → select from dropdown ──
-  // The Bank name field is a text input that filters a dropdown list
-  const bankTyped = await imPage.evaluate((bank) => {
+  // Extra wait for Angular to render One-off Beneficiary form fields
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Find and click the bank name input using label proximity
+  const bankInputCoords = await imPage.evaluate(() => {
+    // Look for input near a "Bank name" label
+    const labels = Array.from(document.querySelectorAll('label, div, span, p, h6'));
+    const bankLabel = labels.find(el =>
+      (el.textContent || '').trim().toLowerCase() === 'bank name' &&
+      el.getBoundingClientRect().width > 0
+    );
+    if (bankLabel) {
+      const parent = bankLabel.parentElement?.parentElement || bankLabel.parentElement;
+      const inp = parent ? parent.querySelector('input') : null;
+      if (inp) { const r = inp.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+    }
+    // Fallback: any input with placeholder or formcontrolname containing "bank"
     const inputs = Array.from(document.querySelectorAll('input'));
-    // Find the bank name input (near "Bank name" label)
     const bankInput = inputs.find(i =>
       (i.placeholder || '').toLowerCase().includes('bank') ||
-      (i.getAttribute('formcontrolname') || '').toLowerCase().includes('bank') ||
-      (i.closest('[class*="bank" i]')) != null
+      (i.getAttribute('formcontrolname') || '').toLowerCase().includes('bank')
     );
-    if (bankInput) {
-      bankInput.click();
-      bankInput.focus();
-      // Use native setter to trigger Angular binding
-      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-      if (nativeSetter) nativeSetter.call(bankInput, bank.substring(0, 5));
-      bankInput.dispatchEvent(new Event('input', { bubbles: true }));
-      return true;
-    }
-    return false;
-  }, targetBank).catch(() => false);
+    if (bankInput) { const r = bankInput.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+    return null;
+  }).catch(() => null);
 
-  if (bankTyped) {
-    await new Promise(r => setTimeout(r, 1200));
+  if (bankInputCoords) {
+    await imPage.mouse.click(bankInputCoords.x / imDpr, bankInputCoords.y / imDpr);
+    await new Promise(r => setTimeout(r, 400));
+    // Type first 5 chars via keyboard to trigger Angular autocomplete
+    const searchStr = targetBank.substring(0, 5);
+    await imPage.keyboard.type(searchStr, { delay: 80 });
+    await new Promise(r => setTimeout(r, 1800));
     // Select matching option from dropdown
     const bankSelected = await imPage.evaluate((bank) => {
       const opts = Array.from(document.querySelectorAll('[class*="option" i], [role="option"], li, .ng-option, .dropdown-item'));
@@ -7125,8 +7135,14 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       if (match) { match.click(); return (match.textContent || '').trim(); }
       return null;
     }, targetBank).catch(() => null);
-    if (bankSelected) console.log(`[BankTransfer] ✅ Bank selected: ${bankSelected}`);
-    await new Promise(r => setTimeout(r, 1000));
+    if (bankSelected) {
+      console.log(`[BankTransfer] ✅ Bank selected: ${bankSelected}`);
+      await new Promise(r => setTimeout(r, 1000));
+    } else {
+      console.log(`[BankTransfer] ⚠️ Bank dropdown option not found for "${targetBank}" — Vision will handle`);
+    }
+  } else {
+    console.log('[BankTransfer] ⚠️ Bank name input not found via L1 — Vision will handle');
   }
 
   // ── L1 STEP 4: Type account number ───────────────────────────────────────
@@ -7195,11 +7211,21 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
 
   // ── L1 STEP 6: Type amount in whole number field ──────────────────────────
   const amtTyped = await imPage.evaluate((amt) => {
-    // Amount field: number input showing "0" (the whole number part)
+    // Amount field: number input with placeholder "0" or type="number", NOT the bank name or account inputs
     const inputs = Array.from(document.querySelectorAll('input[type="number"], input[type="text"]'));
     const amtInput = inputs.find(i => {
       const r = i.getBoundingClientRect();
-      return r.width > 100 && (i.value === '0' || i.value === '' || i.placeholder === '0');
+      if (r.width < 100) return false;
+      const ph = (i.placeholder || '').toLowerCase();
+      const fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
+      const lbl = (i.labels?.[0]?.textContent || '').toLowerCase();
+      // Exclude bank name, account number, account name, reference fields
+      if (ph.includes('bank') || fc.includes('bank')) return false;
+      if (ph.includes('account') || fc.includes('account')) return false;
+      if (ph.includes('reference') || ph.includes('description') || ph.includes('narration')) return false;
+      if (fc.includes('reference') || fc.includes('description') || fc.includes('narration')) return false;
+      // Match: value is "0"/empty and placeholder is "0", or formcontrolname contains "amount"
+      return (i.value === '0' || i.placeholder === '0' || fc.includes('amount') || lbl.includes('amount'));
     });
     if (amtInput) {
       amtInput.click();
