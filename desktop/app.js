@@ -7316,26 +7316,38 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
 
-      // Payment Purpose = Other
-      await imPage.evaluate(() => {
-        const selects = Array.from(document.querySelectorAll('select'));
-        for (const sel of selects) {
-          const otherOpt = Array.from(sel.options).find(o => o.text.trim() === 'Other');
-          if (otherOpt) { sel.value = otherOpt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); return; }
+      // Payment Purpose = Other — use page.select() for native select, fallback to click
+      let purposeDone = false;
+      try {
+        const purposeInfo = await imPage.evaluate(() => {
+          const sels = Array.from(document.querySelectorAll('select'));
+          for (const sel of sels) {
+            const otherOpt = Array.from(sel.options).find(o => o.text.trim() === 'Other');
+            if (otherOpt) return { value: otherOpt.value };
+          }
+          return null;
+        }).catch(() => null);
+        if (purposeInfo) {
+          await imPage.select('select', purposeInfo.value);
+          purposeDone = true;
+          console.log(`[BankTransfer] ✅ Payment Purpose set to Other (page.select value="${purposeInfo.value}")`);
         }
-        const dropdowns = Array.from(document.querySelectorAll('[class*="dropdown" i],ng-select,[class*="select" i]'));
-        for (const d of dropdowns) {
-          if ((d.textContent || '').toLowerCase().includes('payment purpose') || (d.textContent || '').toLowerCase().includes('select payment')) { d.click(); return; }
-        }
-      }).catch(() => {});
-      await new Promise(r => setTimeout(r, 800));
-      await imPage.evaluate(() => {
-        const opts = Array.from(document.querySelectorAll('[class*="option" i],[role="option"],li,.ng-option'));
-        const other = opts.find(o => (o.textContent || '').trim() === 'Other');
-        if (other) other.click();
-      }).catch(() => {});
-      await new Promise(r => setTimeout(r, 500));
-      console.log('[BankTransfer] ✅ Payment Purpose set to Other');
+      } catch (_) {}
+      if (!purposeDone) {
+        // Fallback: click the dropdown then click Other
+        await imPage.evaluate(() => {
+          const all = Array.from(document.querySelectorAll('*'));
+          const trigger = all.find(e => (e.textContent || '').trim() === 'Select payment purpose' && e.getBoundingClientRect().width > 100);
+          if (trigger) trigger.click();
+        }).catch(() => {});
+        await new Promise(r => setTimeout(r, 800));
+        await imPage.evaluate(() => {
+          const opts = Array.from(document.querySelectorAll('[role="option"],mat-option,li,option'));
+          const other = opts.find(o => (o.textContent || '').trim() === 'Other');
+          if (other) other.click();
+        }).catch(() => {});
+        console.log('[BankTransfer] ✅ Payment Purpose set to Other (click fallback)');
+      }
       // Scroll to bottom so Continue button is visible for Vision
       await imPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
       await new Promise(r => setTimeout(r, 800));
@@ -7368,8 +7380,12 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
         const txt = (el.textContent || '').trim();
         if (txt !== 'KES') return false;
         const r = el.getBoundingClientRect();
-        // Must be visible anywhere in viewport (no y floor — page may be scrolled)
-        return r.width > 0 && r.height > 0 && r.width < 200 && r.height < 60 && r.top > 50 && r.top < window.innerHeight;
+        if (!(r.width > 0 && r.height > 0 && r.width < 200 && r.height < 60 && r.top > 50 && r.top < window.innerHeight)) return false;
+        // Only match if EUR/USD also visible nearby (dropdown is truly open, not just selected state)
+        const hasOtherCurrencies = Array.from(document.querySelectorAll('*')).some(e =>
+          (e.textContent || '').trim() === 'EUR' && e.getBoundingClientRect().width > 0 && e.children.length === 0
+        );
+        return hasOtherCurrencies;
       });
       if (leaf[0]) { const r = leaf[0].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
       return null;
