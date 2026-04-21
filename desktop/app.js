@@ -7210,54 +7210,66 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         console.log('[BankTransfer] ⚠️ Account number input not found — skipped');
       }
 
-      // KES currency — find trigger by locating amount input and going left
-      const currTrigger = await imPage.evaluate(() => {
-        const vh = window.innerHeight;
-        // Find the amount input (formcontrolname contains 'amount')
-        const inputs = Array.from(document.querySelectorAll('input'));
-        const amtInput = inputs.find(i => {
-          const r = i.getBoundingClientRect();
-          const fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
-          return fc.includes('amount') && r.width > 100 && r.top >= 0 && r.top < vh;
-        });
-        if (amtInput) {
-          const ar = amtInput.getBoundingClientRect();
-          // Currency trigger is 50px to the left of the amount input, same vertical center
-          return { x: ar.left - 50, y: ar.top + ar.height / 2 };
-        }
-        return null;
-      }).catch(() => null);
+      // KES currency — use Puppeteer page.select() for native <select>, fallback to click+keyboard
+      const kesSetBySelect = await (async () => {
+        try {
+          // Find native <select> with KES option
+          const selInfo = await imPage.evaluate(() => {
+            const sels = Array.from(document.querySelectorAll('select'));
+            for (const s of sels) {
+              const opts = Array.from(s.options).map(o => o.text.trim());
+              if (opts.includes('KES')) {
+                const r = s.getBoundingClientRect();
+                // Collect all option values to find KES
+                const kesOpt = Array.from(s.options).find(o => o.text.trim() === 'KES');
+                return { selector: true, value: kesOpt?.value || 'KES', x: r.left + r.width / 2, y: r.top + r.height / 2 };
+              }
+            }
+            return null;
+          }).catch(() => null);
 
-      if (currTrigger) {
-        // OS-level click to open the dropdown (gives real keyboard focus)
-        await realMouseClick(imPage, currTrigger.x, currTrigger.y);
-        await new Promise(r => setTimeout(r, 900));
-        // Press K then Enter via OS keybd_event — Angular type-ahead selects KES
-        const psKes = `
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-using System.Threading;
-public class KesSelect {
-  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra);
-  public static void PressKey(byte vk) {
-    keybd_event(vk, 0, 0, 0); Thread.Sleep(80); keybd_event(vk, 0, 2, 0); Thread.Sleep(80);
-  }
-}
+          if (selInfo) {
+            // Use Puppeteer's built-in select (sets value + dispatches change/input events)
+            await imPage.select('select', selInfo.value);
+            console.log(`[BankTransfer] ✅ Currency set to KES (page.select value="${selInfo.value}")`);
+            return true;
+          }
+          return false;
+        } catch (e) {
+          console.log(`[BankTransfer] page.select failed: ${e.message}`);
+          return false;
+        }
+      })();
+
+      if (!kesSetBySelect) {
+        // Fallback: find the select trigger visually and use OS click + keyboard K
+        const currTrigger = await imPage.evaluate(() => {
+          const vh = window.innerHeight;
+          // Find any visible small element with text "-" (the currency trigger)
+          const all = Array.from(document.querySelectorAll('select, mat-select, [role="combobox"]'));
+          for (const el of all) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.width < 150 && r.height > 0 && r.top >= 0 && r.top < vh) {
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            }
+          }
+          return null;
+        }).catch(() => null);
+        if (currTrigger) {
+          await realMouseClick(imPage, currTrigger.x, currTrigger.y);
+          await new Promise(r => setTimeout(r, 900));
+          const psKes = `Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices; using System.Threading;
+public class KS2 { [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra); public static void P(byte vk){keybd_event(vk,0,0,0);Thread.Sleep(80);keybd_event(vk,0,2,0);Thread.Sleep(80);} }
 "@
-[KesSelect]::PressKey(0x4B)
-Start-Sleep -Milliseconds 400
-[KesSelect]::PressKey(0x0D)
-Write-Host "done"`;
-        const psTmp = require('path').join(require('os').tmpdir(), 'sp2p_kesselect.ps1');
-        require('fs').writeFileSync(psTmp, psKes, 'utf8');
-        await new Promise(resolve => {
-          require('child_process').exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psTmp}"`, { timeout: 5000 }, resolve);
-        });
-        console.log('[BankTransfer] ✅ Currency set to KES (OS keybd K + Enter)');
-        await new Promise(r => setTimeout(r, 800));
-      } else {
-        console.log('[BankTransfer] ⚠️ Currency trigger not found — Vision will open dropdown, pre-check will press K+Enter');
+[KS2]::P(0x4B); Start-Sleep -Milliseconds 400; [KS2]::P(0x0D); Write-Host "done"`;
+          const psTmp = require('path').join(require('os').tmpdir(), 'sp2p_kes2.ps1');
+          require('fs').writeFileSync(psTmp, psKes, 'utf8');
+          await new Promise(resolve => { require('child_process').exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psTmp}"`, { timeout: 5000 }, resolve); });
+          console.log('[BankTransfer] ✅ Currency KES via OS click+K fallback');
+        } else {
+          console.log('[BankTransfer] ⚠️ Currency trigger not found — Vision will handle');
+        }
       }
 
       // Scroll down to reveal amount/reference/payment mode fields
