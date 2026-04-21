@@ -7229,10 +7229,10 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       }).catch(() => null);
 
       if (currTrigger) {
-        // Click to open the dropdown
-        await imPage.mouse.click(currTrigger.x / imDpr, currTrigger.y / imDpr);
+        // Open the dropdown with OS-level real click (Layer 3)
+        await realMouseClick(imPage, currTrigger.x, currTrigger.y);
         await new Promise(r => setTimeout(r, 1000));
-        // Use TreeWalker to find the "KES" text node in the open dropdown (below y=400)
+        // Find KES option coords via TreeWalker (below y=400, before scroll)
         const kesCoords = await imPage.evaluate(() => {
           const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
           let node;
@@ -7241,9 +7241,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
               const el = node.parentElement;
               if (!el) continue;
               const r = el.getBoundingClientRect();
-              // Must be in the dropdown area (below y=400), small element, visible
               if (r.width > 0 && r.height > 0 && r.width < 300 && r.height < 80 && r.top > 400) {
-                el.click();
                 return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
               }
             }
@@ -7251,11 +7249,11 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
           return null;
         }).catch(() => null);
         if (kesCoords) {
-          // Also fire a mouse.click at the coordinates for Angular binding
-          await imPage.mouse.click(kesCoords.x / imDpr, kesCoords.y / imDpr);
-          console.log(`[BankTransfer] ✅ Currency set to KES (TreeWalker @ ${Math.round(kesCoords.x)},${Math.round(kesCoords.y)})`);
+          // OS-level real click on KES option (bypasses Angular CDP limitations)
+          await realMouseClick(imPage, kesCoords.x, kesCoords.y);
+          console.log(`[BankTransfer] ✅ Currency set to KES (OS click @ ${Math.round(kesCoords.x)},${Math.round(kesCoords.y)})`);
         } else {
-          console.log('[BankTransfer] ⚠️ KES text node not found in dropdown');
+          console.log('[BankTransfer] ⚠️ KES option not found — Vision will handle');
         }
         await new Promise(r => setTimeout(r, 800));
       }
@@ -7359,8 +7357,8 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       return null;
     }).catch(() => null);
     if (openKES) {
-      await imPage.mouse.click(openKES.x / imDpr, openKES.y / imDpr);
-      console.log(`[BankTransfer] ✅ KES clicked from open dropdown (${openKES.x},${openKES.y})`);
+      await realMouseClick(imPage, openKES.x, openKES.y);
+      console.log(`[BankTransfer] ✅ KES OS-clicked from open dropdown (${Math.round(openKES.x)},${Math.round(openKES.y)})`);
       await new Promise(r => setTimeout(r, 800));
       continue;
     }
