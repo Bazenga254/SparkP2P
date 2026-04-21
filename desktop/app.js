@@ -7265,6 +7265,8 @@ Write-Host "done"`;
         });
         console.log('[BankTransfer] ✅ Currency set to KES (OS keybd K + Enter)');
         await new Promise(r => setTimeout(r, 800));
+      } else {
+        console.log('[BankTransfer] ⚠️ Currency trigger not found — Vision will open dropdown, pre-check will press K+Enter');
       }
 
       // Scroll down to reveal amount/reference/payment mode fields
@@ -7366,8 +7368,20 @@ Write-Host "done"`;
       return null;
     }).catch(() => null);
     if (openKES) {
-      await realMouseClick(imPage, openKES.x, openKES.y);
-      console.log(`[BankTransfer] ✅ KES OS-clicked from open dropdown (${Math.round(openKES.x)},${Math.round(openKES.y)})`);
+      // Dropdown is open — press K+Enter via OS keybd_event (type-ahead selects KES)
+      const psKesVision = `
+Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices; using System.Threading;
+public class KesV { [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra); public static void PressKey(byte vk) { keybd_event(vk,0,0,0); Thread.Sleep(80); keybd_event(vk,0,2,0); Thread.Sleep(80); } }
+"@
+[KesV]::PressKey(0x4B)
+Start-Sleep -Milliseconds 400
+[KesV]::PressKey(0x0D)
+Write-Host "done"`;
+      const psTmpV = require('path').join(require('os').tmpdir(), 'sp2p_kesv.ps1');
+      require('fs').writeFileSync(psTmpV, psKesVision, 'utf8');
+      await new Promise(resolve => { require('child_process').exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psTmpV}"`, { timeout: 5000 }, resolve); });
+      console.log('[BankTransfer] ✅ KES selected via OS K+Enter (dropdown was open)');
       await new Promise(r => setTimeout(r, 800));
       continue;
     }
