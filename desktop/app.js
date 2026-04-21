@@ -7316,37 +7316,63 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
 
-      // Payment Purpose = Other — use page.select() for native select, fallback to click
-      let purposeDone = false;
-      try {
-        const purposeInfo = await imPage.evaluate(() => {
-          const sels = Array.from(document.querySelectorAll('select'));
-          for (const sel of sels) {
-            const otherOpt = Array.from(sel.options).find(o => o.text.trim() === 'Other');
-            if (otherOpt) return { value: otherOpt.value };
+      // Payment Purpose = Other — find the specific purpose select (has "Other" but not "KES")
+      // then use page.select() on it via its nth index
+      const purposeDone = await (async () => {
+        try {
+          const info = await imPage.evaluate(() => {
+            const sels = Array.from(document.querySelectorAll('select'));
+            for (let i = 0; i < sels.length; i++) {
+              const opts = Array.from(sels[i].options).map(o => o.text.trim());
+              if (opts.includes('Other') && !opts.includes('KES')) {
+                const otherOpt = sels[i].options[Array.from(sels[i].options).findIndex(o => o.text.trim() === 'Other')];
+                const r = sels[i].getBoundingClientRect();
+                return { index: i, value: otherOpt.value, x: r.left + r.width / 2, y: r.top + r.height / 2 };
+              }
+            }
+            return null;
+          }).catch(() => null);
+          if (info) {
+            // Use page.select on the nth select element
+            const handles = await imPage.$$('select');
+            if (handles[info.index]) {
+              await handles[info.index].select(info.value);
+              console.log(`[BankTransfer] ✅ Payment Purpose set to Other (select[${info.index}] value="${info.value}")`);
+              return true;
+            }
           }
+        } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
+        return false;
+      })();
+
+      if (!purposeDone) {
+        // Fallback: OS real click on dropdown + OS click on "Other" option
+        const purposeTrigger = await imPage.evaluate(() => {
+          const all = Array.from(document.querySelectorAll('*'));
+          const t = all.find(e => (e.textContent || '').trim() === 'Select payment purpose' && e.getBoundingClientRect().width > 100);
+          if (t) { const r = t.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
           return null;
         }).catch(() => null);
-        if (purposeInfo) {
-          await imPage.select('select', purposeInfo.value);
-          purposeDone = true;
-          console.log(`[BankTransfer] ✅ Payment Purpose set to Other (page.select value="${purposeInfo.value}")`);
+        if (purposeTrigger) {
+          await realMouseClick(imPage, purposeTrigger.x, purposeTrigger.y);
+          await new Promise(r => setTimeout(r, 900));
+          const otherCoords = await imPage.evaluate(() => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            let node;
+            while ((node = walker.nextNode())) {
+              if (node.textContent.trim() === 'Other') {
+                const el = node.parentElement;
+                const r = el?.getBoundingClientRect();
+                if (r && r.width > 0 && r.height > 0 && r.top > 50 && r.top < window.innerHeight) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+              }
+            }
+            return null;
+          }).catch(() => null);
+          if (otherCoords) {
+            await realMouseClick(imPage, otherCoords.x, otherCoords.y);
+            console.log('[BankTransfer] ✅ Payment Purpose set to Other (OS click)');
+          }
         }
-      } catch (_) {}
-      if (!purposeDone) {
-        // Fallback: click the dropdown then click Other
-        await imPage.evaluate(() => {
-          const all = Array.from(document.querySelectorAll('*'));
-          const trigger = all.find(e => (e.textContent || '').trim() === 'Select payment purpose' && e.getBoundingClientRect().width > 100);
-          if (trigger) trigger.click();
-        }).catch(() => {});
-        await new Promise(r => setTimeout(r, 800));
-        await imPage.evaluate(() => {
-          const opts = Array.from(document.querySelectorAll('[role="option"],mat-option,li,option'));
-          const other = opts.find(o => (o.textContent || '').trim() === 'Other');
-          if (other) other.click();
-        }).catch(() => {});
-        console.log('[BankTransfer] ✅ Payment Purpose set to Other (click fallback)');
       }
       // Scroll to bottom so Continue button is visible for Vision
       await imPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
