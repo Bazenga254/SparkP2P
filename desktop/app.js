@@ -6229,10 +6229,13 @@ Method selection rules:
       console.log(`[SparkP2P] Payment details: ${JSON.stringify(paymentDetails)}`);
 
       // ── Validate payment details before attempting ──────────────────────────
-      const missingPhone = !paymentDetails.phone || paymentDetails.phone.trim() === '';
+      const _pm = (paymentDetails.method || 'mpesa').toLowerCase();
+      const isBankTransfer = _pm === 'im_bank' || _pm === 'other_bank';
+      const missingPhone = !isBankTransfer && (!paymentDetails.phone || paymentDetails.phone.trim() === '');
+      const missingAccount = isBankTransfer && (!paymentDetails.account_number || !paymentDetails.bank_name);
       const missingAmount = !paymentDetails.amount || paymentDetails.amount <= 0;
-      if (missingPhone || missingAmount) {
-        const reason = missingPhone ? 'phone number is missing' : 'amount is zero/missing';
+      if (missingPhone || missingAccount || missingAmount) {
+        const reason = missingPhone ? 'phone number is missing' : missingAccount ? 'bank account number or bank name is missing' : 'amount is zero/missing';
         console.error(`[SparkP2P] ❌ Buy order ${order_number} — cannot pay: ${reason}`);
         await takeScreenshot(`Pay failed — ${reason}: ${order_number}`);
         await fetch(`${API_BASE}/ext/report-buy-expired`, {
