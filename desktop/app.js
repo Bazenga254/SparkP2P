@@ -7065,29 +7065,57 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   if (acctDropCoords) {
     await imPage.mouse.click(acctDropCoords.x / imDpr, acctDropCoords.y / imDpr);
     await new Promise(r => setTimeout(r, 1500));
-    // Wait for Angular CDK overlay to render the dropdown options
+    // Wait for the inline dropdown list to render
     await new Promise(r => setTimeout(r, 2000));
-    // Search ONLY inside Angular CDK overlay (mat-option rows) — never touches page header
+    // Search entire document for visible account rows — this dropdown renders inline, not in CDK overlay
     const picked = await imPage.evaluate((preferred) => {
-      const search = preferred || 'BONITO CHELUGET';
-      // Angular Material renders options inside .cdk-overlay-container
-      const overlay = document.querySelector('.cdk-overlay-container');
-      if (!overlay) return null;
-      const options = Array.from(overlay.querySelectorAll('mat-option, .mat-option, [role="option"]'));
-      for (const opt of options) {
-        const txt = (opt.textContent || '').trim();
-        if (!txt.toUpperCase().includes(search.toUpperCase())) continue;
-        const r = opt.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) { opt.click(); return txt.substring(0, 80); }
+      const search = (preferred || 'BONITO CHELUGET').toUpperCase();
+      // Cast a wide net: any element whose text includes the search term AND looks like an account row
+      const candidates = Array.from(document.querySelectorAll(
+        'mat-option, .mat-option, [role="option"], li, tr, .account-item, [class*="account" i], [class*="item" i], [class*="row" i]'
+      ));
+      for (const el of candidates) {
+        const txt = (el.textContent || '').trim();
+        if (!txt.toUpperCase().includes(search)) continue;
+        // Must be a visible account row (has KES balance text or 10-digit account number)
+        if (!txt.includes('KES') && !/\d{8,}/.test(txt)) continue;
+        const r = el.getBoundingClientRect();
+        // Must be visible on screen (not header, not hidden)
+        if (r.width > 80 && r.height > 10 && r.height < 200 && r.top > 200 && r.top < window.innerHeight) {
+          el.click();
+          return txt.substring(0, 80);
+        }
       }
       return null;
     }, traderImAccount).catch(() => null);
+
     if (picked) {
-      console.log(`[BankTransfer] ✅ Debit account: ${picked}`);
+      console.log(`[BankTransfer] ✅ Debit account selected: ${picked}`);
+      await new Promise(r => setTimeout(r, 1500));
     } else {
-      console.log(`[BankTransfer] ⚠️ Account not found in CDK overlay — Vision will handle account selection`);
+      // Fallback: use mouse coordinates — BONITO CHELUGET row is always the second option
+      console.log(`[BankTransfer] ⚠️ DOM search failed — trying coordinate click on second account row`);
+      const rowCoords = await imPage.evaluate(() => {
+        // Find all visible rows that contain KES balance text inside the open dropdown area
+        const all = Array.from(document.querySelectorAll('*'));
+        const rows = all.filter(el => {
+          const txt = (el.textContent || '').trim();
+          const r = el.getBoundingClientRect();
+          return txt.includes('KES') && /\d{8,}/.test(txt) &&
+                 r.width > 80 && r.height > 10 && r.height < 120 && r.top > 200;
+        });
+        // Sort by y-position — pick the LAST row (highest balance = BONITO CHELUGET, typically last)
+        rows.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+        const target = rows[rows.length - 1]; // last = BONITO CHELUGET
+        if (target) { const r = target.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+        return null;
+      }).catch(() => null);
+      if (rowCoords) {
+        await imPage.mouse.click(rowCoords.x / imDpr, rowCoords.y / imDpr);
+        console.log(`[BankTransfer] ✅ Coordinate-clicked second account row at (${Math.round(rowCoords.x / imDpr)}, ${Math.round(rowCoords.y / imDpr)})`);
+      }
+      await new Promise(r => setTimeout(r, 1500));
     }
-    await new Promise(r => setTimeout(r, 1500));
   }
 
   // ── L1 STEP 2: Click One-off Beneficiary radio ────────────────────────────
