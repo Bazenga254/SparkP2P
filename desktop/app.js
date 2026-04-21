@@ -7233,14 +7233,34 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       }).catch(() => null);
 
       if (currTrigger) {
-        // Click to open the dropdown, then type "KES" + Enter for type-ahead selection
+        // Click to open the dropdown
         await imPage.mouse.click(currTrigger.x / imDpr, currTrigger.y / imDpr);
+        await new Promise(r => setTimeout(r, 1000));
+        // Use TreeWalker to find the exact "KES" text node and click its parent
+        const kesCoords = await imPage.evaluate(() => {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+          let node;
+          while ((node = walker.nextNode())) {
+            if (node.textContent.trim() === 'KES') {
+              const el = node.parentElement;
+              if (!el) continue;
+              const r = el.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0 && r.width < 300 && r.height < 80) {
+                el.click();
+                return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+              }
+            }
+          }
+          return null;
+        }).catch(() => null);
+        if (kesCoords) {
+          // Also fire a mouse.click at the coordinates for Angular binding
+          await imPage.mouse.click(kesCoords.x / imDpr, kesCoords.y / imDpr);
+          console.log(`[BankTransfer] ✅ Currency set to KES (TreeWalker @ ${Math.round(kesCoords.x)},${Math.round(kesCoords.y)})`);
+        } else {
+          console.log('[BankTransfer] ⚠️ KES text node not found in dropdown');
+        }
         await new Promise(r => setTimeout(r, 800));
-        await imPage.keyboard.type('KES', { delay: 80 });
-        await new Promise(r => setTimeout(r, 400));
-        await imPage.keyboard.press('Enter');
-        await new Promise(r => setTimeout(r, 800));
-        console.log('[BankTransfer] ✅ Currency set to KES (typed KES + Enter)');
       }
 
       // Amount
