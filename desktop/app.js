@@ -7210,11 +7210,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         console.log('[BankTransfer] ⚠️ Account number input not found — skipped');
       }
 
-      // Scroll down to reveal amount/reference/payment mode fields
-      await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
-      await new Promise(r => setTimeout(r, 800));
-
-      // KES currency — open mat-select then use type-ahead 'k' + Enter
+      // KES currency — BEFORE scroll so y>400 filter works correctly
       const currTrigger = await imPage.evaluate(() => {
         // Find the currency mat-select (shows "-" or "KES")
         const matSelects = Array.from(document.querySelectorAll('mat-select'));
@@ -7263,6 +7259,10 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         }
         await new Promise(r => setTimeout(r, 800));
       }
+
+      // Scroll down to reveal amount/reference/payment mode fields
+      await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
+      await new Promise(r => setTimeout(r, 800));
 
       // Amount
       const amtFilled2 = await imPage.evaluate((amt) => {
