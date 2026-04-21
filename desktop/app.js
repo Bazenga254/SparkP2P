@@ -7214,21 +7214,49 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
       await new Promise(r => setTimeout(r, 800));
 
-      // KES currency — click the "-" trigger, then press ArrowDown + Enter to select KES
+      // KES currency — click trigger, wait for CDK overlay panel, then mouse.click KES option
       const currDropCoords = await imPage.evaluate(() => {
+        // Find the currency trigger: the "-" element or mat-select for currency
+        const matSelects = Array.from(document.querySelectorAll('mat-select'));
+        for (const ms of matSelects) {
+          const txt = (ms.textContent || '').trim();
+          if (txt === '-' || txt === '' || txt === 'KES') {
+            const r = ms.getBoundingClientRect();
+            if (r.width > 5 && r.width < 120 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+          }
+        }
+        // Fallback: any element with exactly "-" text in a small box
         const dash = Array.from(document.querySelectorAll('*')).find(e => (e.textContent || '').trim() === '-' && e.getBoundingClientRect().width > 5 && e.getBoundingClientRect().width < 80);
         if (dash) { const r = dash.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
         return null;
       }).catch(() => null);
       if (currDropCoords) {
         await imPage.mouse.click(currDropCoords.x / imDpr, currDropCoords.y / imDpr);
-        await new Promise(r => setTimeout(r, 1000));
-        // Press ArrowDown once to move from "-" to "KES" (first real currency), then Enter
-        await imPage.keyboard.press('ArrowDown');
-        await new Promise(r => setTimeout(r, 300));
-        await imPage.keyboard.press('Enter');
+        await new Promise(r => setTimeout(r, 1200)); // wait for CDK overlay panel
+        // Find KES in the CDK overlay panel (mat-select opens overlay, not inline)
+        const kesCoords = await imPage.evaluate(() => {
+          // CDK overlay container holds mat-option elements
+          const containers = [
+            ...Array.from(document.querySelectorAll('.cdk-overlay-container mat-option, .cdk-overlay-pane mat-option')),
+            ...Array.from(document.querySelectorAll('mat-option')),
+            ...Array.from(document.querySelectorAll('[role="option"]')),
+            ...Array.from(document.querySelectorAll('.mat-option')),
+          ];
+          const kes = containers.find(o => (o.textContent || '').trim() === 'KES' && o.getBoundingClientRect().width > 0);
+          if (kes) { const r = kes.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+          return null;
+        }).catch(() => null);
+        if (kesCoords) {
+          await imPage.mouse.click(kesCoords.x / imDpr, kesCoords.y / imDpr);
+          console.log('[BankTransfer] ✅ Currency set to KES');
+        } else {
+          // Last resort: keyboard
+          await imPage.keyboard.press('ArrowDown');
+          await new Promise(r => setTimeout(r, 200));
+          await imPage.keyboard.press('Enter');
+          console.log('[BankTransfer] ✅ Currency set to KES (keyboard fallback)');
+        }
         await new Promise(r => setTimeout(r, 800));
-        console.log('[BankTransfer] ✅ Currency set to KES (keyboard nav)');
       }
 
       // Amount
@@ -7330,18 +7358,27 @@ TARGET PAYMENT:
 - Payment mode: Pesalink (radio button)
 - Payment purpose: Other
 
+IMPORTANT: The following were already filled programmatically — do NOT re-fill them unless clearly wrong:
+- "One-off Beneficiary" radio: ALREADY SELECTED
+- Bank name: ALREADY SET to "${targetBank}"
+- Account number: ALREADY TYPED (${accountNumber}) and Validated
+- Amount: ALREADY SET to ${amountInt}
+- Reference: ALREADY FILLED
+- Pesalink radio: ALREADY SELECTED
+- Payment Purpose: ALREADY SET to "Other"
+
 FOLLOW THIS ORDER — do only the FIRST incomplete step you see:
-0. If "Debit Account" shows "Select an account" → click the dropdown arrow to open it, then click the "${traderImAccount || 'BONITO CHELUGET SAMOEI'}" row (the one with higher balance)
-1. If "One-off Beneficiary" radio is NOT selected → click it
-2. If Bank name field is empty → click it and type "${targetBank.substring(0, 5)}", then click "${targetBank}" from the dropdown list
-3. If Account number field is empty → click it and type "${accountNumber}"
-4. If "Validate" button is visible and account name is empty → click Validate
-5. If currency shows "-" → click it and select KES
-6. If Amount field shows 0 or is empty → click it and type "${amountInt}"
-7. If Reference/Description field is empty → click it and type the reference
-8. If "Pesalink" radio is NOT selected → click it
-9. If "Payment Purpose" shows "Select payment purpose" → click it, then click "Other"
-10. If ALL fields are filled and form is complete → click the green "Continue" button
+0. If "Debit Account" shows "Select an account" → click the dropdown arrow to open it
+1. SKIP — One-off Beneficiary already selected
+2. SKIP — Bank name already filled
+3. SKIP — Account number already filled
+4. SKIP — Validate already clicked
+5. If currency still shows "-" (not KES) → click the currency dropdown and select KES
+6. SKIP — Amount already filled
+7. SKIP — Reference already filled
+8. SKIP — Pesalink already selected
+9. SKIP — Payment Purpose already set
+10. If ALL visible fields look correct and no red errors → click the green "Continue" button
 11. On review screen → click "Submit" or "Confirm"
 12. On PIN screen → action="type_pin"
 13. After PIN → click "Complete"
