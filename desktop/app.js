@@ -7238,32 +7238,32 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       }).catch(() => null);
 
       if (currTrigger) {
-        // Open the dropdown with OS-level real click (Layer 3)
+        // OS-level click to open the dropdown (gives real keyboard focus)
         await realMouseClick(imPage, currTrigger.x, currTrigger.y);
-        await new Promise(r => setTimeout(r, 1000));
-        // Find KES option coords via TreeWalker (below y=400, before scroll)
-        const kesCoords = await imPage.evaluate(() => {
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-          let node;
-          while ((node = walker.nextNode())) {
-            if (node.textContent.trim() === 'KES') {
-              const el = node.parentElement;
-              if (!el) continue;
-              const r = el.getBoundingClientRect();
-              if (r.width > 0 && r.height > 0 && r.width < 300 && r.height < 80 && r.top > 400) {
-                return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-              }
-            }
-          }
-          return null;
-        }).catch(() => null);
-        if (kesCoords) {
-          // OS-level real click on KES option (bypasses Angular CDP limitations)
-          await realMouseClick(imPage, kesCoords.x, kesCoords.y);
-          console.log(`[BankTransfer] ✅ Currency set to KES (OS click @ ${Math.round(kesCoords.x)},${Math.round(kesCoords.y)})`);
-        } else {
-          console.log('[BankTransfer] ⚠️ KES option not found — Vision will handle');
-        }
+        await new Promise(r => setTimeout(r, 900));
+        // Press K then Enter via OS keybd_event — Angular type-ahead selects KES
+        const psKes = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+public class KesSelect {
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, int flags, int extra);
+  public static void PressKey(byte vk) {
+    keybd_event(vk, 0, 0, 0); Thread.Sleep(80); keybd_event(vk, 0, 2, 0); Thread.Sleep(80);
+  }
+}
+"@
+[KesSelect]::PressKey(0x4B)
+Start-Sleep -Milliseconds 400
+[KesSelect]::PressKey(0x0D)
+Write-Host "done"`;
+        const psTmp = require('path').join(require('os').tmpdir(), 'sp2p_kesselect.ps1');
+        require('fs').writeFileSync(psTmp, psKes, 'utf8');
+        await new Promise(resolve => {
+          require('child_process').exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psTmp}"`, { timeout: 5000 }, resolve);
+        });
+        console.log('[BankTransfer] ✅ Currency set to KES (OS keybd K + Enter)');
         await new Promise(r => setTimeout(r, 800));
       }
 
