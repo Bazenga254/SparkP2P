@@ -7175,22 +7175,39 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
 
       // Account number + Validate
       const acctInput2 = await imPage.evaluate(() => {
+        // Find input near "Account number" label (label-proximity approach)
+        const labels = Array.from(document.querySelectorAll('label, div, span, p, h6, mat-label'));
+        const lbl = labels.find(el => (el.textContent || '').trim().toLowerCase() === 'account number' && el.getBoundingClientRect().width > 0);
+        if (lbl) {
+          const parent = lbl.parentElement?.parentElement || lbl.parentElement;
+          const inp = parent?.querySelector('input');
+          if (inp) { const r = inp.getBoundingClientRect(); if (r.width > 50 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+        }
+        // Fallback: placeholder or formcontrolname
         const inputs = Array.from(document.querySelectorAll('input'));
-        const i = inputs.find(inp => (inp.placeholder || '').toLowerCase().includes('account number') || (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('accountnumber') || (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('account'));
-        if (i) { const r = i.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+        const i = inputs.find(inp =>
+          (inp.placeholder || '').toLowerCase().includes('account number') ||
+          (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('accountnumber') ||
+          (inp.getAttribute('formcontrolname') || '').toLowerCase().replace(/_/g, '') === 'account'
+        );
+        if (i) { const r = i.getBoundingClientRect(); if (r.width > 50 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
         return null;
       }).catch(() => null);
       if (acctInput2) {
         await imPage.mouse.click(acctInput2.x / imDpr, acctInput2.y / imDpr);
         await new Promise(r => setTimeout(r, 300));
         await imPage.keyboard.type(String(accountNumber), { delay: 60 });
+        console.log(`[BankTransfer] ✅ Account number typed: ${accountNumber}`);
         await new Promise(r => setTimeout(r, 800));
         const validated2 = await imPage.evaluate(() => {
           const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim().toLowerCase() === 'validate' && !b.disabled);
           if (btn) { btn.click(); return true; }
           return false;
         }).catch(() => false);
-        if (validated2) { console.log('[BankTransfer] ✅ Account number entered + Validate clicked'); await new Promise(r => setTimeout(r, 3500)); }
+        if (validated2) { console.log('[BankTransfer] ✅ Validate clicked'); await new Promise(r => setTimeout(r, 3500)); }
+        else { console.log('[BankTransfer] ⚠️ Validate button not found or disabled'); }
+      } else {
+        console.log('[BankTransfer] ⚠️ Account number input not found — skipped');
       }
 
       // Scroll down to reveal amount/reference/payment mode fields
