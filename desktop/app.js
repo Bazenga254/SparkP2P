@@ -6236,20 +6236,9 @@ Method selection rules:
       const missingAmount = !paymentDetails.amount || paymentDetails.amount <= 0;
       if (missingPhone || missingAccount || missingAmount) {
         const reason = missingPhone ? 'phone number is missing' : missingAccount ? 'bank account number or bank name is missing' : 'amount is zero/missing';
-        console.error(`[SparkP2P] ❌ Buy order ${order_number} — cannot pay: ${reason}`);
-        await takeScreenshot(`Pay failed — ${reason}: ${order_number}`);
-        await fetch(`${API_BASE}/ext/report-buy-expired`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({
-            order_number,
-            seller_name: paymentDetails.name || 'Unknown',
-            amount: paymentDetails.amount || 0,
-            minutes_waited: 0,
-            reason: `Payment details incomplete — ${reason}. Manual intervention required.`,
-          }),
-        }).catch(() => {});
-        return;
+        console.error(`[SparkP2P] ❌ Buy order ${order_number} — payment details incomplete (${reason}), will retry next cycle`);
+        await takeScreenshot(`Pay details incomplete — ${reason}: ${order_number}`);
+        return; // retry next cycle — do NOT pause ad or send email
       }
 
       // ── Step 1b: Send greeting once per order ────────────────────────────────
