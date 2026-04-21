@@ -7357,32 +7357,68 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
     step++;
     await new Promise(r => setTimeout(r, 1500));
 
-    // ── Account selection shortcut (same pattern as M-Pesa flow) ────────────
-    // Runs every step while dropdown is open — clicks the correct account row directly
+    // ── Account selection: type account number in dropdown search box ────────
     if (!accountSelected) {
-      const acctClicked = await imPage.evaluate((preferred) => {
-        const search = (preferred || 'BONITO CHELUGET').toUpperCase();
-        const all = Array.from(document.querySelectorAll(
-          'mat-option, .mat-option, [role="option"], li, div, span, td'
-        ));
-        for (const el of all) {
-          const txt = (el.textContent || '').trim();
-          if (!txt.toUpperCase().includes(search)) continue;
-          if (txt.toLowerCase().includes('select an account')) continue;
-          const r = el.getBoundingClientRect();
-          if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 100) {
-            return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: txt.substring(0, 60), tag: el.tagName };
-          }
+      // Check if the dropdown search box is visible (dropdown is open)
+      const searchBox = await imPage.evaluate(() => {
+        const inputs = Array.from(document.querySelectorAll('input[type="search"], input[placeholder*="Search" i], input[placeholder*="search" i]'));
+        for (const inp of inputs) {
+          const r = inp.getBoundingClientRect();
+          if (r.width > 50 && r.height > 0 && r.top > 100) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
         }
         return null;
-      }, traderImAccount || 'BONITO CHELUGET').catch(() => null);
+      }).catch(() => null);
 
-      if (acctClicked) {
-        await imPage.mouse.click(acctClicked.x / imDpr, acctClicked.y / imDpr);
-        console.log(`[BankTransfer] ✅ Account clicked via loop L1: <${acctClicked.tag}> "${acctClicked.text}"`);
-        accountSelected = true;
-        await new Promise(r => setTimeout(r, 1500));
-        continue;
+      if (searchBox) {
+        // Type account number into search box to filter results
+        const searchTerm = traderImAccount || 'BONITO';
+        await imPage.mouse.click(searchBox.x / imDpr, searchBox.y / imDpr);
+        await new Promise(r => setTimeout(r, 300));
+        await imPage.keyboard.type(searchTerm, { delay: 60 });
+        await new Promise(r => setTimeout(r, 1200));
+
+        // Now click the first (only) visible result
+        const result = await imPage.evaluate(() => {
+          const all = Array.from(document.querySelectorAll('*'));
+          const rows = all.filter(el => {
+            const txt = (el.textContent || '').trim();
+            const r = el.getBoundingClientRect();
+            return txt.includes('KES') && /\d{8,}/.test(txt) &&
+                   r.width > 80 && r.height > 5 && r.height < 150 && r.top > 150;
+          });
+          // Pick smallest matching element (most specific, not a wrapper)
+          rows.sort((a, b) => {
+            const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+            return (ra.width * ra.height) - (rb.width * rb.height);
+          });
+          if (rows[0]) {
+            const r = rows[0].getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2, tag: rows[0].tagName, txt: (rows[0].textContent || '').trim().substring(0, 60) };
+          }
+          return null;
+        }).catch(() => null);
+
+        if (result) {
+          await imPage.mouse.click(result.x / imDpr, result.y / imDpr);
+          console.log(`[BankTransfer] ✅ Account selected via search box: <${result.tag}> "${result.txt}"`);
+          accountSelected = true;
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
+      } else {
+        // Dropdown not open yet — open it
+        const trigger = await imPage.evaluate(() => {
+          const el = Array.from(document.querySelectorAll('*')).find(e =>
+            (e.textContent || '').trim() === 'Select an account' && e.getBoundingClientRect().width > 100);
+          if (el) { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+          return null;
+        }).catch(() => null);
+        if (trigger) {
+          await imPage.mouse.click(trigger.x / imDpr, trigger.y / imDpr);
+          console.log('[BankTransfer] Opening account dropdown...');
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
       }
     }
 
