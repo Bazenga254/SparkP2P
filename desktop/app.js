@@ -7357,6 +7357,26 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       return { success: true, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot), referenceId };
     }
 
+    // ── Pre-check: if currency dropdown is open, click KES directly ─────────
+    const openKES = await imPage.evaluate(() => {
+      const all = Array.from(document.querySelectorAll('li, span, div, option, mat-option'));
+      const leaf = all.filter(el => {
+        if (el.children.length > 0) return false; // leaf nodes only
+        const txt = (el.textContent || '').trim();
+        if (txt !== 'KES') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.width < 200 && r.height < 60;
+      });
+      if (leaf[0]) { const r = leaf[0].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+      return null;
+    }).catch(() => null);
+    if (openKES) {
+      await imPage.mouse.click(openKES.x / imDpr, openKES.y / imDpr);
+      console.log(`[BankTransfer] ✅ KES clicked from open dropdown (${openKES.x},${openKES.y})`);
+      await new Promise(r => setTimeout(r, 800));
+      continue;
+    }
+
     const vRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
