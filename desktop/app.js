@@ -7065,15 +7065,29 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   if (acctDropCoords) {
     await imPage.mouse.click(acctDropCoords.x / imDpr, acctDropCoords.y / imDpr);
     await new Promise(r => setTimeout(r, 1500));
+    // Use same search logic as M-Pesa Vision loop — search by traderImAccount in all option elements
     const picked = await imPage.evaluate((preferred) => {
-      const rows = Array.from(document.querySelectorAll('[class*="option" i], [role="option"], li'));
-      const target = preferred
-        ? rows.find(r => (r.textContent || '').toUpperCase().includes(preferred.toUpperCase()))
-        : rows.find(r => r.getBoundingClientRect().width > 0);
-      if (target) { target.click(); return (target.textContent || '').trim().substring(0, 60); }
+      const search = preferred || 'BONITO CHELUGET';
+      const rows = Array.from(document.querySelectorAll(
+        'mat-option, .mat-option, [role="option"], [class*="option" i], li, div, span, td'
+      ));
+      for (const el of rows) {
+        const txt = (el.textContent || '').trim();
+        if (!txt.toUpperCase().includes(search.toUpperCase())) continue;
+        if (txt.toLowerCase().includes('select an account')) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 0) {
+          el.click();
+          return txt.substring(0, 80);
+        }
+      }
       return null;
     }, traderImAccount).catch(() => null);
-    if (picked) console.log(`[BankTransfer] ✅ Debit account: ${picked}`);
+    if (picked) {
+      console.log(`[BankTransfer] ✅ Debit account: ${picked}`);
+    } else {
+      console.log(`[BankTransfer] ⚠️ Could not find account matching "${traderImAccount}" — Vision will handle`);
+    }
     await new Promise(r => setTimeout(r, 1500));
   }
 
