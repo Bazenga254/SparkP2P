@@ -7352,6 +7352,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   let screenshot = null;
   let referenceId = null;
   let accountSelected = false;
+  let formFilled = false;
 
   while (step < IM_MAX_STEPS) {
     step++;
@@ -7420,6 +7421,145 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
           continue;
         }
       }
+    }
+
+    // ── Post-account-selection L1 fill (runs once after account confirmed) ───
+    if (accountSelected && !formFilled) {
+      formFilled = true;
+      await new Promise(r => setTimeout(r, 1000));
+
+      // One-off Beneficiary
+      await imPage.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('label, span, div'));
+        for (const el of all) {
+          if ((el.textContent || '').trim() === 'One-off Beneficiary' && el.getBoundingClientRect().width > 0) { el.click(); return; }
+        }
+      }).catch(() => {});
+      await new Promise(r => setTimeout(r, 1500));
+
+      // Bank name (type + select from dropdown)
+      const bankInputCoords2 = await imPage.evaluate(() => {
+        const labels = Array.from(document.querySelectorAll('label, div, span, p, h6'));
+        const lbl = labels.find(el => (el.textContent || '').trim().toLowerCase() === 'bank name' && el.getBoundingClientRect().width > 0);
+        if (lbl) { const parent = lbl.parentElement?.parentElement || lbl.parentElement; const inp = parent?.querySelector('input'); if (inp) { const r = inp.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; } }
+        const inputs = Array.from(document.querySelectorAll('input'));
+        const bi = inputs.find(i => (i.placeholder || '').toLowerCase().includes('bank') || (i.getAttribute('formcontrolname') || '').toLowerCase().includes('bank'));
+        if (bi) { const r = bi.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+        return null;
+      }).catch(() => null);
+      if (bankInputCoords2) {
+        await imPage.mouse.click(bankInputCoords2.x / imDpr, bankInputCoords2.y / imDpr);
+        await new Promise(r => setTimeout(r, 300));
+        await imPage.keyboard.type(targetBank.substring(0, 5), { delay: 80 });
+        await new Promise(r => setTimeout(r, 1800));
+        const bankSelected2 = await imPage.evaluate((bank) => {
+          const opts = Array.from(document.querySelectorAll('[class*="option" i], [role="option"], li, .ng-option, .dropdown-item'));
+          const match = opts.find(o => (o.textContent || '').trim().toLowerCase().includes(bank.substring(0, 6).toLowerCase()) && o.getBoundingClientRect().width > 0);
+          if (match) { match.click(); return (match.textContent || '').trim(); }
+          return null;
+        }, targetBank).catch(() => null);
+        if (bankSelected2) console.log(`[BankTransfer] ✅ Bank selected: ${bankSelected2}`);
+        await new Promise(r => setTimeout(r, 1000));
+      }
+
+      // Account number + Validate
+      const acctInput2 = await imPage.evaluate(() => {
+        const inputs = Array.from(document.querySelectorAll('input'));
+        const i = inputs.find(inp => (inp.placeholder || '').toLowerCase().includes('account number') || (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('accountnumber') || (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('account'));
+        if (i) { const r = i.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+        return null;
+      }).catch(() => null);
+      if (acctInput2) {
+        await imPage.mouse.click(acctInput2.x / imDpr, acctInput2.y / imDpr);
+        await new Promise(r => setTimeout(r, 300));
+        await imPage.keyboard.type(String(accountNumber), { delay: 60 });
+        await new Promise(r => setTimeout(r, 800));
+        const validated2 = await imPage.evaluate(() => {
+          const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim().toLowerCase() === 'validate' && !b.disabled);
+          if (btn) { btn.click(); return true; }
+          return false;
+        }).catch(() => false);
+        if (validated2) { console.log('[BankTransfer] ✅ Account number entered + Validate clicked'); await new Promise(r => setTimeout(r, 3500)); }
+      }
+
+      // Scroll down to reveal amount/reference/payment mode fields
+      await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
+      await new Promise(r => setTimeout(r, 800));
+
+      // KES currency
+      const currClicked2 = await imPage.evaluate(() => {
+        const dash = Array.from(document.querySelectorAll('*')).find(e => (e.textContent || '').trim() === '-' && e.getBoundingClientRect().width > 5 && e.getBoundingClientRect().width < 80);
+        if (dash) { dash.click(); return true; } return false;
+      }).catch(() => false);
+      if (currClicked2) {
+        await new Promise(r => setTimeout(r, 800));
+        await imPage.evaluate(() => { const kes = Array.from(document.querySelectorAll('[class*="option" i],[role="option"],li,option')).find(o => (o.textContent || '').trim() === 'KES'); if (kes) kes.click(); }).catch(() => {});
+        await new Promise(r => setTimeout(r, 500));
+        console.log('[BankTransfer] ✅ Currency set to KES');
+      }
+
+      // Amount
+      const amtFilled2 = await imPage.evaluate((amt) => {
+        const inputs = Array.from(document.querySelectorAll('input[type="number"],input[type="text"]'));
+        const amtInput = inputs.find(i => {
+          const r = i.getBoundingClientRect(); if (r.width < 100) return false;
+          const ph = (i.placeholder || '').toLowerCase(), fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
+          if (ph.includes('bank') || fc.includes('bank') || ph.includes('account') || fc.includes('account') || ph.includes('reference') || fc.includes('reference') || fc.includes('narration')) return false;
+          return i.value === '0' || i.placeholder === '0' || fc.includes('amount');
+        });
+        if (amtInput) {
+          amtInput.click(); amtInput.select();
+          const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (ns) ns.call(amtInput, String(amt));
+          amtInput.dispatchEvent(new Event('input', { bubbles: true }));
+          amtInput.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        return false;
+      }, amountInt).catch(() => false);
+      if (amtFilled2) console.log(`[BankTransfer] ✅ Amount: ${amountInt}`);
+      await new Promise(r => setTimeout(r, 500));
+
+      // Reference
+      const refFilled2 = await imPage.evaluate((ref) => {
+        const inputs = Array.from(document.querySelectorAll('input,textarea'));
+        const i = inputs.find(inp => (inp.placeholder || '').toLowerCase().includes('payment description') || (inp.placeholder || '').toLowerCase().includes('reference') || (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('reference') || (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('narration'));
+        if (i) { i.click(); i.value = ''; const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set; if (ns) ns.call(i, ref); i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('change', { bubbles: true })); return true; }
+        return false;
+      }, refStr).catch(() => false);
+      if (refFilled2) console.log('[BankTransfer] ✅ Reference filled');
+      await new Promise(r => setTimeout(r, 500));
+
+      // Pesalink radio
+      await imPage.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('label, span, div, input[type="radio"]'));
+        for (const el of all) { if ((el.textContent || '').trim() === 'Pesalink' && el.getBoundingClientRect().width > 0) { el.click(); return; } }
+      }).catch(() => {});
+      await new Promise(r => setTimeout(r, 500));
+      console.log('[BankTransfer] ✅ Pesalink selected');
+
+      // Payment Purpose = Other
+      await imPage.evaluate(() => {
+        const selects = Array.from(document.querySelectorAll('select'));
+        for (const sel of selects) {
+          const otherOpt = Array.from(sel.options).find(o => o.text.trim() === 'Other');
+          if (otherOpt) { sel.value = otherOpt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); return; }
+        }
+        const dropdowns = Array.from(document.querySelectorAll('[class*="dropdown" i],ng-select,[class*="select" i]'));
+        for (const d of dropdowns) {
+          if ((d.textContent || '').toLowerCase().includes('payment purpose') || (d.textContent || '').toLowerCase().includes('select payment')) { d.click(); return; }
+        }
+      }).catch(() => {});
+      await new Promise(r => setTimeout(r, 800));
+      await imPage.evaluate(() => {
+        const opts = Array.from(document.querySelectorAll('[class*="option" i],[role="option"],li,.ng-option'));
+        const other = opts.find(o => (o.textContent || '').trim() === 'Other');
+        if (other) other.click();
+      }).catch(() => {});
+      await new Promise(r => setTimeout(r, 500));
+      console.log('[BankTransfer] ✅ Payment Purpose set to Other');
+      console.log('[BankTransfer] Post-account L1 fill done — Vision handles Continue/review/PIN');
+      continue;
     }
 
     screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
