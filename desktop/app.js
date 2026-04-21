@@ -7236,12 +7236,44 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         // Click to open the dropdown
         await imPage.mouse.click(currTrigger.x / imDpr, currTrigger.y / imDpr);
         await new Promise(r => setTimeout(r, 1200));
-        // Type 'k' for mat-select type-ahead → jumps to KES, then Enter to confirm
-        await imPage.keyboard.type('k');
-        await new Promise(r => setTimeout(r, 400));
-        await imPage.keyboard.press('Enter');
-        await new Promise(r => setTimeout(r, 600));
-        console.log('[BankTransfer] ✅ Currency set to KES (type-ahead)');
+        // Take screenshot and use Vision to find KES option pixel coordinates
+        const currSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
+        let kesClicked = false;
+        if (currSS && anthropicApiKey) {
+          const vRes = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-haiku-4-5-20251001', max_tokens: 80,
+              messages: [{ role: 'user', content: [
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: currSS } },
+                { type: 'text', text: 'A currency dropdown is open showing options like -, KES, EUR, USD, GBP. Find the "KES" option in the open dropdown list and return ONLY JSON: {"x": NNN, "y": NNN} with its center pixel coordinates in the screenshot.' },
+              ]}],
+            }),
+          }).catch(() => null);
+          if (vRes?.ok) {
+            const vData = await vRes.json();
+            const m = (vData.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
+            if (m) {
+              try {
+                const coords = JSON.parse(m[0]);
+                if (coords.x && coords.y) {
+                  await imPage.mouse.click(coords.x / imDpr, coords.y / imDpr);
+                  kesClicked = true;
+                  console.log(`[BankTransfer] ✅ Currency set to KES (Vision @ ${coords.x},${coords.y})`);
+                }
+              } catch (_) {}
+            }
+          }
+        }
+        if (!kesClicked) {
+          // Fallback: type-ahead
+          await imPage.keyboard.type('k');
+          await new Promise(r => setTimeout(r, 300));
+          await imPage.keyboard.press('Enter');
+          console.log('[BankTransfer] ✅ Currency set to KES (keyboard fallback)');
+        }
+        await new Promise(r => setTimeout(r, 800));
       }
 
       // Amount
