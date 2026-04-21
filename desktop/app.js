@@ -7214,7 +7214,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
       await new Promise(r => setTimeout(r, 800));
 
-      // KES currency — open dropdown then mouse.click the KES option
+      // KES currency — click the "-" trigger, then press ArrowDown + Enter to select KES
       const currDropCoords = await imPage.evaluate(() => {
         const dash = Array.from(document.querySelectorAll('*')).find(e => (e.textContent || '').trim() === '-' && e.getBoundingClientRect().width > 5 && e.getBoundingClientRect().width < 80);
         if (dash) { const r = dash.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
@@ -7223,20 +7223,12 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       if (currDropCoords) {
         await imPage.mouse.click(currDropCoords.x / imDpr, currDropCoords.y / imDpr);
         await new Promise(r => setTimeout(r, 1000));
-        // Find KES option by coordinates and mouse.click it
-        const kesCoords = await imPage.evaluate(() => {
-          const opts = Array.from(document.querySelectorAll('[class*="option" i],[role="option"],li,option,mat-option'));
-          const kes = opts.find(o => (o.textContent || '').trim() === 'KES' && o.getBoundingClientRect().width > 0);
-          if (kes) { const r = kes.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
-          return null;
-        }).catch(() => null);
-        if (kesCoords) {
-          await imPage.mouse.click(kesCoords.x / imDpr, kesCoords.y / imDpr);
-          console.log('[BankTransfer] ✅ Currency set to KES');
-        } else {
-          console.log('[BankTransfer] ⚠️ KES option not found in dropdown');
-        }
+        // Press ArrowDown once to move from "-" to "KES" (first real currency), then Enter
+        await imPage.keyboard.press('ArrowDown');
+        await new Promise(r => setTimeout(r, 300));
+        await imPage.keyboard.press('Enter');
         await new Promise(r => setTimeout(r, 800));
+        console.log('[BankTransfer] ✅ Currency set to KES (keyboard nav)');
       }
 
       // Amount
