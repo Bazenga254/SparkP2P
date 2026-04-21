@@ -7236,7 +7236,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         // Click to open the dropdown
         await imPage.mouse.click(currTrigger.x / imDpr, currTrigger.y / imDpr);
         await new Promise(r => setTimeout(r, 1000));
-        // Use TreeWalker to find the exact "KES" text node and click its parent
+        // Use TreeWalker to find the "KES" text node in the open dropdown (below y=400)
         const kesCoords = await imPage.evaluate(() => {
           const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
           let node;
@@ -7245,7 +7245,8 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
               const el = node.parentElement;
               if (!el) continue;
               const r = el.getBoundingClientRect();
-              if (r.width > 0 && r.height > 0 && r.width < 300 && r.height < 80) {
+              // Must be in the dropdown area (below y=400), small element, visible
+              if (r.width > 0 && r.height > 0 && r.width < 300 && r.height < 80 && r.top > 400) {
                 el.click();
                 return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
               }
@@ -7348,11 +7349,11 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
     const openKES = await imPage.evaluate(() => {
       const all = Array.from(document.querySelectorAll('li, span, div, option, mat-option'));
       const leaf = all.filter(el => {
-        if (el.children.length > 0) return false; // leaf nodes only
+        if (el.children.length > 0) return false;
         const txt = (el.textContent || '').trim();
         if (txt !== 'KES') return false;
         const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && r.width < 200 && r.height < 60;
+        return r.width > 0 && r.height > 0 && r.width < 200 && r.height < 60 && r.top > 400;
       });
       if (leaf[0]) { const r = leaf[0].getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
       return null;
