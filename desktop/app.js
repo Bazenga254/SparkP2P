@@ -7316,30 +7316,37 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
 
-      // Payment Purpose = Other — find the specific purpose select (has "Other" but not "KES")
-      // then use page.select() on it via its nth index
+      // Payment Purpose = Other — same Puppeteer select strategy as KES
       const purposeDone = await (async () => {
         try {
           const info = await imPage.evaluate(() => {
             const sels = Array.from(document.querySelectorAll('select'));
+            console.log('[BankTransfer-DOM] Total selects found:', sels.length);
             for (let i = 0; i < sels.length; i++) {
               const opts = Array.from(sels[i].options).map(o => o.text.trim());
+              const fc = sels[i].getAttribute('formcontrolname') || sels[i].getAttribute('name') || '';
+              console.log(`[BankTransfer-DOM] select[${i}] fc="${fc}" opts=${JSON.stringify(opts)}`);
               if (opts.includes('Other') && !opts.includes('KES')) {
-                const otherOpt = sels[i].options[Array.from(sels[i].options).findIndex(o => o.text.trim() === 'Other')];
-                const r = sels[i].getBoundingClientRect();
-                return { index: i, value: otherOpt.value, x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                const otherOpt = Array.from(sels[i].options).find(o => o.text.trim() === 'Other');
+                return { index: i, value: otherOpt.value, formcontrolname: fc };
               }
             }
             return null;
           }).catch(() => null);
+          console.log(`[BankTransfer] Purpose select info:`, JSON.stringify(info));
           if (info) {
-            // Use page.select on the nth select element
-            const handles = await imPage.$$('select');
-            if (handles[info.index]) {
-              await handles[info.index].select(info.value);
-              console.log(`[BankTransfer] ✅ Payment Purpose set to Other (select[${info.index}] value="${info.value}")`);
-              return true;
+            // Use unique CSS selector if formcontrolname is available, else use index handle
+            if (info.formcontrolname) {
+              await imPage.select(`select[formcontrolname="${info.formcontrolname}"]`, info.value);
+              console.log(`[BankTransfer] ✅ Payment Purpose set to Other (select[formcontrolname="${info.formcontrolname}"] value="${info.value}")`);
+            } else {
+              const handles = await imPage.$$('select');
+              if (handles[info.index]) {
+                await handles[info.index].select(info.value);
+                console.log(`[BankTransfer] ✅ Payment Purpose set to Other (select[${info.index}] value="${info.value}")`);
+              }
             }
+            return true;
           }
         } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
         return false;
