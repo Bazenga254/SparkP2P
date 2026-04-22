@@ -7512,16 +7512,22 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
       await new Promise(r => setTimeout(r, 800)); continue;
     }
     if (action.action === 'scroll') {
-      // On review screen, try to find and click Submit/Continue/Okay via DOM before scrolling
-      const domClicked = await imPage.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button, a'));
+      // Try to find and click the target button via DOM — search inside modal first
+      const domClicked = await imPage.evaluate((scrn) => {
+        // Review screen: only Submit/Confirm inside the modal (NOT Continue from form behind)
+        const reviewOnly = scrn === 'review';
+        const container = document.querySelector('mat-dialog-container, [role="dialog"], .cdk-overlay-pane') || document.body;
+        const btns = Array.from(container.querySelectorAll('button, a'));
         const target = btns.find(b => {
           const txt = (b.textContent || '').trim().toLowerCase();
-          return (txt === 'submit' || txt === 'continue' || txt === 'confirm' || txt === 'okay' || txt === 'ok' || txt === 'complete') && b.getBoundingClientRect().width > 0;
+          const r = b.getBoundingClientRect();
+          if (r.width === 0) return false;
+          if (reviewOnly) return txt === 'submit' || txt === 'confirm';
+          return txt === 'submit' || txt === 'confirm' || txt === 'okay' || txt === 'ok' || txt === 'complete';
         });
         if (target) { target.scrollIntoView({ block: 'center', behavior: 'instant' }); target.click(); return (target.textContent || '').trim(); }
         return null;
-      }).catch(() => null);
+      }, action.screen).catch(() => null);
       if (domClicked) {
         console.log(`[BankTransfer] ✅ DOM clicked "${domClicked}" instead of scrolling`);
         await new Promise(r => setTimeout(r, 3000));
@@ -7537,7 +7543,9 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
       const isTransition = ['continue', 'submit', 'confirm', 'complete', 'okay'].some(w => desc.includes(w));
       if (isTransition && action.screen === 'review') {
         const domClicked = await imPage.evaluate(() => {
-          const btns = Array.from(document.querySelectorAll('button, a'));
+          // Search inside modal container only to avoid clicking form buttons behind the overlay
+          const container = document.querySelector('mat-dialog-container, [role="dialog"], .cdk-overlay-pane') || document.body;
+          const btns = Array.from(container.querySelectorAll('button, a'));
           const target = btns.find(b => {
             const txt = (b.textContent || '').trim().toLowerCase();
             return (txt === 'submit' || txt === 'confirm') && b.getBoundingClientRect().width > 0;
