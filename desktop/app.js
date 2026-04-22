@@ -9853,7 +9853,21 @@ ipcMain.handle('open-gmail-tab', async () => {
   if (ok) syncCookies();
   return { opened: true, loggedIn: ok };
 });
-ipcMain.handle('set-token', (_, t) => { token = t; return { ok: true }; });
+ipcMain.handle('set-token', (_, t) => {
+  const isNew = !token && !!t;
+  token = t;
+  if (isNew && t) {
+    // Token just arrived (admin portal login or page reload) — reset stale portal flags
+    fetch(`${API_BASE}/traders/disconnect-im`, { method: 'POST', headers: { 'Authorization': `Bearer ${t}` } }).catch(() => {});
+    fetch(`${API_BASE}/traders/disconnect-mpesa-portal`, { method: 'POST', headers: { 'Authorization': `Bearer ${t}` } }).catch(() => {});
+    // Auto-connect portals using persisted Chrome cookies
+    if (browser) {
+      setTimeout(() => connectIm().catch(() => {}), 3000);
+      setTimeout(() => connectMpesaPortal().catch(() => {}), 7000);
+    }
+  }
+  return { ok: true };
+});
 ipcMain.handle('set-pin', (_, pin) => { traderPin = pin; console.log('[SparkP2P] Fund password configured'); return { ok: true }; });
 ipcMain.handle('save-im-pin', (_, pin) => { saveImPin(pin); return { ok: true }; });
 ipcMain.handle('clear-im-pin', () => { clearImPin(); return { ok: true }; });
