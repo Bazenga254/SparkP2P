@@ -8855,92 +8855,42 @@ async function executeImLocalTransfer(job) {
     }
     await imPage.waitForTimeout(1000);
 
-    // ── STEP 3: Click "One-off Beneficiary" tab ────────────────────────────────
-    const oneOffTab = await imPage.$x('//label[contains(text(), "One-off Beneficiary")] | //span[contains(text(), "One-off Beneficiary")] | //*[contains(text(), "One-off")]').catch(() => []);
-    if (oneOffTab.length > 0) {
-      await oneOffTab[0].click();
-      console.log('[SparkP2P] I&M: Clicked One-off Beneficiary tab');
+    // ── STEP 3: Click "Saved Beneficiary" radio ───────────────────────────────
+    const savedTab = await imPage.$x('//label[contains(text(), "Saved Beneficiary")] | //span[contains(text(), "Saved Beneficiary")] | //*[contains(text(), "Saved Beneficiary")]').catch(() => []);
+    if (savedTab.length > 0) {
+      await savedTab[0].click();
+      console.log('[SparkP2P] I&M: Clicked Saved Beneficiary');
     } else {
       ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, 'Click the "One-off Beneficiary" radio button or tab');
+      await imVisionClick(ss, 'Click the "Saved Beneficiary" radio button');
     }
     await imPage.waitForTimeout(1000);
 
-    // ── STEP 4: Select Bank = I & M Bank Ltd ──────────────────────────────────
-    // Click the Bank name dropdown
-    const bankDropdown = await imPage.$x('//*[contains(text(), "Bank name") or @placeholder[contains(., "Bank")]]').catch(() => []);
-    // Try using ng-select or regular select for bank
-    const bankSelects = await imPage.$$('ng-select, app-select, select').catch(() => []);
-    let bankSelected = false;
-    for (const sel of bankSelects) {
-      const text = await imPage.evaluate(el => el.textContent || '', sel).catch(() => '');
-      if (text.includes('Bank') || text.includes('Select')) {
-        await sel.click().catch(() => {});
-        await imPage.waitForTimeout(800);
-        const imOption = await imPage.$x('//*[contains(text(), "I & M Bank") or contains(text(), "I&M Bank")]').catch(() => []);
-        if (imOption.length > 0) {
-          await imOption[0].click();
-          bankSelected = true;
-          console.log('[SparkP2P] I&M: Selected I & M Bank Ltd as destination bank');
-          break;
-        }
-      }
+    // ── STEP 4: Search and select the trader by name ───────────────────────────
+    // The saved beneficiary dropdown has a search field — type trader name to filter
+    const beneficiarySearch = await imPage.$('input[placeholder*="Search" i], ng-select input, [class*="beneficiary"] input').catch(() => null);
+    if (beneficiarySearch) {
+      await beneficiarySearch.click();
+      await beneficiarySearch.type(EXPECTED_NAME.split(' ')[0], { delay: 50 }); // type first word of name
+    } else {
+      // Click the dropdown trigger to open it
+      const bDrop = await imPage.$x('//*[contains(@class, "beneficiary") or contains(text(), "Select") or contains(text(), "beneficiary")]').catch(() => []);
+      if (bDrop.length > 0) await bDrop[0].click().catch(() => {});
     }
-    if (!bankSelected) {
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, 'Click the "Bank name" dropdown and select "I & M Bank Ltd" from the list');
-    }
-    await imPage.waitForTimeout(1000);
+    await imPage.waitForTimeout(1200);
 
-    // ── STEP 5: Enter Account Number then click Validate ──────────────────────
-    const acctInput = await imPage.$('input[formcontrolname*="account"], input[placeholder*="Account number" i], input[name*="account" i]').catch(() => null);
-    if (acctInput) {
-      await acctInput.click({ clickCount: 3 });
-      await acctInput.type(TO_ACCOUNT, { delay: 60 });
+    // Click the matching contact from the dropdown list
+    const contactOption = await imPage.$x(`//*[contains(text(), '${EXPECTED_NAME.split(' ')[0]}')]`).catch(() => []);
+    if (contactOption.length > 0) {
+      await contactOption[0].click();
+      console.log(`[SparkP2P] I&M: Selected saved beneficiary "${EXPECTED_NAME}"`);
     } else {
       ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionType(ss, 'Type the account number in the "Account number" field', TO_ACCOUNT);
+      await imVisionClick(ss, `Click the saved beneficiary contact named "${EXPECTED_NAME}" in the dropdown list`);
     }
-    await imPage.waitForTimeout(500);
-
-    // Click Validate button
-    const validateBtn = await imPage.$x('//button[contains(text(), "Validate")]').catch(() => []);
-    if (validateBtn.length > 0) {
-      await validateBtn[0].click();
-      console.log('[SparkP2P] I&M: Clicked Validate — waiting for account name...');
-    } else {
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, 'Click the "Validate" button next to the account number field');
-    }
-    // Wait for the account name to auto-fill (API call)
-    await imPage.waitForTimeout(3000);
-
-    // ── STEP 6: Read auto-filled account name and verify ──────────────────────
-    // The "Account name" field should now be populated
-    let autoFilledName = '';
-    const acctNameInput = await imPage.$('input[formcontrolname*="name" i], input[placeholder*="Account name" i]').catch(() => null);
-    if (acctNameInput) {
-      autoFilledName = await imPage.evaluate(el => el.value || '', acctNameInput).catch(() => '');
-    }
-    if (!autoFilledName) {
-      // Vision fallback: read the account name from the page
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      const nameRead = await imVisionVerify(ss,
-        `The "Account name" field should now be auto-filled after Validate was clicked.
-        Read the text in the "Account name" input field.
-        Respond JSON only: { "account_name": "the name shown or empty string if blank", "description": "brief" }`
-      );
-      autoFilledName = nameRead?.account_name || '';
-    }
-    autoFilledName = autoFilledName.toUpperCase().trim();
-    console.log(`[SparkP2P] I&M: Validated account name = "${autoFilledName}"`);
-
-    // Verify name matches expected (if we have an expected name)
-    if (EXPECTED_NAME && autoFilledName && !autoFilledName.includes(EXPECTED_NAME.split(' ')[0])) {
-      console.log(`[SparkP2P] ⚠️ Account name mismatch! Expected "${EXPECTED_NAME}", got "${autoFilledName}" — aborting`);
-      throw new Error(`Account name mismatch: expected "${EXPECTED_NAME}", got "${autoFilledName}"`);
-    }
-    console.log(`[SparkP2P] I&M: Account name verified ✓`);
+    // Bank details (bank name, account number, account name) auto-fill after selection
+    await imPage.waitForTimeout(1500);
+    console.log('[SparkP2P] I&M: Beneficiary selected — bank details auto-filled');
 
     // ── STEP 7: Select Currency = KES ─────────────────────────────────────────
     // The currency is a small dropdown (KES/EUR/USD/GBP)
@@ -8996,37 +8946,31 @@ async function executeImLocalTransfer(job) {
     }
     await imPage.waitForTimeout(500);
 
-    // ── STEP 10: Select Payment Purpose = "Import Payments" ───────────────────
-    // Click the Payment Purpose dropdown and select "Import Payments"
+    // ── STEP 10: Select Payment Purpose = "Other" ────────────────────────────
     const purposeSelect = await imPage.$('select[formcontrolname*="purpose" i]').catch(() => null);
     let purposeSet = false;
     if (purposeSelect) {
-      // Try setting by option text
       const options = await imPage.evaluate(el => Array.from(el.options).map((o, i) => ({ i, text: o.text })), purposeSelect).catch(() => []);
-      const importOpt = options.find(o => o.text.toLowerCase().includes('import'));
-      if (importOpt !== undefined) {
-        await imPage.evaluate((el, idx) => { el.selectedIndex = idx; el.dispatchEvent(new Event('change', { bubbles: true })); }, purposeSelect, importOpt.i);
+      const otherOpt = options.find(o => o.text.toLowerCase().includes('other'));
+      if (otherOpt !== undefined) {
+        await imPage.evaluate((el, idx) => { el.selectedIndex = idx; el.dispatchEvent(new Event('change', { bubbles: true })); }, purposeSelect, otherOpt.i);
         purposeSet = true;
       }
     }
     if (!purposeSet) {
-      // Try ng-select / custom dropdown
       const purposeDrop = await imPage.$x('//*[contains(text(), "Select payment purpose") or contains(text(), "Payment Purpose")]').catch(() => []);
       if (purposeDrop.length > 0) {
         await purposeDrop[0].click();
         await imPage.waitForTimeout(800);
-        const importOpt = await imPage.$x('//*[contains(text(), "Import Payments")]').catch(() => []);
-        if (importOpt.length > 0) {
-          await importOpt[0].click();
-          purposeSet = true;
-        }
+        const otherOpt = await imPage.$x('//*[text()="Other" or contains(text(), "Other")]').catch(() => []);
+        if (otherOpt.length > 0) { await otherOpt[0].click(); purposeSet = true; }
       }
     }
     if (!purposeSet) {
       ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, 'Click the "Payment Purpose" dropdown and select "Import Payments" from the list');
+      await imVisionClick(ss, 'Click the "Payment Purpose" dropdown and select "Other" from the list');
     }
-    console.log('[SparkP2P] I&M: Payment purpose set to Import Payments');
+    console.log('[SparkP2P] I&M: Payment purpose set to Other');
     await imPage.waitForTimeout(500);
 
     // ── STEP 11: Click Continue ────────────────────────────────────────────────
@@ -9145,6 +9089,42 @@ setInterval(async () => {
     }
   } catch (e) {}
 }, 30 * 1000);
+
+// Poll VPS every 60s for pending settlement disbursements (SPARK FREELANCE SOLUTIONS → trader I&M accounts)
+setInterval(async () => {
+  if (!token || !imPage || imPage.isClosed() || imWithdrawalRunning) return;
+  try {
+    const res = await fetch(`${API_BASE}/ext/pending-im-disbursements`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.disbursements || data.disbursements.length === 0) return;
+    const d = data.disbursements[0];
+    console.log(`[SparkP2P] Settlement disbursement: KES ${d.amount} → ${d.trader_name} (${d.account_number})`);
+    const job = {
+      id: d.disbursement_id,
+      amount: d.amount,
+      destination_account: d.account_number,
+      destination_name: d.trader_name,
+      reference: d.reference,
+    };
+    try {
+      await executeImLocalTransfer(job);
+      await fetch(`${API_BASE}/ext/im-disbursement-complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ disbursement_id: d.disbursement_id, reference_id: job.reference }),
+      }).catch(() => {});
+    } catch (e) {
+      await fetch(`${API_BASE}/ext/im-disbursement-failed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ disbursement_id: d.disbursement_id, error: e.message }),
+      }).catch(() => {});
+    }
+  } catch (e) {}
+}, 60 * 1000);
 
 // ═══════════════════════════════════════════════════════════
 // M-PESA ORG PORTAL AUTOMATION
