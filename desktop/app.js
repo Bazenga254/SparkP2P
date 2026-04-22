@@ -7053,17 +7053,10 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   });
   await new Promise(r => setTimeout(r, 3000));
 
-  // Set page to 80% zoom via CDP — same strategy as Binance
-  // More content visible in screenshot, coordinate math unchanged (still divide by DPR)
-  try {
-    const imCdpSession = await imPage.createCDPSession();
-    await imCdpSession.send('Emulation.setPageScaleFactor', { pageScaleFactor: 0.8 });
-    console.log('[BankTransfer] ✅ Page scale set to 80%');
-  } catch (e) {
-    console.log(`[BankTransfer] Page scale fallback: ${e.message}`);
-    await imPage.evaluate(() => { document.documentElement.style.zoom = '80%'; }).catch(() => {});
-  }
+  // Set page to 80% zoom using the same setZoom80() helper as Binance
+  await setZoom80(imPage);
   await new Promise(r => setTimeout(r, 400));
+  console.log('[BankTransfer] ✅ Page scale set to 80% via setZoom80()');
 
   let imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
   console.log(`[BankTransfer] DPR = ${imDpr}`);
