@@ -6797,12 +6797,14 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   };
 
   // Click Other Phone + One-off Beneficiary before Vision loop
-  await clickRadio('Other Phone');
+  const r1 = await clickRadio('Other Phone');
   await new Promise(r => setTimeout(r, 1200));
-  await clickRadio('One-off Beneficiary');
+  const r2 = await clickRadio('One-off Beneficiary');
   await new Promise(r => setTimeout(r, 1000));
 
-  console.log(`[I&M] Pre-radios done — handing off to Vision loop (will scroll after account selected)`);
+  // Only mark radios confirmed if BOTH clicks actually succeeded
+  const radiosConfirmed = r1 && r2;
+  console.log(`[I&M] Pre-radios done (otherPhone=${r1}, oneOff=${r2}, confirmed=${radiosConfirmed}) — handing off to Vision loop`);
 
   // I&M amount field only accepts whole numbers — truncate decimals
   const amountInt = Math.floor(parseFloat(amount));
@@ -6814,7 +6816,6 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   let referenceId = null;
   let formFilled = false; // true once all fields are entered
   let accountSelected = false; // true once debit account has been chosen
-  let radiosConfirmed = true; // L1 pre-radio clicks already set Other Phone + One-off Beneficiary
 
   while (step < IM_MAX_STEPS) {
     step++;
@@ -7104,17 +7105,43 @@ Return ONLY valid JSON, no other text.` },
 
       // For "Continue" clicks: always try DOM-first (Vision coords unreliable at 80% zoom for below-fold buttons)
       if (isContinue) {
+        // Guard: ensure reference/narration field is filled before clicking Continue
+        const refStr = String(reference).substring(0, 30);
+        const refFilled = await imPage.evaluate((ref) => {
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                            || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+          const inputs = Array.from(document.querySelectorAll('input, textarea'));
+          const refInput = inputs.find(el => {
+            const id = (el.id || el.name || el.placeholder || '').toLowerCase();
+            return id.includes('description') || id.includes('narration') || id.includes('reference') || id.includes('remark');
+          });
+          if (!refInput) return false;
+          if ((refInput.value || '').trim()) return true; // already filled
+          refInput.scrollIntoView({ block: 'center', behavior: 'instant' });
+          refInput.focus(); refInput.click();
+          if (nativeSetter) nativeSetter.call(refInput, ref); else refInput.value = ref;
+          refInput.dispatchEvent(new Event('input', { bubbles: true }));
+          refInput.dispatchEvent(new Event('change', { bubbles: true }));
+          refInput.dispatchEvent(new Event('blur', { bubbles: true }));
+          return true;
+        }, refStr).catch(() => false);
+        if (refFilled) {
+          console.log(`[I&M Vision] ✅ Reference field filled via DOM guard: "${refStr}"`);
+          await new Promise(r => setTimeout(r, 600));
+        }
         const domClicked = await imPage.evaluate(() => {
           const btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
           const btn = btns.find(b => {
-            const txt = (b.textContent || '').trim().toLowerCase();
+            const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
             const r = b.getBoundingClientRect();
-            return (txt === 'continue' || txt === 'next') && r.width > 0;
+            // Match "continue" or "next"; also match if it's the primary teal submit button with type="submit"
+            return r.width > 0 && (txt.includes('continue') || txt.includes('next') ||
+              (b.type === 'submit' && !txt.includes('cancel') && !txt.includes('clear')));
           });
           if (btn) {
             btn.scrollIntoView({ block: 'center', behavior: 'instant' });
             btn.click();
-            return (btn.textContent || '').trim();
+            return (btn.innerText || btn.textContent || '').trim() || 'button';
           }
           return null;
         }).catch(() => null);
