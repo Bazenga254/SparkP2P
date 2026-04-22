@@ -1768,86 +1768,33 @@ async function findAndReadPaymentScreenshot(page) {
     const locateResult = JSON.parse(locateMatch[0]);
     if (!locateResult.found) { console.log('[Screenshot] No payment thumbnail found in chat'); return null; }
 
-    // ── Step 3: CDP click at thumbnail coords to open lightbox ───────────────
+    // ── Step 3: Click thumbnail to open lightbox — mouse click first, DOM fallback ──
     const thumbVpX = Math.round(locateResult.x / dpr);
     const thumbVpY = Math.round(locateResult.y / dpr);
     console.log(`[Screenshot] Thumbnail at image(${locateResult.x},${locateResult.y}) → viewport(${thumbVpX},${thumbVpY}) — clicking...`);
     await page.mouse.move(thumbVpX, thumbVpY);
     await new Promise(r => setTimeout(r, 100));
     await page.mouse.click(thumbVpX, thumbVpY);
-    console.log('[Screenshot] Clicked thumbnail — waiting 3s for lightbox...');
-    await new Promise(r => setTimeout(r, 3000));
-
-    // ── Step 5: Verify lightbox opened ───────────────────────────────────────
-    const checkSS = await page.screenshot({ type: 'jpeg', quality: 75 });
-    const checkResp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 40,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: checkSS.toString('base64') } },
-          { type: 'text', text: 'Is there an enlarged PAYMENT IMAGE (M-Pesa receipt, bank screenshot) filling most of the screen in an image viewer/lightbox? Answer true ONLY if you see a large payment image, NOT if you see a text dialog or warning message. Return ONLY: {"open": true} or {"open": false}' },
-        ]}],
-      }),
-    });
-    const checkData = await checkResp.json();
-    const checkRaw = (checkData.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
-    const checkMatch = checkRaw.match(/\{[\s\S]*?\}/);
-    const lightboxOpen = checkMatch ? JSON.parse(checkMatch[0])?.open === true : false;
-
-    if (!lightboxOpen) {
-      console.log('[Vision] Lightbox did NOT open via mouse click — trying DOM click on img element...');
-      // Fallback: find the img in the chat panel and click it via JS (triggers React handler)
-      const domClicked = await page.evaluate((vpX, vpY) => {
-        const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
-          const r = img.getBoundingClientRect();
-          return r.width > 40 && r.height > 40 && r.left > window.innerWidth * 0.4;
-        });
-        // Pick the img closest to where Vision said the thumbnail was
-        let best = null, bestDist = Infinity;
-        for (const img of imgs) {
-          const r = img.getBoundingClientRect();
-          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-          const dist = Math.hypot(cx - vpX, cy - vpY);
-          if (dist < bestDist) { best = img; bestDist = dist; }
-        }
-        if (best) { best.click(); return true; }
-        return false;
-      }, thumbVpX, thumbVpY).catch(() => false);
-
-      if (!domClicked) {
-        console.log('[Vision] DOM click fallback also failed — aborting screenshot read');
-        return null;
-      }
-      console.log('[Vision] DOM click sent — waiting 3s for lightbox...');
-      await new Promise(r => setTimeout(r, 3000));
-
-      // Re-check if lightbox opened after DOM click
-      const checkSS2 = await page.screenshot({ type: 'jpeg', quality: 75 });
-      const checkResp2 = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001', max_tokens: 40,
-          messages: [{ role: 'user', content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: checkSS2.toString('base64') } },
-            { type: 'text', text: 'Is there an enlarged PAYMENT IMAGE filling most of the screen in an image viewer/lightbox? Return ONLY: {"open": true} or {"open": false}' },
-          ]}],
-        }),
+    await new Promise(r => setTimeout(r, 1500));
+    // Also fire a DOM click on the closest chat img to guarantee React handler fires
+    await page.evaluate((vpX, vpY) => {
+      const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
+        const r = img.getBoundingClientRect();
+        return r.width > 40 && r.height > 40 && r.left > window.innerWidth * 0.4;
       });
-      const checkData2 = await checkResp2.json();
-      const checkRaw2 = (checkData2.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
-      const lightboxOpen2 = checkRaw2 ? JSON.parse(checkRaw2[0])?.open === true : false;
-      if (!lightboxOpen2) {
-        console.log('[Vision] Lightbox still not open after DOM click — aborting');
-        return null;
+      let best = null, bestDist = Infinity;
+      for (const img of imgs) {
+        const r = img.getBoundingClientRect();
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        const dist = Math.hypot(cx - vpX, cy - vpY);
+        if (dist < bestDist) { best = img; bestDist = dist; }
       }
-      console.log('[Vision] Lightbox opened via DOM click fallback');
-    }
-    console.log('[Vision] Lightbox confirmed open — waiting 12s for full load...');
-    await new Promise(r => setTimeout(r, 12000));
+      if (best) best.click();
+    }, thumbVpX, thumbVpY).catch(() => {});
+
+    // Wait for lightbox to fully load — skip verification (Vision misidentifies it)
+    console.log('[Screenshot] Waiting 5s for lightbox to load...');
+    await new Promise(r => setTimeout(r, 5000));
 
     // ── Step 6: Screenshot the enlarged lightbox view ─────────────────────────
     const enlargedSS = await page.screenshot({ type: 'png' });
@@ -1862,14 +1809,15 @@ There are two possible formats for the M-Pesa transaction code:
 
 FORMAT 1 — Safaricom SMS:
 "XXXXXXXXXX Confirmed. Ksh 2,000.00 sent to NAME on DATE..."
-The code is the FIRST word — exactly 10 uppercase alphanumeric characters.
+The code is the FIRST word — 8-12 uppercase alphanumeric characters (letters and digits only).
 
 FORMAT 2 — I&M Bank / other bank SMS:
 "M-PESA transfer of KES 2,000.00 to A/C ... M-PESA Ref ID: XXXXXXXXXX"
-The code follows "M-PESA Ref ID:" — exactly 10 uppercase alphanumeric characters.
+The code follows "M-PESA Ref ID:" — 8-12 uppercase alphanumeric characters.
 
 Common OCR confusions: I↔1, O↔0, B↔8, S↔5, Z↔2.
 Ignore older messages higher up in the screenshot — only extract from the LAST/BOTTOM message.
+The code may start with digits or letters — include it regardless.
 
 Return ONLY this JSON with no other text:
 {"found": true, "code": "XXXXXXXXXX", "amount": 2000}
