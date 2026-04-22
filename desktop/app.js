@@ -7499,6 +7499,9 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
 
     if (action.screen === 'success' || action.action === 'done') {
       imWithdrawalRunning = false;
+      // Reset zoom to 100% before screenshot so it's crisp and readable
+      if (_zoomSession) await _zoomSession.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 400));
       return { success: true, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot), referenceId };
     }
     if (action.action === 'type_pin') {
