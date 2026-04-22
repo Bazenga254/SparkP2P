@@ -8832,26 +8832,30 @@ async function executeImLocalTransfer(job) {
     console.log('[SparkP2P] I&M: Loaded local-transfers form');
 
     // ── STEP 2: Select Debit Account (SPARK FREELANCE SOLUTIONS) ──────────────
-    // Click the Debit Account dropdown
+    // Click the Debit Account dropdown to open the search
     let ss = await imPage.screenshot({ encoding: 'base64' });
-    // Try to find and click the debit account dropdown via XPath
     const debitDropdown = await imPage.$x('//*[contains(text(), "Select an account") or contains(@placeholder, "Select an account")]').catch(() => []);
     if (debitDropdown.length > 0) {
       await debitDropdown[0].click();
-      await imPage.waitForTimeout(1000);
+      await imPage.waitForTimeout(800);
     } else {
-      // Vision fallback: click the "Debit Account" dropdown
       await imVisionClick(ss, 'Click the "Debit Account" or "Select an account" dropdown at the top of the form');
-      await imPage.waitForTimeout(1000);
+      await imPage.waitForTimeout(800);
     }
-    // Select SPARK FREELANCE SOLUTIONS
+    // Type account number in the search box that appears inside the dropdown
+    const debitSearch = await imPage.$('input[placeholder*="Search" i]').catch(() => null);
+    if (debitSearch) {
+      await debitSearch.type(FROM_ACCOUNT, { delay: 50 });
+      await imPage.waitForTimeout(800);
+    }
+    // Click the SPARK FREELANCE SOLUTIONS row (matches account number)
     const fromOption = await imPage.$x(`//*[contains(text(), '${FROM_ACCOUNT}') or contains(text(), 'SPARK FREELANCE')]`).catch(() => []);
     if (fromOption.length > 0) {
       await fromOption[0].click();
-      console.log('[SparkP2P] I&M: Selected FROM account (Spark Freelance Solutions)');
+      console.log('[SparkP2P] I&M: Selected debit account SPARK FREELANCE SOLUTIONS');
     } else {
       ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, `Select the SPARK FREELANCE SOLUTIONS account (${FROM_ACCOUNT}) from the dropdown list`);
+      await imVisionClick(ss, `Click the SPARK FREELANCE SOLUTIONS row showing account number ${FROM_ACCOUNT}`);
     }
     await imPage.waitForTimeout(1000);
 
@@ -8866,27 +8870,25 @@ async function executeImLocalTransfer(job) {
     }
     await imPage.waitForTimeout(1000);
 
-    // ── STEP 4: Search and select the trader by name ───────────────────────────
-    // The saved beneficiary dropdown has a search field — type trader name to filter
+    // ── STEP 4: Search saved beneficiary by account number ─────────────────────
     const beneficiarySearch = await imPage.$('input[placeholder*="Search" i], ng-select input, [class*="beneficiary"] input').catch(() => null);
     if (beneficiarySearch) {
       await beneficiarySearch.click();
-      await beneficiarySearch.type(EXPECTED_NAME.split(' ')[0], { delay: 50 }); // type first word of name
+      await beneficiarySearch.type(TO_ACCOUNT, { delay: 50 }); // search by account number — more reliable than name
     } else {
-      // Click the dropdown trigger to open it
       const bDrop = await imPage.$x('//*[contains(@class, "beneficiary") or contains(text(), "Select") or contains(text(), "beneficiary")]').catch(() => []);
       if (bDrop.length > 0) await bDrop[0].click().catch(() => {});
     }
     await imPage.waitForTimeout(1200);
 
-    // Click the matching contact from the dropdown list
-    const contactOption = await imPage.$x(`//*[contains(text(), '${EXPECTED_NAME.split(' ')[0]}')]`).catch(() => []);
+    // Click the matching contact row (shows account number or name)
+    const contactOption = await imPage.$x(`//*[contains(text(), '${TO_ACCOUNT}') or contains(text(), '${EXPECTED_NAME.split(' ')[0]}')]`).catch(() => []);
     if (contactOption.length > 0) {
       await contactOption[0].click();
-      console.log(`[SparkP2P] I&M: Selected saved beneficiary "${EXPECTED_NAME}"`);
+      console.log(`[SparkP2P] I&M: Selected saved beneficiary ${TO_ACCOUNT} (${EXPECTED_NAME})`);
     } else {
       ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, `Click the saved beneficiary contact named "${EXPECTED_NAME}" in the dropdown list`);
+      await imVisionClick(ss, `Click the saved beneficiary contact with account number ${TO_ACCOUNT} in the dropdown list`);
     }
     // Bank details (bank name, account number, account name) auto-fill after selection
     await imPage.waitForTimeout(1500);
