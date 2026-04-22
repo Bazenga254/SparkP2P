@@ -7329,26 +7329,41 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
           const handle = handles[1];
           if (!handle) { console.log('[BankTransfer] ⚠️ select[1] not found'); return false; }
 
-          // Scroll into view and click to trigger Angular to load the options
+          // Scroll into view
           await handle.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
           await new Promise(r => setTimeout(r, 300));
-          await handle.click();
-          console.log('[BankTransfer] Clicked payment purpose select — waiting for options to load');
 
-          // Wait for options to populate (Angular loads them on open)
-          await imPage.waitForFunction(() => {
-            const sels = document.querySelectorAll('select');
-            return sels[1] && sels[1].options.length > 1;
-          }, { timeout: 5000 }).catch(() => {});
+          // Retry up to 3 times — Angular loads options lazily on focus/click
+          let otherOpt = null;
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            // Try focus + click + dispatch events to trigger Angular's option loader
+            await handle.focus().catch(() => {});
+            await handle.click().catch(() => {});
+            await handle.evaluate(el => {
+              el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+              el.dispatchEvent(new Event('focus', { bubbles: true }));
+            }).catch(() => {});
+            console.log(`[BankTransfer] Purpose select attempt ${attempt} — waiting for options`);
 
-          // Read what options loaded
-          const opts = await handle.evaluate(el =>
-            Array.from(el.options).map(o => ({ text: o.text.trim(), value: o.value }))
-          ).catch(() => []);
-          console.log(`[BankTransfer] Purpose options loaded: ${JSON.stringify(opts)}`);
+            await imPage.waitForFunction(() => {
+              const sels = document.querySelectorAll('select');
+              return sels[1] && sels[1].options.length > 1;
+            }, { timeout: 4000 }).catch(() => {});
 
-          const otherOpt = opts.find(o => o.text.toLowerCase().includes('other'));
-          if (!otherOpt) { console.log('[BankTransfer] ⚠️ No "Other" option found'); return false; }
+            // Press Escape to close OS dropdown without selecting anything
+            await imPage.keyboard.press('Escape').catch(() => {});
+            await new Promise(r => setTimeout(r, 300));
+
+            const opts = await handle.evaluate(el =>
+              Array.from(el.options).map(o => ({ text: o.text.trim(), value: o.value }))
+            ).catch(() => []);
+            console.log(`[BankTransfer] Purpose options (attempt ${attempt}): ${JSON.stringify(opts)}`);
+
+            otherOpt = opts.find(o => o.text.toLowerCase().includes('other'));
+            if (otherOpt) break;
+          }
+
+          if (!otherOpt) { console.log('[BankTransfer] ⚠️ No "Other" option found after 3 attempts'); return false; }
 
           await handle.select(otherOpt.value);
           console.log(`[BankTransfer] ✅ Payment Purpose set to "${otherOpt.text}" (value="${otherOpt.value}")`);
