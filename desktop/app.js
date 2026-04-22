@@ -7321,44 +7321,41 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
 
-      // Payment Purpose = Other — custom Angular dropdown (not native select)
-      // Step 1: scroll the trigger into view, Step 2: OS click to open, Step 3: OS click "Other" in overlay
+      // Payment Purpose = Other — Angular Material dropdown
+      // Strategy: DOM click to open (no coordinate math needed), then DOM click "Other" in CDK overlay
       const purposeDone = await (async () => {
         try {
-          // Scroll the payment purpose trigger into viewport center first
-          await imPage.evaluate(() => {
-            const all = Array.from(document.querySelectorAll('*'));
-            const t = all.find(e => {
-              const txt = (e.textContent || '').trim();
-              return (txt === 'Select payment purpose' || txt.includes('payment purpose')) && e.getBoundingClientRect().width > 100 && e.children.length < 5;
-            });
-            if (t) t.scrollIntoView({ block: 'center', behavior: 'instant' });
-          }).catch(() => {});
-          await new Promise(r => setTimeout(r, 500));
-
-          // Get trigger coordinates after scroll
-          const purposeTrigger = await imPage.evaluate(() => {
-            const all = Array.from(document.querySelectorAll('*'));
-            const t = all.find(e => {
+          // Step 1: find the trigger and scroll it into view
+          const triggerFound = await imPage.evaluate(() => {
+            const all = Array.from(document.querySelectorAll('mat-select, [role="listbox"], [role="combobox"], select, .mat-select-trigger'));
+            // Also look by placeholder text
+            const byText = Array.from(document.querySelectorAll('*')).find(e => {
               const txt = (e.textContent || '').trim();
               const r = e.getBoundingClientRect();
-              return (txt === 'Select payment purpose') && r.width > 100 && r.top > 0 && r.top < window.innerHeight;
+              return txt === 'Select payment purpose' && r.width > 100 && e.children.length < 5;
             });
-            if (t) { const r = t.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
-            return null;
-          }).catch(() => null);
-          console.log(`[BankTransfer] purposeTrigger after scrollIntoView:`, JSON.stringify(purposeTrigger));
+            const trigger = byText || all[0];
+            if (trigger) { trigger.scrollIntoView({ block: 'center', behavior: 'instant' }); return true; }
+            return false;
+          }).catch(() => false);
+          if (!triggerFound) { console.log('[BankTransfer] ⚠️ Purpose trigger not found'); return false; }
+          await new Promise(r => setTimeout(r, 400));
 
-          if (!purposeTrigger) return false;
+          // Step 2: DOM click to open (works for Angular mat-select without coordinate math)
+          await imPage.evaluate(() => {
+            const trigger = Array.from(document.querySelectorAll('*')).find(e => {
+              const txt = (e.textContent || '').trim();
+              const r = e.getBoundingClientRect();
+              return txt === 'Select payment purpose' && r.width > 100 && e.children.length < 5;
+            });
+            if (trigger) trigger.click();
+          }).catch(() => {});
+          await new Promise(r => setTimeout(r, 800));
+          console.log('[BankTransfer] Clicked payment purpose trigger — waiting for overlay');
 
-          // OS click to open the dropdown
-          await realMouseClick(imPage, purposeTrigger.x, purposeTrigger.y);
-          await new Promise(r => setTimeout(r, 1000));
-
-          // Find "Other" — check CDK overlay first, then full body
-          const otherCoords = await imPage.evaluate(() => {
-            // CDK overlay (Angular Material panels render here)
-            const overlay = document.querySelector('.cdk-overlay-container, .cdk-overlay-pane');
+          // Step 3: find "Other" in CDK overlay and DOM click it
+          const clicked = await imPage.evaluate(() => {
+            const overlay = document.querySelector('.cdk-overlay-container');
             const search = overlay || document.body;
             const walker = document.createTreeWalker(search, NodeFilter.SHOW_TEXT, null);
             let node;
@@ -7366,20 +7363,18 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
               if (node.textContent.trim() === 'Other') {
                 const el = node.parentElement;
                 const r = el?.getBoundingClientRect();
-                if (r && r.width > 0 && r.height > 0 && r.top > 0 && r.top < window.innerHeight)
-                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                if (r && r.width > 0 && r.height > 0) { el.click(); return true; }
               }
             }
-            return null;
-          }).catch(() => null);
-          console.log(`[BankTransfer] otherCoords:`, JSON.stringify(otherCoords));
+            return false;
+          }).catch(() => false);
 
-          if (otherCoords) {
-            await realMouseClick(imPage, otherCoords.x, otherCoords.y);
-            console.log('[BankTransfer] ✅ Payment Purpose set to Other (scrollIntoView + OS click)');
+          if (clicked) {
+            console.log('[BankTransfer] ✅ Payment Purpose set to Other (DOM click)');
             await new Promise(r => setTimeout(r, 500));
             return true;
           }
+          console.log('[BankTransfer] ⚠️ "Other" option not found in overlay');
         } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
         return false;
       })();
