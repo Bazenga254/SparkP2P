@@ -7272,20 +7272,16 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
         }
       }
 
-      // Scroll down to reveal amount/reference/payment mode fields
-      await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
-      await new Promise(r => setTimeout(r, 800));
-
-      // Amount
+      // Amount — scroll it into view first, then fill
       const amtFilled2 = await imPage.evaluate((amt) => {
         const inputs = Array.from(document.querySelectorAll('input[type="number"],input[type="text"]'));
         const amtInput = inputs.find(i => {
-          const r = i.getBoundingClientRect(); if (r.width < 100) return false;
           const ph = (i.placeholder || '').toLowerCase(), fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
           if (ph.includes('bank') || fc.includes('bank') || ph.includes('account') || fc.includes('account') || ph.includes('reference') || fc.includes('reference') || fc.includes('narration')) return false;
           return i.value === '0' || i.placeholder === '0' || fc.includes('amount');
         });
         if (amtInput) {
+          amtInput.scrollIntoView({ block: 'center', behavior: 'instant' });
           amtInput.click(); amtInput.select();
           const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
           if (ns) ns.call(amtInput, String(amt));
@@ -7298,20 +7294,29 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       if (amtFilled2) console.log(`[BankTransfer] ✅ Amount: ${amountInt}`);
       await new Promise(r => setTimeout(r, 500));
 
-      // Reference
+      // Reference — scroll into view, then fill
       const refFilled2 = await imPage.evaluate((ref) => {
         const inputs = Array.from(document.querySelectorAll('input,textarea'));
         const i = inputs.find(inp => (inp.placeholder || '').toLowerCase().includes('payment description') || (inp.placeholder || '').toLowerCase().includes('reference') || (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('reference') || (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('narration'));
-        if (i) { i.click(); i.value = ''; const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set; if (ns) ns.call(i, ref); i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('change', { bubbles: true })); return true; }
+        if (i) {
+          i.scrollIntoView({ block: 'center', behavior: 'instant' });
+          i.click(); i.value = '';
+          const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (ns) ns.call(i, ref);
+          i.dispatchEvent(new Event('input', { bubbles: true }));
+          i.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
         return false;
       }, refStr).catch(() => false);
       if (refFilled2) console.log('[BankTransfer] ✅ Reference filled');
       await new Promise(r => setTimeout(r, 500));
 
-      // Pesalink radio
+      // Pesalink radio — scroll into view, then click
       await imPage.evaluate(() => {
         const all = Array.from(document.querySelectorAll('label, span, div, input[type="radio"]'));
-        for (const el of all) { if ((el.textContent || '').trim() === 'Pesalink' && el.getBoundingClientRect().width > 0) { el.click(); return; } }
+        const el = all.find(e => (e.textContent || '').trim() === 'Pesalink' && e.getBoundingClientRect().width > 0);
+        if (el) { el.scrollIntoView({ block: 'center', behavior: 'instant' }); el.click(); }
       }).catch(() => {});
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
@@ -7378,8 +7383,13 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
         } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
         return false;
       })();
-      // Scroll to bottom so Continue button is visible for Vision
-      await imPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+      // Scroll Continue button into view so Vision can see and click it
+      await imPage.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('button, a'));
+        const btn = all.find(e => (e.textContent || '').trim() === 'Continue' && e.getBoundingClientRect().width > 0);
+        if (btn) btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+        else window.scrollTo(0, document.body.scrollHeight);
+      }).catch(() => {});
       await new Promise(r => setTimeout(r, 800));
       console.log('[BankTransfer] Post-account L1 fill done — Vision handles Continue/review/PIN');
       continue;
