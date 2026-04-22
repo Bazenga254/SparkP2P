@@ -1015,6 +1015,9 @@ async function onLoginDetected() {
 
   if (token) {
     fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
+    // Reset portal connection flags — they reflect live sessions, not persistent state
+    fetch(`${API_BASE}/traders/disconnect-im`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
+    fetch(`${API_BASE}/traders/disconnect-mpesa-portal`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
   }
 
   await fetchAndApplyCredentials();
