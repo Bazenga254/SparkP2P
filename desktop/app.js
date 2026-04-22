@@ -9822,3 +9822,12 @@ ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin:
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
 ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
 ipcMain.handle('restart-app', () => { autoUpdater.quitAndInstall(); });
+ipcMain.handle('manual-mpesa-sweep', async (_, amount) => {
+  const amt = parseFloat(amount);
+  if (!amt || amt <= 0) return { ok: false, error: 'Invalid amount' };
+  if (!mpesaOrgPage || mpesaOrgPage.isClosed()) return { ok: false, error: 'M-PESA portal not connected' };
+  if (mpesaSweepRunning) return { ok: false, error: 'Sweep already in progress' };
+  console.log(`[SparkP2P] Manual M-PESA sweep triggered — KES ${amt}`);
+  const result = await executeMpesaSweep({ sweep_id: 'manual', amount: amt, reference: 'Manual-' + Date.now() });
+  return { ok: result?.success !== false, error: result?.error || null };
+});

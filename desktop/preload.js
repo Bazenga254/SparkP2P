@@ -24,4 +24,5 @@ contextBridge.exposeInMainWorld('sparkp2p', {
   takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
   runAIScan: () => ipcRenderer.invoke('run-ai-scan'),
   restartApp: () => ipcRenderer.invoke('restart-app'),
+  manualMpesaSweep: (amount) => ipcRenderer.invoke('manual-mpesa-sweep', amount),
 });
