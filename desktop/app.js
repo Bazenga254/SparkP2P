@@ -2662,7 +2662,7 @@ async function idleScan(page) {
             } else if (!hasAmounts) {
               // Codes found but no amount info — ask buyer to paste M-Pesa confirmation text
               if (!codeFallbackAskedOrders.has(order.orderNumber)) {
-                const pasteMsg = `I could see your payment screenshot but couldn't read the details clearly. Could you please paste your M-Pesa confirmation message as text in this chat so I can verify your payment?`;
+                const pasteMsg = `Please send me your M-Pesa confirmation SMS message (the text message you received from M-PESA after payment) so I can verify and release your crypto.`;
                 console.log(`[SparkP2P] No amount in OCR — asking buyer to paste M-Pesa message`);
                 await sendChatMessage(page, pasteMsg);
                 codeFallbackAskedOrders.add(order.orderNumber);
@@ -6574,16 +6574,19 @@ Method selection rules:
       console.log(`[SparkP2P] 👀 Buy order ${order_number} — I&M paid, idleScan will monitor for seller release`);
 
     } else if (type === 'send_message') {
-      // Find chat input and type message
-      const chatInput = await page.$('textarea, input[placeholder*="message" i], input[placeholder*="type" i], [contenteditable="true"]');
-      if (chatInput) {
-        await chatInput.click();
-        await chatInput.type(action.message || '', { delay: 30 });
-        await page.keyboard.press('Enter');
-        console.log(`[SparkP2P] Message sent: ${(action.message || '').substring(0, 50)}`);
+      // If buyer already paid (verify_payment state), skip payment instruction messages
+      const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
+      const alreadyPaid = pageText.toLowerCase().includes('verify payment') ||
+                          pageText.toLowerCase().includes('payment received') ||
+                          !!await page.evaluate(() => {
+                            const btns = Array.from(document.querySelectorAll('button'));
+                            return btns.some(b => (b.textContent || '').trim().toLowerCase().startsWith('payment received'));
+                          }).catch(() => false);
+      if (alreadyPaid) {
+        console.log(`[SparkP2P] ⏭ Skipping send_message — buyer already paid (verify_payment state)`);
       } else {
-        console.log('[SparkP2P] Chat input not found');
-        await takeScreenshot('Chat input not found');
+        await sendChatMessage(page, action.message || '');
+        console.log(`[SparkP2P] Message sent: ${(action.message || '').substring(0, 60)}`);
       }
 
     } else if (type === 'screenshot') {
