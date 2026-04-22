@@ -7073,10 +7073,38 @@ Return ONLY valid JSON, no other text.` },
     }
 
     if (action.action === 'click' && action.description) {
-      const isTransition = ['continue', 'submit', 'complete'].some(w => action.description.toLowerCase().includes(w));
+      const descLower = action.description.toLowerCase();
+      const isTransition = ['continue', 'submit', 'complete'].some(w => descLower.includes(w));
+      const isContinue = descLower.includes('continue');
+
+      // For "Continue" clicks: always try DOM-first (Vision coords unreliable at 80% zoom for below-fold buttons)
+      if (isContinue) {
+        const domClicked = await imPage.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
+          const btn = btns.find(b => {
+            const txt = (b.textContent || '').trim().toLowerCase();
+            const r = b.getBoundingClientRect();
+            return (txt === 'continue' || txt === 'next') && r.width > 0;
+          });
+          if (btn) {
+            btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+            btn.click();
+            return (btn.textContent || '').trim();
+          }
+          return null;
+        }).catch(() => null);
+
+        if (domClicked) {
+          console.log(`[I&M Vision] ✅ DOM-clicked Continue button ("${domClicked}")`);
+          await new Promise(r => setTimeout(r, 4000));
+          continue;
+        }
+        // Fall through to coord click if DOM failed
+        console.log('[I&M Vision] DOM Continue not found — falling back to coord click');
+      }
 
       if (action.x && action.y) {
-        // Layer 1: Coordinate-based click (preferred — works for Angular overlays too)
+        // Layer 1: Coordinate-based click (Vision screenshot pixels → divide by DPR for CSS pixels)
         await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
         console.log(`[I&M Vision] Coord-clicked "${action.description}" at (${Math.round(action.x / imDpr)}, ${Math.round(action.y / imDpr)})`);
         await new Promise(r => setTimeout(r, isTransition ? 4000 : 1000));
