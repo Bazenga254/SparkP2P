@@ -2053,6 +2053,81 @@ async function verifyMpesaPayment(orderNumber, fiatAmount, page = null, preExtra
   }
 }
 
+// ── Reconcile stuck orders ────────────────────────────────────────────────────
+// Runs every 10 polls. Reads Binance cancelled+completed history (all dates, not
+// just today) and reports them to SparkP2P so disputed/expired orders get updated.
+async function reconcileStuckOrders(page) {
+  if (!page || !token || pauseNavigation) return;
+  console.log('[SparkP2P] 🔄 Reconciling stuck orders against Binance history...');
+
+  try {
+    // Navigate to Binance order history tab
+    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2500));
+
+    // Read cancelled orders (all dates)
+    await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
+      const t = tabs.find(el => el.textContent.trim() === 'Canceled' || el.textContent.trim() === 'Cancelled');
+      if (t) t.click();
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1500));
+
+    const cancelledText = await page.evaluate(() => document.body.innerText).catch(() => '');
+    let cancelledNums = [];
+    if (cancelledText && anthropicApiKey && !cancelledText.includes('No records')) {
+      const res = await aiScanner.analyzeText(cancelledText, `
+        This is text from a Binance P2P cancelled orders history page.
+        Extract ALL order numbers visible (any date, not just today).
+        Order numbers are 18-20 digit integers — copy EXACTLY as shown.
+        Return JSON: { "cancelled_order_numbers": ["num1", "num2", ...] }
+        If none found: { "cancelled_order_numbers": [] }
+      `);
+      cancelledNums = (res?.cancelled_order_numbers || [])
+        .map(n => String(n).replace(/\D/g, '')).filter(n => n.length >= 15);
+    }
+
+    // Read completed BUY orders (all dates)
+    await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
+      const t = tabs.find(el => el.textContent.trim() === 'Completed');
+      if (t) t.click();
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1500));
+
+    const completedText = await page.evaluate(() => document.body.innerText).catch(() => '');
+    let completedBuyNums = [];
+    if (completedText && anthropicApiKey && !completedText.includes('No records')) {
+      const res = await aiScanner.analyzeText(completedText, `
+        This is text from a Binance P2P completed orders history page.
+        Extract ALL BUY order numbers visible (any date).
+        Order numbers are 18-20 digit integers — copy EXACTLY as shown.
+        Return JSON: { "completed_buy_order_numbers": ["num1", "num2", ...] }
+        If none: { "completed_buy_order_numbers": [] }
+      `);
+      completedBuyNums = (res?.completed_buy_order_numbers || [])
+        .map(n => String(n).replace(/\D/g, '')).filter(n => n.length >= 15);
+    }
+
+    if (cancelledNums.length || completedBuyNums.length) {
+      await fetch(`${API_BASE}/ext/report-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          sell_orders: [], buy_orders: [],
+          cancelled_order_numbers: cancelledNums,
+          completed_buy_order_numbers: completedBuyNums,
+        }),
+      }).catch(() => {});
+      console.log(`[SparkP2P] ✅ Reconciled: ${cancelledNums.length} cancelled, ${completedBuyNums.length} completed buy`);
+    } else {
+      console.log('[SparkP2P] Reconcile: no cancelled/completed orders found in history');
+    }
+  } catch (e) {
+    console.log(`[SparkP2P] reconcileStuckOrders error: ${e.message}`);
+  }
+}
+
 async function pollCycle() {
   if (!pollerRunning || !token || !browser || scanningInProgress || pauseNavigation) return;
   scanningInProgress = true;
@@ -2098,6 +2173,8 @@ async function pollCycle() {
     lastActiveTime = Date.now();
     fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
     if (stats.polls % 5 === 0) await readMarketPrices().catch(() => {});
+    // Every 10 polls, reconcile disputed/expired orders against Binance actual status
+    if (stats.polls % 10 === 0) await reconcileStuckOrders(page).catch(e => console.log(`[SparkP2P] reconcileStuckOrders err: ${e.message}`));
 
     const nextIn = (stats.orders > 0 ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE) / 1000;
     const orderSummary = stats.orders > 0
