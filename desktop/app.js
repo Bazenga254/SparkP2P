@@ -9360,15 +9360,19 @@ Return ONLY valid JSON: {"transactions": [...]}` }
 
   } catch (e) {
     console.error('[PaybillSync] Error:', e.message?.substring(0, 100));
+  } finally {
+    // Navigate back to portal home so the tab isn't left on the statement/404 page
+    if (mpesaOrgPage && !mpesaOrgPage.isClosed()) {
+      await mpesaOrgPage.goto(MPESA_ORG_URL, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    }
   }
 }
 
 function startPaybillSync() {
   if (paybillSyncTimer) clearInterval(paybillSyncTimer);
-  // Run immediately, then every 30 min
-  scrapePaybillStatement();
+  // First run after 30 min — don't navigate away from portal immediately after login
   paybillSyncTimer = setInterval(scrapePaybillStatement, 30 * 60 * 1000);
-  console.log('[PaybillSync] Statement sync started (every 30 min)');
+  console.log('[PaybillSync] Statement sync started (every 30 min, first run in 30 min)');
 }
 
 // ── Shared helper: fill a form on the M-PESA org portal ──────────────────────
