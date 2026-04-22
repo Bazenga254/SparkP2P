@@ -9481,7 +9481,8 @@ async function _waitForMpesaSuccess(page, screenshotLabel) {
   // Check for success message first
   const succeeded = await page.evaluate(() => {
     const body = document.body.innerText.toLowerCase();
-    return body.includes('operation succeeded') || body.includes('successfully') || body.includes('success');
+    return body.includes('operation succeeded') || body.includes('transaction has been processed') ||
+           body.includes('successfully') || body.includes('success');
   }).catch(() => false);
 
   if (succeeded) {
@@ -9500,8 +9501,15 @@ async function _waitForMpesaSuccess(page, screenshotLabel) {
 
   if (popupClicked) {
     console.log(`[SparkP2P] Popup button clicked: "${popupClicked}"`);
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 4000));
     await takeScreenshot(screenshotLabel + '_after_popup', page);
+    // Verify success after popup dismissal
+    const succeededAfterPopup = await page.evaluate(() => {
+      const body = document.body.innerText.toLowerCase();
+      return body.includes('operation succeeded') || body.includes('transaction has been processed') ||
+             body.includes('successfully') || body.includes('success');
+    }).catch(() => false);
+    console.log(`[SparkP2P] Post-popup success: ${succeededAfterPopup}`);
     return true;
   }
 
@@ -9555,59 +9563,94 @@ async function executeMpesaSweep(sweepJob) {
   const { sweep_id, amount, reference } = sweepJob;
   console.log(`[SparkP2P] === M-PESA SWEEP KES ${amount} (sweep #${sweep_id}) ===`);
 
+  const failSweep = async (error) => {
+    mpesaSweepRunning = false;
+    await takeScreenshot('mpesa_sweep_error', mpesaOrgPage).catch(() => {});
+    if (token) await fetch(`${API_BASE}/ext/mpesa-sweep-failed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ sweep_id, error }),
+    }).catch(() => {});
+    return { success: false, error };
+  };
+
   try {
-    // ── STEP 1: Revenue Settlement (utility float → working account) ────────
-    // Business Center → Revenue Settlement → Initiate Revenue Settlement
+    // ── STEP 1: Revenue Settlement (utility float → working account) ──────────
+    // Navigate directly to initiate URL — "All organization" is pre-selected by default
     console.log('[SparkP2P] Step 1: Revenue Settlement...');
     await mpesaOrgPage.goto(MPESA_ORG_REVENUE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 3000));
     await takeScreenshot('sweep_step1_revenue_form', mpesaOrgPage);
 
-    const step1Submitted = await _fillAndSubmitMpesaForm(mpesaOrgPage, amount, 'P2p Transactions', 'p2p trades');
-    if (!step1Submitted) {
-      console.log('[SparkP2P] Step 1: Submit not found — debug screenshot saved');
-      mpesaSweepRunning = false;
-      if (token) {
-        await fetch(`${API_BASE}/ext/mpesa-sweep-failed`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ sweep_id, error: 'Revenue Settlement submit not found' }),
-        }).catch(() => {});
-      }
-      return { success: false, error: 'revenue_settlement_submit_not_found' };
-    }
+    // Ensure "All organization" radio is selected
+    await mpesaOrgPage.evaluate(() => {
+      const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
+      const allOrg = radios.find(r => {
+        const label = r.closest('label')?.textContent || r.nextSibling?.textContent || '';
+        return label.toLowerCase().includes('all organization') || label.toLowerCase().includes('all organisation');
+      });
+      if (allOrg && !allOrg.checked) allOrg.click();
+    }).catch(() => {});
 
-    const step1Ok = await _waitForMpesaSuccess(mpesaOrgPage, 'sweep_step1_revenue');
-    console.log(`[SparkP2P] Step 1 result: ${step1Ok ? 'success' : 'unknown — proceeding anyway'}`);
+    await new Promise(r => setTimeout(r, 800));
 
-    // Brief pause between steps so the portal processes the settlement
+    // Click Submit button (bottom right)
+    const step1Submitted = await mpesaOrgPage.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+      const btn = btns.find(b => b.textContent.trim().toLowerCase() === 'submit' || b.value?.toLowerCase() === 'submit');
+      if (btn) { btn.scrollIntoView({ block: 'center' }); btn.click(); return true; }
+      return false;
+    }).catch(() => false);
+
+    if (!step1Submitted) return failSweep('Revenue Settlement: Submit button not found');
+    console.log('[SparkP2P] Step 1: Submit clicked');
+
     await new Promise(r => setTimeout(r, 2000));
 
-    // ── STEP 2: Organization Withdrawal (working account → I&M Bank) ────────
+    // Confirm dialog: "Are you sure you want to continue?" → click Confirm
+    const step1Confirmed = await mpesaOrgPage.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button'));
+      const btn = btns.find(b => b.textContent.trim().toLowerCase() === 'confirm');
+      if (btn) { btn.click(); return true; }
+      return false;
+    }).catch(() => false);
+    console.log(`[SparkP2P] Step 1: Confirm dialog clicked: ${step1Confirmed}`);
+
+    // Wait for "Operation succeeded."
+    await new Promise(r => setTimeout(r, 4000));
+    const step1Ok = await mpesaOrgPage.evaluate(() =>
+      document.body.innerText.toLowerCase().includes('operation succeeded')
+    ).catch(() => false);
+    console.log(`[SparkP2P] Step 1 result: ${step1Ok ? '✅ Operation succeeded' : 'unknown — proceeding anyway'}`);
+    await takeScreenshot('sweep_step1_revenue_result', mpesaOrgPage);
+
+    await new Promise(r => setTimeout(r, 2000));
+
+    // ── STEP 2: Organization Withdrawal (working account → I&M Bank) ──────────
     // Transaction Center → Initiate Transaction → "Organization Withdrawal From MPESA-Real Time"
-    console.log('[SparkP2P] Step 2: Organization Withdrawal...');
+    console.log('[SparkP2P] Step 2: Org Withdrawal to I&M Bank...');
     await mpesaOrgPage.goto(MPESA_ORG_INITIATE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 3000));
     await takeScreenshot('sweep_step2_withdrawal_form', mpesaOrgPage);
 
-    // Select "Organization Withdrawal From MPESA-Real Time" from Transaction Services dropdown
+    // Select "Organization Withdrawal From MPESA-Real Time" — must match "real time" exactly
     const serviceSelected = await mpesaOrgPage.evaluate(() => {
-      // Standard <select>
+      // Try native <select> first
       for (const sel of document.querySelectorAll('select')) {
-        const opts = Array.from(sel.options);
-        const target = opts.find(o => o.text.toLowerCase().includes('organisation withdrawal') ||
-                                      o.text.toLowerCase().includes('organization withdrawal') ||
-                                      o.text.toLowerCase().includes('withdrawal from mpesa'));
+        const target = Array.from(sel.options).find(o =>
+          o.text.toLowerCase().includes('real time') && o.text.toLowerCase().includes('withdrawal')
+        );
         if (target) {
           sel.value = target.value;
           sel.dispatchEvent(new Event('change', { bubbles: true }));
           return 'select:' + target.text;
         }
       }
-      // Custom dropdown trigger
-      for (const t of document.querySelectorAll('[class*="dropdown"],[class*="select"],[role="combobox"],[role="listbox"]')) {
-        const txt = t.textContent.toLowerCase();
-        if (txt.includes('service') || txt.includes('transaction') || txt.includes('select')) {
+      // Custom dropdown: click the trigger to open
+      for (const t of document.querySelectorAll('[class*="select"],[role="combobox"]')) {
+        if ((t.textContent || '').toLowerCase().includes('transaction service') ||
+            (t.getAttribute('placeholder') || '').toLowerCase().includes('service') ||
+            t.closest('[class*="form"]')) {
           t.click();
           return 'trigger_clicked';
         }
@@ -9620,32 +9663,78 @@ async function executeMpesaSweep(sweepJob) {
       await new Promise(r => setTimeout(r, 1500));
       await mpesaOrgPage.evaluate(() => {
         const opts = Array.from(document.querySelectorAll('li,[role="option"],[class*="option"]'));
-        const t = opts.find(o => o.textContent.toLowerCase().includes('organisation withdrawal') ||
-                                  o.textContent.toLowerCase().includes('organization withdrawal') ||
-                                  o.textContent.toLowerCase().includes('withdrawal from mpesa'));
+        const t = opts.find(o =>
+          o.textContent.toLowerCase().includes('real time') && o.textContent.toLowerCase().includes('withdrawal')
+        );
         if (t) t.click();
       }).catch(() => {});
     }
 
     await new Promise(r => setTimeout(r, 2000));
 
-    const step2Submitted = await _fillAndSubmitMpesaForm(mpesaOrgPage, amount, 'P2p Transactions', 'p2p trades');
-    if (!step2Submitted) {
-      console.log('[SparkP2P] Step 2: Submit not found');
-      mpesaSweepRunning = false;
-      if (token) {
-        await fetch(`${API_BASE}/ext/mpesa-sweep-failed`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ sweep_id, error: 'Org Withdrawal submit not found' }),
-        }).catch(() => {});
-      }
-      return { success: false, error: 'org_withdrawal_submit_not_found' };
-    }
+    // Fill Amount(KSH)
+    const amountFilled = await mpesaOrgPage.evaluate((amt) => {
+      const inputs = Array.from(document.querySelectorAll('input'));
+      const inp = inputs.find(el => {
+        const ctx = (el.placeholder || el.getAttribute('aria-label') || el.closest('div,td,label')?.textContent || '').toLowerCase();
+        return ctx.includes('amount');
+      });
+      if (!inp) return false;
+      inp.scrollIntoView({ block: 'center' });
+      inp.focus();
+      inp.value = String(amt);
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }, amount).catch(() => false);
+    console.log(`[SparkP2P] Step 2: Amount filled: ${amountFilled}`);
+    if (!amountFilled) return failSweep('Org Withdrawal: Amount field not found');
 
-    // "Transaction Budget" popup shows "No charge." — click Continue
+    await new Promise(r => setTimeout(r, 400));
+
+    // Fill Remark textarea
+    await mpesaOrgPage.evaluate(() => {
+      const ta = Array.from(document.querySelectorAll('textarea'));
+      const remark = ta.find(el => (el.placeholder || '').toLowerCase().includes('remark'));
+      if (remark) { remark.value = 'I&M transactions'; remark.dispatchEvent(new Event('input', { bubbles: true })); }
+    }).catch(() => {});
+
+    await new Promise(r => setTimeout(r, 300));
+
+    // Fill "Enter The Reason..." textarea (Reason field — "Input Manually..." already selected)
+    await mpesaOrgPage.evaluate(() => {
+      const ta = Array.from(document.querySelectorAll('textarea'));
+      const reason = ta.find(el => (el.placeholder || '').toLowerCase().includes('reason'));
+      if (reason) { reason.value = 'I&M transactions'; reason.dispatchEvent(new Event('input', { bubbles: true })); }
+    }).catch(() => {});
+
+    await new Promise(r => setTimeout(r, 300));
+
+    // Fill "Comment to Customer" textarea
+    await mpesaOrgPage.evaluate(() => {
+      const ta = Array.from(document.querySelectorAll('textarea'));
+      const comment = ta.find(el => (el.placeholder || '').toLowerCase().includes('comment'));
+      if (comment) { comment.value = 'I&M transactions'; comment.dispatchEvent(new Event('input', { bubbles: true })); }
+    }).catch(() => {});
+
+    await new Promise(r => setTimeout(r, 400));
+    await takeScreenshot('sweep_step2_before_submit', mpesaOrgPage);
+
+    // Click Submit (bottom right)
+    const step2Submitted = await mpesaOrgPage.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+      const btn = btns.find(b => b.textContent.trim().toLowerCase() === 'submit' || b.value?.toLowerCase() === 'submit');
+      if (btn) { btn.scrollIntoView({ block: 'center' }); btn.click(); return true; }
+      return false;
+    }).catch(() => false);
+
+    if (!step2Submitted) return failSweep('Org Withdrawal: Submit button not found');
+    console.log('[SparkP2P] Step 2: Submit clicked');
+
+    // Wait for result (success or OTP prompt)
+    await new Promise(r => setTimeout(r, 4000));
     const step2Ok = await _waitForMpesaSuccess(mpesaOrgPage, 'sweep_step2_withdrawal');
-    console.log(`[SparkP2P] Step 2 result: ${step2Ok ? 'success' : 'unknown'}`);
+    console.log(`[SparkP2P] Step 2 result: ${step2Ok ? '✅ success' : 'unknown'}`);
 
     // Report to backend
     if (token) {
@@ -9656,22 +9745,13 @@ async function executeMpesaSweep(sweepJob) {
       }).catch(() => {});
     }
 
-    console.log(`[SparkP2P] ✅ M-PESA sweep KES ${amount} complete (Revenue Settlement + Org Withdrawal)`);
+    console.log(`[SparkP2P] ✅ M-PESA sweep KES ${amount} complete`);
     mpesaSweepRunning = false;
     return { success: true };
 
   } catch (e) {
     console.error('[SparkP2P] executeMpesaSweep error:', e.message?.substring(0, 80));
-    await takeScreenshot('mpesa_sweep_error', mpesaOrgPage).catch(() => {});
-    if (token) {
-      await fetch(`${API_BASE}/ext/mpesa-sweep-failed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ sweep_id, error: e.message }),
-      }).catch(() => {});
-    }
-    mpesaSweepRunning = false;
-    return { success: false, error: e.message };
+    return failSweep(e.message);
   }
 }
 
