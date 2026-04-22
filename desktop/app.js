@@ -7321,21 +7321,40 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
 
-      // Payment Purpose = Other — Angular Material mat-select
-      // Use Puppeteer ElementHandle.click() (CDP-level) to open, then DOM click "Other" in CDK overlay
+      // Payment Purpose = Other — find the actual element type first via diagnostics
       const purposeDone = await (async () => {
         try {
-          // Find the mat-select that contains "Select payment purpose"
+          // DIAGNOSTIC: find what element contains "Select payment purpose"
+          await imPage.evaluate(() => {
+            const all = Array.from(document.querySelectorAll('*'));
+            const matches = all.filter(e => {
+              const txt = (e.textContent || '').trim();
+              const r = e.getBoundingClientRect();
+              return txt === 'Select payment purpose' && r.width > 50;
+            });
+            matches.forEach((el, i) => {
+              const attrs = Array.from(el.attributes).map(a => `${a.name}="${a.value}"`).join(' ');
+              console.log(`[BankTransfer-DOM] match[${i}] tag=${el.tagName} attrs=[${attrs}] children=${el.children.length}`);
+            });
+            if (!matches.length) console.log('[BankTransfer-DOM] No element found with text "Select payment purpose"');
+          }).catch(() => {});
+
+          // Find the purpose dropdown handle — try mat-select, ng-select, div[role], select
           const purposeHandle = await imPage.evaluateHandle(() => {
-            const selects = Array.from(document.querySelectorAll('mat-select'));
-            return selects.find(s => (s.textContent || '').includes('Select payment purpose') || (s.getAttribute('placeholder') || '').toLowerCase().includes('purpose'))
-              || selects.find(s => !(s.textContent || '').includes('KES'));  // fallback: the non-currency one
+            // Try by text content across any interactive element
+            const candidates = Array.from(document.querySelectorAll('mat-select, ng-select, select, [role="combobox"], [role="listbox"]'));
+            return candidates.find(el => (el.textContent || '').includes('Select payment purpose') || (el.getAttribute('placeholder') || '').toLowerCase().includes('purpose'))
+              || null;
           }).catch(() => null);
 
           if (!purposeHandle || !(await purposeHandle.evaluate(el => !!el).catch(() => false))) {
-            console.log('[BankTransfer] ⚠️ mat-select for payment purpose not found');
+            console.log('[BankTransfer] ⚠️ purpose dropdown handle not found — check [BankTransfer-DOM] logs above');
             return false;
           }
+
+          const elTag = await purposeHandle.evaluate(el => el.tagName).catch(() => '?');
+          console.log(`[BankTransfer] Found purpose dropdown: <${elTag}>`);
+
 
           // Scroll into view then CDP click (dispatches real mouse events Angular listens to)
           await purposeHandle.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
