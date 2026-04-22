@@ -9209,7 +9209,7 @@ setInterval(async () => {
 const MPESA_ORG_URL = 'https://org.ke.m-pesa.com';
 const MPESA_ORG_REVENUE_URL = 'https://org.ke.m-pesa.com/#/mainPage/businessCenter/settlement/revenueSettlement/initiate';
 const MPESA_ORG_INITIATE_URL = 'https://org.ke.m-pesa.com/#/mainPage/transactionCenter/initiate/initiateTransaction/list';
-const MPESA_ORG_KEEP_ALIVE_INTERVAL = 5 * 60 * 1000; // ping every 5 min
+const MPESA_ORG_KEEP_ALIVE_INTERVAL = 2 * 60 * 1000; // ping every 2 min
 let mpesaOrgKeepAliveTimer = null;
 
 async function connectMpesaPortal() {
