@@ -7321,79 +7321,37 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
 
-      // Payment Purpose = Other — find the actual element type first via diagnostics
+      // Payment Purpose = Other — confirmed native <SELECT>, use Puppeteer select() like KES
       const purposeDone = await (async () => {
         try {
-          // DIAGNOSTIC: find what element contains "Select payment purpose"
-          await imPage.evaluate(() => {
-            const all = Array.from(document.querySelectorAll('*'));
-            const matches = all.filter(e => {
-              const txt = (e.textContent || '').trim();
-              const r = e.getBoundingClientRect();
-              return txt === 'Select payment purpose' && r.width > 50;
-            });
-            matches.forEach((el, i) => {
-              const attrs = Array.from(el.attributes).map(a => `${a.name}="${a.value}"`).join(' ');
-              console.log(`[BankTransfer-DOM] match[${i}] tag=${el.tagName} attrs=[${attrs}] children=${el.children.length}`);
-            });
-            if (!matches.length) console.log('[BankTransfer-DOM] No element found with text "Select payment purpose"');
-          }).catch(() => {});
-
-          // Find the purpose dropdown handle — try mat-select, ng-select, div[role], select
-          const purposeHandle = await imPage.evaluateHandle(() => {
-            // Try by text content across any interactive element
-            const candidates = Array.from(document.querySelectorAll('mat-select, ng-select, select, [role="combobox"], [role="listbox"]'));
-            return candidates.find(el => (el.textContent || '').includes('Select payment purpose') || (el.getAttribute('placeholder') || '').toLowerCase().includes('purpose'))
-              || null;
+          // Find the purpose select and log all its options so we know exact values
+          const info = await imPage.evaluate(() => {
+            const sels = Array.from(document.querySelectorAll('select'));
+            for (let i = 0; i < sels.length; i++) {
+              const opts = Array.from(sels[i].options).map(o => ({ text: o.text.trim(), value: o.value }));
+              const fc = sels[i].getAttribute('formcontrolname') || sels[i].getAttribute('name') || '';
+              console.log(`[BankTransfer-DOM] select[${i}] fc="${fc}" opts=${JSON.stringify(opts)}`);
+              // Match by placeholder or by having an "other"-like option (case-insensitive) but not KES
+              const hasOther = opts.find(o => o.text.toLowerCase().includes('other'));
+              const hasKes = opts.find(o => o.text.trim() === 'KES');
+              if (hasOther && !hasKes) return { index: i, value: hasOther.value, text: hasOther.text, fc };
+            }
+            return null;
           }).catch(() => null);
 
-          if (!purposeHandle || !(await purposeHandle.evaluate(el => !!el).catch(() => false))) {
-            console.log('[BankTransfer] ⚠️ purpose dropdown handle not found — check [BankTransfer-DOM] logs above');
-            return false;
-          }
+          console.log(`[BankTransfer] Purpose select info: ${JSON.stringify(info)}`);
+          if (!info) { console.log('[BankTransfer] ⚠️ No purpose select found'); return false; }
 
-          const elTag = await purposeHandle.evaluate(el => el.tagName).catch(() => '?');
-          console.log(`[BankTransfer] Found purpose dropdown: <${elTag}>`);
-
-
-          // Scroll into view then CDP click (dispatches real mouse events Angular listens to)
-          await purposeHandle.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
+          // Scroll into view then use Puppeteer's select() — same strategy that worked for KES
+          const handles = await imPage.$$('select');
+          const handle = handles[info.index];
+          if (!handle) return false;
+          await handle.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
+          await new Promise(r => setTimeout(r, 300));
+          await handle.select(info.value);
+          console.log(`[BankTransfer] ✅ Payment Purpose set to "${info.text}" (select[${info.index}] value="${info.value}")`);
           await new Promise(r => setTimeout(r, 400));
-          await purposeHandle.click();
-          await new Promise(r => setTimeout(r, 900));
-
-          // Diagnose: log what the CDK overlay contains so we can confirm dropdown opened
-          await imPage.evaluate(() => {
-            const overlay = document.querySelector('.cdk-overlay-container');
-            if (!overlay) { console.log('[BankTransfer-DOM] No .cdk-overlay-container found'); return; }
-            const panels = overlay.querySelectorAll('.cdk-overlay-pane, .mat-select-panel, mat-option');
-            console.log(`[BankTransfer-DOM] CDK overlay panes/panels/options: ${panels.length}`);
-            const texts = Array.from(overlay.querySelectorAll('mat-option, [role="option"]')).map(e => e.textContent.trim());
-            console.log(`[BankTransfer-DOM] Options visible: ${JSON.stringify(texts)}`);
-          }).catch(() => {});
-
-          // Find "Other" in the CDK overlay panel and click it
-          const clicked = await imPage.evaluate(() => {
-            const overlay = document.querySelector('.cdk-overlay-container');
-            const search = overlay || document.body;
-            const walker = document.createTreeWalker(search, NodeFilter.SHOW_TEXT, null);
-            let node;
-            while ((node = walker.nextNode())) {
-              if (node.textContent.trim() === 'Other') {
-                const el = node.parentElement;
-                const r = el?.getBoundingClientRect();
-                if (r && r.width > 0 && r.height > 0) { el.click(); return true; }
-              }
-            }
-            return false;
-          }).catch(() => false);
-
-          if (clicked) {
-            console.log('[BankTransfer] ✅ Payment Purpose set to Other (mat-select CDP click + overlay DOM click)');
-            await new Promise(r => setTimeout(r, 500));
-            return true;
-          }
-          console.log('[BankTransfer] ⚠️ "Other" not found in CDK overlay after click');
+          return true;
         } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
         return false;
       })();
