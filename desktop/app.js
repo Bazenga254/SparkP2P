@@ -601,20 +601,36 @@ async function connectPuppeteer() {
   }
 }
 
-let _zoomSession = null;
+// Per-page CDP sessions so Binance and I&M zoom sessions don't collide
+const _zoomSessions = new WeakMap();
+let _zoomSession = null; // kept for legacy references — mirrors last setZoom80 call
+
 async function setZoom80(page) {
   try {
-    // Keep CDP session alive — detaching resets the scale factor
-    if (!_zoomSession || !_zoomSession._connection) {
-      _zoomSession = await page.createCDPSession();
+    let session = _zoomSessions.get(page);
+    if (!session || !session._connection) {
+      session = await page.createCDPSession();
+      _zoomSessions.set(page, session);
     }
-    await _zoomSession.send('Emulation.setPageScaleFactor', { pageScaleFactor: 0.8 });
+    _zoomSession = session; // keep global in sync
+    await session.send('Emulation.setPageScaleFactor', { pageScaleFactor: 0.8 });
   } catch (_) {
+    _zoomSessions.delete(page);
     _zoomSession = null;
-    // CSS fallback — inject zoom directly into the page
-    try {
-      await page.evaluate(() => { document.documentElement.style.zoom = '80%'; });
-    } catch (__) {}
+    try { await page.evaluate(() => { document.documentElement.style.zoom = '80%'; }); } catch (__) {}
+  }
+}
+
+async function resetZoom(page) {
+  try {
+    let session = _zoomSessions.get(page);
+    if (!session || !session._connection) {
+      session = await page.createCDPSession();
+      _zoomSessions.set(page, session);
+    }
+    await session.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 });
+  } catch (_) {
+    try { await page.evaluate(() => { document.documentElement.style.zoom = '100%'; }); } catch (__) {}
   }
 }
 
@@ -6841,7 +6857,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       const refMatch = pageText.match(/reference\s*id\s*(?:number)?[:\s]+([A-Z0-9]{8,12})/i);
       if (refMatch) { referenceId = refMatch[1].trim(); console.log(`[I&M Vision] ✅ Ref ID: ${referenceId}`); }
       console.log(`[I&M Vision] ✅ Payment SUCCESS at step ${step}`);
-      if (_zoomSession) await _zoomSession.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 }).catch(() => {});
+      await resetZoom(imPage);
       await new Promise(r => setTimeout(r, 400));
       const receiptSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot);
       imWithdrawalRunning = false;
@@ -6931,7 +6947,7 @@ Return ONLY valid JSON, no other text.` },
     // ── Execute the action ───────────────────────────────────────────────────
     if (action.screen === 'success' || action.action === 'done') {
       // Handled above by text detection — but catch it here too
-      if (_zoomSession) await _zoomSession.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 }).catch(() => {});
+      await resetZoom(imPage);
       await new Promise(r => setTimeout(r, 400));
       const receiptSS2 = await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot);
       imWithdrawalRunning = false;
@@ -7613,7 +7629,7 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
     if (action.screen === 'success' || action.action === 'done') {
       imWithdrawalRunning = false;
       // Reset zoom to 100% before screenshot so it's crisp and readable
-      if (_zoomSession) await _zoomSession.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 }).catch(() => {});
+      await resetZoom(imPage);
       await new Promise(r => setTimeout(r, 400));
       return { success: true, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot), referenceId };
     }
