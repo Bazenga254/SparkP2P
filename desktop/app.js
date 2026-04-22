@@ -1914,7 +1914,7 @@ async function extractMpesaCodesFromChat(page) {
             { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: ss.toString('base64') } },
             { type: 'text', text: `Look at the chat panel on the RIGHT side of this Binance P2P order page.
 Find ONLY the most recent (last / bottom-most) message sent by the BUYER (left-aligned bubbles).
-Does it contain a 10-character alphanumeric M-Pesa code (e.g. QE1FXYZABC) or a bank reference number?
+Does it contain an M-Pesa transaction code (8-12 uppercase alphanumeric characters, e.g. QE1FXYZABC or UDMSATAB0) or a bank reference number?
 Return ONLY JSON: {"mpesa_code": "CODE or null", "bank_ref": "REF or null"}
 IMPORTANT: ignore ALL older messages — only look at the single most recent buyer message.` },
           ]}],
@@ -1925,7 +1925,7 @@ IMPORTANT: ignore ALL older messages — only look at the single most recent buy
       const vMatch = vText.match(/\{[\s\S]*\}/);
       if (vMatch) {
         const vResult = JSON.parse(vMatch[0]);
-        const vCode = vResult.mpesa_code && /^[A-Z0-9]{10}$/i.test(vResult.mpesa_code) ? vResult.mpesa_code.toUpperCase() : null;
+        const vCode = vResult.mpesa_code && /^[A-Z0-9]{8,12}$/i.test(vResult.mpesa_code) ? vResult.mpesa_code.toUpperCase() : null;
         const vRef  = vResult.bank_ref  && /^[A-Z0-9]{6,20}$/i.test(vResult.bank_ref)  ? vResult.bank_ref.toUpperCase()   : null;
         if (vCode || vRef) {
           console.log(`[SparkP2P] Vision (latest message) — M-Pesa: ${vCode || 'none'} Bank: ${vRef || 'none'}`);
@@ -1972,7 +1972,7 @@ IMPORTANT: ignore ALL older messages — only look at the single most recent buy
         await page.keyboard.press('Escape').catch(() => {});
         await new Promise(r => setTimeout(r, 1500));
 
-        const mpesaFound = (code && /^[A-Z0-9]{10}$/.test(code)) ? code : null;
+        const mpesaFound = (code && /^[A-Z0-9]{8,12}$/.test(code)) ? code : null;
         const bankFound = (bankRef && /^[A-Z0-9]{6,20}$/i.test(bankRef.trim())) ? bankRef.trim().toUpperCase() : null;
         if (!mpesaFound && code) console.log(`[SparkP2P] Rejected mpesa_code "${code}" — not exactly 10 chars`);
         if (!bankFound && bankRef) console.log(`[SparkP2P] Rejected bank_ref "${bankRef}" — unexpected format`);
@@ -2016,7 +2016,7 @@ Two possible payment types:
 
 1. M-Pesa SENT confirmation:
    Message: "XXXXXXXXXX Confirmed. Ksh X,XXX.XX sent to SPARK FREELANCE SOLUTIONS..."
-   Code: EXACTLY 10 uppercase letters/digits (e.g. UD5IZBFOER)
+   Code: 8-12 uppercase letters/digits (e.g. UD5IZBFOER or UDMSATAB0)
    IGNORE RECEIVED messages.
 
 2. Bank transfer to M-Pesa paybill (KCB, Equity, Co-op, Absa, etc.):
@@ -2024,7 +2024,7 @@ Two possible payment types:
    Code: The reference/transaction ID shown (may be longer than 10 chars, e.g. FT24096123456)
 
 Return ONLY valid JSON:
-{"mpesa_code": "<M-Pesa 10-char code or null>", "bank_ref": "<bank transaction ref or null>"}` },
+{"mpesa_code": "<M-Pesa 8-12 char code or null>", "bank_ref": "<bank transaction ref or null>"}` },
           ],
         }],
       }),
@@ -2549,20 +2549,8 @@ async function idleScan(page) {
         // ── Initialise partial-payments accumulator for this order ───────────────
         if (!partialPayments[order.orderNumber]) partialPayments[order.orderNumber] = [];
 
-        // Step 1: Scan most-recent screenshot in chat — always run so we catch the
-        // balance payment after a deficit message was sent.
-        console.log(`[SparkP2P] Step 1: Vision locating payment screenshot in chat...`);
-        const screenshotResult = await findAndReadPaymentScreenshot(page);
-        const latestCode   = screenshotResult?.code   || null;
-        const latestAmount = screenshotResult?.amount || null;
-
-        // Add to accumulator (skip duplicates by code)
-        if (latestCode && !partialPayments[order.orderNumber].some(p => p.code === latestCode)) {
-          partialPayments[order.orderNumber].push({ code: latestCode, amount: latestAmount });
-          console.log(`[SparkP2P] New code found: ${latestCode} (KES ${latestAmount}) — total entries: ${partialPayments[order.orderNumber].length}`);
-        }
-
-        // Step 1b: Scan chat text/typed codes — buyer may have typed since last poll
+        // Step 1: Scan chat text/typed codes FIRST — if buyer typed a code, use it directly
+        console.log(`[SparkP2P] Step 1: Scanning chat for typed M-Pesa codes...`);
         let chatBankRef = null;
         const textScan = await extractMpesaCodesFromChat(page);
         const typedCode = textScan.mpesaCodes?.[0] || null;
@@ -2570,6 +2558,21 @@ async function idleScan(page) {
         if (typedCode && !partialPayments[order.orderNumber].some(p => p.code === typedCode)) {
           partialPayments[order.orderNumber].push({ code: typedCode, amount: null });
           console.log(`[SparkP2P] Typed code added: ${typedCode} — total entries: ${partialPayments[order.orderNumber].length}`);
+        }
+
+        // Step 1b: Scan payment screenshots — only if no text code found yet
+        const alreadyHasCode = partialPayments[order.orderNumber].length > 0;
+        if (!alreadyHasCode) {
+          console.log(`[SparkP2P] Step 1b: No text code found — scanning payment screenshot in chat...`);
+          const screenshotResult = await findAndReadPaymentScreenshot(page);
+          const latestCode   = screenshotResult?.code   || null;
+          const latestAmount = screenshotResult?.amount || null;
+          if (latestCode && !partialPayments[order.orderNumber].some(p => p.code === latestCode)) {
+            partialPayments[order.orderNumber].push({ code: latestCode, amount: latestAmount });
+            console.log(`[SparkP2P] Screenshot code found: ${latestCode} (KES ${latestAmount}) — total entries: ${partialPayments[order.orderNumber].length}`);
+          }
+        } else {
+          console.log(`[SparkP2P] Step 1b: Skipping screenshot scan — text code already found`);
         }
 
         // Compute consolidated state
