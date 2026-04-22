@@ -1798,8 +1798,53 @@ async function findAndReadPaymentScreenshot(page) {
     const lightboxOpen = checkMatch ? JSON.parse(checkMatch[0])?.open === true : false;
 
     if (!lightboxOpen) {
-      console.log('[Vision] Lightbox did NOT open after click — aborting screenshot read');
-      return null;
+      console.log('[Vision] Lightbox did NOT open via mouse click — trying DOM click on img element...');
+      // Fallback: find the img in the chat panel and click it via JS (triggers React handler)
+      const domClicked = await page.evaluate((vpX, vpY) => {
+        const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
+          const r = img.getBoundingClientRect();
+          return r.width > 40 && r.height > 40 && r.left > window.innerWidth * 0.4;
+        });
+        // Pick the img closest to where Vision said the thumbnail was
+        let best = null, bestDist = Infinity;
+        for (const img of imgs) {
+          const r = img.getBoundingClientRect();
+          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          const dist = Math.hypot(cx - vpX, cy - vpY);
+          if (dist < bestDist) { best = img; bestDist = dist; }
+        }
+        if (best) { best.click(); return true; }
+        return false;
+      }, thumbVpX, thumbVpY).catch(() => false);
+
+      if (!domClicked) {
+        console.log('[Vision] DOM click fallback also failed — aborting screenshot read');
+        return null;
+      }
+      console.log('[Vision] DOM click sent — waiting 3s for lightbox...');
+      await new Promise(r => setTimeout(r, 3000));
+
+      // Re-check if lightbox opened after DOM click
+      const checkSS2 = await page.screenshot({ type: 'jpeg', quality: 75 });
+      const checkResp2 = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 40,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: checkSS2.toString('base64') } },
+            { type: 'text', text: 'Is there an enlarged PAYMENT IMAGE filling most of the screen in an image viewer/lightbox? Return ONLY: {"open": true} or {"open": false}' },
+          ]}],
+        }),
+      });
+      const checkData2 = await checkResp2.json();
+      const checkRaw2 = (checkData2.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
+      const lightboxOpen2 = checkRaw2 ? JSON.parse(checkRaw2[0])?.open === true : false;
+      if (!lightboxOpen2) {
+        console.log('[Vision] Lightbox still not open after DOM click — aborting');
+        return null;
+      }
+      console.log('[Vision] Lightbox opened via DOM click fallback');
     }
     console.log('[Vision] Lightbox confirmed open — waiting 12s for full load...');
     await new Promise(r => setTimeout(r, 12000));
@@ -1879,7 +1924,7 @@ OR if no M-Pesa confirmation visible in the bottom message:
     await new Promise(r => setTimeout(r, 2000));
     console.log('[Vision] Page reloaded — lightbox destroyed');
 
-    if (readResult?.found && readResult.code && /^[A-Z0-9]{10}$/.test(readResult.code)) {
+    if (readResult?.found && readResult.code && /^[A-Z0-9]{8,12}$/i.test(readResult.code)) {
       console.log(`[Vision] ✅ M-Pesa code extracted: ${readResult.code} (amount: KES ${readResult.amount})`);
       return { code: readResult.code, amount: readResult.amount, method: 'vision_screenshot' };
     }
@@ -1972,13 +2017,20 @@ IMPORTANT: ignore ALL older messages — only look at the single most recent buy
         await page.keyboard.press('Escape').catch(() => {});
         await new Promise(r => setTimeout(r, 1500));
 
-        const mpesaFound = (code && /^[A-Z0-9]{8,12}$/.test(code)) ? code : null;
+        const mpesaFound = (code && /^[A-Z0-9]{8,12}$/i.test(code)) ? code.toUpperCase() : null;
         const bankFound = (bankRef && /^[A-Z0-9]{6,20}$/i.test(bankRef.trim())) ? bankRef.trim().toUpperCase() : null;
-        if (!mpesaFound && code) console.log(`[SparkP2P] Rejected mpesa_code "${code}" — not exactly 10 chars`);
+        if (!mpesaFound && code) console.log(`[SparkP2P] Rejected mpesa_code "${code}" — unexpected format`);
         if (!bankFound && bankRef) console.log(`[SparkP2P] Rejected bank_ref "${bankRef}" — unexpected format`);
 
+        // If Vision classified a 8-12 char code as bank_ref (e.g. starts with digits), treat it
+        // as a potential M-Pesa code too so VPS can attempt verification on both
+        const altMpesa = (!mpesaFound && bankFound && /^[A-Z0-9]{8,12}$/i.test(bankFound)) ? bankFound : null;
+
         if (mpesaFound || bankFound) {
-          return { mpesaCodes: mpesaFound ? [mpesaFound] : [], bankRefs: bankFound ? [bankFound] : [] };
+          const mpesaCodes = mpesaFound ? [mpesaFound] : (altMpesa ? [altMpesa] : []);
+          const bankRefs = bankFound ? [bankFound] : [];
+          console.log(`[SparkP2P] Image codes: mpesa=[${mpesaCodes}] bank=[${bankRefs}]`);
+          return { mpesaCodes, bankRefs };
         }
       } catch (e) {
         console.log(`[SparkP2P] Chat image ${i + 1} error: ${e.message?.substring(0, 60)}`);
