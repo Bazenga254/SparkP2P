@@ -8383,7 +8383,8 @@ For "reply" cases:
 // Opens as a new tab in the existing Binance browser — one browser, all tabs
 // ═══════════════════════════════════════════════════════════
 
-const IM_URL = 'https://digital.imbank.com/inm-retail/select-context'; // entry point — redirects to login if not authenticated
+// Navigate to dashboard — triggers OAuth redirect to login page with correct PKCE params
+const IM_URL = 'https://digital.imbank.com/inm-retail/dashboard';
 const IM_TRANSFERS_URL = 'https://digital.imbank.com/inm-retail/transfers';
 const IM_KEEP_ALIVE_INTERVAL = 60 * 1000; // ping every 1 min to prevent session timeout
 let imKeepAliveTimer = null;
