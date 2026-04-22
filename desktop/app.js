@@ -634,6 +634,19 @@ async function resetZoom(page) {
   }
 }
 
+async function takeImSuccessScreenshot(page) {
+  await resetZoom(page);
+  await new Promise(r => setTimeout(r, 500));
+  // Remove Angular Material dark backdrop so modal shows on a clear background
+  await page.evaluate(() => {
+    document.querySelectorAll('.cdk-overlay-backdrop, .cdk-overlay-dark-backdrop, .mat-drawer-backdrop').forEach(el => {
+      el.style.display = 'none';
+    });
+  }).catch(() => {});
+  await new Promise(r => setTimeout(r, 200));
+  return page.screenshot({ encoding: 'base64' }).catch(() => null);
+}
+
 async function getPage(urlMatch) {
   if (!browser) return null;
   const pages = await browser.pages();
@@ -6857,9 +6870,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       const refMatch = pageText.match(/reference\s*id\s*(?:number)?[:\s]+([A-Z0-9]{8,12})/i);
       if (refMatch) { referenceId = refMatch[1].trim(); console.log(`[I&M Vision] ✅ Ref ID: ${referenceId}`); }
       console.log(`[I&M Vision] ✅ Payment SUCCESS at step ${step}`);
-      await resetZoom(imPage);
-      await new Promise(r => setTimeout(r, 400));
-      const receiptSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot);
+      const receiptSS = await takeImSuccessScreenshot(imPage) || screenshot;
       imWithdrawalRunning = false;
       return { success: true, screenshot: receiptSS, referenceId };
     }
@@ -6947,9 +6958,7 @@ Return ONLY valid JSON, no other text.` },
     // ── Execute the action ───────────────────────────────────────────────────
     if (action.screen === 'success' || action.action === 'done') {
       // Handled above by text detection — but catch it here too
-      await resetZoom(imPage);
-      await new Promise(r => setTimeout(r, 400));
-      const receiptSS2 = await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot);
+      const receiptSS2 = await takeImSuccessScreenshot(imPage) || screenshot;
       imWithdrawalRunning = false;
       return { success: true, screenshot: receiptSS2, referenceId };
     }
@@ -7628,10 +7637,7 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
 
     if (action.screen === 'success' || action.action === 'done') {
       imWithdrawalRunning = false;
-      // Reset zoom to 100% before screenshot so it's crisp and readable
-      await resetZoom(imPage);
-      await new Promise(r => setTimeout(r, 400));
-      return { success: true, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot), referenceId };
+      return { success: true, screenshot: await takeImSuccessScreenshot(imPage) || screenshot, referenceId };
     }
     if (action.action === 'type_pin') {
       // Focus the PIN input first
