@@ -7316,71 +7316,68 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
 
-      // Payment Purpose = Other — same Puppeteer select strategy as KES
+      // Payment Purpose = Other — custom Angular dropdown (not native select)
+      // Step 1: scroll the trigger into view, Step 2: OS click to open, Step 3: OS click "Other" in overlay
       const purposeDone = await (async () => {
         try {
-          const info = await imPage.evaluate(() => {
-            const sels = Array.from(document.querySelectorAll('select'));
-            console.log('[BankTransfer-DOM] Total selects found:', sels.length);
-            for (let i = 0; i < sels.length; i++) {
-              const opts = Array.from(sels[i].options).map(o => o.text.trim());
-              const fc = sels[i].getAttribute('formcontrolname') || sels[i].getAttribute('name') || '';
-              console.log(`[BankTransfer-DOM] select[${i}] fc="${fc}" opts=${JSON.stringify(opts)}`);
-              if (opts.includes('Other') && !opts.includes('KES')) {
-                const otherOpt = Array.from(sels[i].options).find(o => o.text.trim() === 'Other');
-                return { index: i, value: otherOpt.value, formcontrolname: fc };
-              }
-            }
+          // Scroll the payment purpose trigger into viewport center first
+          await imPage.evaluate(() => {
+            const all = Array.from(document.querySelectorAll('*'));
+            const t = all.find(e => {
+              const txt = (e.textContent || '').trim();
+              return (txt === 'Select payment purpose' || txt.includes('payment purpose')) && e.getBoundingClientRect().width > 100 && e.children.length < 5;
+            });
+            if (t) t.scrollIntoView({ block: 'center', behavior: 'instant' });
+          }).catch(() => {});
+          await new Promise(r => setTimeout(r, 500));
+
+          // Get trigger coordinates after scroll
+          const purposeTrigger = await imPage.evaluate(() => {
+            const all = Array.from(document.querySelectorAll('*'));
+            const t = all.find(e => {
+              const txt = (e.textContent || '').trim();
+              const r = e.getBoundingClientRect();
+              return (txt === 'Select payment purpose') && r.width > 100 && r.top > 0 && r.top < window.innerHeight;
+            });
+            if (t) { const r = t.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
             return null;
           }).catch(() => null);
-          console.log(`[BankTransfer] Purpose select info:`, JSON.stringify(info));
-          if (info) {
-            // Use unique CSS selector if formcontrolname is available, else use index handle
-            if (info.formcontrolname) {
-              await imPage.select(`select[formcontrolname="${info.formcontrolname}"]`, info.value);
-              console.log(`[BankTransfer] ✅ Payment Purpose set to Other (select[formcontrolname="${info.formcontrolname}"] value="${info.value}")`);
-            } else {
-              const handles = await imPage.$$('select');
-              if (handles[info.index]) {
-                await handles[info.index].select(info.value);
-                console.log(`[BankTransfer] ✅ Payment Purpose set to Other (select[${info.index}] value="${info.value}")`);
-              }
-            }
-            return true;
-          }
-        } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
-        return false;
-      })();
+          console.log(`[BankTransfer] purposeTrigger after scrollIntoView:`, JSON.stringify(purposeTrigger));
 
-      if (!purposeDone) {
-        // Fallback: OS real click on dropdown + OS click on "Other" option
-        const purposeTrigger = await imPage.evaluate(() => {
-          const all = Array.from(document.querySelectorAll('*'));
-          const t = all.find(e => (e.textContent || '').trim() === 'Select payment purpose' && e.getBoundingClientRect().width > 100);
-          if (t) { const r = t.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
-          return null;
-        }).catch(() => null);
-        if (purposeTrigger) {
+          if (!purposeTrigger) return false;
+
+          // OS click to open the dropdown
           await realMouseClick(imPage, purposeTrigger.x, purposeTrigger.y);
-          await new Promise(r => setTimeout(r, 900));
+          await new Promise(r => setTimeout(r, 1000));
+
+          // Find "Other" — check CDK overlay first, then full body
           const otherCoords = await imPage.evaluate(() => {
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            // CDK overlay (Angular Material panels render here)
+            const overlay = document.querySelector('.cdk-overlay-container, .cdk-overlay-pane');
+            const search = overlay || document.body;
+            const walker = document.createTreeWalker(search, NodeFilter.SHOW_TEXT, null);
             let node;
             while ((node = walker.nextNode())) {
               if (node.textContent.trim() === 'Other') {
                 const el = node.parentElement;
                 const r = el?.getBoundingClientRect();
-                if (r && r.width > 0 && r.height > 0 && r.top > 50 && r.top < window.innerHeight) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                if (r && r.width > 0 && r.height > 0 && r.top > 0 && r.top < window.innerHeight)
+                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
               }
             }
             return null;
           }).catch(() => null);
+          console.log(`[BankTransfer] otherCoords:`, JSON.stringify(otherCoords));
+
           if (otherCoords) {
             await realMouseClick(imPage, otherCoords.x, otherCoords.y);
-            console.log('[BankTransfer] ✅ Payment Purpose set to Other (OS click)');
+            console.log('[BankTransfer] ✅ Payment Purpose set to Other (scrollIntoView + OS click)');
+            await new Promise(r => setTimeout(r, 500));
+            return true;
           }
-        }
-      }
+        } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
+        return false;
+      })();
       // Scroll to bottom so Continue button is visible for Vision
       await imPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
       await new Promise(r => setTimeout(r, 800));
