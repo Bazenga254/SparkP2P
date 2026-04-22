@@ -37,7 +37,13 @@ http.createServer(async (req, res) => {
     console.log('[SparkP2P] Bot RESUMED — Chrome locked back to bot');
     res.end(JSON.stringify({ ok: true, paused: false }));
   } else if (req.url === '/status') {
-    res.end(JSON.stringify({ paused: pauseNavigation, running: pollerRunning, version: app.getVersion() }));
+    res.end(JSON.stringify({
+      paused: pauseNavigation,
+      running: pollerRunning,
+      version: app.getVersion(),
+      imConnected: !!(typeof imPage !== 'undefined' && imPage && !imPage.isClosed()),
+      mpesaConnected: !!(typeof mpesaOrgPage !== 'undefined' && mpesaOrgPage && !mpesaOrgPage.isClosed()),
+    }));
   } else {
     res.end(JSON.stringify({ ok: false }));
   }
