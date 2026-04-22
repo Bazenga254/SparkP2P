@@ -9740,42 +9740,76 @@ async function executeMpesaSweep(sweepJob) {
 
     // Wait for the form to fully load after service selection (fields render dynamically)
     await new Promise(r => setTimeout(r, 4000));
+
+    // Scroll to bottom of page so all form fields render
+    await mpesaOrgPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
+    await mpesaOrgPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
     await takeScreenshot('sweep_step2_after_service_select', mpesaOrgPage);
 
-    // Scroll down so dynamically-loaded fields are visible
-    await mpesaOrgPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
-    await new Promise(r => setTimeout(r, 1000));
+    // Log all visible input fields to help debug if amount not found
+    const allInputs = await mpesaOrgPage.evaluate(() =>
+      Array.from(document.querySelectorAll('input')).map(el => ({
+        placeholder: el.placeholder, name: el.name, id: el.id, type: el.type,
+        label: el.closest('div,td,tr,label')?.textContent?.trim().substring(0, 60),
+      }))
+    ).catch(() => []);
+    console.log('[SparkP2P] All inputs on page:', JSON.stringify(allInputs.slice(0, 20)));
 
-    // Wait up to 10s for Amount field to appear
-    await mpesaOrgPage.waitForFunction(() => {
-      const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"], input:not([type])'));
-      return inputs.some(el => {
-        const ctx = (el.placeholder || el.getAttribute('aria-label') || el.name || el.id ||
-          el.closest('div,td,tr,label')?.textContent || '').toLowerCase();
+    // Find Amount field — check placeholder, name, id, aria-label, and surrounding label text
+    const amountHandle = await mpesaOrgPage.evaluateHandle((amt) => {
+      const inputs = Array.from(document.querySelectorAll('input'));
+      return inputs.find(el => {
+        const ctx = [
+          el.placeholder, el.getAttribute('aria-label'), el.name, el.id,
+          el.closest('div,td,tr,label,th')?.textContent || '',
+          el.closest('[class*="form-group"],[class*="field"],[class*="row"]')?.textContent || '',
+        ].join(' ').toLowerCase();
         return ctx.includes('amount') || ctx.includes('ksh') || ctx.includes('kes');
-      });
-    }, { timeout: 10000 }).catch(() => {});
+      }) || null;
+    }, amount).catch(() => null);
 
-    // Fill Amount(KSH)
-    const amountFilled = await mpesaOrgPage.evaluate((amt) => {
-      const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"], input:not([type])'));
-      const inp = inputs.find(el => {
-        const ctx = (el.placeholder || el.getAttribute('aria-label') || el.name || el.id ||
-          el.closest('div,td,tr,label')?.textContent || '').toLowerCase();
-        return ctx.includes('amount') || ctx.includes('ksh') || ctx.includes('kes');
-      });
-      if (!inp) return false;
-      inp.scrollIntoView({ block: 'center' });
-      inp.focus();
-      // Clear existing value then set new one
-      inp.value = '';
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-      inp.value = String(amt);
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-      inp.dispatchEvent(new Event('change', { bubbles: true }));
-      inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-      return true;
-    }, amount).catch(() => false);
+    const amountEl = amountHandle?.asElement ? amountHandle.asElement() : null;
+
+    let amountFilled = false;
+    if (amountEl) {
+      await amountEl.scrollIntoView().catch(() => {});
+      await new Promise(r => setTimeout(r, 500));
+      await amountEl.click({ clickCount: 3 }).catch(() => {}); // select all
+      await amountEl.type(String(amount), { delay: 80 });
+      await mpesaOrgPage.evaluate(el => {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }, amountEl).catch(() => {});
+      amountFilled = true;
+      console.log('[SparkP2P] Step 2: Amount filled via element handle');
+    }
+
+    if (!amountFilled) {
+      // Fallback: try clicking each input and checking label, then type
+      amountFilled = await mpesaOrgPage.evaluate((amt) => {
+        const inputs = Array.from(document.querySelectorAll('input'));
+        for (const inp of inputs) {
+          const rect = inp.getBoundingClientRect();
+          if (rect.width === 0) continue; // skip hidden
+          const ctx = [
+            inp.placeholder, inp.getAttribute('aria-label'), inp.name, inp.id,
+            inp.closest('div,td,tr,label,th')?.textContent || '',
+          ].join(' ').toLowerCase();
+          if (ctx.includes('amount') || ctx.includes('ksh') || ctx.includes('kes')) {
+            inp.scrollIntoView({ block: 'center' });
+            inp.focus();
+            inp.value = String(amt);
+            inp.dispatchEvent(new Event('input', { bubbles: true }));
+            inp.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          }
+        }
+        return false;
+      }, amount).catch(() => false);
+    }
+
     console.log(`[SparkP2P] Step 2: Amount filled: ${amountFilled}`);
     if (!amountFilled) return failSweep('Org Withdrawal: Amount field not found');
 
