@@ -7092,7 +7092,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       if (searchBox) {
         // Type account number into search box to filter results
         const searchTerm = traderImAccount || 'BONITO';
-        await imPage.mouse.click(searchBox.x / imDpr, searchBox.y / imDpr);
+        await imPage.mouse.click(searchBox.x, searchBox.y);
         await new Promise(r => setTimeout(r, 300));
         await imPage.keyboard.type(searchTerm, { delay: 60 });
         await new Promise(r => setTimeout(r, 1200));
@@ -7119,7 +7119,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         }).catch(() => null);
 
         if (result) {
-          await imPage.mouse.click(result.x / imDpr, result.y / imDpr);
+          await imPage.mouse.click(result.x, result.y);
           console.log(`[BankTransfer] ✅ Account selected via search box: <${result.tag}> "${result.txt}"`);
           accountSelected = true;
           await new Promise(r => setTimeout(r, 1500));
@@ -7134,7 +7134,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
           return null;
         }).catch(() => null);
         if (trigger) {
-          await imPage.mouse.click(trigger.x / imDpr, trigger.y / imDpr);
+          await imPage.mouse.click(trigger.x, trigger.y);
           console.log('[BankTransfer] Opening account dropdown...');
           await new Promise(r => setTimeout(r, 1500));
           continue;
@@ -7167,7 +7167,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         return null;
       }).catch(() => null);
       if (bankInputCoords2) {
-        await imPage.mouse.click(bankInputCoords2.x / imDpr, bankInputCoords2.y / imDpr);
+        await imPage.mouse.click(bankInputCoords2.x, bankInputCoords2.y);
         await new Promise(r => setTimeout(r, 300));
         await imPage.keyboard.type(targetBank.substring(0, 5), { delay: 80 });
         await new Promise(r => setTimeout(r, 1800));
@@ -7202,7 +7202,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         return null;
       }).catch(() => null);
       if (acctInput2) {
-        await imPage.mouse.click(acctInput2.x / imDpr, acctInput2.y / imDpr);
+        await imPage.mouse.click(acctInput2.x, acctInput2.y);
         await new Promise(r => setTimeout(r, 300));
         await imPage.keyboard.type(String(accountNumber), { delay: 60 });
         console.log(`[BankTransfer] ✅ Account number typed: ${accountNumber}`);
