@@ -7321,39 +7321,30 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
 
-      // Payment Purpose = Other — Angular Material dropdown
-      // Strategy: DOM click to open (no coordinate math needed), then DOM click "Other" in CDK overlay
+      // Payment Purpose = Other — Angular Material mat-select
+      // Use Puppeteer ElementHandle.click() (CDP-level) to open, then DOM click "Other" in CDK overlay
       const purposeDone = await (async () => {
         try {
-          // Step 1: find the trigger and scroll it into view
-          const triggerFound = await imPage.evaluate(() => {
-            const all = Array.from(document.querySelectorAll('mat-select, [role="listbox"], [role="combobox"], select, .mat-select-trigger'));
-            // Also look by placeholder text
-            const byText = Array.from(document.querySelectorAll('*')).find(e => {
-              const txt = (e.textContent || '').trim();
-              const r = e.getBoundingClientRect();
-              return txt === 'Select payment purpose' && r.width > 100 && e.children.length < 5;
-            });
-            const trigger = byText || all[0];
-            if (trigger) { trigger.scrollIntoView({ block: 'center', behavior: 'instant' }); return true; }
+          // Find the mat-select that contains "Select payment purpose"
+          const purposeHandle = await imPage.evaluateHandle(() => {
+            const selects = Array.from(document.querySelectorAll('mat-select'));
+            return selects.find(s => (s.textContent || '').includes('Select payment purpose') || (s.getAttribute('placeholder') || '').toLowerCase().includes('purpose'))
+              || selects.find(s => !(s.textContent || '').includes('KES'));  // fallback: the non-currency one
+          }).catch(() => null);
+
+          if (!purposeHandle || !(await purposeHandle.evaluate(el => !!el).catch(() => false))) {
+            console.log('[BankTransfer] ⚠️ mat-select for payment purpose not found');
             return false;
-          }).catch(() => false);
-          if (!triggerFound) { console.log('[BankTransfer] ⚠️ Purpose trigger not found'); return false; }
+          }
+
+          // Scroll into view then CDP click (dispatches real mouse events Angular listens to)
+          await purposeHandle.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
           await new Promise(r => setTimeout(r, 400));
+          await purposeHandle.click();
+          await new Promise(r => setTimeout(r, 900));
+          console.log('[BankTransfer] Clicked mat-select for payment purpose — waiting for CDK overlay');
 
-          // Step 2: DOM click to open (works for Angular mat-select without coordinate math)
-          await imPage.evaluate(() => {
-            const trigger = Array.from(document.querySelectorAll('*')).find(e => {
-              const txt = (e.textContent || '').trim();
-              const r = e.getBoundingClientRect();
-              return txt === 'Select payment purpose' && r.width > 100 && e.children.length < 5;
-            });
-            if (trigger) trigger.click();
-          }).catch(() => {});
-          await new Promise(r => setTimeout(r, 800));
-          console.log('[BankTransfer] Clicked payment purpose trigger — waiting for overlay');
-
-          // Step 3: find "Other" in CDK overlay and DOM click it
+          // Find "Other" in the CDK overlay panel and click it
           const clicked = await imPage.evaluate(() => {
             const overlay = document.querySelector('.cdk-overlay-container');
             const search = overlay || document.body;
@@ -7370,11 +7361,11 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
           }).catch(() => false);
 
           if (clicked) {
-            console.log('[BankTransfer] ✅ Payment Purpose set to Other (DOM click)');
+            console.log('[BankTransfer] ✅ Payment Purpose set to Other (mat-select CDP click + overlay DOM click)');
             await new Promise(r => setTimeout(r, 500));
             return true;
           }
-          console.log('[BankTransfer] ⚠️ "Other" option not found in overlay');
+          console.log('[BankTransfer] ⚠️ "Other" not found in CDK overlay after click');
         } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
         return false;
       })();
