@@ -234,6 +234,36 @@ function loadAnthropicKey() {
 loadAnthropicKey(); // Load immediately on startup
 
 // ── I&M Bank PIN — stored ONLY on this device using OS-level encryption ──
+// ── Session cookie persistence for I&M and M-Pesa portals ───────────────────
+// Saves session cookies to disk after login so reconnects don't require re-login
+const IM_COOKIES_FILE = path.join(app.getPath('userData'), 'im_session.json');
+const MPESA_COOKIES_FILE = path.join(app.getPath('userData'), 'mpesa_session.json');
+
+function saveImCookiesLocal(cookies) {
+  try { fs.writeFileSync(IM_COOKIES_FILE, JSON.stringify(cookies)); } catch (e) {}
+}
+function loadImCookiesLocal() {
+  try { return JSON.parse(fs.readFileSync(IM_COOKIES_FILE, 'utf8')); } catch (e) { return null; }
+}
+function saveMpesaCookiesLocal(cookies) {
+  try { fs.writeFileSync(MPESA_COOKIES_FILE, JSON.stringify(cookies)); } catch (e) {}
+}
+function loadMpesaCookiesLocal() {
+  try { return JSON.parse(fs.readFileSync(MPESA_COOKIES_FILE, 'utf8')); } catch (e) { return null; }
+}
+
+async function restoreCookiesToPage(page, cookies, url) {
+  if (!cookies || !cookies.length) return false;
+  try {
+    await page.goto('about:blank').catch(() => {});
+    for (const c of cookies) {
+      await page.setCookie(c).catch(() => {});
+    }
+    console.log(`[SparkP2P] Restored ${cookies.length} session cookies`);
+    return true;
+  } catch (e) { return false; }
+}
+
 // Uses Electron safeStorage (Windows Credential Store / macOS Keychain).
 // The PIN never leaves this machine and cannot be decrypted on any other device.
 let imPin = null;
@@ -8419,6 +8449,12 @@ async function connectIm() {
       imPage = existing;
     } else {
       imPage = await browser.newPage();
+      // Restore saved session cookies before navigating — avoids login page if session still valid
+      const savedCookies = loadImCookiesLocal();
+      if (savedCookies) {
+        await restoreCookiesToPage(imPage, savedCookies, 'https://digital.imbank.com');
+        console.log('[SparkP2P] I&M saved session cookies restored — attempting silent reconnect');
+      }
       await imPage.goto(IM_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
     await imPage.bringToFront();
@@ -8461,6 +8497,9 @@ async function connectIm() {
           clearInterval(check);
           console.log('[SparkP2P] I&M login confirmed by Vision! Syncing cookies...');
           await syncImCookies();
+          // Save cookies locally so next reconnect skips login page
+          const freshCookies = await imPage.cookies('https://digital.imbank.com').catch(() => []);
+          if (freshCookies.length) saveImCookiesLocal(freshCookies);
           startImKeepAlive();
           // Lock ALL bot-controlled tabs (sets browserLocked = true)
           await lockChromeBrowser().catch(() => {});
@@ -8537,6 +8576,9 @@ function startImKeepAlive() {
         waitUntil: 'domcontentloaded', timeout: 15000
       }).catch(() => {});
       await syncImCookies();
+      // Refresh locally saved cookies so next reconnect uses the latest tokens
+      const kaCookies = await imPage.cookies('https://digital.imbank.com').catch(() => []);
+      if (kaCookies.length) saveImCookiesLocal(kaCookies);
       console.log('[SparkP2P] I&M keep-alive: navigated to dashboard, session refreshed');
     } catch (e) {
       console.log('[SparkP2P] I&M keep-alive error:', e.message);
@@ -9181,6 +9223,12 @@ async function connectMpesaPortal() {
       mpesaOrgPage = existing;
     } else {
       mpesaOrgPage = await browser.newPage();
+      // Restore saved session cookies before navigating — avoids login page if session still valid
+      const savedMpesaCookies = loadMpesaCookiesLocal();
+      if (savedMpesaCookies) {
+        await restoreCookiesToPage(mpesaOrgPage, savedMpesaCookies, MPESA_ORG_URL);
+        console.log('[SparkP2P] M-PESA saved session cookies restored — attempting silent reconnect');
+      }
       await mpesaOrgPage.goto(MPESA_ORG_URL, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     }
     await mpesaOrgPage.bringToFront();
@@ -9221,6 +9269,9 @@ async function connectMpesaPortal() {
         if (verdict === 'LOGGED_IN') {
           clearInterval(check);
           console.log('[SparkP2P] M-PESA portal login confirmed! Starting keep-alive...');
+          // Save cookies locally so next reconnect skips login page
+          const mpesaFreshCookies = await mpesaOrgPage.cookies(MPESA_ORG_URL).catch(() => []);
+          if (mpesaFreshCookies.length) saveMpesaCookiesLocal(mpesaFreshCookies);
           startMpesaOrgKeepAlive();
           startPaybillSync();
           // Lock ALL bot-controlled tabs (sets browserLocked = true and injects overlay on all pages)
@@ -9253,9 +9304,11 @@ function startMpesaOrgKeepAlive() {
       // Avoid navigating away from initiate page if a sweep is in progress
       if (!mpesaSweepRunning) {
         await mpesaOrgPage.evaluate(() => {
-          // Trigger a lightweight XHR instead of full navigation
           fetch('/mainPage', { method: 'HEAD' }).catch(() => {});
         }).catch(() => {});
+        // Refresh locally saved cookies so next reconnect uses latest tokens
+        const mpesaKaCookies = await mpesaOrgPage.cookies(MPESA_ORG_URL).catch(() => []);
+        if (mpesaKaCookies.length) saveMpesaCookiesLocal(mpesaKaCookies);
       }
       console.log('[SparkP2P] M-PESA portal keep-alive sent');
     } catch (e) {}
