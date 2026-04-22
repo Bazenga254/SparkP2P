@@ -8460,6 +8460,14 @@ async function connectIm() {
     await imPage.bringToFront();
     imPage.on('close', () => { imPage = null; });
 
+    // Auto-open M-PESA portal tab 10 seconds after I&M tab opens
+    setTimeout(() => {
+      if (!connectingMpesa && (!mpesaOrgPage || mpesaOrgPage.isClosed())) {
+        console.log('[SparkP2P] Auto-opening M-PESA portal after I&M connect...');
+        connectMpesaPortal().catch(() => {});
+      }
+    }, 10000);
+
     // Poll until Claude Vision confirms the user is actually logged into I&M dashboard
     let attempts = 0;
     let verifying = false;
