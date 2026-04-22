@@ -7053,15 +7053,20 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   });
   await new Promise(r => setTimeout(r, 3000));
 
-  // Force zoom to 100% so DPR is always 1 and Vision coordinates are reliable
-  await imPage.evaluate(() => { document.body.style.zoom = ''; }).catch(() => {});
-  await imPage.keyboard.down('Control').catch(() => {});
-  await imPage.keyboard.press('0').catch(() => {});
-  await imPage.keyboard.up('Control').catch(() => {});
+  // Set page to 80% zoom via CDP — same strategy as Binance
+  // More content visible in screenshot, coordinate math unchanged (still divide by DPR)
+  try {
+    const imCdpSession = await imPage.createCDPSession();
+    await imCdpSession.send('Emulation.setPageScaleFactor', { pageScaleFactor: 0.8 });
+    console.log('[BankTransfer] ✅ Page scale set to 80%');
+  } catch (e) {
+    console.log(`[BankTransfer] Page scale fallback: ${e.message}`);
+    await imPage.evaluate(() => { document.documentElement.style.zoom = '80%'; }).catch(() => {});
+  }
   await new Promise(r => setTimeout(r, 400));
 
   let imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
-  console.log(`[BankTransfer] DPR after zoom reset = ${imDpr}`);
+  console.log(`[BankTransfer] DPR = ${imDpr}`);
 
   // All form filling handled inside Vision loop after account selection
 
