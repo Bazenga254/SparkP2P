@@ -7342,7 +7342,16 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
           await new Promise(r => setTimeout(r, 400));
           await purposeHandle.click();
           await new Promise(r => setTimeout(r, 900));
-          console.log('[BankTransfer] Clicked mat-select for payment purpose — waiting for CDK overlay');
+
+          // Diagnose: log what the CDK overlay contains so we can confirm dropdown opened
+          await imPage.evaluate(() => {
+            const overlay = document.querySelector('.cdk-overlay-container');
+            if (!overlay) { console.log('[BankTransfer-DOM] No .cdk-overlay-container found'); return; }
+            const panels = overlay.querySelectorAll('.cdk-overlay-pane, .mat-select-panel, mat-option');
+            console.log(`[BankTransfer-DOM] CDK overlay panes/panels/options: ${panels.length}`);
+            const texts = Array.from(overlay.querySelectorAll('mat-option, [role="option"]')).map(e => e.textContent.trim());
+            console.log(`[BankTransfer-DOM] Options visible: ${JSON.stringify(texts)}`);
+          }).catch(() => {});
 
           // Find "Other" in the CDK overlay panel and click it
           const clicked = await imPage.evaluate(() => {
