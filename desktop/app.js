@@ -8437,7 +8437,7 @@ async function connectIm() {
   try {
     // Ensure main browser is running — launch if needed
     if (!browser) {
-      await launchChrome('https://digital.imbank.com');
+      await launchChrome(IM_URL);
       await connectPuppeteer();
       if (!browser) { connectingIm = false; return; }
     }
