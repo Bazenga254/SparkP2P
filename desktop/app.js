@@ -7509,16 +7509,27 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
       return { success: true, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot), referenceId };
     }
     if (action.action === 'type_pin') {
+      // Focus the PIN input first
+      await imPage.evaluate(() => {
+        const input = document.querySelector('input[type="password"], input[type="tel"]');
+        if (input) { input.click(); input.focus(); }
+      }).catch(() => {});
+      await new Promise(r => setTimeout(r, 300));
       for (const digit of String(imPin)) {
-        await imPage.evaluate(() => {
-          const inputs = Array.from(document.querySelectorAll('input[type="password"], input[type="tel"], input[maxlength="1"]'));
-          const empty = inputs.find(i => !i.value);
-          if (empty) empty.click();
-        }).catch(() => {});
         await imPage.keyboard.press(digit);
         await new Promise(r => setTimeout(r, 150));
       }
-      await new Promise(r => setTimeout(r, 1000)); continue;
+      await new Promise(r => setTimeout(r, 800));
+      // Click Complete immediately after PIN — don't wait for Vision to see it
+      const completeClicked = await imPage.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const btn = btns.find(b => (b.textContent || '').trim().toLowerCase() === 'complete');
+        if (btn) { btn.scrollIntoView({ block: 'center', behavior: 'instant' }); btn.click(); return true; }
+        return false;
+      }).catch(() => false);
+      if (completeClicked) console.log('[BankTransfer] ✅ PIN typed + Complete clicked');
+      else console.log('[BankTransfer] ⚠️ Complete button not found after PIN');
+      await new Promise(r => setTimeout(r, 4000)); continue;
     }
     if (action.action === 'type' && action.value && action.x && action.y) {
       await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
