@@ -9665,21 +9665,42 @@ async function executeMpesaSweep(sweepJob) {
       }).catch(() => {});
     }
 
-    await new Promise(r => setTimeout(r, 2000));
+    // Wait for the form to fully load after service selection (fields render dynamically)
+    await new Promise(r => setTimeout(r, 4000));
+    await takeScreenshot('sweep_step2_after_service_select', mpesaOrgPage);
+
+    // Scroll down so dynamically-loaded fields are visible
+    await mpesaOrgPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
+
+    // Wait up to 10s for Amount field to appear
+    await mpesaOrgPage.waitForFunction(() => {
+      const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"], input:not([type])'));
+      return inputs.some(el => {
+        const ctx = (el.placeholder || el.getAttribute('aria-label') || el.name || el.id ||
+          el.closest('div,td,tr,label')?.textContent || '').toLowerCase();
+        return ctx.includes('amount') || ctx.includes('ksh') || ctx.includes('kes');
+      });
+    }, { timeout: 10000 }).catch(() => {});
 
     // Fill Amount(KSH)
     const amountFilled = await mpesaOrgPage.evaluate((amt) => {
-      const inputs = Array.from(document.querySelectorAll('input'));
+      const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"], input:not([type])'));
       const inp = inputs.find(el => {
-        const ctx = (el.placeholder || el.getAttribute('aria-label') || el.closest('div,td,label')?.textContent || '').toLowerCase();
-        return ctx.includes('amount');
+        const ctx = (el.placeholder || el.getAttribute('aria-label') || el.name || el.id ||
+          el.closest('div,td,tr,label')?.textContent || '').toLowerCase();
+        return ctx.includes('amount') || ctx.includes('ksh') || ctx.includes('kes');
       });
       if (!inp) return false;
       inp.scrollIntoView({ block: 'center' });
       inp.focus();
+      // Clear existing value then set new one
+      inp.value = '';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
       inp.value = String(amt);
       inp.dispatchEvent(new Event('input', { bubbles: true }));
       inp.dispatchEvent(new Event('change', { bubbles: true }));
+      inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
       return true;
     }, amount).catch(() => false);
     console.log(`[SparkP2P] Step 2: Amount filled: ${amountFilled}`);
