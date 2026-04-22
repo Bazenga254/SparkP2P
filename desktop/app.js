@@ -7053,7 +7053,15 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   });
   await new Promise(r => setTimeout(r, 3000));
 
-  const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
+  // Force zoom to 100% so DPR is always 1 and Vision coordinates are reliable
+  await imPage.evaluate(() => { document.body.style.zoom = ''; }).catch(() => {});
+  await imPage.keyboard.down('Control').catch(() => {});
+  await imPage.keyboard.press('0').catch(() => {});
+  await imPage.keyboard.up('Control').catch(() => {});
+  await new Promise(r => setTimeout(r, 400));
+
+  let imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
+  console.log(`[BankTransfer] DPR after zoom reset = ${imDpr}`);
 
   // All form filling handled inside Vision loop after account selection
 
@@ -7068,6 +7076,8 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   while (step < IM_MAX_STEPS) {
     step++;
     await new Promise(r => setTimeout(r, 1500));
+    // Re-read DPR each iteration in case zoom changed
+    imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => imDpr);
 
     // ── Account selection: type account number in dropdown search box ────────
     if (!accountSelected) {
