@@ -7512,14 +7512,46 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
       await new Promise(r => setTimeout(r, 800)); continue;
     }
     if (action.action === 'scroll') {
-      await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
-      await new Promise(r => setTimeout(r, 800));
+      // On review screen, try to find and click Submit/Continue/Okay via DOM before scrolling
+      const domClicked = await imPage.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button, a'));
+        const target = btns.find(b => {
+          const txt = (b.textContent || '').trim().toLowerCase();
+          return (txt === 'submit' || txt === 'continue' || txt === 'confirm' || txt === 'okay' || txt === 'ok' || txt === 'complete') && b.getBoundingClientRect().width > 0;
+        });
+        if (target) { target.scrollIntoView({ block: 'center', behavior: 'instant' }); target.click(); return (target.textContent || '').trim(); }
+        return null;
+      }).catch(() => null);
+      if (domClicked) {
+        console.log(`[BankTransfer] ✅ DOM clicked "${domClicked}" instead of scrolling`);
+        await new Promise(r => setTimeout(r, 3000));
+      } else {
+        await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
+        await new Promise(r => setTimeout(r, 800));
+      }
       continue;
     }
     if (action.action === 'click' && action.x && action.y) {
-      await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
+      // For submit/confirm/continue on review screen, prefer DOM click over coordinates
       const desc = (action.description || '').toLowerCase();
-      const isTransition = ['continue', 'submit', 'confirm', 'complete'].some(w => desc.includes(w));
+      const isTransition = ['continue', 'submit', 'confirm', 'complete', 'okay'].some(w => desc.includes(w));
+      if (isTransition && action.screen === 'review') {
+        const domClicked = await imPage.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button, a'));
+          const target = btns.find(b => {
+            const txt = (b.textContent || '').trim().toLowerCase();
+            return (txt === 'submit' || txt === 'confirm') && b.getBoundingClientRect().width > 0;
+          });
+          if (target) { target.scrollIntoView({ block: 'center', behavior: 'instant' }); target.click(); return (target.textContent || '').trim(); }
+          return null;
+        }).catch(() => null);
+        if (domClicked) {
+          console.log(`[BankTransfer] ✅ DOM clicked "${domClicked}" on review screen`);
+          await new Promise(r => setTimeout(r, 3500)); continue;
+        }
+      }
+      await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
+      const isTransition2 = ['continue', 'submit', 'confirm', 'complete'].some(w => desc.includes(w));
       // After clicking account dropdown row, try L1 CDK overlay selection before waiting
       if (action.screen === 'account_list' || desc.includes('bonito') || desc.includes('account') && desc.includes('row')) {
         await new Promise(r => setTimeout(r, 1500));
@@ -7540,7 +7572,7 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
         if (l1Picked) console.log(`[BankTransfer] ✅ L1 CDK account selected after Vision click: ${l1Picked}`);
         await new Promise(r => setTimeout(r, 1500));
       } else {
-        await new Promise(r => setTimeout(r, isTransition ? 3500 : 1000));
+        await new Promise(r => setTimeout(r, isTransition2 ? 3500 : 1000));
       }
       continue;
     }
