@@ -7455,12 +7455,13 @@ ALL form fields have been filled. Your ONLY jobs are:
 2. If you see a green "Continue" button → click it immediately
 3. On review/confirmation screen → click "Submit" or "Confirm"
 4. On PIN screen → action="type_pin"
-5. After PIN → click "Complete"
-6. On success screen → action="done"
+5. After PIN → if you see "Okay" or "Complete" or "Done" button → click it. If not visible → action="scroll"
+6. On success/completion screen → action="done"
 
-DO NOT click Validate, DO NOT re-enter any fields. Scroll down if Continue is not visible.
+If a button you need is not visible, return action="scroll" to scroll down.
+DO NOT click Validate, DO NOT re-enter any fields.
 
-Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"click|type|type_pin|done","description":"what you are doing","value":"text if typing","x":NNN,"y":NNN}` },
+Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"click|type|type_pin|scroll|done","description":"what you are doing","value":"text if typing","x":NNN,"y":NNN}` },
         ]}],
       }),
     }).catch(() => null);
@@ -7494,6 +7495,11 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
       await new Promise(r => setTimeout(r, 400));
       await imPage.keyboard.type(String(action.value), { delay: 40 });
       await new Promise(r => setTimeout(r, 800)); continue;
+    }
+    if (action.action === 'scroll') {
+      await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
+      await new Promise(r => setTimeout(r, 800));
+      continue;
     }
     if (action.action === 'click' && action.x && action.y) {
       await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
