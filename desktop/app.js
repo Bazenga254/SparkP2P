@@ -6711,8 +6711,12 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   });
   await new Promise(r => setTimeout(r, 3000));
 
-  // Get DPR once — used for all coordinate-based clicks
-  const imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
+  // Set 80% zoom for full form visibility (same as BankTransfer + Binance)
+  await setZoom80(imPage);
+  await new Promise(r => setTimeout(r, 400));
+
+  // DPR — only used for Vision screenshot coordinate division (NOT for DOM coords)
+  let imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
   console.log(`[I&M] DPR = ${imDpr}`);
   // Helper: click a radio button by label text — L1 DOM, L2 Vision fallback
   const clickRadio = async (labelText) => {
@@ -6732,8 +6736,8 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     }, labelText).catch(() => null);
 
     if (domCoords) {
-      await imPage.mouse.click(domCoords.x / imDpr, domCoords.y / imDpr);
-      console.log(`[I&M] ✅ L1 radio "${labelText}" at (${Math.round(domCoords.x / imDpr)}, ${Math.round(domCoords.y / imDpr)})`);
+      await imPage.mouse.click(domCoords.x, domCoords.y);
+      console.log(`[I&M] ✅ L1 radio "${labelText}" at (${Math.round(domCoords.x)}, ${Math.round(domCoords.y)})`);
       return true;
     }
     // L2: Vision screenshot → coordinates
@@ -6755,8 +6759,8 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     const m = (rd.content?.[0]?.text || '').match(/\{[\s\S]*?\}/);
     let coords = null; try { if (m) coords = JSON.parse(m[0]); } catch (_) {}
     if (coords?.x && coords?.y) {
-      await imPage.mouse.click(coords.x / imDpr, coords.y / imDpr);
-      console.log(`[I&M] ✅ L2 radio "${labelText}" at (${Math.round(coords.x / imDpr)}, ${Math.round(coords.y / imDpr)})`);
+      await imPage.mouse.click(coords.x, coords.y);
+      console.log(`[I&M] ✅ L2 radio "${labelText}" at (${Math.round(coords.x)}, ${Math.round(coords.y)})`);
       return true;
     }
     console.log(`[I&M] ❌ Radio "${labelText}" not found via L1 or L2`);
@@ -6809,8 +6813,8 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     }, traderImAccount || '00108094726050').catch(() => null);
 
     if (domCoords && domCoords.x > 0 && domCoords.y > 0) {
-      await imPage.mouse.click(domCoords.x / imDpr, domCoords.y / imDpr);
-      console.log(`[I&M] ✅ L1 clicked <${domCoords.tag}> "${domCoords.text}" at (${Math.round(domCoords.x / imDpr)}, ${Math.round(domCoords.y / imDpr)})`);
+      await imPage.mouse.click(domCoords.x, domCoords.y);
+      console.log(`[I&M] ✅ L1 clicked <${domCoords.tag}> "${domCoords.text}" at (${Math.round(domCoords.x)}, ${Math.round(domCoords.y)})`);
       await imPage.keyboard.press('Escape'); // close the dropdown
       accountSelected = true;
       await new Promise(r => setTimeout(r, 1000));
@@ -6837,6 +6841,8 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       const refMatch = pageText.match(/reference\s*id\s*(?:number)?[:\s]+([A-Z0-9]{8,12})/i);
       if (refMatch) { referenceId = refMatch[1].trim(); console.log(`[I&M Vision] ✅ Ref ID: ${referenceId}`); }
       console.log(`[I&M Vision] ✅ Payment SUCCESS at step ${step}`);
+      if (_zoomSession) await _zoomSession.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 400));
       const receiptSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot);
       imWithdrawalRunning = false;
       return { success: true, screenshot: receiptSS, referenceId };
@@ -6925,6 +6931,8 @@ Return ONLY valid JSON, no other text.` },
     // ── Execute the action ───────────────────────────────────────────────────
     if (action.screen === 'success' || action.action === 'done') {
       // Handled above by text detection — but catch it here too
+      if (_zoomSession) await _zoomSession.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 400));
       const receiptSS2 = await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot);
       imWithdrawalRunning = false;
       return { success: true, screenshot: receiptSS2, referenceId };
@@ -7032,8 +7040,8 @@ Return ONLY valid JSON, no other text.` },
       }).catch(() => null);
 
       if (completeBtn && completeBtn.x > 0) {
-        await imPage.mouse.click(completeBtn.x / imDpr, completeBtn.y / imDpr);
-        console.log(`[I&M Vision] ✅ Clicked Complete at (${Math.round(completeBtn.x / imDpr)}, ${Math.round(completeBtn.y / imDpr)})`);
+        await imPage.mouse.click(completeBtn.x, completeBtn.y);
+        console.log(`[I&M Vision] ✅ Clicked Complete at (${Math.round(completeBtn.x)}, ${Math.round(completeBtn.y)})`);
       } else {
         // L2: Vision coordinates
         const pinSS = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
