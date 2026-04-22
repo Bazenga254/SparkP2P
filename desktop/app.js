@@ -8875,9 +8875,7 @@ async function imVisionVerify(screenshotB64, instruction) {
 // Used for all trader withdrawals to their I&M accounts
 async function executeImLocalTransfer(job) {
   // job = { id, amount, destination_account, destination_name }
-  // Flow: local-transfers/form → select FROM → One-off Beneficiary → I&M Bank → enter account
-  //       → Validate → verify name → KES → amount → Import Payments → Continue
-  //       → review modal → Submit → PIN → success
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
   if (imWithdrawalRunning) return;
   if (!imPage || imPage.isClosed()) {
     console.log('[SparkP2P] I&M page not open — cannot execute local transfer');
@@ -8899,27 +8897,24 @@ async function executeImLocalTransfer(job) {
       'https://digital.imbank.com/inm-retail/transfers/local-transfers/form',
       { waitUntil: 'networkidle2', timeout: 30000 }
     );
-    await imPage.waitForTimeout(2500);
+    await sleep(2500);
     console.log('[SparkP2P] I&M: Loaded local-transfers form');
 
     // ── STEP 2: Select Debit Account (SPARK FREELANCE SOLUTIONS) ──────────────
-    // Click the Debit Account dropdown to open the search
     let ss = await imPage.screenshot({ encoding: 'base64' });
     const debitDropdown = await imPage.$x('//*[contains(text(), "Select an account") or contains(@placeholder, "Select an account")]').catch(() => []);
     if (debitDropdown.length > 0) {
       await debitDropdown[0].click();
-      await imPage.waitForTimeout(800);
+      await sleep(800);
     } else {
       await imVisionClick(ss, 'Click the "Debit Account" or "Select an account" dropdown at the top of the form');
-      await imPage.waitForTimeout(800);
+      await sleep(800);
     }
-    // Type account number in the search box that appears inside the dropdown
     const debitSearch = await imPage.$('input[placeholder*="Search" i]').catch(() => null);
     if (debitSearch) {
       await debitSearch.type(FROM_ACCOUNT, { delay: 50 });
-      await imPage.waitForTimeout(800);
+      await sleep(800);
     }
-    // Click the SPARK FREELANCE SOLUTIONS row (matches account number)
     const fromOption = await imPage.$x(`//*[contains(text(), '${FROM_ACCOUNT}') or contains(text(), 'SPARK FREELANCE')]`).catch(() => []);
     if (fromOption.length > 0) {
       await fromOption[0].click();
@@ -8928,7 +8923,7 @@ async function executeImLocalTransfer(job) {
       ss = await imPage.screenshot({ encoding: 'base64' });
       await imVisionClick(ss, `Click the SPARK FREELANCE SOLUTIONS row showing account number ${FROM_ACCOUNT}`);
     }
-    await imPage.waitForTimeout(1000);
+    await sleep(1000);
 
     // ── STEP 3: Click "Saved Beneficiary" radio ───────────────────────────────
     const savedTab = await imPage.$x('//label[contains(text(), "Saved Beneficiary")] | //span[contains(text(), "Saved Beneficiary")] | //*[contains(text(), "Saved Beneficiary")]').catch(() => []);
@@ -8939,20 +8934,20 @@ async function executeImLocalTransfer(job) {
       ss = await imPage.screenshot({ encoding: 'base64' });
       await imVisionClick(ss, 'Click the "Saved Beneficiary" radio button');
     }
-    await imPage.waitForTimeout(1000);
+    await sleep(1000);
 
     // ── STEP 4: Search saved beneficiary by account number ─────────────────────
     const beneficiarySearch = await imPage.$('input[placeholder*="Search" i], ng-select input, [class*="beneficiary"] input').catch(() => null);
     if (beneficiarySearch) {
       await beneficiarySearch.click();
-      await beneficiarySearch.type(TO_ACCOUNT, { delay: 50 }); // search by account number — more reliable than name
+      await beneficiarySearch.type(TO_ACCOUNT, { delay: 50 });
     } else {
       const bDrop = await imPage.$x('//*[contains(@class, "beneficiary") or contains(text(), "Select") or contains(text(), "beneficiary")]').catch(() => []);
       if (bDrop.length > 0) await bDrop[0].click().catch(() => {});
     }
-    await imPage.waitForTimeout(1200);
+    await sleep(1500);
 
-    // Click the matching contact row (shows account number or name)
+    // Click the matching contact row
     const contactOption = await imPage.$x(`//*[contains(text(), '${TO_ACCOUNT}') or contains(text(), '${EXPECTED_NAME.split(' ')[0]}')]`).catch(() => []);
     if (contactOption.length > 0) {
       await contactOption[0].click();
@@ -8961,12 +8956,10 @@ async function executeImLocalTransfer(job) {
       ss = await imPage.screenshot({ encoding: 'base64' });
       await imVisionClick(ss, `Click the saved beneficiary contact with account number ${TO_ACCOUNT} in the dropdown list`);
     }
-    // Bank details (bank name, account number, account name) auto-fill after selection
-    await imPage.waitForTimeout(1500);
+    await sleep(1500);
     console.log('[SparkP2P] I&M: Beneficiary selected — bank details auto-filled');
 
     // ── STEP 7: Select Currency = KES ─────────────────────────────────────────
-    // The currency is a small dropdown (KES/EUR/USD/GBP)
     const currencySelects = await imPage.$$('select').catch(() => []);
     let currencySet = false;
     for (const sel of currencySelects) {
@@ -8977,21 +8970,19 @@ async function executeImLocalTransfer(job) {
       } catch (_) {}
     }
     if (!currencySet) {
-      // Try clicking the currency "-" dropdown and picking KES
       const currDrop = await imPage.$x('//*[text()="-" or text()="KES" or text()="EUR" or text()="USD"]').catch(() => []);
       if (currDrop.length > 0) {
         await currDrop[0].click();
-        await imPage.waitForTimeout(500);
+        await sleep(500);
         const kesOpt = await imPage.$x('//*[text()="KES"]').catch(() => []);
         if (kesOpt.length > 0) await kesOpt[0].click();
       }
     }
     console.log('[SparkP2P] I&M: Currency set to KES');
-    await imPage.waitForTimeout(500);
+    await sleep(500);
 
     // ── STEP 8: Enter Amount ───────────────────────────────────────────────────
     const amountWhole = Math.floor(job.amount).toString();
-    // The amount field is a number input (whole part); there's a separate .00 field for cents
     const amountInputs = await imPage.$$('input[type="number"], input[formcontrolname*="amount"]').catch(() => []);
     let amountEntered = false;
     for (const inp of amountInputs) {
@@ -9008,7 +8999,7 @@ async function executeImLocalTransfer(job) {
       await imVisionType(ss, `Type ${amountWhole} in the Amount (whole number) field`, amountWhole);
     }
     console.log(`[SparkP2P] I&M: Entered amount ${amountWhole}`);
-    await imPage.waitForTimeout(500);
+    await sleep(500);
 
     // ── STEP 9: Enter Payment Reference ───────────────────────────────────────
     const refText = `SparkP2P ${job.id}`.substring(0, 50);
@@ -9017,7 +9008,7 @@ async function executeImLocalTransfer(job) {
       await refInput.click();
       await refInput.type(refText, { delay: 30 });
     }
-    await imPage.waitForTimeout(500);
+    await sleep(500);
 
     // ── STEP 10: Select Payment Purpose = "Other" ────────────────────────────
     const purposeSelect = await imPage.$('select[formcontrolname*="purpose" i]').catch(() => null);
@@ -9034,7 +9025,7 @@ async function executeImLocalTransfer(job) {
       const purposeDrop = await imPage.$x('//*[contains(text(), "Select payment purpose") or contains(text(), "Payment Purpose")]').catch(() => []);
       if (purposeDrop.length > 0) {
         await purposeDrop[0].click();
-        await imPage.waitForTimeout(800);
+        await sleep(800);
         const otherOpt = await imPage.$x('//*[text()="Other" or contains(text(), "Other")]').catch(() => []);
         if (otherOpt.length > 0) { await otherOpt[0].click(); purposeSet = true; }
       }
@@ -9044,7 +9035,7 @@ async function executeImLocalTransfer(job) {
       await imVisionClick(ss, 'Click the "Payment Purpose" dropdown and select "Other" from the list');
     }
     console.log('[SparkP2P] I&M: Payment purpose set to Other');
-    await imPage.waitForTimeout(500);
+    await sleep(500);
 
     // ── STEP 11: Click Continue ────────────────────────────────────────────────
     const continueBtn = await imPage.$x('//button[contains(text(), "Continue")]').catch(() => []);
@@ -9054,7 +9045,7 @@ async function executeImLocalTransfer(job) {
       await imPage.click('button[type="submit"], button.btn-primary').catch(() => {});
     }
     console.log('[SparkP2P] I&M: Clicked Continue');
-    await imPage.waitForTimeout(3000);
+    await sleep(3000);
 
     // ── STEP 12: Review modal — verify beneficiary name then click Submit ──────
     ss = await imPage.screenshot({ encoding: 'base64' });
@@ -9062,7 +9053,7 @@ async function executeImLocalTransfer(job) {
       ss,
       `This is the "Local Transfer - Review" confirmation modal.
       Read the Account Name shown under "Beneficiary bank details".
-      Expected account name contains: "${EXPECTED_NAME || autoFilledName}".
+      Expected account name contains: "${EXPECTED_NAME}".
       Does the Account Name in the modal match?
       Respond JSON only: { "match": true/false, "found_name": "name you read", "description": "brief" }`
     );
@@ -9083,7 +9074,7 @@ async function executeImLocalTransfer(job) {
       await imPage.click('button[type="submit"]').catch(() => {});
     }
     console.log('[SparkP2P] I&M: Clicked Submit');
-    await imPage.waitForTimeout(2000);
+    await sleep(2000);
 
     // ── STEP 13: Identity Validation — enter PIN then click Complete ───────────
     await imPage.waitForSelector('input[type="password"], input[placeholder*="PIN" i]', { timeout: 10000 });
@@ -9092,7 +9083,7 @@ async function executeImLocalTransfer(job) {
     await pinInput.click();
     await pinInput.type(imPin, { delay: 80 });
     console.log('[SparkP2P] I&M: Entered PIN');
-    await imPage.waitForTimeout(500);
+    await sleep(500);
 
     const completeBtn = await imPage.$x('//button[contains(text(), "Complete")]').catch(() => []);
     if (completeBtn.length > 0) {
@@ -9101,7 +9092,7 @@ async function executeImLocalTransfer(job) {
       await imPage.click('button[type="submit"]').catch(() => {});
     }
     console.log('[SparkP2P] I&M: Clicked Complete');
-    await imPage.waitForTimeout(4000);
+    await sleep(4000);
 
     // ── STEP 14: Verify success screen ────────────────────────────────────────
     ss = await imPage.screenshot({ encoding: 'base64' });
@@ -9116,9 +9107,8 @@ async function executeImLocalTransfer(job) {
       console.log(`[SparkP2P] ✅ I&M local transfer KES ${job.amount} → ${TO_ACCOUNT} SUCCESS — ref: ${successCheck.reference || 'N/A'}`);
       const closeBtn = await imPage.$x('//button[contains(text(), "Close")]').catch(() => []);
       if (closeBtn.length > 0) await closeBtn[0].click().catch(() => {});
-      await imPage.waitForTimeout(1000);
+      await sleep(1000);
 
-      // Notify backend of success
       await fetch(`${API_BASE}/ext/bank-withdrawal-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -9870,6 +9860,23 @@ async function executeMpesaSweep(sweepJob) {
 
     console.log(`[SparkP2P] ✅ M-PESA sweep KES ${amount} complete`);
     mpesaSweepRunning = false;
+
+    // Immediately trigger the I&M bank transfer now that funds have arrived
+    setTimeout(async () => {
+      if (!token || !imPage || imPage.isClosed() || imWithdrawalRunning) return;
+      try {
+        const r = await fetch(`${API_BASE}/ext/pending-bank-withdrawals`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d.jobs && d.jobs.length > 0) {
+          console.log(`[SparkP2P] Auto-triggering I&M transfer after sweep — KES ${d.jobs[0].amount}`);
+          await executeImLocalTransfer(d.jobs[0]);
+        }
+      } catch (_) {}
+    }, 5000); // 5s delay so funds settle in I&M account
+
     return { success: true };
 
   } catch (e) {
