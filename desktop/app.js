@@ -7321,35 +7321,43 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
 
-      // Payment Purpose = Other — confirmed native <SELECT>, use Puppeteer select() like KES
+      // Payment Purpose = Other — native SELECT, wait for options to load then use handle.select()
       const purposeDone = await (async () => {
         try {
-          // Find the purpose select and log all its options so we know exact values
-          const info = await imPage.evaluate(() => {
+          // Wait up to 5s for a non-KES select to have options (Angular loads them async)
+          await imPage.waitForFunction(() => {
             const sels = Array.from(document.querySelectorAll('select'));
-            for (let i = 0; i < sels.length; i++) {
-              const opts = Array.from(sels[i].options).map(o => ({ text: o.text.trim(), value: o.value }));
-              const fc = sels[i].getAttribute('formcontrolname') || sels[i].getAttribute('name') || '';
-              console.log(`[BankTransfer-DOM] select[${i}] fc="${fc}" opts=${JSON.stringify(opts)}`);
-              // Match by placeholder or by having an "other"-like option (case-insensitive) but not KES
-              const hasOther = opts.find(o => o.text.toLowerCase().includes('other'));
-              const hasKes = opts.find(o => o.text.trim() === 'KES');
-              if (hasOther && !hasKes) return { index: i, value: hasOther.value, text: hasOther.text, fc };
-            }
-            return null;
-          }).catch(() => null);
+            return sels.some(s => s.options.length > 1 && !Array.from(s.options).some(o => o.text.trim() === 'KES'));
+          }, { timeout: 5000 }).catch(() => {});
 
-          console.log(`[BankTransfer] Purpose select info: ${JSON.stringify(info)}`);
-          if (!info) { console.log('[BankTransfer] ⚠️ No purpose select found'); return false; }
+          // Return all select data to Node.js (console.log inside evaluate is invisible in terminal)
+          const debug = await imPage.evaluate(() => {
+            const sels = Array.from(document.querySelectorAll('select'));
+            return sels.map((s, i) => ({
+              index: i,
+              fc: s.getAttribute('formcontrolname') || s.getAttribute('name') || '',
+              opts: Array.from(s.options).map(o => ({ text: o.text.trim(), value: o.value }))
+            }));
+          }).catch(() => []);
+          console.log(`[BankTransfer] All selects found: ${JSON.stringify(debug)}`);
 
-          // Scroll into view then use Puppeteer's select() — same strategy that worked for KES
+          const info = debug.find(s => {
+            const hasOther = s.opts.find(o => o.text.toLowerCase().includes('other'));
+            const hasKes = s.opts.find(o => o.text.trim() === 'KES');
+            return hasOther && !hasKes;
+          });
+          if (info) info.otherOpt = info.opts.find(o => o.text.toLowerCase().includes('other'));
+
+          console.log(`[BankTransfer] Purpose select: ${JSON.stringify(info)}`);
+          if (!info || !info.otherOpt) { console.log('[BankTransfer] ⚠️ No purpose select with Other option found'); return false; }
+
           const handles = await imPage.$$('select');
           const handle = handles[info.index];
           if (!handle) return false;
           await handle.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
           await new Promise(r => setTimeout(r, 300));
-          await handle.select(info.value);
-          console.log(`[BankTransfer] ✅ Payment Purpose set to "${info.text}" (select[${info.index}] value="${info.value}")`);
+          await handle.select(info.otherOpt.value);
+          console.log(`[BankTransfer] ✅ Payment Purpose set to "${info.otherOpt.text}" (select[${info.index}] value="${info.otherOpt.value}")`);
           await new Promise(r => setTimeout(r, 400));
           return true;
         } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
