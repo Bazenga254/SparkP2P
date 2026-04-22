@@ -7321,43 +7321,37 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] ✅ Pesalink selected');
 
-      // Payment Purpose = Other — native SELECT, wait for options to load then use handle.select()
+      // Payment Purpose = Other — options load lazily on click, so: click→wait for options→select
       const purposeDone = await (async () => {
         try {
-          // Wait up to 5s for a non-KES select to have options (Angular loads them async)
-          await imPage.waitForFunction(() => {
-            const sels = Array.from(document.querySelectorAll('select'));
-            return sels.some(s => s.options.length > 1 && !Array.from(s.options).some(o => o.text.trim() === 'KES'));
-          }, { timeout: 5000 }).catch(() => {});
-
-          // Return all select data to Node.js (console.log inside evaluate is invisible in terminal)
-          const debug = await imPage.evaluate(() => {
-            const sels = Array.from(document.querySelectorAll('select'));
-            return sels.map((s, i) => ({
-              index: i,
-              fc: s.getAttribute('formcontrolname') || s.getAttribute('name') || '',
-              opts: Array.from(s.options).map(o => ({ text: o.text.trim(), value: o.value }))
-            }));
-          }).catch(() => []);
-          console.log(`[BankTransfer] All selects found: ${JSON.stringify(debug)}`);
-
-          const info = debug.find(s => {
-            const hasOther = s.opts.find(o => o.text.toLowerCase().includes('other'));
-            const hasKes = s.opts.find(o => o.text.trim() === 'KES');
-            return hasOther && !hasKes;
-          });
-          if (info) info.otherOpt = info.opts.find(o => o.text.toLowerCase().includes('other'));
-
-          console.log(`[BankTransfer] Purpose select: ${JSON.stringify(info)}`);
-          if (!info || !info.otherOpt) { console.log('[BankTransfer] ⚠️ No purpose select with Other option found'); return false; }
-
+          // select[1] is the payment purpose select (confirmed from debug logs)
           const handles = await imPage.$$('select');
-          const handle = handles[info.index];
-          if (!handle) return false;
+          const handle = handles[1];
+          if (!handle) { console.log('[BankTransfer] ⚠️ select[1] not found'); return false; }
+
+          // Scroll into view and click to trigger Angular to load the options
           await handle.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
           await new Promise(r => setTimeout(r, 300));
-          await handle.select(info.otherOpt.value);
-          console.log(`[BankTransfer] ✅ Payment Purpose set to "${info.otherOpt.text}" (select[${info.index}] value="${info.otherOpt.value}")`);
+          await handle.click();
+          console.log('[BankTransfer] Clicked payment purpose select — waiting for options to load');
+
+          // Wait for options to populate (Angular loads them on open)
+          await imPage.waitForFunction(() => {
+            const sels = document.querySelectorAll('select');
+            return sels[1] && sels[1].options.length > 1;
+          }, { timeout: 5000 }).catch(() => {});
+
+          // Read what options loaded
+          const opts = await handle.evaluate(el =>
+            Array.from(el.options).map(o => ({ text: o.text.trim(), value: o.value }))
+          ).catch(() => []);
+          console.log(`[BankTransfer] Purpose options loaded: ${JSON.stringify(opts)}`);
+
+          const otherOpt = opts.find(o => o.text.toLowerCase().includes('other'));
+          if (!otherOpt) { console.log('[BankTransfer] ⚠️ No "Other" option found'); return false; }
+
+          await handle.select(otherOpt.value);
+          console.log(`[BankTransfer] ✅ Payment Purpose set to "${otherOpt.text}" (value="${otherOpt.value}")`);
           await new Promise(r => setTimeout(r, 400));
           return true;
         } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
