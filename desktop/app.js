@@ -8642,11 +8642,12 @@ async function executeImWithdrawal(job) {
   const $x = async xpath => imPage.$$('::-p-xpath(' + xpath + ')').catch(() => []);
   if (imWithdrawalRunning) return;
   if (!imPage || imPage.isClosed()) {
-    console.log('[SparkP2P] I&M page not open â€” cannot execute withdrawal');
+    console.log('[SparkP2P] I&M page not open — cannot execute withdrawal');
     return;
   }
+  await imPage.bringToFront().catch(() => {});
   if (!imPin) {
-    console.log('[SparkP2P] I&M PIN not set â€” cannot execute withdrawal');
+    console.log('[SparkP2P] I&M PIN not set — cannot execute withdrawal');
     return;
   }
   imWithdrawalRunning = true;
@@ -8935,11 +8936,12 @@ async function executeImLocalTransfer(job) {
   const $x = async xpath => imPage.$$('::-p-xpath(' + xpath + ')').catch(() => []);
   if (imWithdrawalRunning) return;
   if (!imPage || imPage.isClosed()) {
-    console.log('[SparkP2P] I&M page not open â€” cannot execute local transfer');
+    console.log('[SparkP2P] I&M page not open — cannot execute local transfer');
     return;
   }
+  await imPage.bringToFront().catch(() => {});
   if (!imPin) {
-    console.log('[SparkP2P] I&M PIN not set â€” cannot execute local transfer');
+    console.log('[SparkP2P] I&M PIN not set — cannot execute local transfer');
     return;
   }
   imWithdrawalRunning = true;
@@ -9817,6 +9819,7 @@ async function executeMpesaSweep(sweepJob) {
   mpesaSweepRunning = true;
   const { sweep_id, amount, reference } = sweepJob;
   console.log(`[SparkP2P] === M-PESA SWEEP KES ${amount} (sweep #${sweep_id}) ===`);
+  await mpesaOrgPage.bringToFront().catch(() => {});
 
   const failSweep = async (error) => {
     mpesaSweepRunning = false;
@@ -10073,6 +10076,7 @@ async function executeMpesaSweep(sweepJob) {
         if (d.jobs && d.jobs.length > 0) {
           const job = d.jobs[0];
           console.log(`[SparkP2P] Auto-triggering I&M transfer after sweep — KES ${job.amount}`);
+          await imPage.bringToFront().catch(() => {});
           if (job.destination_account === '00108094726050') {
             await executeImWithdrawal(job);
           } else {
