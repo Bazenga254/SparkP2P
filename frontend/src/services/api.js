@@ -36,7 +36,7 @@ export const updateVerification = (data) => api.put('/traders/verification', dat
 export const updateTradingConfig = (data) => api.put('/traders/trading-config', data);
 export const getWallet = () => api.get('/traders/wallet');
 export const requestWithdrawalOtp = () => api.post('/traders/wallet/withdraw/request-otp');
-export const requestWithdrawal = (otp_code) => api.post('/traders/wallet/withdraw', { otp_code });
+export const requestWithdrawal = (otp_code, amount) => api.post('/traders/wallet/withdraw', { otp_code, ...(amount != null ? { amount } : {}) });
 export const getWalletTransactions = (limit = 50, direction = null) => api.get(`/traders/wallet/transactions?limit=${limit}${direction ? '&direction=' + direction : ''}`);
 export const getSessionHealth = () => api.get('/traders/session-health');
 export const updateProfile = (data) => api.put('/traders/profile', data);

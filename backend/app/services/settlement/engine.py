@@ -129,7 +129,7 @@ class SettlementEngine:
             )
         return success
 
-    async def batch_settle(self, trader_id: int, simulate: bool = False) -> bool:
+    async def batch_settle(self, trader_id: int, simulate: bool = False, amount: float = None) -> bool:
         """Settle accumulated balance to trader in one transaction.
 
         Fee breakdown:
@@ -168,9 +168,13 @@ class SettlementEngine:
             )
             return False
 
-        amount = wallet.balance
-        safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, amount)
-        net_amount = amount - total_fee
+        # Use caller-specified partial amount if provided and within balance
+        if amount is not None and 0 < amount < wallet.balance:
+            settle_amount = amount
+        else:
+            settle_amount = wallet.balance
+        safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, settle_amount)
+        net_amount = settle_amount - total_fee
 
         if net_amount <= 0:
             return False
@@ -178,8 +182,8 @@ class SettlementEngine:
         success = await self._send_payment(trader, net_amount, simulate=simulate)
 
         if success:
-            # Deduct full amount from wallet
-            wallet.balance -= amount
+            # Deduct settled amount from wallet
+            wallet.balance -= settle_amount
             wallet.total_withdrawn += net_amount
             wallet.total_fees_paid += total_fee
 

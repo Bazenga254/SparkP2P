@@ -390,6 +390,7 @@ export default function Dashboard() {
   const [showBalance, setShowBalance] = useState(false);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawPreview, setWithdrawPreview] = useState(null);
+  const [withdrawCustomAmount, setWithdrawCustomAmount] = useState('');
   const [withdrawOtp, setWithdrawOtp] = useState('');
   const [withdrawOtpSent, setWithdrawOtpSent] = useState(false);
   const [withdrawOtpLoading, setWithdrawOtpLoading] = useState(false);
@@ -647,6 +648,7 @@ export default function Dashboard() {
       }
 
       setWithdrawPreview(p);
+      setWithdrawCustomAmount(String(p.balance ?? ''));
       setWithdrawOtp('');
       setWithdrawOtpSent(false);
       setWithdrawMsg('');
@@ -1641,20 +1643,52 @@ export default function Dashboard() {
               <button onClick={() => setShowWithdrawModal(false)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 20 }}>×</button>
             </div>
 
-            {/* Fee summary */}
-            {withdrawPreview && (
-              <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: 20, fontSize: 13 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
-                  <span>Wallet Balance</span><span style={{ color: '#fff', fontWeight: 600 }}>KES {withdrawPreview.balance?.toLocaleString()}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
-                  <span>Transaction Fee</span><span style={{ color: '#f59e0b', fontWeight: 600 }}>- KES {withdrawPreview.transaction_fee?.toLocaleString()}</span>
-                </div>
-                <div style={{ borderTop: '1px solid #374151', paddingTop: 8, display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#10b981', fontWeight: 700 }}>You Receive</span><span style={{ color: '#10b981', fontWeight: 700, fontSize: 15 }}>KES {withdrawPreview.you_receive?.toLocaleString()}</span>
-                </div>
-              </div>
-            )}
+            {/* Amount input */}
+            {withdrawPreview && (() => {
+              const balance = withdrawPreview.balance ?? 0;
+              const customAmt = parseFloat(withdrawCustomAmount) || 0;
+              const clampedAmt = Math.min(customAmt, balance);
+              const liveFee = getWithdrawalFee(withdrawPreview.settlement_method || 'mpesa', clampedAmt);
+              const liveReceive = Math.max(0, clampedAmt - liveFee);
+              const amtErr = customAmt > balance ? `Max KES ${balance.toLocaleString()}` : customAmt > 0 && customAmt < (withdrawPreview.min_withdrawal ?? 0) ? `Min KES ${(withdrawPreview.min_withdrawal ?? 0).toLocaleString()}` : '';
+              return (
+                <>
+                  <div style={{ marginBottom: 16 }}>
+                    <label style={{ display: 'block', color: '#9ca3af', fontSize: 12, marginBottom: 6 }}>
+                      Withdrawal Amount <span style={{ color: '#6b7280' }}>(Balance: KES {balance.toLocaleString()})</span>
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 13 }}>KES</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={balance}
+                        step={1}
+                        value={withdrawCustomAmount}
+                        onChange={e => setWithdrawCustomAmount(e.target.value)}
+                        style={{ width: '100%', padding: '11px 14px 11px 44px', borderRadius: 8, border: `1px solid ${amtErr ? '#ef4444' : '#374151'}`, background: '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box' }}
+                      />
+                      <button
+                        onClick={() => setWithdrawCustomAmount(String(balance))}
+                        style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#10b981', fontSize: 11, cursor: 'pointer', fontWeight: 700 }}
+                      >MAX</button>
+                    </div>
+                    {amtErr && <p style={{ color: '#ef4444', fontSize: 11, margin: '4px 0 0' }}>{amtErr}</p>}
+                  </div>
+                  <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: 20, fontSize: 13 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
+                      <span>Withdrawal Amount</span><span style={{ color: '#fff', fontWeight: 600 }}>KES {clampedAmt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
+                      <span>Transaction Fee</span><span style={{ color: '#f59e0b', fontWeight: 600 }}>- KES {liveFee.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div style={{ borderTop: '1px solid #374151', paddingTop: 8, display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#10b981', fontWeight: 700 }}>You Receive</span><span style={{ color: '#10b981', fontWeight: 700, fontSize: 15 }}>KES {liveReceive.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
 
             <div style={{
               display: 'flex', gap: 8, alignItems: 'flex-start',
@@ -1706,10 +1740,13 @@ export default function Dashboard() {
                 <button
                   onClick={async () => {
                     if (withdrawOtp.length !== 6) { setWithdrawMsg('Enter the 6-digit code'); return; }
+                    const customAmt = parseFloat(withdrawCustomAmount);
+                    const walletBal = withdrawPreview?.balance ?? 0;
+                    const finalAmt = customAmt > 0 && customAmt < walletBal ? customAmt : undefined;
                     setWithdrawing(true);
                     setWithdrawMsg('');
                     try {
-                      const res = await requestWithdrawal(withdrawOtp);
+                      const res = await requestWithdrawal(withdrawOtp, finalAmt);
                       setShowWithdrawModal(false);
                       alert(res.data.message || 'Withdrawal sent!');
                       await loadData();

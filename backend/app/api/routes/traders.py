@@ -980,6 +980,7 @@ async def get_wallet(
 
 class WithdrawRequest(BaseModel):
     otp_code: str
+    amount: Optional[float] = None
 
 
 @router.post("/wallet/withdraw")
@@ -1036,8 +1037,14 @@ async def request_withdrawal(
             detail="No funds available for withdrawal",
         )
 
+    # Determine effective withdrawal amount (partial or full balance)
+    if data.amount is not None and 0 < data.amount < wallet.balance:
+        withdraw_amount = data.amount
+    else:
+        withdraw_amount = wallet.balance
+
     from app.services.settlement.engine import get_total_settlement_fee, MIN_WITHDRAWAL, BANK_MIN_WITHDRAWAL, get_bank_withdrawal_eligibility
-    if wallet.balance < MIN_WITHDRAWAL:
+    if withdraw_amount < MIN_WITHDRAWAL:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Minimum withdrawal is KES {MIN_WITHDRAWAL:,}. Your balance is KES {wallet.balance:,.0f}.",
@@ -1045,7 +1052,7 @@ async def request_withdrawal(
 
     # For bank withdrawals, check tier eligibility
     if trader.settlement_method.value != "mpesa":
-        eligibility = get_bank_withdrawal_eligibility(wallet.balance)
+        eligibility = get_bank_withdrawal_eligibility(withdraw_amount)
         if not eligibility["eligible"]:
             min_req = eligibility.get("min_required", 0)
             raise HTTPException(
@@ -1054,32 +1061,28 @@ async def request_withdrawal(
             )
 
     # Calculate fees
-    safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, wallet.balance)
-    net_amount = wallet.balance - total_fee
+    safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, withdraw_amount)
+    net_amount = withdraw_amount - total_fee
 
     if net_amount <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Balance too low to cover fees (KES {total_fee})",
+            detail=f"Amount too low to cover fees (KES {total_fee})",
         )
 
     # ── Auto-Sweep: paybill 4041355 → I&M Bank ───────────────────────────────
-    # Fire BEFORE settlement so the I&M account has the funds ready.
-    # Sweep is for the GROSS amount (wallet.balance) — Daraja B2B is async so
-    # the result arrives via callback; settlement proceeds regardless.
     from app.services.sweep_service import trigger_im_sweep
     sweep_ref = f"WD-{trader.email[:20]}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     sweep_result = await trigger_im_sweep(
-        amount=wallet.balance,       # gross amount (before fees)
+        amount=withdraw_amount,
         trader_id=trader.id,
-        withdrawal_tx_id=None,       # linked after settlement commits
+        withdrawal_tx_id=None,
         reference=sweep_ref,
         db=db,
     )
     if sweep_result.get("success"):
-        logger.info(f"[Sweep] Initiated for KES {wallet.balance:,.0f} — sweep_id={sweep_result.get('sweep_id')}")
+        logger.info(f"[Sweep] Initiated for KES {withdraw_amount:,.0f} — sweep_id={sweep_result.get('sweep_id')}")
     elif not sweep_result.get("skipped"):
-        # Log the failure but don't block the trader's withdrawal
         logger.error(f"[Sweep] Failed for trader {trader.id}: {sweep_result.get('error')}")
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -1087,7 +1090,7 @@ async def request_withdrawal(
     # Force withdraw — bypass batch threshold for manual withdrawals
     original_threshold = trader.batch_threshold
     trader.batch_threshold = 0  # Temporarily disable threshold
-    success = await engine.batch_settle(trader.id)
+    success = await engine.batch_settle(trader.id, amount=withdraw_amount if withdraw_amount < wallet.balance else None)
     trader.batch_threshold = original_threshold  # Restore
 
     if not success:
@@ -1101,7 +1104,7 @@ async def request_withdrawal(
         "message": f"KES {net_amount:,.0f} sent to your account",
         "amount_sent": net_amount,
         "transaction_fee": total_fee,
-        "wallet_deducted": wallet.balance + total_fee,
+        "wallet_deducted": withdraw_amount,
         "sweep": {
             "initiated": sweep_result.get("success", False),
             "sweep_id": sweep_result.get("sweep_id"),
@@ -1157,6 +1160,8 @@ async def preview_withdrawal(
         "you_receive": max(net_amount, 0),
         "cooldown_active": cooldown_active,
         "cooldown_hours": cooldown_hours,
+        "settlement_method": trader.settlement_method.value,
+        "min_withdrawal": MIN_WITHDRAWAL,
     }
 
 
