@@ -8991,30 +8991,38 @@ async function executeImLocalTransfer(job) {
     await sleep(800);
 
     // STEP 5: Currency = KES
-    const currencyDropdown = await imPage.$('select[formcontrolname*="currency"], select').catch(() => null);
-    if (currencyDropdown) {
-      await imPage.select('select', 'KES').catch(() => {});
+    // The currency selector is a custom dropdown (not ng-select) — click it to open, then click KES
+    const currDropBtn = await imPage.$('select[formcontrolname*="currency"]').catch(() => null);
+    if (currDropBtn) {
+      // Native select — use evaluate to set value and fire change event
+      await imPage.evaluate(el => {
+        const opt = Array.from(el.options).find(o => o.text === 'KES' || o.value === 'KES');
+        if (opt) { el.value = opt.value; el.dispatchEvent(new Event('change', { bubbles: true })); }
+      }, currDropBtn).catch(() => {});
     } else {
-      const currBtn = await $x('//*[contains(text(), "KES") or contains(text(), "EUR") or contains(text(), "USD")]').catch(() => []);
-      if (currBtn.length > 0) {
-        await currBtn[0].click().catch(() => {});
-        await sleep(500);
-        const kesOpt = await $x('//*[contains(text(), "KES")]').catch(() => []);
-        if (kesOpt.length > 0) await kesOpt[0].click().catch(() => {});
-      }
+      // Custom dropdown — click the currency toggle (shows "-" or current value), then click KES option
+      const currToggle = await imPage.$('.currency-select, [class*="currency"], select').catch(() => null);
+      if (currToggle) await currToggle.click().catch(() => {});
+      await sleep(600);
+      const kesOpt = await $x('//*[text()="KES" or contains(@class,"option") and contains(text(),"KES")]').catch(() => []);
+      if (kesOpt.length > 0) await kesOpt[0].click().catch(() => {});
     }
+    // Close any open dropdown by pressing Escape, then wait
+    await imPage.keyboard.press('Escape').catch(() => {});
+    await sleep(600);
     console.log('[SparkP2P] I&M: Currency set to KES');
-    await sleep(500);
 
-    // STEP 6: Enter Amount
+    // STEP 6: Enter Amount — scroll the amount field into view, then triple-click and type
     const amountWhole = Math.floor(job.amount).toString();
-    const amountInput = await imPage.$('input[type="number"], input[formcontrolname*="amount"], input[placeholder*="amount" i]').catch(() => null);
+    const amountInput = await imPage.$('input[type="number"], input[formcontrolname*="amount"]').catch(() => null);
     if (amountInput) {
+      await imPage.evaluate(el => el.scrollIntoView({ block: 'center' }), amountInput).catch(() => {});
+      await sleep(400);
       await amountInput.click({ clickCount: 3 });
       await amountInput.type(amountWhole, { delay: 50 });
     } else {
       ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionType(ss, `Type ${amountWhole} in the Amount field`, amountWhole);
+      await imVisionType(ss, `Type ${amountWhole} in the Amount whole number field`, amountWhole);
     }
     console.log(`[SparkP2P] I&M: Entered amount ${amountWhole}`);
     await sleep(500);
@@ -9029,23 +9037,28 @@ async function executeImLocalTransfer(job) {
     await sleep(500);
 
     // STEP 8: Payment Purpose = Other
+    // Scroll to bring the purpose dropdown into view first
+    await imPage.evaluate(() => window.scrollBy(0, 300)).catch(() => {});
+    await sleep(500);
     let purposeSet = false;
-    const purposeSelect = await imPage.$('select[formcontrolname*="purpose" i]').catch(() => null);
-    if (purposeSelect) {
-      const opts = await imPage.evaluate(el => Array.from(el.options).map((o, i) => ({ i, text: o.text })), purposeSelect).catch(() => []);
-      const otherOpt = opts.find(o => o.text.toLowerCase().includes('other'));
-      if (otherOpt !== undefined) {
-        await imPage.evaluate((el, idx) => { el.selectedIndex = idx; el.dispatchEvent(new Event('change', { bubbles: true })); }, purposeSelect, otherOpt.i);
-        purposeSet = true;
-      }
+    // Try clicking the "Select payment purpose" dropdown, then pick "Other"
+    const purposeDrop = await $x('//*[contains(text(), "Select payment purpose") or contains(text(), "Payment Purpose")]').catch(() => []);
+    if (purposeDrop.length > 0) {
+      await purposeDrop[0].click().catch(() => {});
+      await sleep(800);
+      const otherOpt2 = await $x('//*[text()="Other" or contains(text(), "Other")]').catch(() => []);
+      if (otherOpt2.length > 0) { await otherOpt2[0].click().catch(() => {}); purposeSet = true; }
     }
     if (!purposeSet) {
-      const purposeDrop = await $x('//*[contains(text(), "Select payment purpose") or contains(text(), "Payment Purpose")]').catch(() => []);
-      if (purposeDrop.length > 0) {
-        await purposeDrop[0].click().catch(() => {});
-        await sleep(800);
-        const otherOpt2 = await $x('//*[text()="Other" or contains(text(), "Other")]').catch(() => []);
-        if (otherOpt2.length > 0) { await otherOpt2[0].click().catch(() => {}); purposeSet = true; }
+      // Try native select fallback
+      const purposeSelect = await imPage.$('select[formcontrolname*="purpose" i]').catch(() => null);
+      if (purposeSelect) {
+        const opts = await imPage.evaluate(el => Array.from(el.options).map((o, i) => ({ i, text: o.text })), purposeSelect).catch(() => []);
+        const otherOpt = opts.find(o => o.text.toLowerCase().includes('other'));
+        if (otherOpt !== undefined) {
+          await imPage.evaluate((el, idx) => { el.selectedIndex = idx; el.dispatchEvent(new Event('change', { bubbles: true })); }, purposeSelect, otherOpt.i);
+          purposeSet = true;
+        }
       }
     }
     if (!purposeSet) {
