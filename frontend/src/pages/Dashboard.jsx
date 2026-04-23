@@ -20,6 +20,8 @@ function getWithdrawalFee(method, amount) {
   // bank_paybill, bank, till, paybill — 0.05% flat
   return Math.round(amount * 0.0005 * 100) / 100;
 }
+const fmtKES = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+const fmtKESFee = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function SpreadCalculator() {
   const [buyPrice, setBuyPrice] = useState('130.00');
@@ -130,9 +132,6 @@ function SpreadCalculator() {
   const breakEvenSpreadKES = usdtAmount > 0 ? wdFee / usdtAmount : 0;
   const breakEvenSell = buy + breakEvenSpreadKES;
   const breakEvenPct = buy > 0 ? (breakEvenSpreadKES / buy) * 100 : 0;
-
-  const fmtKES = (n) => 'KES ' + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
-  const fmtKESFee = (n) => 'KES ' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
     <div className="card" style={{ marginBottom: 16 }}>
