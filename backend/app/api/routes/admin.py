@@ -669,16 +669,15 @@ async def list_unmatched_payments(
     )
     deposits = dep_result.scalars().all()
 
-    # ── Unmatched Withdrawals: outbound with no order, no destination, or failed ──
+    # ── Unmatched Withdrawals: outbound with no destination, or failed/reversed ──
     from sqlalchemy import or_
     wd_result = await db.execute(
         select(Payment)
         .where(
             Payment.direction == PaymentDirection.OUTBOUND,
             or_(
-                Payment.order_id.is_(None),
                 Payment.destination.is_(None),
-                Payment.status == "failed",
+                Payment.status.in_(["failed", "reversed"]),
             ),
         )
         .order_by(Payment.created_at.desc())
