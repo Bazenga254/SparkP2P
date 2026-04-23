@@ -8663,7 +8663,7 @@ async function executeImWithdrawal(job) {
       'https://digital.imbank.com/inm-retail/transfers/own-account-transfer/form',
       { waitUntil: 'networkidle2', timeout: 30000 }
     );
-    await imPage.waitForTimeout(2000);
+    await sleep(2000);
     console.log('[SparkP2P] I&M: Loaded own-account-transfer form');
 
     // â”€â”€ STEP 2: Select FROM account (SPARK FREELANCE SOLUTIONS) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -8676,7 +8676,7 @@ async function executeImWithdrawal(job) {
     const fromDropdowns = await imPage.$$('ng-select, app-select, select').catch(() => []);
     if (fromDropdowns.length > 0) {
       await fromDropdowns[0].click().catch(() => {});
-      await imPage.waitForTimeout(1000);
+      await sleep(1000);
       // Find option containing FROM_ACCOUNT number
       const fromOption = await $x(`//*[contains(text(), '${FROM_ACCOUNT}') or contains(text(), 'SPARK FREELANCE')]`).catch(() => []);
       if (fromOption.length > 0) {
@@ -8690,14 +8690,14 @@ async function executeImWithdrawal(job) {
       ss = await imPage.screenshot({ encoding: 'base64' });
       await imVisionClick(ss, `Click the "From" account dropdown and select the account with number ${FROM_ACCOUNT} (SPARK FREELANCE SOLUTIONS)`);
     }
-    await imPage.waitForTimeout(1000);
+    await sleep(1000);
 
     // â”€â”€ STEP 3: Select TO account (trader's personal account) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const allDropdowns = await imPage.$$('ng-select, app-select, select').catch(() => []);
     let toDone = false;
     if (allDropdowns.length > 1) {
       await allDropdowns[1].click().catch(() => {});
-      await imPage.waitForTimeout(1000);
+      await sleep(1000);
       const toOption = await $x(`//*[contains(text(), '${TO_ACCOUNT}') or contains(text(), 'BONITO')]`).catch(() => []);
       if (toOption.length > 0) {
         await toOption[0].click().catch(() => {});
@@ -8709,7 +8709,7 @@ async function executeImWithdrawal(job) {
       ss = await imPage.screenshot({ encoding: 'base64' });
       await imVisionClick(ss, `Click the "To" account dropdown and select the account with number ${TO_ACCOUNT}`);
     }
-    await imPage.waitForTimeout(1000);
+    await sleep(1000);
 
     // â”€â”€ STEP 4: Set currency to KES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Click the currency dropdown and select KES
@@ -8721,13 +8721,13 @@ async function executeImWithdrawal(job) {
       const currencyBtn = await $x('//*[contains(text(), "KES") or contains(text(), "EUR") or contains(text(), "USD")]').catch(() => []);
       if (currencyBtn.length > 0) {
         await currencyBtn[0].click().catch(() => {});
-        await imPage.waitForTimeout(500);
+        await sleep(500);
         const kesOption = await $x('//*[contains(text(), "KES")]').catch(() => []);
         if (kesOption.length > 0) await kesOption[0].click().catch(() => {});
       }
     }
     console.log('[SparkP2P] I&M: Currency set to KES');
-    await imPage.waitForTimeout(500);
+    await sleep(500);
 
     // â”€â”€ STEP 5: Enter amount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Amount field â€” type the whole number part (cents field stays 00)
@@ -8742,7 +8742,7 @@ async function executeImWithdrawal(job) {
       await imVisionType(ss, `Type ${amountWhole} in the Amount field`, amountWhole);
     }
     console.log(`[SparkP2P] I&M: Entered amount ${amountWhole}`);
-    await imPage.waitForTimeout(500);
+    await sleep(500);
 
     // â”€â”€ STEP 6: Enter description (optional) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const descInput = await imPage.$('textarea, input[formcontrolname*="description"], input[placeholder*="description" i]').catch(() => null);
@@ -8750,7 +8750,7 @@ async function executeImWithdrawal(job) {
       await descInput.click();
       await descInput.type(`SparkP2P withdrawal ${job.id}`, { delay: 30 });
     }
-    await imPage.waitForTimeout(500);
+    await sleep(500);
 
     // â”€â”€ STEP 7: Click Continue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const continueBtn = await $x('//button[contains(text(), "Continue")]').catch(() => []);
@@ -8760,7 +8760,7 @@ async function executeImWithdrawal(job) {
       await imPage.click('button[type="submit"], button.btn-primary').catch(() => {});
     }
     console.log('[SparkP2P] I&M: Clicked Continue');
-    await imPage.waitForTimeout(3000);
+    await sleep(3000);
 
     // â”€â”€ STEP 8: Review modal â€” verify account name then click Submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Use Claude Vision to read the beneficiary name shown in the review modal
@@ -8789,7 +8789,7 @@ async function executeImWithdrawal(job) {
     } else {
       await imPage.click('button[type="submit"]').catch(() => {});
     }
-    await imPage.waitForTimeout(2000);
+    await sleep(2000);
     console.log('[SparkP2P] I&M: Clicked Submit');
 
     // â”€â”€ STEP 9: Identity Validation â€” enter PIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -8799,7 +8799,7 @@ async function executeImWithdrawal(job) {
     await pinInput.click();
     await pinInput.type(imPin, { delay: 80 });
     console.log('[SparkP2P] I&M: Entered PIN');
-    await imPage.waitForTimeout(500);
+    await sleep(500);
 
     // Click Complete button
     const completeBtn = await $x('//button[contains(text(), "Complete")]').catch(() => []);
@@ -8809,7 +8809,7 @@ async function executeImWithdrawal(job) {
       await imPage.click('button[type="submit"]').catch(() => {});
     }
     console.log('[SparkP2P] I&M: Clicked Complete');
-    await imPage.waitForTimeout(4000);
+    await sleep(4000);
 
     // â”€â”€ STEP 10: Verify success screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     ss = await imPage.screenshot({ encoding: 'base64' });
@@ -8826,7 +8826,7 @@ async function executeImWithdrawal(job) {
       // Click Close to dismiss the success modal
       const closeBtn = await $x('//button[contains(text(), "Close")]').catch(() => []);
       if (closeBtn.length > 0) await closeBtn[0].click().catch(() => {});
-      await imPage.waitForTimeout(1000);
+      await sleep(1000);
 
       // Notify backend
       await fetch(`${API_BASE}/ext/bank-withdrawal-complete`, {
