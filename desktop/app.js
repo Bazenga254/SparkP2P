@@ -8929,41 +8929,23 @@ async function executeImLocalTransfer(job) {
     }
     await sleep(1000);
 
-    // â”€â”€ STEP 3: Click "Saved Beneficiary" radio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    const savedTab = await $x('//label[contains(text(), "Saved Beneficiary")] | //span[contains(text(), "Saved Beneficiary")] | //*[contains(text(), "Saved Beneficiary")]').catch(() => []);
-    if (savedTab.length > 0) {
-      await savedTab[0].click();
-      console.log('[SparkP2P] I&M: Clicked Saved Beneficiary');
-    } else {
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, 'Click the "Saved Beneficiary" radio button');
-    }
-    await sleep(1000);
+    // // ── STEP 3: Click "Saved Beneficiary" — Vision click (Angular radio labels aren't real buttons)
+    ss = await imPage.screenshot({ encoding: 'base64' });
+    await imVisionClick(ss, 'Click the "Saved Beneficiary" radio button or label in the To section');
+    await sleep(1200);
+    console.log('[SparkP2P] I&M: Clicked Saved Beneficiary');
 
-    // â”€â”€ STEP 4: Search saved beneficiary by account number â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    const beneficiarySearch = await imPage.$('input[placeholder*="Search" i], ng-select input, [class*="beneficiary"] input').catch(() => null);
-    if (beneficiarySearch) {
-      await beneficiarySearch.click();
-      await beneficiarySearch.type(TO_ACCOUNT, { delay: 50 });
-    } else {
-      const bDrop = await $x('//*[contains(@class, "beneficiary") or contains(text(), "Select") or contains(text(), "beneficiary")]').catch(() => []);
-      if (bDrop.length > 0) await bDrop[0].click().catch(() => {});
-    }
+    // ── STEP 4: Open beneficiary dropdown and pick the contact ────────────────
+    ss = await imPage.screenshot({ encoding: 'base64' });
+    await imVisionClick(ss, 'Click the "Select a beneficiary" dropdown field to open the list');
     await sleep(1500);
 
-    // Click the matching contact row
-    const contactOption = await $x(`//*[contains(text(), '${TO_ACCOUNT}') or contains(text(), '${EXPECTED_NAME.split(' ')[0]}')]`).catch(() => []);
-    if (contactOption.length > 0) {
-      await contactOption[0].click();
-      console.log(`[SparkP2P] I&M: Selected saved beneficiary ${TO_ACCOUNT} (${EXPECTED_NAME})`);
-    } else {
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, `Click the saved beneficiary contact with account number ${TO_ACCOUNT} in the dropdown list`);
-    }
+    ss = await imPage.screenshot({ encoding: 'base64' });
+    await imVisionClick(ss, `In the open dropdown, click the contact row that shows account ${TO_ACCOUNT} or name containing ${EXPECTED_NAME.split(' ')[0]}`);
     await sleep(1500);
-    console.log('[SparkP2P] I&M: Beneficiary selected â€” bank details auto-filled');
+    console.log(`[SparkP2P] I&M: Selected saved beneficiary ${TO_ACCOUNT} (${EXPECTED_NAME})`);
 
-    // â”€â”€ STEP 7: Select Currency = KES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //    // â”€â”€ STEP 7: Select Currency = KES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const currencySelects = await imPage.$$('select').catch(() => []);
     let currencySet = false;
     for (const sel of currencySelects) {
@@ -9997,4 +9979,5 @@ ipcMain.handle('manual-mpesa-sweep', async (_, amount) => {
   const result = await executeMpesaSweep({ sweep_id: 'manual', amount: amt, reference: 'Manual-' + Date.now() });
   return { ok: result?.success !== false, error: result?.error || null };
 });
+
 
