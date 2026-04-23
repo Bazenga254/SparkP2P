@@ -182,8 +182,14 @@ class SettlementEngine:
         success = await self._send_payment(trader, net_amount, simulate=simulate)
 
         if success:
-            # Deduct settled amount from wallet
-            wallet.balance -= settle_amount
+            # Deduct fees and withdrawal incrementally so each transaction records its own balance_after
+            wallet.balance -= platform_markup
+            balance_after_platform_fee = wallet.balance
+            wallet.balance -= safaricom_fee
+            balance_after_safaricom_fee = wallet.balance
+            wallet.balance -= net_amount
+            balance_after_withdrawal = wallet.balance
+
             wallet.total_withdrawn += net_amount
             wallet.total_fees_paid += total_fee
 
@@ -204,7 +210,7 @@ class SettlementEngine:
                 wallet_id=wallet.id,
                 transaction_type=TransactionType.WITHDRAWAL,
                 amount=-net_amount,
-                balance_after=wallet.balance,
+                balance_after=balance_after_withdrawal,
                 description=f"Withdrawal: KES {net_amount:,.0f} to {trader.settlement_method.value}",
                 status="pending" if is_bank else "completed",
                 destination=withdrawal_destination,
@@ -218,7 +224,7 @@ class SettlementEngine:
                 wallet_id=wallet.id,
                 transaction_type=TransactionType.SETTLEMENT_FEE,
                 amount=-safaricom_fee,
-                balance_after=wallet.balance,
+                balance_after=balance_after_safaricom_fee,
                 description=f"Safaricom fee: KES {safaricom_fee}",
             ))
 
@@ -228,7 +234,7 @@ class SettlementEngine:
                 wallet_id=wallet.id,
                 transaction_type=TransactionType.PLATFORM_FEE,
                 amount=-platform_markup,
-                balance_after=wallet.balance,
+                balance_after=balance_after_platform_fee,
                 description=f"Service fee: KES {platform_markup}",
             ))
 
@@ -404,7 +410,7 @@ class SettlementEngine:
                 destination=phone if trader.settlement_method == SettlementMethod.MPESA else (trader.settlement_paybill or ""),
                 destination_type=trader.settlement_method.value,
                 remarks=remarks,
-                mpesa_transaction_id=result.get("ConversationID") or result.get("OriginatorConversationID") or "",
+                mpesa_transaction_id=result.get("ConversationID") or result.get("OriginatorConversationID") or None,
                 status=PaymentStatus.COMPLETED,
                 raw_callback=result,
             )
