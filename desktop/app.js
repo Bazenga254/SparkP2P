@@ -8809,6 +8809,14 @@ async function executeImWithdrawal(job) {
 }
 
 // â”€â”€ Claude Vision helpers for I&M automation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function _parseVisionJson(text) {
+  // Strip markdown code fences before parsing
+  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON object in response');
+  return JSON.parse(match[0]);
+}
+
 async function imVisionClick(screenshotB64, instruction) {
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -8818,15 +8826,17 @@ async function imVisionClick(screenshotB64, instruction) {
         model: 'claude-haiku-4-5-20251001', max_tokens: 300,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotB64 } },
-          { type: 'text', text: `${instruction}. Respond JSON only: { "selector": "css selector to click", "description": "what you see" }` },
+          { type: 'text', text: `${instruction}. Reply with JSON only, no markdown: {"x": <pixel x center of element>, "y": <pixel y center of element>, "description": "brief"}` },
         ]}],
       }),
     });
     const data = await res.json();
-    const result = JSON.parse(data.content[0].text);
-    if (result.selector) await imPage.click(result.selector).catch(() => {});
-    await imPage.waitForTimeout(1000);
-  } catch (e) { console.log('[SparkP2P] imVisionClick error:', e.message); }
+    const result = _parseVisionJson(data.content[0].text);
+    if (result.x && result.y) {
+      await imPage.mouse.click(Number(result.x), Number(result.y));
+      await new Promise(r => setTimeout(r, 600));
+    }
+  } catch (e) { console.log('[SparkP2P] imVisionClick error:', e.message?.substring(0, 100)); }
 }
 
 async function imVisionType(screenshotB64, instruction, text) {
@@ -8838,18 +8848,19 @@ async function imVisionType(screenshotB64, instruction, text) {
         model: 'claude-haiku-4-5-20251001', max_tokens: 300,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotB64 } },
-          { type: 'text', text: `${instruction}. Respond JSON only: { "selector": "css selector of input field", "description": "what you see" }` },
+          { type: 'text', text: `${instruction}. Reply with JSON only, no markdown: {"x": <pixel x center of input>, "y": <pixel y center of input>, "description": "brief"}` },
         ]}],
       }),
     });
     const data = await res.json();
-    const result = JSON.parse(data.content[0].text);
-    if (result.selector) {
-      await imPage.click(result.selector, { clickCount: 3 }).catch(() => {});
-      await imPage.type(result.selector, text, { delay: 50 }).catch(() => {});
+    const result = _parseVisionJson(data.content[0].text);
+    if (result.x && result.y) {
+      await imPage.mouse.click(Number(result.x), Number(result.y), { clickCount: 3 });
+      await new Promise(r => setTimeout(r, 200));
+      await imPage.keyboard.type(text, { delay: 50 });
+      await new Promise(r => setTimeout(r, 300));
     }
-    await imPage.waitForTimeout(500);
-  } catch (e) { console.log('[SparkP2P] imVisionType error:', e.message); }
+  } catch (e) { console.log('[SparkP2P] imVisionType error:', e.message?.substring(0, 100)); }
 }
 
 async function imVisionVerify(screenshotB64, instruction) {
@@ -8858,17 +8869,17 @@ async function imVisionVerify(screenshotB64, instruction) {
       method: 'POST',
       headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 400,
+        model: 'claude-haiku-4-5-20251001', max_tokens: 500,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotB64 } },
-          { type: 'text', text: instruction },
+          { type: 'text', text: instruction + '\nReply with JSON only, no markdown.' },
         ]}],
       }),
     });
     const data = await res.json();
-    return JSON.parse(data.content[0].text);
+    return _parseVisionJson(data.content[0].text);
   } catch (e) {
-    console.log('[SparkP2P] imVisionVerify error:', e.message);
+    console.log('[SparkP2P] imVisionVerify error:', e.message?.substring(0, 100));
     return null;
   }
 }
