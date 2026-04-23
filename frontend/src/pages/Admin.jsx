@@ -95,7 +95,8 @@ export default function Admin() {
   const [resolveAction, setResolveAction] = useState('cancel');
   const [resolveNote, setResolveNote] = useState('');
   const [resolving, setResolving] = useState(false);
-  const [unmatched, setUnmatched] = useState([]);
+  const [unmatched, setUnmatched] = useState({ deposits: [], withdrawals: [] });
+  const [unmatchedTab, setUnmatchedTab] = useState('deposits');
   const [analytics, setAnalytics] = useState(null);
   const [onlineTraders, setOnlineTraders] = useState([]);
   const [transactions, setTransactions] = useState({ total: 0, transactions: [] });
@@ -502,7 +503,7 @@ export default function Admin() {
       setDashboard(dashRes.data);
       setTraders(tradersRes.data);
       setDisputes(disputesRes.data);
-      setUnmatched(unmatchedRes.data);
+      setUnmatched(unmatchedRes.data || { deposits: [], withdrawals: [] });
       setAnalytics(analyticsRes.data);
       setOnlineTraders(onlineRes.data);
 
@@ -789,7 +790,7 @@ export default function Admin() {
               <div className="adm-nav-label">{section.label}</div>
               {section.items.map((item) => {
                 const Icon = item.icon;
-                const badgeCount = item.key === 'disputes' ? unreadTicketCount : item.key === 'unmatched' ? unmatched.length : 0;
+                const badgeCount = item.key === 'disputes' ? unreadTicketCount : item.key === 'unmatched' ? ((unmatched.deposits?.length || 0) + (unmatched.withdrawals?.length || 0)) : 0;
                 return (
                   <button
                     key={item.key}
@@ -2419,45 +2420,109 @@ export default function Admin() {
           )}
 
           {/* ==================== UNMATCHED ==================== */}
-          {activeTab === 'unmatched' && (
-            <div className="adm-card">
-              <div className="adm-card-header">
-                <h3>Unmatched Payments</h3>
-                <span className="adm-card-count">{unmatched.length} payments</span>
-              </div>
-              <p className="adm-help-text">Payments received that couldn't be matched to any order.</p>
-              {unmatched.length === 0 ? (
-                <p className="adm-empty">No unmatched payments</p>
-              ) : (
-                <div className="adm-table-wrap">
-                  <table className="adm-table">
-                    <thead>
-                      <tr>
-                        <th>Amount</th>
-                        <th>Phone</th>
-                        <th>Sender</th>
-                        <th>Reference</th>
-                        <th>M-Pesa ID</th>
-                        <th>Time</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {unmatched.map((p) => (
-                        <tr key={p.id}>
-                          <td>KES {p.amount.toLocaleString()}</td>
-                          <td>{p.phone && p.phone.length > 20 ? (p.sender_name || 'Hidden') : (p.phone || '-')}</td>
-                          <td>{p.sender_name}</td>
-                          <td className="mono">{p.bill_ref_number}</td>
-                          <td className="mono">{p.mpesa_transaction_id}</td>
-                          <td>{new Date(p.created_at).toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+          {activeTab === 'unmatched' && (() => {
+            const deposits = unmatched.deposits || [];
+            const withdrawals = unmatched.withdrawals || [];
+            const active = unmatchedTab === 'deposits' ? deposits : withdrawals;
+            return (
+              <div className="adm-card">
+                <div className="adm-card-header">
+                  <h3>Unmatched Payments</h3>
+                  <span className="adm-card-count">{deposits.length + withdrawals.length} total</span>
                 </div>
-              )}
-            </div>
-          )}
+
+                {/* Sub-tabs */}
+                <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', marginBottom: 0 }}>
+                  {[['deposits', 'Unmatched Deposits', deposits.length, '#10b981'], ['withdrawals', 'Unmatched Withdrawals', withdrawals.length, '#f59e0b']].map(([key, label, count, color]) => (
+                    <button key={key} onClick={() => setUnmatchedTab(key)}
+                      style={{
+                        padding: '10px 22px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13,
+                        borderBottom: unmatchedTab === key ? `2px solid ${color}` : '2px solid transparent',
+                        color: unmatchedTab === key ? color : 'var(--text-dim)',
+                        fontWeight: unmatchedTab === key ? 700 : 400,
+                        display: 'flex', alignItems: 'center', gap: 8,
+                      }}
+                    >
+                      {label}
+                      {count > 0 && (
+                        <span style={{ background: color, color: '#000', borderRadius: 10, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>{count}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                <p style={{ color: 'var(--text-dim)', fontSize: 12, padding: '10px 20px 0' }}>
+                  {unmatchedTab === 'deposits'
+                    ? 'Inbound M-Pesa payments whose account number didn\'t match any trader or order.'
+                    : 'Outbound disbursements with no destination, no linked order, or failed status.'}
+                </p>
+
+                {active.length === 0 ? (
+                  <p className="adm-empty">No unmatched {unmatchedTab}</p>
+                ) : unmatchedTab === 'deposits' ? (
+                  <div className="adm-table-wrap">
+                    <table className="adm-table">
+                      <thead>
+                        <tr>
+                          <th>Amount</th>
+                          <th>Phone</th>
+                          <th>Sender</th>
+                          <th>Account Used</th>
+                          <th>M-Pesa Code</th>
+                          <th>Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {deposits.map((p) => (
+                          <tr key={p.id}>
+                            <td style={{ color: '#10b981', fontWeight: 600 }}>+KES {p.amount.toLocaleString()}</td>
+                            <td>{p.phone && p.phone.length > 20 ? '—' : (p.phone || '—')}</td>
+                            <td>{p.sender_name || '—'}</td>
+                            <td className="mono" style={{ color: p.bill_ref_number ? '#f59e0b' : '#ef4444' }}>{p.bill_ref_number || 'No account'}</td>
+                            <td className="mono" style={{ fontSize: 11 }}>{p.mpesa_transaction_id || '—'}</td>
+                            <td style={{ color: '#6b7280', fontSize: 12 }}>{new Date(p.created_at).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="adm-table-wrap">
+                    <table className="adm-table">
+                      <thead>
+                        <tr>
+                          <th>Amount</th>
+                          <th>Type</th>
+                          <th>Destination</th>
+                          <th>Status</th>
+                          <th>Remarks</th>
+                          <th>M-Pesa Code</th>
+                          <th>Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {withdrawals.map((p) => (
+                          <tr key={p.id}>
+                            <td style={{ color: '#ef4444', fontWeight: 600 }}>-KES {p.amount.toLocaleString()}</td>
+                            <td><span className="adm-badge dim">{p.transaction_type || '—'}</span></td>
+                            <td style={{ color: p.destination ? '#9ca3af' : '#ef4444' }}>{p.destination || 'No destination'}</td>
+                            <td>
+                              <span className={`adm-badge ${p.status === 'completed' ? 'green' : p.status === 'failed' ? 'red' : 'yellow'}`}>
+                                {p.status || 'unknown'}
+                              </span>
+                            </td>
+                            <td style={{ color: '#6b7280', fontSize: 12 }}>{p.remarks || '—'}</td>
+                            <td className="mono" style={{ fontSize: 11 }}>{p.mpesa_transaction_id || '—'}</td>
+                            <td style={{ color: '#6b7280', fontSize: 12 }}>{new Date(p.created_at).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* ==================== REVENUE ==================== */}
           {activeTab === 'revenue' && (

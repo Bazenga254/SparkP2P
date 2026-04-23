@@ -654,9 +654,11 @@ async def list_unmatched_payments(
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """List INBOUND payments that couldn't be matched to an order.
-    Excludes outbound (withdrawals, B2C settlements)."""
-    result = await db.execute(
+    """Unmatched deposits (inbound with no order) and unmatched withdrawals
+    (outbound with no order, no destination, or failed status)."""
+
+    # ── Unmatched Deposits: inbound C2B payments not linked to any order ──
+    dep_result = await db.execute(
         select(Payment)
         .where(
             Payment.order_id.is_(None),
@@ -665,20 +667,46 @@ async def list_unmatched_payments(
         )
         .order_by(Payment.created_at.desc())
     )
-    payments = result.scalars().all()
+    deposits = dep_result.scalars().all()
 
-    return [
-        {
+    # ── Unmatched Withdrawals: outbound with no order, no destination, or failed ──
+    from sqlalchemy import or_
+    wd_result = await db.execute(
+        select(Payment)
+        .where(
+            Payment.direction == PaymentDirection.OUTBOUND,
+            or_(
+                Payment.order_id.is_(None),
+                Payment.destination.is_(None),
+                Payment.status == "failed",
+            ),
+        )
+        .order_by(Payment.created_at.desc())
+        .limit(100)
+    )
+    withdrawals = wd_result.scalars().all()
+
+    def fmt(p, kind):
+        return {
             "id": p.id,
+            "kind": kind,
             "amount": p.amount,
             "phone": p.phone,
             "sender_name": p.sender_name,
             "bill_ref_number": p.bill_ref_number,
-            "mpesa_transaction_id": p.mpesa_transaction_id,
+            "mpesa_transaction_id": p.mpesa_transaction_id or p.mpesa_receipt_number,
+            "destination": p.destination,
+            "destination_type": p.destination_type,
+            "transaction_type": p.transaction_type,
+            "status": p.status.value if p.status else None,
+            "remarks": p.remarks,
             "created_at": p.created_at.isoformat() if p.created_at else "",
         }
-        for p in payments
-    ]
+
+    return {
+        "deposits": [fmt(p, "deposit") for p in deposits],
+        "withdrawals": [fmt(p, "withdrawal") for p in withdrawals],
+    }
 
 
 def _get_period_start(period: str):
