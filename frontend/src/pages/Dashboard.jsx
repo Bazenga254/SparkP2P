@@ -132,6 +132,7 @@ function SpreadCalculator() {
   const breakEvenPct = buy > 0 ? (breakEvenSpreadKES / buy) * 100 : 0;
 
   const fmtKES = (n) => 'KES ' + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const fmtKESFee = (n) => 'KES ' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
     <div className="card" style={{ marginBottom: 16 }}>
@@ -312,14 +313,14 @@ function SpreadCalculator() {
             {/* Card 1 — Gross Profit */}
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
               <div style={{ fontSize: 11, color: '#9ca3af' }}>{realProfit !== null ? 'Today\'s Gross Profit' : 'Est. Gross Profit'}</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#10b981' }}>+ {fmtKES(baseProfit)}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#10b981' }}>+ {fmtKESFee(baseProfit)}</div>
               <div style={{ fontSize: 11, color: '#6b7280' }}>{realProfit !== null ? 'from completed trades' : 'from spread × volume'}</div>
             </div>
 
             {/* Card 2 — Withdrawal Fee */}
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
               <div style={{ fontSize: 11, color: '#9ca3af' }}>Withdrawal Fee</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>− {fmtKES(wdFee)}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>− {fmtKESFee(wdFee)}</div>
               <div style={{ fontSize: 11, color: '#6b7280' }}>
                 {feePct > 0 ? `${feePct.toFixed(3)}% of amount` : withdrawMethod === 'mpesa' ? 'tiered rate' : '0.05% flat'}
               </div>
@@ -329,7 +330,7 @@ function SpreadCalculator() {
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: `1px solid ${netProfitable ? '#10b981' : '#ef4444'}` }}>
               <div style={{ fontSize: 11, color: '#9ca3af' }}>Net Profit (after fees)</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: netProfitable ? '#10b981' : '#ef4444' }}>
-                {netProfitable ? '+' : '−'} {fmtKES(netProfit)}
+                {netProfitable ? '+' : '−'} {fmtKESFee(Math.abs(netProfit))}
               </div>
               <div style={{ fontSize: 11, color: netProfitable ? '#10b981' : '#ef4444' }}>
                 {netPct >= 0 ? '+' : ''}{netPct.toFixed(2)}% of gross profit
