@@ -353,7 +353,12 @@ function loadTokenFromDisk() {
 }
 // Load persisted token on startup
 token = loadTokenFromDisk();
-if (token) console.log('[SparkP2P] Session restored from disk');
+if (token) {
+  console.log('[SparkP2P] Session restored from disk');
+  sendBotLog('info', 'App started — previous session restored');
+} else {
+  sendBotLog('info', 'App started — please log in');
+}
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // ELECTRON
@@ -461,6 +466,7 @@ function createMainWindow() {
           token = t;
           saveTokenToDisk(t);
           console.log('[SparkP2P] Token captured and saved');
+          sendBotLog('success', 'Logged in to SparkP2P account');
           tryAutoStart();
         }
       }).catch(() => {});
@@ -634,6 +640,7 @@ async function connectPuppeteer() {
     // This is the SINGLE cleanup handler â€” fires automatically when Chrome exits or CDP drops
     browser.on('disconnected', () => {
       console.log('[SparkP2P] Binance Chrome disconnected');
+      sendBotLog('error', 'Binance disconnected — bot stopped');
       browser = null;
       chromeProcess = null;
       stopPoller();
@@ -1216,6 +1223,7 @@ async function tryAutoStart() {
   } catch (e) {}
 
   console.log('[SparkP2P] No active Binance session â€” click Connect Binance to start');
+  sendBotLog('warning', 'No active Binance session — click Connect Binance to start');
 }
 
 function checkInactivityTimeout() {
@@ -1262,6 +1270,7 @@ setInterval(async () => {
           ).catch(() => {});
         }
         console.log('[SparkP2P] Token refreshed â€” session extended 30 days');
+        sendBotLog('info', 'Session refreshed — login extended');
       }
     }
   } catch (e) {}
@@ -8598,6 +8607,7 @@ function startImKeepAlive() {
         }
         // Auto-reconnect â€” re-opens the I&M tab and waits for QR scan
         console.log('[SparkP2P] I&M auto-reconnect triggered â€” opening login page');
+        sendBotLog('warning', 'I&M Bank session expired — reconnecting');
         await connectIm().catch(() => {});
         return;
       }
@@ -9477,6 +9487,7 @@ function startMpesaOrgKeepAlive() {
       // If portal has logged us out, reconnect automatically
       if (currentUrl.includes('/login') || currentUrl === MPESA_ORG_URL + '/' || currentUrl === MPESA_ORG_URL) {
         console.log('[SparkP2P] M-PESA portal session expired — reconnecting');
+        sendBotLog('warning', 'M-Pesa portal session expired — reconnecting');
         clearInterval(mpesaOrgKeepAliveTimer);
         mpesaOrgKeepAliveTimer = null;
         connectMpesaPortal().catch(() => {});
