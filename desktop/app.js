@@ -10043,9 +10043,11 @@ async function executeMpesaSweep(sweepJob) {
     // Wait for result (success or OTP prompt)
     await new Promise(r => setTimeout(r, 4000));
     const step2Ok = await _waitForMpesaSuccess(mpesaOrgPage, 'sweep_step2_withdrawal');
-    console.log(`[SparkP2P] Step 2 result: ${step2Ok ? 'âœ… success' : 'unknown'}`);
+    console.log(`[SparkP2P] Step 2 result: ${step2Ok ? '✅ success' : '❌ not confirmed'}`);
 
-    // Report to backend
+    if (!step2Ok) return failSweep('Org Withdrawal: success not confirmed after submit');
+
+    // Report to backend only after confirmed success
     if (token) {
       await fetch(`${API_BASE}/ext/mpesa-sweep-complete`, {
         method: 'POST',
