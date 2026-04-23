@@ -1030,58 +1030,6 @@ export default function SettingsPanel({ profile, onUpdate }) {
         </div>
       )}
 
-      {/* M-PESA Org Portal Connection — admin only */}
-      {activeSection === 'binance' && profile?.is_admin && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3 style={{ marginBottom: 4 }}>M-PESA Org Portal</h3>
-          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
-            Automates <strong style={{ color: '#e5e7eb' }}>org.ke.m-pesa.com</strong> to sweep funds from paybill 4041355 to your I&amp;M Bank account automatically when traders withdraw — <strong style={{ color: '#10b981' }}>completely free</strong>.
-          </p>
-          {profile?.mpesa_portal_connected ? (
-            <div className="name-verify-box match">
-              <h4>M-PESA Portal Connected</h4>
-              <p style={{ fontSize: 13, color: '#9ca3af', marginTop: 8 }}>
-                Session is active. Funds will sweep to I&amp;M Bank automatically on each trader withdrawal.
-              </p>
-              <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-                <button
-                  onClick={handleConnectMpesa}
-                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #f59e0b', background: 'transparent', color: '#f59e0b', cursor: 'pointer', fontSize: 13 }}
-                >
-                  Re-connect (if session expired)
-                </button>
-                <button
-                  onClick={async () => { await api.post('/traders/disconnect-mpesa-portal'); if (onUpdate) { const r = await getProfile(); onUpdate(r.data); } }}
-                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 13 }}
-                >
-                  Disconnect
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div style={{ textAlign: 'center', padding: '30px 20px', background: 'var(--bg)', borderRadius: 12, border: '1px dashed var(--border)' }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>📱</div>
-              <h4 style={{ color: '#fff', marginBottom: 8 }}>Connect M-PESA Org Portal</h4>
-              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20, maxWidth: 420, margin: '0 auto 20px' }}>
-                A browser tab will open <strong style={{ color: '#e5e7eb' }}>org.ke.m-pesa.com</strong>. Log in manually — the app will then automate fund sweeps from paybill 4041355 to your linked I&amp;M account at zero cost.
-              </p>
-              {mpesaConnecting ? (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 36, height: 36, border: '3px solid rgba(16,185,129,0.2)', borderTop: '3px solid #10b981', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                  <span style={{ color: '#10b981', fontSize: 13 }}>Waiting for M-PESA portal login...</span>
-                </div>
-              ) : (
-                <button
-                  onClick={handleConnectMpesa}
-                  style={{ padding: '14px 32px', borderRadius: 10, border: 'none', background: '#10b981', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 15 }}
-                >
-                  Connect M-PESA Portal
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
       {activeSection === 'settlement' && (
         <div className="card">
