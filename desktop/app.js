@@ -9130,7 +9130,7 @@ async function executeImLocalTransfer(job) {
     await sleep(500);
 
     // STEP 7: Payment Reference — Angular native setter
-    const refText = `SparkP2P ${job.id}`.substring(0, 50);
+    const refText = `SPK-${String(job.id).padStart(6, '0')}`;
     await imPage.evaluate((ref) => {
       const inputs = Array.from(document.querySelectorAll('input,textarea'));
       const i = inputs.find(inp =>

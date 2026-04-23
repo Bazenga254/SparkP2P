@@ -1548,9 +1548,11 @@ export default function Dashboard() {
                     <table className="data-table">
                       <thead>
                         <tr>
+                          <th>Reference</th>
                           <th>Amount</th>
                           <th>Balance After</th>
                           <th>Sent To</th>
+                          <th>Status</th>
                           <th>Time</th>
                           <th></th>
                         </tr>
@@ -1565,6 +1567,11 @@ export default function Dashboard() {
                           const key = withdrawal.id;
                           const isExpanded = !!expandedWithdrawals[key];
                           const hasFees = fees.length > 0;
+                          const refNum = `SPK-${String(withdrawal.id).padStart(6, '0')}`;
+                          const wdStatus = (withdrawal.status || 'pending').toLowerCase();
+                          const statusBadge = wdStatus === 'completed'
+                            ? { label: 'Completed', color: '#10b981', bg: 'rgba(16,185,129,0.1)' }
+                            : { label: 'Pending', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' };
 
                           const feeLabels = {
                             platform_fee: 'Service fee',
@@ -1575,6 +1582,11 @@ export default function Dashboard() {
                             <React.Fragment key={key}>
                               <tr style={{ cursor: hasFees ? 'pointer' : 'default' }}
                                   onClick={() => hasFees && setExpandedWithdrawals(prev => ({ ...prev, [key]: !prev[key] }))}>
+                                <td>
+                                  <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#9ca3af', letterSpacing: '0.5px' }}>
+                                    {refNum}
+                                  </span>
+                                </td>
                                 <td>
                                   <span className="negative" style={{ fontWeight: 600 }}>
                                     {fmtKES(Math.abs(totalDeducted))}
@@ -1593,6 +1605,11 @@ export default function Dashboard() {
                                     </span>
                                   ) : '—'}
                                 </td>
+                                <td>
+                                  <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, color: statusBadge.color, background: statusBadge.bg }}>
+                                    {statusBadge.label}
+                                  </span>
+                                </td>
                                 <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: '#9ca3af' }}>
                                   {new Date(withdrawal.created_at).toLocaleString()}
                                 </td>
@@ -1607,7 +1624,7 @@ export default function Dashboard() {
                               {isExpanded && (
                                 <>
                                   <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
-                                    <td colSpan={5} style={{ paddingTop: 0, paddingBottom: 0 }}>
+                                    <td colSpan={7} style={{ paddingTop: 0, paddingBottom: 0 }}>
                                       <div style={{ padding: '8px 16px', borderLeft: '2px solid #374151', marginLeft: 8 }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13, color: '#d1d5db' }}>
                                           <span>Net withdrawal</span>
