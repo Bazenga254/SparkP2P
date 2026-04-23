@@ -8990,81 +8990,112 @@ async function executeImLocalTransfer(job) {
     await imPage.evaluate(() => window.scrollBy(0, 500)).catch(() => {});
     await sleep(800);
 
-    // STEP 5: Currency = KES
-    // The currency selector is a custom dropdown (not ng-select) — click it to open, then click KES
-    const currDropBtn = await imPage.$('select[formcontrolname*="currency"]').catch(() => null);
-    if (currDropBtn) {
-      // Native select — use evaluate to set value and fire change event
-      await imPage.evaluate(el => {
-        const opt = Array.from(el.options).find(o => o.text === 'KES' || o.value === 'KES');
-        if (opt) { el.value = opt.value; el.dispatchEvent(new Event('change', { bubbles: true })); }
-      }, currDropBtn).catch(() => {});
-    } else {
-      // Custom dropdown — click the currency toggle (shows "-" or current value), then click KES option
-      const currToggle = await imPage.$('.currency-select, [class*="currency"], select').catch(() => null);
-      if (currToggle) await currToggle.click().catch(() => {});
-      await sleep(600);
-      const kesOpt = await $x('//*[text()="KES" or contains(@class,"option") and contains(text(),"KES")]').catch(() => []);
-      if (kesOpt.length > 0) await kesOpt[0].click().catch(() => {});
+    // STEP 5: Currency = KES — same proven approach as executeImBankTransfer
+    const currSelHandles = await imPage.$$('select');
+    const currHandle = currSelHandles[0]; // first <select> on the page is the currency
+    if (currHandle) {
+      const selInfo = await imPage.evaluate(() => {
+        const sels = Array.from(document.querySelectorAll('select'));
+        for (const s of sels) {
+          const kesOpt = Array.from(s.options).find(o => o.text.trim() === 'KES');
+          if (kesOpt) return { value: kesOpt.value };
+        }
+        return null;
+      }).catch(() => null);
+      if (selInfo) {
+        await imPage.select('select', selInfo.value).catch(() => {});
+        console.log('[SparkP2P] I&M: Currency set to KES via page.select');
+      }
     }
-    // Close any open dropdown by pressing Escape, then wait
-    await imPage.keyboard.press('Escape').catch(() => {});
-    await sleep(600);
+    await sleep(500);
     console.log('[SparkP2P] I&M: Currency set to KES');
 
-    // STEP 6: Enter Amount — scroll the amount field into view, then triple-click and type
+    // STEP 6: Enter Amount — Angular native setter (same as executeImBankTransfer)
     const amountWhole = Math.floor(job.amount).toString();
-    const amountInput = await imPage.$('input[type="number"], input[formcontrolname*="amount"]').catch(() => null);
-    if (amountInput) {
-      await imPage.evaluate(el => el.scrollIntoView({ block: 'center' }), amountInput).catch(() => {});
-      await sleep(400);
-      await amountInput.click({ clickCount: 3 });
-      await amountInput.type(amountWhole, { delay: 50 });
-    } else {
+    const amtFilled = await imPage.evaluate((amt) => {
+      const inputs = Array.from(document.querySelectorAll('input[type="number"],input[type="text"]'));
+      const amtInput = inputs.find(i => {
+        const ph = (i.placeholder || '').toLowerCase();
+        const fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
+        // Exclude reference, bank, account fields
+        if (ph.includes('reference') || fc.includes('reference') || fc.includes('narration') ||
+            ph.includes('account') || fc.includes('account') || ph.includes('description') || fc.includes('description')) return false;
+        return i.value === '0' || i.placeholder === '0' || fc.includes('amount') || fc.includes('whole');
+      });
+      if (amtInput) {
+        amtInput.scrollIntoView({ block: 'center', behavior: 'instant' });
+        amtInput.click(); amtInput.select();
+        // Angular requires native setter to trigger change detection
+        const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (ns) ns.call(amtInput, String(amt));
+        amtInput.dispatchEvent(new Event('input', { bubbles: true }));
+        amtInput.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }
+      return false;
+    }, amountWhole).catch(() => false);
+    if (!amtFilled) {
       ss = await imPage.screenshot({ encoding: 'base64' });
       await imVisionType(ss, `Type ${amountWhole} in the Amount whole number field`, amountWhole);
     }
     console.log(`[SparkP2P] I&M: Entered amount ${amountWhole}`);
     await sleep(500);
 
-    // STEP 7: Payment Reference
+    // STEP 7: Payment Reference — Angular native setter
     const refText = `SparkP2P ${job.id}`.substring(0, 50);
-    const refInput = await imPage.$('input[formcontrolname*="reference" i], input[placeholder*="Payment Description" i], input[placeholder*="description" i]').catch(() => null);
-    if (refInput) {
-      await refInput.click();
-      await refInput.type(refText, { delay: 30 });
-    }
+    await imPage.evaluate((ref) => {
+      const inputs = Array.from(document.querySelectorAll('input,textarea'));
+      const i = inputs.find(inp =>
+        (inp.placeholder || '').toLowerCase().includes('payment description') ||
+        (inp.placeholder || '').toLowerCase().includes('reference') ||
+        (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('reference') ||
+        (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('narration')
+      );
+      if (i) {
+        i.scrollIntoView({ block: 'center', behavior: 'instant' });
+        i.click(); i.value = '';
+        const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (ns) ns.call(i, ref);
+        i.dispatchEvent(new Event('input', { bubbles: true }));
+        i.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }, refText).catch(() => {});
     await sleep(500);
 
-    // STEP 8: Payment Purpose = Other
-    // Scroll to bring the purpose dropdown into view first
-    await imPage.evaluate(() => window.scrollBy(0, 300)).catch(() => {});
-    await sleep(500);
+    // STEP 8: Payment Purpose = Other — select[1] with lazy-load wait (same as executeImBankTransfer)
+    const purposeHandles = await imPage.$$('select');
+    const purposeHandle = purposeHandles[1] || purposeHandles[0];
     let purposeSet = false;
-    // Try clicking the "Select payment purpose" dropdown, then pick "Other"
-    const purposeDrop = await $x('//*[contains(text(), "Select payment purpose") or contains(text(), "Payment Purpose")]').catch(() => []);
-    if (purposeDrop.length > 0) {
-      await purposeDrop[0].click().catch(() => {});
-      await sleep(800);
-      const otherOpt2 = await $x('//*[text()="Other" or contains(text(), "Other")]').catch(() => []);
-      if (otherOpt2.length > 0) { await otherOpt2[0].click().catch(() => {}); purposeSet = true; }
-    }
-    if (!purposeSet) {
-      // Try native select fallback
-      const purposeSelect = await imPage.$('select[formcontrolname*="purpose" i]').catch(() => null);
-      if (purposeSelect) {
-        const opts = await imPage.evaluate(el => Array.from(el.options).map((o, i) => ({ i, text: o.text })), purposeSelect).catch(() => []);
+    if (purposeHandle) {
+      await purposeHandle.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => {});
+      await sleep(300);
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        await purposeHandle.focus().catch(() => {});
+        await purposeHandle.click().catch(() => {});
+        await purposeHandle.evaluate(el => {
+          el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          el.dispatchEvent(new Event('focus', { bubbles: true }));
+        }).catch(() => {});
+        await imPage.waitForFunction(() => {
+          const sels = document.querySelectorAll('select');
+          const target = sels[1] || sels[0];
+          return target && target.options.length > 1;
+        }, { timeout: 4000 }).catch(() => {});
+        await imPage.keyboard.press('Escape').catch(() => {});
+        await sleep(300);
+        const opts = await purposeHandle.evaluate(el =>
+          Array.from(el.options).map(o => ({ text: o.text.trim(), value: o.value }))
+        ).catch(() => []);
         const otherOpt = opts.find(o => o.text.toLowerCase().includes('other'));
-        if (otherOpt !== undefined) {
-          await imPage.evaluate((el, idx) => { el.selectedIndex = idx; el.dispatchEvent(new Event('change', { bubbles: true })); }, purposeSelect, otherOpt.i);
+        if (otherOpt) {
+          await purposeHandle.select(otherOpt.value);
           purposeSet = true;
+          console.log(`[SparkP2P] I&M: Payment purpose set to "${otherOpt.text}"`);
+          break;
         }
       }
     }
-    if (!purposeSet) {
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, 'Click the Payment Purpose dropdown and select "Other"');
-    }
+    if (!purposeSet) console.log('[SparkP2P] I&M: Payment purpose fallback — continuing anyway');
     console.log('[SparkP2P] I&M: Payment purpose set to Other');
     await sleep(500);
 
