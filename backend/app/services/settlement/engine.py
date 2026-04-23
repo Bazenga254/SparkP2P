@@ -244,49 +244,51 @@ class SettlementEngine:
                 f"(safaricom: {safaricom_fee}, markup: {platform_markup})"
             )
 
-            # Send SMS notification
-            try:
-                from app.services.sms import sms_withdrawal_sent
-                sms_withdrawal_sent(trader.phone, net_amount, wallet.balance)
-            except Exception as e:
-                logger.warning(f"Failed to send withdrawal SMS to {trader.phone}: {e}")
+            # Send SMS + email notification.
+            # For bank_paybill the transfer is not done yet (desktop bot handles it),
+            # so we skip here and notify from /ext/bank-withdrawal-complete instead.
+            if not is_bank:
+                try:
+                    from app.services.sms import sms_withdrawal_sent
+                    sms_withdrawal_sent(trader.phone, net_amount, wallet.balance)
+                except Exception as e:
+                    logger.warning(f"Failed to send withdrawal SMS to {trader.phone}: {e}")
 
-            # Send email notification
-            try:
-                from app.services.email import send_email
-                send_email(
-                    trader.email,
-                    "SparkP2P - Withdrawal Sent",
-                    f"""
-                    <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
-                        <div style="text-align: center; margin-bottom: 30px;">
-                            <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
-                        </div>
-                        <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
-                            <h2 style="color: #10b981; font-size: 20px; margin: 0 0 12px;">Withdrawal Sent</h2>
-                            <p style="color: #9ca3af; font-size: 14px;">
-                                Hi {trader.full_name}, your withdrawal has been processed.
-                            </p>
-                            <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin: 16px 0;">
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                                    <span style="color: #9ca3af;">Amount Sent</span>
-                                    <span style="color: #10b981; font-weight: 600;">KES {net_amount:,.0f}</span>
-                                </div>
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                                    <span style="color: #9ca3af;">Transaction Fee</span>
-                                    <span style="color: #f59e0b;">KES {total_fee:,.0f}</span>
-                                </div>
-                                <div style="display: flex; justify-content: space-between;">
-                                    <span style="color: #9ca3af;">Remaining Balance</span>
-                                    <span style="color: #fff; font-weight: 600;">KES {wallet.balance:,.0f}</span>
+                try:
+                    from app.services.email import send_email
+                    send_email(
+                        trader.email,
+                        "SparkP2P - Withdrawal Sent",
+                        f"""
+                        <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+                            <div style="text-align: center; margin-bottom: 30px;">
+                                <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+                            </div>
+                            <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+                                <h2 style="color: #10b981; font-size: 20px; margin: 0 0 12px;">Withdrawal Sent</h2>
+                                <p style="color: #9ca3af; font-size: 14px;">
+                                    Hi {trader.full_name}, your withdrawal has been processed.
+                                </p>
+                                <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin: 16px 0;">
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                        <span style="color: #9ca3af;">Amount Sent</span>
+                                        <span style="color: #10b981; font-weight: 600;">KES {net_amount:,.0f}</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                        <span style="color: #9ca3af;">Transaction Fee</span>
+                                        <span style="color: #f59e0b;">KES {total_fee:,.0f}</span>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between;">
+                                        <span style="color: #9ca3af;">Remaining Balance</span>
+                                        <span style="color: #fff; font-weight: 600;">KES {wallet.balance:,.0f}</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    """,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to send withdrawal email to {trader.email}: {e}")
+                        """,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send withdrawal email to {trader.email}: {e}")
 
         return success
 

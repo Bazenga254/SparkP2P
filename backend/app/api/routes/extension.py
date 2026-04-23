@@ -1258,18 +1258,76 @@ async def bank_withdrawal_complete(
     """Desktop app calls this after successfully executing an I&M bank transfer."""
     if not trader.is_admin and trader.role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
+
     result = await db.execute(
-        select(WalletTransaction).where(WalletTransaction.id == data.tx_id)
+        select(WalletTransaction, Trader, Wallet)
+        .join(Trader, Trader.id == WalletTransaction.trader_id)
+        .join(Wallet, Wallet.trader_id == WalletTransaction.trader_id)
+        .where(WalletTransaction.id == data.tx_id)
     )
-    tx = result.scalar_one_or_none()
-    if not tx:
+    row = result.first()
+    if not row:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    tx, tx_trader, tx_wallet = row
+
     tx.status = "completed"
-    tx.processed_by = f"auto:im_bot"
+    tx.processed_by = "auto:im_bot"
     tx.processed_at = datetime.now(timezone.utc)
     if data.reference:
         tx.description = (tx.description or "") + f" | I&M ref: {data.reference}"
     await db.commit()
+
+    net_amount = abs(tx.amount)
+    remaining = tx_wallet.balance
+
+    # SMS notification — now that the transfer is actually done
+    try:
+        from app.services.sms import send_otp_sms
+        send_otp_sms(
+            tx_trader.phone,
+            f"SparkP2P: KES {net_amount:,.0f} sent to your I&M Bank account. "
+            f"Remaining balance: KES {remaining:,.0f}."
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send bank withdrawal SMS to {tx_trader.phone}: {e}")
+
+    # Email notification
+    try:
+        from app.services.email import send_email
+        send_email(
+            tx_trader.email,
+            "SparkP2P - Withdrawal Sent",
+            f"""
+            <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+                <div style="text-align: center; margin-bottom: 30px;">
+                    <h1 style="color: #f59e0b; font-size: 28px; margin: 0;">SparkP2P</h1>
+                </div>
+                <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+                    <h2 style="color: #10b981; font-size: 20px; margin: 0 0 12px;">Withdrawal Sent</h2>
+                    <p style="color: #9ca3af; font-size: 14px;">
+                        Hi {tx_trader.full_name}, your withdrawal to I&M Bank has been completed.
+                    </p>
+                    <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin: 16px 0;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span style="color: #9ca3af;">Amount Sent</span>
+                            <span style="color: #10b981; font-weight: 600;">KES {net_amount:,.0f}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span style="color: #9ca3af;">Reference</span>
+                            <span style="color: #fff;">SPK-{str(tx.id).zfill(6)}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: #9ca3af;">Remaining Balance</span>
+                            <span style="color: #fff; font-weight: 600;">KES {remaining:,.0f}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send bank withdrawal email to {tx_trader.email}: {e}")
+
     return {"status": "ok", "tx_id": tx.id}
 
 
