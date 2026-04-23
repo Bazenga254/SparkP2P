@@ -952,23 +952,25 @@ async def admin_analytics(
     )
     online_traders = r.scalar()
 
-    # Top 5 traders by volume
+    # Top 5 traders by volume — computed from actual completed orders
     top_q = (
         select(
             Trader.full_name,
-            Trader.total_trades,
-            Trader.total_volume,
+            func.count(Order.id).label("trades"),
+            func.coalesce(func.sum(Order.fiat_amount), 0).label("volume"),
         )
+        .join(Order, (Order.trader_id == Trader.id) & (Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED])), isouter=True)
         .where(Trader.is_admin == False)
-        .order_by(Trader.total_volume.desc())
+        .group_by(Trader.id, Trader.full_name)
+        .order_by(func.coalesce(func.sum(Order.fiat_amount), 0).desc())
         .limit(5)
     )
     r = await db.execute(top_q)
     top_traders = [
         {
             "name": row.full_name,
-            "trades": row.total_trades,
-            "volume": float(row.total_volume),
+            "trades": int(row.trades),
+            "volume": float(row.volume),
         }
         for row in r.all()
     ]
