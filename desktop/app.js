@@ -8986,6 +8986,10 @@ async function executeImLocalTransfer(job) {
     await sleep(1000);
     console.log(`[SparkP2P] I&M: Selected saved beneficiary ${TO_ACCOUNT} (${EXPECTED_NAME})`);
 
+    // Scroll down to reveal Payment details (Amount, Reference, Purpose)
+    await imPage.evaluate(() => window.scrollBy(0, 500)).catch(() => {});
+    await sleep(800);
+
     // STEP 5: Currency = KES
     const currencyDropdown = await imPage.$('select[formcontrolname*="currency"], select').catch(() => null);
     if (currencyDropdown) {
