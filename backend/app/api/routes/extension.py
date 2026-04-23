@@ -1328,6 +1328,11 @@ async def bank_withdrawal_complete(
     except Exception as e:
         logger.warning(f"Failed to send bank withdrawal email to {tx_trader.email}: {e}")
 
+    # Report success so system health clears any degraded I&M state
+    from app.services import system_health
+    import asyncio
+    asyncio.create_task(system_health.report_success("im_bank"))
+
     return {"status": "ok", "tx_id": tx.id}
 
 
@@ -1349,6 +1354,12 @@ async def bank_withdrawal_failed(
     tx.status = "pending"
     tx.processed_by = None
     await db.commit()
+
+    # Report I&M failure so system health can alert admin after threshold
+    from app.services import system_health
+    import asyncio
+    asyncio.create_task(system_health.report_failure("im_bank", data.reference or "Bank transfer failed"))
+
     return {"status": "requeued", "tx_id": tx.id}
 
 
@@ -1420,6 +1431,12 @@ async def mpesa_sweep_complete(
     sweep.status = "completed"
     sweep.completed_at = datetime.now(timezone.utc)
     await db.commit()
+
+    # Report success so system health clears any degraded state
+    from app.services import system_health
+    import asyncio
+    asyncio.create_task(system_health.report_success("mpesa_org"))
+
     return {"status": "ok", "sweep_id": sweep.id}
 
 
@@ -1528,6 +1545,11 @@ async def mpesa_sweep_failed(
             )
         except Exception as e:
             logger.warning(f"Failed to send sweep-failed email: {e}")
+
+    # Report failure so system health can alert admin after threshold
+    from app.services import system_health
+    import asyncio
+    asyncio.create_task(system_health.report_failure("mpesa_org", data.error or "Sweep failed"))
 
     return {"status": "failed", "sweep_id": sweep.id, "refunded": refunded_amount}
 

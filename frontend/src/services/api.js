@@ -100,6 +100,7 @@ export const getAdminSupportTickets = (params = {}) => api.get('/admin/support-t
 export const closeSupportTicket = (ticketId) => api.put(`/admin/support-tickets/${ticketId}/close`);
 export const replyToSupportTicket = (ticketId, message, attachmentUrl = null, attachmentName = null) => api.post(`/admin/support-tickets/${ticketId}/reply`, { message, attachment_url: attachmentUrl, attachment_name: attachmentName });
 export const uploadSupportAttachment = (file) => { const fd = new FormData(); fd.append('file', file); return api.post('/support/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); };
+export const getSystemStatus = () => api.get('/system-status');
 
 // Withdrawals
 export const getAdminWithdrawals = (params = {}) => api.get('/admin/withdrawals', { params });

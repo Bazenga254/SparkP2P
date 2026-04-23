@@ -334,3 +334,10 @@ async def upload_support_attachment(
         f.write(data)
 
     return {"url": f"/uploads/support/{filename}", "name": file.filename, "type": file.content_type}
+
+
+@router.get("/system-status")
+async def system_status(trader: Trader = Depends(get_current_trader)):
+    """Returns current health status of critical payment systems (I&M Bank, M-PESA Org)."""
+    from app.services import system_health
+    return system_health.get_status()

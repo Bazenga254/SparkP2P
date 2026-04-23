@@ -20,13 +20,16 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
-BOT_OFFLINE_THRESHOLD_MINUTES = 5    # Alert after 5 min of silence
-BOT_NOTIFY_COOLDOWN_MINUTES   = 60   # Re-alert at most once per hour
-CHECK_INTERVAL_SECONDS        = 60   # Check every 60s
+BOT_OFFLINE_THRESHOLD_MINUTES    = 5    # Alert after 5 min of silence
+BOT_NOTIFY_COOLDOWN_MINUTES      = 60   # Re-alert at most once per hour
+CHECK_INTERVAL_SECONDS           = 60   # Check every 60s
+PENDING_WD_ALERT_HOURS           = 4    # Alert trader after 4h pending withdrawal
+PENDING_WD_NOTIFY_COOLDOWN_HOURS = 12   # Re-alert at most once per 12h per trader
 
 # In-memory state — reset on service restart (acceptable)
-_last_notified_at: dict[int, datetime] = {}   # trader_id → when we last sent offline alert
-_was_offline:      dict[int, bool]     = {}   # trader_id → True if we sent an alert for current outage
+_last_notified_at:    dict[int, datetime] = {}   # trader_id → when we last sent offline alert
+_was_offline:         dict[int, bool]     = {}   # trader_id → True if we sent an alert for current outage
+_wd_last_notified_at: dict[int, datetime] = {}   # trader_id → when we last sent pending-withdrawal alert
 
 
 async def _check_traders():
@@ -157,11 +160,95 @@ async def _notify_recovered(trader):
         logger.warning(f"[BotMonitor] Recovery email failed for trader {trader.id}: {e}")
 
 
+async def _check_pending_withdrawals():
+    """Alert traders who have a withdrawal stuck in 'pending' for more than PENDING_WD_ALERT_HOURS."""
+    from app.core.database import AsyncSessionLocal
+    from app.models import Trader
+    from app.models.wallet import WalletTransaction, TransactionType
+    from sqlalchemy import select
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=PENDING_WD_ALERT_HOURS)
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(WalletTransaction, Trader)
+            .join(Trader, Trader.id == WalletTransaction.trader_id)
+            .where(
+                WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+                WalletTransaction.status == "pending",
+                WalletTransaction.created_at <= cutoff,
+            )
+        )
+        rows = result.all()
+
+    now = datetime.now(timezone.utc)
+
+    for tx, trader in rows:
+        trader_id = trader.id
+        cooldown_ok = (
+            trader_id not in _wd_last_notified_at or
+            (now - _wd_last_notified_at[trader_id]).total_seconds() / 3600 >= PENDING_WD_NOTIFY_COOLDOWN_HOURS
+        )
+        if not cooldown_ok:
+            continue
+
+        hours_pending = (now - tx.created_at.replace(tzinfo=timezone.utc if tx.created_at.tzinfo is None else tx.created_at.tzinfo)).total_seconds() / 3600
+        _wd_last_notified_at[trader_id] = now
+
+        logger.info(f"[BotMonitor] Trader {trader_id} has withdrawal pending {hours_pending:.1f}h — notifying")
+
+        try:
+            from app.services.sms import send_otp_sms
+            send_otp_sms(
+                trader.phone,
+                f"SparkP2P: Your withdrawal of KES {abs(tx.amount):,.0f} is still being processed "
+                f"({hours_pending:.0f} hours). Your funds are safe — we're working on it. "
+                f"Contact support if this continues."
+            )
+        except Exception as e:
+            logger.warning(f"[BotMonitor] Pending-wd SMS failed for trader {trader_id}: {e}")
+
+        try:
+            from app.services.email import send_email
+            send_email(
+                trader.email,
+                "SparkP2P - Withdrawal Still Processing",
+                f"""
+                <div style="font-family:-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
+                  <div style="background:#1a1d27;border-radius:12px;padding:32px;">
+                    <h2 style="color:#f59e0b;font-size:20px;margin:0 0 12px;">&#8987; Withdrawal Delayed</h2>
+                    <p style="color:#9ca3af;font-size:14px;">Hi {trader.full_name},</p>
+                    <p style="color:#d1d5db;font-size:14px;">
+                      Your withdrawal of <strong style="color:#fff;">KES {abs(tx.amount):,.0f}</strong>
+                      has been pending for approximately <strong style="color:#f59e0b;">{hours_pending:.0f} hours</strong>.
+                    </p>
+                    <div style="background:#0f1117;border-radius:10px;padding:16px;margin:16px 0;border-left:4px solid #f59e0b;">
+                      <p style="color:#d1d5db;font-size:13px;margin:0;">
+                        Your funds are <strong style="color:#10b981;">safe and intact</strong>.
+                        The delay may be caused by a temporary issue with our payment partner.
+                        We are processing your withdrawal and will notify you once it completes.
+                      </p>
+                    </div>
+                    <p style="color:#9ca3af;font-size:13px;">
+                      If you need urgent assistance, please contact support from the SparkP2P app.
+                    </p>
+                  </div>
+                </div>
+                """,
+            )
+        except Exception as e:
+            logger.warning(f"[BotMonitor] Pending-wd email failed for trader {trader_id}: {e}")
+
+
 async def start():
     logger.info(f"[BotMonitor] Started — checking every {CHECK_INTERVAL_SECONDS}s, alert after {BOT_OFFLINE_THRESHOLD_MINUTES}m silence")
     while True:
         try:
             await _check_traders()
         except Exception as e:
-            logger.error(f"[BotMonitor] Unexpected error: {e}")
+            logger.error(f"[BotMonitor] Unexpected error in bot check: {e}")
+        try:
+            await _check_pending_withdrawals()
+        except Exception as e:
+            logger.error(f"[BotMonitor] Unexpected error in pending-wd check: {e}")
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)

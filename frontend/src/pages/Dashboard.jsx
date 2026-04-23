@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -397,6 +397,7 @@ export default function Dashboard() {
   const [withdrawMsg, setWithdrawMsg] = useState('');
   const [withdrawStatus, setWithdrawStatus] = useState(null); // null | 'processing' | 'succeeded'
   const withdrawPollRef = useRef(null);
+  const [systemStatus, setSystemStatus] = useState(null);
   const [sessionHealth, setSessionHealth] = useState(null);
   const [identityError, setIdentityError] = useState('');
   const [notifications, setNotifications] = useState([]);
@@ -654,6 +655,13 @@ export default function Dashboard() {
       setWithdrawOtp('');
       setWithdrawOtpSent(false);
       setWithdrawMsg('');
+      // Fetch system health status before showing modal
+      try {
+        const sysRes = await getSystemStatus();
+        setSystemStatus(sysRes.data);
+      } catch (_) {
+        setSystemStatus(null);
+      }
       setShowWithdrawModal(true);
     } catch (err) {
       alert(err.response?.data?.detail || 'Could not check withdrawal');
@@ -1706,6 +1714,30 @@ export default function Dashboard() {
               <h3 style={{ color: '#fff', fontSize: 18, margin: 0 }}>Confirm Withdrawal</h3>
               <button onClick={() => { setShowWithdrawModal(false); setWithdrawStatus(null); clearInterval(withdrawPollRef.current); }} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 20 }}>×</button>
             </div>
+
+            {/* System degraded banner */}
+            {systemStatus && (() => {
+              const degradedSystems = Object.values(systemStatus).filter(s => s.degraded);
+              if (degradedSystems.length === 0) return null;
+              const names = degradedSystems.map(s => s.name).join(' and ');
+              return (
+                <div style={{
+                  display: 'flex', gap: 10, alignItems: 'flex-start',
+                  background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)',
+                  borderRadius: 8, padding: '12px 14px', marginBottom: 16,
+                }}>
+                  <span style={{ fontSize: 16, flexShrink: 0 }}>⚠️</span>
+                  <div>
+                    <p style={{ margin: '0 0 4px', fontSize: 13, color: '#ef4444', fontWeight: 700 }}>
+                      {names} {degradedSystems.length > 1 ? 'are' : 'is'} currently unavailable
+                    </p>
+                    <p style={{ margin: 0, fontSize: 12, color: '#f87171', lineHeight: 1.5 }}>
+                      Withdrawals are temporarily on hold. Your balance is safe and will be processed as soon as the system recovers. Our team has been notified.
+                    </p>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Amount input */}
             {withdrawPreview && (() => {
