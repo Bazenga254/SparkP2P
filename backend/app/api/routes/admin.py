@@ -1792,8 +1792,11 @@ async def retry_sweep(
 # ═══════════════════════════════════════════════════════════
 
 def _apply_period(q, model_col, period, now):
+    EAT = timezone(timedelta(hours=3))
     if period == "today":
-        return q.where(func.date(model_col) == now.date())
+        now_eat = now.astimezone(EAT)
+        today_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        return q.where(model_col >= today_start)
     elif period == "week":
         return q.where(model_col >= now - timedelta(days=7))
     elif period == "month":
