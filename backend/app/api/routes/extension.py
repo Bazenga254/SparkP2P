@@ -1214,6 +1214,11 @@ async def get_pending_bank_withdrawals(
     """Desktop app polls this to get pending I&M bank withdrawals queued for execution."""
     if not trader.is_admin and trader.role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
+
+    # Only return withdrawals where the M-PESA sweep has already completed.
+    # If a sweep is still pending, the money isn't in the I&M business account yet.
+    traders_with_pending_sweep = select(ImSweep.trader_id).where(ImSweep.status == "pending")
+
     result = await db.execute(
         select(WalletTransaction, Trader).join(
             Trader, Trader.id == WalletTransaction.trader_id
@@ -1221,6 +1226,7 @@ async def get_pending_bank_withdrawals(
             WalletTransaction.settlement_method.in_(["bank", "bank_paybill"]),
             WalletTransaction.status == "pending",
             WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+            WalletTransaction.trader_id.notin_(traders_with_pending_sweep),
         ).order_by(WalletTransaction.created_at)
     )
     rows = result.all()
