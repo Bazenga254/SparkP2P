@@ -1763,7 +1763,7 @@ export default function Admin() {
                               {[
                                 { label: 'Gross Revenue', value: s.revenue, color: '#10b981', prefix: '+' },
                                 { label: 'Fees Paid', value: s.fees, color: '#ef4444', prefix: '-' },
-                                { label: 'Net P&L', value: s.net, color: s.net > 0 ? '#10b981' : s.net < 0 ? '#ef4444' : '#6b7280', prefix: s.net > 0 ? '+' : '' },
+                                { label: 'Net P&L', value: s.net, color: s.net > 0 ? '#10b981' : s.net < 0 ? '#ef4444' : '#6b7280', prefix: s.net > 0 ? '+' : s.net < 0 ? '-' : '' },
                                 { label: 'Sell Orders', value: s.trades, color: '#f59e0b', isCount: true },
                               ].map(({ label, value, color, isCount, prefix }) => (
                                 <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 14px', border: `1px solid ${color}33` }}>
