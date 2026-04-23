@@ -9327,12 +9327,7 @@ setInterval(async () => {
     if (data.jobs && data.jobs.length > 0) {
       console.log(`[SparkP2P] ${data.jobs.length} pending I&M withdrawal(s) found â€” executing first`);
       const job = data.jobs[0];
-      // Own-account transfer for owner's personal account; local transfer for all other traders
-      if (job.destination_account === '00108094726050') {
-        await executeImWithdrawal(job);
-      } else {
-        await executeImLocalTransfer(job);
-      }
+      await executeImLocalTransfer(job);
     }
   } catch (e) {}
 }, 30 * 1000);
@@ -10077,11 +10072,7 @@ async function executeMpesaSweep(sweepJob) {
           const job = d.jobs[0];
           console.log(`[SparkP2P] Auto-triggering I&M transfer after sweep — KES ${job.amount}`);
           await imPage.bringToFront().catch(() => {});
-          if (job.destination_account === '00108094726050') {
-            await executeImWithdrawal(job);
-          } else {
-            await executeImLocalTransfer(job);
-          }
+          await executeImLocalTransfer(job);
         }
       } catch (_) {}
     }, 5000); // 5s delay so funds settle in I&M account
