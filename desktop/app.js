@@ -10059,23 +10059,39 @@ async function executeMpesaSweep(sweepJob) {
     mpesaSweepRunning = false;
     lastSweepCompletedAt = Date.now();
 
-    // Immediately trigger the I&M bank transfer now that funds have arrived
-    setTimeout(async () => {
-      if (!token || !imPage || imPage.isClosed() || imWithdrawalRunning) return;
+    // Switch to I&M tab immediately so user can see what's happening
+    if (imPage && !imPage.isClosed()) await imPage.bringToFront().catch(() => {});
+
+    // Trigger I&M transfer with retries (3 attempts, 10s apart)
+    const triggerImTransfer = async (attempt) => {
+      if (!token) { console.log('[SparkP2P] Post-sweep: no token, skipping I&M trigger'); return; }
+      if (!imPage || imPage.isClosed()) { console.log('[SparkP2P] Post-sweep: I&M page closed, skipping'); return; }
+      if (imWithdrawalRunning) { console.log('[SparkP2P] Post-sweep: I&M transfer already in progress'); return; }
       try {
         const r = await fetch(`${API_BASE}/ext/pending-bank-withdrawals`, {
           headers: { 'Authorization': `Bearer ${token}` },
         });
-        if (!r.ok) return;
+        if (!r.ok) {
+          console.log(`[SparkP2P] Post-sweep: pending-withdrawals fetch failed (${r.status}) — attempt ${attempt}`);
+          if (attempt < 3) setTimeout(() => triggerImTransfer(attempt + 1), 10000);
+          return;
+        }
         const d = await r.json();
         if (d.jobs && d.jobs.length > 0) {
           const job = d.jobs[0];
           console.log(`[SparkP2P] Auto-triggering I&M transfer after sweep — KES ${job.amount}`);
           await imPage.bringToFront().catch(() => {});
           await executeImLocalTransfer(job);
+        } else {
+          console.log(`[SparkP2P] Post-sweep: no pending bank withdrawals found (attempt ${attempt})`);
+          if (attempt < 3) setTimeout(() => triggerImTransfer(attempt + 1), 10000);
         }
-      } catch (_) {}
-    }, 5000); // 5s delay so funds settle in I&M account
+      } catch (e) {
+        console.log(`[SparkP2P] Post-sweep trigger error (attempt ${attempt}):`, e.message);
+        if (attempt < 3) setTimeout(() => triggerImTransfer(attempt + 1), 10000);
+      }
+    };
+    setTimeout(() => triggerImTransfer(1), 5000);
 
     return { success: true };
 
