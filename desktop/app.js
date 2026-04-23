@@ -8946,37 +8946,33 @@ async function executeImLocalTransfer(job) {
     await sleep(1200);
     console.log('[SparkP2P] I&M: Clicked Saved Beneficiary');
 
-    // ── STEP 4: Open beneficiary dropdown, search, select ────────────────────
-    // Click the ng-select beneficiary dropdown to open the search field
-    const bDrop = await imPage.$('ng-select[formcontrolname*="beneficiary" i], ng-select[placeholder*="beneficiary" i], ng-select').catch(() => null);
-    if (bDrop) {
-      await bDrop.click();
-    } else {
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, 'Click the "Select a beneficiary" dropdown in the To section to open it');
-    }
-    await sleep(1000);
+    // ── STEP 4: Open beneficiary dropdown via Vision (ng-select container isn't directly clickable) ──
+    ss = await imPage.screenshot({ encoding: 'base64' });
+    await imVisionClick(ss, 'Click the "Select a beneficiary" dropdown or combobox in the To section to open its search field');
+    await sleep(1200);
 
-    // Type the account number in the search input that appears inside the dropdown
-    const bSearchInput = await imPage.$('ng-select input, input[role="combobox"], [class*="ng-select"] input').catch(() => null);
+    // After the dropdown opens, an input[role="combobox"] appears inside the ng-select
+    const bSearchInput = await imPage.$('input[role="combobox"], ng-select input').catch(() => null);
     if (bSearchInput) {
       await bSearchInput.click();
       await bSearchInput.type(TO_ACCOUNT, { delay: 60 });
       console.log(`[SparkP2P] I&M: Typed account ${TO_ACCOUNT} in beneficiary search`);
     } else {
-      // Fallback: just type — the focused element should be the search field
+      // Fallback: keyboard type into whatever is focused after dropdown opens
       await imPage.keyboard.type(TO_ACCOUNT, { delay: 60 });
+      console.log(`[SparkP2P] I&M: Keyboard typed account ${TO_ACCOUNT}`);
     }
-    await sleep(1500);
+    await sleep(1800);
 
-    // Click the first ng-option result, or press Enter
+    // Click the first result — try CSS selector first, then Vision fallback
     const firstOption = await imPage.$('.ng-option, .ng-option-label, [class*="ng-option"]').catch(() => null);
     if (firstOption) {
       await firstOption.click();
       console.log(`[SparkP2P] I&M: Clicked beneficiary option from dropdown`);
     } else {
-      await imPage.keyboard.press('Enter');
-      console.log(`[SparkP2P] I&M: Pressed Enter to select beneficiary`);
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionClick(ss, `Click the dropdown option that contains account number ${TO_ACCOUNT} or the beneficiary name in the search results list`);
+      console.log(`[SparkP2P] I&M: Vision-clicked beneficiary option`);
     }
     await sleep(1200);
     console.log(`[SparkP2P] I&M: Selected saved beneficiary ${TO_ACCOUNT} (${EXPECTED_NAME})`);
