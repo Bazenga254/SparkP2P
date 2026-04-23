@@ -625,16 +625,18 @@ async def list_disputed_orders(
 ):
     """List all disputed orders that need manual review."""
     result = await db.execute(
-        select(Order)
+        select(Order, Trader.full_name.label("trader_name"))
+        .join(Trader, Trader.id == Order.trader_id, isouter=True)
         .where(Order.status == OrderStatus.DISPUTED)
         .order_by(Order.created_at.desc())
     )
-    orders = result.scalars().all()
+    rows = result.all()
 
     return [
         {
             "id": o.id,
             "trader_id": o.trader_id,
+            "trader_name": trader_name or f"Trader #{o.trader_id}",
             "binance_order_number": o.binance_order_number,
             "side": o.side.value,
             "fiat_amount": o.fiat_amount,
@@ -643,7 +645,7 @@ async def list_disputed_orders(
             "risk_score": o.risk_score,
             "created_at": o.created_at.isoformat() if o.created_at else "",
         }
-        for o in orders
+        for o, trader_name in rows
     ]
 
 

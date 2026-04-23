@@ -91,6 +91,10 @@ export default function Admin() {
   const [ordersPage, setOrdersPage] = useState(1);
   const PAGE_SIZE = 15;
   const [disputes, setDisputes] = useState([]);
+  const [resolveModal, setResolveModal] = useState(null); // { dispute }
+  const [resolveAction, setResolveAction] = useState('cancel');
+  const [resolveNote, setResolveNote] = useState('');
+  const [resolving, setResolving] = useState(false);
   const [unmatched, setUnmatched] = useState([]);
   const [analytics, setAnalytics] = useState(null);
   const [onlineTraders, setOnlineTraders] = useState([]);
@@ -2131,21 +2135,95 @@ export default function Admin() {
                           <th>Amount</th>
                           <th>Risk Score</th>
                           <th>Created</th>
+                          <th>Action</th>
                         </tr>
                       </thead>
                       <tbody>
                         {disputes.map((d) => (
                           <tr key={d.id}>
-                            <td className="mono">{d.binance_order_number}</td>
-                            <td>{d.trader_id}</td>
+                            <td className="mono" style={{ fontSize: 11 }}>{d.binance_order_number}</td>
+                            <td>
+                              <button
+                                onClick={() => { setActiveTab('traders'); openTraderPage({ id: d.trader_id, full_name: d.trader_name }); }}
+                                style={{ background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontWeight: 600, fontSize: 13, padding: 0, textDecoration: 'underline' }}
+                              >
+                                {d.trader_name}
+                              </button>
+                            </td>
                             <td><span className={`adm-badge ${d.side === 'BUY' ? 'green' : 'red'}`}>{d.side}</span></td>
                             <td>KES {d.fiat_amount.toLocaleString()}</td>
                             <td>{d.risk_score || '-'}</td>
                             <td>{new Date(d.created_at).toLocaleString()}</td>
+                            <td>
+                              <button
+                                onClick={() => { setResolveModal(d); setResolveAction('cancel'); setResolveNote(''); }}
+                                style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}
+                              >
+                                Resolve
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                )}
+
+                {/* Resolve Dispute Modal */}
+                {resolveModal && (
+                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 28, width: 420, maxWidth: '90vw' }}>
+                      <h3 style={{ margin: '0 0 6px', fontSize: 16 }}>Resolve Dispute</h3>
+                      <p style={{ color: 'var(--text-dim)', fontSize: 12, margin: '0 0 20px' }}>
+                        Order: <span className="mono" style={{ fontSize: 11 }}>{resolveModal.binance_order_number}</span> — KES {resolveModal.fiat_amount?.toLocaleString()} ({resolveModal.trader_name})
+                      </p>
+
+                      <div style={{ marginBottom: 16 }}>
+                        <label style={{ fontSize: 12, color: 'var(--text-dim)', display: 'block', marginBottom: 6 }}>Action</label>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          {[['cancel', 'Cancel Order', '#ef4444'], ['release', 'Mark Completed', '#10b981']].map(([val, label, color]) => (
+                            <button key={val} onClick={() => setResolveAction(val)}
+                              style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `2px solid ${resolveAction === val ? color : 'var(--border)'}`, background: resolveAction === val ? `${color}22` : 'transparent', color: resolveAction === val ? color : 'var(--text-dim)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={{ marginBottom: 20 }}>
+                        <label style={{ fontSize: 12, color: 'var(--text-dim)', display: 'block', marginBottom: 6 }}>Resolution Note</label>
+                        <textarea
+                          value={resolveNote}
+                          onChange={e => setResolveNote(e.target.value)}
+                          placeholder="Describe how the dispute was resolved…"
+                          style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, resize: 'vertical', minHeight: 80, boxSizing: 'border-box' }}
+                        />
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <button onClick={() => setResolveModal(null)} style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-dim)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                          Cancel
+                        </button>
+                        <button
+                          disabled={resolving || !resolveNote.trim()}
+                          onClick={async () => {
+                            setResolving(true);
+                            try {
+                              await api.put(`/admin/disputes/${resolveModal.id}/resolve`, { resolution: resolveNote, action: resolveAction });
+                              setDisputes(prev => prev.filter(d => d.id !== resolveModal.id));
+                              setResolveModal(null);
+                            } catch (e) {
+                              alert(e?.response?.data?.detail || 'Failed to resolve dispute');
+                            }
+                            setResolving(false);
+                          }}
+                          style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: 'none', background: resolveAction === 'release' ? 'linear-gradient(135deg,#10b981,#059669)' : 'linear-gradient(135deg,#ef4444,#dc2626)', color: '#fff', fontWeight: 600, fontSize: 13, cursor: resolving || !resolveNote.trim() ? 'not-allowed' : 'pointer', opacity: resolving || !resolveNote.trim() ? 0.6 : 1 }}
+                        >
+                          {resolving ? 'Resolving…' : resolveAction === 'release' ? 'Mark Completed' : 'Cancel Order'}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
