@@ -77,7 +77,7 @@ class DepositRequest(BaseModel):
 class WalletResponse(BaseModel):
     balance: float
     reserved: float
-    total_earned: float
+    total_volume: float
     total_withdrawn: float
     total_fees_paid: float
     daily_volume: float
@@ -940,10 +940,19 @@ async def get_wallet(
 
     if not wallet:
         return WalletResponse(
-            balance=0, reserved=0, total_earned=0,
+            balance=0, reserved=0, total_volume=0,
             total_withdrawn=0, total_fees_paid=0,
             daily_volume=0, daily_trades=0,
         )
+
+    # Compute total P2P trading volume from completed orders
+    vol_r = await db.execute(
+        select(func.coalesce(func.sum(Order.fiat_amount), 0)).where(
+            Order.trader_id == trader.id,
+            Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
+        )
+    )
+    total_volume = float(vol_r.scalar() or 0)
 
     # Check for any pending bank withdrawal
     from app.models.wallet import WalletTransaction, TransactionType
@@ -959,7 +968,7 @@ async def get_wallet(
     return WalletResponse(
         balance=wallet.balance,
         reserved=wallet.reserved,
-        total_earned=wallet.total_earned,
+        total_volume=total_volume,
         total_withdrawn=wallet.total_withdrawn,
         total_fees_paid=wallet.total_fees_paid,
         daily_volume=wallet.daily_volume,

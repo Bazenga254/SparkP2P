@@ -304,11 +304,22 @@ async def get_trader_wallet(
     result = await db.execute(select(Wallet).where(Wallet.trader_id == trader_id))
     wallet = result.scalar_one_or_none()
     if not wallet:
-        return {"balance": 0, "reserved": 0, "total_earned": 0, "total_withdrawn": 0, "total_fees_paid": 0}
+        return {"balance": 0, "reserved": 0, "total_volume": 0, "total_withdrawn": 0, "total_fees_paid": 0}
+
+    from app.models.order import Order, OrderStatus
+    from sqlalchemy import func
+    vol_r = await db.execute(
+        select(func.coalesce(func.sum(Order.fiat_amount), 0)).where(
+            Order.trader_id == trader_id,
+            Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
+        )
+    )
+    total_volume = float(vol_r.scalar() or 0)
+
     return {
         "balance": wallet.balance,
         "reserved": wallet.reserved,
-        "total_earned": wallet.total_earned,
+        "total_volume": total_volume,
         "total_withdrawn": getattr(wallet, 'total_withdrawn', 0) or 0,
         "total_fees_paid": wallet.total_fees_paid,
     }

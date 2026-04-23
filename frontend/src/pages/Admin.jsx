@@ -1693,7 +1693,7 @@ export default function Admin() {
                           {[
                             ['Balance', w?.balance, '#10b981'],
                             ['Reserved', w?.reserved, '#f59e0b'],
-                            ['Total Earned', w?.total_earned, '#3b82f6'],
+                            ['Total Volume', w?.total_volume, '#3b82f6'],
                             ['Withdrawn', w?.total_withdrawn, '#8b5cf6'],
                           ].map(([label, val, color]) => (
                             <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
