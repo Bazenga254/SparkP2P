@@ -165,42 +165,6 @@ export default function SettingsPanel({ profile, onUpdate }) {
     setTotpEnabled(!!profile?.has_totp);
   }, [profile?.has_totp]);
 
-  // Gmail App Password (IMAP)
-  const [gmailImapEmail, setGmailImapEmail] = useState('');
-  const [gmailImapPassword, setGmailImapPassword] = useState('');
-  const [gmailImapSaved, setGmailImapSaved] = useState(false);
-  const [gmailImapSaving, setGmailImapSaving] = useState(false);
-  const [gmailImapMsg, setGmailImapMsg] = useState('');
-  const [gmailImapShowPw, setGmailImapShowPw] = useState(false);
-
-  // Load Gmail IMAP credentials on mount
-  useEffect(() => {
-    if (window.sparkp2p?.loadGmailCredentials) {
-      window.sparkp2p.loadGmailCredentials().then(r => {
-        if (r?.email) { setGmailImapEmail(r.email); setGmailImapSaved(true); }
-      });
-    }
-  }, []);
-
-  const saveGmailImap = async () => {
-    if (!gmailImapEmail || !gmailImapPassword) { setGmailImapMsg('Enter both email and App Password.'); return; }
-    if (!gmailImapEmail.includes('@')) { setGmailImapMsg('Enter a valid email address.'); return; }
-    if (gmailImapPassword.replace(/\s/g, '').length !== 16) { setGmailImapMsg('App Password must be 16 characters (no spaces).'); return; }
-    setGmailImapSaving(true); setGmailImapMsg('');
-    try {
-      await window.sparkp2p.saveGmailCredentials(gmailImapEmail, gmailImapPassword.replace(/\s/g, ''));
-      setGmailImapSaved(true); setGmailImapPassword('');
-      setGmailImapMsg('Saved! Bot will now use IMAP to read email codes.');
-    } catch (e) { setGmailImapMsg('Failed to save. Try again.'); }
-    setGmailImapSaving(false);
-  };
-
-  const clearGmailImap = async () => {
-    await window.sparkp2p?.clearGmailCredentials?.();
-    setGmailImapSaved(false); setGmailImapEmail(''); setGmailImapPassword('');
-    setGmailImapMsg('Gmail App Password removed.');
-  };
-
   // Check if I&M PIN is already saved on this device
   useEffect(() => {
     if (window.sparkp2p?.hasImPin) {
@@ -636,77 +600,15 @@ export default function SettingsPanel({ profile, onUpdate }) {
         <div className="card" style={{ marginTop: 16 }}>
           <h3 style={{ marginBottom: 4 }}>Gmail — Email OTP</h3>
           <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
-            The bot reads Binance email verification codes from your Gmail. Configure an App Password for the fastest, most reliable method.
+            The bot reads Binance email verification codes directly from Gmail via a connected browser session.
           </p>
-
-          {/* IMAP App Password — primary method */}
-          <div style={{ background: 'var(--bg)', borderRadius: 10, padding: 16, border: '1px solid var(--border)', marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>App Password (Recommended)</span>
-              {gmailImapSaved && <span style={{ fontSize: 11, background: '#10b98120', color: '#10b981', borderRadius: 6, padding: '2px 8px' }}>Active</span>}
-            </div>
-            <p style={{ fontSize: 12, color: '#9ca3af', marginBottom: 12 }}>
-              Reads email codes instantly via IMAP — no browser tab needed. Go to{' '}
-              <strong style={{ color: '#e5e7eb' }}>Google Account → Security → 2-Step Verification → App passwords</strong>{' '}
-              and create one for "Mail".
-            </p>
-            {gmailImapSaved ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13, color: '#9ca3af' }}>{gmailImapEmail}</span>
-                <button
-                  onClick={clearGmailImap}
-                  style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', cursor: 'pointer' }}
-                >
-                  Remove
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <input
-                  type="email"
-                  placeholder="your@gmail.com"
-                  value={gmailImapEmail}
-                  onChange={e => setGmailImapEmail(e.target.value)}
-                  style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: 13 }}
-                />
-                <div style={{ position: 'relative' }}>
-                  <input
-                    type={gmailImapShowPw ? 'text' : 'password'}
-                    placeholder="App Password (16 chars, e.g. abcd efgh ijkl mnop)"
-                    value={gmailImapPassword}
-                    onChange={e => setGmailImapPassword(e.target.value)}
-                    style={{ width: '100%', padding: '10px 40px 10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: 13, boxSizing: 'border-box' }}
-                  />
-                  <button
-                    onClick={() => setGmailImapShowPw(v => !v)}
-                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}
-                  >
-                    {gmailImapShowPw ? 'Hide' : 'Show'}
-                  </button>
-                </div>
-                <button
-                  className="btn-primary"
-                  onClick={saveGmailImap}
-                  disabled={gmailImapSaving}
-                  style={{ alignSelf: 'flex-start' }}
-                >
-                  {gmailImapSaving ? 'Saving...' : 'Save App Password'}
-                </button>
-              </div>
-            )}
-            {gmailImapMsg && (
-              <p style={{ fontSize: 12, marginTop: 8, color: gmailImapMsg.includes('Saved') ? '#10b981' : '#f87171' }}>{gmailImapMsg}</p>
-            )}
-          </div>
-
-          {/* Browser tab fallback — secondary */}
           <div style={{ background: 'var(--bg)', borderRadius: 10, padding: 16, border: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>Browser Session (Fallback)</span>
-              {gmailConfigured && <span style={{ fontSize: 11, background: '#3b82f620', color: '#3b82f6', borderRadius: 6, padding: '2px 8px' }}>Connected</span>}
+              <span style={{ fontSize: 13, fontWeight: 600 }}>Browser Session</span>
+              {gmailConfigured && <span style={{ fontSize: 11, background: '#10b98120', color: '#10b981', borderRadius: 6, padding: '2px 8px' }}>Connected</span>}
             </div>
             <p style={{ fontSize: 12, color: '#9ca3af', marginBottom: 12 }}>
-              Opens Gmail in the bot's Chrome window. Used as fallback if App Password is not configured.
+              Opens Gmail in the bot's Chrome window. Log in once and the bot will read verification codes automatically.
             </p>
             <button
               onClick={() => { wasConnectingRef.current = true; window.sparkp2p?.openGmailTab(); }}
