@@ -25,4 +25,6 @@ contextBridge.exposeInMainWorld('sparkp2p', {
   runAIScan: () => ipcRenderer.invoke('run-ai-scan'),
   restartApp: () => ipcRenderer.invoke('restart-app'),
   manualMpesaSweep: (amount) => ipcRenderer.invoke('manual-mpesa-sweep', amount),
+  getLogs: () => ipcRenderer.invoke('get-bot-logs'),
+  onLog: (callback) => ipcRenderer.on('bot-log', (_event, data) => callback(data)),
 });

@@ -28,6 +28,7 @@ http.createServer(async (req, res) => {
     const pages = browser ? await browser.pages().catch(() => []) : [];
     for (const p of pages) attachActivityListenerToPage(p);
     console.log('[SparkP2P] Bot PAUSED â€” Chrome unlocked for manual use, auto-resume in 3 minutes');
+    sendBotLog('warning', 'Bot paused — Chrome unlocked for manual use');
     res.end(JSON.stringify({ ok: true, paused: true }));
   } else if (req.url === '/resume') {
     pauseNavigation = false;
@@ -35,6 +36,7 @@ http.createServer(async (req, res) => {
     await lockChromeBrowser().catch(() => {}); // Bot takes Chrome back
     mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed"))').catch(() => {});
     console.log('[SparkP2P] Bot RESUMED â€” Chrome locked back to bot');
+    sendBotLog('success', 'Bot resumed — Chrome locked back to bot');
     res.end(JSON.stringify({ ok: true, paused: false }));
   } else if (req.url === '/status') {
     res.end(JSON.stringify({
@@ -163,6 +165,27 @@ let connectingMpesa = false;   // Prevents concurrent connectMpesaPortal() calls
 let mpesaSweepRunning = false; // Prevents concurrent sweep executions
 let pauseInactivityTimer = null; // Auto-resume timer when bot is paused
 const PAUSE_AUTO_RESUME_MS = 3 * 60 * 1000; // 3 minutes
+
+// ── Bot Activity Logs ─────────────────────────────────────────────────────────
+const BOT_LOG_MAX = 400;
+const botLogBuffer = [];
+
+function sanitizeLog(msg) {
+  if (typeof msg !== 'string') msg = String(msg);
+  return msg
+    .replace(/\b(0\d{2})\d{5}(\d{3})\b/g, '$1XXXXX$2')           // Kenyan phone: 07XX XXXXX 123
+    .replace(/\b(254\d{2})\d{5}(\d{3})\b/g, '$1XXXXX$2')          // +254 format
+    .replace(/\b(\d{4})\d{4,8}(\d{4})\b/g, '$1XXXX$2')            // Bank account / long numbers
+    .replace(/(pin|PIN|password|secret|token|otp|totp|code)([:\s=]+)\S+/gi, '$1$2[hidden]')
+    .replace(/\[TOTP[^\]]*\]/gi, '[TOTP hidden]');
+}
+
+function sendBotLog(level, message) {
+  const entry = { level, message: sanitizeLog(message), time: new Date().toISOString() };
+  botLogBuffer.push(entry);
+  if (botLogBuffer.length > BOT_LOG_MAX) botLogBuffer.shift();
+  mainWindow?.webContents.send('bot-log', entry);
+}
 
 function startPauseInactivityTimer() {
   clearPauseInactivityTimer();
@@ -1104,6 +1127,7 @@ async function onLoginDetected() {
   }
 
   console.log('[SparkP2P] Binance connected â€” starting bot');
+  sendBotLog('success', 'Binance connected — bot starting');
   await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
   startPoller();
 }
@@ -1167,6 +1191,7 @@ function notifySetupIncomplete(missing) {
     `window.dispatchEvent(new CustomEvent("setup-incomplete", { detail: ${detail} }))`
   ).catch(() => {});
   console.log(`[SparkP2P] Bot paused â€” missing connections: ${missing.join(', ')}`);
+  sendBotLog('warning', `Setup incomplete — waiting for: ${missing.join(', ')}`);
 }
 
 async function tryAutoStart() {
@@ -2260,6 +2285,7 @@ async function pollCycle() {
       ? `${stats.orders} active order(s) â€” next cycle in ${nextIn}s`
       : `Idle â€” next scan in ${nextIn}s`;
     console.log(`[SparkP2P] Poll complete. ${orderSummary}`);
+    sendBotLog('info', `Poll #${stats.polls} — ${orderSummary}`);
 
   } catch (e) {
     stats.errors++;
@@ -2409,6 +2435,7 @@ async function idleScan(page) {
     if (!orderFirstSeenAt[num]) {
       orderFirstSeenAt[num] = Date.now();
       console.log(`[SparkP2P] New order detected: ${num}`);
+      sendBotLog('info', `New order detected: ${num}`);
     }
   }
   for (const num of Object.keys(orderFirstSeenAt)) {
@@ -2484,6 +2511,7 @@ async function idleScan(page) {
     if (screen === 'order_complete' ||
         lower.includes('sale successful') || lower.includes('order completed') || lower.includes('crypto released')) {
       console.log(`[SparkP2P] âœ… Sell order ${order.orderNumber} COMPLETED â€” reporting release`);
+      sendBotLog('success', `Sell order ${order.orderNumber} completed — crypto released`);
       await fetch(`${API_BASE}/ext/report-release`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -8513,6 +8541,7 @@ async function connectIm() {
           await lockChromeBrowser().catch(() => {});
           connectingIm = false;
           mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("im-connected"))').catch(() => {});
+          sendBotLog('success', 'I&M Bank portal connected');
           // Re-check setup â€” if all 3 now connected, auto-start bot
           const setup = await checkSetupComplete();
           if (setup.complete && !pollerRunning) {
@@ -8614,6 +8643,7 @@ async function executeImWithdrawal(job) {
   const TO_ACCOUNT   = job.destination_account || '00108094726050'; // trader personal KES acc
   const EXPECTED_NAME = (job.destination_name || '').toUpperCase();
   console.log(`[SparkP2P] ðŸ'¸ I&M own-account transfer: KES ${job.amount} → ${TO_ACCOUNT}`);
+  sendBotLog('info', `I&M Bank withdrawal started — KES ${job.amount}`);
 
   try {
     // â”€â”€ STEP 1: Navigate to Own Account Transfer form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -8780,6 +8810,7 @@ async function executeImWithdrawal(job) {
 
     if (successCheck && successCheck.success) {
       console.log(`[SparkP2P] âœ… I&M withdrawal KES ${job.amount} SUCCESS â€” ref: ${successCheck.reference || 'N/A'}`);
+      sendBotLog('success', `I&M Bank withdrawal KES ${job.amount} completed — ref: ${successCheck.reference || 'N/A'}`);
       // Click Close to dismiss the success modal
       const closeBtn = await $x('//button[contains(text(), "Close")]').catch(() => []);
       if (closeBtn.length > 0) await closeBtn[0].click().catch(() => {});
@@ -8905,10 +8936,17 @@ async function executeImLocalTransfer(job) {
   const TO_ACCOUNT    = job.destination_account;
   const EXPECTED_NAME = (job.destination_name || '').toUpperCase().trim();
   console.log(`[SparkP2P] ðŸ'¸ I&M local transfer: KES ${job.amount} → ${TO_ACCOUNT} (${EXPECTED_NAME})`);
+  sendBotLog('info', `I&M Bank local transfer started — KES ${job.amount}`);
 
   let ss;
   try {
-    // STEP 1: Navigate to Local Transfers form
+    // STEP 1: Navigate to Local Transfers form — go via dashboard first so Angular
+    // fully destroys/recreates the form component on retry (avoids dirty state)
+    await imPage.goto(
+      'https://digital.imbank.com/inm-retail/dashboard',
+      { waitUntil: 'networkidle2', timeout: 20000 }
+    ).catch(() => {});
+    await sleep(1000);
     await imPage.goto(
       'https://digital.imbank.com/inm-retail/transfers/local-transfers/form',
       { waitUntil: 'networkidle2', timeout: 30000 }
@@ -9136,88 +9174,119 @@ async function executeImLocalTransfer(job) {
     console.log('[SparkP2P] I&M: Payment purpose set to Other');
     await sleep(500);
 
-    // STEP 9: Click Continue — scroll into view first, then click via evaluate
-    await imPage.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Continue' && !b.disabled);
-      if (btn) btn.scrollIntoView({ block: 'center', behavior: 'instant' });
-    }).catch(() => {});
-    await sleep(500);
-    const continueBtn = await $x('//button[contains(text(), "Continue")]').catch(() => []);
-    if (continueBtn.length > 0) {
-      await continueBtn[0].click();
-    } else {
-      await imPage.evaluate(() => {
-        const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Continue' && !b.disabled);
-        if (btn) btn.click();
-      }).catch(() => {});
+    // STEPS 9-12: Vision loop — handles Continue, Review modal, PIN, and Success
+    // Using coordinate-based clicks throughout (same as buy side) for Angular reliability
+    let txSuccess = false;
+    let txReference = null;
+    let postContinueSubmitted = false;
+    for (let vStep = 0; vStep < 20; vStep++) {
+      await sleep(vStep === 0 ? 500 : 2000);
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      const vAction = await imVisionVerify(
+        ss,
+        `I&M Bank local transfer portal. What screen is currently showing?
+        - "form" = the transfer form with Continue button at the bottom (no popup overlay)
+        - "review" = a popup/modal overlay titled "Local Transfer - Review" with Back, Discard and Submit buttons
+        - "pin" = PIN entry screen with a password/PIN input field
+        - "success" = green checkmark or "Payment Successful" / "Transfer Successful" message
+        - "other" = loading, error, or anything else
+        If success, extract the reference/transaction number.
+        JSON only: {"screen":"form|review|pin|success|other","reference":"ref or null","description":"brief"}`
+      );
+      if (!vAction) continue;
+      console.log(`[SparkP2P] I&M Vision step ${vStep+1}: screen=${vAction.screen} — ${vAction.description}`);
+
+      if (vAction.screen === 'success') {
+        txSuccess = true;
+        txReference = vAction.reference;
+        break;
+      }
+
+      if (vAction.screen === 'form') {
+        // Form visible — click Continue via coordinate-based mouse click
+        const contCoords = await imPage.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button'));
+          const btn = btns.find(b => (b.textContent || '').trim() === 'Continue' && !b.disabled);
+          if (!btn) return null;
+          btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+          const r = btn.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }).catch(() => null);
+        if (contCoords && contCoords.x > 0) {
+          await imPage.mouse.click(contCoords.x, contCoords.y);
+          console.log(`[SparkP2P] I&M: Clicked Continue at (${Math.round(contCoords.x)}, ${Math.round(contCoords.y)})`);
+        } else {
+          const continueXp = await $x('//button[contains(text(), "Continue")]').catch(() => []);
+          if (continueXp.length > 0) await continueXp[0].click().catch(() => {});
+          console.log('[SparkP2P] I&M: Clicked Continue (XPath fallback)');
+        }
+        continue;
+      }
+
+      if (vAction.screen === 'review') {
+        // Review modal — verify name then click Submit via coordinates
+        const submCoords = await imPage.evaluate(() => {
+          // Search inside modal/dialog first
+          const container = document.querySelector('mat-dialog-container, [role="dialog"], .cdk-overlay-pane') || document.body;
+          const btns = Array.from(container.querySelectorAll('button'));
+          const btn = btns.find(b => (b.textContent || '').trim() === 'Submit');
+          if (!btn) return null;
+          btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+          const r = btn.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }).catch(() => null);
+        if (submCoords && submCoords.x > 0) {
+          await imPage.mouse.click(submCoords.x, submCoords.y);
+          console.log(`[SparkP2P] I&M: Clicked Submit at (${Math.round(submCoords.x)}, ${Math.round(submCoords.y)})`);
+          postContinueSubmitted = true;
+        } else {
+          const submitXp = await $x('//button[contains(text(), "Submit")]').catch(() => []);
+          if (submitXp.length > 0) await submitXp[0].click().catch(() => {});
+          console.log('[SparkP2P] I&M: Clicked Submit (XPath fallback)');
+          postContinueSubmitted = true;
+        }
+        await sleep(3000);
+        continue;
+      }
+
+      if (vAction.screen === 'pin') {
+        // Mirror exact PIN approach from executeImBankTransfer Vision loop
+        await imPage.evaluate(() => {
+          const input = document.querySelector('input[type="password"], input[type="tel"]');
+          if (input) { input.click(); input.focus(); }
+        }).catch(() => {});
+        await sleep(300);
+        for (const digit of String(imPin)) {
+          await imPage.keyboard.press(digit);
+          await sleep(150);
+        }
+        await sleep(800);
+        const completeClicked = await imPage.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button'));
+          const btn = btns.find(b => (b.textContent || '').trim().toLowerCase() === 'complete');
+          if (btn) { btn.scrollIntoView({ block: 'center', behavior: 'instant' }); btn.click(); return true; }
+          return false;
+        }).catch(() => false);
+        console.log(`[SparkP2P] I&M: PIN entered + Complete clicked: ${completeClicked}`);
+        await sleep(4000);
+        continue;
+      }
+      // 'other' — loading/transition, just wait
     }
-    console.log('[SparkP2P] I&M: Clicked Continue');
-    await sleep(3000);
 
-    // STEP 10: Review modal — verify beneficiary name then Submit
-    ss = await imPage.screenshot({ encoding: 'base64' });
-    const reviewCheck = await imVisionVerify(
-      ss,
-      `This is the "Local Transfer - Review" confirmation modal.
-      Read the Account Name shown under "Beneficiary bank details".
-      Expected name contains: "${EXPECTED_NAME}".
-      Does it match? Respond JSON only: { "match": true/false, "found_name": "name you read", "description": "brief" }`
-    );
-    if (reviewCheck && reviewCheck.match === false) {
-      console.log(`[SparkP2P] Review name mismatch: expected "${EXPECTED_NAME}", got "${reviewCheck.found_name}" — discarding`);
-      const discardBtn = await $x('//button[contains(text(), "Discard")]').catch(() => []);
-      if (discardBtn.length > 0) await discardBtn[0].click().catch(() => {});
-      throw new Error(`Account name mismatch at review: expected "${EXPECTED_NAME}", got "${reviewCheck.found_name}"`);
-    }
-    console.log(`[SparkP2P] I&M: Review verified (${reviewCheck?.found_name || 'confirmed'}) — submitting`);
-
-    const submitBtn = await $x('//button[contains(text(), "Submit")]').catch(() => []);
-    if (submitBtn.length > 0) {
-      await submitBtn[0].click();
-    } else {
-      await imPage.click('button[type="submit"]').catch(() => {});
-    }
-    console.log('[SparkP2P] I&M: Clicked Submit');
-    await sleep(2000);
-
-    // STEP 11: Enter PIN then Complete
-    await imPage.waitForSelector('input[type="password"], input[placeholder*="PIN" i]', { timeout: 10000 });
-    const pinInput = await imPage.$('input[type="password"], input[placeholder*="PIN" i]').catch(() => null);
-    if (!pinInput) throw new Error('PIN input not found');
-    await pinInput.click();
-    await pinInput.type(imPin, { delay: 80 });
-    console.log('[SparkP2P] I&M: Entered PIN');
-    await sleep(500);
-
-    const completeBtn = await $x('//button[contains(text(), "Complete")]').catch(() => []);
-    if (completeBtn.length > 0) {
-      await completeBtn[0].click();
-    } else {
-      await imPage.click('button[type="submit"]').catch(() => {});
-    }
-    console.log('[SparkP2P] I&M: Clicked Complete');
-    await sleep(4000);
-
-    // STEP 12: Verify success
-    ss = await imPage.screenshot({ encoding: 'base64' });
-    const successCheck = await imVisionVerify(
-      ss,
-      `Does this screen show "Payment Success" or a green success confirmation?
-      Extract the Reference ID or transaction number if visible.
-      Respond JSON only: { "success": true/false, "reference": "ref or null", "description": "brief" }`
-    );
-    if (successCheck && successCheck.success) {
-      console.log(`[SparkP2P] I&M local transfer KES ${job.amount} SUCCESS — ref: ${successCheck.reference || 'N/A'}`);
+    if (txSuccess) {
+      console.log(`[SparkP2P] I&M local transfer KES ${job.amount} SUCCESS — ref: ${txReference || 'N/A'}`);
+      sendBotLog('success', `I&M Bank local transfer KES ${job.amount} completed — ref: ${txReference || 'N/A'}`);
       const closeBtn = await $x('//button[contains(text(), "Close")]').catch(() => []);
       if (closeBtn.length > 0) await closeBtn[0].click().catch(() => {});
       await sleep(1000);
       await fetch(`${API_BASE}/ext/bank-withdrawal-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ tx_id: job.id, reference: successCheck.reference }),
+        body: JSON.stringify({ tx_id: job.id, reference: txReference }),
       }).catch(() => {});
     } else {
-      throw new Error(`Payment success not detected: ${successCheck?.description || 'unknown state'}`);
+      throw new Error('Transfer did not complete: PIN/success screen not detected after 10 attempts');
     }
 
   } catch (e) {
@@ -9386,6 +9455,7 @@ async function connectMpesaPortal() {
             }).catch(() => {});
           }
           mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("mpesa-portal-connected"))').catch(() => {});
+          sendBotLog('success', 'M-Pesa Organization Portal connected');
         }
       } catch (e) { verifying = false; }
     }, 3000);
@@ -9400,18 +9470,31 @@ function startMpesaOrgKeepAlive() {
   mpesaOrgKeepAliveTimer = setInterval(async () => {
     if (!mpesaOrgPage || mpesaOrgPage.isClosed()) return;
     try {
-      // Silent keep-alive: navigate to home page to reset session timer
-      // Avoid navigating away from initiate page if a sweep is in progress
-      if (!mpesaSweepRunning) {
-        await mpesaOrgPage.evaluate(() => {
-          fetch('/mainPage', { method: 'HEAD' }).catch(() => {});
-        }).catch(() => {});
-        // Refresh locally saved cookies so next reconnect uses latest tokens
-        const mpesaKaCookies = await mpesaOrgPage.cookies(MPESA_ORG_URL).catch(() => []);
-        if (mpesaKaCookies.length) saveMpesaCookiesLocal(mpesaKaCookies);
+      if (mpesaSweepRunning) return; // don't interrupt a sweep
+
+      const currentUrl = mpesaOrgPage.url();
+
+      // If portal has logged us out, reconnect automatically
+      if (currentUrl.includes('/login') || currentUrl === MPESA_ORG_URL + '/' || currentUrl === MPESA_ORG_URL) {
+        console.log('[SparkP2P] M-PESA portal session expired — reconnecting');
+        clearInterval(mpesaOrgKeepAliveTimer);
+        mpesaOrgKeepAliveTimer = null;
+        connectMpesaPortal().catch(() => {});
+        return;
       }
-      console.log('[SparkP2P] M-PESA portal keep-alive sent');
-    } catch (e) {}
+
+      // Navigate to the initiate page to reset the server-side session timer.
+      // A HEAD fetch is not enough — the portal (Huawei) only counts real page loads.
+      await mpesaOrgPage.goto(MPESA_ORG_INITIATE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+
+      // Refresh locally saved cookies so next reconnect uses latest tokens
+      const mpesaKaCookies = await mpesaOrgPage.cookies(MPESA_ORG_URL).catch(() => []);
+      if (mpesaKaCookies.length) saveMpesaCookiesLocal(mpesaKaCookies);
+
+      console.log('[SparkP2P] M-PESA portal keep-alive: navigated to initiate page');
+    } catch (e) {
+      console.log('[SparkP2P] M-PESA portal keep-alive error:', e.message);
+    }
   }, MPESA_ORG_KEEP_ALIVE_INTERVAL);
 }
 
@@ -9961,6 +10044,7 @@ async function executeMpesaSweep(sweepJob) {
     }
 
     console.log(`[SparkP2P] âœ… M-PESA sweep KES ${amount} complete`);
+    sendBotLog('success', `M-Pesa paybill sweep KES ${amount} complete — funds transferred to I&M`);
     mpesaSweepRunning = false;
 
     // Immediately trigger the I&M bank transfer now that funds have arrived
@@ -10083,6 +10167,7 @@ ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.
 ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; console.log('[SparkP2P] AI key set (legacy)'); return { ok: true }; });
 ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; saveAnthropicKey(key); aiScanner.initAI(key); console.log('[SparkP2P] Claude configured and saved to disk'); return { ok: true }; });
 ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasTOTP: !!totpSecret, hasAI: !!anthropicApiKey, hasVision: !!anthropicApiKey, version: app.getVersion() }));
+ipcMain.handle('get-bot-logs', () => botLogBuffer);
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
 ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
 ipcMain.handle('restart-app', () => { autoUpdater.quitAndInstall(); });

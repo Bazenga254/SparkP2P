@@ -379,7 +379,10 @@ export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [orders, setOrders] = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [withdrawalTxns, setWithdrawalTxns] = useState([]);
   const [activeTab, setActiveTab] = useState('overview');
+  const [botLogs, setBotLogs] = useState([]);
+  const logsEndRef = useRef(null);
   const [txnTab, setTxnTab] = useState('deposits');
   const [refreshing, setRefreshing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
@@ -423,9 +426,10 @@ export default function Dashboard() {
         getWallet(),
         getOrderStats(),
         getOrders({ limit: 20 }),
-        getWalletTransactions(20),
+        getWalletTransactions(50, 'positive'),
         getSessionHealth(),
         getBinanceAccountData(),
+        getWalletTransactions(100, 'negative'),
       ]);
       if (results[0].status === 'fulfilled') setProfile(results[0].value.data);
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
@@ -434,6 +438,7 @@ export default function Dashboard() {
       if (results[4].status === 'fulfilled') setTransactions(results[4].value.data);
       if (results[5].status === 'fulfilled') setSessionHealth(results[5].value.data);
       if (results[6].status === 'fulfilled') setBinanceData(results[6].value.data);
+      if (results[7].status === 'fulfilled') setWithdrawalTxns(results[7].value.data);
 
       // Fetch notifications
       try {
@@ -528,7 +533,8 @@ export default function Dashboard() {
           setWallet(prev => {
             if (prev && res.data.balance !== prev.balance) {
               // Balance changed — also refresh transactions
-              getWalletTransactions(20).then(r => { if (r.data) setTransactions(r.data); }).catch(() => {});
+              getWalletTransactions(50, 'positive').then(r => { if (r.data) setTransactions(r.data); }).catch(() => {});
+              getWalletTransactions(100, 'negative').then(r => { if (r.data) setWithdrawalTxns(r.data); }).catch(() => {});
             }
             return res.data;
           });
@@ -599,6 +605,22 @@ export default function Dashboard() {
       clearTimeout(timeout);
     };
   }, [scanning]);
+
+  // Bot activity logs — only available in Electron desktop app
+  useEffect(() => {
+    if (!window.sparkp2p?.getLogs) return;
+    window.sparkp2p.getLogs().then(logs => setBotLogs(logs || []));
+    window.sparkp2p.onLog(entry => {
+      setBotLogs(prev => {
+        const next = [...prev, entry];
+        return next.length > 400 ? next.slice(-400) : next;
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'logs') logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [botLogs, activeTab]);
 
   const handleWithdraw = async () => {
     if (!wallet || wallet.balance <= 0) return;
@@ -963,7 +985,7 @@ export default function Dashboard() {
       </header>
 
       <nav className="dash-tabs">
-        {['overview', 'orders', 'transactions', 'settings'].map((tab) => (
+        {['overview', 'orders', 'transactions', 'logs', 'settings'].map((tab) => (
           <button
             key={tab}
             className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
@@ -1492,11 +1514,10 @@ export default function Dashboard() {
             {/* Withdrawals Tab */}
             {txnTab === 'withdrawals' && (() => {
               // Group platform_fee + settlement_fee at the same timestamp into one "fees" row
-              const negative = transactions.filter(t => t.amount < 0);
               const grouped = [];
               const feeMap = {}; // key = minute-truncated timestamp → accumulated fee amount
 
-              negative.forEach(txn => {
+              withdrawalTxns.forEach(txn => {
                 const minuteKey = txn.created_at.slice(0, 16); // "2026-04-01T11:44"
                 if (txn.type === 'platform_fee' || txn.type === 'settlement_fee') {
                   if (!feeMap[minuteKey]) {
@@ -1526,15 +1547,18 @@ export default function Dashboard() {
                       </thead>
                       <tbody>
                         {grouped.map((txn) => {
+                          const method = (txn.settlement_method || '').toLowerCase();
                           const desc = (txn.description || '').toLowerCase();
                           let destination = null;
                           if (txn.type === 'withdrawal') {
-                            if (desc.includes('mpesa') || desc.includes('m-pesa') || desc.includes('safaricom')) {
+                            if (method === 'mpesa') {
                               destination = { label: 'Safaricom M-Pesa', color: '#10b981', bg: 'rgba(16,185,129,0.1)' };
-                            } else if (desc.includes('i&m') || desc.includes('im bank') || desc.includes('i & m')) {
+                            } else if (method === 'bank' || method === 'bank_paybill') {
                               destination = { label: 'I&M Bank', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' };
-                            } else if (desc.includes('bank') || desc.includes('paybill') || desc.includes('till')) {
-                              destination = { label: 'Bank', color: '#8b5cf6', bg: 'rgba(139,92,246,0.1)' };
+                            } else if (desc.includes('mpesa') || desc.includes('m-pesa') || desc.includes('safaricom')) {
+                              destination = { label: 'Safaricom M-Pesa', color: '#10b981', bg: 'rgba(16,185,129,0.1)' };
+                            } else if (desc.includes('bank') || desc.includes('paybill')) {
+                              destination = { label: 'I&M Bank', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' };
                             }
                           }
                           return (
@@ -1569,6 +1593,42 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} />}
+
+        {/* ── Logs Tab ── */}
+        {activeTab === 'logs' && (
+          <div className="card" style={{ fontFamily: 'monospace', fontSize: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h3 style={{ margin: 0 }}>Activity Logs</h3>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={{ color: '#6b7280', fontSize: 11 }}>{botLogs.length} entries</span>
+                <button onClick={() => setBotLogs([])} style={{ background: '#374151', border: 'none', color: '#9ca3af', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>Clear</button>
+              </div>
+            </div>
+            {!window.sparkp2p ? (
+              <p style={{ color: '#6b7280', textAlign: 'center', padding: 40 }}>Logs are only available in the desktop app.</p>
+            ) : botLogs.length === 0 ? (
+              <p style={{ color: '#6b7280', textAlign: 'center', padding: 40 }}>No activity yet. Logs will appear here as the bot runs.</p>
+            ) : (
+              <div style={{ maxHeight: 520, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {botLogs.map((log, i) => {
+                  const colors = { success: '#10b981', error: '#ef4444', warning: '#f59e0b', info: '#6b7280' };
+                  const badges = { success: '✓', error: '✕', warning: '⚠', info: '·' };
+                  const color = colors[log.level] || '#6b7280';
+                  const badge = badges[log.level] || '·';
+                  const time = new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                  return (
+                    <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '4px 6px', borderRadius: 4, background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                      <span style={{ color, minWidth: 14, marginTop: 1 }}>{badge}</span>
+                      <span style={{ color: '#374151', minWidth: 70, fontSize: 10, marginTop: 2 }}>{time}</span>
+                      <span style={{ color: log.level === 'error' ? '#fca5a5' : log.level === 'success' ? '#6ee7b7' : log.level === 'warning' ? '#fcd34d' : '#9ca3af', flex: 1, wordBreak: 'break-word' }}>{log.message}</span>
+                    </div>
+                  );
+                })}
+                <div ref={logsEndRef} />
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
       {/* Withdraw OTP Modal */}

@@ -1210,13 +1210,23 @@ async def simulate_withdrawal(
 async def get_wallet_transactions(
     limit: int = 50,
     offset: int = 0,
+    direction: str = None,   # "positive" | "negative" | None (all)
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
     """Get wallet transaction history."""
+    filters = [
+        WalletTransaction.trader_id == trader.id,
+        ~WalletTransaction.description.contains("[CANCELLED"),
+    ]
+    if direction == "negative":
+        filters.append(WalletTransaction.amount < 0)
+    elif direction == "positive":
+        filters.append(WalletTransaction.amount > 0)
+
     result = await db.execute(
         select(WalletTransaction)
-        .where(WalletTransaction.trader_id == trader.id)
+        .where(*filters)
         .order_by(WalletTransaction.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -1231,6 +1241,8 @@ async def get_wallet_transactions(
             "balance_after": t.balance_after,
             "description": t.description,
             "status": t.status or "completed",
+            "settlement_method": t.settlement_method or "",
+            "destination": t.destination or "",
             "created_at": t.created_at.isoformat(),
         }
         for t in transactions

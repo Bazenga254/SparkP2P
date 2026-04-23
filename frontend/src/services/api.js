@@ -37,7 +37,7 @@ export const updateTradingConfig = (data) => api.put('/traders/trading-config', 
 export const getWallet = () => api.get('/traders/wallet');
 export const requestWithdrawalOtp = () => api.post('/traders/wallet/withdraw/request-otp');
 export const requestWithdrawal = (otp_code) => api.post('/traders/wallet/withdraw', { otp_code });
-export const getWalletTransactions = (limit = 50) => api.get(`/traders/wallet/transactions?limit=${limit}`);
+export const getWalletTransactions = (limit = 50, direction = null) => api.get(`/traders/wallet/transactions?limit=${limit}${direction ? '&direction=' + direction : ''}`);
 export const getSessionHealth = () => api.get('/traders/session-health');
 export const updateProfile = (data) => api.put('/traders/profile', data);
 export const setSecurityQuestion = (data) => api.post('/traders/security-question', data);
@@ -103,8 +103,10 @@ export const uploadSupportAttachment = (file) => { const fd = new FormData(); fd
 
 // Withdrawals
 export const getAdminWithdrawals = (params = {}) => api.get('/admin/withdrawals', { params });
+export const getRevenueBreakdown = (params = {}) => api.get('/admin/revenue/breakdown', { params });
 export const markWithdrawalComplete = (txId) => api.put(`/admin/withdrawals/${txId}/complete`);
 export const markWithdrawalPending = (txId) => api.put(`/admin/withdrawals/${txId}/pending`);
+export const deleteWithdrawal = (txId) => api.delete(`/admin/withdrawals/${txId}`);
 
 export const getTodayStats = () => api.get('/traders/stats/today');
 

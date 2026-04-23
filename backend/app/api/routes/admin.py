@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select, func, case, extract
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -75,7 +76,10 @@ async def admin_dashboard(
     db: AsyncSession = Depends(get_db),
 ):
     """Get admin dashboard overview."""
-    today = func.current_date()
+    # Use Kenya time (EAT = UTC+3) so "today" matches the admin's local date
+    EAT = timezone(timedelta(hours=3))
+    now_eat = datetime.now(EAT)
+    today_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
     # Total traders
     result = await db.execute(select(func.count(Trader.id)))
@@ -93,29 +97,28 @@ async def admin_dashboard(
         select(
             func.count(Order.id),
             func.coalesce(func.sum(Order.fiat_amount), 0),
-            func.coalesce(func.sum(Order.platform_fee), 0),
         ).where(
-            func.date(Order.created_at) == today,
+            Order.created_at >= today_start,
             Order.status.in_(completed_statuses),
         )
     )
-    today_orders, today_volume, today_order_revenue = result.one()
+    today_orders, today_volume = result.one()
 
-    # Today's wallet fees (settlement markup)
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Today's withdrawal fees — exclude cancelled/refunded fees
     result = await db.execute(
         select(
-            func.coalesce(func.sum(func.abs(WalletTransaction.amount)), 0),
+            func.coalesce(func.sum(-WalletTransaction.amount), 0),
         ).where(
             WalletTransaction.created_at >= today_start,
             WalletTransaction.transaction_type.in_([
                 TransactionType.PLATFORM_FEE,
                 TransactionType.DAILY_VOLUME_FEE,
             ]),
+            WalletTransaction.amount < 0,
+            ~WalletTransaction.description.contains('[CANCELLED'),
         )
     )
-    today_wallet_fees = float(result.scalar() or 0)
-    today_revenue = float(today_order_revenue) + today_wallet_fees
+    today_revenue = float(result.scalar() or 0)
 
     # Completed orders today (subset of the above)
     completed_today = today_orders
@@ -828,71 +831,37 @@ async def admin_analytics(
     db: AsyncSession = Depends(get_db),
 ):
     """Comprehensive platform analytics."""
+    EAT = timezone(timedelta(hours=3))  # Africa/Nairobi = UTC+3
     now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    now_eat = now.astimezone(EAT)
+    today_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     week_start = now - timedelta(days=7)
     month_start = now - timedelta(days=30)
     year_start = now - timedelta(days=365)
 
     async def _revenue_for_period(start):
-        """Sum ALL platform revenue for a period:
-        1. Order fees (platform_fee + settlement_fee from orders)
-        2. Wallet fees (PLATFORM_FEE transactions = settlement markup KES 25)
-        """
-        # From orders
-        q1 = select(
-            func.coalesce(func.sum(Order.platform_fee), 0),
-            func.coalesce(func.sum(Order.settlement_fee), 0),
-        ).where(
-            Order.created_at >= start,
-            Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
-        )
-        r1 = await db.execute(q1)
-        order_pf, order_sf = r1.one()
-
-        # From wallet transactions (settlement markup = PLATFORM_FEE + DAILY_VOLUME_FEE)
-        q2 = select(
-            func.coalesce(func.sum(func.abs(WalletTransaction.amount)), 0),
-        ).where(
-            WalletTransaction.created_at >= start,
+        """Sum withdrawal-based platform revenue (PLATFORM_FEE + DAILY_VOLUME_FEE wallet charges).
+        P2P order trading fees are not tracked and excluded."""
+        where = [
             WalletTransaction.transaction_type.in_([
                 TransactionType.PLATFORM_FEE,
                 TransactionType.DAILY_VOLUME_FEE,
             ]),
-        )
-        r2 = await db.execute(q2)
-        wallet_fees = float(r2.scalar() or 0)
-
-        return float(order_pf) + float(order_sf) + wallet_fees
+            WalletTransaction.amount < 0,
+            ~WalletTransaction.description.contains('[CANCELLED'),
+        ]
+        if start is not None:
+            where.append(WalletTransaction.created_at >= start)
+        q = select(func.coalesce(func.sum(-WalletTransaction.amount), 0)).where(*where)
+        return float((await db.execute(q)).scalar() or 0)
 
     today_revenue = await _revenue_for_period(today_start)
     week_revenue = await _revenue_for_period(week_start)
     month_revenue = await _revenue_for_period(month_start)
     year_revenue = await _revenue_for_period(year_start)
 
-    # Total platform profit (all time)
-    r = await db.execute(
-        select(
-            func.coalesce(func.sum(Order.platform_fee), 0),
-            func.coalesce(func.sum(Order.settlement_fee), 0),
-        ).where(Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]))
-    )
-    total_pf, total_sf = r.one()
-
-    # Add wallet platform fees (all time) — includes daily volume fees
-    r_wf = await db.execute(
-        select(
-            func.coalesce(func.sum(func.abs(WalletTransaction.amount)), 0),
-        ).where(
-            WalletTransaction.transaction_type.in_([
-                TransactionType.PLATFORM_FEE,
-                TransactionType.DAILY_VOLUME_FEE,
-            ])
-        )
-    )
-    total_wallet_fees = float(r_wf.scalar() or 0)
-
-    platform_profit = float(total_pf) + float(total_sf) + total_wallet_fees
+    # Total platform profit (all time) = withdrawal fees only
+    platform_profit = await _revenue_for_period(None)
 
     # Monthly volumes - last 6 months
     six_months_ago = now - timedelta(days=180)
@@ -1577,6 +1546,171 @@ async def mark_withdrawal_pending(
     tx.processed_at = None
     await db.commit()
     return {"status": "pending"}
+
+
+@router.delete("/withdrawals/{tx_id}")
+async def delete_withdrawal(
+    tx_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently delete a withdrawal record (for removing duplicates/stuck pending).
+    Also cancels the paired PLATFORM_FEE so it is excluded from revenue calculations."""
+    result = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.id == tx_id,
+            WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+        )
+    )
+    tx = result.scalar_one_or_none()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Withdrawal not found")
+
+    # Cancel the paired PLATFORM_FEE (same trader, same second) so it no longer counts as revenue
+    fee_result = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.trader_id == tx.trader_id,
+            WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE,
+            func.date_trunc("second", WalletTransaction.created_at) == func.date_trunc("second", tx.created_at),
+            ~WalletTransaction.description.contains("[CANCELLED"),
+        )
+    )
+    paired_fee = fee_result.scalar_one_or_none()
+    if paired_fee:
+        paired_fee.description = (paired_fee.description or "") + " [CANCELLED - withdrawal deleted]"
+
+    await db.delete(tx)
+    await db.commit()
+    return {"deleted": tx_id}
+
+
+# ── Revenue Breakdown ──────────────────────────────────────────────────────────
+
+@router.get("/revenue/breakdown")
+async def revenue_breakdown(
+    period: str = Query("all"),   # today | week | month | all
+    method: str = Query("all"),   # mpesa | bank | all
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, le=200),
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-transaction fee breakdown with M-Pesa vs I&M Bank split."""
+    from sqlalchemy import case as sa_case, text as sa_text
+
+    now = datetime.now(timezone.utc)
+    period_starts = {
+        "today": now.replace(hour=0, minute=0, second=0, microsecond=0),
+        "week":  now - timedelta(days=7),
+        "month": now - timedelta(days=30),
+    }
+    start = period_starts.get(period)
+
+    # Base filter: only real fee charges (not cancelled)
+    base_where = [
+        WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE,
+        WalletTransaction.amount < 0,
+        ~WalletTransaction.description.contains("[CANCELLED"),
+    ]
+    if start:
+        base_where.append(WalletTransaction.created_at >= start)
+
+    # Alias for the paired WITHDRAWAL transaction (same trader, same second)
+    W = aliased(WalletTransaction)
+
+    # Join PLATFORM_FEE to its paired WITHDRAWAL via trader_id + timestamp match
+    q = (
+        select(
+            WalletTransaction.id,
+            WalletTransaction.created_at,
+            WalletTransaction.amount.label("fee"),
+            WalletTransaction.description,
+            Trader.full_name.label("trader_name"),
+            Trader.phone.label("trader_phone"),
+            W.amount.label("withdrawal_amount"),
+            W.settlement_method.label("method"),
+            W.destination.label("destination"),
+        )
+        .join(Trader, Trader.id == WalletTransaction.trader_id)
+        .join(
+            W,
+            (W.trader_id == WalletTransaction.trader_id)
+            & (W.transaction_type == TransactionType.WITHDRAWAL)
+            & (func.date_trunc("second", W.created_at) == func.date_trunc("second", WalletTransaction.created_at)),
+        )
+        .where(*base_where)
+    )
+
+    if method != "all":
+        if method == "mpesa":
+            q = q.where(W.settlement_method == "mpesa")
+        else:
+            q = q.where(W.settlement_method.in_(["bank", "bank_paybill"]))
+
+    # Totals query (same filters, no pagination)
+    total_q = select(func.count()).select_from(q.subquery())
+    total = (await db.execute(total_q)).scalar_one()
+
+    # Summary by method
+    summary_q = (
+        select(
+            W.settlement_method,
+            func.count(WalletTransaction.id).label("count"),
+            func.sum(-WalletTransaction.amount).label("total_fee"),
+        )
+        .join(Trader, Trader.id == WalletTransaction.trader_id)
+        .join(
+            W,
+            (W.trader_id == WalletTransaction.trader_id)
+            & (W.transaction_type == TransactionType.WITHDRAWAL)
+            & (func.date_trunc("second", W.created_at) == func.date_trunc("second", WalletTransaction.created_at)),
+        )
+        .where(*base_where)
+        .group_by(W.settlement_method)
+    )
+    summary_rows = (await db.execute(summary_q)).all()
+
+    mpesa_total = 0.0
+    bank_total = 0.0
+    for row in summary_rows:
+        m = (row.settlement_method or "").lower()
+        val = float(row.total_fee or 0)
+        if m == "mpesa":
+            mpesa_total = val
+        elif m in ("bank", "bank_paybill"):
+            bank_total = val
+
+    # Paginate
+    q = q.order_by(WalletTransaction.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    rows = (await db.execute(q)).all()
+
+    transactions = []
+    for row in rows:
+        m = (row.method or "").lower()
+        method_label = "M-Pesa" if m == "mpesa" else "I&M Bank" if m in ("bank", "bank_paybill") else "Unknown"
+        transactions.append({
+            "id": row.id,
+            "date": row.created_at.isoformat() if row.created_at else "",
+            "trader_name": row.trader_name or "—",
+            "trader_phone": row.trader_phone or "",
+            "method": method_label,
+            "withdrawal_amount": abs(float(row.withdrawal_amount or 0)),
+            "fee": abs(float(row.fee or 0)),
+            "description": row.description or "",
+            "destination": row.destination or "",
+        })
+
+    return {
+        "transactions": transactions,
+        "total": total,
+        "page": page,
+        "pages": max(1, -(-total // limit)),
+        "summary": {
+            "total": round(mpesa_total + bank_total, 2),
+            "mpesa": round(mpesa_total, 2),
+            "bank": round(bank_total, 2),
+        },
+    }
 
 
 # ── Auto-Sweep History ─────────────────────────────────────────────────────────

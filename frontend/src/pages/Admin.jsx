@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock } from 'lucide-react';
@@ -151,6 +151,13 @@ export default function Admin() {
   const [wdPage, setWdPage] = useState(1);
   const [wdLoading, setWdLoading] = useState(false);
   const [wdActionLoading, setWdActionLoading] = useState(null); // tx id being actioned
+
+  // Revenue breakdown
+  const [revBreakdown, setRevBreakdown] = useState(null);
+  const [revPeriod, setRevPeriod] = useState('all');
+  const [revMethod, setRevMethod] = useState('all');
+  const [revPage, setRevPage] = useState(1);
+  const [revLoading, setRevLoading] = useState(false);
 
   // Auto-Sweeps (M-Pesa paybill → I&M Bank)
   const [sweeps, setSweeps] = useState([]);
@@ -346,6 +353,29 @@ export default function Admin() {
       console.error('Mark pending error:', err);
     }
     setWdActionLoading(null);
+  };
+
+  const handleDeleteWithdrawal = async (txId) => {
+    if (!window.confirm('Permanently delete this withdrawal record? This cannot be undone.')) return;
+    setWdActionLoading(txId);
+    try {
+      await deleteWithdrawal(txId);
+      loadWithdrawals();
+    } catch (err) {
+      console.error('Delete withdrawal error:', err);
+    }
+    setWdActionLoading(null);
+  };
+
+  const loadRevenueBreakdown = async (period = revPeriod, method = revMethod, page = revPage) => {
+    setRevLoading(true);
+    try {
+      const res = await getRevenueBreakdown({ period, method, page, limit: 50 });
+      setRevBreakdown(res.data);
+    } catch (err) {
+      console.error('Revenue breakdown error:', err);
+    }
+    setRevLoading(false);
   };
 
   const handleAdminFileSelect = async (ticketId, e) => {
@@ -641,6 +671,7 @@ export default function Admin() {
   };
 
   const fmtKES = (v) => `KES ${(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const fmtKESFee = (v) => `KES ${(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   // Compute max volume for chart scaling
   const maxVolume = analytics?.monthly_volumes?.length
@@ -759,7 +790,7 @@ export default function Admin() {
                   <button
                     key={item.key}
                     className={`adm-nav-item ${activeTab === item.key ? 'active' : ''}`}
-                    onClick={() => { setActiveTab(item.key); setSidebarOpen(false); }}
+                    onClick={() => { setActiveTab(item.key); setSidebarOpen(false); if (item.key === 'revenue') loadRevenueBreakdown('all', 'all', 1); }}
                   >
                     <Icon size={18} />
                     <span>{item.label}</span>
@@ -1178,19 +1209,19 @@ export default function Admin() {
                     <div className="adm-profit-rows">
                       <div className="adm-profit-row">
                         <span>Today</span>
-                        <span className="adm-profit-val">{fmtKES(analytics?.revenue?.today)}</span>
+                        <span className="adm-profit-val">{fmtKESFee(analytics?.revenue?.today)}</span>
                       </div>
                       <div className="adm-profit-row">
                         <span>This Week</span>
-                        <span className="adm-profit-val">{fmtKES(analytics?.revenue?.week)}</span>
+                        <span className="adm-profit-val">{fmtKESFee(analytics?.revenue?.week)}</span>
                       </div>
                       <div className="adm-profit-row">
                         <span>This Month</span>
-                        <span className="adm-profit-val">{fmtKES(analytics?.revenue?.month)}</span>
+                        <span className="adm-profit-val">{fmtKESFee(analytics?.revenue?.month)}</span>
                       </div>
                       <div className="adm-profit-row">
                         <span>This Year</span>
-                        <span className="adm-profit-val">{fmtKES(analytics?.revenue?.year)}</span>
+                        <span className="adm-profit-val">{fmtKESFee(analytics?.revenue?.year)}</span>
                       </div>
                     </div>
                   </div>
@@ -2353,63 +2384,118 @@ export default function Admin() {
           {/* ==================== REVENUE ==================== */}
           {activeTab === 'revenue' && (
             <>
-              {/* Revenue summary cards */}
-              <div className="adm-stat-grid" style={{ marginBottom: 16 }}>
-                <div className="adm-stat-card" style={{ '--card-accent': '#10b981' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Today's Revenue</span>
-                    <span className="adm-stat-value">{fmtKES(analytics?.revenue?.today)}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
-                    <DollarSign size={22} />
-                  </div>
+              {/* ── Period + Method filters ── */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
+                  {[['all','All Time'], ['month','This Month'], ['week','This Week'], ['today','Today']].map(([val, label]) => (
+                    <button key={val} onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revMethod, 1); }}
+                      style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                        background: revPeriod === val ? '#f59e0b' : 'transparent', color: revPeriod === val ? '#000' : '#9ca3af' }}>
+                      {label}
+                    </button>
+                  ))}
                 </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#3b82f6' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Weekly Revenue</span>
-                    <span className="adm-stat-value">{fmtKES(analytics?.revenue?.week)}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
-                    <TrendingUp size={22} />
-                  </div>
-                </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#f59e0b' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Monthly Revenue</span>
-                    <span className="adm-stat-value">{fmtKES(analytics?.revenue?.month)}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>
-                    <TrendingUp size={22} />
-                  </div>
-                </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#8b5cf6' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">All-Time Profit</span>
-                    <span className="adm-stat-value">{fmtKES(analytics?.platform_profit)}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }}>
-                    <DollarSign size={22} />
-                  </div>
+                <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
+                  {[['all','All Methods'], ['mpesa','M-Pesa'], ['bank','I&M Bank']].map(([val, label]) => (
+                    <button key={val} onClick={() => { setRevMethod(val); setRevPage(1); loadRevenueBreakdown(revPeriod, val, 1); }}
+                      style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                        background: revMethod === val ? '#10b981' : 'transparent', color: revMethod === val ? '#000' : '#9ca3af' }}>
+                      {label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Monthly breakdown table */}
-              <div className="adm-card">
-                <div className="adm-card-header">
-                  <h3>Monthly Breakdown</h3>
+              {/* ── Summary cards: Total + M-Pesa + I&M ── */}
+              <div className="adm-stat-grid" style={{ marginBottom: 16 }}>
+                <div className="adm-stat-card" style={{ '--card-accent': '#10b981' }}>
+                  <div className="adm-stat-info">
+                    <span className="adm-stat-label">Total Revenue</span>
+                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.total ?? analytics?.platform_profit)}</span>
+                  </div>
+                  <div className="adm-stat-icon" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}><DollarSign size={22} /></div>
                 </div>
+                <div className="adm-stat-card" style={{ '--card-accent': '#e11d48' }}>
+                  <div className="adm-stat-info">
+                    <span className="adm-stat-label">M-Pesa Revenue</span>
+                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.mpesa ?? 0)}</span>
+                  </div>
+                  <div className="adm-stat-icon" style={{ background: 'rgba(225,29,72,0.15)', color: '#e11d48' }}><DollarSign size={22} /></div>
+                </div>
+                <div className="adm-stat-card" style={{ '--card-accent': '#3b82f6' }}>
+                  <div className="adm-stat-info">
+                    <span className="adm-stat-label">I&M Bank Revenue</span>
+                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.bank ?? 0)}</span>
+                  </div>
+                  <div className="adm-stat-icon" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}><DollarSign size={22} /></div>
+                </div>
+              </div>
+
+              {/* ── Per-transaction breakdown table ── */}
+              <div className="adm-card" style={{ marginBottom: 16 }}>
+                <div className="adm-card-header"><h3>Fee Transactions</h3></div>
+                {revLoading ? (
+                  <p className="adm-empty">Loading...</p>
+                ) : revBreakdown?.transactions?.length > 0 ? (
+                  <>
+                    <div className="adm-table-wrap">
+                      <table className="adm-table">
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Trader</th>
+                            <th>Method</th>
+                            <th>Destination</th>
+                            <th style={{ textAlign: 'right' }}>Withdrawal</th>
+                            <th style={{ textAlign: 'right' }}>Fee Earned</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {revBreakdown.transactions.map((tx) => (
+                            <tr key={tx.id}>
+                              <td style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>{new Date(tx.date).toLocaleString()}</td>
+                              <td>
+                                <div style={{ fontWeight: 500, fontSize: 13 }}>{tx.trader_name}</div>
+                                <div style={{ fontSize: 11, color: '#6b7280' }}>{tx.trader_phone}</div>
+                              </td>
+                              <td>
+                                <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600,
+                                  background: tx.method === 'M-Pesa' ? 'rgba(225,29,72,0.15)' : 'rgba(59,130,246,0.15)',
+                                  color: tx.method === 'M-Pesa' ? '#e11d48' : '#3b82f6' }}>
+                                  {tx.method}
+                                </span>
+                              </td>
+                              <td style={{ fontSize: 12, color: '#6b7280' }}>{tx.destination || '—'}</td>
+                              <td style={{ textAlign: 'right', fontSize: 13 }}>{fmtKES(tx.withdrawal_amount)}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 700, color: '#10b981' }}>+{fmtKESFee(tx.fee)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {revBreakdown.pages > 1 && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+                        <button onClick={() => { setRevPage(p => p - 1); loadRevenueBreakdown(revPeriod, revMethod, revPage - 1); }} disabled={revPage <= 1}
+                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage <= 1 ? '#4b5563' : '#fff', cursor: revPage <= 1 ? 'default' : 'pointer', fontSize: 13 }}>← Prev</button>
+                        <span style={{ fontSize: 13, color: '#6b7280' }}>Page {revPage} of {revBreakdown.pages} · {revBreakdown.total} transactions</span>
+                        <button onClick={() => { setRevPage(p => p + 1); loadRevenueBreakdown(revPeriod, revMethod, revPage + 1); }} disabled={revPage >= revBreakdown.pages}
+                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage >= revBreakdown.pages ? '#4b5563' : '#fff', cursor: revPage >= revBreakdown.pages ? 'default' : 'pointer', fontSize: 13 }}>Next →</button>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="adm-empty">No fee transactions for this period</p>
+                )}
+              </div>
+
+              {/* ── Monthly volume breakdown ── */}
+              <div className="adm-card">
+                <div className="adm-card-header"><h3>Monthly Volume</h3></div>
                 {analytics?.monthly_volumes?.length > 0 ? (
                   <div className="adm-table-wrap">
                     <table className="adm-table">
                       <thead>
-                        <tr>
-                          <th>Month</th>
-                          <th>Buy Volume</th>
-                          <th>Sell Volume</th>
-                          <th>Total Volume</th>
-                          <th>Trades</th>
-                          <th>Profit</th>
-                        </tr>
+                        <tr><th>Month</th><th>Buy Volume</th><th>Sell Volume</th><th>Total Volume</th><th>Trades</th><th>Profit</th></tr>
                       </thead>
                       <tbody>
                         {[...analytics.monthly_volumes].reverse().map((m, i) => (
@@ -2525,8 +2611,8 @@ export default function Admin() {
                           {fmtKES(wd.amount)}
                         </td>
                         <td>
-                          <span className={`adm-badge ${wd.status === 'completed' ? 'green' : wd.status === 'failed' ? 'red' : 'yellow'}`}>
-                            {wd.status === 'completed' ? 'Completed' : wd.status === 'failed' ? 'Failed' : 'Pending'}
+                          <span className={`adm-badge ${wd.status === 'completed' ? 'green' : wd.status === 'failed' || wd.status === 'cancelled' ? 'red' : 'yellow'}`}>
+                            {wd.status === 'completed' ? 'Completed' : wd.status === 'failed' ? 'Failed' : wd.status === 'cancelled' ? 'Cancelled' : 'Pending'}
                           </span>
                         </td>
                         <td style={{ fontSize: 12, color: '#9ca3af' }}>
@@ -2544,9 +2630,20 @@ export default function Admin() {
                         </td>
                         <td>
                           {wd.status === 'pending' ? (
-                            <button disabled={wdActionLoading === wd.id} onClick={() => handleMarkComplete(wd.id)}
-                              style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#10b981', color: '#000', fontWeight: 600, fontSize: 12, cursor: 'pointer', opacity: wdActionLoading === wd.id ? 0.6 : 1 }}>
-                              {wdActionLoading === wd.id ? '...' : '✓ Mark Complete'}
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <button disabled={wdActionLoading === wd.id} onClick={() => handleMarkComplete(wd.id)}
+                                style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#10b981', color: '#000', fontWeight: 600, fontSize: 12, cursor: 'pointer', opacity: wdActionLoading === wd.id ? 0.6 : 1 }}>
+                                {wdActionLoading === wd.id ? '...' : '✓ Mark Complete'}
+                              </button>
+                              <button disabled={wdActionLoading === wd.id} onClick={() => handleDeleteWithdrawal(wd.id)}
+                                style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', fontSize: 12, cursor: 'pointer', opacity: wdActionLoading === wd.id ? 0.6 : 1 }}>
+                                {wdActionLoading === wd.id ? '...' : '✕ Remove'}
+                              </button>
+                            </div>
+                          ) : wd.status === 'cancelled' ? (
+                            <button disabled={wdActionLoading === wd.id} onClick={() => handleDeleteWithdrawal(wd.id)}
+                              style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', fontSize: 12, cursor: 'pointer', opacity: wdActionLoading === wd.id ? 0.6 : 1 }}>
+                              {wdActionLoading === wd.id ? '...' : '✕ Remove'}
                             </button>
                           ) : wd.status === 'completed' && wd.settlement_method !== 'mpesa' ? (
                             <button disabled={wdActionLoading === wd.id} onClick={() => handleMarkPending(wd.id)}
