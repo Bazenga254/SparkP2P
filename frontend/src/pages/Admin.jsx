@@ -966,7 +966,7 @@ export default function Admin() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--green)' }}>
-                        {dashHidden ? '••••••' : fmtKES(analytics?.revenue?.today || dashboard.today.revenue)}
+                        {dashHidden ? '••••••' : fmtKESFee(analytics?.revenue?.today || dashboard.today.revenue)}
                       </div>
                       <p style={{ color: 'var(--text-dim)', fontSize: 12 }}>fees collected</p>
                     </div>
@@ -1021,7 +1021,7 @@ export default function Admin() {
                 <div className="adm-stat-card" style={{ '--card-accent': '#f59e0b' }}>
                   <div className="adm-stat-info">
                     <span className="adm-stat-label">Today's Revenue</span>
-                    <span className="adm-stat-value">{dashHidden ? '••••••' : fmtKES(dashboard.today.revenue)}</span>
+                    <span className="adm-stat-value">{dashHidden ? '••••••' : fmtKESFee(dashboard.today.revenue)}</span>
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>
                     <TrendingUp size={22} />
