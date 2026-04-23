@@ -11,6 +11,7 @@ from app.core.database import init_db
 from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support
 from app.services.binance.poller import order_poller
 from app.services.message_templates import seed_default_templates
+from app.services import bot_monitor
 
 
 @asynccontextmanager
@@ -21,10 +22,13 @@ async def lifespan(app: FastAPI):
     # Start housekeeping poller (no longer polls Binance directly;
     # the Chrome extension handles all Binance API calls)
     poller_task = asyncio.create_task(order_poller.start())
+    # Start bot offline monitor — alerts traders when their desktop app goes silent
+    monitor_task = asyncio.create_task(bot_monitor.start())
     yield
     # Shutdown
     order_poller.stop()
     poller_task.cancel()
+    monitor_task.cancel()
 
 
 app = FastAPI(
