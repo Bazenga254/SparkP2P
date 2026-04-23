@@ -380,6 +380,7 @@ export default function Dashboard() {
   const [orders, setOrders] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [withdrawalTxns, setWithdrawalTxns] = useState([]);
+  const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
   const [activeTab, setActiveTab] = useState('overview');
   const [botLogs, setBotLogs] = useState([]);
   const logsEndRef = useRef(null);
@@ -1517,72 +1518,117 @@ export default function Dashboard() {
 
             {/* Withdrawals Tab */}
             {txnTab === 'withdrawals' && (() => {
-              // Group platform_fee + settlement_fee at the same timestamp into one "fees" row
-              const grouped = [];
-              const feeMap = {}; // key = minute-truncated timestamp → accumulated fee amount
+              // Group withdrawal + its fees (platform_fee, settlement_fee) by minute-timestamp into one combined row
+              const groups = {}; // minuteKey → { withdrawal, fees: [] }
+              const order = [];  // preserve insertion order
 
               withdrawalTxns.forEach(txn => {
-                const minuteKey = txn.created_at.slice(0, 16); // "2026-04-01T11:44"
-                if (txn.type === 'platform_fee' || txn.type === 'settlement_fee') {
-                  if (!feeMap[minuteKey]) {
-                    feeMap[minuteKey] = { type: 'fees', amount: 0, balance_after: txn.balance_after, description: 'Transaction fees', created_at: txn.created_at, id: 'fee-' + minuteKey };
-                    grouped.push(feeMap[minuteKey]);
-                  }
-                  feeMap[minuteKey].amount += txn.amount;
-                } else {
-                  grouped.push(txn);
-                }
+                const minuteKey = txn.created_at.slice(0, 16);
+                if (!groups[minuteKey]) { groups[minuteKey] = { withdrawal: null, fees: [] }; order.push(minuteKey); }
+                if (txn.type === 'withdrawal') groups[minuteKey].withdrawal = txn;
+                else if (txn.type === 'platform_fee' || txn.type === 'settlement_fee') groups[minuteKey].fees.push(txn);
               });
+
+              const rows = order.map(k => groups[k]);
+
+              const getDestination = (txn) => {
+                const method = (txn.settlement_method || '').toLowerCase();
+                const desc = (txn.description || '').toLowerCase();
+                if (method === 'mpesa' || desc.includes('mpesa') || desc.includes('m-pesa') || desc.includes('safaricom'))
+                  return { label: 'Safaricom M-Pesa', color: '#10b981', bg: 'rgba(16,185,129,0.1)' };
+                if (method === 'bank' || method === 'bank_paybill' || desc.includes('bank') || desc.includes('paybill'))
+                  return { label: 'I&M Bank', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' };
+                return null;
+              };
 
               return (
                 <div className="card">
-                  <h3>Withdrawals & Fees</h3>
-                  {grouped.length > 0 ? (
+                  <h3>Withdrawals</h3>
+                  {rows.length > 0 ? (
                     <table className="data-table">
                       <thead>
                         <tr>
-                          <th>Type</th>
                           <th>Amount</th>
                           <th>Balance After</th>
                           <th>Sent To</th>
-                          <th>Description</th>
                           <th>Time</th>
+                          <th></th>
                         </tr>
                       </thead>
                       <tbody>
-                        {grouped.map((txn) => {
-                          const method = (txn.settlement_method || '').toLowerCase();
-                          const desc = (txn.description || '').toLowerCase();
-                          let destination = null;
-                          if (txn.type === 'withdrawal') {
-                            if (method === 'mpesa') {
-                              destination = { label: 'Safaricom M-Pesa', color: '#10b981', bg: 'rgba(16,185,129,0.1)' };
-                            } else if (method === 'bank' || method === 'bank_paybill') {
-                              destination = { label: 'I&M Bank', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' };
-                            } else if (desc.includes('mpesa') || desc.includes('m-pesa') || desc.includes('safaricom')) {
-                              destination = { label: 'Safaricom M-Pesa', color: '#10b981', bg: 'rgba(16,185,129,0.1)' };
-                            } else if (desc.includes('bank') || desc.includes('paybill')) {
-                              destination = { label: 'I&M Bank', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' };
-                            }
-                          }
+                        {rows.map((group, idx) => {
+                          const { withdrawal, fees } = group;
+                          if (!withdrawal) return null;
+                          const totalFees = fees.reduce((s, f) => s + f.amount, 0);
+                          const totalDeducted = withdrawal.amount + totalFees; // both negative
+                          const destination = getDestination(withdrawal);
+                          const key = withdrawal.id;
+                          const isExpanded = !!expandedWithdrawals[key];
+                          const hasFees = fees.length > 0;
+
+                          const feeLabels = {
+                            platform_fee: 'Service fee',
+                            settlement_fee: 'Safaricom fee',
+                          };
+
                           return (
-                            <tr key={txn.id}>
-                              <td>{txn.type.replace(/_/g, ' ')}</td>
-                              <td className="negative">{txn.amount.toLocaleString()}</td>
-                              <td>KES {txn.balance_after.toLocaleString()}</td>
-                              <td>
-                                {destination ? (
-                                  <span style={{
-                                    padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600,
-                                    color: destination.color, background: destination.bg,
-                                  }}>
-                                    {destination.label}
+                            <React.Fragment key={key}>
+                              <tr style={{ cursor: hasFees ? 'pointer' : 'default' }}
+                                  onClick={() => hasFees && setExpandedWithdrawals(prev => ({ ...prev, [key]: !prev[key] }))}>
+                                <td>
+                                  <span className="negative" style={{ fontWeight: 600 }}>
+                                    {fmtKES(Math.abs(totalDeducted))}
                                   </span>
-                                ) : '—'}
-                              </td>
-                              <td>{txn.description}</td>
-                              <td>{new Date(txn.created_at).toLocaleString()}</td>
-                            </tr>
+                                  {hasFees && (
+                                    <span style={{ marginLeft: 6, fontSize: 11, color: '#6b7280' }}>
+                                      (incl. {fmtKES(Math.abs(totalFees))} fees)
+                                    </span>
+                                  )}
+                                </td>
+                                <td>KES {(withdrawal.balance_after ?? 0).toLocaleString()}</td>
+                                <td>
+                                  {destination ? (
+                                    <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, color: destination.color, background: destination.bg }}>
+                                      {destination.label}
+                                    </span>
+                                  ) : '—'}
+                                </td>
+                                <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: '#9ca3af' }}>
+                                  {new Date(withdrawal.created_at).toLocaleString()}
+                                </td>
+                                <td style={{ textAlign: 'right' }}>
+                                  {hasFees && (
+                                    <span style={{ fontSize: 12, color: '#6b7280', userSelect: 'none' }}>
+                                      {isExpanded ? '▲ hide' : '▼ fees'}
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                              {isExpanded && (
+                                <>
+                                  <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
+                                    <td colSpan={5} style={{ paddingTop: 0, paddingBottom: 0 }}>
+                                      <div style={{ padding: '8px 16px', borderLeft: '2px solid #374151', marginLeft: 8 }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13, color: '#d1d5db' }}>
+                                          <span>Net withdrawal</span>
+                                          <span className="negative">{fmtKES(Math.abs(withdrawal.amount))}</span>
+                                        </div>
+                                        {fees.map(f => (
+                                          <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13, color: '#9ca3af' }}>
+                                            <span>{feeLabels[f.type] || f.type.replace(/_/g, ' ')}</span>
+                                            <span className="negative">{fmtKES(Math.abs(f.amount))}</span>
+                                          </div>
+                                        ))}
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #374151', paddingTop: 4, marginTop: 4, fontSize: 13, fontWeight: 600, color: '#f9fafb' }}>
+                                          <span>Total deducted</span>
+                                          <span className="negative">{fmtKES(Math.abs(totalDeducted))}</span>
+                                        </div>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                </>
+                              )}
+                            </React.Fragment>
                           );
                         })}
                       </tbody>
