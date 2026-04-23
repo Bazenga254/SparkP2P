@@ -1001,7 +1001,7 @@ async def request_withdrawal(
         raise HTTPException(status_code=401, detail="Invalid or expired OTP code")
     del _withdraw_otp_codes[trader.email]
 
-    # Block if pending withdrawal already exists
+    # If pending withdrawal already exists, return processing status instead of error
     from app.models.wallet import WalletTransaction, TransactionType
     pending_r = await db.execute(
         select(WalletTransaction).where(
@@ -1011,10 +1011,12 @@ async def request_withdrawal(
         ).limit(1)
     )
     if pending_r.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You have a pending withdrawal being processed. Please wait for it to complete before requesting another.",
-        )
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=202, content={
+            "status": "processing",
+            "pending": True,
+            "message": "Your withdrawal is already being processed. We'll complete the transfer to your account shortly.",
+        })
 
     # Check 48-hour cooldown
     if trader.settlement_changed_at:
@@ -1099,17 +1101,19 @@ async def request_withdrawal(
             detail="Withdrawal failed. Please try again.",
         )
 
+    is_bank = trader.settlement_method.value != "mpesa"
+    if is_bank:
+        return {
+            "status": "processing",
+            "message": f"KES {net_amount:,.2f} scheduled for transfer to your I&M account. The bot will complete this shortly.",
+            "amount_sent": net_amount,
+            "transaction_fee": total_fee,
+        }
     return {
         "status": "success",
-        "message": f"KES {net_amount:,.0f} sent to your account",
+        "message": f"KES {net_amount:,.0f} sent to your M-PESA",
         "amount_sent": net_amount,
         "transaction_fee": total_fee,
-        "wallet_deducted": withdraw_amount,
-        "sweep": {
-            "initiated": sweep_result.get("success", False),
-            "sweep_id": sweep_result.get("sweep_id"),
-            "skipped": sweep_result.get("skipped", False),
-        },
     }
 
 

@@ -394,6 +394,8 @@ export default function Dashboard() {
   const [withdrawOtpSent, setWithdrawOtpSent] = useState(false);
   const [withdrawOtpLoading, setWithdrawOtpLoading] = useState(false);
   const [withdrawMsg, setWithdrawMsg] = useState('');
+  const [withdrawStatus, setWithdrawStatus] = useState(null); // null | 'processing' | 'succeeded'
+  const withdrawPollRef = useRef(null);
   const [sessionHealth, setSessionHealth] = useState(null);
   const [identityError, setIdentityError] = useState('');
   const [notifications, setNotifications] = useState([]);
@@ -1639,7 +1641,7 @@ export default function Dashboard() {
           <div style={{ background: '#1f2937', borderRadius: 16, padding: 32, width: '100%', maxWidth: 420, boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <h3 style={{ color: '#fff', fontSize: 18, margin: 0 }}>Confirm Withdrawal</h3>
-              <button onClick={() => setShowWithdrawModal(false)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 20 }}>×</button>
+              <button onClick={() => { setShowWithdrawModal(false); setWithdrawStatus(null); clearInterval(withdrawPollRef.current); }} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 20 }}>×</button>
             </div>
 
             {/* Amount input */}
@@ -1700,7 +1702,25 @@ export default function Dashboard() {
               </p>
             </div>
 
-            {!withdrawOtpSent ? (
+            {withdrawStatus === 'processing' ? (
+              <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                <div style={{ fontSize: 40, marginBottom: 16 }}>⏳</div>
+                <p style={{ color: '#10b981', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Processing your withdrawal...</p>
+                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 24 }}>The bot is completing the bank transfer. This usually takes 1–3 minutes.</p>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', animation: 'pulse 1.2s infinite' }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', animation: 'pulse 1.2s infinite 0.4s' }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', animation: 'pulse 1.2s infinite 0.8s' }} />
+                </div>
+              </div>
+            ) : withdrawStatus === 'succeeded' ? (
+              <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
+                <p style={{ color: '#10b981', fontWeight: 700, fontSize: 18, marginBottom: 8 }}>Withdrawal Successful!</p>
+                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 24 }}>The funds have been transferred to your account.</p>
+                <button onClick={() => { setShowWithdrawModal(false); setWithdrawStatus(null); }} style={{ padding: '11px 32px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>Done</button>
+              </div>
+            ) : !withdrawOtpSent ? (
               <>
                 <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 16 }}>We'll send a one-time code to your registered phone number to authorize this withdrawal.</p>
                 <button
@@ -1746,11 +1766,27 @@ export default function Dashboard() {
                     setWithdrawMsg('');
                     try {
                       const res = await requestWithdrawal(withdrawOtp, finalAmt);
-                      setShowWithdrawModal(false);
-                      alert(res.data.message || 'Withdrawal sent!');
-                      await loadData();
+                      const s = res.data?.status;
+                      if (s === 'processing') {
+                        setWithdrawStatus('processing');
+                        // Poll wallet every 5s until pending_withdrawal clears
+                        withdrawPollRef.current = setInterval(async () => {
+                          try {
+                            const w = await getWallet();
+                            if (!w.data.pending_withdrawal) {
+                              clearInterval(withdrawPollRef.current);
+                              setWithdrawStatus('succeeded');
+                              await loadData();
+                            }
+                          } catch (_) {}
+                        }, 5000);
+                      } else {
+                        setShowWithdrawModal(false);
+                        alert(res.data.message || 'Withdrawal sent!');
+                        await loadData();
+                      }
                     } catch (e) {
-                      setWithdrawMsg(e.response?.data?.detail || 'Withdrawal failed');
+                      setWithdrawMsg(e.response?.data?.detail || 'Withdrawal failed. Please try again.');
                     }
                     setWithdrawing(false);
                   }}
