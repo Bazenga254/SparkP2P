@@ -10,7 +10,6 @@ from app.models import (
     SettlementMethod,
 )
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
-from app.models.im_sweep import ImSweep
 from app.core.config import settings
 from app.services.mpesa.client import mpesa_client
 
@@ -358,22 +357,8 @@ class SettlementEngine:
                 )
 
             elif trader.settlement_method == SettlementMethod.BANK_PAYBILL:
-                # Queue org-portal sweep (M-Pesa paybill → I&M business account)
-                # then I&M transfer (I&M business → trader's account).
-                # Both are picked up by the desktop app via polling — no Daraja B2B needed.
-                sweep = ImSweep(
-                    trader_id=trader.id,
-                    amount=amount,
-                    status="pending",
-                    sweep_paybill=trader.settlement_paybill,
-                    sweep_account=trader.settlement_account,
-                )
-                self.db.add(sweep)
-                logger.info(
-                    f"Queued org-portal sweep for trader {trader.id}: "
-                    f"KES {amount} → paybill {trader.settlement_paybill} / {trader.settlement_account}"
-                )
-                # No Daraja call — fall through to save payment record below
+                # Sweep is already queued by trigger_im_sweep() in the withdrawal route
+                # before batch_settle is called — do NOT create a second ImSweep here.
                 result = {"queued": True, "method": "org_portal_sweep", "amount": amount}
 
             elif trader.settlement_method == SettlementMethod.TILL:
