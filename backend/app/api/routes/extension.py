@@ -1429,15 +1429,107 @@ async def mpesa_sweep_failed(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Desktop app calls this if the M-PESA org portal sweep failed."""
+    """Desktop app calls this if the M-PESA org portal sweep failed.
+    Marks sweep failed, cancels the pending WalletTransaction, restores
+    the wallet balance, and notifies the trader via SMS + email.
+    """
     result = await db.execute(select(ImSweep).where(ImSweep.id == data.sweep_id))
     sweep = result.scalar_one_or_none()
     if not sweep:
         raise HTTPException(status_code=404, detail="Sweep not found")
     sweep.status = "failed"
     sweep.failure_reason = (data.error or "Unknown error")[:500]
+
+    # Find the pending WalletTransaction + wallet for this trader and reverse it
+    tx_result = await db.execute(
+        select(WalletTransaction, Wallet)
+        .join(Wallet, Wallet.trader_id == WalletTransaction.trader_id)
+        .where(
+            WalletTransaction.trader_id == sweep.trader_id,
+            WalletTransaction.status == "pending",
+            WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+        )
+        .order_by(WalletTransaction.created_at.desc())
+        .limit(1)
+    )
+    tx_row = tx_result.first()
+
+    refunded_amount = 0
+    tx_trader = None
+    if tx_row:
+        pending_tx, wallet = tx_row
+
+        # Cancel all pending transactions for this withdrawal group (withdrawal + fees)
+        # by finding all negative txns created within 5 seconds of the withdrawal
+        group_result = await db.execute(
+            select(WalletTransaction).where(
+                WalletTransaction.trader_id == sweep.trader_id,
+                WalletTransaction.status == "pending",
+                WalletTransaction.amount < 0,
+            )
+        )
+        group_txns = group_result.scalars().all()
+        total_to_refund = sum(abs(t.amount) for t in group_txns)
+
+        for t in group_txns:
+            t.status = "cancelled"
+            t.description = (t.description or "") + " | CANCELLED: sweep failed"
+
+        # Restore wallet balance and totals
+        wallet.balance += total_to_refund
+        wallet.total_withdrawn -= abs(pending_tx.amount)
+        wallet.total_fees_paid -= sum(abs(t.amount) for t in group_txns if t.transaction_type != TransactionType.WITHDRAWAL)
+        refunded_amount = total_to_refund
+
+        # Look up the trader for notifications
+        tr_result = await db.execute(select(Trader).where(Trader.id == sweep.trader_id))
+        tx_trader = tr_result.scalar_one_or_none()
+
     await db.commit()
-    return {"status": "failed", "sweep_id": sweep.id}
+
+    # Notify trader
+    if tx_trader and refunded_amount > 0:
+        try:
+            from app.services.sms import send_otp_sms
+            send_otp_sms(
+                tx_trader.phone,
+                f"SparkP2P: Your withdrawal of KES {refunded_amount:,.0f} could not be processed "
+                f"(M-PESA sweep failed). KES {refunded_amount:,.0f} has been refunded to your wallet."
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send sweep-failed SMS: {e}")
+        try:
+            from app.services.email import send_email
+            send_email(
+                tx_trader.email,
+                "SparkP2P - Withdrawal Failed",
+                f"""
+                <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+                    <div style="background: #1a1d27; border-radius: 12px; padding: 32px;">
+                        <h2 style="color: #ef4444; font-size: 20px; margin: 0 0 12px;">Withdrawal Failed</h2>
+                        <p style="color: #9ca3af; font-size: 14px;">
+                            Hi {tx_trader.full_name}, your withdrawal could not be completed because the
+                            M-PESA sweep failed (insufficient M-PESA org balance).
+                        </p>
+                        <div style="background: #0f1117; border-radius: 10px; padding: 16px; margin: 16px 0;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="color: #9ca3af;">Amount Refunded</span>
+                                <span style="color: #10b981; font-weight: 600;">KES {refunded_amount:,.0f}</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between;">
+                                <span style="color: #9ca3af;">Error</span>
+                                <span style="color: #ef4444; font-size: 12px;">{(data.error or 'Sweep failed')[:80]}</span>
+                            </div>
+                        </div>
+                        <p style="color: #9ca3af; font-size: 13px;">Your balance has been fully restored. Please try again once the M-PESA org account is recharged.</p>
+                    </div>
+                </div>
+                """,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send sweep-failed email: {e}")
+
+    return {"status": "failed", "sweep_id": sweep.id, "refunded": refunded_amount}
 
 
 # ═══════════════════════════════════════════════════════════

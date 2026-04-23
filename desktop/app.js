@@ -10045,7 +10045,21 @@ async function executeMpesaSweep(sweepJob) {
     const step2Ok = await _waitForMpesaSuccess(mpesaOrgPage, 'sweep_step2_withdrawal');
     console.log(`[SparkP2P] Step 2 result: ${step2Ok ? '✅ success' : '❌ not confirmed'}`);
 
-    if (!step2Ok) return failSweep('Org Withdrawal: success not confirmed after submit');
+    if (!step2Ok) {
+      // Dismiss any error popup before failing (e.g. "insufficient balance" modal with Confirm button)
+      await mpesaOrgPage.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const confirmBtn = btns.find(b => b.textContent.trim().toLowerCase() === 'confirm' || b.textContent.trim().toLowerCase() === 'ok');
+        if (confirmBtn) confirmBtn.click();
+      }).catch(() => {});
+      await new Promise(r => setTimeout(r, 1000));
+      // Extract error description from the page if visible
+      const errText = await mpesaOrgPage.evaluate(() => {
+        const el = document.querySelector('.exception-description, [class*="exception"], [class*="error-desc"]');
+        return el ? el.textContent.trim().substring(0, 200) : null;
+      }).catch(() => null);
+      return failSweep(errText || 'Org Withdrawal: success not confirmed after submit');
+    }
 
     // Report to backend only after confirmed success
     if (token) {
