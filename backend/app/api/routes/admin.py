@@ -953,14 +953,14 @@ async def admin_analytics(
     online_traders = r.scalar()
 
     # Top 5 traders by volume — computed from actual completed orders
+    from sqlalchemy import and_ as sql_and
     top_q = (
         select(
             Trader.full_name,
             func.count(Order.id).label("trades"),
             func.coalesce(func.sum(Order.fiat_amount), 0).label("volume"),
         )
-        .join(Order, (Order.trader_id == Trader.id) & (Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED])), isouter=True)
-        .where(Trader.is_admin == False)
+        .join(Order, sql_and(Order.trader_id == Trader.id, Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED])), isouter=True)
         .group_by(Trader.id, Trader.full_name)
         .order_by(func.coalesce(func.sum(Order.fiat_amount), 0).desc())
         .limit(5)
