@@ -8946,14 +8946,39 @@ async function executeImLocalTransfer(job) {
     await sleep(1200);
     console.log('[SparkP2P] I&M: Clicked Saved Beneficiary');
 
-    // ── STEP 4: Open beneficiary dropdown and pick the contact ────────────────
-    ss = await imPage.screenshot({ encoding: 'base64' });
-    await imVisionClick(ss, 'Click the "Select a beneficiary" dropdown field to open the list');
+    // ── STEP 4: Open beneficiary dropdown, search, select ────────────────────
+    // Click the ng-select beneficiary dropdown to open the search field
+    const bDrop = await imPage.$('ng-select[formcontrolname*="beneficiary" i], ng-select[placeholder*="beneficiary" i], ng-select').catch(() => null);
+    if (bDrop) {
+      await bDrop.click();
+    } else {
+      ss = await imPage.screenshot({ encoding: 'base64' });
+      await imVisionClick(ss, 'Click the "Select a beneficiary" dropdown in the To section to open it');
+    }
+    await sleep(1000);
+
+    // Type the account number in the search input that appears inside the dropdown
+    const bSearchInput = await imPage.$('ng-select input, input[role="combobox"], [class*="ng-select"] input').catch(() => null);
+    if (bSearchInput) {
+      await bSearchInput.click();
+      await bSearchInput.type(TO_ACCOUNT, { delay: 60 });
+      console.log(`[SparkP2P] I&M: Typed account ${TO_ACCOUNT} in beneficiary search`);
+    } else {
+      // Fallback: just type — the focused element should be the search field
+      await imPage.keyboard.type(TO_ACCOUNT, { delay: 60 });
+    }
     await sleep(1500);
 
-    ss = await imPage.screenshot({ encoding: 'base64' });
-    await imVisionClick(ss, `In the open dropdown, click the contact row that shows account ${TO_ACCOUNT} or name containing ${EXPECTED_NAME.split(' ')[0]}`);
-    await sleep(1500);
+    // Click the first ng-option result, or press Enter
+    const firstOption = await imPage.$('.ng-option, .ng-option-label, [class*="ng-option"]').catch(() => null);
+    if (firstOption) {
+      await firstOption.click();
+      console.log(`[SparkP2P] I&M: Clicked beneficiary option from dropdown`);
+    } else {
+      await imPage.keyboard.press('Enter');
+      console.log(`[SparkP2P] I&M: Pressed Enter to select beneficiary`);
+    }
+    await sleep(1200);
     console.log(`[SparkP2P] I&M: Selected saved beneficiary ${TO_ACCOUNT} (${EXPECTED_NAME})`);
 
     //    // â”€â”€ STEP 7: Select Currency = KES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
