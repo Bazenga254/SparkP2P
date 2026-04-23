@@ -17,8 +17,8 @@ function mpesaB2CFee(amount) {
 function getWithdrawalFee(method, amount) {
   if (amount <= 0) return 0;
   if (method === 'mpesa') return mpesaB2CFee(amount) + 25;
-  if (method === 'bank') return Math.round(amount * 0.0005 * 100) / 100;
-  return 0;
+  // bank_paybill, bank, till, paybill — 0.05% flat
+  return Math.round(amount * 0.0005 * 100) / 100;
 }
 
 function SpreadCalculator() {
