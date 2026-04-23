@@ -8986,6 +8986,22 @@ async function executeImLocalTransfer(job) {
     await sleep(1000);
     console.log(`[SparkP2P] I&M: Selected saved beneficiary ${TO_ACCOUNT} (${EXPECTED_NAME})`);
 
+    // Click Validate button (required even for saved beneficiaries)
+    const validated = await imPage.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll('button')).find(b =>
+        (b.textContent || '').trim().toLowerCase() === 'validate' && !b.disabled
+      );
+      if (btn) { btn.scrollIntoView({ block: 'center', behavior: 'instant' }); btn.click(); return true; }
+      return false;
+    }).catch(() => false);
+    if (validated) {
+      console.log('[SparkP2P] I&M: Clicked Validate — waiting for confirmation...');
+      await sleep(3500); // wait for validation API response
+    } else {
+      console.log('[SparkP2P] I&M: Validate button not found — continuing');
+      await sleep(500);
+    }
+
     // Scroll down to reveal Payment details (Amount, Reference, Purpose)
     await imPage.evaluate(() => window.scrollBy(0, 500)).catch(() => {});
     await sleep(800);
