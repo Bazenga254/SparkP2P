@@ -163,6 +163,7 @@ let imWithdrawalRunning = false; // Prevents concurrent withdrawal executions
 let mpesaOrgPage = null;       // Persistent M-PESA org portal tab
 let connectingMpesa = false;   // Prevents concurrent connectMpesaPortal() calls
 let mpesaSweepRunning = false; // Prevents concurrent sweep executions
+let lastSweepCompletedAt = 0;  // Timestamp of last completed sweep (ms) — enforces cooldown
 let pauseInactivityTimer = null; // Auto-resume timer when bot is paused
 const PAUSE_AUTO_RESUME_MS = 3 * 60 * 1000; // 3 minutes
 
@@ -9325,7 +9326,7 @@ setInterval(async () => {
       console.log(`[SparkP2P] ${data.jobs.length} pending I&M withdrawal(s) found â€” executing first`);
       const job = data.jobs[0];
       // Own-account transfer for owner's personal account; local transfer for all other traders
-      if (job.destination_account === '00108094726050' && !job.destination_name) {
+      if (job.destination_account === '00108094726050') {
         await executeImWithdrawal(job);
       } else {
         await executeImLocalTransfer(job);
@@ -9819,6 +9820,7 @@ async function executeMpesaSweep(sweepJob) {
 
   const failSweep = async (error) => {
     mpesaSweepRunning = false;
+    lastSweepCompletedAt = Date.now(); // cooldown applies even on failure
     await takeScreenshot('mpesa_sweep_error', mpesaOrgPage).catch(() => {});
     if (token) await fetch(`${API_BASE}/ext/mpesa-sweep-failed`, {
       method: 'POST',
@@ -10054,9 +10056,10 @@ async function executeMpesaSweep(sweepJob) {
       }).catch(() => {});
     }
 
-    console.log(`[SparkP2P] âœ… M-PESA sweep KES ${amount} complete`);
+    console.log(`[SparkP2P] ✅ M-PESA sweep KES ${amount} complete`);
     sendBotLog('success', `M-Pesa paybill sweep KES ${amount} complete — funds transferred to I&M`);
     mpesaSweepRunning = false;
+    lastSweepCompletedAt = Date.now();
 
     // Immediately trigger the I&M bank transfer now that funds have arrived
     setTimeout(async () => {
@@ -10068,8 +10071,13 @@ async function executeMpesaSweep(sweepJob) {
         if (!r.ok) return;
         const d = await r.json();
         if (d.jobs && d.jobs.length > 0) {
-          console.log(`[SparkP2P] Auto-triggering I&M transfer after sweep â€” KES ${d.jobs[0].amount}`);
-          await executeImLocalTransfer(d.jobs[0]);
+          const job = d.jobs[0];
+          console.log(`[SparkP2P] Auto-triggering I&M transfer after sweep — KES ${job.amount}`);
+          if (job.destination_account === '00108094726050') {
+            await executeImWithdrawal(job);
+          } else {
+            await executeImLocalTransfer(job);
+          }
         }
       } catch (_) {}
     }, 5000); // 5s delay so funds settle in I&M account
@@ -10116,8 +10124,10 @@ async function fillFieldWithVision(page, fieldLabel, value) {
 }
 
 // Poll VPS every 30s for pending M-PESA sweeps and execute them
+const SWEEP_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes between sweeps — portal needs to reset
 setInterval(async () => {
   if (!token || !mpesaOrgPage || mpesaOrgPage.isClosed() || mpesaSweepRunning) return;
+  if (Date.now() - lastSweepCompletedAt < SWEEP_COOLDOWN_MS) return; // cooldown
   try {
     const res = await fetch(`${API_BASE}/ext/pending-mpesa-sweeps`, {
       headers: { 'Authorization': `Bearer ${token}` },

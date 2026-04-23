@@ -1231,7 +1231,7 @@ async def get_pending_bank_withdrawals(
             "amount": abs(t.amount),
             "destination": t.destination or "",
             "destination_account": t.destination or "",
-            "destination_name": (tr.name or "").upper().strip(),
+            "destination_name": (tr.full_name or "").upper().strip(),
             "trader_id": tr.id,
             "created_at": t.created_at.isoformat() if t.created_at else None,
         })
