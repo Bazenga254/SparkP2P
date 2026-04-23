@@ -680,10 +680,12 @@ async def list_unmatched_payments(
 
 
 def _get_period_start(period: str):
-    """Return the start datetime for a given period filter."""
+    """Return the start datetime for a given period filter (Kenya timezone for 'today')."""
     now = datetime.now(timezone.utc)
     if period == "today":
-        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+        EAT = timezone(timedelta(hours=3))
+        now_eat = now.astimezone(EAT)
+        return now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     elif period == "week":
         return now - timedelta(days=7)
     elif period == "month":
@@ -1437,8 +1439,10 @@ async def get_withdrawals(
         q = q.where(WalletTransaction.status == status)
 
     if period == "today":
-        today = datetime.now(timezone.utc).date()
-        q = q.where(func.date(WalletTransaction.created_at) == today)
+        EAT = timezone(timedelta(hours=3))
+        now_eat = datetime.now(timezone.utc).astimezone(EAT)
+        today_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        q = q.where(WalletTransaction.created_at >= today_start)
     elif period == "week":
         q = q.where(WalletTransaction.created_at >= datetime.now(timezone.utc) - timedelta(days=7))
     elif period == "month":
@@ -1610,8 +1614,11 @@ async def revenue_breakdown(
     from sqlalchemy import case as sa_case, text as sa_text
 
     now = datetime.now(timezone.utc)
+    EAT = timezone(timedelta(hours=3))
+    now_eat = now.astimezone(EAT)
+    today_start_utc = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     period_starts = {
-        "today": now.replace(hour=0, minute=0, second=0, microsecond=0),
+        "today": today_start_utc,
         "week":  now - timedelta(days=7),
         "month": now - timedelta(days=30),
     }
