@@ -9317,7 +9317,7 @@ async function executeImLocalTransfer(job) {
 
 // Poll VPS every 30s for pending bank withdrawals and execute them
 setInterval(async () => {
-  if (!token || !imPage || imPage.isClosed() || imWithdrawalRunning) return;
+  if (!token || !imPage || imPage.isClosed() || imWithdrawalRunning || !isOnline) return;
   try {
     const res = await fetch(`${API_BASE}/ext/pending-bank-withdrawals`, {
       headers: { 'Authorization': `Bearer ${token}` },
@@ -9334,7 +9334,7 @@ setInterval(async () => {
 
 // Poll VPS every 60s for pending settlement disbursements (SPARK FREELANCE SOLUTIONS → trader I&M accounts)
 setInterval(async () => {
-  if (!token || !imPage || imPage.isClosed() || imWithdrawalRunning) return;
+  if (!token || !imPage || imPage.isClosed() || imWithdrawalRunning || !isOnline) return;
   try {
     const res = await fetch(`${API_BASE}/ext/pending-im-disbursements`, {
       headers: { 'Authorization': `Bearer ${token}` },
@@ -9374,6 +9374,85 @@ setInterval(async () => {
 // → linked I&M Bank account (FREE â€” "No charge" confirmed in portal)
 // Same approach as I&M Bank: real Chrome tab, cookie persistence, Vision
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+// ── Connectivity Monitor ─────────────────────────────────────────────────────
+// Detects internet loss/restore and recovers Chrome sessions automatically.
+// On disconnect: logs warning, marks offline, prevents new automation.
+// On reconnect: refreshes all Chrome tabs and resets stuck automation flags.
+
+let isOnline = true;
+let offlineSince = null;
+
+async function checkConnectivity() {
+  try {
+    const r = await fetch(`${API_BASE}/health`, {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(6000),
+    });
+    return r.ok || r.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+async function recoverSessions() {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  console.log('[SparkP2P] Internet restored — recovering Chrome sessions');
+  sendBotLog('info', 'Internet restored — refreshing sessions and resuming automation');
+
+  // Reset stuck automation flags from any interrupted operations
+  if (mpesaSweepRunning) {
+    console.log('[SparkP2P] Resetting stuck mpesaSweepRunning flag');
+    mpesaSweepRunning = false;
+    lastSweepCompletedAt = Date.now(); // enforce cooldown before next attempt
+  }
+  if (imWithdrawalRunning) {
+    console.log('[SparkP2P] Resetting stuck imWithdrawalRunning flag');
+    imWithdrawalRunning = false;
+  }
+
+  // Refresh M-PESA org portal tab
+  if (mpesaOrgPage && !mpesaOrgPage.isClosed()) {
+    try {
+      await mpesaOrgPage.goto(MPESA_ORG_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      console.log('[SparkP2P] M-PESA org portal tab refreshed');
+    } catch (e) {
+      console.log('[SparkP2P] M-PESA tab refresh failed:', e.message);
+    }
+    await sleep(1500);
+  }
+
+  // Refresh I&M Bank tab — go to dashboard to re-establish session
+  if (imPage && !imPage.isClosed()) {
+    try {
+      await imPage.goto('https://digital.imbank.com/inm-retail/dashboard', { waitUntil: 'networkidle2', timeout: 25000 });
+      await syncImCookies();
+      console.log('[SparkP2P] I&M Bank tab refreshed and cookies synced');
+    } catch (e) {
+      console.log('[SparkP2P] I&M tab refresh failed:', e.message);
+    }
+  }
+
+  sendBotLog('success', 'Sessions recovered — automation resumed');
+}
+
+setInterval(async () => {
+  const online = await checkConnectivity();
+  if (online && !isOnline) {
+    const downtime = offlineSince ? Math.round((Date.now() - offlineSince) / 1000) : '?';
+    console.log(`[SparkP2P] Internet reconnected after ${downtime}s offline`);
+    isOnline = true;
+    offlineSince = null;
+    await recoverSessions();
+  } else if (!online && isOnline) {
+    isOnline = false;
+    offlineSince = Date.now();
+    console.log('[SparkP2P] Internet disconnected — automation paused');
+    sendBotLog('warning', 'Internet disconnected — automation paused. Binance ads remain live.');
+  }
+}, 15000);
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 const MPESA_ORG_URL = 'https://org.ke.m-pesa.com';
 const MPESA_ORG_REVENUE_URL = 'https://org.ke.m-pesa.com/#/mainPage/businessCenter/settlement/revenueSettlement/initiate';
