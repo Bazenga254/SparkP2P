@@ -1202,7 +1202,7 @@ export default function Admin() {
                   </div>
                   <div style={{ padding: 20 }}>
                     <div className="adm-profit-total">
-                      {fmtKES(analytics?.revenue?.week)}
+                      {fmtKESFee(analytics?.revenue?.week)}
                     </div>
                     <p style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 20 }}>this week's earnings</p>
 
