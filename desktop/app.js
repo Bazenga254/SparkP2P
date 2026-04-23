@@ -9433,7 +9433,22 @@ async function recoverSessions() {
     }
   }
 
-  sendBotLog('success', 'Sessions recovered — automation resumed');
+  // Reconcile Binance order state before resuming automation.
+  // This syncs any orders the trader completed/cancelled manually during the outage
+  // so the VPS DB matches Binance reality and the bot doesn't re-process them.
+  sendBotLog('info', 'Reconciling Binance orders completed during outage...');
+  try {
+    const binancePage = await getPage('binance.com').catch(() => null);
+    if (binancePage && pollerRunning) {
+      await reconcileStuckOrders(binancePage);
+      sendBotLog('success', 'Reconciliation done — bot resuming from current Binance state (manually handled orders are skipped)');
+    } else {
+      sendBotLog('info', 'Sessions recovered — automation resumed');
+    }
+  } catch (e) {
+    console.log('[SparkP2P] Post-reconnect reconciliation error:', e.message);
+    sendBotLog('success', 'Sessions recovered — automation resumed');
+  }
 }
 
 setInterval(async () => {
