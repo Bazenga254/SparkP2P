@@ -9010,14 +9010,20 @@ async function executeImLocalTransfer(job) {
     await sleep(500);
     console.log('[SparkP2P] I&M: Currency set to KES');
 
-    // STEP 6: Enter Amount — Angular native setter (same as executeImBankTransfer)
-    const amountWhole = Math.floor(job.amount).toString();
+    // STEP 6: Enter Amount (integer + cents) — Angular native setter
+    const amountInt = Math.floor(job.amount);
+    const amountCents = Math.round((job.amount - amountInt) * 100);
+    const amountWhole = amountInt.toString();
+    const amountCentsStr = amountCents.toString().padStart(2, '0');
+
+    // Fill integer part
     const amtFilled = await imPage.evaluate((amt) => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+      const setVal = (el, v) => { if (nativeSetter) nativeSetter.call(el, v); else el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
       const inputs = Array.from(document.querySelectorAll('input[type="number"],input[type="text"]'));
       const amtInput = inputs.find(i => {
         const ph = (i.placeholder || '').toLowerCase();
         const fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
-        // Exclude reference, bank, account fields
         if (ph.includes('reference') || fc.includes('reference') || fc.includes('narration') ||
             ph.includes('account') || fc.includes('account') || ph.includes('description') || fc.includes('description')) return false;
         return i.value === '0' || i.placeholder === '0' || fc.includes('amount') || fc.includes('whole');
@@ -9025,11 +9031,7 @@ async function executeImLocalTransfer(job) {
       if (amtInput) {
         amtInput.scrollIntoView({ block: 'center', behavior: 'instant' });
         amtInput.click(); amtInput.select();
-        // Angular requires native setter to trigger change detection
-        const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-        if (ns) ns.call(amtInput, String(amt));
-        amtInput.dispatchEvent(new Event('input', { bubbles: true }));
-        amtInput.dispatchEvent(new Event('change', { bubbles: true }));
+        setVal(amtInput, String(amt));
         return true;
       }
       return false;
@@ -9038,7 +9040,26 @@ async function executeImLocalTransfer(job) {
       ss = await imPage.screenshot({ encoding: 'base64' });
       await imVisionType(ss, `Type ${amountWhole} in the Amount whole number field`, amountWhole);
     }
-    console.log(`[SparkP2P] I&M: Entered amount ${amountWhole}`);
+    await sleep(300);
+
+    // Fill cents part (the "00" field after the period separator)
+    await imPage.evaluate((cents) => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+      const setVal = (el, v) => { if (nativeSetter) nativeSetter.call(el, v); else el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
+      const inputs = Array.from(document.querySelectorAll('input[type="number"],input[type="text"]'));
+      // Cents field has placeholder "00" or formcontrolname containing "cent" or "decimal"
+      const centsInput = inputs.find(i => {
+        const ph = (i.placeholder || '');
+        const fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
+        return ph === '00' || fc.includes('cent') || fc.includes('decimal') || fc.includes('fraction');
+      });
+      if (centsInput) {
+        centsInput.scrollIntoView({ block: 'center', behavior: 'instant' });
+        centsInput.click(); centsInput.select();
+        setVal(centsInput, cents);
+      }
+    }, amountCentsStr).catch(() => {});
+    console.log(`[SparkP2P] I&M: Entered amount ${amountWhole}.${amountCentsStr}`);
     await sleep(500);
 
     // STEP 7: Payment Reference — Angular native setter
@@ -9099,12 +9120,20 @@ async function executeImLocalTransfer(job) {
     console.log('[SparkP2P] I&M: Payment purpose set to Other');
     await sleep(500);
 
-    // STEP 9: Click Continue
+    // STEP 9: Click Continue — scroll into view first, then click via evaluate
+    await imPage.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Continue' && !b.disabled);
+      if (btn) btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+    }).catch(() => {});
+    await sleep(500);
     const continueBtn = await $x('//button[contains(text(), "Continue")]').catch(() => []);
     if (continueBtn.length > 0) {
       await continueBtn[0].click();
     } else {
-      await imPage.click('button[type="submit"], button.btn-primary').catch(() => {});
+      await imPage.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Continue' && !b.disabled);
+        if (btn) btn.click();
+      }).catch(() => {});
     }
     console.log('[SparkP2P] I&M: Clicked Continue');
     await sleep(3000);
