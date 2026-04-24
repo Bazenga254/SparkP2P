@@ -9951,24 +9951,36 @@ async function executeMpesaSweep(sweepJob) {
   console.log(`[SparkP2P] === M-PESA SWEEP KES ${amount} (sweep #${sweep_id}) ===`);
   await mpesaOrgPage.bringToFront().catch(() => {});
 
-  // Close any open "Transaction" tab so every sweep starts from a clean portal state
+  // Close ALL non-Home portal tabs before each sweep so we always start from a clean state.
+  // This clears leftover "Initiate Revenue Settlement" (success page) and "Transaction" tabs
+  // from previous sweeps, which otherwise cause Step 1's Submit button to not be found.
   try {
-    const closed = await mpesaOrgPage.evaluate(() => {
-      const tabs = Array.from(document.querySelectorAll('[class*="tab"], [role="tab"], li, span'));
-      const txTab = tabs.find(el => el.textContent.trim().toLowerCase().startsWith('transaction'));
-      if (!txTab) return false;
-      const closeBtn = txTab.querySelector('button, [class*="close"], [class*="cancel"], span') ||
-                       txTab.closest('li')?.querySelector('button, [class*="close"]');
-      if (closeBtn) { closeBtn.click(); return true; }
-      // fallback: look for × or X inside the tab
-      const xBtn = Array.from(txTab.querySelectorAll('*')).find(el =>
-        el.children.length === 0 && (el.textContent.trim() === '×' || el.textContent.trim() === 'x' || el.textContent.trim() === 'X')
-      );
-      if (xBtn) { xBtn.click(); return true; }
-      return false;
+    const closedCount = await mpesaOrgPage.evaluate(() => {
+      let count = 0;
+      // Keep clicking close buttons on non-Home tabs until none remain
+      for (let pass = 0; pass < 5; pass++) {
+        const allEls = Array.from(document.querySelectorAll('*'));
+        // Find close buttons (×) that are inside a tab that is NOT "Home"
+        const closeBtn = allEls.find(el => {
+          const txt = el.textContent.trim();
+          if (txt !== '×' && txt !== 'x' && txt !== 'X') return false;
+          // Walk up to find the tab container and make sure it's not the Home tab
+          let parent = el.parentElement;
+          for (let i = 0; i < 5 && parent; i++) {
+            const tabTxt = parent.textContent.replace('×','').replace('x','').trim().toLowerCase();
+            if (tabTxt === 'home') return false;
+            parent = parent.parentElement;
+          }
+          return true;
+        });
+        if (!closeBtn) break;
+        closeBtn.click();
+        count++;
+      }
+      return count;
     });
-    if (closed) {
-      console.log('[SparkP2P] Closed open Transaction tab — portal reset to clean state');
+    if (closedCount > 0) {
+      console.log(`[SparkP2P] Closed ${closedCount} portal tab(s) — starting sweep from clean state`);
       await new Promise(r => setTimeout(r, 1500));
     }
   } catch (e) {}
