@@ -9951,39 +9951,12 @@ async function executeMpesaSweep(sweepJob) {
   console.log(`[SparkP2P] === M-PESA SWEEP KES ${amount} (sweep #${sweep_id}) ===`);
   await mpesaOrgPage.bringToFront().catch(() => {});
 
-  // Close ALL non-Home portal tabs before each sweep so we always start from a clean state.
-  // This clears leftover "Initiate Revenue Settlement" (success page) and "Transaction" tabs
-  // from previous sweeps, which otherwise cause Step 1's Submit button to not be found.
-  try {
-    const closedCount = await mpesaOrgPage.evaluate(() => {
-      let count = 0;
-      // Keep clicking close buttons on non-Home tabs until none remain
-      for (let pass = 0; pass < 5; pass++) {
-        const allEls = Array.from(document.querySelectorAll('*'));
-        // Find close buttons (×) that are inside a tab that is NOT "Home"
-        const closeBtn = allEls.find(el => {
-          const txt = el.textContent.trim();
-          if (txt !== '×' && txt !== 'x' && txt !== 'X') return false;
-          // Walk up to find the tab container and make sure it's not the Home tab
-          let parent = el.parentElement;
-          for (let i = 0; i < 5 && parent; i++) {
-            const tabTxt = parent.textContent.replace('×','').replace('x','').trim().toLowerCase();
-            if (tabTxt === 'home') return false;
-            parent = parent.parentElement;
-          }
-          return true;
-        });
-        if (!closeBtn) break;
-        closeBtn.click();
-        count++;
-      }
-      return count;
-    });
-    if (closedCount > 0) {
-      console.log(`[SparkP2P] Closed ${closedCount} portal tab(s) — starting sweep from clean state`);
-      await new Promise(r => setTimeout(r, 1500));
-    }
-  } catch (e) {}
+  // Reload the portal page before each sweep — this clears all internal SPA tabs
+  // (Initiate Revenue Settlement, Transaction, etc.) left over from previous sweeps.
+  // Navigating to home doesn't clear them; a full reload does.
+  console.log('[SparkP2P] Reloading portal to clear tab state...');
+  await mpesaOrgPage.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 3000));
 
   const failSweep = async (error) => {
     mpesaSweepRunning = false;
