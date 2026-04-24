@@ -1626,6 +1626,10 @@ export default function Dashboard() {
                           const wdStatus = (withdrawal.status || 'pending').toLowerCase();
                           const statusBadge = wdStatus === 'completed'
                             ? { label: 'Completed', color: '#10b981', bg: 'rgba(16,185,129,0.1)' }
+                            : wdStatus === 'cancelled'
+                            ? { label: 'Cancelled', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' }
+                            : wdStatus === 'failed'
+                            ? { label: 'Failed', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' }
                             : { label: 'Pending', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' };
 
                           const feeLabels = {
