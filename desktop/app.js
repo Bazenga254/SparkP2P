@@ -9963,31 +9963,38 @@ async function executeMpesaSweep(sweepJob) {
     // â”€â”€ STEP 1: Revenue Settlement (utility float → working account) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Navigate directly to initiate URL â€” "All organization" is pre-selected by default
     console.log('[SparkP2P] Step 1: Revenue Settlement...');
-    await mpesaOrgPage.goto(MPESA_ORG_REVENUE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 3000));
-    await takeScreenshot('sweep_step1_revenue_form', mpesaOrgPage);
+    // Retry up to 3 times — back-to-back sweeps can leave the portal transitioning
+    // so the revenue form loads but Submit isn't rendered yet. Fresh navigation fixes it.
+    let step1Submitted = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await mpesaOrgPage.goto(MPESA_ORG_REVENUE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, attempt === 1 ? 4000 : 6000));
+      await takeScreenshot(`sweep_step1_revenue_form_attempt${attempt}`, mpesaOrgPage);
 
-    // Ensure "All organization" radio is selected
-    await mpesaOrgPage.evaluate(() => {
-      const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
-      const allOrg = radios.find(r => {
-        const label = r.closest('label')?.textContent || r.nextSibling?.textContent || '';
-        return label.toLowerCase().includes('all organization') || label.toLowerCase().includes('all organisation');
-      });
-      if (allOrg && !allOrg.checked) allOrg.click();
-    }).catch(() => {});
+      await mpesaOrgPage.evaluate(() => {
+        const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
+        const allOrg = radios.find(r => {
+          const label = r.closest('label')?.textContent || r.nextSibling?.textContent || '';
+          return label.toLowerCase().includes('all organization') || label.toLowerCase().includes('all organisation');
+        });
+        if (allOrg && !allOrg.checked) allOrg.click();
+      }).catch(() => {});
 
-    await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 1000));
 
-    // Click Submit button (bottom right)
-    const step1Submitted = await mpesaOrgPage.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-      const btn = btns.find(b => b.textContent.trim().toLowerCase() === 'submit' || b.value?.toLowerCase() === 'submit');
-      if (btn) { btn.scrollIntoView({ block: 'center' }); btn.click(); return true; }
-      return false;
-    }).catch(() => false);
+      step1Submitted = await mpesaOrgPage.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+        const btn = btns.find(b => b.textContent.trim().toLowerCase() === 'submit' || b.value?.toLowerCase() === 'submit');
+        if (btn) { btn.scrollIntoView({ block: 'center' }); btn.click(); return true; }
+        return false;
+      }).catch(() => false);
 
-    if (!step1Submitted) return failSweep('Revenue Settlement: Submit button not found');
+      if (step1Submitted) break;
+      console.log(`[SparkP2P] Step 1: Submit not found (attempt ${attempt}/3) — retrying...`);
+      if (attempt < 3) await new Promise(r => setTimeout(r, 4000));
+    }
+
+    if (!step1Submitted) return failSweep('Revenue Settlement: Submit button not found after 3 attempts');
     console.log('[SparkP2P] Step 1: Submit clicked');
 
     await new Promise(r => setTimeout(r, 2000));
