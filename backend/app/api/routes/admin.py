@@ -104,7 +104,7 @@ async def admin_dashboard(
     )
     today_orders, today_volume = result.one()
 
-    # Today's withdrawal fees — exclude cancelled/refunded fees
+    # Today's withdrawal fees — only count completed fees (not pending/cancelled/failed)
     result = await db.execute(
         select(
             func.coalesce(func.sum(-WalletTransaction.amount), 0),
@@ -115,7 +115,7 @@ async def admin_dashboard(
                 TransactionType.DAILY_VOLUME_FEE,
             ]),
             WalletTransaction.amount < 0,
-            ~WalletTransaction.description.contains('[CANCELLED'),
+            WalletTransaction.status == "completed",
         )
     )
     today_revenue = float(result.scalar() or 0)
@@ -890,7 +890,7 @@ async def admin_analytics(
                 TransactionType.DAILY_VOLUME_FEE,
             ]),
             WalletTransaction.amount < 0,
-            ~WalletTransaction.description.contains('[CANCELLED'),
+            WalletTransaction.status == "completed",
         ]
         if start is not None:
             where.append(WalletTransaction.created_at >= start)
@@ -1655,11 +1655,11 @@ async def revenue_breakdown(
     }
     start = period_starts.get(period)
 
-    # Base filter: only real fee charges (not cancelled)
+    # Base filter: only completed fee charges (not cancelled/pending)
     base_where = [
         WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE,
         WalletTransaction.amount < 0,
-        ~WalletTransaction.description.contains("[CANCELLED"),
+        WalletTransaction.status == "completed",
     ]
     if start:
         base_where.append(WalletTransaction.created_at >= start)

@@ -1290,6 +1290,17 @@ async def bank_withdrawal_complete(
     for fee_tx in fee_result.scalars().all():
         fee_tx.status = "completed"
 
+    # Mark the queued Payment record as completed now that transfer actually happened
+    spk_ref = f"SPK-{str(tx.id).zfill(6)}"
+    pay_result = await db.execute(
+        select(Payment).where(Payment.bill_ref_number == spk_ref)
+    )
+    payment = pay_result.scalar_one_or_none()
+    if payment:
+        payment.status = PaymentStatus.COMPLETED
+        if data.reference:
+            payment.mpesa_transaction_id = data.reference
+
     await db.commit()
 
     net_amount = abs(tx.amount)
@@ -1510,6 +1521,15 @@ async def mpesa_sweep_failed(
         for t in group_txns:
             t.status = "cancelled"
             t.description = (t.description or "") + " | CANCELLED: sweep failed"
+
+        # Reverse the queued Payment record so admin sees it as cancelled, not completed
+        withdrawal_tx = next((t for t in group_txns if t.transaction_type == TransactionType.WITHDRAWAL), None)
+        if withdrawal_tx:
+            spk_ref = f"SPK-{str(withdrawal_tx.id).zfill(6)}"
+            pay_result = await db.execute(select(Payment).where(Payment.bill_ref_number == spk_ref))
+            payment = pay_result.scalar_one_or_none()
+            if payment:
+                payment.status = PaymentStatus.REVERSED
 
         # Restore wallet balance and totals
         wallet.balance += total_to_refund

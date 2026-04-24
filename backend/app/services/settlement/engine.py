@@ -407,8 +407,15 @@ class SettlementEngine:
                 logger.error(f"Unknown settlement method: {trader.settlement_method}")
                 return False
 
-            # Save outbound payment record with full details
+            # Save outbound payment record with full details.
+            # bank_paybill: I&M transfer hasn't happened yet — start as PENDING,
+            # updated to COMPLETED by /ext/bank-withdrawal-complete when bot succeeds.
             phone = trader.settlement_phone or trader.phone
+            pay_status = (
+                PaymentStatus.PENDING
+                if trader.settlement_method == SettlementMethod.BANK_PAYBILL
+                else PaymentStatus.COMPLETED
+            )
             payment = Payment(
                 order_id=order.id if order else None,
                 trader_id=trader.id,
@@ -422,7 +429,7 @@ class SettlementEngine:
                 remarks=remarks,
                 mpesa_transaction_id=result.get("ConversationID") or result.get("OriginatorConversationID") or None,
                 bill_ref_number=spk_ref,  # SPK-XXXXXX reference for admin traceability
-                status=PaymentStatus.COMPLETED,
+                status=pay_status,
                 raw_callback=result,
             )
             self.db.add(payment)
