@@ -647,7 +647,7 @@ export default function Dashboard() {
         if (p.cooldown_active) {
           alert(`Your payment method was recently changed. Withdrawals available in ${p.cooldown_hours} hours.`);
         } else {
-          alert('Cannot withdraw at this time.');
+          alert(p.reason || 'Cannot withdraw at this time.');
         }
         return;
       }

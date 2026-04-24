@@ -1140,9 +1140,14 @@ async def preview_withdrawal(
             min_req = eligibility.get("min_required", 0)
             return {
                 "can_withdraw": False,
-                "reason": eligibility["reason"],
+                "reason": (
+                    f"Minimum I&M Bank withdrawal is KES {min_req:,}. "
+                    f"Your balance is KES {wallet.balance:,.2f}. "
+                    f"You need KES {max(0, min_req - wallet.balance):,.2f} more to withdraw."
+                ),
                 "min_required": min_req,
                 "balance": wallet.balance,
+                "cooldown_active": False,
             }
 
     safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, wallet.balance)
