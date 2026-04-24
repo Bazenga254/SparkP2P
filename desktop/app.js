@@ -9317,6 +9317,16 @@ async function executeImLocalTransfer(job) {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ tx_id: job.id, error: e.message }),
     }).catch(() => {});
+    // Reset the associated M-PESA sweep to pending so the bot retries the full flow
+    const resetRes = await fetch(`${API_BASE}/ext/reset-pending-sweep`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    }).catch(() => null);
+    const resetData = resetRes ? await resetRes.json().catch(() => null) : null;
+    if (resetData?.reset) {
+      console.log(`[SparkP2P] Sweep ${resetData.sweep_id} reset to pending — will retry M-PESA → I&M flow`);
+      sendBotLog('warning', `I&M transfer failed — retrying from M-PESA sweep #${resetData.sweep_id}`);
+    }
   } finally {
     imWithdrawalRunning = false;
     await syncImCookies();

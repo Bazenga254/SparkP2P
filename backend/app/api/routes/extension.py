@@ -1554,6 +1554,37 @@ async def mpesa_sweep_failed(
     return {"status": "failed", "sweep_id": sweep.id, "refunded": refunded_amount}
 
 
+@router.post("/reset-pending-sweep")
+async def reset_pending_sweep(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Called by desktop when I&M transfer fails after a sweep.
+    Resets the most recent completed sweep (within last 2h) back to 'pending'
+    so the bot retries the full M-PESA → I&M flow from scratch on next poll.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    result = await db.execute(
+        select(ImSweep)
+        .where(
+            ImSweep.trader_id == trader.id,
+            ImSweep.status == "completed",
+            ImSweep.created_at >= cutoff,
+        )
+        .order_by(ImSweep.created_at.desc())
+        .limit(1)
+    )
+    sweep = result.scalar_one_or_none()
+    if not sweep:
+        return {"reset": False, "reason": "No recent completed sweep found"}
+
+    sweep.status = "pending"
+    sweep.failure_reason = "I&M transfer failed — auto-retrying from M-PESA sweep"
+    await db.commit()
+    logger.info(f"Sweep {sweep.id} reset to pending for retry (I&M transfer failure)")
+    return {"reset": True, "sweep_id": sweep.id}
+
+
 # ═══════════════════════════════════════════════════════════
 # PAYBILL STATEMENT SYNC — Desktop pushes scraped transactions
 # ═══════════════════════════════════════════════════════════
