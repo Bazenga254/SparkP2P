@@ -669,7 +669,7 @@ export default function Dashboard() {
       }
 
       setWithdrawPreview(p);
-      setWithdrawCustomAmount(String(p.balance ?? ''));
+      setWithdrawCustomAmount(String(Math.round((p.balance ?? 0) * 100) / 100));
       setWithdrawOtp('');
       setWithdrawOtpSent(false);
       setWithdrawMsg('');
@@ -1852,7 +1852,7 @@ export default function Dashboard() {
                       />
                       {!forceFullBalance && (
                       <button
-                        onClick={() => setWithdrawCustomAmount(String(balance))}
+                        onClick={() => setWithdrawCustomAmount(String(Math.round(balance * 100) / 100))}
                         style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#10b981', fontSize: 11, cursor: 'pointer', fontWeight: 700 }}
                       >MAX</button>
                       )}

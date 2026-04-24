@@ -1151,20 +1151,23 @@ async def preview_withdrawal(
         eligibility = get_bank_withdrawal_eligibility(wallet.balance)
         if not eligibility["eligible"]:
             min_req = eligibility.get("min_required", 0)
+            bal = round(wallet.balance, 2)
             return {
                 "can_withdraw": False,
                 "reason": (
                     f"Minimum I&M Bank withdrawal is KES {min_req:,}. "
-                    f"Your balance is KES {wallet.balance:,.2f}. "
-                    f"You need KES {max(0, min_req - wallet.balance):,.2f} more to withdraw."
+                    f"Your balance is KES {bal:,.2f}. "
+                    f"You need KES {max(0, min_req - bal):,.2f} more to withdraw."
                 ),
                 "min_required": min_req,
-                "balance": wallet.balance,
+                "balance": bal,
                 "cooldown_active": False,
             }
 
-    safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, wallet.balance)
-    net_amount = wallet.balance - total_fee
+    balance = round(wallet.balance, 2)
+    safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, balance)
+    total_fee = round(total_fee, 2)
+    net_amount = round(balance - total_fee, 2)
 
     # Check cooldown
     cooldown_active = False
@@ -1177,14 +1180,14 @@ async def preview_withdrawal(
 
     return {
         "can_withdraw": net_amount > 0 and not cooldown_active,
-        "balance": wallet.balance,
+        "balance": balance,
         "transaction_fee": total_fee,
         "you_receive": max(net_amount, 0),
         "cooldown_active": cooldown_active,
         "cooldown_hours": cooldown_hours,
         "settlement_method": trader.settlement_method.value,
         "min_withdrawal": MIN_WITHDRAWAL,
-        "force_full_withdrawal": wallet.balance < MIN_WITHDRAWAL * 2,  # balance < KES 2,000 → must take all
+        "force_full_withdrawal": balance < MIN_WITHDRAWAL * 2,
     }
 
 
