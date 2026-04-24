@@ -103,6 +103,7 @@ const POLL_INTERVAL_IDLE   = 30000; // 30 seconds â€” no orders, scan faste
 let mainWindow = null;
 let tray = null;
 let token = null;
+let traderIsAdmin = false; // Set after login — gates M-PESA portal auto-open to admin accounts only
 let browser = null;
 let pollerRunning = false;
 let pollTimer = null;
@@ -1085,6 +1086,15 @@ async function onLoginDetected() {
     // Reset portal connection flags â€” they reflect live sessions, not persistent state
     fetch(`${API_BASE}/traders/disconnect-im`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
     fetch(`${API_BASE}/traders/disconnect-mpesa-portal`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
+    // Determine if this trader is an admin — controls M-PESA portal auto-open
+    try {
+      const profileRes = await fetch(`${API_BASE}/traders/profile`, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (profileRes.ok) {
+        const profileData = await profileRes.json();
+        traderIsAdmin = !!(profileData.is_admin);
+        console.log(`[SparkP2P] Trader role: ${traderIsAdmin ? 'admin' : 'trader'}`);
+      }
+    } catch (e) { traderIsAdmin = false; }
   }
 
   await fetchAndApplyCredentials();
@@ -1117,12 +1127,14 @@ async function onLoginDetected() {
     else console.log('[SparkP2P] Gmail not detected â€” open Gmail in Chrome manually if needed');
   }).catch(() => {});
 
-  // Auto-reconnect I&M Bank using persisted Chrome profile cookies.
-  // M-PESA org portal is connected lazily when a sweep job arrives, not on login.
-  setTimeout(() => {
-    console.log('[SparkP2P] Auto-connecting I&M Bank...');
-    connectIm().catch(() => {});
-  }, 5000);
+  // Auto-reconnect I&M Bank and M-PESA portal — admin accounts only.
+  // Regular traders never need these banking portals open.
+  if (traderIsAdmin) {
+    setTimeout(() => {
+      console.log('[SparkP2P] Auto-connecting I&M Bank (admin)...');
+      connectIm().catch(() => {});
+    }, 5000);
+  }
 
   // Suppress window.open() on Binance pages (prevents popup tabs)
   const mainPage = await getPage();
@@ -8494,10 +8506,10 @@ async function connectIm() {
     await imPage.bringToFront();
     imPage.on('close', () => { imPage = null; });
 
-    // Auto-open M-PESA portal tab 10 seconds after I&M tab opens
+    // Auto-open M-PESA portal tab 10 seconds after I&M tab opens — admin accounts only
     setTimeout(() => {
-      if (!connectingMpesa && (!mpesaOrgPage || mpesaOrgPage.isClosed())) {
-        console.log('[SparkP2P] Auto-opening M-PESA portal after I&M connect...');
+      if (traderIsAdmin && !connectingMpesa && (!mpesaOrgPage || mpesaOrgPage.isClosed())) {
+        console.log('[SparkP2P] Auto-opening M-PESA portal after I&M connect (admin)...');
         connectMpesaPortal().catch(() => {});
       }
     }, 10000);
