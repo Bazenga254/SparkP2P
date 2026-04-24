@@ -1601,7 +1601,7 @@ export default function Dashboard() {
                                   </span>
                                   {hasFees && (
                                     <span style={{ marginLeft: 6, fontSize: 11, color: '#6b7280' }}>
-                                      (incl. {fmtKES(Math.abs(totalFees))} fees)
+                                      (incl. {fmtKESFee(Math.abs(totalFees))} fees)
                                     </span>
                                   )}
                                 </td>
@@ -1641,7 +1641,7 @@ export default function Dashboard() {
                                         {fees.map(f => (
                                           <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13, color: '#9ca3af' }}>
                                             <span>{feeLabels[f.type] || f.type.replace(/_/g, ' ')}</span>
-                                            <span className="negative">{fmtKES(Math.abs(f.amount))}</span>
+                                            <span className="negative">{fmtKESFee(Math.abs(f.amount))}</span>
                                           </div>
                                         ))}
                                         <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #374151', paddingTop: 4, marginTop: 4, fontSize: 13, fontWeight: 600, color: '#f9fafb' }}>
