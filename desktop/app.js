@@ -1117,16 +1117,12 @@ async function onLoginDetected() {
     else console.log('[SparkP2P] Gmail not detected â€” open Gmail in Chrome manually if needed');
   }).catch(() => {});
 
-  // Auto-reconnect I&M and M-PESA portals using persisted Chrome profile cookies.
-  // If session is still valid → silent reconnect. If expired → tab opens for manual login.
+  // Auto-reconnect I&M Bank using persisted Chrome profile cookies.
+  // M-PESA org portal is connected lazily when a sweep job arrives, not on login.
   setTimeout(() => {
     console.log('[SparkP2P] Auto-connecting I&M Bank...');
     connectIm().catch(() => {});
   }, 5000);
-  setTimeout(() => {
-    console.log('[SparkP2P] Auto-connecting M-PESA portal...');
-    connectMpesaPortal().catch(() => {});
-  }, 10000);
 
   // Suppress window.open() on Binance pages (prevents popup tabs)
   const mainPage = await getPage();
@@ -9902,8 +9898,21 @@ async function executeMpesaSweep(sweepJob) {
   // sweepJob = { sweep_id, amount, reference }
   if (mpesaSweepRunning) return { success: false, error: 'sweep_in_progress' };
   if (!mpesaOrgPage || mpesaOrgPage.isClosed()) {
-    console.log('[SparkP2P] M-PESA org page not open â€” cannot execute sweep');
-    return { success: false, error: 'portal_not_connected' };
+    // Lazy-connect: portal not open yet — try silent reconnect using saved cookies
+    console.log('[SparkP2P] M-PESA org page not open — attempting lazy connect before sweep');
+    sendBotLog('info', 'M-Pesa portal not connected — connecting now for sweep...');
+    if (!connectingMpesa) connectMpesaPortal().catch(() => {});
+    // Wait up to 60 seconds for session to restore (succeeds silently if cookies are valid)
+    let waited = 0;
+    while ((!mpesaOrgPage || mpesaOrgPage.isClosed()) && waited < 60000) {
+      await new Promise(r => setTimeout(r, 2000));
+      waited += 2000;
+    }
+    if (!mpesaOrgPage || mpesaOrgPage.isClosed()) {
+      console.log('[SparkP2P] M-PESA org page still not open after 60s — sweep aborted');
+      sendBotLog('error', 'M-Pesa portal not connected — go to Settings to connect manually');
+      return { success: false, error: 'portal_not_connected' };
+    }
   }
   mpesaSweepRunning = true;
   const { sweep_id, amount, reference } = sweepJob;
