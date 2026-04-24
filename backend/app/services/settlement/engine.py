@@ -58,7 +58,7 @@ def get_bank_withdrawal_eligibility(amount: float) -> dict:
     """
     if amount < BANK_MIN_WITHDRAWAL:
         return {"eligible": False, "fee": 0, "reason": f"Minimum I&M Bank withdrawal is KES {BANK_MIN_WITHDRAWAL:,}", "min_required": BANK_MIN_WITHDRAWAL}
-    return {"eligible": True, "fee": round(amount * 0.0005, 2), "min_required": None}
+    return {"eligible": True, "fee": round(amount * 0.0005), "min_required": None}
 
 
 def get_total_settlement_fee(trader, amount: float, is_manual_withdrawal: bool = True) -> tuple:
