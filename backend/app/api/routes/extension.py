@@ -1275,6 +1275,21 @@ async def bank_withdrawal_complete(
     tx.processed_at = datetime.now(timezone.utc)
     if data.reference:
         tx.description = (tx.description or "") + f" | I&M ref: {data.reference}"
+
+    # Complete the pending fee transactions created alongside this withdrawal
+    fee_result = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.trader_id == tx.trader_id,
+            WalletTransaction.status == "pending",
+            WalletTransaction.transaction_type.in_([
+                TransactionType.PLATFORM_FEE,
+                TransactionType.SETTLEMENT_FEE,
+            ]),
+        )
+    )
+    for fee_tx in fee_result.scalars().all():
+        fee_tx.status = "completed"
+
     await db.commit()
 
     net_amount = abs(tx.amount)
@@ -1476,13 +1491,17 @@ async def mpesa_sweep_failed(
     if tx_row:
         pending_tx, wallet = tx_row
 
-        # Cancel all pending transactions for this withdrawal group (withdrawal + fees)
-        # by finding all negative txns created within 5 seconds of the withdrawal
+        # Cancel all pending transactions for this withdrawal group (withdrawal + fees).
+        # Include zero-amount fee transactions (SETTLEMENT_FEE can be 0 for bank withdrawals).
         group_result = await db.execute(
             select(WalletTransaction).where(
                 WalletTransaction.trader_id == sweep.trader_id,
                 WalletTransaction.status == "pending",
-                WalletTransaction.amount < 0,
+                WalletTransaction.transaction_type.in_([
+                    TransactionType.WITHDRAWAL,
+                    TransactionType.PLATFORM_FEE,
+                    TransactionType.SETTLEMENT_FEE,
+                ]),
             )
         )
         group_txns = group_result.scalars().all()

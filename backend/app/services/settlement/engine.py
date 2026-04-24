@@ -234,6 +234,10 @@ class SettlementEngine:
                 )
                 self.db.add(txn)
 
+            # For bank_paybill the I&M transfer has not happened yet —
+            # keep fees pending until /ext/bank-withdrawal-complete fires.
+            fee_status = "pending" if is_bank else "completed"
+
             # Record Safaricom fee
             self.db.add(WalletTransaction(
                 trader_id=trader_id,
@@ -242,6 +246,7 @@ class SettlementEngine:
                 amount=-safaricom_fee,
                 balance_after=balance_after_safaricom_fee,
                 description=f"Safaricom fee: KES {safaricom_fee}",
+                status=fee_status,
             ))
 
             # Record platform markup (our revenue)
@@ -252,6 +257,7 @@ class SettlementEngine:
                 amount=-platform_markup,
                 balance_after=balance_after_platform_fee,
                 description=f"Service fee: KES {platform_markup}",
+                status=fee_status,
             ))
 
             await self.db.commit()
