@@ -381,6 +381,8 @@ export default function Dashboard() {
   const [transactions, setTransactions] = useState([]);
   const [withdrawalTxns, setWithdrawalTxns] = useState([]);
   const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
+  const [depositPage, setDepositPage] = useState(1);
+  const [withdrawalPage, setWithdrawalPage] = useState(1);
   const [activeTab, setActiveTab] = useState('overview');
   const [botLogs, setBotLogs] = useState([]);
   const logsEndRef = useRef(null);
@@ -1460,7 +1462,7 @@ export default function Dashboard() {
               {['deposits', 'withdrawals'].map((t) => (
                 <button
                   key={t}
-                  onClick={() => setTxnTab(t)}
+                  onClick={() => { setTxnTab(t); setDepositPage(1); setWithdrawalPage(1); }}
                   style={{
                     padding: '8px 22px', borderRadius: 8, border: 'none', cursor: 'pointer',
                     fontWeight: 600, fontSize: 13,
@@ -1491,34 +1493,58 @@ export default function Dashboard() {
                     <Plus size={14} /> New Deposit
                   </button>
                 </div>
-                {depositHistory.length > 0 ? (
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Amount</th>
-                        <th>Status</th>
-                        <th>Receipt</th>
-                        <th>Balance After</th>
-                        <th>Time</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {depositHistory.map((dep) => (
-                        <tr key={dep.id}>
-                          <td className="positive">+KES {dep.amount.toLocaleString()}</td>
-                          <td style={{
-                            color: dep.status === 'completed' ? '#10b981' : dep.status === 'failed' ? '#ef4444' : '#f59e0b',
-                          }}>
-                            {dep.status}
-                          </td>
-                          <td className="mono">{dep.mpesa_receipt || '-'}</td>
-                          <td>KES {dep.balance_after?.toLocaleString() || '-'}</td>
-                          <td>{new Date(dep.created_at).toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
+                {depositHistory.length > 0 ? (() => {
+                  const PAGE_SIZE = 20;
+                  const totalDepPages = Math.ceil(depositHistory.length / PAGE_SIZE);
+                  const depSlice = depositHistory.slice((depositPage - 1) * PAGE_SIZE, depositPage * PAGE_SIZE);
+                  return (
+                    <>
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Amount</th>
+                            <th>Status</th>
+                            <th>Receipt</th>
+                            <th>Balance After</th>
+                            <th>Time</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {depSlice.map((dep) => (
+                            <tr key={dep.id}>
+                              <td className="positive">+KES {dep.amount.toLocaleString()}</td>
+                              <td style={{ color: dep.status === 'completed' ? '#10b981' : dep.status === 'failed' ? '#ef4444' : '#f59e0b' }}>
+                                {dep.status}
+                              </td>
+                              <td className="mono">{dep.mpesa_receipt || '-'}</td>
+                              <td>KES {dep.balance_after?.toLocaleString() || '-'}</td>
+                              <td>{new Date(dep.created_at).toLocaleString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {totalDepPages > 1 && (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid #1f2937', marginTop: 0 }}>
+                          <span style={{ fontSize: 12, color: '#6b7280' }}>
+                            Page {depositPage} of {totalDepPages} &nbsp;·&nbsp; {depositHistory.length} total
+                          </span>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                              onClick={() => setDepositPage(p => Math.max(1, p - 1))}
+                              disabled={depositPage === 1}
+                              style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #374151', background: depositPage === 1 ? 'transparent' : '#1f2937', color: depositPage === 1 ? '#4b5563' : '#fff', fontSize: 12, cursor: depositPage === 1 ? 'default' : 'pointer' }}
+                            >← Prev</button>
+                            <button
+                              onClick={() => setDepositPage(p => Math.min(totalDepPages, p + 1))}
+                              disabled={depositPage === totalDepPages}
+                              style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #374151', background: depositPage === totalDepPages ? 'transparent' : '#1f2937', color: depositPage === totalDepPages ? '#4b5563' : '#fff', fontSize: 12, cursor: depositPage === totalDepPages ? 'default' : 'pointer' }}
+                            >Next →</button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  );
+                })() : (
                   <p className="empty-msg">No deposits yet. Deposit funds to enable auto-pay for buy orders.</p>
                 )}
               </div>
@@ -1549,10 +1575,15 @@ export default function Dashboard() {
                 return null;
               };
 
+              const WD_PAGE_SIZE = 20;
+              const totalWdPages = Math.ceil(rows.length / WD_PAGE_SIZE);
+              const wdSlice = rows.slice((withdrawalPage - 1) * WD_PAGE_SIZE, withdrawalPage * WD_PAGE_SIZE);
+
               return (
                 <div className="card">
                   <h3>Withdrawals</h3>
                   {rows.length > 0 ? (
+                    <>
                     <table className="data-table">
                       <thead>
                         <tr>
@@ -1566,7 +1597,7 @@ export default function Dashboard() {
                         </tr>
                       </thead>
                       <tbody>
-                        {rows.map((group, idx) => {
+                        {wdSlice.map((group, idx) => {
                           const { withdrawal, fees } = group;
                           if (!withdrawal) return null;
                           const totalFees = fees.reduce((s, f) => s + f.amount, 0);
@@ -1658,6 +1689,26 @@ export default function Dashboard() {
                         })}
                       </tbody>
                     </table>
+                    {totalWdPages > 1 && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid #1f2937' }}>
+                        <span style={{ fontSize: 12, color: '#6b7280' }}>
+                          Page {withdrawalPage} of {totalWdPages} &nbsp;·&nbsp; {rows.length} total
+                        </span>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            onClick={() => setWithdrawalPage(p => Math.max(1, p - 1))}
+                            disabled={withdrawalPage === 1}
+                            style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #374151', background: withdrawalPage === 1 ? 'transparent' : '#1f2937', color: withdrawalPage === 1 ? '#4b5563' : '#fff', fontSize: 12, cursor: withdrawalPage === 1 ? 'default' : 'pointer' }}
+                          >← Prev</button>
+                          <button
+                            onClick={() => setWithdrawalPage(p => Math.min(totalWdPages, p + 1))}
+                            disabled={withdrawalPage === totalWdPages}
+                            style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #374151', background: withdrawalPage === totalWdPages ? 'transparent' : '#1f2937', color: withdrawalPage === totalWdPages ? '#4b5563' : '#fff', fontSize: 12, cursor: withdrawalPage === totalWdPages ? 'default' : 'pointer' }}
+                          >Next →</button>
+                        </div>
+                      </div>
+                    )}
+                    </>
                   ) : (
                     <p className="empty-msg">No withdrawals yet.</p>
                   )}
