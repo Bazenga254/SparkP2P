@@ -1735,7 +1735,7 @@ export default function Dashboard() {
             ) : botLogs.length === 0 ? (
               <p style={{ color: '#6b7280', textAlign: 'center', padding: 40 }}>No activity yet. Logs will appear here as the bot runs.</p>
             ) : (
-              <div style={{ maxHeight: 520, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{ maxHeight: 'calc(80vh - 140px)', minHeight: 300, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {botLogs.map((log, i) => {
                   const colors = { success: '#10b981', error: '#ef4444', warning: '#f59e0b', info: '#6b7280' };
                   const badges = { success: '✓', error: '✕', warning: '⚠', info: '·' };
