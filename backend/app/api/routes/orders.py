@@ -202,6 +202,7 @@ async def get_order_stats(
                 TransactionType.SETTLEMENT_FEE,
                 TransactionType.PLATFORM_FEE,
             ]),
+            WalletTransaction.status == "completed",
         )
     )
     total_fees_today = float(result.scalar() or 0)
