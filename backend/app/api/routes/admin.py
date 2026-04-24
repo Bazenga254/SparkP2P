@@ -1618,11 +1618,12 @@ async def delete_withdrawal(
             WalletTransaction.trader_id == tx.trader_id,
             WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE,
             func.date_trunc("second", WalletTransaction.created_at) == func.date_trunc("second", tx.created_at),
-            ~WalletTransaction.description.contains("[CANCELLED"),
+            WalletTransaction.status != "cancelled",
         )
     )
     paired_fee = fee_result.scalar_one_or_none()
     if paired_fee:
+        paired_fee.status = "cancelled"
         paired_fee.description = (paired_fee.description or "") + " [CANCELLED - withdrawal deleted]"
 
     await db.delete(tx)
