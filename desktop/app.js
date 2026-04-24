@@ -163,6 +163,7 @@ let connectingIm = false;      // Prevents concurrent connectIm() calls
 let imWithdrawalRunning = false; // Prevents concurrent withdrawal executions
 let mpesaOrgPage = null;       // Persistent M-PESA org portal tab
 let connectingMpesa = false;   // Prevents concurrent connectMpesaPortal() calls
+let mpesaPortalReady = false;  // True only after Vision confirms LOGGED_IN — gates sweep execution
 let mpesaSweepRunning = false; // Prevents concurrent sweep executions
 let lastSweepCompletedAt = 0;  // Timestamp of last completed sweep (ms) — enforces cooldown
 let pauseInactivityTimer = null; // Auto-resume timer when bot is paused
@@ -9521,7 +9522,7 @@ async function connectMpesaPortal() {
       await mpesaOrgPage.goto(MPESA_ORG_URL, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     }
     await mpesaOrgPage.bringToFront();
-    mpesaOrgPage.on('close', () => { mpesaOrgPage = null; });
+    mpesaOrgPage.on('close', () => { mpesaOrgPage = null; mpesaPortalReady = false; });
 
     // Poll until Vision confirms user is logged into M-PESA org dashboard
     let attempts = 0;
@@ -9557,6 +9558,7 @@ async function connectMpesaPortal() {
 
         if (verdict === 'LOGGED_IN') {
           clearInterval(check);
+          mpesaPortalReady = true; // Portal confirmed logged in — sweeps may now execute
           console.log('[SparkP2P] M-PESA portal login confirmed! Starting keep-alive...');
           // Save cookies locally so next reconnect skips login page
           const mpesaFreshCookies = await mpesaOrgPage.cookies(MPESA_ORG_URL).catch(() => []);
@@ -9598,6 +9600,7 @@ function startMpesaOrgKeepAlive() {
       if (currentUrl.includes('/login') || currentUrl === MPESA_ORG_URL + '/' || currentUrl === MPESA_ORG_URL) {
         console.log('[SparkP2P] M-PESA portal session expired — reconnecting');
         sendBotLog('warning', 'M-Pesa portal session expired — reconnecting');
+        mpesaPortalReady = false; // Block sweeps until re-login confirmed
         clearInterval(mpesaOrgKeepAliveTimer);
         mpesaOrgKeepAliveTimer = null;
         connectMpesaPortal().catch(() => {});
@@ -9926,14 +9929,14 @@ async function executeMpesaSweep(sweepJob) {
     console.log('[SparkP2P] M-PESA org page not open — attempting lazy connect before sweep');
     sendBotLog('info', 'M-Pesa portal not connected — connecting now for sweep...');
     if (!connectingMpesa) connectMpesaPortal().catch(() => {});
-    // Wait up to 60 seconds for session to restore (succeeds silently if cookies are valid)
+    // Wait up to 90 seconds for portal tab to open AND Vision to confirm login
     let waited = 0;
-    while ((!mpesaOrgPage || mpesaOrgPage.isClosed()) && waited < 60000) {
+    while ((!mpesaPortalReady) && waited < 90000) {
       await new Promise(r => setTimeout(r, 2000));
       waited += 2000;
     }
-    if (!mpesaOrgPage || mpesaOrgPage.isClosed()) {
-      console.log('[SparkP2P] M-PESA org page still not open after 60s — sweep aborted');
+    if (!mpesaPortalReady || !mpesaOrgPage || mpesaOrgPage.isClosed()) {
+      console.log('[SparkP2P] M-PESA portal not logged in after 90s — sweep aborted');
       sendBotLog('error', 'M-Pesa portal not connected — go to Settings to connect manually');
       return { success: false, error: 'portal_not_connected' };
     }
@@ -10282,6 +10285,7 @@ async function fillFieldWithVision(page, fieldLabel, value) {
 const SWEEP_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes between sweeps — portal needs to reset
 setInterval(async () => {
   if (!token || !mpesaOrgPage || mpesaOrgPage.isClosed() || mpesaSweepRunning) return;
+  if (!mpesaPortalReady) return; // Wait for Vision to confirm portal login before sweeping
   if (Date.now() - lastSweepCompletedAt < SWEEP_COOLDOWN_MS) return; // cooldown
   try {
     const res = await fetch(`${API_BASE}/ext/pending-mpesa-sweeps`, {
