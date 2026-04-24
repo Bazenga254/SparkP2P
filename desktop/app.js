@@ -9947,6 +9947,28 @@ async function executeMpesaSweep(sweepJob) {
   console.log(`[SparkP2P] === M-PESA SWEEP KES ${amount} (sweep #${sweep_id}) ===`);
   await mpesaOrgPage.bringToFront().catch(() => {});
 
+  // Close any open "Transaction" tab so every sweep starts from a clean portal state
+  try {
+    const closed = await mpesaOrgPage.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('[class*="tab"], [role="tab"], li, span'));
+      const txTab = tabs.find(el => el.textContent.trim().toLowerCase().startsWith('transaction'));
+      if (!txTab) return false;
+      const closeBtn = txTab.querySelector('button, [class*="close"], [class*="cancel"], span') ||
+                       txTab.closest('li')?.querySelector('button, [class*="close"]');
+      if (closeBtn) { closeBtn.click(); return true; }
+      // fallback: look for × or X inside the tab
+      const xBtn = Array.from(txTab.querySelectorAll('*')).find(el =>
+        el.children.length === 0 && (el.textContent.trim() === '×' || el.textContent.trim() === 'x' || el.textContent.trim() === 'X')
+      );
+      if (xBtn) { xBtn.click(); return true; }
+      return false;
+    });
+    if (closed) {
+      console.log('[SparkP2P] Closed open Transaction tab — portal reset to clean state');
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  } catch (e) {}
+
   const failSweep = async (error) => {
     mpesaSweepRunning = false;
     lastSweepCompletedAt = Date.now(); // cooldown applies even on failure
