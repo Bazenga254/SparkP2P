@@ -178,32 +178,21 @@ class SettlementEngine:
         if net_amount <= 0:
             return False
 
-        success = await self._send_payment(trader, net_amount, simulate=simulate)
+        is_bank = trader.settlement_method == SettlementMethod.BANK_PAYBILL
+        withdrawal_destination = trader.settlement_account or "" if is_bank else trader.settlement_phone or ""
+        settle_method_label = "bank_paybill" if is_bank else trader.settlement_method.value
 
-        if success:
-            # Deduct fees and withdrawal incrementally so each transaction records its own balance_after
-            wallet.balance -= platform_markup
-            balance_after_platform_fee = wallet.balance
-            wallet.balance -= safaricom_fee
-            balance_after_safaricom_fee = wallet.balance
-            wallet.balance -= net_amount
-            balance_after_withdrawal = wallet.balance
+        # Pre-compute balance_after values (deterministic — applied to wallet on success below)
+        balance_after_platform_fee = wallet.balance - platform_markup
+        balance_after_safaricom_fee = balance_after_platform_fee - safaricom_fee
+        balance_after_withdrawal = balance_after_safaricom_fee - net_amount
 
-            wallet.total_withdrawn += net_amount
-            wallet.total_fees_paid += total_fee
-
-            # Record withdrawal.
-            # bank_paybill = automated via org portal + I&M Bank (desktop app picks up as "pending")
-            # mpesa = completed immediately via Daraja B2C
-            is_bank = trader.settlement_method == SettlementMethod.BANK_PAYBILL
-            if is_bank:
-                # destination format expected by executeImWithdrawal: "AccountNumber"
-                # (I&M to I&M — desktop app uses this to fill the transfer form)
-                withdrawal_destination = trader.settlement_account or ""
-                settle_method_label = "bank_paybill"
-            else:
-                withdrawal_destination = trader.settlement_phone or ""
-                settle_method_label = trader.settlement_method.value
+        # For bank_paybill: pre-create WalletTransaction so we can get its ID
+        # and embed the SPK-XXXXXX reference in the Payment record.
+        # bank_paybill _send_payment never fails (it just queues), so this is safe.
+        spk_ref = None
+        txn = None
+        if is_bank:
             txn = WalletTransaction(
                 trader_id=trader_id,
                 wallet_id=wallet.id,
@@ -211,11 +200,39 @@ class SettlementEngine:
                 amount=-net_amount,
                 balance_after=balance_after_withdrawal,
                 description=f"Withdrawal: KES {net_amount:,.0f} to {trader.settlement_method.value}",
-                status="pending" if is_bank else "completed",
+                status="pending",
                 destination=withdrawal_destination,
                 settlement_method=settle_method_label,
             )
             self.db.add(txn)
+            await self.db.flush()  # assign ID without committing
+            spk_ref = f"SPK-{str(txn.id).zfill(6)}"
+
+        success = await self._send_payment(trader, net_amount, simulate=simulate, spk_ref=spk_ref)
+
+        if success:
+            # Apply wallet balance deductions
+            wallet.balance -= platform_markup
+            wallet.balance -= safaricom_fee
+            wallet.balance -= net_amount
+
+            wallet.total_withdrawn += net_amount
+            wallet.total_fees_paid += total_fee
+
+            # For M-Pesa: create WalletTransaction now (bank_paybill one was pre-created above)
+            if not is_bank:
+                txn = WalletTransaction(
+                    trader_id=trader_id,
+                    wallet_id=wallet.id,
+                    transaction_type=TransactionType.WITHDRAWAL,
+                    amount=-net_amount,
+                    balance_after=balance_after_withdrawal,
+                    description=f"Withdrawal: KES {net_amount:,.0f} to {trader.settlement_method.value}",
+                    status="completed",
+                    destination=withdrawal_destination,
+                    settlement_method=settle_method_label,
+                )
+                self.db.add(txn)
 
             # Record Safaricom fee
             self.db.add(WalletTransaction(
@@ -315,7 +332,7 @@ class SettlementEngine:
 
     async def _send_payment(
         self, trader: Trader, amount: float, order: Optional[Order] = None,
-        simulate: bool = False,
+        simulate: bool = False, spk_ref: Optional[str] = None,
     ) -> bool:
         """Send payment to trader via their preferred settlement method."""
         try:
@@ -398,6 +415,7 @@ class SettlementEngine:
                 destination_type=trader.settlement_method.value,
                 remarks=remarks,
                 mpesa_transaction_id=result.get("ConversationID") or result.get("OriginatorConversationID") or None,
+                bill_ref_number=spk_ref,  # SPK-XXXXXX reference for admin traceability
                 status=PaymentStatus.COMPLETED,
                 raw_callback=result,
             )
