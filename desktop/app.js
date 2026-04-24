@@ -9307,6 +9307,8 @@ async function executeImLocalTransfer(job) {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ tx_id: job.id, reference: txReference }),
       }).catch(() => {});
+      // Switch back to M-PESA portal so admin can see it's ready for the next sweep
+      if (mpesaOrgPage && !mpesaOrgPage.isClosed()) await mpesaOrgPage.bringToFront().catch(() => {});
     } else {
       throw new Error('Transfer did not complete: PIN/success screen not detected after 10 attempts');
     }
@@ -9328,6 +9330,8 @@ async function executeImLocalTransfer(job) {
       console.log(`[SparkP2P] Sweep ${resetData.sweep_id} reset to pending — will retry M-PESA → I&M flow`);
       sendBotLog('warning', `I&M transfer failed — retrying from M-PESA sweep #${resetData.sweep_id}`);
     }
+    // Switch back to M-PESA portal so admin can see the state after failure
+    if (mpesaOrgPage && !mpesaOrgPage.isClosed()) await mpesaOrgPage.bringToFront().catch(() => {});
   } finally {
     imWithdrawalRunning = false;
     await syncImCookies();
