@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 MIN_WITHDRAWAL = 1000  # KES — minimum withdrawal amount (M-Pesa)
-BANK_MIN_WITHDRAWAL = 5000  # KES — minimum for I&M Bank withdrawals
+BANK_MIN_WITHDRAWAL = 1000  # KES — minimum for I&M Bank withdrawals
 MPESA_PLATFORM_MARKUP = 25  # KES added on top of Safaricom fee for M-Pesa withdrawals
 
 # Safaricom B2C fee schedule (Business Bouquet Tariff)
