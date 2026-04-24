@@ -9738,6 +9738,8 @@ function startPaybillSync() {
 // Fills Amount(KSH), Remark, and Reason (Input Manually) on the current page,
 // then clicks Submit. Used by both Revenue Settlement and Org Withdrawal steps.
 async function _fillAndSubmitMpesaForm(page, amount, remark, reason) {
+  // M-PESA portal rejects amounts with more than 2 decimal places
+  const amtStr = (Math.round(amount * 100) / 100).toFixed(2).replace(/\.00$/, '');
   // Fill Amount(KSH)
   const amountFilled = await page.evaluate((amt) => {
     const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"], input:not([type])'));
@@ -9753,10 +9755,10 @@ async function _fillAndSubmitMpesaForm(page, amount, remark, reason) {
       }
     }
     return false;
-  }, amount).catch(() => false);
+  }, amtStr).catch(() => false);
 
-  if (!amountFilled) await fillFieldWithVision(page, 'Amount(KSH)', String(amount));
-  console.log(`[SparkP2P] Amount filled: ${amountFilled}`);
+  if (!amountFilled) await fillFieldWithVision(page, 'Amount(KSH)', amtStr);
+  console.log(`[SparkP2P] Amount filled: ${amountFilled} (${amtStr})`);
 
   await new Promise(r => setTimeout(r, 300));
 
@@ -9927,7 +9929,8 @@ async function executeMpesaSweep(sweepJob) {
     }
   }
   mpesaSweepRunning = true;
-  const { sweep_id, amount, reference } = sweepJob;
+  const { sweep_id, reference } = sweepJob;
+  const amount = Math.round(sweepJob.amount * 100) / 100; // round to 2 d.p. — portal rejects >2 decimals
   console.log(`[SparkP2P] === M-PESA SWEEP KES ${amount} (sweep #${sweep_id}) ===`);
   await mpesaOrgPage.bringToFront().catch(() => {});
 
