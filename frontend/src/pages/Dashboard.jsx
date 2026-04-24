@@ -397,6 +397,7 @@ export default function Dashboard() {
   const [withdrawOtpSent, setWithdrawOtpSent] = useState(false);
   const [withdrawOtpLoading, setWithdrawOtpLoading] = useState(false);
   const [withdrawMsg, setWithdrawMsg] = useState('');
+  const [withdrawAmtErr, setWithdrawAmtErr] = useState('');
   const [withdrawStatus, setWithdrawStatus] = useState(null); // null | 'processing' | 'succeeded'
   const withdrawPollRef = useRef(null);
   const [systemStatus, setSystemStatus] = useState(null);
@@ -569,6 +570,21 @@ export default function Dashboard() {
       navigate('/onboarding');
     }
   }, [profile]);
+
+  // Recompute withdrawal amount error whenever amount or preview changes
+  useEffect(() => {
+    if (!withdrawPreview) { setWithdrawAmtErr(''); return; }
+    const balance = withdrawPreview.balance ?? 0;
+    const minWd = withdrawPreview.min_withdrawal ?? 1000;
+    const customAmt = parseFloat(withdrawCustomAmount) || 0;
+    const clampedAmt = Math.min(customAmt, balance);
+    const remainingAfter = balance - clampedAmt;
+    const wouldStrand = clampedAmt > 0 && clampedAmt < balance && remainingAfter > 0 && remainingAfter < minWd;
+    if (customAmt > balance) setWithdrawAmtErr(`Max KES ${balance.toLocaleString()}`);
+    else if (customAmt > 0 && customAmt < minWd) setWithdrawAmtErr(`Min KES ${minWd.toLocaleString()}`);
+    else if (wouldStrand) setWithdrawAmtErr(`Withdrawing KES ${clampedAmt.toLocaleString()} would leave KES ${remainingAfter.toLocaleString()} which can't be withdrawn later. Withdraw the full KES ${balance.toLocaleString()} instead.`);
+    else setWithdrawAmtErr('');
+  }, [withdrawCustomAmount, withdrawPreview]);
 
   // Scanning overlay: poll until bot confirms Binance connection
   const SCAN_STEPS = [
@@ -1793,13 +1809,31 @@ export default function Dashboard() {
             {/* Amount input */}
             {withdrawPreview && (() => {
               const balance = withdrawPreview.balance ?? 0;
+              const minWd = withdrawPreview.min_withdrawal ?? 1000;
+              const forceFullBalance = withdrawPreview.force_full_withdrawal;
               const customAmt = parseFloat(withdrawCustomAmount) || 0;
               const clampedAmt = Math.min(customAmt, balance);
               const liveFee = getWithdrawalFee(withdrawPreview.settlement_method || 'mpesa', clampedAmt);
               const liveReceive = Math.max(0, clampedAmt - liveFee);
-              const amtErr = customAmt > balance ? `Max KES ${balance.toLocaleString()}` : customAmt > 0 && customAmt < (withdrawPreview.min_withdrawal ?? 0) ? `Min KES ${(withdrawPreview.min_withdrawal ?? 0).toLocaleString()}` : '';
+              const remainingAfter = balance - clampedAmt;
+              const wouldStrand = clampedAmt > 0 && clampedAmt < balance && remainingAfter > 0 && remainingAfter < minWd;
+              const amtErr = customAmt > balance
+                ? `Max KES ${balance.toLocaleString()}`
+                : customAmt > 0 && customAmt < minWd
+                  ? `Min KES ${minWd.toLocaleString()}`
+                  : wouldStrand
+                    ? `Withdrawing KES ${clampedAmt.toLocaleString()} would leave KES ${remainingAfter.toLocaleString()} which can't be withdrawn later. Withdraw the full KES ${balance.toLocaleString()} instead.`
+                    : '';
               return (
                 <>
+                  {forceFullBalance && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
+                      <span style={{ fontSize: 14, flexShrink: 0 }}>ℹ️</span>
+                      <p style={{ margin: 0, fontSize: 12, color: '#d97706', lineHeight: 1.5 }}>
+                        Your balance is below KES {(minWd * 2).toLocaleString()}. You must withdraw the <strong>full amount</strong> to avoid leaving a balance that cannot be withdrawn later.
+                      </p>
+                    </div>
+                  )}
                   <div style={{ marginBottom: 16 }}>
                     <label style={{ display: 'block', color: '#9ca3af', fontSize: 12, marginBottom: 6 }}>
                       Withdrawal Amount <span style={{ color: '#6b7280' }}>(Balance: KES {balance.toLocaleString()})</span>
@@ -1812,13 +1846,16 @@ export default function Dashboard() {
                         max={balance}
                         step={1}
                         value={withdrawCustomAmount}
-                        onChange={e => setWithdrawCustomAmount(e.target.value)}
-                        style={{ width: '100%', padding: '11px 14px 11px 44px', borderRadius: 8, border: `1px solid ${amtErr ? '#ef4444' : '#374151'}`, background: '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box' }}
+                        onChange={e => { if (!forceFullBalance) setWithdrawCustomAmount(e.target.value); }}
+                        readOnly={forceFullBalance}
+                        style={{ width: '100%', padding: '11px 14px 11px 44px', borderRadius: 8, border: `1px solid ${amtErr ? '#ef4444' : '#374151'}`, background: forceFullBalance ? '#0f1117' : '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box', cursor: forceFullBalance ? 'not-allowed' : 'text' }}
                       />
+                      {!forceFullBalance && (
                       <button
                         onClick={() => setWithdrawCustomAmount(String(balance))}
                         style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#10b981', fontSize: 11, cursor: 'pointer', fontWeight: 700 }}
                       >MAX</button>
+                      )}
                     </div>
                     {amtErr && <p style={{ color: '#ef4444', fontSize: 11, margin: '4px 0 0' }}>{amtErr}</p>}
                   </div>
@@ -1936,8 +1973,8 @@ export default function Dashboard() {
                     }
                     setWithdrawing(false);
                   }}
-                  disabled={withdrawing || withdrawOtp.length !== 6}
-                  style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: withdrawOtp.length === 6 ? 'linear-gradient(135deg,#10b981,#059669)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: withdrawOtp.length === 6 ? 'pointer' : 'not-allowed', marginBottom: 8 }}
+                  disabled={withdrawing || withdrawOtp.length !== 6 || !!withdrawAmtErr}
+                  style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: (withdrawOtp.length === 6 && !withdrawAmtErr) ? 'linear-gradient(135deg,#10b981,#059669)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: (withdrawOtp.length === 6 && !withdrawAmtErr) ? 'pointer' : 'not-allowed', marginBottom: 8 }}
                 >
                   {withdrawing ? 'Processing...' : 'Confirm Withdrawal'}
                 </button>

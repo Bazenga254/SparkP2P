@@ -1052,6 +1052,19 @@ async def request_withdrawal(
             detail=f"Minimum withdrawal is KES {MIN_WITHDRAWAL:,}. Your balance is KES {wallet.balance:,.0f}.",
         )
 
+    # Stranded-balance check: block partial withdrawals that would leave a remainder
+    # too small to ever withdraw (< MIN_WITHDRAWAL). Force the trader to take the full balance.
+    remaining_after = wallet.balance - withdraw_amount
+    if 0 < remaining_after < MIN_WITHDRAWAL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Withdrawing KES {withdraw_amount:,.0f} would leave KES {remaining_after:,.0f} in your wallet, "
+                f"which is below the KES {MIN_WITHDRAWAL:,} minimum and cannot be withdrawn later. "
+                f"Please withdraw your full balance of KES {wallet.balance:,.0f} instead."
+            ),
+        )
+
     # For bank withdrawals, check tier eligibility
     if trader.settlement_method.value != "mpesa":
         eligibility = get_bank_withdrawal_eligibility(withdraw_amount)
@@ -1171,6 +1184,7 @@ async def preview_withdrawal(
         "cooldown_hours": cooldown_hours,
         "settlement_method": trader.settlement_method.value,
         "min_withdrawal": MIN_WITHDRAWAL,
+        "force_full_withdrawal": wallet.balance < MIN_WITHDRAWAL * 2,  # balance < KES 2,000 → must take all
     }
 
 
