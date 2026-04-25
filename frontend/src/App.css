@@ -976,6 +976,11 @@ body {
   color: var(--accent);
 }
 
+.land-feature-icon.purple-glow {
+  background: rgba(139, 92, 246, 0.12);
+  color: #a78bfa;
+}
+
 .land-feature-card h3 {
   font-size: 20px;
   font-weight: 700;
@@ -1422,7 +1427,7 @@ body {
   .land-hero-content h1 { font-size: 36px; }
   .land-hero-sub { margin: 0 auto 28px; }
   .land-hero-actions { justify-content: center; flex-wrap: wrap; }
-  .land-features-grid { grid-template-columns: 1fr; max-width: 420px; margin: 0 auto; }
+  .land-features-grid { grid-template-columns: 1fr; max-width: 460px; margin: 0 auto; }
   .land-download-grid { grid-template-columns: 1fr; max-width: 320px; }
   .land-faq { padding: 60px 20px; }
   .land-faq-item { padding: 16px 18px; }

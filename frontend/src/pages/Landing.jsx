@@ -231,8 +231,11 @@ export default function Landing() {
           <div className="land-section-header">
             <span className="land-section-tag">Features</span>
             <h2>Everything You Need to<br /><span className="land-highlight">Trade Hands-Free</span></h2>
+            <p className="land-section-desc">One platform handles your entire Binance P2P workflow — from payment verification to settlement.</p>
           </div>
           <div className="land-features-grid">
+
+            {/* Row 1 */}
             <div className="land-feature-card">
               <div className="land-feature-icon green-glow">
                 <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -240,8 +243,9 @@ export default function Landing() {
                 </svg>
               </div>
               <h3>Auto-Release</h3>
-              <p>Payments verified via M-Pesa, crypto released automatically on Binance. Zero manual work.</p>
+              <p>M-Pesa payment confirmed → crypto released on Binance in seconds. Zero manual intervention, zero missed orders.</p>
             </div>
+
             <div className="land-feature-card">
               <div className="land-feature-icon blue-glow">
                 <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -249,8 +253,9 @@ export default function Landing() {
                 </svg>
               </div>
               <h3>Buy & Sell Automation</h3>
-              <p>Both sides automated. Buy orders auto-pay sellers. Sell orders auto-release to buyers.</p>
+              <p>Both trading sides handled. Buy orders auto-pay via M-Pesa. Sell orders auto-verify and release to buyers.</p>
             </div>
+
             <div className="land-feature-card">
               <div className="land-feature-icon accent-glow">
                 <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -258,8 +263,71 @@ export default function Landing() {
                 </svg>
               </div>
               <h3>Real-Time Profit Tracking</h3>
-              <p>See your spread, volume, and net profit in real-time. Know exactly how much you're making.</p>
+              <p>Live dashboard showing your spread, daily volume, completed orders, and net KES profit — updated after every trade.</p>
             </div>
+
+            {/* Row 2 */}
+            <div className="land-feature-card">
+              <div className="land-feature-icon purple-glow">
+                <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                </svg>
+              </div>
+              <h3>Instant Wallet & Withdrawals</h3>
+              <p>Earnings land in your SparkP2P wallet after every trade. Withdraw anytime to M-Pesa or I&M Bank — funds arrive in minutes.</p>
+            </div>
+
+            <div className="land-feature-card">
+              <div className="land-feature-icon green-glow">
+                <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+              </div>
+              <h3>Smart Alerts</h3>
+              <p>SMS and email alerts when your bot goes offline unexpectedly, an order stalls, or a withdrawal is delayed. Stay informed 24/7.</p>
+            </div>
+
+            <div className="land-feature-card">
+              <div className="land-feature-icon blue-glow">
+                <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+              </div>
+              <h3>In-App Chat Support</h3>
+              <p>Reach the SparkP2P team directly from your dashboard. Get help with setup, withdrawals, or anything else — no email tickets.</p>
+            </div>
+
+            {/* Row 3 */}
+            <div className="land-feature-card">
+              <div className="land-feature-icon accent-glow">
+                <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+              </div>
+              <h3>Secure by Design</h3>
+              <p>No API keys required. SparkP2P uses your existing Chrome session — your Binance credentials never leave your device.</p>
+            </div>
+
+            <div className="land-feature-card">
+              <div className="land-feature-icon purple-glow">
+                <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+              </div>
+              <h3>Full Order History</h3>
+              <p>Every order, payment, and fee logged with timestamps and references. Export-ready records for accounting and dispute resolution.</p>
+            </div>
+
+            <div className="land-feature-card">
+              <div className="land-feature-icon green-glow">
+                <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </div>
+              <h3>Auto-Updates</h3>
+              <p>SparkP2P updates itself silently in the background. You always run the latest version with the newest features and security fixes.</p>
+            </div>
+
           </div>
         </div>
       </section>
