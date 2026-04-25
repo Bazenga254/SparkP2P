@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.core.database import init_db, AsyncSessionLocal
+from app.core.database import init_db, async_session
 from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support
 from app.services.binance.poller import order_poller
 from app.services.message_templates import seed_default_templates
@@ -29,7 +29,7 @@ async def _close_collecting_batch():
     from app.models.batch import WithdrawalBatch, BatchItem
     from app.models.im_sweep import ImSweep
 
-    async with AsyncSessionLocal() as db:
+    async with async_session() as db:
         try:
             # Find collecting batch with queued items
             batch_result = await db.execute(
