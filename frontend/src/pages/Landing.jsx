@@ -1,4 +1,152 @@
 import { Link } from 'react-router-dom';
+import { useState } from 'react';
+
+const FAQS = [
+  {
+    category: 'Getting Started',
+    items: [
+      {
+        q: 'What is SparkP2P?',
+        a: 'SparkP2P is a desktop application that automates your Binance P2P trading. It monitors incoming orders, verifies M-Pesa payments in real time, releases crypto automatically, and tracks your profits — all without you lifting a finger.',
+      },
+      {
+        q: 'Do I need any coding or technical knowledge to use SparkP2P?',
+        a: 'No. SparkP2P is designed for everyday traders. Download the app, connect your Binance account by scanning a QR code in the app, configure your M-Pesa number, and you\'re live. The whole setup takes less than 10 minutes.',
+      },
+      {
+        q: 'Is SparkP2P safe to use with my Binance account?',
+        a: 'Yes. SparkP2P never asks for your Binance API keys or password. It connects through the Binance website using your existing Chrome browser session — the same session you already use to trade manually. No credentials are stored or transmitted to our servers.',
+      },
+      {
+        q: 'Which operating systems are supported?',
+        a: 'Windows 10 and Windows 11 are fully supported. macOS and Linux versions are in development and coming soon.',
+      },
+      {
+        q: 'Does SparkP2P work with any Binance account?',
+        a: 'Yes, as long as you have a Binance P2P account that is verified and has active buy or sell ads. SparkP2P works with both individual and merchant accounts.',
+      },
+    ],
+  },
+  {
+    category: 'Payments & Settlement',
+    items: [
+      {
+        q: 'How does M-Pesa payment verification work?',
+        a: 'SparkP2P connects to your M-Pesa business paybill and monitors incoming transactions in real time. When a buyer sends M-Pesa, the bot matches the amount and reference to the order, confirms receipt, and releases the crypto automatically — typically within seconds of the payment landing.',
+      },
+      {
+        q: 'What if a buyer sends the wrong amount via M-Pesa?',
+        a: 'If the payment amount does not match the order exactly, SparkP2P will not auto-release. The order stays open and you will receive an alert so you can investigate and act manually.',
+      },
+      {
+        q: 'How do I receive my earnings?',
+        a: 'Your trading profits accumulate in your SparkP2P wallet. You can request a withdrawal at any time — funds are sent directly to your registered M-Pesa number or I&M Bank account, depending on your selected settlement method.',
+      },
+      {
+        q: 'What is the minimum withdrawal amount?',
+        a: 'The minimum withdrawal is KES 1,000. For I&M Bank transfers the minimum is also KES 1,000.',
+      },
+      {
+        q: 'How long do withdrawals take?',
+        a: 'M-Pesa withdrawals are typically processed within minutes. I&M Bank withdrawals are batched hourly — your funds are swept and transferred in one combined operation, usually completing within 1–2 hours of your request.',
+      },
+      {
+        q: 'Are there fees for withdrawals?',
+        a: 'A small service fee applies to each withdrawal. You can preview the exact fee (including the Safaricom transaction fee) before confirming — there are no hidden charges.',
+      },
+    ],
+  },
+  {
+    category: 'Bot & Automation',
+    items: [
+      {
+        q: 'Does the bot run in the background while I use my computer?',
+        a: 'Yes. SparkP2P runs as a background desktop app with a tray icon. You can use your computer normally while it monitors and processes orders silently in the background.',
+      },
+      {
+        q: 'What happens if my computer goes to sleep or loses internet?',
+        a: 'If the bot goes offline for more than 5 minutes, SparkP2P will send you an SMS and email alert so you can take action. Any pending orders at that time will not be auto-processed until the bot reconnects.',
+      },
+      {
+        q: 'Will I get alerts if I intentionally close the app?',
+        a: 'No — SparkP2P is smart enough to know the difference. When you close the app normally, it notifies the server that you\'ve stopped intentionally. The offline alert system is suppressed until you restart the app, so you won\'t be spammed with alerts when you\'re taking a break.',
+      },
+      {
+        q: 'Can I pause the bot without closing the app?',
+        a: 'Yes. The SparkP2P dashboard has a pause button that suspends order processing without disconnecting your Binance or M-Pesa sessions. You can resume with one click.',
+      },
+      {
+        q: 'Does the bot handle both buy and sell orders?',
+        a: 'Yes. Both sides are fully automated. For sell orders, the bot verifies the buyer\'s M-Pesa payment and releases crypto. For buy orders, the bot detects when crypto is received and auto-pays the seller via M-Pesa.',
+      },
+      {
+        q: 'How many orders can the bot handle simultaneously?',
+        a: 'SparkP2P processes one order at a time per trading session to ensure accuracy and avoid double-payments. High-volume traders can run the bot on multiple trading accounts if needed.',
+      },
+    ],
+  },
+  {
+    category: 'Account & Subscription',
+    items: [
+      {
+        q: 'How do I create a SparkP2P account?',
+        a: 'Contact us via the chat widget on this page or email support@sparkp2p.com to get started. We\'ll set up your account and walk you through the onboarding process.',
+      },
+      {
+        q: 'Is there a free trial?',
+        a: 'We periodically offer free access periods. Contact us to find out current availability and pricing.',
+      },
+      {
+        q: 'Can I use SparkP2P on multiple devices?',
+        a: 'Your SparkP2P account is tied to one active desktop session at a time. If you log in on a second device, the first session will be disconnected.',
+      },
+      {
+        q: 'How do I update the SparkP2P desktop app?',
+        a: 'SparkP2P has built-in auto-update. When a new version is released, the app will prompt you to update automatically. You can also download the latest installer directly from the Download section on this page.',
+      },
+      {
+        q: 'What happens to my wallet balance if I cancel my subscription?',
+        a: 'Your wallet balance remains yours. You can request a withdrawal of your full balance at any time — before, during, or after cancellation.',
+      },
+    ],
+  },
+  {
+    category: 'Security & Privacy',
+    items: [
+      {
+        q: 'Does SparkP2P store my Binance login credentials?',
+        a: 'No. SparkP2P uses your existing Chrome browser session to interact with Binance — your login credentials never pass through our servers. The only data we store are your trade records and wallet transactions.',
+      },
+      {
+        q: 'Is my M-Pesa business paybill data secure?',
+        a: 'Your M-Pesa credentials are stored encrypted on your local device and used only to connect to the M-Pesa org portal for payment verification. They are never transmitted to SparkP2P\'s servers.',
+      },
+      {
+        q: 'What happens if SparkP2P releases crypto before payment arrives?',
+        a: 'SparkP2P will never release crypto before confirming payment. The M-Pesa verification step is mandatory — the bot waits for the exact payment amount to appear in your paybill before triggering any release on Binance.',
+      },
+      {
+        q: 'Can SparkP2P access or move my Binance crypto wallet funds?',
+        a: 'No. SparkP2P only interacts with the Binance P2P order flow — it can release crypto held in escrow for active orders. It cannot initiate withdrawals, transfers, or any other actions outside of P2P order processing.',
+      },
+    ],
+  },
+];
+
+function FaqItem({ q, a }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`land-faq-item${open ? ' open' : ''}`} onClick={() => setOpen(o => !o)}>
+      <div className="land-faq-q">
+        <span>{q}</span>
+        <svg className="land-faq-chevron" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </div>
+      {open && <div className="land-faq-a">{a}</div>}
+    </div>
+  );
+}
 
 export default function Landing() {
   return (
@@ -12,6 +160,7 @@ export default function Landing() {
           </div>
           <div className="land-nav-links">
             <a href="#features">Features</a>
+            <a href="#faq">FAQ</a>
             <a href="#download">Download</a>
             <Link to="/login" className="land-nav-login">Login</Link>
           </div>
@@ -193,11 +342,34 @@ export default function Landing() {
           </div>
           <div style={{ textAlign: 'center', marginTop: 24, maxWidth: 520, margin: '24px auto 0' }}>
             <p style={{ color: '#6b7280', fontSize: 13 }}>
-              v1.1.18 &middot; Auto-updates enabled &middot; Requires Google Chrome installed
+              v1.1.26 &middot; Auto-updates enabled &middot; Requires Google Chrome installed
             </p>
             <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
               If Chrome blocks the download, click the <strong style={{ color: '#e5e7eb' }}>&#8942;</strong> (three dots) next to the download and select <strong style={{ color: '#e5e7eb' }}>"Keep"</strong>. The file is safe — downloaded directly from our servers.
             </p>
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section className="land-faq" id="faq">
+        <div className="land-section-inner">
+          <div className="land-section-header">
+            <span className="land-section-tag">FAQ</span>
+            <h2>Frequently Asked<br /><span className="land-highlight">Questions</span></h2>
+            <p className="land-section-desc">Everything you need to know about SparkP2P. Can't find an answer? <a href="mailto:support@sparkp2p.com" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Contact us</a>.</p>
+          </div>
+          <div className="land-faq-categories">
+            {FAQS.map(cat => (
+              <div key={cat.category} className="land-faq-category">
+                <div className="land-faq-cat-label">{cat.category}</div>
+                <div className="land-faq-list">
+                  {cat.items.map(item => (
+                    <FaqItem key={item.q} q={item.q} a={item.a} />
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </section>
@@ -212,6 +384,8 @@ export default function Landing() {
           </div>
           <div className="land-footer-links">
             <a href="#features">Features</a>
+            <a href="#faq">FAQ</a>
+            <a href="#download">Download</a>
             <Link to="/login">Login</Link>
             <a href="mailto:support@sparkp2p.com">Contact</a>
           </div>

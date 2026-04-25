@@ -1210,6 +1210,83 @@ body {
   color: #000;
 }
 
+/* FAQ Section */
+.land-faq {
+  padding: 80px 32px;
+  background: var(--surface);
+}
+.land-faq-categories {
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+  max-width: 860px;
+  margin: 0 auto;
+}
+.land-faq-category {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.land-faq-cat-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 16px;
+  padding-left: 4px;
+}
+.land-faq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.land-faq-item {
+  padding: 20px 24px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+  user-select: none;
+}
+.land-faq-item:last-child {
+  border-bottom: none;
+}
+.land-faq-item:hover {
+  background: rgba(255,255,255,0.03);
+}
+.land-faq-item.open {
+  background: rgba(245,158,11,0.04);
+}
+.land-faq-q {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.45;
+}
+.land-faq-chevron {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  transition: transform 0.2s;
+}
+.land-faq-item.open .land-faq-chevron {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+.land-faq-a {
+  margin-top: 14px;
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.75;
+  padding-right: 36px;
+}
+
 /* Footer */
 .land-footer {
   border-top: 1px solid var(--border);
@@ -1347,6 +1424,10 @@ body {
   .land-hero-actions { justify-content: center; flex-wrap: wrap; }
   .land-features-grid { grid-template-columns: 1fr; max-width: 420px; margin: 0 auto; }
   .land-download-grid { grid-template-columns: 1fr; max-width: 320px; }
+  .land-faq { padding: 60px 20px; }
+  .land-faq-item { padding: 16px 18px; }
+  .land-faq-q { font-size: 14px; }
+  .land-faq-a { font-size: 13px; padding-right: 0; }
   .land-steps { flex-direction: column; }
   .land-step-line { width: 2px; height: 30px; margin: 0; }
   .land-pricing-grid { grid-template-columns: 1fr; max-width: 400px; margin: 0 auto; }
