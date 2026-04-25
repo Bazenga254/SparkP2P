@@ -321,7 +321,7 @@ export default function Landing() {
               </div>
               <h3>Windows</h3>
               <p>Windows 10 / 11</p>
-              <a href="https://github.com/Bazenga254/SparkP2P/releases/download/v1.1.8/SparkP2P.Setup.1.1.8.exe" className="land-download-btn" target="_blank" rel="noreferrer">Download .exe</a>
+              <a href="https://github.com/Bazenga254/SparkP2P/releases/download/v1.1.26/SparkP2P-Setup-1.1.26.exe" className="land-download-btn" target="_blank" rel="noreferrer">Download .exe</a>
             </div>
             <div className="land-download-card">
               <div className="land-download-icon">
