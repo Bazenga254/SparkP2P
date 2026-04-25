@@ -71,10 +71,10 @@ async def report_success(system: str):
 async def _get_admin_contact():
     """Fetch admin phone + email from DB (first trader with is_admin=True)."""
     try:
-        from app.core.database import AsyncSessionLocal
+        from app.core.database import async_session
         from app.models import Trader
         from sqlalchemy import select
-        async with AsyncSessionLocal() as db:
+        async with async_session() as db:
             result = await db.execute(
                 select(Trader).where(Trader.is_admin == True).limit(1)
             )

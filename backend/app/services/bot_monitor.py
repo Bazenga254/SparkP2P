@@ -33,11 +33,11 @@ _wd_last_notified_at: dict[int, datetime] = {}   # trader_id → when we last se
 
 
 async def _check_traders():
-    from app.core.database import AsyncSessionLocal
+    from app.core.database import async_session
     from app.models import Trader
     from sqlalchemy import select
 
-    async with AsyncSessionLocal() as db:
+    async with async_session() as db:
         result = await db.execute(
             select(Trader).where(
                 Trader.is_active == True,
@@ -162,14 +162,14 @@ async def _notify_recovered(trader):
 
 async def _check_pending_withdrawals():
     """Alert traders who have a withdrawal stuck in 'pending' for more than PENDING_WD_ALERT_HOURS."""
-    from app.core.database import AsyncSessionLocal
+    from app.core.database import async_session
     from app.models import Trader
     from app.models.wallet import WalletTransaction, TransactionType
     from sqlalchemy import select
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=PENDING_WD_ALERT_HOURS)
 
-    async with AsyncSessionLocal() as db:
+    async with async_session() as db:
         result = await db.execute(
             select(WalletTransaction, Trader)
             .join(Trader, Trader.id == WalletTransaction.trader_id)
