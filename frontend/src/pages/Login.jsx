@@ -236,6 +236,18 @@ export default function Login() {
 
   return (
     <div className="login-split">
+      {/* Mobile-only hero panel */}
+      <div className="login-mobile-hero">
+        <Link to="/" className="login-mobile-hero-brand">
+          <img src="/logo.png" alt="SparkP2P" style={{ width: 36, height: 36, borderRadius: 9, objectFit: 'contain' }} />
+          <span>SparkP2P</span>
+        </Link>
+        <div className="login-mobile-hero-content">
+          <h1>Automate Your<br />Binance P2P Trading</h1>
+          <p>Payments verified. Crypto released. All on autopilot.</p>
+        </div>
+      </div>
+
       <div className="login-left">
         <Link to="/" className="login-left-brand">
           <img src="/logo.png" alt="SparkP2P" className="login-left-logo" />

@@ -149,6 +149,10 @@ function FaqItem({ q, a }) {
 }
 
 export default function Landing() {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const closeMenu = () => setMenuOpen(false);
+
   return (
     <div className="landing">
       {/* Navigation */}
@@ -164,8 +168,26 @@ export default function Landing() {
             <a href="#download">Download</a>
             <Link to="/login" className="land-nav-login">Login</Link>
           </div>
+          {/* Mobile right side */}
+          <div className="land-nav-mobile-actions">
+            <Link to="/login" className="land-nav-login">Login</Link>
+            <button
+              className={`land-hamburger${menuOpen ? ' open' : ''}`}
+              onClick={() => setMenuOpen(o => !o)}
+              aria-label="Menu"
+            >
+              <span /><span /><span />
+            </button>
+          </div>
         </div>
       </nav>
+
+      {/* Mobile drawer */}
+      <div className={`land-mobile-drawer${menuOpen ? ' open' : ''}`}>
+        <a href="#features" onClick={closeMenu}>Features</a>
+        <a href="#faq" onClick={closeMenu}>FAQ</a>
+        <a href="#download" onClick={closeMenu}>Download</a>
+      </div>
 
       {/* Hero */}
       <section className="land-hero">
@@ -179,6 +201,11 @@ export default function Landing() {
             <Link to="/login" className="land-cta-primary">Get Started</Link>
             <a href="#how-it-works" className="land-cta-secondary">See How It Works</a>
           </div>
+        </div>
+        {/* Mobile-only hero CTA card */}
+        <div className="land-hero-mobile-cta">
+          <p>Payments verified. Crypto released. All on autopilot.</p>
+          <Link to="/login" className="land-cta-primary" style={{ display: 'inline-block', marginTop: 16 }}>Get Started Free</Link>
         </div>
         <div className="land-hero-visual">
           <div className="land-mockup">
