@@ -34,5 +34,8 @@ class ImSweep(Base):
     sweep_paybill = Column(String(20), nullable=True)   # I&M paybill used
     sweep_account = Column(String(50), nullable=True)   # I&M account credited
 
+    # Batch link — set for hourly batch sweeps (null for legacy per-withdrawal sweeps)
+    batch_id = Column(Integer, ForeignKey("withdrawal_batches.id"), nullable=True, index=True)
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime(timezone=True), nullable=True)

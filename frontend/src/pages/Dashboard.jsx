@@ -1624,12 +1624,15 @@ export default function Dashboard() {
                           const hasFees = fees.length > 0;
                           const refNum = `SPK-${String(withdrawal.id).padStart(6, '0')}`;
                           const wdStatus = (withdrawal.status || 'pending').toLowerCase();
+                          const isBatchQueued = wdStatus === 'pending' && withdrawal.description?.includes('Batch withdrawal');
                           const statusBadge = wdStatus === 'completed'
                             ? { label: 'Completed', color: '#10b981', bg: 'rgba(16,185,129,0.1)' }
                             : wdStatus === 'cancelled'
                             ? { label: 'Cancelled', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' }
                             : wdStatus === 'failed'
                             ? { label: 'Failed', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' }
+                            : isBatchQueued
+                            ? { label: 'Queued (Batch)', color: '#6366f1', bg: 'rgba(99,102,241,0.1)' }
                             : { label: 'Pending', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' };
 
                           const feeLabels = {
@@ -1954,7 +1957,12 @@ export default function Dashboard() {
                     try {
                       const res = await requestWithdrawal(withdrawOtp, finalAmt);
                       const s = res.data?.status;
-                      if (s === 'processing') {
+                      if (s === 'queued') {
+                        // Batch withdrawal queued — wallet balance already deducted
+                        setShowWithdrawModal(false);
+                        alert(res.data.message || 'Withdrawal queued! You will receive an SMS and email once the hourly batch transfer completes.');
+                        await loadData();
+                      } else if (s === 'processing') {
                         setWithdrawStatus('processing');
                         // Poll wallet every 5s until pending_withdrawal clears
                         withdrawPollRef.current = setInterval(async () => {

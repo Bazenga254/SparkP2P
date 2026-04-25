@@ -1085,7 +1085,34 @@ async def request_withdrawal(
             detail=f"Amount too low to cover fees (KES {total_fee})",
         )
 
-    # ── Auto-Sweep: paybill 4041355 → I&M Bank ───────────────────────────────
+    is_bank = trader.settlement_method.value != "mpesa"
+
+    if is_bank:
+        # ── Bank (I&M) traders: queue into hourly batch ───────────────────────
+        engine = SettlementEngine(db)
+        batch_result = await engine.queue_batch_withdrawal(
+            trader.id,
+            amount=withdraw_amount if data.amount is not None else None,
+        )
+        if not batch_result.get("success"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=batch_result.get("error", "Failed to queue withdrawal"),
+            )
+        queued_net = batch_result["net_amount"]
+        queued_fee = batch_result["fee_amount"]
+        return {
+            "status": "queued",
+            "message": (
+                f"KES {queued_net:,.0f} queued for the next hourly batch transfer to your I&M account. "
+                f"You will receive an SMS and email once the transfer completes."
+            ),
+            "amount_sent": queued_net,
+            "transaction_fee": queued_fee,
+            "batch_id": batch_result["batch_id"],
+        }
+
+    # ── M-PESA traders: immediate B2C (unchanged flow) ────────────────────────
     from app.services.sweep_service import trigger_im_sweep
     sweep_ref = f"WD-{trader.email[:20]}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     sweep_result = await trigger_im_sweep(
@@ -1099,14 +1126,13 @@ async def request_withdrawal(
         logger.info(f"[Sweep] Initiated for KES {withdraw_amount:,.0f} — sweep_id={sweep_result.get('sweep_id')}")
     elif not sweep_result.get("skipped"):
         logger.error(f"[Sweep] Failed for trader {trader.id}: {sweep_result.get('error')}")
-    # ─────────────────────────────────────────────────────────────────────────
 
     engine = SettlementEngine(db)
     # Force withdraw — bypass batch threshold for manual withdrawals
     original_threshold = trader.batch_threshold
-    trader.batch_threshold = 0  # Temporarily disable threshold
+    trader.batch_threshold = 0
     success = await engine.batch_settle(trader.id, amount=withdraw_amount if withdraw_amount < wallet.balance else None)
-    trader.batch_threshold = original_threshold  # Restore
+    trader.batch_threshold = original_threshold
 
     if not success:
         raise HTTPException(
@@ -1114,14 +1140,6 @@ async def request_withdrawal(
             detail="Withdrawal failed. Please try again.",
         )
 
-    is_bank = trader.settlement_method.value != "mpesa"
-    if is_bank:
-        return {
-            "status": "processing",
-            "message": f"KES {net_amount:,.2f} scheduled for transfer to your I&M account. The bot will complete this shortly.",
-            "amount_sent": net_amount,
-            "transaction_fee": total_fee,
-        }
     return {
         "status": "success",
         "message": f"KES {net_amount:,.0f} sent to your M-PESA",

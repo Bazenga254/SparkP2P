@@ -27,6 +27,7 @@ from app.core.database import get_db
 from app.models import Order, OrderSide, OrderStatus, Trader, Payment, PaymentStatus, PaymentDirection
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.im_sweep import ImSweep
+from app.models.batch import WithdrawalBatch, BatchItem
 from app.services.settlement.engine import SettlementEngine
 from app.api.deps import get_current_trader
 
@@ -1429,7 +1430,12 @@ async def get_pending_mpesa_sweeps(
             {
                 "sweep_id": s.id,
                 "amount": s.amount,
-                "reference": f"WD{s.withdrawal_tx_id}" if s.withdrawal_tx_id else f"SW{s.id}",
+                "reference": (
+                    f"BATCH{s.batch_id}" if s.batch_id
+                    else (f"WD{s.withdrawal_tx_id}" if s.withdrawal_tx_id else f"SW{s.id}")
+                ),
+                "is_batch": bool(s.batch_id),
+                "batch_id": s.batch_id,
             }
             for s in sweeps
         ]
@@ -1456,14 +1462,29 @@ async def mpesa_sweep_complete(
         raise HTTPException(status_code=404, detail="Sweep not found")
     sweep.status = "completed"
     sweep.completed_at = datetime.now(timezone.utc)
+
+    batch_id = sweep.batch_id
+    if batch_id:
+        # Batch sweep completed — transition batch to disbursing
+        batch_result = await db.execute(select(WithdrawalBatch).where(WithdrawalBatch.id == batch_id))
+        batch = batch_result.scalar_one_or_none()
+        if batch and batch.status == "sweeping":
+            batch.status = "disbursing"
+            batch.swept_at = datetime.now(timezone.utc)
+            logger.info(f"Batch {batch_id} transitioned to disbursing after sweep {sweep.id}")
+
     await db.commit()
 
-    # Report success so system health clears any degraded state
     from app.services import system_health
     import asyncio
     asyncio.create_task(system_health.report_success("mpesa_org"))
 
-    return {"status": "ok", "sweep_id": sweep.id}
+    return {
+        "status": "ok",
+        "sweep_id": sweep.id,
+        "is_batch": bool(batch_id),
+        "batch_id": batch_id,
+    }
 
 
 @router.post("/mpesa-sweep-failed")
@@ -1482,6 +1503,96 @@ async def mpesa_sweep_failed(
         raise HTTPException(status_code=404, detail="Sweep not found")
     sweep.status = "failed"
     sweep.failure_reason = (data.error or "Unknown error")[:500]
+
+    # ── Batch sweep failed: refund ALL batch items ────────────────────────────
+    if sweep.batch_id:
+        batch_result = await db.execute(select(WithdrawalBatch).where(WithdrawalBatch.id == sweep.batch_id))
+        batch = batch_result.scalar_one_or_none()
+        if batch:
+            batch.status = "failed"
+
+        items_result = await db.execute(
+            select(BatchItem).where(
+                BatchItem.batch_id == sweep.batch_id,
+                BatchItem.status == "queued",
+            )
+        )
+        failed_items = items_result.scalars().all()
+        total_refunded = 0
+        for item in failed_items:
+            item.status = "failed"
+            item.failure_reason = (data.error or "Sweep failed")[:500]
+
+            # Find and cancel all pending transactions for this trader
+            group_result = await db.execute(
+                select(WalletTransaction).where(
+                    WalletTransaction.trader_id == item.trader_id,
+                    WalletTransaction.status == "pending",
+                    WalletTransaction.transaction_type.in_([
+                        TransactionType.WITHDRAWAL,
+                        TransactionType.PLATFORM_FEE,
+                        TransactionType.SETTLEMENT_FEE,
+                    ]),
+                )
+            )
+            group_txns = group_result.scalars().all()
+            refund_amount = sum(abs(t.amount) for t in group_txns)
+
+            for t in group_txns:
+                t.status = "cancelled"
+                t.description = (t.description or "") + " | CANCELLED: batch sweep failed"
+
+            # Reverse Payment record
+            if item.wallet_tx_id:
+                spk_ref = f"SPK-{str(item.wallet_tx_id).zfill(6)}"
+                pay_result = await db.execute(
+                    select(Payment).where(Payment.bill_ref_number == spk_ref)
+                )
+                payment = pay_result.scalar_one_or_none()
+                if payment:
+                    payment.status = PaymentStatus.REVERSED
+
+            # Restore wallet balance
+            wallet_result = await db.execute(
+                select(Wallet).where(Wallet.trader_id == item.trader_id)
+            )
+            item_wallet = wallet_result.scalar_one_or_none()
+            if item_wallet and refund_amount > 0:
+                item_wallet.balance += refund_amount
+                item_wallet.total_withdrawn -= item.net_amount
+                item_wallet.total_fees_paid -= item.fee_amount
+
+            total_refunded += refund_amount
+
+            # Notify trader
+            tr_result = await db.execute(select(Trader).where(Trader.id == item.trader_id))
+            item_trader = tr_result.scalar_one_or_none()
+            if item_trader and refund_amount > 0:
+                try:
+                    from app.services.sms import send_otp_sms
+                    send_otp_sms(
+                        item_trader.phone,
+                        f"SparkP2P: Your batch withdrawal of KES {refund_amount:,.0f} failed "
+                        f"(M-PESA sweep error). Amount refunded to your wallet. Please try again."
+                    )
+                except Exception as e:
+                    logger.warning(f"Batch item refund SMS failed for trader {item.trader_id}: {e}")
+
+        await db.commit()
+
+        from app.services import system_health
+        import asyncio
+        asyncio.create_task(system_health.report_failure("mpesa_org", data.error or "Batch sweep failed"))
+
+        return {
+            "status": "failed",
+            "sweep_id": sweep.id,
+            "is_batch": True,
+            "batch_id": sweep.batch_id,
+            "items_refunded": len(failed_items),
+            "total_refunded": total_refunded,
+        }
+    # ─────────────────────────────────────────────────────────────────────────
 
     # Find the pending WalletTransaction + wallet for this trader and reverse it
     tx_result = await db.execute(
@@ -1622,6 +1733,277 @@ async def reset_pending_sweep(
     await db.commit()
     logger.info(f"Sweep {sweep.id} reset to pending for retry (I&M transfer failure)")
     return {"reset": True, "sweep_id": sweep.id}
+
+
+# ═══════════════════════════════════════════════════════════
+# BATCH WITHDRAWAL DISBURSEMENT
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/pending-batch-disbursements")
+async def get_pending_batch_disbursements(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Desktop app calls this after a batch sweep completes.
+    Returns all queued batch items whose batch is in 'disbursing' state.
+    """
+    if not trader.is_admin and trader.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    result = await db.execute(
+        select(BatchItem, Trader)
+        .join(Trader, Trader.id == BatchItem.trader_id)
+        .join(WithdrawalBatch, WithdrawalBatch.id == BatchItem.batch_id)
+        .where(
+            WithdrawalBatch.status == "disbursing",
+            BatchItem.status == "queued",
+        )
+        .order_by(BatchItem.created_at)
+    )
+    rows = result.all()
+
+    jobs = []
+    for item, tr in rows:
+        jobs.append({
+            "item_id": item.id,
+            "batch_id": item.batch_id,
+            "amount": item.net_amount,
+            "destination": item.destination or "",
+            "destination_account": item.destination or "",
+            "destination_name": item.destination_name or (tr.full_name or "").upper().strip(),
+            "trader_id": item.trader_id,
+            "wallet_tx_id": item.wallet_tx_id,
+        })
+
+    return {"jobs": jobs}
+
+
+class BatchItemResultRequest(BaseModel):
+    item_id: int
+    reference: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.post("/batch-item-complete")
+async def batch_item_complete(
+    data: BatchItemResultRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desktop app calls this after successfully completing one I&M transfer in a batch."""
+    if not trader.is_admin and trader.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    result = await db.execute(select(BatchItem).where(BatchItem.id == data.item_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Batch item not found")
+
+    item.status = "completed"
+    item.completed_at = datetime.now(timezone.utc)
+    if data.reference:
+        item.im_reference = data.reference
+
+    # Complete the withdrawal WalletTransaction
+    if item.wallet_tx_id:
+        tx_result = await db.execute(
+            select(WalletTransaction).where(WalletTransaction.id == item.wallet_tx_id)
+        )
+        tx = tx_result.scalar_one_or_none()
+        if tx:
+            tx.status = "completed"
+            tx.processed_by = "auto:im_bot"
+            tx.processed_at = datetime.now(timezone.utc)
+            if data.reference:
+                tx.description = (tx.description or "") + f" | I&M ref: {data.reference}"
+
+            # Mark the outbound Payment record as completed
+            spk_ref = f"SPK-{str(tx.id).zfill(6)}"
+            pay_result = await db.execute(
+                select(Payment).where(Payment.bill_ref_number == spk_ref)
+            )
+            payment = pay_result.scalar_one_or_none()
+            if payment:
+                payment.status = PaymentStatus.COMPLETED
+                if data.reference:
+                    payment.mpesa_transaction_id = data.reference
+
+    # Complete pending fee transactions for this trader
+    fee_result = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.trader_id == item.trader_id,
+            WalletTransaction.status == "pending",
+            WalletTransaction.transaction_type.in_([
+                TransactionType.PLATFORM_FEE,
+                TransactionType.SETTLEMENT_FEE,
+            ]),
+        )
+    )
+    for fee_tx in fee_result.scalars().all():
+        fee_tx.status = "completed"
+
+    # Check if entire batch is now complete
+    from sqlalchemy import func as sa_func
+    remaining_result = await db.execute(
+        select(sa_func.count(BatchItem.id)).where(
+            BatchItem.batch_id == item.batch_id,
+            BatchItem.status == "queued",
+        )
+    )
+    if (remaining_result.scalar() or 0) == 0:
+        batch_result = await db.execute(
+            select(WithdrawalBatch).where(WithdrawalBatch.id == item.batch_id)
+        )
+        batch = batch_result.scalar_one_or_none()
+        if batch:
+            batch.status = "completed"
+            batch.completed_at = datetime.now(timezone.utc)
+            logger.info(f"Batch {item.batch_id} fully completed")
+
+    await db.commit()
+
+    # Notify trader
+    tr_result = await db.execute(select(Trader).where(Trader.id == item.trader_id))
+    item_trader = tr_result.scalar_one_or_none()
+    wallet_result = await db.execute(
+        select(Wallet).where(Wallet.trader_id == item.trader_id)
+    )
+    item_wallet = wallet_result.scalar_one_or_none()
+    remaining_bal = item_wallet.balance if item_wallet else 0
+
+    if item_trader:
+        try:
+            from app.services.sms import send_otp_sms
+            send_otp_sms(
+                item_trader.phone,
+                f"SparkP2P: KES {item.net_amount:,.0f} sent to your I&M Bank account. "
+                f"Remaining balance: KES {remaining_bal:,.0f}."
+            )
+        except Exception as e:
+            logger.warning(f"Batch item complete SMS failed for trader {item.trader_id}: {e}")
+
+        try:
+            from app.services.email import send_email
+            ref_display = data.reference or f"SPK-{str(item.wallet_tx_id).zfill(6)}" if item.wallet_tx_id else "N/A"
+            send_email(
+                item_trader.email,
+                "SparkP2P - Withdrawal Sent",
+                f"""
+                <div style="font-family:-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
+                    <div style="text-align:center;margin-bottom:30px;">
+                        <h1 style="color:#f59e0b;font-size:28px;margin:0;">SparkP2P</h1>
+                    </div>
+                    <div style="background:#1a1d27;border-radius:12px;padding:32px;">
+                        <h2 style="color:#10b981;font-size:20px;margin:0 0 12px;">Withdrawal Sent</h2>
+                        <p style="color:#9ca3af;font-size:14px;">
+                            Hi {item_trader.full_name}, your withdrawal to I&M Bank has been completed.
+                        </p>
+                        <div style="background:#0f1117;border-radius:10px;padding:16px;margin:16px 0;">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+                                <span style="color:#9ca3af;">Amount Sent</span>
+                                <span style="color:#10b981;font-weight:600;">KES {item.net_amount:,.0f}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+                                <span style="color:#9ca3af;">Reference</span>
+                                <span style="color:#fff;">{ref_display}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="color:#9ca3af;">Remaining Balance</span>
+                                <span style="color:#fff;font-weight:600;">KES {remaining_bal:,.0f}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """,
+            )
+        except Exception as e:
+            logger.warning(f"Batch item complete email failed for trader {item.trader_id}: {e}")
+
+    from app.services import system_health
+    import asyncio
+    asyncio.create_task(system_health.report_success("im_bank"))
+
+    return {"status": "ok", "item_id": item.id}
+
+
+@router.post("/batch-item-failed")
+async def batch_item_failed(
+    data: BatchItemResultRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Desktop app calls this if an I&M transfer for one batch item fails.
+    Refunds the individual trader and marks their item failed.
+    Other batch items are unaffected.
+    """
+    if not trader.is_admin and trader.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    result = await db.execute(select(BatchItem).where(BatchItem.id == data.item_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Batch item not found")
+
+    item.status = "failed"
+    item.failure_reason = (data.error or "Transfer failed")[:500]
+
+    # Cancel pending wallet transactions and restore balance
+    group_result = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.trader_id == item.trader_id,
+            WalletTransaction.status == "pending",
+            WalletTransaction.transaction_type.in_([
+                TransactionType.WITHDRAWAL,
+                TransactionType.PLATFORM_FEE,
+                TransactionType.SETTLEMENT_FEE,
+            ]),
+        )
+    )
+    group_txns = group_result.scalars().all()
+    total_refund = sum(abs(t.amount) for t in group_txns)
+    for t in group_txns:
+        t.status = "cancelled"
+        t.description = (t.description or "") + " | CANCELLED: batch item transfer failed"
+
+    # Reverse Payment record
+    if item.wallet_tx_id:
+        spk_ref = f"SPK-{str(item.wallet_tx_id).zfill(6)}"
+        pay_result = await db.execute(select(Payment).where(Payment.bill_ref_number == spk_ref))
+        payment = pay_result.scalar_one_or_none()
+        if payment:
+            payment.status = PaymentStatus.REVERSED
+
+    # Restore wallet
+    wallet_result = await db.execute(select(Wallet).where(Wallet.trader_id == item.trader_id))
+    item_wallet = wallet_result.scalar_one_or_none()
+    if item_wallet and total_refund > 0:
+        item_wallet.balance += total_refund
+        item_wallet.total_withdrawn -= item.net_amount
+        item_wallet.total_fees_paid -= item.fee_amount
+
+    await db.commit()
+
+    # Notify trader
+    tr_result = await db.execute(select(Trader).where(Trader.id == item.trader_id))
+    item_trader = tr_result.scalar_one_or_none()
+    if item_trader and total_refund > 0:
+        try:
+            from app.services.sms import send_otp_sms
+            send_otp_sms(
+                item_trader.phone,
+                f"SparkP2P: Your batch withdrawal of KES {total_refund:,.0f} could not be "
+                f"completed (I&M transfer error). Amount refunded to your wallet. Please try again."
+            )
+        except Exception as e:
+            logger.warning(f"Batch item failed SMS error for trader {item.trader_id}: {e}")
+
+    from app.services import system_health
+    import asyncio
+    asyncio.create_task(system_health.report_failure("im_bank", data.error or "Batch item transfer failed"))
+
+    return {"status": "failed", "item_id": item.id, "refunded": total_refund}
 
 
 # ═══════════════════════════════════════════════════════════

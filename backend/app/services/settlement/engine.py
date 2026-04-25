@@ -314,6 +314,168 @@ class SettlementEngine:
 
         return success
 
+    async def queue_batch_withdrawal(self, trader_id: int, amount: float = None) -> dict:
+        """
+        Queue a bank withdrawal into the current hourly collecting batch.
+        Deducts wallet balance immediately (same as individual withdrawal).
+        The actual M-PESA sweep + I&M transfer happen when the scheduler closes the batch.
+
+        Returns {"success": True, "batch_id": ..., "item_id": ..., ...} or
+                {"success": False, "error": ...}
+        """
+        from app.models.batch import WithdrawalBatch, BatchItem
+        from app.models.payment import Payment, PaymentDirection, PaymentStatus
+        from sqlalchemy import select as sa_select
+
+        trader = await self._get_trader(trader_id)
+        if not trader:
+            return {"success": False, "error": "Trader not found"}
+
+        wallet = await self._get_wallet(trader_id)
+        if not wallet or wallet.balance <= 0:
+            return {"success": False, "error": "No funds available"}
+
+        # Determine gross withdrawal amount
+        if amount is not None and 0 < amount < wallet.balance:
+            gross_amount = amount
+        else:
+            gross_amount = wallet.balance
+
+        # Calculate fees
+        safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, gross_amount)
+        net_amount = gross_amount - total_fee
+        if net_amount <= 0:
+            return {"success": False, "error": "Amount too low to cover fees"}
+
+        # Block if trader already has a pending batch item (queued or processing)
+        existing_result = await self.db.execute(
+            sa_select(BatchItem).where(
+                BatchItem.trader_id == trader_id,
+                BatchItem.status.in_(["queued", "processing"]),
+            ).limit(1)
+        )
+        if existing_result.scalar_one_or_none():
+            return {"success": False, "error": "You already have a withdrawal queued in the current batch"}
+
+        # Find or create the current collecting batch
+        batch_result = await self.db.execute(
+            sa_select(WithdrawalBatch).where(
+                WithdrawalBatch.status == "collecting"
+            ).order_by(WithdrawalBatch.created_at.desc()).limit(1)
+        )
+        batch = batch_result.scalar_one_or_none()
+        if not batch:
+            batch = WithdrawalBatch(status="collecting", total_amount=0.0)
+            self.db.add(batch)
+            await self.db.flush()
+
+        # Destination details
+        withdrawal_destination = trader.settlement_account or trader.settlement_paybill or ""
+        destination_name = (trader.full_name or "").upper().strip()
+        settle_method_label = "bank_paybill"
+
+        # Pre-compute balance_after values (fees deducted first, then net withdrawal)
+        balance_after_platform_fee = wallet.balance - platform_markup
+        balance_after_safaricom_fee = balance_after_platform_fee - safaricom_fee
+        balance_after_withdrawal = balance_after_safaricom_fee - net_amount
+
+        # Create pending withdrawal WalletTransaction
+        txn = WalletTransaction(
+            trader_id=trader_id,
+            wallet_id=wallet.id,
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=-net_amount,
+            balance_after=balance_after_withdrawal,
+            description=f"Batch withdrawal queued: KES {net_amount:,.0f} to I&M Bank",
+            status="pending",
+            destination=withdrawal_destination,
+            settlement_method=settle_method_label,
+        )
+        self.db.add(txn)
+        await self.db.flush()  # get txn.id
+
+        spk_ref = f"SPK-{str(txn.id).zfill(6)}"
+        txn.description = f"Batch withdrawal: KES {net_amount:,.0f} to I&M Bank | {spk_ref}"
+
+        # Create pending fee transactions
+        self.db.add(WalletTransaction(
+            trader_id=trader_id,
+            wallet_id=wallet.id,
+            transaction_type=TransactionType.SETTLEMENT_FEE,
+            amount=-safaricom_fee,
+            balance_after=balance_after_safaricom_fee,
+            description=f"Safaricom fee: KES {safaricom_fee}",
+            status="pending",
+        ))
+        self.db.add(WalletTransaction(
+            trader_id=trader_id,
+            wallet_id=wallet.id,
+            transaction_type=TransactionType.PLATFORM_FEE,
+            amount=-platform_markup,
+            balance_after=balance_after_platform_fee,
+            description=f"Service fee: KES {platform_markup}",
+            status="pending",
+        ))
+
+        # Deduct wallet balance immediately
+        wallet.balance -= platform_markup
+        wallet.balance -= safaricom_fee
+        wallet.balance -= net_amount
+        wallet.total_withdrawn += net_amount
+        wallet.total_fees_paid += total_fee
+
+        # Create BatchItem
+        item = BatchItem(
+            batch_id=batch.id,
+            trader_id=trader_id,
+            wallet_tx_id=txn.id,
+            gross_amount=gross_amount,
+            net_amount=net_amount,
+            fee_amount=total_fee,
+            destination=withdrawal_destination,
+            destination_name=destination_name,
+            status="queued",
+        )
+        self.db.add(item)
+
+        # Update batch total
+        batch.total_amount += gross_amount
+
+        # Outbound Payment record for admin traceability
+        self.db.add(Payment(
+            order_id=None,
+            trader_id=trader_id,
+            direction=PaymentDirection.OUTBOUND,
+            transaction_type=trader.settlement_method.value,
+            amount=net_amount,
+            phone=trader.phone,
+            sender_name=trader.full_name,
+            destination=withdrawal_destination,
+            destination_type=trader.settlement_method.value,
+            remarks=f"Batch withdrawal for {trader.full_name}",
+            bill_ref_number=spk_ref,
+            status=PaymentStatus.PENDING,
+            raw_callback={"queued": True, "method": "batch"},
+        ))
+
+        await self.db.commit()
+
+        logger.info(
+            f"Queued batch withdrawal trader={trader_id}: "
+            f"gross=KES {gross_amount:,.0f} net=KES {net_amount:,.0f} "
+            f"batch={batch.id} item={item.id} ref={spk_ref}"
+        )
+
+        return {
+            "success": True,
+            "batch_id": batch.id,
+            "item_id": item.id,
+            "gross_amount": gross_amount,
+            "net_amount": net_amount,
+            "fee_amount": total_fee,
+            "spk_ref": spk_ref,
+        }
+
     async def auto_settle_if_threshold(self, trader_id: int) -> bool:
         """Auto-settle if trader's balance exceeds their threshold.
         Called after each trade completes.

@@ -69,4 +69,7 @@ class WalletTransaction(Base):
     processed_by = Column(String(100), nullable=True)     # admin name who marked complete
     processed_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Batch link — set when this withdrawal belongs to a batch item
+    batch_item_id = Column(Integer, ForeignKey("batch_items.id"), nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

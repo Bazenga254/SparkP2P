@@ -8938,22 +8938,57 @@ async function imVisionVerify(screenshotB64, instruction) {
 
 // â”€â”€ I&M Local Transfer (to any I&M account holder) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Used for all trader withdrawals to their I&M accounts
-async function executeImLocalTransfer(job) {
+async function executeImLocalTransfer(job, _page = null) {
   // job = { id, amount, destination_account, destination_name }
-  // Strategy mirrors executeImWithdrawal: index-based ng-select clicks + XPath text search for options
+  // For batch items: job = { item_id, wallet_tx_id, amount, destination_account, destination_name }
+  const page = _page || imPage;
+  const isBatchItem = !!job.item_id;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const $x = async xpath => imPage.$$('::-p-xpath(' + xpath + ')').catch(() => []);
-  if (imWithdrawalRunning) return;
-  if (!imPage || imPage.isClosed()) {
+  const $x = async xpath => page.$$('::-p-xpath(' + xpath + ')').catch(() => []);
+  if (!_page && imWithdrawalRunning) return;
+  if (!page || page.isClosed()) {
     console.log('[SparkP2P] I&M page not open — cannot execute local transfer');
     return;
   }
-  await imPage.bringToFront().catch(() => {});
+  if (!_page) await page.bringToFront().catch(() => {});
   if (!imPin) {
     console.log('[SparkP2P] I&M PIN not set — cannot execute local transfer');
     return;
   }
-  imWithdrawalRunning = true;
+  if (!_page) imWithdrawalRunning = true;
+  // Page-specific Vision helpers that operate on the active page object
+  const visionClick = async (screenshotB64, instruction) => {
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 300,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotB64 } },
+            { type: 'text', text: instruction + '\nReply JSON only: {"x": pixel_x, "y": pixel_y, "found": bool}' },
+          ]}] }),
+      });
+      const d = await res.json();
+      const r = _parseVisionJson(d.content[0].text);
+      if (r.x && r.y) { await page.mouse.click(Number(r.x), Number(r.y)); await sleep(600); }
+    } catch (e) { console.log('[SparkP2P] visionClick error:', e.message?.substring(0, 100)); }
+  };
+  const visionType = async (screenshotB64, instruction, text) => {
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 300,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotB64 } },
+            { type: 'text', text: instruction + '\nReply JSON only: {"x": pixel_x, "y": pixel_y}' },
+          ]}] }),
+      });
+      const d = await res.json();
+      const r = _parseVisionJson(d.content[0].text);
+      if (r.x && r.y) { await page.mouse.click(Number(r.x), Number(r.y), { clickCount: 3 }); await sleep(200); await page.keyboard.type(text, { delay: 50 }); await sleep(300); }
+    } catch (e) { console.log('[SparkP2P] visionType error:', e.message?.substring(0, 100)); }
+  };
   const FROM_ACCOUNT  = '00108094726150'; // SPARK FREELANCE SOLUTIONS
   const TO_ACCOUNT    = job.destination_account;
   const EXPECTED_NAME = (job.destination_name || '').toUpperCase().trim();
@@ -8964,12 +8999,12 @@ async function executeImLocalTransfer(job) {
   try {
     // STEP 1: Navigate to Local Transfers form — go via dashboard first so Angular
     // fully destroys/recreates the form component on retry (avoids dirty state)
-    await imPage.goto(
+    await page.goto(
       'https://digital.imbank.com/inm-retail/dashboard',
       { waitUntil: 'networkidle2', timeout: 20000 }
     ).catch(() => {});
     await sleep(1000);
-    await imPage.goto(
+    await page.goto(
       'https://digital.imbank.com/inm-retail/transfers/local-transfers/form',
       { waitUntil: 'networkidle2', timeout: 30000 }
     );
@@ -8977,8 +9012,8 @@ async function executeImLocalTransfer(job) {
     console.log('[SparkP2P] I&M: Loaded local-transfers form');
 
     // STEP 2: Select Debit Account (same pattern as executeImWithdrawal)
-    await imPage.waitForSelector('ng-select, select', { timeout: 10000 }).catch(() => {});
-    const ngSelectsInit = await imPage.$$('ng-select').catch(() => []);
+    await page.waitForSelector('ng-select, select', { timeout: 10000 }).catch(() => {});
+    const ngSelectsInit = await page.$$('ng-select').catch(() => []);
     let debitDone = false;
     if (ngSelectsInit.length > 0) {
       await ngSelectsInit[0].click().catch(() => {});
@@ -8991,8 +9026,8 @@ async function executeImLocalTransfer(job) {
       }
     }
     if (!debitDone) {
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, `Click the Debit Account dropdown and select SPARK FREELANCE SOLUTIONS (${FROM_ACCOUNT})`);
+      ss = await page.screenshot({ encoding: 'base64' });
+      await visionClick(ss, `Click the Debit Account dropdown and select SPARK FREELANCE SOLUTIONS (${FROM_ACCOUNT})`);
       console.log('[SparkP2P] I&M: Selected debit account via Vision');
     }
     await sleep(1000);
@@ -9005,28 +9040,28 @@ async function executeImLocalTransfer(job) {
       radioDone = true;
     }
     if (!radioDone) {
-      const radioInputs = await imPage.$$('input[type="radio"]').catch(() => []);
+      const radioInputs = await page.$$('input[type="radio"]').catch(() => []);
       if (radioInputs.length > 0) {
-        await imPage.evaluate(el => el.click(), radioInputs[0]).catch(() => {});
+        await page.evaluate(el => el.click(), radioInputs[0]).catch(() => {});
         radioDone = true;
       }
     }
     if (!radioDone) {
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, 'Click the "Saved Beneficiary" radio button or label');
+      ss = await page.screenshot({ encoding: 'base64' });
+      await visionClick(ss, 'Click the "Saved Beneficiary" radio button or label');
     }
     await sleep(1200);
     console.log('[SparkP2P] I&M: Clicked Saved Beneficiary');
 
     // STEP 4: Select beneficiary — index-based ng-select click + XPath option (mirrors own-account TO field)
     let benefDone = false;
-    const allNgSelects = await imPage.$$('ng-select').catch(() => []);
+    const allNgSelects = await page.$$('ng-select').catch(() => []);
     // Beneficiary ng-select is the 2nd one (index 1); debit account is index 0
     const benefDrop = allNgSelects.length > 1 ? allNgSelects[1] : allNgSelects[0];
     if (benefDrop) {
       await benefDrop.click().catch(() => {});
       await sleep(800);
-      await imPage.keyboard.type(TO_ACCOUNT, { delay: 60 });
+      await page.keyboard.type(TO_ACCOUNT, { delay: 60 });
       await sleep(1500);
       const benefOption = await $x(
         `//*[contains(text(), '${TO_ACCOUNT}') or contains(text(), '${EXPECTED_NAME}')]`
@@ -9035,19 +9070,19 @@ async function executeImLocalTransfer(job) {
         await benefOption[0].click().catch(() => {});
         benefDone = true;
       } else {
-        await imPage.keyboard.press('Enter');
+        await page.keyboard.press('Enter');
         benefDone = true;
       }
     }
     if (!benefDone) {
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionClick(ss, `Click the beneficiary dropdown and select ${TO_ACCOUNT} (${EXPECTED_NAME})`);
+      ss = await page.screenshot({ encoding: 'base64' });
+      await visionClick(ss, `Click the beneficiary dropdown and select ${TO_ACCOUNT} (${EXPECTED_NAME})`);
     }
     await sleep(1000);
     console.log(`[SparkP2P] I&M: Selected saved beneficiary ${TO_ACCOUNT} (${EXPECTED_NAME})`);
 
     // Click Validate button (required even for saved beneficiaries)
-    const validated = await imPage.evaluate(() => {
+    const validated = await page.evaluate(() => {
       const btn = Array.from(document.querySelectorAll('button')).find(b =>
         (b.textContent || '').trim().toLowerCase() === 'validate' && !b.disabled
       );
@@ -9063,14 +9098,14 @@ async function executeImLocalTransfer(job) {
     }
 
     // Scroll down to reveal Payment details (Amount, Reference, Purpose)
-    await imPage.evaluate(() => window.scrollBy(0, 500)).catch(() => {});
+    await page.evaluate(() => window.scrollBy(0, 500)).catch(() => {});
     await sleep(800);
 
     // STEP 5: Currency = KES — same proven approach as executeImBankTransfer
-    const currSelHandles = await imPage.$$('select');
+    const currSelHandles = await page.$$('select');
     const currHandle = currSelHandles[0]; // first <select> on the page is the currency
     if (currHandle) {
-      const selInfo = await imPage.evaluate(() => {
+      const selInfo = await page.evaluate(() => {
         const sels = Array.from(document.querySelectorAll('select'));
         for (const s of sels) {
           const kesOpt = Array.from(s.options).find(o => o.text.trim() === 'KES');
@@ -9079,7 +9114,7 @@ async function executeImLocalTransfer(job) {
         return null;
       }).catch(() => null);
       if (selInfo) {
-        await imPage.select('select', selInfo.value).catch(() => {});
+        await page.select('select', selInfo.value).catch(() => {});
         console.log('[SparkP2P] I&M: Currency set to KES via page.select');
       }
     }
@@ -9093,7 +9128,7 @@ async function executeImLocalTransfer(job) {
     const amountCentsStr = amountCents.toString().padStart(2, '0');
 
     // Fill integer part
-    const amtFilled = await imPage.evaluate((amt) => {
+    const amtFilled = await page.evaluate((amt) => {
       const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
       const setVal = (el, v) => { if (nativeSetter) nativeSetter.call(el, v); else el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
       const inputs = Array.from(document.querySelectorAll('input[type="number"],input[type="text"]'));
@@ -9113,13 +9148,13 @@ async function executeImLocalTransfer(job) {
       return false;
     }, amountWhole).catch(() => false);
     if (!amtFilled) {
-      ss = await imPage.screenshot({ encoding: 'base64' });
-      await imVisionType(ss, `Type ${amountWhole} in the Amount whole number field`, amountWhole);
+      ss = await page.screenshot({ encoding: 'base64' });
+      await visionType(ss, `Type ${amountWhole} in the Amount whole number field`, amountWhole);
     }
     await sleep(300);
 
     // Fill cents part (the "00" field after the period separator)
-    await imPage.evaluate((cents) => {
+    await page.evaluate((cents) => {
       const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
       const setVal = (el, v) => { if (nativeSetter) nativeSetter.call(el, v); else el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
       const inputs = Array.from(document.querySelectorAll('input[type="number"],input[type="text"]'));
@@ -9140,7 +9175,7 @@ async function executeImLocalTransfer(job) {
 
     // STEP 7: Payment Reference — Angular native setter
     const refText = `SPK-${String(job.id).padStart(6, '0')}`;
-    await imPage.evaluate((ref) => {
+    await page.evaluate((ref) => {
       const inputs = Array.from(document.querySelectorAll('input,textarea'));
       const i = inputs.find(inp =>
         (inp.placeholder || '').toLowerCase().includes('payment description') ||
@@ -9160,7 +9195,7 @@ async function executeImLocalTransfer(job) {
     await sleep(500);
 
     // STEP 8: Payment Purpose = Other — select[1] with lazy-load wait (same as executeImBankTransfer)
-    const purposeHandles = await imPage.$$('select');
+    const purposeHandles = await page.$$('select');
     const purposeHandle = purposeHandles[1] || purposeHandles[0];
     let purposeSet = false;
     if (purposeHandle) {
@@ -9173,12 +9208,12 @@ async function executeImLocalTransfer(job) {
           el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
           el.dispatchEvent(new Event('focus', { bubbles: true }));
         }).catch(() => {});
-        await imPage.waitForFunction(() => {
+        await page.waitForFunction(() => {
           const sels = document.querySelectorAll('select');
           const target = sels[1] || sels[0];
           return target && target.options.length > 1;
         }, { timeout: 4000 }).catch(() => {});
-        await imPage.keyboard.press('Escape').catch(() => {});
+        await page.keyboard.press('Escape').catch(() => {});
         await sleep(300);
         const opts = await purposeHandle.evaluate(el =>
           Array.from(el.options).map(o => ({ text: o.text.trim(), value: o.value }))
@@ -9203,7 +9238,7 @@ async function executeImLocalTransfer(job) {
     let postContinueSubmitted = false;
     for (let vStep = 0; vStep < 20; vStep++) {
       await sleep(vStep === 0 ? 500 : 2000);
-      ss = await imPage.screenshot({ encoding: 'base64' });
+      ss = await page.screenshot({ encoding: 'base64' });
       const vAction = await imVisionVerify(
         ss,
         `I&M Bank local transfer portal. What screen is currently showing?
@@ -9226,7 +9261,7 @@ async function executeImLocalTransfer(job) {
 
       if (vAction.screen === 'form') {
         // Form visible — click Continue via coordinate-based mouse click
-        const contCoords = await imPage.evaluate(() => {
+        const contCoords = await page.evaluate(() => {
           const btns = Array.from(document.querySelectorAll('button'));
           const btn = btns.find(b => (b.textContent || '').trim() === 'Continue' && !b.disabled);
           if (!btn) return null;
@@ -9235,7 +9270,7 @@ async function executeImLocalTransfer(job) {
           return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
         }).catch(() => null);
         if (contCoords && contCoords.x > 0) {
-          await imPage.mouse.click(contCoords.x, contCoords.y);
+          await page.mouse.click(contCoords.x, contCoords.y);
           console.log(`[SparkP2P] I&M: Clicked Continue at (${Math.round(contCoords.x)}, ${Math.round(contCoords.y)})`);
         } else {
           const continueXp = await $x('//button[contains(text(), "Continue")]').catch(() => []);
@@ -9247,7 +9282,7 @@ async function executeImLocalTransfer(job) {
 
       if (vAction.screen === 'review') {
         // Review modal — verify name then click Submit via coordinates
-        const submCoords = await imPage.evaluate(() => {
+        const submCoords = await page.evaluate(() => {
           // Search inside modal/dialog first
           const container = document.querySelector('mat-dialog-container, [role="dialog"], .cdk-overlay-pane') || document.body;
           const btns = Array.from(container.querySelectorAll('button'));
@@ -9258,7 +9293,7 @@ async function executeImLocalTransfer(job) {
           return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
         }).catch(() => null);
         if (submCoords && submCoords.x > 0) {
-          await imPage.mouse.click(submCoords.x, submCoords.y);
+          await page.mouse.click(submCoords.x, submCoords.y);
           console.log(`[SparkP2P] I&M: Clicked Submit at (${Math.round(submCoords.x)}, ${Math.round(submCoords.y)})`);
           postContinueSubmitted = true;
         } else {
@@ -9273,17 +9308,17 @@ async function executeImLocalTransfer(job) {
 
       if (vAction.screen === 'pin') {
         // Mirror exact PIN approach from executeImBankTransfer Vision loop
-        await imPage.evaluate(() => {
+        await page.evaluate(() => {
           const input = document.querySelector('input[type="password"], input[type="tel"]');
           if (input) { input.click(); input.focus(); }
         }).catch(() => {});
         await sleep(300);
         for (const digit of String(imPin)) {
-          await imPage.keyboard.press(digit);
+          await page.keyboard.press(digit);
           await sleep(150);
         }
         await sleep(800);
-        const completeClicked = await imPage.evaluate(() => {
+        const completeClicked = await page.evaluate(() => {
           const btns = Array.from(document.querySelectorAll('button'));
           const btn = btns.find(b => (b.textContent || '').trim().toLowerCase() === 'complete');
           if (btn) { btn.scrollIntoView({ block: 'center', behavior: 'instant' }); btn.click(); return true; }
@@ -9302,40 +9337,142 @@ async function executeImLocalTransfer(job) {
       const closeBtn = await $x('//button[contains(text(), "Close")]').catch(() => []);
       if (closeBtn.length > 0) await closeBtn[0].click().catch(() => {});
       await sleep(1000);
-      await fetch(`${API_BASE}/ext/bank-withdrawal-complete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ tx_id: job.id, reference: txReference }),
-      }).catch(() => {});
-      // Switch back to M-PESA portal so admin can see it's ready for the next sweep
-      if (mpesaOrgPage && !mpesaOrgPage.isClosed()) await mpesaOrgPage.bringToFront().catch(() => {});
+      if (isBatchItem) {
+        await fetch(`${API_BASE}/ext/batch-item-complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ item_id: job.item_id, reference: txReference }),
+        }).catch(() => {});
+      } else {
+        await fetch(`${API_BASE}/ext/bank-withdrawal-complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ tx_id: job.id, reference: txReference }),
+        }).catch(() => {});
+        if (mpesaOrgPage && !mpesaOrgPage.isClosed()) await mpesaOrgPage.bringToFront().catch(() => {});
+      }
     } else {
       throw new Error('Transfer did not complete: PIN/success screen not detected after 10 attempts');
     }
 
   } catch (e) {
     console.log('[SparkP2P] I&M local transfer error:', e.message);
-    await fetch(`${API_BASE}/ext/bank-withdrawal-failed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ tx_id: job.id, error: e.message }),
-    }).catch(() => {});
-    // Reset the associated M-PESA sweep to pending so the bot retries the full flow
-    const resetRes = await fetch(`${API_BASE}/ext/reset-pending-sweep`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    }).catch(() => null);
-    const resetData = resetRes ? await resetRes.json().catch(() => null) : null;
-    if (resetData?.reset) {
-      console.log(`[SparkP2P] Sweep ${resetData.sweep_id} reset to pending — will retry M-PESA → I&M flow`);
-      sendBotLog('warning', `I&M transfer failed — retrying from M-PESA sweep #${resetData.sweep_id}`);
+    if (isBatchItem) {
+      await fetch(`${API_BASE}/ext/batch-item-failed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ item_id: job.item_id, error: e.message }),
+      }).catch(() => {});
+    } else {
+      await fetch(`${API_BASE}/ext/bank-withdrawal-failed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ tx_id: job.id, error: e.message }),
+      }).catch(() => {});
+      const resetRes = await fetch(`${API_BASE}/ext/reset-pending-sweep`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      }).catch(() => null);
+      const resetData = resetRes ? await resetRes.json().catch(() => null) : null;
+      if (resetData?.reset) {
+        console.log(`[SparkP2P] Sweep ${resetData.sweep_id} reset to pending — will retry M-PESA → I&M flow`);
+        sendBotLog('warning', `I&M transfer failed — retrying from M-PESA sweep #${resetData.sweep_id}`);
+      }
+      if (mpesaOrgPage && !mpesaOrgPage.isClosed()) await mpesaOrgPage.bringToFront().catch(() => {});
     }
-    // Switch back to M-PESA portal so admin can see the state after failure
-    if (mpesaOrgPage && !mpesaOrgPage.isClosed()) await mpesaOrgPage.bringToFront().catch(() => {});
   } finally {
-    imWithdrawalRunning = false;
+    if (!_page) imWithdrawalRunning = false;
     await syncImCookies();
   }
+}
+
+// ── Batch Withdrawal Disbursement ──────────────────────────────────────────────
+// After a batch M-PESA sweep completes, open up to BATCH_PARALLEL_TABS I&M browser
+// tabs and process all queued batch items concurrently.
+const BATCH_PARALLEL_TABS = 3;
+
+async function runBatchDisbursements(batchId) {
+  if (!token) return;
+  console.log(`[BatchDisburse] Batch ${batchId}: starting disbursements...`);
+  sendBotLog('info', `Batch ${batchId}: starting I&M disbursements`);
+
+  // Fetch all queued batch items (with retries)
+  let jobs = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await fetch(`${API_BASE}/ext/pending-batch-disbursements`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (r.ok) { const d = await r.json(); jobs = d.jobs || []; break; }
+    } catch (e) {}
+    if (attempt < 3) await new Promise(r => setTimeout(r, 5000));
+  }
+
+  if (jobs.length === 0) {
+    console.log(`[BatchDisburse] Batch ${batchId}: no items found`);
+    return;
+  }
+  console.log(`[BatchDisburse] Batch ${batchId}: ${jobs.length} item(s) to disburse`);
+
+  // Collect available I&M pages — start with the existing imPage
+  const pages = [];
+  if (imPage && !imPage.isClosed()) pages.push(imPage);
+
+  // Open additional I&M tabs (share same browser session/cookies)
+  const numParallel = Math.min(BATCH_PARALLEL_TABS, jobs.length);
+  if (browser && pages.length < numParallel) {
+    for (let i = pages.length; i < numParallel; i++) {
+      try {
+        const newPage = await browser.newPage();
+        if (imPage && !imPage.isClosed()) {
+          const cookies = await imPage.cookies('https://digital.imbank.com').catch(() => []);
+          if (cookies.length) await newPage.setCookie(...cookies).catch(() => {});
+        }
+        await newPage.goto('https://digital.imbank.com/inm-retail/dashboard', {
+          waitUntil: 'domcontentloaded', timeout: 20000,
+        }).catch(() => {});
+        pages.push(newPage);
+        console.log(`[BatchDisburse] Opened extra I&M tab ${i + 1}`);
+      } catch (e) {
+        console.log(`[BatchDisburse] Could not open extra I&M tab:`, e.message?.substring(0, 60));
+        break;
+      }
+    }
+  }
+
+  if (pages.length === 0) {
+    console.log('[BatchDisburse] No I&M pages available — aborting');
+    return;
+  }
+
+  // Process jobs in parallel slices across available pages
+  const chunkSize = pages.length;
+  for (let i = 0; i < jobs.length; i += chunkSize) {
+    const chunk = jobs.slice(i, i + chunkSize);
+    await Promise.all(chunk.map((job, idx) => {
+      const page = pages[idx % pages.length];
+      // Pass the page override so each concurrent transfer uses its own tab
+      return executeImLocalTransfer(job, page).catch(async (e) => {
+        console.log(`[BatchDisburse] Item ${job.item_id} error:`, e.message?.substring(0, 80));
+        await fetch(`${API_BASE}/ext/batch-item-failed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ item_id: job.item_id, error: e.message }),
+        }).catch(() => {});
+      });
+    }));
+  }
+
+  // Close extra I&M tabs (keep the original imPage)
+  for (let i = 1; i < pages.length; i++) {
+    await pages[i].close().catch(() => {});
+  }
+
+  console.log(`[BatchDisburse] Batch ${batchId}: all ${jobs.length} item(s) processed`);
+  sendBotLog('success', `Batch ${batchId}: all ${jobs.length} withdrawal(s) disbursed`);
+
+  // Return focus to M-PESA portal
+  if (mpesaOrgPage && !mpesaOrgPage.isClosed()) await mpesaOrgPage.bringToFront().catch(() => {});
 }
 
 // Poll VPS every 30s for pending bank withdrawals and execute them
@@ -10211,12 +10348,14 @@ async function executeMpesaSweep(sweepJob) {
     }
 
     // Report to backend only after confirmed success
+    let sweepResponse = null;
     if (token) {
-      await fetch(`${API_BASE}/ext/mpesa-sweep-complete`, {
+      const sweepRes = await fetch(`${API_BASE}/ext/mpesa-sweep-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ sweep_id, amount, reference }),
-      }).catch(() => {});
+      }).catch(() => null);
+      if (sweepRes?.ok) sweepResponse = await sweepRes.json().catch(() => null);
     }
 
     console.log(`[SparkP2P] ✅ M-PESA sweep KES ${amount} complete`);
@@ -10224,39 +10363,43 @@ async function executeMpesaSweep(sweepJob) {
     mpesaSweepRunning = false;
     lastSweepCompletedAt = Date.now();
 
-    // Switch to I&M tab immediately so user can see what's happening
+    // Switch to I&M tab immediately
     if (imPage && !imPage.isClosed()) await imPage.bringToFront().catch(() => {});
 
-    // Trigger I&M transfer with retries (3 attempts, 10s apart)
-    const triggerImTransfer = async (attempt) => {
-      if (!token) { console.log('[SparkP2P] Post-sweep: no token, skipping I&M trigger'); return; }
-      if (!imPage || imPage.isClosed()) { console.log('[SparkP2P] Post-sweep: I&M page closed, skipping'); return; }
-      if (imWithdrawalRunning) { console.log('[SparkP2P] Post-sweep: I&M transfer already in progress'); return; }
-      try {
-        const r = await fetch(`${API_BASE}/ext/pending-bank-withdrawals`, {
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-        if (!r.ok) {
-          console.log(`[SparkP2P] Post-sweep: pending-withdrawals fetch failed (${r.status}) — attempt ${attempt}`);
+    if (sweepResponse?.is_batch && sweepResponse?.batch_id) {
+      // Batch sweep — trigger parallel I&M disbursements for all batch items
+      console.log(`[SparkP2P] Batch sweep complete — starting batch ${sweepResponse.batch_id} disbursements`);
+      setTimeout(() => runBatchDisbursements(sweepResponse.batch_id), 5000);
+    } else {
+      // Individual withdrawal sweep — trigger single I&M transfer (legacy flow)
+      const triggerImTransfer = async (attempt) => {
+        if (!token) { console.log('[SparkP2P] Post-sweep: no token, skipping I&M trigger'); return; }
+        if (!imPage || imPage.isClosed()) { console.log('[SparkP2P] Post-sweep: I&M page closed, skipping'); return; }
+        if (imWithdrawalRunning) { console.log('[SparkP2P] Post-sweep: I&M transfer already in progress'); return; }
+        try {
+          const r = await fetch(`${API_BASE}/ext/pending-bank-withdrawals`, {
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+          if (!r.ok) {
+            if (attempt < 3) setTimeout(() => triggerImTransfer(attempt + 1), 10000);
+            return;
+          }
+          const d = await r.json();
+          if (d.jobs && d.jobs.length > 0) {
+            const job = d.jobs[0];
+            console.log(`[SparkP2P] Auto-triggering I&M transfer after sweep — KES ${job.amount}`);
+            await imPage.bringToFront().catch(() => {});
+            await executeImLocalTransfer(job);
+          } else {
+            if (attempt < 3) setTimeout(() => triggerImTransfer(attempt + 1), 10000);
+          }
+        } catch (e) {
+          console.log(`[SparkP2P] Post-sweep trigger error (attempt ${attempt}):`, e.message);
           if (attempt < 3) setTimeout(() => triggerImTransfer(attempt + 1), 10000);
-          return;
         }
-        const d = await r.json();
-        if (d.jobs && d.jobs.length > 0) {
-          const job = d.jobs[0];
-          console.log(`[SparkP2P] Auto-triggering I&M transfer after sweep — KES ${job.amount}`);
-          await imPage.bringToFront().catch(() => {});
-          await executeImLocalTransfer(job);
-        } else {
-          console.log(`[SparkP2P] Post-sweep: no pending bank withdrawals found (attempt ${attempt})`);
-          if (attempt < 3) setTimeout(() => triggerImTransfer(attempt + 1), 10000);
-        }
-      } catch (e) {
-        console.log(`[SparkP2P] Post-sweep trigger error (attempt ${attempt}):`, e.message);
-        if (attempt < 3) setTimeout(() => triggerImTransfer(attempt + 1), 10000);
-      }
-    };
-    setTimeout(() => triggerImTransfer(1), 5000);
+      };
+      setTimeout(() => triggerImTransfer(1), 5000);
+    }
 
     return { success: true };
 
