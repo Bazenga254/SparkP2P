@@ -38,9 +38,10 @@ async def _check_traders():
     from sqlalchemy import select
 
     async with async_session() as db:
+        from app.models.trader import TraderStatus
         result = await db.execute(
             select(Trader).where(
-                Trader.is_active == True,
+                Trader.status == TraderStatus.ACTIVE,
                 Trader.updated_at.isnot(None),
             )
         )
