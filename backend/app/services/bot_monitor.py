@@ -59,6 +59,12 @@ async def _check_traders():
             silent_minutes = silent_for.total_seconds() / 60
 
             trader_id = trader.id
+
+            # Trader intentionally stopped the bot — skip all alerts
+            if getattr(trader, 'bot_intentionally_stopped', False):
+                _was_offline[trader_id] = False  # Reset so recovery msg isn't sent on restart
+                continue
+
             cooldown_ok = (
                 trader_id not in _last_notified_at or
                 (now - _last_notified_at[trader_id]).total_seconds() / 60 >= BOT_NOTIFY_COOLDOWN_MINUTES

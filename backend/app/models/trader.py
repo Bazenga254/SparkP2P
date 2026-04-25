@@ -107,6 +107,9 @@ class Trader(Base):
     ad_sell_price = Column(Float, nullable=True)   # Trader's current Binance sell ad price
     ad_prices_updated_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Bot online/offline state — set by desktop app on graceful shutdown
+    bot_intentionally_stopped = Column(Boolean, default=False)
+
     # Login security
     failed_login_attempts = Column(Integer, default=0)
     locked_until = Column(DateTime(timezone=True), nullable=True)

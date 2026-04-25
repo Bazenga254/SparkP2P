@@ -1,0 +1,1 @@
+ALTER TABLE traders ADD COLUMN IF NOT EXISTS bot_intentionally_stopped BOOLEAN NOT NULL DEFAULT FALSE;

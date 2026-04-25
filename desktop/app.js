@@ -417,11 +417,26 @@ function killChrome() {
   } catch (e) {}
 }
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  event.preventDefault(); // Hold quit until we notify the backend
   stopPoller();
   killChrome();
   if (browser) { try { browser.disconnect(); } catch(e) {} browser = null; }
   if (tray) tray.destroy();
+
+  // Tell the backend the bot stopped intentionally so offline alerts are suppressed
+  const notifyAndExit = async () => {
+    if (token) {
+      try {
+        await fetch(`${API_BASE}/ext/bot-stopped`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+      } catch (e) {}
+    }
+    app.exit(0);
+  };
+  notifyAndExit();
 });
 
 function createMainWindow() {
