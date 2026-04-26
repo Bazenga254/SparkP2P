@@ -294,26 +294,31 @@ export default function SettingsPanel({ profile, onUpdate }) {
   }, []);
 
   const handleRequestPauseOtp = async () => {
-    // DEV: skip OTP — pause immediately
     setPauseLoading(true);
+    setPauseMsg('');
     try {
-      if (window.sparkp2p?.pauseNavigation) {
-        await window.sparkp2p.pauseNavigation();
-      } else {
-        await fetch('http://127.0.0.1:9223/pause').catch(() => {});
-      }
-      setShowPauseModal(false);
-      setPauseStep('warning');
+      const res = await api.post('/traders/pause-bot/request-otp');
+      setPauseSecQ(res.data.security_question || '');
+      setPauseMsg(`OTP sent to ${res.data.message?.replace('OTP sent to ', '') || 'your phone'}`);
+      setPauseStep('otp');
     } catch (err) {
-      setPauseMsg('Failed to pause bot.');
+      setPauseMsg(err.response?.data?.detail || 'Failed to send OTP. Please try again.');
     }
     setPauseLoading(false);
   };
 
   const handleConfirmPause = async () => {
-    // DEV: skip OTP — pause immediately
+    if (!pauseOtpCode) { setPauseMsg('Enter the OTP sent to your phone.'); return; }
+    if (pauseSecQ && !pauseSecAnswer) { setPauseMsg('Enter your security answer.'); return; }
     setPauseLoading(true);
+    setPauseMsg('');
     try {
+      await api.post('/traders/pause-bot/confirm', {
+        otp_code: pauseOtpCode,
+        security_answer: pauseSecAnswer,
+        totp_code: pauseTotpCode || undefined,
+      });
+      // Verification passed — now actually pause
       if (window.sparkp2p?.pauseNavigation) {
         await window.sparkp2p.pauseNavigation();
       } else {
@@ -322,7 +327,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
       setShowPauseModal(false);
       setPauseStep('warning'); setPauseOtpCode(''); setPauseSecAnswer(''); setPauseTotpCode(''); setPauseMsg('');
     } catch (err) {
-      setPauseMsg('Failed to pause bot.');
+      setPauseMsg(err.response?.data?.detail || 'Verification failed. Check your codes and try again.');
     }
     setPauseLoading(false);
   };
@@ -1601,7 +1606,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
                 your trading and banking accounts directly.<br /><br />
                 <strong style={{ color: '#fca5a5' }}>We strongly recommend pausing only when absolutely necessary</strong> — for example, to update your
                 configuration or troubleshoot an issue — and resuming immediately once done. The system will
-                automatically resume and re-lock all sessions after <strong>30 seconds of inactivity</strong>.
+                automatically resume and re-lock all sessions after <strong>3 minutes of inactivity</strong>.
               </div>
               <div style={{ display: 'flex', gap: 10 }}>
                 <button
