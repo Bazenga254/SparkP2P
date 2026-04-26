@@ -72,7 +72,7 @@ export default function Onboarding() {
   const [nameVerification, setNameVerification] = useState(null);
 
   // Verification step
-  const [verifyMethod, setVerifyMethod] = useState('fund_password');
+  const [verifyMethod, setVerifyMethod] = useState('totp');
   const [fundPassword, setFundPassword] = useState('');
 
   // Settlement step
@@ -540,109 +540,50 @@ export default function Onboarding() {
               <Shield size={28} className="onb-step-icon" />
               <div>
                 <h2>Release Verification</h2>
-                <p>How do you verify releases on Binance?</p>
+                <p>Google Authenticator (TOTP) is required to automate crypto releases</p>
               </div>
             </div>
 
             <div className="onb-card">
               <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
-                When releasing crypto on Binance P2P, a verification step is required. Choose your method so we can automate it.
+                When releasing crypto on Binance P2P, Binance asks for a Google Authenticator code. Enter your TOTP secret key below so the bot can generate codes automatically.
               </p>
 
-              {[
-                { value: 'fund_password', icon: Lock, title: 'Fund Password', desc: 'Your Binance trade/fund password (4-6 digit PIN)', recommended: true },
-                { value: 'totp', icon: Smartphone, title: 'Google Authenticator (TOTP)', desc: 'Auto-generate 2FA codes. Requires your TOTP secret key.' },
-              ].map((option) => (
-                <div
-                  key={option.value}
-                  className={`onb-verify-option ${verifyMethod === option.value ? 'selected' : ''}`}
-                  onClick={() => setVerifyMethod(option.value)}
-                >
-                  <div className="onb-verify-option-left">
-                    <option.icon size={20} />
-                    <div>
-                      <strong>{option.title}</strong>
-                      {option.recommended && <span className="onb-verify-badge">Recommended</span>}
-                      <p>{option.desc}</p>
-                    </div>
-                  </div>
-                  <div className={`onb-verify-radio ${verifyMethod === option.value ? 'checked' : ''}`} />
+              <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                <strong style={{ color: '#f59e0b', fontSize: 14 }}>How to get your TOTP Secret Key:</strong>
+                <ol style={{ fontSize: 12, color: '#9ca3af', marginTop: 8, paddingLeft: 18, lineHeight: 1.8 }}>
+                  <li>Open <strong style={{ color: '#e4e4e7' }}>Binance App</strong> → <strong style={{ color: '#e4e4e7' }}>Profile → Security</strong></li>
+                  <li>Click <strong style={{ color: '#e4e4e7' }}>Google Authenticator → Manage</strong></li>
+                  <li>Click <strong style={{ color: '#e4e4e7' }}>Change Authenticator</strong> or <strong style={{ color: '#e4e4e7' }}>Reset</strong></li>
+                  <li>Binance will show a <strong style={{ color: '#e4e4e7' }}>QR code</strong> and a text key below it</li>
+                  <li>Copy the <strong style={{ color: '#e4e4e7' }}>text key</strong> (looks like: JBSWY3DPEHPK3PXP)</li>
+                  <li>Scan the QR code with Google Authenticator as normal</li>
+                  <li>Paste the text key below</li>
+                </ol>
+                <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, padding: 10, marginTop: 10 }}>
+                  <p style={{ fontSize: 11, color: '#ef4444' }}>⚠️ If you already set up Google Authenticator and didn't save the key, you'll need to reset it on Binance to get the key. Make sure to scan the new QR code in your Authenticator app after resetting.</p>
                 </div>
-              ))}
+              </div>
 
-              {verifyMethod === 'fund_password' && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 16, marginBottom: 16 }}>
-                    <strong style={{ color: '#f59e0b', fontSize: 14 }}>How to find your Fund Password:</strong>
-                    <ol style={{ fontSize: 12, color: '#9ca3af', marginTop: 8, paddingLeft: 18, lineHeight: 1.8 }}>
-                      <li>Open <strong style={{ color: '#e4e4e7' }}>Binance App</strong> or website</li>
-                      <li>Go to <strong style={{ color: '#e4e4e7' }}>Profile → Security</strong></li>
-                      <li>Look for <strong style={{ color: '#e4e4e7' }}>Fund Password</strong> (also called Trade Password)</li>
-                      <li>If not set up, click <strong style={{ color: '#e4e4e7' }}>Create Fund Password</strong> and set a 6-digit PIN</li>
-                      <li>Enter that same PIN below</li>
-                    </ol>
-                    <p style={{ fontSize: 11, color: '#6b7280', marginTop: 8 }}>This is the PIN Binance asks when you release crypto. Not your login password.</p>
-                  </div>
-                  <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Fund Password</label>
-                  <input
-                    type="password"
-                    placeholder="Enter your 6-digit fund password"
-                    value={fundPassword}
-                    onChange={(e) => setFundPassword(e.target.value)}
-                    className="onb-input"
-                    maxLength={6}
-                  />
-                  <p style={{ fontSize: 11, color: '#10b981', marginTop: 4 }}>🔒 Stored securely with encryption. Never shared with anyone.</p>
-                  <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, padding: 10, marginTop: 10 }}>
-                    <p style={{ fontSize: 11, color: '#ef4444' }}>⚠️ <strong>Important:</strong> Make sure this is the exact PIN you enter when releasing crypto on Binance. If incorrect, auto-release will be disabled until you update it and your payments will delay.</p>
-                  </div>
-                </div>
-              )}
-
-              {verifyMethod === 'totp' && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 16, marginBottom: 16 }}>
-                    <strong style={{ color: '#f59e0b', fontSize: 14 }}>How to get your TOTP Secret Key:</strong>
-                    <ol style={{ fontSize: 12, color: '#9ca3af', marginTop: 8, paddingLeft: 18, lineHeight: 1.8 }}>
-                      <li>Open <strong style={{ color: '#e4e4e7' }}>Binance App</strong> → <strong style={{ color: '#e4e4e7' }}>Profile → Security</strong></li>
-                      <li>Click <strong style={{ color: '#e4e4e7' }}>Google Authenticator → Manage</strong></li>
-                      <li>Click <strong style={{ color: '#e4e4e7' }}>Change Authenticator</strong> or <strong style={{ color: '#e4e4e7' }}>Reset</strong></li>
-                      <li>Binance will show a <strong style={{ color: '#e4e4e7' }}>QR code</strong> and a text key below it</li>
-                      <li>Copy the <strong style={{ color: '#e4e4e7' }}>text key</strong> (looks like: JBSWY3DPEHPK3PXP)</li>
-                      <li>Scan the QR code with Google Authenticator as normal</li>
-                      <li>Paste the text key below</li>
-                    </ol>
-                    <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, padding: 10, marginTop: 10 }}>
-                      <p style={{ fontSize: 11, color: '#ef4444' }}>⚠️ If you already set up Google Authenticator and didn't save the key, you'll need to reset it on Binance to see the key again. Consider using Fund Password instead — it's simpler.</p>
-                    </div>
-                  </div>
-                  <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>TOTP Secret Key</label>
-                  <input
-                    type="password"
-                    placeholder="e.g. JBSWY3DPEHPK3PXP"
-                    value={totpSecret}
-                    onChange={(e) => setTotpSecret(e.target.value)}
-                    className="onb-input"
-                  />
-                  <p style={{ fontSize: 11, color: '#10b981', marginTop: 4 }}>🔒 Stored securely with encryption. Never shared with anyone.</p>
-                </div>
-              )}
-
+              <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>TOTP Secret Key</label>
+              <input
+                type="password"
+                placeholder="e.g. JBSWY3DPEHPK3PXP"
+                value={totpSecret}
+                onChange={(e) => setTotpSecret(e.target.value)}
+                className="onb-input"
+              />
+              <p style={{ fontSize: 11, color: '#10b981', marginTop: 4 }}>🔒 Stored securely with encryption. Never shared with anyone.</p>
             </div>
 
             <div className="onb-actions">
               <button className="onb-btn-primary" onClick={async () => {
-                if (verifyMethod === 'fund_password' && !fundPassword) {
-                  return;
-                }
-                if (verifyMethod === 'totp' && !totpSecret) {
-                  return;
-                }
+                if (!totpSecret) return;
                 try {
                   await updateVerification({
-                    verify_method: verifyMethod,
-                    totp_secret: verifyMethod === 'totp' ? totpSecret : null,
-                    fund_password: verifyMethod === 'fund_password' ? fundPassword : null,
+                    verify_method: 'totp',
+                    totp_secret: totpSecret,
+                    fund_password: null,
                   });
                   setCurrentStep(3);
                 } catch (err) {
