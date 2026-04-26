@@ -523,7 +523,8 @@ export default function Dashboard() {
   const bannerMissing = setupMissing.length > 0 ? setupMissing : missingConnections;
 
   useEffect(() => {
-    // Fetch desktop app version from local bot server
+    // Fetch desktop app version from local bot server; fall back to build-time version for web browser
+    setAppVersion(__APP_VERSION__);
     fetch('http://127.0.0.1:9223/status').then(r => r.json()).then(d => { if (d.version) setAppVersion(d.version); }).catch(() => {});
     // Wait a tick to ensure token is stored after login redirect
     const timer = setTimeout(() => {
