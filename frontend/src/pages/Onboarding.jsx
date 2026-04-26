@@ -222,14 +222,13 @@ export default function Onboarding() {
   };
 
   // --- Step 3: Settlement ---
-  const handleSaveSettlement = async (e) => {
-    e.preventDefault();
+  const saveSettlement = async (phoneOverride) => {
     setSettlementLoading(true);
     setSettlementMsg(null);
     try {
       const data = { method: settlementMethod };
       if (settlementMethod === 'mpesa') {
-        data.phone = settlementPhone;
+        data.phone = phoneOverride || settlementPhone;
       } else if (settlementMethod === 'bank_paybill') {
         data.paybill = BANK_PAYBILLS[selectedBank] || customPaybill;
         data.account = bankAccount;
@@ -241,16 +240,20 @@ export default function Onboarding() {
         data.account = paybillAccount;
       }
       await updateSettlement(data);
-      setSettlementMsg({ type: 'success', text: 'Settlement settings saved!' });
       setSettlementSaved(true);
       await refreshProfile();
+      return true;
     } catch (err) {
-      setSettlementMsg({
-        type: 'error',
-        text: 'Failed to save settlement settings',
-      });
+      setSettlementMsg({ type: 'error', text: 'Failed to save settlement settings' });
+      return false;
+    } finally {
+      setSettlementLoading(false);
     }
-    setSettlementLoading(false);
+  };
+
+  const handleSaveSettlement = async (e) => {
+    e.preventDefault();
+    await saveSettlement();
   };
 
   // --- Step 4: Subscribe ---
@@ -725,7 +728,6 @@ export default function Onboarding() {
                                     if (newAttempts >= 3) {
                                       setAccountSuspended(true);
                                       localStorage.setItem('sparkp2p_suspended', 'true');
-                                      // Notify backend to suspend account
                                       fetch('/api/traders/suspend-self', {
                                         method: 'POST',
                                         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -733,9 +735,17 @@ export default function Onboarding() {
                                       }).catch(() => {});
                                     }
                                   } else {
-                                    // Reset attempts on success
+                                    // Name matched — auto-save and advance
                                     setVerifyAttempts(0);
                                     localStorage.setItem('sparkp2p_verify_attempts', '0');
+                                    setMpesaVerifyMsg('Verified! Saving and continuing...');
+                                    const ok = await saveSettlement(settlementPhone);
+                                    if (ok) {
+                                      setTimeout(() => {
+                                        setCurrentStep(4);
+                                        getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
+                                      }, 800);
+                                    }
                                   }
                                 }
                               }, 3000);
