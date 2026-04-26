@@ -442,15 +442,18 @@ export default function SettingsPanel({ profile, onUpdate }) {
 
   const handleSaveSettlement = async (e) => {
     e.preventDefault();
-    if (!settlementOtp) { showMsg('Enter the OTP code sent to your phone'); return; }
-    if (!securityAnswer) { showMsg('Enter your security answer'); return; }
+    const isFreeChange = profile?.settlement_first_change_free;
+    if (!isFreeChange) {
+      if (!settlementOtp) { showMsg('Enter the OTP code sent to your phone'); return; }
+      if (!securityAnswer) { showMsg('Enter your security answer'); return; }
+    }
     setLoading(true);
     try {
-      const data = {
-        method: settlementMethod,
-        otp_code: settlementOtp,
-        security_answer: securityAnswer,
-      };
+      const data = { method: settlementMethod };
+      if (!isFreeChange) {
+        data.otp_code = settlementOtp;
+        data.security_answer = securityAnswer;
+      }
       if (settlementMethod === 'mpesa') {
         data.phone = settlementPhone;
       } else if (settlementMethod === 'bank_paybill') {
@@ -464,7 +467,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
         data.account = paybillAccount;
       }
       const res = await updateSettlement(data);
-      showMsg(res.data.message || 'Settlement method updated! 48-hour cooldown applies.');
+      showMsg(res.data.message || 'Payment method updated!');
       setShowChangeForm(false);
       setOtpSent(false);
       setSettlementOtp('');
@@ -1030,8 +1033,8 @@ export default function SettingsPanel({ profile, onUpdate }) {
             </button>
           ) : (
             <>
-              {/* Step 1: Request OTP */}
-              {!otpSent ? (
+              {/* Step 1: Request OTP (skipped for free first-change accounts) */}
+              {!otpSent && !profile?.settlement_first_change_free ? (
                 <div style={{ marginTop: 16 }}>
                   <div style={{
                     padding: 14, borderRadius: 8, background: 'rgba(245,158,11,0.1)',
@@ -1062,8 +1065,17 @@ export default function SettingsPanel({ profile, onUpdate }) {
                   </button>
                 </div>
               ) : (
-                /* Step 2: OTP + Security Answer + New Method */
+                /* Step 2: New Method form (OTP + security answer only for non-free changes) */
                 <form onSubmit={handleSaveSettlement} style={{ marginTop: 16 }}>
+                  {profile?.settlement_first_change_free && (
+                    <div style={{
+                      padding: 12, borderRadius: 8, background: 'rgba(16,185,129,0.1)',
+                      border: '1px solid #10b981', marginBottom: 12, fontSize: 13, color: '#10b981',
+                    }}>
+                      Your first payment method update is free — no OTP or cooldown required.
+                    </div>
+                  )}
+
                   <label>New Method</label>
                   <select value={settlementMethod} onChange={(e) => setSettlementMethod(e.target.value)}>
                     <option value="mpesa">M-Pesa (B2C)</option>
@@ -1111,27 +1123,29 @@ export default function SettingsPanel({ profile, onUpdate }) {
                     </>
                   )}
 
-                  <div style={{ marginTop: 16, padding: 16, background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 14 }}>
-                    <div>
-                      <label style={{ display: 'block', fontSize: 13, color: '#f59e0b', marginBottom: 6, fontWeight: 600 }}>Verification Code (OTP)</label>
-                      <input type="text" placeholder="Enter 6-digit code" value={settlementOtp}
-                        onChange={(e) => setSettlementOtp(e.target.value)} maxLength={6} required
-                        style={{ width: '100%', boxSizing: 'border-box' }} />
-                      <span style={{ fontSize: 11, color: '#6b7280', marginTop: 4, display: 'block' }}>Check your phone and email for the code</span>
-                    </div>
+                  {!profile?.settlement_first_change_free && (
+                    <div style={{ marginTop: 16, padding: 16, background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 13, color: '#f59e0b', marginBottom: 6, fontWeight: 600 }}>Verification Code (OTP)</label>
+                        <input type="text" placeholder="Enter 6-digit code" value={settlementOtp}
+                          onChange={(e) => setSettlementOtp(e.target.value)} maxLength={6} required
+                          style={{ width: '100%', boxSizing: 'border-box' }} />
+                        <span style={{ fontSize: 11, color: '#6b7280', marginTop: 4, display: 'block' }}>Check your phone and email for the code</span>
+                      </div>
 
-                    <div>
-                      <label style={{ display: 'block', fontSize: 13, color: '#f59e0b', marginBottom: 6, fontWeight: 600 }}>
-                        Security Question
-                      </label>
-                      <p style={{ fontSize: 13, color: '#9ca3af', margin: '0 0 6px', fontStyle: 'italic' }}>
-                        {settleSQ || profile?.security_question || 'Not set'}
-                      </p>
-                      <input type="text" placeholder="Your security answer" value={securityAnswer}
-                        onChange={(e) => setSecurityAnswer(e.target.value)} required
-                        style={{ width: '100%', boxSizing: 'border-box' }} />
+                      <div>
+                        <label style={{ display: 'block', fontSize: 13, color: '#f59e0b', marginBottom: 6, fontWeight: 600 }}>
+                          Security Question
+                        </label>
+                        <p style={{ fontSize: 13, color: '#9ca3af', margin: '0 0 6px', fontStyle: 'italic' }}>
+                          {settleSQ || profile?.security_question || 'Not set'}
+                        </p>
+                        <input type="text" placeholder="Your security answer" value={securityAnswer}
+                          onChange={(e) => setSecurityAnswer(e.target.value)} required
+                          style={{ width: '100%', boxSizing: 'border-box' }} />
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
                     <button type="submit" disabled={loading}>

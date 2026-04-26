@@ -118,6 +118,7 @@ class TraderProfileResponse(BaseModel):
     security_question: Optional[str] = None
     last_extension_sync: Optional[str] = None
     settlement_cooldown_until: Optional[str] = None  # ISO datetime when cooldown ends
+    settlement_first_change_free: bool = False  # True if user has a method but never changed it (first post-onboarding change is free)
     password_change_cooldown_until: Optional[str] = None  # ISO datetime, 48hr after last pw change
     binance_verify_method: Optional[str] = None
     im_connected: bool = False
@@ -414,6 +415,9 @@ async def get_profile(
                (trader.settlement_changed_at + timedelta(hours=48)) > datetime.now(timezone.utc)
             else None
         ),
+        settlement_first_change_free=(
+            bool(trader.settlement_method) and trader.settlement_changed_at is None
+        ),
         password_change_cooldown_until=(
             (trader.password_changed_at + timedelta(hours=48)).isoformat()
             if trader.password_changed_at and
@@ -596,7 +600,11 @@ async def update_settlement(
     from app.core.security import verify_password
     from datetime import datetime, timezone
 
-    is_first_time = not trader.settlement_phone and not trader.settlement_paybill
+    # True first-time: no settlement ever set
+    is_truly_first_time = not trader.settlement_phone and not trader.settlement_paybill
+    # Free first change: settlement was set during onboarding but never changed via Settings
+    is_free_first_change = not is_truly_first_time and trader.settlement_changed_at is None
+    is_first_time = is_truly_first_time or is_free_first_change
 
     if not is_first_time:
         # Verify OTP
@@ -627,15 +635,20 @@ async def update_settlement(
     trader.pending_settlement_bank_name = data.bank_name
     trader.settlement_changed_at = datetime.now(timezone.utc)
 
-    # If this is the FIRST time setting settlement (no active method), activate immediately
-    if not trader.settlement_phone and not trader.settlement_paybill:
+    # If first-time (truly new or free first post-onboarding change), activate immediately
+    if is_first_time:
         trader.settlement_method = data.method
         trader.settlement_phone = data.phone
         trader.settlement_paybill = data.paybill
         trader.settlement_account = data.account
         trader.settlement_bank_name = data.bank_name
         trader.pending_settlement_method = None
-        trader.settlement_changed_at = None
+        if is_truly_first_time:
+            # No previous settlement — keep changed_at=None so first post-onboarding change is also free
+            trader.settlement_changed_at = None
+        else:
+            # Free first change used — backdated so no active cooldown, but future changes need OTP
+            trader.settlement_changed_at = datetime.now(timezone.utc) - timedelta(hours=72)
 
     await db.commit()
 
