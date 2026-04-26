@@ -378,21 +378,25 @@ app.whenReady().then(() => {
 // AUTO-UPDATE â€” checks GitHub Releases for new versions
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+let updateReadyToInstall = false;
+
 function checkForUpdates() {
   try { autoUpdater = require('electron-updater').autoUpdater; } catch (e) { return; }
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = false; // handled manually so app.quit() path works correctly
 
   autoUpdater.on('update-available', (info) => {
-    console.log(`[SparkP2P] Update available: v${info.version}`);
+    console.log(`[SparkP2P] Update available: v${info.version} — downloading in background`);
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    console.log(`[SparkP2P] Update downloaded: v${info.version}`);
+    updateReadyToInstall = true;
+    console.log(`[SparkP2P] Update downloaded: v${info.version} — will install on next restart`);
     if (mainWindow) {
+      // Dispatch event to React UI so it can show a non-blocking banner
       mainWindow.webContents.executeJavaScript(
-        `if(confirm("SparkP2P v${info.version} is ready. Restart now to update?")) { window.sparkp2p?.restartApp?.() }`
-      );
+        `window.dispatchEvent(new CustomEvent('sparkp2p-update-ready', { detail: { version: '${info.version}' } }))`
+      ).catch(() => {});
     }
   });
 
@@ -417,8 +421,11 @@ function killChrome() {
   } catch (e) {}
 }
 
+let isQuitting = false;
 app.on('before-quit', (event) => {
-  event.preventDefault(); // Hold quit until we notify the backend
+  if (isQuitting) return; // second before-quit from app.quit() below — let it proceed to will-quit
+  isQuitting = true;
+  event.preventDefault();
   stopPoller();
   killChrome();
   if (browser) { try { browser.disconnect(); } catch(e) {} browser = null; }
@@ -434,7 +441,11 @@ app.on('before-quit', (event) => {
         });
       } catch (e) {}
     }
-    app.exit(0);
+    if (updateReadyToInstall && autoUpdater) {
+      autoUpdater.quitAndInstall(false, true); // install silently and relaunch
+    } else {
+      app.quit(); // normal exit — isQuitting guard prevents re-entry, will-quit fires cleanly
+    }
   };
   notifyAndExit();
 });

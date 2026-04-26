@@ -424,6 +424,14 @@ export default function Dashboard() {
   const [sendLoading, setSendLoading] = useState(false);
   const [sendMessage, setSendMessage] = useState('');
   const [sendStatus, setSendStatus] = useState(null); // null, 'success', 'error'
+  const [updateVersion, setUpdateVersion] = useState(null); // set when desktop update is ready
+
+  // Listen for update-ready event from Electron main process
+  useEffect(() => {
+    const handler = (e) => setUpdateVersion(e.detail?.version || 'latest');
+    window.addEventListener('sparkp2p-update-ready', handler);
+    return () => window.removeEventListener('sparkp2p-update-ready', handler);
+  }, []);
 
   const loadData = async () => {
     if (!localStorage.getItem('token')) return;
@@ -912,6 +920,33 @@ export default function Dashboard() {
             style={{ background: 'transparent', border: '1px solid #ef4444', color: '#f87171', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}
           >
             Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* App update ready banner */}
+      {updateVersion && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 10000,
+          background: '#0c2a1a', borderBottom: '2px solid #10b981',
+          padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 14,
+        }}>
+          <span style={{ fontSize: 20 }}>🚀</span>
+          <div style={{ flex: 1, color: '#6ee7b7', fontSize: 13 }}>
+            <strong style={{ color: '#10b981' }}>SparkP2P v{updateVersion} is ready.</strong>
+            {' '}Restart the app now to install the update.
+          </div>
+          <button
+            onClick={() => window.sparkp2p?.restartApp?.()}
+            style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: '#10b981', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap' }}
+          >
+            Restart & Update
+          </button>
+          <button
+            onClick={() => setUpdateVersion(null)}
+            style={{ background: 'transparent', border: '1px solid #10b981', color: '#6ee7b7', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}
+          >
+            Later
           </button>
         </div>
       )}
