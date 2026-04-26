@@ -537,13 +537,14 @@ async def google_callback(code: str = None, state: str = None, error: str = None
 
     if not trader:
         # Auto-register with Google account
+        google_id = google_user.get("id", secrets.token_urlsafe(16))
         trader = Trader(
             email=email,
             full_name=name.upper(),
-            phone="",
-            password_hash=hash_password(secrets.token_urlsafe(32)),  # random password
+            phone=f"google_{google_id}",  # placeholder — replaced when user adds real phone
+            password_hash=hash_password(secrets.token_urlsafe(32)),
             status=TraderStatus.ACTIVE,
-            google_id=google_user.get("id", ""),
+            google_id=google_id,
         )
         db.add(trader)
         await db.flush()
@@ -563,8 +564,8 @@ async def google_callback(code: str = None, state: str = None, error: str = None
     # Create JWT token
     token = create_access_token({"sub": str(trader.id), "email": trader.email})
 
-    # Check if profile is incomplete (Google users need phone + KYC name)
-    needs_profile = not trader.phone or trader.phone == ""
+    # Check if profile is incomplete (Google users need a real phone number)
+    needs_profile = not trader.phone or trader.phone == "" or trader.phone.startswith("google_")
 
     # Redirect with token — frontend handles profile completion
     return RedirectResponse(f"/login?google_token={token}&name={trader.full_name}&id={trader.id}&role={trader.role or 'trader'}&needs_profile={'1' if needs_profile else '0'}")
