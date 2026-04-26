@@ -306,7 +306,6 @@ export default function Install() {
                   />
                   <div className="inst-screenshot-illus" style={{ display: 'none' }}>
                     {step.illustration}
-                    <div className="inst-illus-caption">Illustration — screenshot coming soon</div>
                   </div>
                 </div>
               </div>
