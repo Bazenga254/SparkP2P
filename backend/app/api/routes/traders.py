@@ -1,5 +1,6 @@
 import json
 import logging
+import random
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -36,6 +37,11 @@ class BinanceConnectRequest(BaseModel):
 
 class CompleteProfileRequest(BaseModel):
     full_name: str
+    phone: str
+    otp_code: str
+
+
+class SendProfileOtpRequest(BaseModel):
     phone: str
 
 
@@ -124,6 +130,9 @@ class TraderProfileResponse(BaseModel):
 
 # In-memory store for phone verification results
 _phone_verifications: dict[str, dict] = {}
+
+# In-memory OTP store for Google profile phone verification (phone -> otp)
+_profile_otp_codes: dict[str, str] = {}
 
 # In-memory notification store (per trader)
 _notifications: dict[int, list] = {}
@@ -252,6 +261,39 @@ async def suspend_self(
     return {"status": "suspended"}
 
 
+@router.post("/send-profile-otp")
+async def send_profile_otp(
+    data: SendProfileOtpRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send OTP to verify phone number during Google profile completion."""
+    phone = data.phone.strip().replace(" ", "")
+    if phone.startswith("0"):
+        phone = "254" + phone[1:]
+    if not phone.startswith("254") or len(phone) != 12:
+        raise HTTPException(status_code=400, detail="Invalid phone number. Use format 0712345678")
+
+    # Check phone not already taken by another trader
+    result = await db.execute(select(Trader).where(Trader.phone == phone))
+    existing = result.scalar_one_or_none()
+    if existing and existing.id != trader.id:
+        raise HTTPException(status_code=400, detail="Phone number already registered to another account")
+
+    otp = str(random.randint(100000, 999999))
+    _profile_otp_codes[phone] = otp
+
+    try:
+        from app.services.sms import sms_verification_code
+        sms_verification_code(phone, otp)
+    except Exception as e:
+        logger.warning(f"Profile OTP SMS failed for {phone}: {e}")
+
+    masked = f"***{phone[-4:]}"
+    logger.info(f"Profile OTP sent to {masked} for trader {trader.id}")
+    return {"message": f"OTP sent to {masked}", "phone_hint": masked}
+
+
 @router.post("/complete-profile")
 async def complete_profile(
     data: CompleteProfileRequest,
@@ -266,13 +308,27 @@ async def complete_profile(
 
     # Normalize phone
     phone = data.phone.strip().replace(" ", "")
-    if phone.startswith("07") or phone.startswith("01"):
+    if phone.startswith("0"):
         phone = "254" + phone[1:]
+    if not phone.startswith("254") or len(phone) != 12:
+        raise HTTPException(status_code=400, detail="Invalid phone number format")
+
+    # Verify OTP
+    stored_otp = _profile_otp_codes.get(phone)
+    if not stored_otp or stored_otp != data.otp_code.strip():
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP code")
+
+    # Check phone not already taken by another trader
+    result = await db.execute(select(Trader).where(Trader.phone == phone))
+    existing = result.scalar_one_or_none()
+    if existing and existing.id != trader.id:
+        raise HTTPException(status_code=400, detail="Phone number already registered to another account")
 
     trader.full_name = data.full_name.upper()
     trader.phone = phone
     await db.commit()
 
+    _profile_otp_codes.pop(phone, None)
     logger.info(f"Profile completed for trader {trader.id}: {trader.full_name}, {trader.phone}")
     return {"status": "ok", "full_name": trader.full_name, "phone": trader.phone}
 

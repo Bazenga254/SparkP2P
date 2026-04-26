@@ -34,6 +34,11 @@ export default function Login() {
   const [googleProfile, setGoogleProfile] = useState(null); // {token, name, id, role} — needs phone+KYC
   const [profileForm, setProfileForm] = useState({ full_name: '', phone: '' });
   const [savingProfile, setSavingProfile] = useState(false);
+  const [profileOtpSent, setProfileOtpSent] = useState(false);
+  const [profileOtpCode, setProfileOtpCode] = useState('');
+  const [sendingProfileOtp, setSendingProfileOtp] = useState(false);
+  const [profilePhoneHint, setProfilePhoneHint] = useState('');
+  const [profileOtpCooldown, setProfileOtpCooldown] = useState(0);
   const { loginUser } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -87,14 +92,53 @@ export default function Login() {
     return () => clearInterval(id);
   }, [lockoutUntil]);
 
+  const handleSendProfileOtp = async () => {
+    if (!profileForm.phone) { setError('Enter your phone number first'); return; }
+    if (!/^(07|01|2547|2541)\d{7,8}$/.test(profileForm.phone.replace(/\s/g, ''))) {
+      setError('Enter a valid Kenyan phone number (e.g., 0712345678)');
+      return;
+    }
+    setSendingProfileOtp(true);
+    setError('');
+    try {
+      const res = await fetch('/api/traders/send-profile-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${googleProfile.token}` },
+        body: JSON.stringify({ phone: profileForm.phone }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setProfileOtpSent(true);
+        setProfilePhoneHint(data.phone_hint || '');
+        setProfileOtpCode('');
+        setProfileOtpCooldown(30);
+        const interval = setInterval(() => {
+          setProfileOtpCooldown(prev => {
+            if (prev <= 1) { clearInterval(interval); return 0; }
+            return prev - 1;
+          });
+        }, 1000);
+      } else {
+        setError(data.detail || 'Failed to send OTP');
+      }
+    } catch {
+      setError('Network error');
+    }
+    setSendingProfileOtp(false);
+  };
+
   const handleCompleteProfile = async (e) => {
     e.preventDefault();
     if (!profileForm.full_name || !profileForm.phone) {
       setError('Full name and phone number are required');
       return;
     }
-    if (!/^(07|01|2547|2541)\d{7,8}$/.test(profileForm.phone.replace(/\s/g, ''))) {
-      setError('Enter a valid Kenyan phone number (e.g., 0712345678)');
+    if (!profileOtpSent) {
+      setError('Please verify your phone number first');
+      return;
+    }
+    if (!profileOtpCode) {
+      setError('Enter the OTP sent to your phone');
       return;
     }
     setSavingProfile(true);
@@ -103,7 +147,7 @@ export default function Login() {
       const res = await fetch('/api/traders/complete-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${googleProfile.token}` },
-        body: JSON.stringify({ full_name: profileForm.full_name.toUpperCase(), phone: profileForm.phone }),
+        body: JSON.stringify({ full_name: profileForm.full_name.toUpperCase(), phone: profileForm.phone, otp_code: profileOtpCode }),
       });
       if (res.ok) {
         loginUser(googleProfile.token, { id: googleProfile.id, full_name: profileForm.full_name, role: googleProfile.role });
@@ -112,7 +156,7 @@ export default function Login() {
         const data = await res.json();
         setError(data.detail || 'Failed to save profile');
       }
-    } catch (err) {
+    } catch {
       setError('Network error');
     }
     setSavingProfile(false);
@@ -296,16 +340,45 @@ export default function Login() {
 
                 <div className="login-field">
                   <label>Phone Number (M-Pesa)</label>
-                  <input
-                    type="tel"
-                    placeholder="0712345678"
-                    value={profileForm.phone}
-                    onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
-                    required
-                  />
+                  <div className="login-field-with-btn">
+                    <input
+                      type="tel"
+                      placeholder="0712345678"
+                      value={profileForm.phone}
+                      onChange={(e) => { setProfileForm({ ...profileForm, phone: e.target.value }); setProfileOtpSent(false); setProfileOtpCode(''); }}
+                      required
+                      disabled={profileOtpSent}
+                    />
+                    <button
+                      type="button"
+                      className="login-send-code-btn"
+                      onClick={handleSendProfileOtp}
+                      disabled={sendingProfileOtp || profileOtpCooldown > 0}
+                    >
+                      {sendingProfileOtp ? 'Sending...' : profileOtpCooldown > 0 ? `Resend (${profileOtpCooldown}s)` : profileOtpSent ? 'Resend OTP' : 'Send OTP'}
+                    </button>
+                  </div>
+                  {profileOtpSent && <span className="login-field-hint">OTP sent to {profilePhoneHint}</span>}
                 </div>
 
-                <button type="submit" disabled={savingProfile} className="login-submit">
+                {profileOtpSent && (
+                  <div className="login-field">
+                    <label>OTP Code</label>
+                    <input
+                      type="text"
+                      placeholder="Enter 6-digit OTP"
+                      value={profileOtpCode}
+                      onChange={(e) => setProfileOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      maxLength={6}
+                      inputMode="numeric"
+                      autoFocus
+                      required
+                    />
+                    <span className="login-field-hint">Enter the code sent to your Safaricom number</span>
+                  </div>
+                )}
+
+                <button type="submit" disabled={savingProfile || !profileOtpSent} className="login-submit">
                   {savingProfile ? 'Saving...' : 'Continue to Dashboard'}
                 </button>
               </form>

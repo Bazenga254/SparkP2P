@@ -448,28 +448,39 @@ export default function Onboarding() {
                     <div>
                       <h3>Connect via Desktop App</h3>
                       <p>
-                        Open the SparkP2P desktop app, click <strong>Connect Binance</strong>,
-                        and log into your Binance account in the Chrome window that opens.
-                        The bot will detect your login and start automatically.
+                        {window.sparkp2p?.isDesktop
+                          ? <>Click <strong>Connect Binance</strong> below and log into your Binance account in the Chrome window that opens. The bot will detect your login and start automatically.</>
+                          : <>Open the SparkP2P desktop app, click <strong>Connect Binance</strong>, and log into your Binance account in the Chrome window that opens. The bot will detect your login and start automatically.</>
+                        }
                       </p>
                     </div>
                   </div>
                   <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12, lineHeight: 1.6 }}>
                     <strong>Steps:</strong><br />
-                    1. Open SparkP2P desktop app<br />
-                    2. Go to <strong>Settings → Binance → Connect Binance</strong><br />
-                    3. Chrome opens — log into Binance (Google, email, etc.)<br />
-                    4. Bot detects login and starts trading automatically
+                    1. Click <strong>Connect Binance</strong> below<br />
+                    2. Chrome opens — log into Binance (Google, email, etc.)<br />
+                    3. Bot detects login and starts trading automatically
                   </div>
-                  <a
-                    href="https://sparkp2p.com/SparkP2P-Setup.exe"
-                    download
-                    className="onb-btn-secondary"
-                    style={{ marginTop: 16 }}
-                  >
-                    <Download size={16} />
-                    Download Desktop App
-                  </a>
+                  {window.sparkp2p?.isDesktop ? (
+                    <button
+                      className="onb-btn-secondary"
+                      style={{ marginTop: 16 }}
+                      onClick={() => window.sparkp2p.connectBinance()}
+                    >
+                      <Link2 size={16} />
+                      Connect Binance
+                    </button>
+                  ) : (
+                    <a
+                      href="https://sparkp2p.com/SparkP2P-Setup.exe"
+                      download
+                      className="onb-btn-secondary"
+                      style={{ marginTop: 16 }}
+                    >
+                      <Download size={16} />
+                      Download Desktop App
+                    </a>
+                  )}
                 </div>
 
                 {binanceMsg && (
