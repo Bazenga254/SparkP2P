@@ -782,7 +782,7 @@ export default function Onboarding() {
                       <label>Account Holder Name (as on bank statement)</label>
                       <input
                         type="text"
-                        placeholder="BONITO CHELUGET SAMOEI"
+                        placeholder="JANE DOE ANTONY"
                         value={bankAccountName}
                         onChange={(e) => {
                           const val = e.target.value.toUpperCase();
