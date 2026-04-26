@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 BATCH_INTERVAL_SECONDS = 3600        # Close and sweep every hour
 BATCH_STUCK_CHECK_SECONDS = 1800     # Check for stuck batches every 30 minutes
-BATCH_STUCK_THRESHOLD_HOURS = 2      # Alert if batch stuck in sweeping/disbursing for 2+ hours
+BATCH_STUCK_THRESHOLD_HOURS = 1      # Alert if batch stuck in sweeping/disbursing for 1+ hour
 BATCH_ITEM_MAX_RETRIES = 3           # Max auto-retries for failed batch items
 
 
@@ -88,7 +88,7 @@ async def _alert_admin(subject: str, body_html: str, sms: str):
     from app.models.trader import Trader
     try:
         async with async_session() as db:
-            result = await db.execute(select(Trader).where(Trader.is_admin == True).limit(1))
+            result = await db.execute(select(Trader).where(Trader.is_admin == True).order_by(Trader.id.asc()).limit(1))
             admin_trader = result.scalar_one_or_none()
             if not admin_trader:
                 return
