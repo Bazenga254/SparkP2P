@@ -305,7 +305,7 @@ export default function Login() {
                   />
                 </div>
 
-                <button type="submit" disabled={savingProfile} className="login-submit-btn">
+                <button type="submit" disabled={savingProfile} className="login-submit">
                   {savingProfile ? 'Saving...' : 'Continue to Dashboard'}
                 </button>
               </form>
