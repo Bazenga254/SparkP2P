@@ -19,6 +19,11 @@ class WithdrawalBatch(Base):
 
     alerted = Column(Boolean, default=False, nullable=False)
 
+    # I&M balance verification
+    balance_verified = Column(Boolean, default=False, nullable=False)
+    im_balance_before = Column(Float, nullable=True)   # I&M balance before sweep (reported by bot)
+    im_balance_after = Column(Float, nullable=True)    # I&M balance after sweep confirmed
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     closed_at = Column(DateTime(timezone=True), nullable=True)    # when stopped accepting
     swept_at = Column(DateTime(timezone=True), nullable=True)     # when M-PESA sweep done

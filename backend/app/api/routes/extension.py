@@ -1479,14 +1479,18 @@ async def mpesa_sweep_complete(
     sweep.completed_at = datetime.now(timezone.utc)
 
     batch_id = sweep.batch_id
+    expected_amount = sweep.amount
     if batch_id:
-        # Batch sweep completed — transition batch to disbursing
+        # Batch sweep submitted — record swept_at but hold in 'sweeping' until
+        # the bot confirms the money arrived in the I&M account
         batch_result = await db.execute(select(WithdrawalBatch).where(WithdrawalBatch.id == batch_id))
         batch = batch_result.scalar_one_or_none()
         if batch and batch.status == "sweeping":
-            batch.status = "disbursing"
             batch.swept_at = datetime.now(timezone.utc)
-            logger.info(f"Batch {batch_id} transitioned to disbursing after sweep {sweep.id}")
+            logger.info(
+                f"Batch {batch_id} sweep submitted (KES {expected_amount:,.0f}). "
+                f"Holding in 'sweeping' until I&M balance confirmed."
+            )
 
     await db.commit()
 
@@ -1499,7 +1503,61 @@ async def mpesa_sweep_complete(
         "sweep_id": sweep.id,
         "is_batch": bool(batch_id),
         "batch_id": batch_id,
+        "needs_balance_check": bool(batch_id),
+        "expected_amount": expected_amount,
     }
+
+
+class BatchBalanceVerifyRequest(BaseModel):
+    batch_id: int
+    im_balance: float        # current SPARK FREELANCE SOLUTIONS KES balance
+    im_balance_before: Optional[float] = None  # balance before sweep (optional)
+
+
+@router.post("/batch-balance-verified")
+async def batch_balance_verified(
+    data: BatchBalanceVerifyRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Bot calls this after reading the I&M account balance post-sweep.
+    If balance >= batch total, advances batch to 'disbursing'.
+    Otherwise returns verified=False so the bot can retry or give up.
+    """
+    result = await db.execute(select(WithdrawalBatch).where(WithdrawalBatch.id == data.batch_id))
+    batch = result.scalar_one_or_none()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    batch.im_balance_after = data.im_balance
+    if data.im_balance_before is not None:
+        batch.im_balance_before = data.im_balance_before
+
+    # Accept if I&M balance covers at least 98% of the batch total
+    sufficient = data.im_balance >= batch.total_amount * 0.98
+
+    if sufficient:
+        batch.balance_verified = True
+        batch.status = "disbursing"
+        await db.commit()
+        logger.info(
+            f"Batch {batch.id}: I&M balance KES {data.im_balance:,.0f} confirmed "
+            f"(need KES {batch.total_amount:,.0f}) — advancing to disbursing"
+        )
+        return {"verified": True, "proceed": True, "batch_id": batch.id}
+    else:
+        await db.commit()
+        logger.warning(
+            f"Batch {batch.id}: I&M balance KES {data.im_balance:,.0f} insufficient "
+            f"(need KES {batch.total_amount:,.0f}) — not proceeding yet"
+        )
+        return {
+            "verified": False,
+            "proceed": False,
+            "im_balance": data.im_balance,
+            "required": batch.total_amount,
+        }
 
 
 @router.post("/mpesa-sweep-failed")

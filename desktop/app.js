@@ -9402,6 +9402,82 @@ async function executeImLocalTransfer(job, _page = null) {
 }
 
 // ── Batch Withdrawal Disbursement ──────────────────────────────────────────────
+// Read the current KES balance of the SPARK FREELANCE SOLUTIONS I&M account.
+// Navigates to the I&M dashboard and uses Vision to extract the balance figure.
+async function readSparkImBalance() {
+  if (!imPage || imPage.isClosed()) return null;
+  try {
+    await imPage.bringToFront().catch(() => {});
+    await imPage.goto('https://digital.imbank.com/inm-retail/dashboard', { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 4000));
+    const ss = await imPage.screenshot({ encoding: 'base64' });
+    const prompt = `You are reading an I&M Bank internet banking dashboard screenshot.
+Find the account named "SPARK FREELANCE SOLUTIONS" (account number 00108094726150).
+Return ONLY a JSON object: {"balance": <number>} where balance is the KES available balance as a plain number (no commas, no currency symbol).
+If you cannot find the account or the balance, return {"balance": null}.`;
+    const result = await callVision(ss, prompt);
+    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+    const balance = parsed?.balance;
+    if (balance !== null && balance !== undefined && !isNaN(Number(balance))) {
+      console.log(`[SparkP2P] SPARK FREELANCE SOLUTIONS I&M balance: KES ${Number(balance).toLocaleString()}`);
+      return Number(balance);
+    }
+    console.log('[SparkP2P] readSparkImBalance: could not parse balance from Vision response', result);
+    return null;
+  } catch (e) {
+    console.error('[SparkP2P] readSparkImBalance error:', e.message?.substring(0, 80));
+    return null;
+  }
+}
+
+// After a batch M-PESA sweep completes, confirm the money reached Spark Freelance
+// Solutions I&M Bank before triggering disbursements (3 attempts × 5 min apart).
+async function verifyImBalanceAndDisburse(batchId, expectedAmount) {
+  if (!token) return;
+  const MAX_ATTEMPTS = 3;
+  const RETRY_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    console.log(`[BatchVerify] Batch ${batchId}: checking I&M balance (attempt ${attempt}/${MAX_ATTEMPTS})...`);
+    sendBotLog('info', `Batch ${batchId}: verifying I&M balance (attempt ${attempt}/${MAX_ATTEMPTS})`);
+
+    // Wait 3 minutes on first attempt so M-Pesa has time to settle
+    const waitMs = attempt === 1 ? 3 * 60 * 1000 : RETRY_DELAY_MS;
+    await new Promise(r => setTimeout(r, waitMs));
+
+    const balance = await readSparkImBalance();
+    if (balance === null) {
+      console.log(`[BatchVerify] Batch ${batchId}: could not read I&M balance — will retry`);
+      continue;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/ext/batch-balance-verified`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ batch_id: batchId, im_balance: balance }),
+      });
+      const data = res.ok ? await res.json().catch(() => ({})) : {};
+
+      if (data.verified) {
+        console.log(`[BatchVerify] Batch ${batchId}: I&M balance KES ${balance.toLocaleString()} confirmed ✅ — starting disbursements`);
+        sendBotLog('success', `Batch ${batchId}: I&M balance confirmed KES ${balance.toLocaleString()} — starting disbursements`);
+        await runBatchDisbursements(batchId);
+        return;
+      } else {
+        console.log(`[BatchVerify] Batch ${batchId}: balance KES ${balance.toLocaleString()} < required KES ${expectedAmount.toLocaleString()} — retrying in 5 min`);
+        sendBotLog('warning', `Batch ${batchId}: I&M balance KES ${balance.toLocaleString()} not yet sufficient (need KES ${expectedAmount.toLocaleString()})`);
+      }
+    } catch (e) {
+      console.error(`[BatchVerify] Batch ${batchId}: error reporting balance:`, e.message?.substring(0, 80));
+    }
+  }
+
+  // All retries exhausted — the backend monitor will send an SMS alert after 1 hour
+  console.error(`[BatchVerify] Batch ${batchId}: I&M balance not confirmed after ${MAX_ATTEMPTS} attempts. Admin will be alerted.`);
+  sendBotLog('error', `Batch ${batchId}: I&M balance not confirmed after ${MAX_ATTEMPTS} attempts. Check Spark Freelance Solutions account.`);
+}
+
 // After a batch M-PESA sweep completes, open up to BATCH_PARALLEL_TABS I&M browser
 // tabs and process all queued batch items concurrently.
 const BATCH_PARALLEL_TABS = 3;
@@ -10382,9 +10458,10 @@ async function executeMpesaSweep(sweepJob) {
     if (imPage && !imPage.isClosed()) await imPage.bringToFront().catch(() => {});
 
     if (sweepResponse?.is_batch && sweepResponse?.batch_id) {
-      // Batch sweep — trigger parallel I&M disbursements for all batch items
-      console.log(`[SparkP2P] Batch sweep complete — starting batch ${sweepResponse.batch_id} disbursements`);
-      setTimeout(() => runBatchDisbursements(sweepResponse.batch_id), 5000);
+      // Batch sweep — verify money reached I&M before disbursing
+      const expectedAmt = sweepResponse.expected_amount || sweep.amount || amount;
+      console.log(`[SparkP2P] Batch sweep complete — verifying I&M balance before batch ${sweepResponse.batch_id} disbursements`);
+      verifyImBalanceAndDisburse(sweepResponse.batch_id, expectedAmt);
     } else {
       // Individual withdrawal sweep — trigger single I&M transfer (legacy flow)
       const triggerImTransfer = async (attempt) => {
