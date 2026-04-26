@@ -596,24 +596,27 @@ async def update_settlement(
     from app.core.security import verify_password
     from datetime import datetime, timezone
 
-    # Verify OTP
-    if not data.otp_code:
-        raise HTTPException(status_code=400, detail="OTP code is required to change payment method")
+    is_first_time = not trader.settlement_phone and not trader.settlement_paybill
 
-    stored_otp = _login_otp_codes.get(f"settle_{trader.email}")
-    if not stored_otp or stored_otp != data.otp_code:
-        raise HTTPException(status_code=401, detail="Invalid or expired OTP code")
+    if not is_first_time:
+        # Verify OTP
+        if not data.otp_code:
+            raise HTTPException(status_code=400, detail="OTP code is required to change payment method")
 
-    # Verify security answer
-    if not data.security_answer:
-        raise HTTPException(status_code=400, detail="Security answer is required")
+        stored_otp = _login_otp_codes.get(f"settle_{trader.email}")
+        if not stored_otp or stored_otp != data.otp_code:
+            raise HTTPException(status_code=401, detail="Invalid or expired OTP code")
 
-    if trader.security_answer_hash:
-        if not verify_password(data.security_answer.strip().lower(), trader.security_answer_hash):
-            raise HTTPException(status_code=401, detail="Incorrect security answer")
+        # Verify security answer
+        if not data.security_answer:
+            raise HTTPException(status_code=400, detail="Security answer is required")
 
-    # Clear OTP
-    _login_otp_codes.pop(f"settle_{trader.email}", None)
+        if trader.security_answer_hash:
+            if not verify_password(data.security_answer.strip().lower(), trader.security_answer_hash):
+                raise HTTPException(status_code=401, detail="Incorrect security answer")
+
+        # Clear OTP
+        _login_otp_codes.pop(f"settle_{trader.email}", None)
 
     # Save as PENDING — don't replace the active method yet
     # Active method continues to work during 48hr cooldown
