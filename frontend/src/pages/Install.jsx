@@ -19,7 +19,7 @@ const STEPS = [
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Download .exe
           </div>
-          <div className="inst-illus-label">SparkP2P v1.1.26 · Windows 10/11</div>
+          <div className="inst-illus-label">SparkP2P v1.1.27 · Windows 10/11</div>
         </div>
       </div>
     ),
@@ -38,7 +38,7 @@ const STEPS = [
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           </div>
           <div className="inst-illus-dl-info">
-            <div className="inst-illus-dl-name">SparkP2P-Setup-1.1.26.exe</div>
+            <div className="inst-illus-dl-name">SparkP2P-Setup-1.1.27.exe</div>
             <div className="inst-illus-dl-warn">⚠ This file may be dangerous</div>
           </div>
           <div className="inst-illus-dl-actions">
@@ -69,7 +69,7 @@ const STEPS = [
         <div className="inst-illus-ss-body">
           <p className="inst-illus-ss-text">Microsoft Defender SmartScreen prevented an unrecognized app from starting.</p>
           <div className="inst-illus-ss-app">
-            <span className="inst-illus-ss-label">App:</span> SparkP2P-Setup-1.1.26.exe
+            <span className="inst-illus-ss-label">App:</span> SparkP2P-Setup-1.1.27.exe
           </div>
         </div>
         <div className="inst-illus-ss-actions">
@@ -321,7 +321,7 @@ export default function Install() {
           <p>Download SparkP2P and start automating your Binance P2P trading today.</p>
           <div className="inst-cta-actions">
             <a
-              href="https://github.com/Bazenga254/SparkP2P/releases/download/v1.1.26/SparkP2P-Setup-1.1.26.exe"
+              href="https://github.com/Bazenga254/SparkP2P/releases/download/v1.1.27/SparkP2P-Setup-1.1.27.exe"
               className="inst-cta-btn-primary"
               target="_blank"
               rel="noreferrer"
