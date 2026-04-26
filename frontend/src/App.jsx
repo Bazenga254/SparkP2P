@@ -10,6 +10,7 @@ import EmployeeLogin from './pages/EmployeeLogin';
 import Subscribe from './pages/Subscribe';
 import Onboarding from './pages/Onboarding';
 import ResetPassword from './pages/ResetPassword';
+import Install from './pages/Install';
 import './App.css';
 
 function ProtectedRoute({ children }) {
@@ -34,6 +35,7 @@ function App() {
           <Route path="/employee/login" element={<EmployeeLogin />} />
           <Route path="/employee" element={<ProtectedRoute><Employee /></ProtectedRoute>} />
           <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/install" element={<Install />} />
           <Route path="*" element={<Navigate to="/dashboard" />} />
         </Routes>
       </BrowserRouter>

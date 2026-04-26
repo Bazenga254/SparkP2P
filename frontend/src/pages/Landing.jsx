@@ -166,6 +166,7 @@ export default function Landing() {
             <a href="#features">Features</a>
             <a href="#faq">FAQ</a>
             <a href="#download">Download</a>
+            <Link to="/install">Install Guide</Link>
             <Link to="/login" className="land-nav-login">Login</Link>
           </div>
           {/* Mobile right side */}
@@ -442,6 +443,11 @@ export default function Landing() {
             <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
               If Chrome blocks the download, click the <strong style={{ color: '#e5e7eb' }}>&#8942;</strong> (three dots) next to the download and select <strong style={{ color: '#e5e7eb' }}>"Keep"</strong>. The file is safe — downloaded directly from our servers.
             </p>
+            <p style={{ marginTop: 16 }}>
+              <Link to="/install" style={{ color: '#6b8eff', fontSize: 13, textDecoration: 'none', fontWeight: 600 }}>
+                Need help installing? View step-by-step guide →
+              </Link>
+            </p>
           </div>
         </div>
       </section>
@@ -481,6 +487,7 @@ export default function Landing() {
             <a href="#features">Features</a>
             <a href="#faq">FAQ</a>
             <a href="#download">Download</a>
+            <Link to="/install">Install Guide</Link>
             <Link to="/login">Login</Link>
             <a href="mailto:support@sparkp2p.com">Contact</a>
           </div>
