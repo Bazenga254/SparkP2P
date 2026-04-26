@@ -5,7 +5,7 @@ const STEPS = [
     num: 1,
     title: 'Download the Installer',
     desc: 'Click the "Download .exe" button on the SparkP2P website. The file is named SparkP2P-Setup-X.X.X.exe and is approximately 130 MB.',
-    img: '/install/step1-download.png',
+    img: '/install-imgs/step1-download.png',
     tip: null,
     warning: null,
     illustration: (
@@ -28,7 +28,7 @@ const STEPS = [
     num: 2,
     title: 'Handle Chrome\'s Download Warning',
     desc: 'Chrome may flag the installer because it\'s new software. Look for the download bar at the bottom of your browser. Click the three-dot menu (⋮) next to the file, then select "Keep" and confirm "Keep anyway".',
-    img: '/install/step2-chrome-keep.png',
+    img: '/install-imgs/step2-chrome-keep.png',
     tip: null,
     warning: 'The file is safe — it\'s downloaded directly from our GitHub release. Chrome shows this warning for any new executable that hasn\'t been widely downloaded yet.',
     illustration: (
@@ -57,7 +57,7 @@ const STEPS = [
     num: 3,
     title: 'Bypass Windows SmartScreen',
     desc: 'Windows may show a blue SmartScreen warning saying "Windows protected your PC." This appears because the app is new and not yet widely distributed. Click "More info", then click "Run anyway" to proceed.',
-    img: '/install/step3-smartscreen.png',
+    img: '/install-imgs/step3-smartscreen.png',
     tip: null,
     warning: 'This is normal for new software. SparkP2P is safe — you can verify the file by checking the GitHub release page where it was published.',
     illustration: (
@@ -83,7 +83,7 @@ const STEPS = [
     num: 4,
     title: 'Installation Completes Automatically',
     desc: 'SparkP2P uses a one-click installer — no wizard pages, no "Next" buttons. The installer runs silently, installs the app, and places a shortcut on your Desktop and Start Menu. The whole process takes about 10–20 seconds.',
-    img: '/install/step4-installing.png',
+    img: '/install-imgs/step4-installing.png',
     tip: 'SparkP2P is installed to your user profile folder (no admin password required on most setups).',
     warning: null,
     illustration: (
@@ -103,7 +103,7 @@ const STEPS = [
     num: 5,
     title: 'App Launches — Sign In',
     desc: 'SparkP2P opens automatically after installation and a SparkP2P icon appears in your system tray (bottom-right of your taskbar). Enter your email and password on the login screen to sign in.',
-    img: '/install/step5-login.png',
+    img: '/install-imgs/step5-login.png',
     tip: 'If you don\'t have an account yet, contact support@sparkp2p.com or use the chat widget on the website to get set up.',
     warning: null,
     illustration: (
@@ -130,7 +130,7 @@ const STEPS = [
     num: 6,
     title: 'Connect Your Binance Account',
     desc: 'After signing in, SparkP2P will open Google Chrome and navigate to Binance P2P automatically. If you\'re already logged into Binance in Chrome, the bot will detect your session and connect instantly. If not, log into Binance manually in the Chrome window that opens.',
-    img: '/install/step6-binance.png',
+    img: '/install-imgs/step6-binance.png',
     tip: 'SparkP2P uses your existing Chrome session — it never asks for your Binance password or API keys.',
     warning: null,
     illustration: (
@@ -163,7 +163,7 @@ const STEPS = [
     num: 7,
     title: 'Connect the M-Pesa Org Portal',
     desc: 'SparkP2P opens a second tab for the M-Pesa Org Portal (org.ke.m-pesa.com). Log in with your M-Pesa business credentials. Once logged in, SparkP2P confirms the connection and will monitor all incoming payments automatically.',
-    img: '/install/step7-mpesa.png',
+    img: '/install-imgs/step7-mpesa.png',
     tip: 'SparkP2P saves your M-Pesa portal session in your Chrome profile. You usually only need to log in once — after that it reconnects automatically on each restart.',
     warning: null,
     illustration: (
@@ -192,7 +192,7 @@ const STEPS = [
     num: 8,
     title: 'You\'re Live — Bot is Running!',
     desc: 'The SparkP2P dashboard shows your bot as online. From this point, the bot monitors your Binance P2P orders 24/7, verifies every M-Pesa payment, and releases crypto automatically. You can close the Chrome window — the bot will keep running in the system tray.',
-    img: '/install/step8-running.png',
+    img: '/install-imgs/step8-running.png',
     tip: 'The green "Bot Online" indicator in the top bar confirms everything is connected and running. Keep your PC on and internet connected for continuous automation.',
     warning: null,
     illustration: (
