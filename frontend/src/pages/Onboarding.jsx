@@ -163,13 +163,31 @@ export default function Onboarding() {
   const loadProfile = async () => {
     try {
       const res = await getProfile();
-      setProfile(res.data);
-      if (res.data.onboarding_complete) {
+      const p = res.data;
+      setProfile(p);
+      if (p.onboarding_complete) {
         navigate('/dashboard');
         return;
       }
-      // Determine starting step based on existing progress
-      if (res.data.settlement_method) setSettlementSaved(true);
+      // Resume at the furthest completed step
+      if (p.settlement_method) setSettlementSaved(true);
+      if (p.binance_connected && p.settlement_method && p.security_question) {
+        // Everything done except I&M PIN — go to last step
+        setCurrentStep(5);
+      } else if (p.binance_connected && p.settlement_method) {
+        // Settlement done, go to 2FA setup
+        setCurrentStep(4);
+        getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
+      } else if (p.binance_connected && p.verify_method) {
+        // Verification done, go to settlement
+        setCurrentStep(3);
+      } else if (p.binance_connected) {
+        // Binance connected, go to verification
+        setCurrentStep(2);
+      } else {
+        // Start from Connect Binance (skip Install App step)
+        setCurrentStep(1);
+      }
     } catch (err) {
       console.error('Failed to load profile', err);
     }

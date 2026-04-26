@@ -377,7 +377,7 @@ async def get_profile(
 
     # Compute onboarding status — Binance + settlement + security question + TOTP required
     onboarding_complete = (
-        trader.binance_connected
+        (trader.binance_connected or bool(trader.binance_cookies))
         and trader.settlement_method is not None
         and bool(trader.security_question)
         and bool(trader.totp_secret)
