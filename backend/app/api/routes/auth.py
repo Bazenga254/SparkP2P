@@ -541,7 +541,7 @@ async def google_callback(code: str = None, state: str = None, error: str = None
         trader = Trader(
             email=email,
             full_name=name.upper(),
-            phone=f"google_{google_id}",  # placeholder — replaced when user adds real phone
+            phone=f"g_{google_id[-12:]}",  # unique placeholder (14 chars max) — replaced when user adds real phone
             password_hash=hash_password(secrets.token_urlsafe(32)),
             status=TraderStatus.ACTIVE,
             google_id=google_id,
@@ -565,7 +565,7 @@ async def google_callback(code: str = None, state: str = None, error: str = None
     token = create_access_token({"sub": str(trader.id), "email": trader.email})
 
     # Check if profile is incomplete (Google users need a real phone number)
-    needs_profile = not trader.phone or trader.phone == "" or trader.phone.startswith("google_")
+    needs_profile = not trader.phone or trader.phone == "" or trader.phone.startswith("g_")
 
     # Redirect with token — frontend handles profile completion
     return RedirectResponse(f"/login?google_token={token}&name={trader.full_name}&id={trader.id}&role={trader.role or 'trader'}&needs_profile={'1' if needs_profile else '0'}")
