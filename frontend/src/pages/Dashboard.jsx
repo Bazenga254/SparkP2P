@@ -1748,10 +1748,7 @@ export default function Dashboard() {
           <div className="card" style={{ fontFamily: 'monospace', fontSize: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <h3 style={{ margin: 0 }}>Activity Logs</h3>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span style={{ color: '#6b7280', fontSize: 11 }}>{botLogs.length} entries</span>
-                <button onClick={() => setBotLogs([])} style={{ background: '#374151', border: 'none', color: '#9ca3af', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>Clear</button>
-              </div>
+              <span style={{ color: '#6b7280', fontSize: 11 }}>{botLogs.length} entries</span>
             </div>
             {!window.sparkp2p ? (
               <p style={{ color: '#6b7280', textAlign: 'center', padding: 40 }}>Logs are only available in the desktop app.</p>
