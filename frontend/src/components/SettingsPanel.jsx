@@ -632,36 +632,11 @@ export default function SettingsPanel({ profile, onUpdate }) {
             When releasing crypto, Binance asks for identity verification. Choose your method so the bot can automate it.
           </p>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-            {[
-              { value: 'fund_password', label: 'Fund Password', desc: 'Your Binance trade/fund password' },
-              { value: 'totp', label: 'Google Authenticator (TOTP)', desc: 'Auto-generate 2FA codes from your secret key' },
-            ].map(opt => (
-              <div key={opt.value}
-                onClick={() => { setVerifyMethod(opt.value); setVerifyInput(''); setVerifySaved(false); }}
-                style={{
-                  padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
-                  border: `1px solid ${verifyMethod === opt.value ? '#f59e0b' : 'var(--border)'}`,
-                  background: verifyMethod === opt.value ? 'rgba(245,158,11,0.08)' : 'var(--bg)',
-                  display: 'flex', alignItems: 'center', gap: 12,
-                }}>
-                <div style={{
-                  width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
-                  border: `2px solid ${verifyMethod === opt.value ? '#f59e0b' : '#4b5563'}`,
-                  background: verifyMethod === opt.value ? '#f59e0b' : 'transparent',
-                }} />
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: '#fff' }}>{opt.label}</div>
-                  <div style={{ fontSize: 12, color: '#9ca3af' }}>{opt.desc}</div>
-                </div>
-              </div>
-            ))}
-          </div>
 
           {/* Already configured — show status, allow update */}
           {verifySaved && !verifyInput && (
             <div style={{ padding: '12px 14px', borderRadius: 8, background: 'rgba(16,185,129,0.08)', border: '1px solid #10b981', fontSize: 13, color: '#10b981', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>✓ {verifyMethod === 'totp' ? 'Google Authenticator secret' : 'Fund password'} is configured</span>
+              <span>✓ Google Authenticator (TOTP) is configured</span>
               <button
                 onClick={() => setVerifyInput(' ')}
                 style={{ background: 'none', border: '1px solid #10b981', borderRadius: 6, color: '#10b981', fontSize: 12, padding: '4px 10px', cursor: 'pointer' }}
@@ -696,20 +671,6 @@ export default function SettingsPanel({ profile, onUpdate }) {
             </div>
           )}
 
-          {(!verifySaved || verifyInput) && verifyMethod === 'fund_password' && (
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Fund Password</label>
-              <input
-                type="password"
-                placeholder="Your Binance fund/trade password"
-                value={verifyInput.trim()}
-                onChange={e => setVerifyInput(e.target.value)}
-                maxLength={8}
-                style={{ width: '100%', boxSizing: 'border-box' }}
-                autoFocus
-              />
-            </div>
-          )}
 
           {(!verifySaved || verifyInput.trim()) && (
             <div style={{ display: 'flex', gap: 8 }}>
@@ -728,15 +689,14 @@ export default function SettingsPanel({ profile, onUpdate }) {
                   setLoading(true);
                   try {
                     await updateVerification({
-                      verify_method: verifyMethod,
-                      totp_secret: verifyMethod === 'totp' ? val : null,
-                      fund_password: verifyMethod === 'fund_password' ? val : null,
+                      verify_method: 'totp',
+                      totp_secret: val,
+                      fund_password: null,
                     });
                     setVerifySaved(true);
                     setVerifyInput('');
                     if (window.sparkp2p?.isDesktop) {
-                      if (verifyMethod === 'totp') window.sparkp2p.setTotpSecret(val);
-                      if (verifyMethod === 'fund_password') window.sparkp2p.setPin(val);
+                      window.sparkp2p.setTotpSecret(val);
                     }
                   } catch (e) {
                     showMsg('Failed to save verification method');
