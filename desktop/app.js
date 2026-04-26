@@ -9532,6 +9532,379 @@ async function executeImLocalTransfer(job, _page = null) {
   }
 }
 
+// ── Pipeline helpers for batch disbursements ─────────────────────────────────
+//
+// The pipeline splits each transfer into two phases so that multiple tabs can
+// fill forms concurrently while PIN entry stays strictly serial (one at a time):
+//
+//   Tab 1:  [Fill form] ──→ [HOLD at PIN] ──────────────────────── [Fill next] ──→ ...
+//   Tab 2:       [Fill form] ──→ [HOLD at PIN] ──────────────────────── ...
+//   Tab 3:            [Fill form] ──→ [HOLD at PIN] ──────────────────────── ...
+//                                                ↑
+//            PIN sequencer (serial): Tab1 PIN → confirm → Tab2 PIN → confirm → ...
+//
+// This eliminates session/PIN conflicts while keeping form-fill concurrent.
+
+// Phase 1: fill all transfer form fields and navigate through Continue + Review
+// modal, stopping the moment Vision detects the PIN screen.
+// Returns { readyForPin: true } or { success: true, reference } (if portal
+// somehow skips PIN) or throws on error.
+async function _imFillUntilPin(job, page) {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const $x = async xpath => page.$$('::-p-xpath(' + xpath + ')').catch(() => []);
+  const FROM_ACCOUNT = '00108094726150';
+  const TO_ACCOUNT = job.destination_account;
+  const EXPECTED_NAME = (job.destination_name || '').toUpperCase().trim();
+  const refText = `SPK-${String(job.wallet_tx_id || job.id || '').padStart(6, '0')}`;
+  let ss;
+
+  const vClick = async (screenshotB64, instruction) => {
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 300,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotB64 } },
+            { type: 'text', text: instruction + '\nReply JSON only: {"x": pixel_x, "y": pixel_y}' },
+          ]}] }),
+      });
+      const d = await res.json();
+      const r = _parseVisionJson(d.content[0].text);
+      if (r.x && r.y) { await page.mouse.click(Number(r.x), Number(r.y)); await sleep(600); }
+    } catch (e) {}
+  };
+
+  // Step 1: Navigate to form
+  await page.goto('https://digital.imbank.com/inm-retail/dashboard', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+  await sleep(800);
+  await page.goto('https://digital.imbank.com/inm-retail/transfers/local-transfers/form', { waitUntil: 'networkidle2', timeout: 30000 });
+  await sleep(2500);
+
+  // Step 2: Debit account = SPARK FREELANCE SOLUTIONS
+  await page.waitForSelector('ng-select, select', { timeout: 10000 }).catch(() => {});
+  const ngSelectsInit = await page.$$('ng-select').catch(() => []);
+  let debitDone = false;
+  if (ngSelectsInit.length > 0) {
+    await ngSelectsInit[0].click().catch(() => {});
+    await sleep(800);
+    const opt = await $x(`//*[contains(text(), '${FROM_ACCOUNT}') or contains(text(), 'SPARK FREELANCE')]`);
+    if (opt.length > 0) { await opt[0].click().catch(() => {}); debitDone = true; }
+  }
+  if (!debitDone) { ss = await page.screenshot({ encoding: 'base64' }); await vClick(ss, `Click Debit Account dropdown and select SPARK FREELANCE SOLUTIONS (${FROM_ACCOUNT})`); }
+  await sleep(800);
+
+  // Step 3: Saved Beneficiary radio
+  const savedBenef = await $x('//*[contains(text(), "Saved Beneficiary")]');
+  if (savedBenef.length > 0) { await savedBenef[0].click().catch(() => {}); }
+  else {
+    const radios = await page.$$('input[type="radio"]').catch(() => []);
+    if (radios.length > 0) await page.evaluate(el => el.click(), radios[0]).catch(() => {});
+  }
+  await sleep(1200);
+
+  // Step 4: Select beneficiary
+  const allNgSelects = await page.$$('ng-select').catch(() => []);
+  const benefDrop = allNgSelects.length > 1 ? allNgSelects[1] : allNgSelects[0];
+  if (benefDrop) {
+    await benefDrop.click().catch(() => {});
+    await sleep(600);
+    await page.keyboard.type(TO_ACCOUNT, { delay: 60 });
+    await sleep(1500);
+    const benefOpt = await $x(`//*[contains(text(), '${TO_ACCOUNT}') or contains(text(), '${EXPECTED_NAME}')]`);
+    if (benefOpt.length > 0) await benefOpt[0].click().catch(() => {});
+    else await page.keyboard.press('Enter');
+  }
+  await sleep(800);
+
+  // Validate button
+  const validated = await page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim().toLowerCase() === 'validate' && !b.disabled);
+    if (btn) { btn.scrollIntoView({ block: 'center', behavior: 'instant' }); btn.click(); return true; }
+    return false;
+  }).catch(() => false);
+  if (validated) await sleep(3500);
+  await page.evaluate(() => window.scrollBy(0, 500)).catch(() => {});
+  await sleep(600);
+
+  // Step 5: Currency = KES
+  await page.evaluate(() => {
+    const sels = Array.from(document.querySelectorAll('select'));
+    for (const s of sels) {
+      const o = Array.from(s.options).find(opt => opt.text.trim() === 'KES');
+      if (o) { s.value = o.value; s.dispatchEvent(new Event('change', { bubbles: true })); break; }
+    }
+  }).catch(() => {});
+  await sleep(400);
+
+  // Step 6: Amount
+  const amountWhole = Math.floor(job.amount).toString();
+  const amountCents = Math.round((job.amount - Math.floor(job.amount)) * 100).toString().padStart(2, '0');
+  await page.evaluate((amt) => {
+    const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    const set = (el, v) => { if (ns) ns.call(el, v); else el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
+    const inp = Array.from(document.querySelectorAll('input')).find(i => {
+      const fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
+      const ph = (i.placeholder || '').toLowerCase();
+      if (ph.includes('reference') || fc.includes('reference') || fc.includes('narration') || fc.includes('account')) return false;
+      return i.value === '0' || fc.includes('amount') || fc.includes('whole') || i.placeholder === '0';
+    });
+    if (inp) { inp.scrollIntoView({ block: 'center', behavior: 'instant' }); inp.click(); inp.select(); set(inp, amt); }
+  }, amountWhole).catch(() => {});
+  await sleep(300);
+  await page.evaluate((c) => {
+    const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    const set = (el, v) => { if (ns) ns.call(el, v); else el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
+    const inp = Array.from(document.querySelectorAll('input')).find(i => i.placeholder === '00' || (i.getAttribute('formcontrolname') || '').toLowerCase().includes('cent'));
+    if (inp) { inp.scrollIntoView({ block: 'center', behavior: 'instant' }); inp.click(); inp.select(); set(inp, c); }
+  }, amountCents).catch(() => {});
+  await sleep(300);
+
+  // Step 7: Reference
+  await page.evaluate((ref) => {
+    const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    const inp = Array.from(document.querySelectorAll('input,textarea')).find(i =>
+      (i.placeholder || '').toLowerCase().includes('reference') || (i.placeholder || '').toLowerCase().includes('description') ||
+      (i.getAttribute('formcontrolname') || '').toLowerCase().includes('reference') || (i.getAttribute('formcontrolname') || '').toLowerCase().includes('narration')
+    );
+    if (inp) { inp.scrollIntoView({ block: 'center', behavior: 'instant' }); inp.click(); inp.value = ''; if (ns) ns.call(inp, ref); inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true })); }
+  }, refText).catch(() => {});
+  await sleep(400);
+
+  // Step 8: Purpose = Other
+  const purposeSels = await page.$$('select');
+  const purposeHandle = purposeSels[1] || purposeSels[0];
+  if (purposeHandle) {
+    for (let a = 0; a < 3; a++) {
+      await purposeHandle.focus().catch(() => {});
+      await purposeHandle.click().catch(() => {});
+      await page.waitForFunction(() => { const s = document.querySelectorAll('select'); const t = s[1] || s[0]; return t && t.options.length > 1; }, { timeout: 4000 }).catch(() => {});
+      await page.keyboard.press('Escape').catch(() => {});
+      await sleep(300);
+      const opts = await purposeHandle.evaluate(el => Array.from(el.options).map(o => ({ text: o.text.trim(), value: o.value }))).catch(() => []);
+      const other = opts.find(o => o.text.toLowerCase().includes('other'));
+      if (other) { await purposeHandle.select(other.value); break; }
+    }
+  }
+  await sleep(400);
+
+  console.log(`[Pipeline] Tab filled: KES ${job.amount} → ${TO_ACCOUNT} (${EXPECTED_NAME})`);
+
+  // Vision loop: handle Continue → Review → stop at PIN
+  for (let step = 0; step < 15; step++) {
+    await sleep(step === 0 ? 500 : 2000);
+    ss = await page.screenshot({ encoding: 'base64' });
+    const vAction = await imVisionVerify(ss,
+      `I&M Bank local transfer. Current screen?
+      - "form" = transfer form with Continue button
+      - "review" = "Local Transfer - Review" modal with Submit button
+      - "pin" = PIN entry screen
+      - "success" = green checkmark or success message
+      - "other" = loading or anything else
+      JSON only: {"screen":"form|review|pin|success|other","reference":"ref or null"}`
+    );
+    if (!vAction) continue;
+
+    if (vAction.screen === 'pin') {
+      console.log(`[Pipeline] Tab at PIN screen — handing to sequencer`);
+      return { readyForPin: true };
+    }
+    if (vAction.screen === 'success') return { success: true, reference: vAction.reference };
+
+    if (vAction.screen === 'form') {
+      const coords = await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Continue' && !b.disabled);
+        if (!btn) return null;
+        btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+        const r = btn.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }).catch(() => null);
+      if (coords?.x > 0) await page.mouse.click(coords.x, coords.y);
+      else { const xp = await $x('//button[contains(text(),"Continue")]'); if (xp.length) await xp[0].click().catch(() => {}); }
+      continue;
+    }
+    if (vAction.screen === 'review') {
+      const coords = await page.evaluate(() => {
+        const container = document.querySelector('mat-dialog-container,[role="dialog"],.cdk-overlay-pane') || document.body;
+        const btn = Array.from(container.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Submit');
+        if (!btn) return null;
+        btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+        const r = btn.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }).catch(() => null);
+      if (coords?.x > 0) await page.mouse.click(coords.x, coords.y);
+      else { const xp = await $x('//button[contains(text(),"Submit")]'); if (xp.length) await xp[0].click().catch(() => {}); }
+      await sleep(3000);
+      continue;
+    }
+    // 'other' — loading/transition
+  }
+  throw new Error('Form phase: did not reach PIN screen after 15 Vision steps');
+}
+
+// Phase 2: enter PIN and confirm success (called serially — only one tab at a time).
+// Returns { success: true, reference } or throws.
+async function _imEnterPinAndConfirm(page) {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const $x = async xpath => page.$$('::-p-xpath(' + xpath + ')').catch(() => []);
+
+  for (let step = 0; step < 12; step++) {
+    await sleep(step === 0 ? 300 : 2000);
+    const ss = await page.screenshot({ encoding: 'base64' });
+    const vAction = await imVisionVerify(ss,
+      `I&M Bank transfer. Current screen?
+      - "pin" = PIN entry screen with password/PIN input
+      - "success" = green checkmark or "Payment Successful" / "Transfer Successful"
+      - "other" = loading, error, or anything else
+      JSON only: {"screen":"pin|success|other","reference":"ref or null"}`
+    );
+    if (!vAction) continue;
+
+    if (vAction.screen === 'success') {
+      console.log(`[Pipeline] PIN confirmed — transfer success, ref: ${vAction.reference || 'N/A'}`);
+      const closeBtn = await $x('//button[contains(text(),"Close")]').catch(() => []);
+      if (closeBtn.length > 0) await closeBtn[0].click().catch(() => {});
+      await sleep(800);
+      return { success: true, reference: vAction.reference };
+    }
+
+    if (vAction.screen === 'pin') {
+      await page.evaluate(() => {
+        const inp = document.querySelector('input[type="password"],input[type="tel"]');
+        if (inp) { inp.click(); inp.focus(); }
+      }).catch(() => {});
+      await sleep(300);
+      for (const digit of String(imPin)) { await page.keyboard.press(digit); await sleep(150); }
+      await sleep(800);
+      await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim().toLowerCase() === 'complete');
+        if (btn) { btn.scrollIntoView({ block: 'center', behavior: 'instant' }); btn.click(); }
+      }).catch(() => {});
+      console.log('[Pipeline] PIN entered + Complete clicked');
+      await sleep(4000);
+      continue;
+    }
+    // 'other' — loading/transition
+  }
+  throw new Error('PIN phase: success screen not detected after 12 steps');
+}
+
+// Pipeline coordinator: fills forms concurrently across tabs, enters PIN serially.
+async function runBatchDisbursementsPipeline(batchId, jobs, pages) {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const jobQueue = [...jobs]; // shared queue, pop from front
+  let completedCount = 0;
+  let failedCount = 0;
+
+  // Per-tab state: idle → filling → ready_for_pin → pin_entering
+  const tabs = pages.map((page, i) => ({
+    page, index: i,
+    state: 'idle',
+    job: null,
+    pinDoneResolve: null,
+  }));
+
+  const reportComplete = async (job, reference) => {
+    completedCount++;
+    sendBotLog('success', `Batch ${batchId}: KES ${job.amount} → ${job.destination_name || job.destination} complete (ref: ${reference || 'N/A'})`);
+    await fetch(`${API_BASE}/ext/batch-item-complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ item_id: job.item_id, reference }),
+    }).catch(() => {});
+  };
+
+  const reportFailed = async (job, error) => {
+    failedCount++;
+    sendBotLog('error', `Batch ${batchId}: item ${job.item_id} failed — ${error}`);
+    await fetch(`${API_BASE}/ext/batch-item-failed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ item_id: job.item_id, error }),
+    }).catch(() => {});
+  };
+
+  // Fill worker: one per tab, runs concurrently
+  const fillWorker = async (tab) => {
+    while (true) {
+      const job = jobQueue.shift();
+      if (!job) break;
+
+      tab.state = 'filling';
+      tab.job = job;
+      console.log(`[Pipeline] Tab ${tab.index}: filling form for item ${job.item_id} KES ${job.amount} → ${job.destination}`);
+      sendBotLog('info', `Tab ${tab.index + 1}: filling form — KES ${job.amount} → ${job.destination_name || job.destination}`);
+
+      try {
+        const result = await _imFillUntilPin(job, tab.page);
+
+        if (result.success) {
+          // Portal skipped PIN (very unusual) — report and continue
+          await reportComplete(job, result.reference);
+        } else if (result.readyForPin) {
+          // Hand off to PIN sequencer
+          tab.state = 'ready_for_pin';
+          await new Promise(resolve => { tab.pinDoneResolve = resolve; });
+          // pinDoneResolve called by sequencer after success/failure handled
+        }
+      } catch (e) {
+        console.log(`[Pipeline] Tab ${tab.index}: fill error for item ${job.item_id}:`, e.message?.substring(0, 80));
+        await reportFailed(job, e.message);
+        // If tab ended up stuck at PIN somehow, release
+        if (tab.state === 'ready_for_pin' && tab.pinDoneResolve) {
+          tab.pinDoneResolve();
+          tab.pinDoneResolve = null;
+        }
+      }
+
+      tab.state = 'idle';
+      tab.job = null;
+    }
+  };
+
+  // PIN sequencer: runs serially, processes one tab at a time
+  const pinSequencer = async () => {
+    while (true) {
+      const allDone = tabs.every(t => t.state === 'idle') && jobQueue.length === 0;
+      if (allDone) break;
+
+      const readyTab = tabs.find(t => t.state === 'ready_for_pin');
+      if (!readyTab) { await sleep(300); continue; }
+
+      readyTab.state = 'pin_entering';
+      const job = readyTab.job;
+      console.log(`[Pipeline] Sequencer: entering PIN for tab ${readyTab.index} — item ${job.item_id}`);
+      sendBotLog('info', `Entering PIN for KES ${job.amount} → ${job.destination_name || job.destination}`);
+
+      try {
+        const result = await _imEnterPinAndConfirm(readyTab.page);
+        await reportComplete(job, result.reference);
+      } catch (e) {
+        console.log(`[Pipeline] PIN failed for item ${job.item_id}:`, e.message?.substring(0, 80));
+        await reportFailed(job, e.message);
+      }
+
+      // Signal fill worker to continue with next job
+      if (readyTab.pinDoneResolve) {
+        readyTab.pinDoneResolve();
+        readyTab.pinDoneResolve = null;
+      }
+      readyTab.state = 'idle';
+    }
+  };
+
+  // Run fill workers and sequencer concurrently
+  await Promise.all([
+    ...tabs.map(tab => fillWorker(tab)),
+    pinSequencer(),
+  ]);
+
+  console.log(`[Pipeline] Batch ${batchId} complete — ${completedCount} ok, ${failedCount} failed`);
+  sendBotLog(failedCount === 0 ? 'success' : 'warning',
+    `Batch ${batchId}: ${completedCount}/${jobs.length} transfers complete${failedCount ? `, ${failedCount} failed` : ''}`
+  );
+}
+
 // ── Batch Withdrawal Disbursement ──────────────────────────────────────────────
 // Read the current KES balance of the SPARK FREELANCE SOLUTIONS I&M account.
 // Navigates to the I&M dashboard and uses Vision to extract the balance figure.
@@ -9681,23 +10054,8 @@ async function runBatchDisbursements(batchId) {
     return;
   }
 
-  // Process jobs in parallel slices across available pages
-  const chunkSize = pages.length;
-  for (let i = 0; i < jobs.length; i += chunkSize) {
-    const chunk = jobs.slice(i, i + chunkSize);
-    await Promise.all(chunk.map((job, idx) => {
-      const page = pages[idx % pages.length];
-      // Pass the page override so each concurrent transfer uses its own tab
-      return executeImLocalTransfer(job, page).catch(async (e) => {
-        console.log(`[BatchDisburse] Item ${job.item_id} error:`, e.message?.substring(0, 80));
-        await fetch(`${API_BASE}/ext/batch-item-failed`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ item_id: job.item_id, error: e.message }),
-        }).catch(() => {});
-      });
-    }));
-  }
+  // Run the pipeline: fill forms concurrently, enter PINs serially
+  await runBatchDisbursementsPipeline(batchId, jobs, pages);
 
   // Close extra I&M tabs (keep the original imPage)
   for (let i = 1; i < pages.length; i++) {
