@@ -8951,6 +8951,137 @@ async function imVisionVerify(screenshotB64, instruction) {
   }
 }
 
+// Send a one-off admin alert SMS via the VPS API.
+async function _alertAdminFromBot(message) {
+  if (!token) return;
+  try {
+    await fetch(`${API_BASE}/admin/alert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ message }),
+    }).catch(() => {});
+    console.log(`[ImHealth] Admin alert sent: ${message.substring(0, 80)}`);
+  } catch (e) {}
+}
+
+// Classify the current state of an I&M Bank page before attempting any operation.
+// Returns: "ok" | "login_required" | "error" | "unreachable"
+// Attempts cookie-based session recovery on login_required.
+// Sends admin SMS immediately on error/unreachable so we fail fast.
+async function checkImPageHealth(page) {
+  const p = page || imPage;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  if (!p || p.isClosed()) {
+    console.log('[ImHealth] I&M page is closed or null');
+    await _alertAdminFromBot('I&M Bank tab closed — bot cannot execute transfers. Please reconnect I&M Bank in the desktop app.');
+    return 'unreachable';
+  }
+
+  // URL check — catches complete navigation failure
+  let url = '';
+  try { url = p.url(); } catch (e) {}
+  if (!url.includes('imbank.com')) {
+    console.log(`[ImHealth] Unexpected URL: ${url.substring(0, 60)} — re-navigating`);
+    try {
+      await p.goto('https://digital.imbank.com/inm-retail/dashboard', { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await sleep(3000);
+      url = p.url();
+    } catch (e) {
+      console.log('[ImHealth] Re-navigation to I&M failed:', e.message?.substring(0, 60));
+      await _alertAdminFromBot('I&M Bank portal unreachable — bot cannot load digital.imbank.com. Check VPS internet connectivity.');
+      return 'unreachable';
+    }
+  }
+
+  // Vision classification
+  let ss;
+  try { ss = await p.screenshot({ encoding: 'base64' }); } catch (e) {
+    await _alertAdminFromBot('I&M Bank page screenshot failed — page may have crashed.');
+    return 'unreachable';
+  }
+
+  let verdict = 'DASHBOARD';
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 10,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+          { type: 'text', text:
+            'Classify this I&M Bank browser page. Reply with ONLY one word:\n' +
+            'DASHBOARD — account balances or transfer forms visible (logged in)\n' +
+            'LOGIN — login form, QR code, username/password, or "sign in" button\n' +
+            'SESSION_EXPIRED — session timeout message\n' +
+            'ERROR — error page, 404, 500, maintenance, or blank white page\n' +
+            'OTHER — anything else'
+          },
+        ]}],
+      }),
+    });
+    const data = await res.json();
+    verdict = (data.content?.[0]?.text || 'DASHBOARD').trim().toUpperCase().split(/\s/)[0];
+  } catch (e) {
+    console.log('[ImHealth] Vision call failed — assuming OK:', e.message?.substring(0, 60));
+    return 'ok'; // Don't block on Vision API errors
+  }
+
+  console.log(`[ImHealth] Page state: ${verdict}`);
+
+  if (verdict === 'DASHBOARD') return 'ok';
+
+  if (verdict === 'LOGIN' || verdict === 'SESSION_EXPIRED') {
+    sendBotLog('warning', 'I&M Bank session expired — attempting cookie restore');
+    // Try restoring saved cookies
+    const savedCookies = loadImCookiesLocal();
+    if (savedCookies && p === imPage) {
+      try {
+        await restoreCookiesToPage(p, savedCookies, 'https://digital.imbank.com');
+        await p.goto('https://digital.imbank.com/inm-retail/dashboard', { waitUntil: 'networkidle2', timeout: 20000 });
+        await sleep(2000);
+        const ss2 = await p.screenshot({ encoding: 'base64' });
+        const r2 = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001', max_tokens: 10,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss2 } },
+              { type: 'text', text: 'Is this the I&M Bank dashboard (logged in)? Reply LOGGED_IN or LOGIN_PAGE only.' },
+            ]}],
+          }),
+        });
+        const d2 = await r2.json();
+        if ((d2.content?.[0]?.text || '').includes('LOGGED_IN')) {
+          console.log('[ImHealth] Cookie restore succeeded');
+          sendBotLog('success', 'I&M Bank session restored via saved cookies');
+          return 'ok';
+        }
+      } catch (e) {
+        console.log('[ImHealth] Cookie restore failed:', e.message?.substring(0, 60));
+      }
+    }
+    await _alertAdminFromBot(
+      'I&M Bank session has expired and could not be restored automatically. ' +
+      'Please open the SparkP2P desktop app and re-connect I&M Bank. ' +
+      'Batch disbursements are paused until you reconnect.'
+    );
+    sendBotLog('error', 'I&M session expired — manual reconnect required. Batch disbursements paused.');
+    return 'login_required';
+  }
+
+  // ERROR or OTHER
+  const pageText = await p.evaluate(() => (document.body?.innerText || '').substring(0, 150)).catch(() => '');
+  await _alertAdminFromBot(
+    `I&M Bank portal showing unexpected page (${verdict}). Bot cannot execute transfers. ` +
+    `Check https://digital.imbank.com manually. Page snippet: "${pageText.substring(0, 100)}"`
+  );
+  sendBotLog('error', `I&M portal unexpected page (${verdict}) — transfers paused`);
+  return 'error';
+}
+
 // â”€â”€ I&M Local Transfer (to any I&M account holder) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Used for all trader withdrawals to their I&M accounts
 async function executeImLocalTransfer(job, _page = null) {
@@ -9406,6 +9537,12 @@ async function executeImLocalTransfer(job, _page = null) {
 // Navigates to the I&M dashboard and uses Vision to extract the balance figure.
 async function readSparkImBalance() {
   if (!imPage || imPage.isClosed()) return null;
+  // Health check before navigating — catches session expiry / portal down
+  const health = await checkImPageHealth(imPage);
+  if (health !== 'ok') {
+    console.log(`[readSparkImBalance] I&M page unhealthy (${health}) — skipping balance read`);
+    return null;
+  }
   try {
     await imPage.bringToFront().catch(() => {});
     await imPage.goto('https://digital.imbank.com/inm-retail/dashboard', { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
@@ -9504,6 +9641,14 @@ async function runBatchDisbursements(batchId) {
     return;
   }
   console.log(`[BatchDisburse] Batch ${batchId}: ${jobs.length} item(s) to disburse`);
+
+  // Health check before opening parallel tabs — fail fast if portal is down
+  const health = await checkImPageHealth(imPage);
+  if (health !== 'ok') {
+    console.log(`[BatchDisburse] Batch ${batchId}: I&M portal unhealthy (${health}) — aborting disbursements`);
+    sendBotLog('error', `Batch ${batchId}: I&M portal issue (${health}) — disbursements paused. Admin has been alerted.`);
+    return;
+  }
 
   // Collect available I&M pages — start with the existing imPage
   const pages = [];

@@ -2038,3 +2038,37 @@ async def get_paybill_transactions(
             "count_out": count_out,
         },
     }
+
+
+# ── Bot → Admin alert ─────────────────────────────────────────────────────────
+
+class BotAlertRequest(BaseModel):
+    message: str
+
+
+@router.post("/alert")
+async def bot_alert(
+    data: BotAlertRequest,
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Desktop bot calls this to send an urgent SMS alert to the admin trader.
+    Used for I&M portal issues (session expired, portal down, wrong page).
+    """
+    result = await db.execute(
+        select(Trader).where(Trader.is_admin == True).order_by(Trader.id.asc()).limit(1)
+    )
+    admin_trader = result.scalar_one_or_none()
+    if not admin_trader:
+        return {"status": "no admin found"}
+
+    sms = f"SparkP2P BOT ALERT: {data.message[:140]}"
+    try:
+        from app.services.sms import send_otp_sms
+        send_otp_sms(admin_trader.phone, sms)
+        logger.warning(f"[BotAlert] SMS sent to {admin_trader.phone}: {data.message[:80]}")
+    except Exception as e:
+        logger.error(f"[BotAlert] SMS failed: {e}")
+
+    return {"status": "ok"}
