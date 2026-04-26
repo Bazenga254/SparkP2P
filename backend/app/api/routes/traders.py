@@ -486,8 +486,8 @@ async def connect_binance(
         trader.gmail_cookies = encrypt_data(json.dumps(data.gmail_cookies))
         logger.info(f"Gmail session synced: {len(data.gmail_cookies)} cookies for trader {trader.id}")
 
-    # Mark as connected if full cookies provided (verified login from desktop app)
-    if data.cookies_full and len(data.cookies_full) > 10:
+    # Mark as connected whenever cookies are saved
+    if data.cookies_full or data.cookies:
         trader.binance_connected = True
     if binance_name:
         trader.binance_username = binance_name
