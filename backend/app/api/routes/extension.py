@@ -626,10 +626,10 @@ async def heartbeat(
 ):
     """
     Extension sends heartbeat every 30 seconds.
-    Updates last_seen timestamp and clears intentional-stop flag.
+    Only updates the last-seen timestamp — does NOT touch bot_intentionally_stopped
+    to avoid a race where an in-flight heartbeat clears the flag set by /bot-stopped.
     """
     trader.updated_at = datetime.now(timezone.utc)
-    trader.bot_intentionally_stopped = False
     await db.commit()
     return {"status": "ok", "trader_id": trader.id}
 
@@ -641,9 +641,24 @@ async def bot_stopped(
 ):
     """
     Desktop app calls this on graceful quit.
-    Suppresses offline alerts in bot_monitor until the next heartbeat.
+    Suppresses offline alerts in bot_monitor until /bot-started is called.
     """
     trader.bot_intentionally_stopped = True
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/bot-started")
+async def bot_started(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Desktop app calls this when the bot first connects and starts polling.
+    Clears the intentional-stop flag so the monitor resumes alerting.
+    """
+    trader.bot_intentionally_stopped = False
+    trader.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return {"status": "ok"}
 

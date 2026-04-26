@@ -1801,6 +1801,10 @@ function startPoller() {
   if (pollerRunning) return;
   pollerRunning = true;
   console.log('[SparkP2P] Bot started');
+  // Notify backend that bot is running — clears bot_intentionally_stopped flag
+  if (token) {
+    fetch(`${API_BASE}/ext/bot-started`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
+  }
   scheduleNextPoll(0); // run immediately
 }
 
