@@ -646,13 +646,12 @@ export default function Onboarding() {
               <div className="onb-card">
                 <form onSubmit={handleSaveSettlement} className="onb-form">
                   <label>Settlement Method</label>
-                  <select
-                    value={settlementMethod}
-                    onChange={(e) => setSettlementMethod(e.target.value)}
-                  >
+                  <select value={settlementMethod} onChange={(e) => setSettlementMethod(e.target.value)}>
                     <option value="mpesa">M-Pesa</option>
-                    <option value="bank_paybill">I&M Bank Account</option>
                   </select>
+                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4, marginBottom: 8 }}>
+                    You can switch to I&M Bank Account in Settings after completing setup — no waiting period for your first change.
+                  </div>
 
                   {accountSuspended && (
                     <div style={{ padding: 16, background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', borderRadius: 10, color: '#ef4444', textAlign: 'center' }}>
@@ -768,61 +767,6 @@ export default function Onboarding() {
                     </>
                   )}
 
-                  {!accountSuspended && settlementMethod === 'bank_paybill' && (
-                    <>
-                      <label>I&M Bank Account Number</label>
-                      <input
-                        type="text"
-                        placeholder="Your I&M Bank account number"
-                        value={bankAccount}
-                        onChange={(e) => { setBankAccount(e.target.value); setNameVerified(null); }}
-                        required
-                      />
-
-                      <label>Account Holder Name (as on bank statement)</label>
-                      <input
-                        type="text"
-                        placeholder="JANE DOE ANTONY"
-                        value={bankAccountName}
-                        onChange={(e) => {
-                          const val = e.target.value.toUpperCase();
-                          setBankAccountName(val);
-                          // Auto-compare with registered name
-                          if (val.length > 3 && profile?.full_name) {
-                            const registered = profile.full_name.toUpperCase().trim();
-                            const entered = val.trim();
-                            // Check if names match (allow partial — first+last name match)
-                            const regParts = registered.split(/\s+/);
-                            const entParts = entered.split(/\s+/);
-                            const matchCount = regParts.filter(p => entParts.includes(p)).length;
-                            setNameVerified(matchCount >= 2 || registered === entered);
-                          } else {
-                            setNameVerified(null);
-                          }
-                        }}
-                        required
-                        style={{ textTransform: 'uppercase' }}
-                      />
-
-                      {/* Name verification result */}
-                      {nameVerified === true && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: 'rgba(16,185,129,0.1)', borderRadius: 8, fontSize: 13, color: '#10b981', marginTop: 4 }}>
-                          <Check size={16} />
-                          Name matches your registered name: <strong>{profile?.full_name}</strong>
-                        </div>
-                      )}
-                      {nameVerified === false && (
-                        <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 8, fontSize: 13, color: '#ef4444', marginTop: 4 }}>
-                          <strong>Name mismatch!</strong> Your registered name is <strong>{profile?.full_name}</strong>.
-                          Bank account name must match your Binance KYC name for security.
-                        </div>
-                      )}
-
-                      <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>
-                        Settlements are sent to your I&M account or M-Pesa for free. Fees: KES 10-50 depending on amount.
-                      </div>
-                    </>
-                  )}
 
                   {settlementMsg && (
                     <div className={`onb-msg ${settlementMsg.type}`}>
