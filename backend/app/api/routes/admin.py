@@ -657,7 +657,9 @@ async def list_unmatched_payments(
     """Unmatched deposits (inbound with no order) and unmatched withdrawals
     (outbound with no order, no destination, or failed status)."""
 
-    # ── Unmatched Deposits: inbound C2B payments not linked to any order ──
+    # ── Unmatched Deposits: inbound C2B payments with no linked order
+    #    These are payments to our paybill where the account reference didn't
+    #    match any registered trader or active order.
     dep_result = await db.execute(
         select(Payment)
         .where(
@@ -669,16 +671,16 @@ async def list_unmatched_payments(
     )
     deposits = dep_result.scalars().all()
 
-    # ── Unmatched Withdrawals: outbound with no destination, or failed/reversed ──
-    from sqlalchemy import or_
+    # ── Unmatched Withdrawals: outbound disbursements that have no destination
+    #    and no linked order — i.e. truly unrouted payments.
+    #    Reversed/failed withdrawals are NOT unmatched — they have a known
+    #    destination and order, they just failed to process.
     wd_result = await db.execute(
         select(Payment)
         .where(
             Payment.direction == PaymentDirection.OUTBOUND,
-            or_(
-                Payment.destination.is_(None),
-                Payment.status.in_(["failed", "reversed"]),
-            ),
+            Payment.destination.is_(None),
+            Payment.order_id.is_(None),
         )
         .order_by(Payment.created_at.desc())
         .limit(100)

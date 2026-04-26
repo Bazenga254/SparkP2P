@@ -24,7 +24,7 @@ class Payment(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=True, index=True)
-    trader_id = Column(Integer, ForeignKey("traders.id"), nullable=False, index=True)
+    trader_id = Column(Integer, ForeignKey("traders.id"), nullable=True, index=True)
 
     direction = Column(Enum(PaymentDirection), nullable=False)
 

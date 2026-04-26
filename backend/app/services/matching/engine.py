@@ -169,7 +169,7 @@ class MatchingEngine:
         """Save unmatched payment for manual review."""
         payment = Payment(
             order_id=None,
-            trader_id=0,  # Will need admin assignment
+            trader_id=None,
             direction=PaymentDirection.INBOUND,
             mpesa_transaction_id=txn_id,
             transaction_type="C2B",
