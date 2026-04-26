@@ -107,6 +107,11 @@ export default function Onboarding() {
   const [totpSetupSaving, setTotpSetupSaving] = useState(false);
   const [totpSetupDone, setTotpSetupDone] = useState(false);
 
+  // Name correction (settlement mismatch)
+  const [correctedName, setCorrectedName] = useState('');
+  const [savingCorrectedName, setSavingCorrectedName] = useState(false);
+  const [correctedNameMsg, setCorrectedNameMsg] = useState('');
+
   // I&M PIN step
   const [onbImPin, setOnbImPin] = useState('');
   const [onbImPinSaved, setOnbImPinSaved] = useState(false);
@@ -755,9 +760,64 @@ export default function Onboarding() {
                         </div>
                       )}
                       {mpesaName && !mpesaName.match && (
-                        <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 8, fontSize: 13, color: '#ef4444', marginTop: 8 }}>
-                          <strong>Name mismatch!</strong> M-Pesa name: <strong>{mpesaName.name}</strong><br />
-                          Your registered name: <strong>{profile?.full_name}</strong>. Settlement phone must be registered under your name.
+                        <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, padding: 14, marginTop: 8 }}>
+                          <div style={{ fontSize: 13, color: '#ef4444', marginBottom: 10 }}>
+                            <strong>Name mismatch!</strong> M-Pesa name: <strong>{mpesaName.name}</strong><br />
+                            Your registered name: <strong>{profile?.full_name}</strong>. Update your name below to match.
+                          </div>
+                          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Update Your Full Name (as on Binance KYC)</label>
+                          <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                            <input
+                              type="text"
+                              value={correctedName}
+                              onChange={(e) => { setCorrectedName(e.target.value.toUpperCase()); setCorrectedNameMsg(''); }}
+                              placeholder={mpesaName.name?.toUpperCase()}
+                              style={{ flex: 1, textTransform: 'uppercase' }}
+                            />
+                            <button
+                              type="button"
+                              className="onb-btn-secondary"
+                              style={{ whiteSpace: 'nowrap', padding: '8px 14px' }}
+                              onClick={() => setCorrectedName(mpesaName.name?.toUpperCase() || '')}
+                            >
+                              Use M-Pesa Name
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="onb-btn-primary"
+                            style={{ width: '100%' }}
+                            disabled={savingCorrectedName || correctedName.trim().length < 3}
+                            onClick={async () => {
+                              setSavingCorrectedName(true);
+                              setCorrectedNameMsg('');
+                              try {
+                                const token = localStorage.getItem('token');
+                                const res = await fetch('/api/traders/profile', {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                  body: JSON.stringify({ full_name: correctedName.trim().toUpperCase() }),
+                                });
+                                if (res.ok) {
+                                  setCorrectedNameMsg('Name updated! Now click Verify again.');
+                                  await refreshProfile();
+                                  setMpesaName(null);
+                                  setCorrectedName('');
+                                } else {
+                                  const d = await res.json();
+                                  setCorrectedNameMsg(d.detail || 'Failed to update name');
+                                }
+                              } catch { setCorrectedNameMsg('Network error'); }
+                              setSavingCorrectedName(false);
+                            }}
+                          >
+                            {savingCorrectedName ? 'Saving...' : 'Save Name & Re-verify'}
+                          </button>
+                          {correctedNameMsg && (
+                            <div style={{ fontSize: 12, color: correctedNameMsg.includes('updated') ? '#10b981' : '#ef4444', marginTop: 6 }}>
+                              {correctedNameMsg}
+                            </div>
+                          )}
                         </div>
                       )}
 
