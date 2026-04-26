@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, Boolean
 from app.core.database import Base
 
 
@@ -16,6 +16,8 @@ class WithdrawalBatch(Base):
     id = Column(Integer, primary_key=True, index=True)
     status = Column(String(20), default="collecting", nullable=False, index=True)
     total_amount = Column(Float, default=0.0, nullable=False)
+
+    alerted = Column(Boolean, default=False, nullable=False)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     closed_at = Column(DateTime(timezone=True), nullable=True)    # when stopped accepting
@@ -48,6 +50,8 @@ class BatchItem(Base):
     status = Column(String(20), default="queued", nullable=False, index=True)
     failure_reason = Column(String(500), nullable=True)
     im_reference = Column(String(100), nullable=True)  # I&M txn ref after success
+    retry_count = Column(Integer, default=0, nullable=False)
+    alerted = Column(Boolean, default=False, nullable=False)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime(timezone=True), nullable=True)

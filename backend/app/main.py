@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +17,10 @@ from app.services import bot_monitor
 
 logger = logging.getLogger(__name__)
 
-BATCH_INTERVAL_SECONDS = 3600  # Close and sweep every hour
+BATCH_INTERVAL_SECONDS = 3600        # Close and sweep every hour
+BATCH_STUCK_CHECK_SECONDS = 1800     # Check for stuck batches every 30 minutes
+BATCH_STUCK_THRESHOLD_HOURS = 2      # Alert if batch stuck in sweeping/disbursing for 2+ hours
+BATCH_ITEM_MAX_RETRIES = 3           # Max auto-retries for failed batch items
 
 
 async def _close_collecting_batch():
@@ -79,11 +82,178 @@ async def _close_collecting_batch():
             logger.error(f"[BatchScheduler] Error closing batch: {e}")
 
 
+async def _alert_admin(subject: str, body_html: str, sms: str):
+    """Send email + SMS alert to the admin trader."""
+    from sqlalchemy import select
+    from app.models.trader import Trader
+    try:
+        async with async_session() as db:
+            result = await db.execute(select(Trader).where(Trader.is_admin == True).limit(1))
+            admin_trader = result.scalar_one_or_none()
+            if not admin_trader:
+                return
+            try:
+                from app.services.sms import send_otp_sms
+                send_otp_sms(admin_trader.phone, sms)
+            except Exception as e:
+                logger.warning(f"[BatchMonitor] SMS alert failed: {e}")
+            try:
+                from app.services.email import send_email
+                send_email(admin_trader.email, subject, body_html)
+            except Exception as e:
+                logger.warning(f"[BatchMonitor] Email alert failed: {e}")
+    except Exception as e:
+        logger.error(f"[BatchMonitor] _alert_admin error: {e}")
+
+
+async def _check_stuck_batches():
+    """
+    Alert admin if any batch has been stuck in 'sweeping' or 'disbursing'
+    for more than BATCH_STUCK_THRESHOLD_HOURS hours.
+    Retry failed batch items up to BATCH_ITEM_MAX_RETRIES times.
+    """
+    from sqlalchemy import select
+    from app.models.batch import WithdrawalBatch, BatchItem
+
+    async with async_session() as db:
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=BATCH_STUCK_THRESHOLD_HOURS)
+
+            # ── Find stuck batches ────────────────────────────────────────────
+            stuck_result = await db.execute(
+                select(WithdrawalBatch).where(
+                    WithdrawalBatch.status.in_(["sweeping", "disbursing"]),
+                    WithdrawalBatch.closed_at <= cutoff,
+                    WithdrawalBatch.alerted == False,
+                )
+            )
+            stuck_batches = stuck_result.scalars().all()
+
+            for batch in stuck_batches:
+                age_hours = (datetime.now(timezone.utc) - batch.closed_at).total_seconds() / 3600
+                logger.warning(
+                    f"[BatchMonitor] Batch {batch.id} stuck in '{batch.status}' "
+                    f"for {age_hours:.1f}h — alerting admin"
+                )
+                await _alert_admin(
+                    subject=f"SparkP2P — Batch #{batch.id} Stuck ({batch.status})",
+                    sms=(
+                        f"SparkP2P ALERT: Withdrawal batch #{batch.id} "
+                        f"(KES {batch.total_amount:,.0f}) is stuck in '{batch.status}' "
+                        f"for {age_hours:.0f}h. Check the desktop bot."
+                    ),
+                    body_html=f"""
+                    <div style="font-family:-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
+                      <div style="background:#1a1d27;border-radius:12px;padding:32px;">
+                        <h2 style="color:#f59e0b;margin:0 0 16px;">⚠️ Batch Withdrawal Stuck</h2>
+                        <p style="color:#d1d5db;font-size:14px;">
+                          Batch <strong>#{batch.id}</strong> has been stuck in
+                          <strong style="color:#f59e0b;">'{batch.status}'</strong>
+                          for <strong>{age_hours:.1f} hours</strong>.
+                        </p>
+                        <div style="background:#0f1117;border-radius:10px;padding:16px;margin:16px 0;border-left:4px solid #f59e0b;">
+                          <p style="color:#9ca3af;font-size:13px;margin:0;">
+                            Amount: <strong style="color:#fff;">KES {batch.total_amount:,.2f}</strong><br/>
+                            Status: <strong style="color:#f59e0b;">{batch.status}</strong><br/>
+                            Closed at: {batch.closed_at.strftime('%Y-%m-%d %H:%M UTC')}
+                          </p>
+                        </div>
+                        <p style="color:#d1d5db;font-size:14px;">
+                          <strong>Action required:</strong> Ensure the SparkP2P desktop bot is
+                          running and connected to M-Pesa and I&amp;M Bank. The bot will pick up
+                          the pending sweep automatically once it reconnects.
+                        </p>
+                      </div>
+                    </div>
+                    """,
+                )
+                batch.alerted = True
+                await db.commit()
+
+            # ── Retry failed batch items ──────────────────────────────────────
+            failed_result = await db.execute(
+                select(BatchItem).where(
+                    BatchItem.status == "failed",
+                    BatchItem.retry_count < BATCH_ITEM_MAX_RETRIES,
+                )
+            )
+            failed_items = failed_result.scalars().all()
+
+            for item in failed_items:
+                item.retry_count = (item.retry_count or 0) + 1
+                item.status = "queued"
+                logger.warning(
+                    f"[BatchMonitor] Retrying batch item {item.id} "
+                    f"(attempt {item.retry_count}/{BATCH_ITEM_MAX_RETRIES})"
+                )
+
+            if failed_items:
+                await db.commit()
+                logger.info(f"[BatchMonitor] Re-queued {len(failed_items)} failed batch items")
+
+            # Alert admin when an item has exhausted all retries
+            exhausted_result = await db.execute(
+                select(BatchItem).where(
+                    BatchItem.status == "failed",
+                    BatchItem.retry_count >= BATCH_ITEM_MAX_RETRIES,
+                    BatchItem.alerted == False,
+                )
+            )
+            exhausted_items = exhausted_result.scalars().all()
+
+            for item in exhausted_items:
+                logger.error(
+                    f"[BatchMonitor] Batch item {item.id} exhausted retries — "
+                    f"manual intervention required"
+                )
+                await _alert_admin(
+                    subject=f"SparkP2P — Batch Item #{item.id} Failed (manual action needed)",
+                    sms=(
+                        f"SparkP2P ALERT: Batch withdrawal item #{item.id} "
+                        f"(KES {item.amount:,.0f} to {item.destination}) "
+                        f"failed {BATCH_ITEM_MAX_RETRIES} times. Manual action required."
+                    ),
+                    body_html=f"""
+                    <div style="font-family:-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
+                      <div style="background:#1a1d27;border-radius:12px;padding:32px;">
+                        <h2 style="color:#ef4444;margin:0 0 16px;">❌ Batch Item Failed — Action Required</h2>
+                        <p style="color:#d1d5db;font-size:14px;">
+                          Batch item <strong>#{item.id}</strong> has failed
+                          <strong>{BATCH_ITEM_MAX_RETRIES} times</strong> and cannot be retried automatically.
+                        </p>
+                        <div style="background:#0f1117;border-radius:10px;padding:16px;margin:16px 0;border-left:4px solid #ef4444;">
+                          <p style="color:#9ca3af;font-size:13px;margin:0;">
+                            Amount: <strong style="color:#fff;">KES {item.amount:,.2f}</strong><br/>
+                            Destination: <strong style="color:#fff;">{item.destination}</strong><br/>
+                            Retries: <strong style="color:#ef4444;">{item.retry_count}/{BATCH_ITEM_MAX_RETRIES}</strong>
+                          </p>
+                        </div>
+                        <p style="color:#d1d5db;font-size:14px;">
+                          Please log into the admin dashboard and process this withdrawal manually.
+                        </p>
+                      </div>
+                    </div>
+                    """,
+                )
+                item.alerted = True
+                await db.commit()
+
+        except Exception as e:
+            logger.error(f"[BatchMonitor] Error in _check_stuck_batches: {e}")
+
+
 async def batch_scheduler():
     """Hourly loop: close collecting batches and queue M-PESA sweeps."""
     while True:
         await asyncio.sleep(BATCH_INTERVAL_SECONDS)
         await _close_collecting_batch()
+
+
+async def batch_monitor():
+    """Every 30 min: alert on stuck batches and retry failed items."""
+    while True:
+        await asyncio.sleep(BATCH_STUCK_CHECK_SECONDS)
+        await _check_stuck_batches()
 
 
 @asynccontextmanager
@@ -98,12 +268,15 @@ async def lifespan(app: FastAPI):
     monitor_task = asyncio.create_task(bot_monitor.start())
     # Start hourly batch withdrawal scheduler
     batch_task = asyncio.create_task(batch_scheduler())
+    # Start batch stuck-alert + retry monitor (every 30 min)
+    batch_monitor_task = asyncio.create_task(batch_monitor())
     yield
     # Shutdown
     order_poller.stop()
     poller_task.cancel()
     monitor_task.cancel()
     batch_task.cancel()
+    batch_monitor_task.cancel()
 
 
 app = FastAPI(
