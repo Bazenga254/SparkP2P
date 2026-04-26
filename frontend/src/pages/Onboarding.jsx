@@ -551,17 +551,29 @@ export default function Onboarding() {
 
               <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 16, marginBottom: 16 }}>
                 <strong style={{ color: '#f59e0b', fontSize: 14 }}>How to get your TOTP Secret Key:</strong>
-                <ol style={{ fontSize: 12, color: '#9ca3af', marginTop: 8, paddingLeft: 18, lineHeight: 1.8 }}>
-                  <li>Open <strong style={{ color: '#e4e4e7' }}>Binance App</strong> → <strong style={{ color: '#e4e4e7' }}>Profile → Security</strong></li>
-                  <li>Click <strong style={{ color: '#e4e4e7' }}>Google Authenticator → Manage</strong></li>
-                  <li>Click <strong style={{ color: '#e4e4e7' }}>Change Authenticator</strong> or <strong style={{ color: '#e4e4e7' }}>Reset</strong></li>
-                  <li>Binance will show a <strong style={{ color: '#e4e4e7' }}>QR code</strong> and a text key below it</li>
-                  <li>Copy the <strong style={{ color: '#e4e4e7' }}>text key</strong> (looks like: JBSWY3DPEHPK3PXP)</li>
-                  <li>Scan the QR code with Google Authenticator as normal</li>
-                  <li>Paste the text key below</li>
-                </ol>
-                <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, padding: 10, marginTop: 10 }}>
-                  <p style={{ fontSize: 11, color: '#ef4444' }}>⚠️ If you already set up Google Authenticator and didn't save the key, you'll need to reset it on Binance to get the key. Make sure to scan the new QR code in your Authenticator app after resetting.</p>
+
+                <div style={{ marginTop: 12 }}>
+                  <p style={{ fontSize: 12, color: '#e4e4e7', marginBottom: 6 }}>
+                    <strong>Step 1:</strong> Go to <strong>Binance → Account → Security</strong> and click <strong>Manage</strong> next to <strong>Authenticator App</strong>
+                  </p>
+                  <img
+                    src="/binance-totp-step1.jpg"
+                    alt="Binance Security page showing Authenticator App"
+                    style={{ width: '100%', borderRadius: 8, border: '1px solid #2a2d3a', marginBottom: 14 }}
+                  />
+
+                  <p style={{ fontSize: 12, color: '#e4e4e7', marginBottom: 6 }}>
+                    <strong>Step 2:</strong> Binance shows a QR code and a <strong>text key</strong> below it (circled). Copy that text key and paste it below. Also scan the QR code in your Google Authenticator app.
+                  </p>
+                  <img
+                    src="/binance-totp-step2.jpg"
+                    alt="Binance Link an Authenticator dialog showing QR code and text key"
+                    style={{ width: '100%', borderRadius: 8, border: '1px solid #2a2d3a', marginBottom: 14 }}
+                  />
+                </div>
+
+                <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, padding: 10 }}>
+                  <p style={{ fontSize: 11, color: '#ef4444' }}>⚠️ If Authenticator App is already ON, click <strong>Manage → Change Authenticator</strong> to reset it and reveal the text key. Make sure to scan the new QR code in your app after resetting.</p>
                 </div>
               </div>
 
