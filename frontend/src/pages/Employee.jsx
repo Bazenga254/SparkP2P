@@ -780,12 +780,24 @@ export default function Employee() {
               </div>
 
               {surveySelected && (
-                <div className="emp-card" style={{ width: 320, flexShrink: 0 }}>
-                  <div className="emp-card-header">
-                    <h3>{surveySelected.full_name}</h3>
-                    <button onClick={() => setSurveySelected(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 18 }}>×</button>
+                <div className="emp-card" style={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+                  {/* Header */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, paddingBottom: 14, borderBottom: '1px solid #1f2937' }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 15, color: '#fff', marginBottom: 3 }}>
+                        {surveySelected.full_name || 'Unknown'}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#9ca3af' }}>{surveySelected.phone}</div>
+                      <span style={{ marginTop: 6, display: 'inline-block', padding: '2px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600,
+                        background: surveySelected.is_qualified ? 'rgba(16,185,129,0.15)' : surveySelected.disqualified ? 'rgba(239,68,68,0.15)' : 'rgba(107,114,128,0.15)',
+                        color: surveySelected.is_qualified ? '#10b981' : surveySelected.disqualified ? '#ef4444' : '#9ca3af' }}>
+                        {surveySelected.is_qualified ? 'Qualified' : surveySelected.disqualified ? 'Disqualified' : 'Pending'}
+                      </span>
+                    </div>
+                    <button onClick={() => setSurveySelected(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 0 }}>×</button>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {/* Answers */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 0, overflowY: 'auto' }}>
                     {[
                       { q: 'Verified Merchant?', a: surveySelected.q1_is_merchant },
                       { q: 'Trading Frequency', a: surveySelected.q2_trade_frequency },
@@ -795,10 +807,10 @@ export default function Employee() {
                       { q: 'Automation Name', a: surveySelected.q5_automation_name },
                       { q: 'Biggest Challenge', a: surveySelected.q6_biggest_challenge },
                       { q: 'Daily Transactions', a: surveySelected.q7_daily_transactions },
-                    ].map(({ q, a }) => a && (
-                      <div key={q} style={{ borderBottom: '1px solid #1f2937', paddingBottom: 10 }}>
-                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{q}</div>
-                        <div style={{ fontSize: 13, color: '#e5e7eb' }}>{a}</div>
+                    ].filter(({ a }) => a).map(({ q, a }) => (
+                      <div key={q} style={{ padding: '10px 0', borderBottom: '1px solid #1f2937' }}>
+                        <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>{q}</div>
+                        <div style={{ fontSize: 13, color: '#e5e7eb', fontWeight: 500 }}>{a}</div>
                       </div>
                     ))}
                   </div>
