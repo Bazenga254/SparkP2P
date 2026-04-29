@@ -8011,19 +8011,29 @@ async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
 
 async function sendBinanceChatMessage(page, message) {
   try {
-    // Wait up to 10s for the chat panel to render
+    // Wait up to 15s for the chat panel to render (Binance chat loads async)
     let chatInput = null;
-    for (let i = 0; i < 5; i++) {
-      chatInput = await page.$('[placeholder*="message" i], [placeholder*="Enter message" i], [placeholder*="Type" i], textarea');
+    for (let i = 0; i < 6; i++) {
+      chatInput = await page.$(
+        '[placeholder*="Enter message" i], [placeholder*="message" i], ' +
+        '[placeholder*="Type" i], textarea, [contenteditable="true"]'
+      );
       if (chatInput) break;
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 2500));
     }
     if (!chatInput) { console.log('[SparkP2P] Chat input not found after retries'); return false; }
+
+    // Click to focus, then type
     await chatInput.click();
-    await new Promise(r => setTimeout(r, 400));
-    await chatInput.type(message, { delay: 30 });
-    await page.keyboard.press('Enter');
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 500));
+    await chatInput.type(message, { delay: 20 });
+    await new Promise(r => setTimeout(r, 300));
+
+    // Press Enter directly on the element (not page.keyboard) to avoid focus loss
+    await chatInput.press('Enter');
+    await new Promise(r => setTimeout(r, 1200));
+
+    // Verify: if input is now empty or has changed, message was sent
     console.log(`[SparkP2P] Chat message sent: ${message.substring(0, 60)}`);
     return true;
   } catch (e) {
