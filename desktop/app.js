@@ -2210,8 +2210,8 @@ async function verifyMpesaPayment(orderNumber, fiatAmount, page = null, preExtra
 // Runs every 10 polls. Reads Binance cancelled+completed history (all dates, not
 // just today) and reports them to SparkP2P so disputed/expired orders get updated.
 async function reconcileStuckOrders(page) {
-  if (!page || !token || pauseNavigation) return;
-  console.log('[SparkP2P] ðŸ”„ Reconciling stuck orders against Binance history...');
+  if (!page || !token || pauseNavigation) return { pendingBuyOrders: [] };
+  console.log('[SparkP2P] 🔄 Reconciling stuck orders against Binance history...');
 
   try {
     // Navigate to Binance order history tab
@@ -2220,7 +2220,7 @@ async function reconcileStuckOrders(page) {
 
     // Read cancelled orders (all dates)
     await page.evaluate(() => {
-      const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
+      const tabs = Array.from(document.querySelectorAll('div[class*=”tab”], span[class*=”tab”], button'));
       const t = tabs.find(el => el.textContent.trim() === 'Canceled' || el.textContent.trim() === 'Cancelled');
       if (t) t.click();
     }).catch(() => {});
@@ -2232,9 +2232,9 @@ async function reconcileStuckOrders(page) {
       const res = await aiScanner.analyzeText(cancelledText, `
         This is text from a Binance P2P cancelled orders history page.
         Extract ALL order numbers visible (any date, not just today).
-        Order numbers are 18-20 digit integers â€” copy EXACTLY as shown.
-        Return JSON: { "cancelled_order_numbers": ["num1", "num2", ...] }
-        If none found: { "cancelled_order_numbers": [] }
+        Order numbers are 18-20 digit integers — copy EXACTLY as shown.
+        Return JSON: { “cancelled_order_numbers”: [“num1”, “num2”, ...] }
+        If none found: { “cancelled_order_numbers”: [] }
       `);
       cancelledNums = (res?.cancelled_order_numbers || [])
         .map(n => String(n).replace(/\D/g, '')).filter(n => n.length >= 15);
@@ -2242,7 +2242,7 @@ async function reconcileStuckOrders(page) {
 
     // Read completed BUY orders (all dates)
     await page.evaluate(() => {
-      const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
+      const tabs = Array.from(document.querySelectorAll('div[class*=”tab”], span[class*=”tab”], button'));
       const t = tabs.find(el => el.textContent.trim() === 'Completed');
       if (t) t.click();
     }).catch(() => {});
@@ -2254,9 +2254,9 @@ async function reconcileStuckOrders(page) {
       const res = await aiScanner.analyzeText(completedText, `
         This is text from a Binance P2P completed orders history page.
         Extract ALL BUY order numbers visible (any date).
-        Order numbers are 18-20 digit integers â€” copy EXACTLY as shown.
-        Return JSON: { "completed_buy_order_numbers": ["num1", "num2", ...] }
-        If none: { "completed_buy_order_numbers": [] }
+        Order numbers are 18-20 digit integers — copy EXACTLY as shown.
+        Return JSON: { “completed_buy_order_numbers”: [“num1”, “num2”, ...] }
+        If none: { “completed_buy_order_numbers”: [] }
       `);
       completedBuyNums = (res?.completed_buy_order_numbers || [])
         .map(n => String(n).replace(/\D/g, '')).filter(n => n.length >= 15);
@@ -2272,12 +2272,37 @@ async function reconcileStuckOrders(page) {
           completed_buy_order_numbers: completedBuyNums,
         }),
       }).catch(() => {});
-      console.log(`[SparkP2P] âœ… Reconciled: ${cancelledNums.length} cancelled, ${completedBuyNums.length} completed buy`);
+      console.log(`[SparkP2P] ✅ Reconciled: ${cancelledNums.length} cancelled, ${completedBuyNums.length} completed buy`);
     } else {
       console.log('[SparkP2P] Reconcile: no cancelled/completed orders found in history');
     }
+
+    // Check active orders tab — if a buy order is still pending, resume it immediately
+    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2000));
+    const activeText = await page.evaluate(() => document.body.innerText).catch(() => '');
+    let pendingBuyOrders = [];
+    if (activeText && anthropicApiKey && !activeText.includes('No records')) {
+      const res = await aiScanner.analyzeText(activeText, `
+        This is text from a Binance P2P active orders page.
+        Find any BUY orders with status “Pending payment” or “Payment pending” that still have a countdown timer.
+        Order numbers are 18-20 digit integers — copy EXACTLY as shown.
+        Return JSON: { “pending_buy_orders”: [“num1”, “num2”, ...] }
+        If none: { “pending_buy_orders”: [] }
+      `);
+      pendingBuyOrders = (res?.pending_buy_orders || [])
+        .map(n => String(n).replace(/\D/g, '')).filter(n => n.length >= 15)
+        .filter(n => !cancelledNums.includes(n) && !completedBuyNums.includes(n));
+    }
+
+    if (pendingBuyOrders.length) {
+      console.log(`[SparkP2P] 🔔 Found ${pendingBuyOrders.length} active buy order(s) still pending after outage — will process immediately`);
+    }
+
+    return { pendingBuyOrders };
   } catch (e) {
     console.log(`[SparkP2P] reconcileStuckOrders error: ${e.message}`);
+    return { pendingBuyOrders: [] };
   }
 }
 
@@ -10207,12 +10232,21 @@ async function recoverSessions() {
   // Reconcile Binance order state before resuming automation.
   // This syncs any orders the trader completed/cancelled manually during the outage
   // so the VPS DB matches Binance reality and the bot doesn't re-process them.
+  // Also detects any buy orders still pending and processes them immediately.
   sendBotLog('info', 'Reconciling Binance orders completed during outage...');
   try {
     const binancePage = await getPage('binance.com').catch(() => null);
     if (binancePage && pollerRunning) {
-      await reconcileStuckOrders(binancePage);
-      sendBotLog('success', 'Reconciliation done — bot resuming from current Binance state (manually handled orders are skipped)');
+      const { pendingBuyOrders } = await reconcileStuckOrders(binancePage);
+      if (pendingBuyOrders.length) {
+        sendBotLog('success', `Reconciliation done — ${pendingBuyOrders.length} active buy order(s) found, processing now`);
+        // Trigger an immediate poll cycle so the bot processes the pending buy order right away
+        // without waiting for the next 60s interval
+        await sleep(1000);
+        pollCycle().catch(e => console.log('[SparkP2P] Post-outage immediate poll error:', e.message));
+      } else {
+        sendBotLog('success', 'Reconciliation done — no pending orders, bot resuming normally');
+      }
     } else {
       sendBotLog('info', 'Sessions recovered — automation resumed');
     }
