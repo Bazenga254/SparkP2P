@@ -1,4 +1,7 @@
-﻿const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage } = require('electron');
+﻿const { app, BrowserWindow, screen, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage } = require('electron');
+const crypto = require('crypto');
+let speakeasy; try { speakeasy = require('speakeasy'); } catch (_) {}
+let QRCode;    try { QRCode    = require('qrcode');    } catch (_) {}
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -317,6 +320,91 @@ function clearImPin() {
   imPin = null;
 }
 
+// ── Lock Screen credentials (TOTP secret + security question) ─────────────
+let lockWindow = null;
+let lockScreenActive = false;
+let lockTotpSecret = null;
+let lockSecQuestion = null;
+let lockSecAnswerHash = null;
+const LOCK_CREDS_FILE = path.join(app.getPath('userData'), 'lock-creds.enc');
+
+function saveLockCredentials({ totpSecret, secQuestion, secAnswerHash }) {
+  try {
+    const data = JSON.stringify({ totpSecret, secQuestion, secAnswerHash });
+    const enc = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(data) : Buffer.from(data);
+    fs.writeFileSync(LOCK_CREDS_FILE, enc);
+    lockTotpSecret = totpSecret; lockSecQuestion = secQuestion; lockSecAnswerHash = secAnswerHash;
+    console.log('[Lock] Credentials saved securely');
+  } catch (e) { console.error('[Lock] Failed to save credentials:', e.message); }
+}
+
+function loadLockCredentials() {
+  try {
+    if (!fs.existsSync(LOCK_CREDS_FILE)) return;
+    const enc = fs.readFileSync(LOCK_CREDS_FILE);
+    const data = JSON.parse(safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(enc) : enc.toString());
+    lockTotpSecret = data.totpSecret; lockSecQuestion = data.secQuestion; lockSecAnswerHash = data.secAnswerHash;
+    console.log('[Lock] Credentials loaded from secure storage');
+  } catch (e) { console.error('[Lock] Failed to load credentials:', e.message); }
+}
+
+function createLockWindow() {
+  if (lockWindow && !lockWindow.isDestroyed()) return;
+  const { bounds } = screen.getPrimaryDisplay();
+  lockWindow = new BrowserWindow({
+    x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+    frame: false, transparent: true, alwaysOnTop: true,
+    fullscreen: true, skipTaskbar: true, resizable: false, movable: false,
+    webPreferences: { nodeIntegration: true, contextIsolation: false },
+  });
+  lockWindow.loadFile(path.join(__dirname, 'lock.html'));
+  lockWindow.setAlwaysOnTop(true, 'screen-saver');
+  lockWindow.hide();
+  lockWindow.on('closed', () => { lockWindow = null; lockScreenActive = false; });
+}
+
+function blockHumanInput(block) {
+  const ps = `Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public class W { [DllImport("user32.dll")] public static extern bool BlockInput(bool b); }
+'@; [W]::BlockInput($${block ? 'true' : 'false'})`;
+  try { execSync(`powershell -NonInteractive -Command "${ps.replace(/\n/g, ' ')}"`, { timeout: 3000 }); }
+  catch (e) { console.log('[Lock] BlockInput call failed (may need admin rights):', e.message); }
+}
+
+async function showLockScreen() {
+  if (!lockWindow || lockWindow.isDestroyed()) createLockWindow();
+  // Reload so status text is fresh
+  lockWindow.webContents.reload();
+  await new Promise(r => setTimeout(r, 400));
+  lockWindow.show();
+  lockWindow.focus();
+  lockScreenActive = true;
+  blockHumanInput(true);
+  console.log('[Lock] Screen locked — bot continues via CDP');
+  sendBotLog('warning', 'Screen locked — enter Google Authenticator code to unlock');
+}
+
+async function hideLockScreen() {
+  if (lockWindow && !lockWindow.isDestroyed()) lockWindow.hide();
+  lockScreenActive = false;
+  blockHumanInput(false);
+  sendLockAccessAlert();
+  console.log('[Lock] Screen unlocked');
+  sendBotLog('success', 'Screen unlocked');
+}
+
+function sendLockAccessAlert() {
+  if (!token) return;
+  const time = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Nairobi' });
+  const date = new Date().toLocaleDateString('en-KE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Africa/Nairobi' });
+  fetch(`${API_BASE}/notifications/bot-access`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({ time, date, phone: traderPhoneNumber }),
+  }).catch(() => {});
+}
+
 function saveGmailCredentials(email, appPassword) {
   try {
     const data = JSON.stringify({ email, appPassword });
@@ -344,7 +432,7 @@ function clearGmailCredentials() {
 }
 
 // Load PIN on startup (after app is ready â€” safeStorage requires app to be ready)
-app.whenReady().then(() => loadImPin());
+app.whenReady().then(() => { loadImPin(); loadLockCredentials(); createLockWindow(); });
 function saveTokenToDisk(t) {
   try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token: t, savedAt: Date.now() })); } catch (e) {}
 }
@@ -11246,6 +11334,43 @@ ipcMain.handle('unlock-browser', async () => { await unlockChromeBrowser(); cons
 ipcMain.handle('lock-browser', async () => { const p = await getPage(); if (p) await lockChromeBrowser(); return { ok: true }; });
 ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED â€” Chrome unlocked for manual use'); return { ok: true }; });
 ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED â€” Chrome locked back to bot'); return { ok: true }; });
+
+// ── Lock Screen IPC handlers ───────────────────────────────────────────────
+ipcMain.handle('lock-screen', async () => { await showLockScreen(); return { ok: true }; });
+
+ipcMain.handle('lock-unlock', async (_, { totp, answer }) => {
+  if (!lockTotpSecret) return { success: false, message: 'Lock not configured. Set up security in Settings first.' };
+  if (!speakeasy) return { success: false, message: 'TOTP library not available.' };
+  const totpValid = speakeasy.totp.verify({ secret: lockTotpSecret, encoding: 'base32', token: String(totp), window: 1 });
+  if (!totpValid) return { success: false, message: 'Invalid Google Authenticator code. Try again.' };
+  const answerHash = crypto.createHash('sha256').update(answer.toLowerCase().trim()).digest('hex');
+  if (answerHash !== lockSecAnswerHash) return { success: false, message: 'Incorrect security answer.' };
+  await hideLockScreen();
+  return { success: true };
+});
+
+ipcMain.handle('lock-get-question', () => lockSecQuestion || 'Security not set up yet. Go to Settings → Security.');
+
+ipcMain.handle('lock-generate-totp', async () => {
+  if (!speakeasy) return { error: 'speakeasy not available' };
+  const secret = speakeasy.generateSecret({ name: 'SparkP2P Bot', issuer: 'SparkP2P', length: 20 });
+  let qrDataUrl = null;
+  if (QRCode) {
+    try { qrDataUrl = await QRCode.toDataURL(secret.otpauth_url); } catch (_) {}
+  }
+  return { secret: secret.base32, otpauthUrl: secret.otpauth_url, qrDataUrl };
+});
+
+ipcMain.handle('lock-save-setup', (_, { totpSecret, secQuestion, secAnswer }) => {
+  const hash = crypto.createHash('sha256').update(secAnswer.toLowerCase().trim()).digest('hex');
+  saveLockCredentials({ totpSecret, secQuestion, secAnswerHash: hash });
+  return { ok: true };
+});
+
+ipcMain.handle('lock-status', () => ({
+  configured: !!(lockTotpSecret && lockSecQuestion),
+  active: lockScreenActive,
+}));
 ipcMain.handle('open-gmail-tab', async () => {
   // If Chrome is not running yet, launch it to Gmail directly
   if (!browser) {

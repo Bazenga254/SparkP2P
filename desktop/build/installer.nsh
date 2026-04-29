@@ -1,0 +1,1 @@
+SetCompressor /FINAL zlib
