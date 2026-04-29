@@ -29,6 +29,7 @@ echo Version updated: %CURRENT% → %NEW_VERSION%
 echo Publishing to GitHub...
 echo.
 
+if "%GH_TOKEN%"=="" set /p GH_TOKEN="Enter GitHub token: "
 npm run publish
 
 echo.
