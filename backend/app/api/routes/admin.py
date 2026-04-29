@@ -233,6 +233,7 @@ async def create_employee(
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    DEFAULT_PERMISSIONS = {"disputes": True, "orders": True, "chat": True, "transactions": False, "withdrawals": False}
     employee = Trader(
         email=email,
         phone=phone,
@@ -241,6 +242,7 @@ async def create_employee(
         role="employee",
         is_admin=False,
         status=TraderStatus.ACTIVE,
+        permissions=DEFAULT_PERMISSIONS,
     )
     db.add(employee)
     await db.commit()
@@ -251,6 +253,58 @@ async def create_employee(
         "email": email,
         "full_name": full_name,
     }
+
+
+@router.get("/employees")
+async def list_employees(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Trader).where(Trader.role == "employee").order_by(Trader.created_at.asc()))
+    employees = result.scalars().all()
+    return [
+        {
+            "id": e.id,
+            "full_name": e.full_name,
+            "email": e.email,
+            "phone": e.phone,
+            "status": e.status.value if e.status else "active",
+            "permissions": e.permissions or {"disputes": True, "orders": True, "chat": True, "transactions": False, "withdrawals": False},
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in employees
+    ]
+
+
+@router.put("/employees/{employee_id}/permissions")
+async def update_employee_permissions(
+    employee_id: int,
+    permissions: dict,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Trader).where(Trader.id == employee_id, Trader.role == "employee"))
+    employee = result.scalar_one_or_none()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    employee.permissions = permissions
+    await db.commit()
+    return {"status": "updated", "permissions": permissions}
+
+
+@router.delete("/employees/{employee_id}")
+async def delete_employee(
+    employee_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Trader).where(Trader.id == employee_id, Trader.role == "employee"))
+    employee = result.scalar_one_or_none()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    await db.delete(employee)
+    await db.commit()
+    return {"status": "deleted"}
 
 
 @router.get("/traders/{trader_id}/detail")

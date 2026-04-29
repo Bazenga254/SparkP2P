@@ -4,7 +4,7 @@ import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPaym
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock } from 'lucide-react';
-import { getProfile } from '../services/api';
+import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee } from '../services/api';
 
 const sidebarSections = [
   {
@@ -30,6 +30,12 @@ const sidebarSections = [
       { key: 'revenue', icon: TrendingUp, label: 'Revenue' },
       { key: 'security', icon: Shield, label: 'Security' },
       { key: 'settings', icon: Settings, label: 'Settings' },
+    ],
+  },
+  {
+    label: 'OUTREACH',
+    items: [
+      { key: 'survey', icon: MessageSquare, label: 'Survey Responses' },
     ],
   },
 ];
@@ -170,6 +176,20 @@ export default function Admin() {
   const [sweepRetrying, setSweepRetrying] = useState(null); // sweep id being retried
   const [sweepSubTab, setSweepSubTab] = useState('all'); // all | pending | completed | failed
 
+  // Employees
+  const [employees, setEmployees] = useState([]);
+  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [permSaving, setPermSaving] = useState(null); // employee id being saved
+  const [empDeleting, setEmpDeleting] = useState(null);
+  const [empMsg, setEmpMsg] = useState('');
+
+  // Survey Responses
+  const [surveyResponses, setSurveyResponses] = useState([]);
+  const [surveyLoading, setSurveyLoading] = useState(false);
+  const [surveyFilter, setSurveyFilter] = useState('all'); // all | qualified | disqualified | invited
+  const [surveyInviting, setSurveyInviting] = useState(null);
+  const [surveyMsg, setSurveyMsg] = useState('');
+
   // Paybill Transactions
   const [paybillTxs, setPaybillTxs] = useState({ transactions: [], total: 0, pages: 1, summary: {} });
   const [paybillPeriod, setPaybillPeriod] = useState('today');
@@ -205,6 +225,75 @@ export default function Admin() {
       console.error('Sweeps load error:', e);
     } finally {
       setSweepsLoading(false);
+    }
+  };
+
+  const loadEmployees = async () => {
+    setEmployeesLoading(true);
+    try {
+      const res = await getEmployees();
+      setEmployees(res.data);
+    } catch (e) {
+      console.error('Employees load error:', e);
+    } finally {
+      setEmployeesLoading(false);
+    }
+  };
+
+  const handlePermissionToggle = async (empId, key, value) => {
+    const emp = employees.find(e => e.id === empId);
+    if (!emp) return;
+    const updated = { ...emp.permissions, [key]: value };
+    setPermSaving(empId);
+    setEmpMsg('');
+    try {
+      await updateEmployeePermissions(empId, updated);
+      setEmployees(prev => prev.map(e => e.id === empId ? { ...e, permissions: updated } : e));
+      setEmpMsg('Permissions saved');
+      setTimeout(() => setEmpMsg(''), 2500);
+    } catch (e) {
+      setEmpMsg('Failed to save');
+    } finally {
+      setPermSaving(null);
+    }
+  };
+
+  const handleDeleteEmployee = async (empId, name) => {
+    if (!confirm(`Delete employee ${name}? This cannot be undone.`)) return;
+    setEmpDeleting(empId);
+    try {
+      await deleteEmployee(empId);
+      setEmployees(prev => prev.filter(e => e.id !== empId));
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'Failed to delete');
+    } finally {
+      setEmpDeleting(null);
+    }
+  };
+
+  const loadSurveyResponses = async () => {
+    setSurveyLoading(true);
+    try {
+      const res = await getSurveyResponses();
+      setSurveyResponses(res.data);
+    } catch (e) {
+      console.error('Survey load error:', e);
+    } finally {
+      setSurveyLoading(false);
+    }
+  };
+
+  const handleSendSurveyInvite = async (id) => {
+    setSurveyInviting(id);
+    setSurveyMsg('');
+    try {
+      await sendSurveyInvite(id);
+      setSurveyMsg('Invite sent!');
+      loadSurveyResponses();
+    } catch (e) {
+      setSurveyMsg(e?.response?.data?.detail || 'Failed to send invite');
+    } finally {
+      setSurveyInviting(null);
     }
   };
 
@@ -546,6 +635,8 @@ export default function Admin() {
     if (activeTab === 'disputes') { setUnreadTicketCount(0); loadSupportTickets(ticketCategory, ticketPage); }
     if (activeTab === 'withdrawals') { loadWithdrawals(); loadSweeps('all'); }
     if (activeTab === 'paybill') { loadPaybillTxs('today', 1); }
+    if (activeTab === 'survey') { loadSurveyResponses(); }
+    if (activeTab === 'settings') { loadEmployees(); }
   }, [activeTab]);
 
   useEffect(() => {
@@ -673,6 +764,7 @@ export default function Admin() {
     revenue: 'Revenue',
     security: 'Security',
     settings: 'Settings',
+    survey: 'Survey Responses',
   };
 
   const fmtKES = (v) => `KES ${(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -1475,7 +1567,7 @@ export default function Admin() {
                               <td>{o.trader_name}</td>
                               <td style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset}</td>
                               <td style={{ fontWeight: 600, color: '#10b981' }}>{fmtKES(o.fiat_amount)}</td>
-                              <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${o.price.toLocaleString()}/USDT` : '—'}</td>
+                              <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${o.price.toLocaleString()}/${o.asset || 'USDT'}` : '—'}</td>
                               <td>{o.counterparty}</td>
                               <td style={{ color: '#ef4444', fontSize: 12 }}>{o.platform_fee ? fmtKES(o.platform_fee) : '—'}</td>
                               <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
@@ -2083,7 +2175,7 @@ export default function Admin() {
                                     <td><span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`}>{o.side}</span></td>
                                     <td style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset || 'USDT'}</td>
                                     <td style={{ fontWeight: 600, color: '#10b981' }}>{fmtKES(o.fiat_amount)}</td>
-                                    <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${(o.price).toLocaleString()}/USDT` : '—'}</td>
+                                    <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${(o.price).toLocaleString()}/${o.asset || 'USDT'}` : '—'}</td>
                                     <td style={{ fontSize: 12 }}>{o.counterparty || '—'}</td>
                                     <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
                                     <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '—'}</td>
@@ -3385,6 +3477,70 @@ export default function Admin() {
                 </form>
               </div>
 
+              {/* Employee List */}
+              <div className="adm-card" style={{ marginBottom: 20 }}>
+                <div className="adm-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Users size={18} /> Employee Accounts</h3>
+                  <button className="adm-btn-secondary" style={{ fontSize: 12, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }} onClick={loadEmployees} disabled={employeesLoading}>
+                    <RefreshCw size={13} style={{ animation: employeesLoading ? 'spin 1s linear infinite' : 'none' }} />
+                    {employeesLoading ? 'Loading…' : 'Refresh'}
+                  </button>
+                </div>
+                {empMsg && <div style={{ padding: '6px 16px', fontSize: 13, color: empMsg.includes('Failed') ? '#ef4444' : '#10b981' }}>{empMsg}</div>}
+                {!employeesLoading && employees.length === 0 && (
+                  <p className="adm-empty">No employee accounts yet. Create one above.</p>
+                )}
+                {employees.length > 0 && (
+                  <div style={{ padding: '0 16px 16px' }}>
+                    {employees.map(emp => (
+                      <div key={emp.id} style={{ background: '#0a0e1a', border: '1px solid #1f2937', borderRadius: 12, padding: '16px 18px', marginBottom: 12 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                          <div>
+                            <div style={{ fontWeight: 700, color: '#fff', fontSize: 15 }}>{emp.full_name}</div>
+                            <div style={{ fontSize: 13, color: '#9ca3af', marginTop: 2 }}>{emp.email}</div>
+                            {emp.phone && emp.phone !== '0000000000' && <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{emp.phone}</div>}
+                          </div>
+                          <button
+                            style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', padding: '5px 12px', borderRadius: 7, fontSize: 12, cursor: 'pointer', opacity: empDeleting === emp.id ? 0.5 : 1 }}
+                            disabled={empDeleting === emp.id}
+                            onClick={() => handleDeleteEmployee(emp.id, emp.full_name)}
+                          >
+                            {empDeleting === emp.id ? 'Deleting…' : 'Delete'}
+                          </button>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>Page Access</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                            {[
+                              { key: 'disputes', label: 'Disputes' },
+                              { key: 'orders', label: 'Orders' },
+                              { key: 'chat', label: 'Chat' },
+                              { key: 'transactions', label: 'Transactions' },
+                              { key: 'withdrawals', label: 'Withdrawals' },
+                            ].map(({ key, label }) => {
+                              const enabled = emp.permissions?.[key] ?? false;
+                              return (
+                                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', padding: '6px 12px', borderRadius: 8, border: `1px solid ${enabled ? '#f59e0b' : '#374151'}`, background: enabled ? 'rgba(245,158,11,0.08)' : 'transparent', fontSize: 13, color: enabled ? '#f59e0b' : '#6b7280', opacity: permSaving === emp.id ? 0.6 : 1 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={enabled}
+                                    disabled={permSaving === emp.id}
+                                    onChange={e => handlePermissionToggle(emp.id, key, e.target.checked)}
+                                    style={{ accentColor: '#f59e0b', width: 14, height: 14 }}
+                                  />
+                                  {label}
+                                </label>
+                              );
+                            })}
+                          </div>
+                          {permSaving === emp.id && <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 8 }}>Saving…</div>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Message Templates */}
               <div className="adm-card">
                 <div
@@ -3604,6 +3760,159 @@ export default function Admin() {
               </div>
             </div>
           )}
+          {/* ==================== SURVEY RESPONSES ==================== */}
+          {activeTab === 'survey' && (
+            <div>
+              {/* Stats row */}
+              <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+                {[
+                  { label: 'Total', value: surveyResponses.length, color: '#9ca3af' },
+                  { label: 'Qualified', value: surveyResponses.filter(r => r.is_qualified).length, color: '#10b981' },
+                  { label: 'Not Qualified', value: surveyResponses.filter(r => !r.is_qualified && !r.disqualified).length, color: '#f59e0b' },
+                  { label: 'Disqualified', value: surveyResponses.filter(r => r.disqualified).length, color: '#ef4444' },
+                  { label: 'Invite Sent', value: surveyResponses.filter(r => r.invite_sent).length, color: '#60a5fa' },
+                ].map(s => (
+                  <div key={s.label} className="adm-card" style={{ flex: '1 1 100px', padding: '14px 18px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: s.color }}>{s.value}</div>
+                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="adm-card">
+                <div className="adm-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                  <h3>Responses</h3>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {['all', 'qualified', 'disqualified', 'invited'].map(f => (
+                      <button
+                        key={f}
+                        className={`adm-btn-secondary${surveyFilter === f ? ' active' : ''}`}
+                        style={{ fontSize: 12, padding: '4px 12px', background: surveyFilter === f ? 'rgba(245,158,11,0.15)' : '', borderColor: surveyFilter === f ? '#f59e0b' : '', color: surveyFilter === f ? '#f59e0b' : '' }}
+                        onClick={() => setSurveyFilter(f)}
+                      >
+                        {f.charAt(0).toUpperCase() + f.slice(1)}
+                      </button>
+                    ))}
+                    <button className="adm-btn-secondary" style={{ fontSize: 12, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }} onClick={loadSurveyResponses} disabled={surveyLoading}>
+                      <RefreshCw size={13} style={{ animation: surveyLoading ? 'spin 1s linear infinite' : 'none' }} />
+                      {surveyLoading ? 'Loading…' : 'Refresh'}
+                    </button>
+                  </div>
+                </div>
+
+                {surveyMsg && (
+                  <div style={{ padding: '8px 16px', fontSize: 13, color: surveyMsg.includes('Failed') ? '#ef4444' : '#10b981' }}>{surveyMsg}</div>
+                )}
+
+                {surveyLoading && <p className="adm-empty">Loading responses…</p>}
+                {!surveyLoading && surveyResponses.length === 0 && <p className="adm-empty">No survey responses yet. Share your survey link: <strong>sparkp2p.com/survey</strong></p>}
+
+                {!surveyLoading && surveyResponses.length > 0 && (() => {
+                  const filtered = surveyResponses.filter(r => {
+                    if (surveyFilter === 'qualified') return r.is_qualified;
+                    if (surveyFilter === 'disqualified') return r.disqualified;
+                    if (surveyFilter === 'invited') return r.invite_sent;
+                    return true;
+                  });
+
+                  return (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid #1f2937' }}>
+                            {['Name', 'Phone', 'Merchant?', 'Frequency', 'Daily Volume', 'Status', 'Submitted', 'Action'].map(h => (
+                              <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: '#6b7280', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filtered.map(r => (
+                            <tr key={r.id} style={{ borderBottom: '1px solid #111827' }}>
+                              <td style={{ padding: '12px 14px', color: '#fff', fontWeight: 600 }}>{r.full_name}</td>
+                              <td style={{ padding: '12px 14px', color: '#9ca3af' }}>{r.phone}</td>
+                              <td style={{ padding: '12px 14px' }}>
+                                <span style={{ color: r.q1_is_merchant === 'yes' ? '#10b981' : '#ef4444' }}>
+                                  {r.q1_is_merchant === 'yes' ? '✓ Yes' : '✗ No'}
+                                </span>
+                              </td>
+                              <td style={{ padding: '12px 14px', color: '#d1d5db', maxWidth: 140 }}>{r.q2_trade_frequency || '—'}</td>
+                              <td style={{ padding: '12px 14px', color: '#d1d5db', maxWidth: 140 }}>{r.q3_daily_volume || '—'}</td>
+                              <td style={{ padding: '12px 14px' }}>
+                                {r.disqualified ? (
+                                  <span style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>Disqualified</span>
+                                ) : r.is_qualified ? (
+                                  <span style={{ background: 'rgba(16,185,129,0.12)', color: '#10b981', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>Qualified</span>
+                                ) : (
+                                  <span style={{ background: 'rgba(245,158,11,0.12)', color: '#f59e0b', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>Reviewed</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '12px 14px', color: '#6b7280', whiteSpace: 'nowrap' }}>
+                                {r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : '—'}
+                              </td>
+                              <td style={{ padding: '12px 14px' }}>
+                                {r.invite_sent ? (
+                                  <span style={{ color: '#60a5fa', fontSize: 12 }}>✓ Invite sent</span>
+                                ) : (
+                                  <button
+                                    className="adm-btn-secondary"
+                                    style={{ fontSize: 12, padding: '4px 12px', opacity: surveyInviting === r.id ? 0.6 : 1 }}
+                                    disabled={surveyInviting === r.id}
+                                    onClick={() => handleSendSurveyInvite(r.id)}
+                                  >
+                                    {surveyInviting === r.id ? 'Sending…' : 'Send Invite'}
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {filtered.length === 0 && <p className="adm-empty">No responses match this filter.</p>}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Full answer detail - expandable */}
+              {surveyResponses.filter(r => {
+                if (surveyFilter === 'qualified') return r.is_qualified;
+                if (surveyFilter === 'disqualified') return r.disqualified;
+                if (surveyFilter === 'invited') return r.invite_sent;
+                return true;
+              }).length > 0 && (
+                <div className="adm-card" style={{ marginTop: 16 }}>
+                  <div className="adm-card-header"><h3>Full Answers</h3></div>
+                  {surveyResponses.filter(r => {
+                    if (surveyFilter === 'qualified') return r.is_qualified;
+                    if (surveyFilter === 'disqualified') return r.disqualified;
+                    if (surveyFilter === 'invited') return r.invite_sent;
+                    return true;
+                  }).map(r => (
+                    <div key={r.id} style={{ padding: '14px 16px', borderBottom: '1px solid #1f2937' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <span style={{ fontWeight: 700, color: '#fff' }}>{r.full_name}</span>
+                        <span style={{ fontSize: 12, color: '#6b7280' }}>{r.phone}</span>
+                      </div>
+                      {[
+                        ['Q2 — Frequency', r.q2_trade_frequency],
+                        ['Q3 — Daily Volume', r.q3_daily_volume],
+                        ['Q4 — I&M Frozen', r.q4_account_frozen],
+                        ['Q5 — Automation', r.q5_has_automation === 'yes' ? `Yes — ${r.q5_automation_name || 'not specified'}` : r.q5_has_automation === 'no' ? 'No' : null],
+                        ['Q6 — Biggest Challenge', r.q6_biggest_challenge],
+                        ['Q7 — Daily Transactions', r.q7_daily_transactions],
+                      ].filter(([, v]) => v).map(([label, value]) => (
+                        <div key={label} style={{ display: 'flex', gap: 8, marginBottom: 4, fontSize: 13 }}>
+                          <span style={{ color: '#6b7280', minWidth: 180 }}>{label}</span>
+                          <span style={{ color: '#d1d5db' }}>{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
         </div>
       </div>
     </div>

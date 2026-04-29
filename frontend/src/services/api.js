@@ -116,4 +116,14 @@ export const getAdminSweeps = (params = {}) => api.get('/admin/sweeps', { params
 export const retrySweep = (sweepId) => api.post(`/admin/sweeps/${sweepId}/retry`);
 export const getAdminPaybillTransactions = (params = {}) => api.get('/admin/paybill-transactions', { params });
 
+// Survey
+export const getSurveyResponses = () => api.get('/survey/responses');
+export const sendSurveyInvite = (id) => api.post(`/survey/${id}/send-invite`);
+
+// Employees
+export const getEmployees = () => api.get('/admin/employees');
+export const updateEmployeePermissions = (id, permissions) => api.put(`/admin/employees/${id}/permissions`, permissions);
+export const deleteEmployee = (id) => api.delete(`/admin/employees/${id}`);
+export const getMyPermissions = () => api.get('/traders/my-permissions');
+
 export default api;

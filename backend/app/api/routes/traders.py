@@ -853,6 +853,13 @@ async def change_password(
     return {"message": "Password changed successfully", "cooldown_until": cooldown_until}
 
 
+@router.get("/my-permissions")
+async def get_my_permissions(trader: Trader = Depends(get_current_trader)):
+    """Returns the current employee's permissions (for role-based UI rendering)."""
+    DEFAULT = {"disputes": True, "orders": True, "chat": True, "transactions": False, "withdrawals": False}
+    return trader.permissions or DEFAULT
+
+
 @router.get("/session-health")
 async def get_session_health(
     trader: Trader = Depends(get_current_trader),
@@ -1848,6 +1855,9 @@ async def get_today_stats(
     trades_count = len(orders_today)
     usdt_traded = sum(o.crypto_amount for o in orders_today)
     kes_volume = sum(o.fiat_amount for o in orders_today)
+    from collections import Counter
+    currency_counts = Counter(o.crypto_currency for o in orders_today if o.crypto_currency)
+    dominant_currency = currency_counts.most_common(1)[0][0] if currency_counts else 'USDT'
 
     # Gross profit = KES received (sell credits) - KES paid (buy debits) since midnight EAT
     txn_q = await db.execute(
@@ -1873,6 +1883,7 @@ async def get_today_stats(
         "kes_volume": round(kes_volume, 2),
         "gross_profit": round(gross_profit, 2),
         "reset_at": midnight_utc.isoformat(),
+        "dominant_currency": dominant_currency,
     }
 
 

@@ -8,6 +8,7 @@ from app.models.message_template import MessageTemplate
 from app.models.support_ticket import SupportTicket, TicketStatus
 from app.models.audit_log import AuditLog
 from app.models.batch import WithdrawalBatch, BatchItem
+from app.models.survey import SurveyResponse
 
 __all__ = [
     "Trader", "SettlementMethod", "TraderStatus",
@@ -20,4 +21,5 @@ __all__ = [
     "SupportTicket", "TicketStatus",
     "AuditLog",
     "WithdrawalBatch", "BatchItem",
+    "SurveyResponse",
 ]

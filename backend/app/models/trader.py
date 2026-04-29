@@ -110,6 +110,10 @@ class Trader(Base):
     # Bot online/offline state — set by desktop app on graceful shutdown
     bot_intentionally_stopped = Column(Boolean, default=False)
 
+    # Employee permissions (JSON object, only relevant when role="employee")
+    # e.g. {"disputes": true, "orders": true, "chat": true, "transactions": false, "withdrawals": false}
+    permissions = Column(JSON, nullable=True)
+
     # Login security
     failed_login_attempts = Column(Integer, default=0)
     locked_until = Column(DateTime(timezone=True), nullable=True)

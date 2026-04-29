@@ -9,6 +9,7 @@ import {
   sendChatMessage,
   getChatHistory,
   getAdminTransactions,
+  getMyPermissions,
 } from '../services/api';
 import {
   LayoutDashboard,
@@ -26,11 +27,11 @@ import {
   Ban,
 } from 'lucide-react';
 
-const sidebarItems = [
-  { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { key: 'disputes', icon: AlertTriangle, label: 'Active Disputes' },
-  { key: 'orders', icon: ShoppingCart, label: 'All Orders' },
-  { key: 'chat', icon: MessageCircle, label: 'Chat' },
+const ALL_SIDEBAR_ITEMS = [
+  { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard', permission: null },
+  { key: 'disputes', icon: AlertTriangle, label: 'Active Disputes', permission: 'disputes' },
+  { key: 'orders', icon: ShoppingCart, label: 'All Orders', permission: 'orders' },
+  { key: 'chat', icon: MessageCircle, label: 'Chat', permission: 'chat' },
 ];
 
 function getGreeting() {
@@ -46,6 +47,15 @@ export default function Employee() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [permissions, setPermissions] = useState(null);
+
+  useEffect(() => {
+    getMyPermissions().then(res => setPermissions(res.data)).catch(() => {});
+  }, []);
+
+  const sidebarItems = ALL_SIDEBAR_ITEMS.filter(item =>
+    item.permission === null || (permissions && permissions[item.permission])
+  );
 
   // Data
   const [disputes, setDisputes] = useState([]);
