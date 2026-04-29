@@ -1,0 +1,23 @@
+midsceneVersion: 1.7.3
+cacheId: sparkp2p-binance
+caches:
+  - type: locate
+    prompt: the chat messages panel on the right side of the page
+    cache:
+      xpaths:
+        - /html/dialog[normalize-space()="🔒SparkP2P Bot Active"]
+  - type: locate
+    prompt: the narrow rectangular text input bar at the very bottom of the right-side chat panel, below all the chat messages, where it says "Enter message here" or similar placeholder text
+    cache:
+      xpaths:
+        - /html/dialog[1]
+  - type: locate
+    prompt: the narrow rectangular text input bar at the very bottom of the right-side chat panel
+    cache:
+      xpaths:
+        - /html/dialog[normalize-space()="🔒SparkP2P Bot Active"]
+  - type: locate
+    prompt: the photo or image thumbnail inside the chat messages on the right panel — it is a rectangular image sent by the buyer showing a phone screen or payment receipt, located in the middle of the chat conversation area (not a button, not an icon)
+    cache:
+      xpaths:
+        - /html/dialog[normalize-space()="🔒SparkP2P Bot Active"]

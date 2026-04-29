@@ -208,6 +208,17 @@ async def get_order_stats(
     total_fees_today = float(result.scalar() or 0)
     net_profit = gross_profit - total_fees_today
 
+    # Dominant currency today (most-traded coin)
+    dom_result = await db.execute(
+        select(Order.crypto_currency, func.count(Order.id).label("cnt")).where(
+            Order.trader_id == trader.id,
+            func.date(Order.created_at) == today,
+            Order.status.in_(completed_statuses),
+        ).group_by(Order.crypto_currency).order_by(func.count(Order.id).desc()).limit(1)
+    )
+    dom_row = dom_result.first()
+    dominant_currency = dom_row[0] if dom_row else "USDT"
+
     return {
         "today": {
             "total_trades": today_count,
@@ -226,6 +237,7 @@ async def get_order_stats(
             "gross_profit": round(gross_profit, 2),
             "total_fees": round(total_fees_today, 2),
             "net_profit": round(net_profit, 2),
+            "dominant_currency": dominant_currency,
         },
         "all_time": {
             "total_trades": trader.total_trades,

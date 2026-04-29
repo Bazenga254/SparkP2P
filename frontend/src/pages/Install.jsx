@@ -321,10 +321,8 @@ export default function Install() {
           <p>Download SparkP2P and start automating your Binance P2P trading today.</p>
           <div className="inst-cta-actions">
             <a
-              href="https://github.com/Bazenga254/SparkP2P/releases/download/v1.1.28/SparkP2P-Setup-1.1.28.exe"
+              href="/api/download/latest"
               className="inst-cta-btn-primary"
-              target="_blank"
-              rel="noreferrer"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               Download for Windows

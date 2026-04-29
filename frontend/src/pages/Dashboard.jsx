@@ -23,7 +23,10 @@ function getWithdrawalFee(method, amount) {
 const fmtKES = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 const fmtKESFee = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+const SUPPORTED_COINS = ['USDT', 'USDC', 'BTC', 'ETH', 'BNB', 'BUSD'];
+
 function SpreadCalculator() {
+  const [coin, setCoin] = useState('USDT');
   const [buyPrice, setBuyPrice] = useState('130.00');
   const [sellPrice, setSellPrice] = useState('130.50');
   const [volume, setVolume] = useState('500000');
@@ -152,14 +155,21 @@ function SpreadCalculator() {
       </div>
 
       {/* Inputs */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, padding: '12px 0 0' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr 1fr', gap: 12, padding: '12px 0 0', alignItems: 'end' }}>
         <div>
-          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Buy Price (KSh/USDT)</label>
+          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Coin</label>
+          <select value={coin} onChange={(e) => setCoin(e.target.value)}
+            style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14, fontWeight: 700 }}>
+            {SUPPORTED_COINS.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Buy Price (KSh/{coin})</label>
           <input type="number" step="0.01" placeholder="130.23" value={buyPrice} onChange={(e) => setBuyPrice(e.target.value)}
             style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }} />
         </div>
         <div>
-          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Sell Price (KSh/USDT)</label>
+          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Sell Price (KSh/{coin})</label>
           <input type="number" step="0.01" placeholder="130.74" value={sellPrice} onChange={(e) => setSellPrice(e.target.value)}
             style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }} />
         </div>
@@ -202,17 +212,17 @@ function SpreadCalculator() {
       {buy > 0 && sell > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 10 }}>
 
-          {/* Spread per USDT — calculated from inputs */}
+          {/* Spread per coin — calculated from inputs */}
           <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, color: '#9ca3af' }}>Spread per USDT</div>
+            <div style={{ fontSize: 11, color: '#9ca3af' }}>Spread per {coin}</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: profitable ? '#10b981' : '#ef4444' }}>KSh {spread.toFixed(2)}</div>
             <div style={{ fontSize: 11, color: '#6b7280' }}>{spreadPct.toFixed(3)}%</div>
           </div>
 
-          {/* USDT Traded — real 24h */}
+          {/* Crypto Traded — real 24h */}
           <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)', position: 'relative' }}>
             <div style={{ fontSize: 11, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 4 }}>
-              USDT Traded
+              {todayStats?.dominant_currency || coin} Traded
               <span style={{ fontSize: 9, background: 'rgba(16,185,129,0.15)', color: '#10b981', borderRadius: 4, padding: '1px 5px' }}>24h</span>
             </div>
             {statsLoading ? (
@@ -1239,7 +1249,7 @@ export default function Dashboard() {
                   <h3>Buying</h3>
                 </div>
                 <div className="buysell-amount">
-                  <span className="buysell-crypto">{(stats?.today?.buy_crypto || 0).toFixed(2)} USDT</span>
+                  <span className="buysell-crypto">{(stats?.today?.buy_crypto || 0).toFixed(2)} {stats?.today?.dominant_currency || 'USDT'}</span>
                   <span className="buysell-fiat">KES {(stats?.today?.buy_volume || 0).toLocaleString()}</span>
                 </div>
                 <div className="buysell-detail">
@@ -1258,7 +1268,7 @@ export default function Dashboard() {
                   <h3>Selling</h3>
                 </div>
                 <div className="buysell-amount">
-                  <span className="buysell-crypto">{(stats?.today?.sell_crypto || 0).toFixed(2)} USDT</span>
+                  <span className="buysell-crypto">{(stats?.today?.sell_crypto || 0).toFixed(2)} {stats?.today?.dominant_currency || 'USDT'}</span>
                   <span className="buysell-fiat">KES {(stats?.today?.sell_volume || 0).toLocaleString()}</span>
                 </div>
                 <div className="buysell-detail">

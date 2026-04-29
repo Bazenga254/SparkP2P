@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import PublicChat from '../components/PublicChat';
 
 const FAQS = [
   {
@@ -150,8 +151,16 @@ function FaqItem({ q, a }) {
 
 export default function Landing() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [latestVersion, setLatestVersion] = useState(null);
 
   const closeMenu = () => setMenuOpen(false);
+
+  useEffect(() => {
+    fetch('/api/download/version')
+      .then(r => r.json())
+      .then(d => setLatestVersion(d.version))
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="landing">
@@ -167,6 +176,7 @@ export default function Landing() {
             <a href="#faq">FAQ</a>
             <a href="#download">Download</a>
             <Link to="/install">Install Guide</Link>
+            <Link to="/contact">Contact</Link>
             <Link to="/login" className="land-nav-login">Login</Link>
           </div>
           {/* Mobile right side */}
@@ -417,7 +427,7 @@ export default function Landing() {
               </div>
               <h3>Windows</h3>
               <p>Windows 10 / 11</p>
-              <a href="https://github.com/Bazenga254/SparkP2P/releases/download/v1.1.28/SparkP2P-Setup-1.1.28.exe" className="land-download-btn" target="_blank" rel="noreferrer">Download .exe</a>
+              <a href="/api/download/latest" className="land-download-btn">Download .exe</a>
             </div>
             <div className="land-download-card">
               <div className="land-download-icon">
@@ -438,7 +448,7 @@ export default function Landing() {
           </div>
           <div style={{ textAlign: 'center', marginTop: 24, maxWidth: 520, margin: '24px auto 0' }}>
             <p style={{ color: '#6b7280', fontSize: 13 }}>
-              v1.1.28 &middot; Auto-updates enabled &middot; Requires Google Chrome installed
+              {latestVersion ? `v${latestVersion}` : 'Latest version'} &middot; Auto-updates enabled &middot; Requires Google Chrome installed
             </p>
             <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
               If Chrome blocks the download, click the <strong style={{ color: '#e5e7eb' }}>&#8942;</strong> (three dots) next to the download and select <strong style={{ color: '#e5e7eb' }}>"Keep"</strong>. The file is safe — downloaded directly from our servers.
@@ -475,6 +485,8 @@ export default function Landing() {
         </div>
       </section>
 
+      <PublicChat />
+
       {/* Footer */}
       <footer className="land-footer">
         <div className="land-footer-inner">
@@ -489,7 +501,7 @@ export default function Landing() {
             <a href="#download">Download</a>
             <Link to="/install">Install Guide</Link>
             <Link to="/login">Login</Link>
-            <a href="mailto:support@sparkp2p.com">Contact</a>
+            <Link to="/contact">Contact</Link>
           </div>
           <div className="land-footer-copy">
             &copy; {new Date().getFullYear()} SparkP2P. All rights reserved.

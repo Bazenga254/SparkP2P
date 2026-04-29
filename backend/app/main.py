@@ -414,6 +414,61 @@ async def health_check():
     return {"status": "ok", "service": settings.APP_NAME}
 
 
+# ── Latest release download endpoints ─────────────────────────────────────────
+import time as _time
+import httpx as _httpx
+from fastapi.responses import RedirectResponse
+
+_release_cache: dict = {}
+_GITHUB_REPO = "Bazenga254/SparkP2P"
+_CACHE_TTL = 300  # 5 minutes
+
+
+async def _fetch_latest_release() -> dict:
+    now = _time.time()
+    if _release_cache.get("cached_at") and now - _release_cache["cached_at"] < _CACHE_TTL:
+        return _release_cache
+    async with _httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    exe = next((a for a in data.get("assets", []) if a["name"].endswith(".exe")), None)
+    _release_cache.update({
+        "version": data.get("tag_name", "").lstrip("v"),
+        "url": exe["browser_download_url"] if exe else None,
+        "cached_at": now,
+    })
+    return _release_cache
+
+
+@app.get("/api/download/version")
+async def get_latest_version():
+    from fastapi import HTTPException
+    try:
+        info = await _fetch_latest_release()
+        return {"version": info["version"], "url": info["url"]}
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not fetch latest release")
+
+
+@app.get("/api/download/latest")
+async def download_latest():
+    from fastapi import HTTPException
+    try:
+        info = await _fetch_latest_release()
+        if not info.get("url"):
+            raise HTTPException(status_code=404, detail="No .exe asset found in latest release")
+        return RedirectResponse(info["url"], status_code=302)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not fetch latest release")
+
+
 # Serve uploaded support attachments
 _uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(os.path.join(_uploads_dir, "support"), exist_ok=True)

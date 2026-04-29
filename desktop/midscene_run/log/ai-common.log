@@ -1,0 +1,24 @@
+[2026-04-15T14:22:05.318+03:00] adaptBboxToRect [ 749, 641, 1020, 673 ] 1121 838 offset 0 0 limit 1121 838 modelFamily undefined scale 1
+[2026-04-15T14:22:05.318+03:00] adaptBboxToRect, result= { left: 840, top: 537, width: 282, height: 28 }
+[2026-04-15T14:24:28.969+03:00] adaptBboxToRect [ 749, 641, 1021, 673 ] 1121 838 offset 0 0 limit 1121 838 modelFamily undefined scale 1
+[2026-04-15T14:24:28.969+03:00] adaptBboxToRect, result= { left: 840, top: 537, width: 282, height: 28 }
+[2026-04-15T14:38:09.072+03:00] adaptBboxToRect [ 750, 641, 1020, 673 ] 1121 806 offset 0 0 limit 1121 806 modelFamily undefined scale 1
+[2026-04-15T14:38:09.072+03:00] adaptBboxToRect, result= { left: 841, top: 517, width: 281, height: 26 }
+[2026-04-15T14:41:41.237+03:00] adaptBboxToRect [ 749, 641, 1021, 673 ] 1121 806 offset 0 0 limit 1121 806 modelFamily undefined scale 1
+[2026-04-15T14:41:41.237+03:00] adaptBboxToRect, result= { left: 840, top: 517, width: 282, height: 26 }
+[2026-04-15T14:52:15.060+03:00] adaptBboxToRect [ 711, 645, 973, 668 ] 1025 806 offset 0 0 limit 1025 806 modelFamily undefined scale 1
+[2026-04-15T14:52:15.060+03:00] adaptBboxToRect, result= { left: 729, top: 520, width: 269, height: 19 }
+[2026-04-15T14:54:32.067+03:00] adaptBboxToRect [ 711, 645, 973, 668 ] 1025 806 offset 0 0 limit 1025 806 modelFamily undefined scale 1
+[2026-04-15T14:54:32.067+03:00] adaptBboxToRect, result= { left: 729, top: 520, width: 269, height: 19 }
+[2026-04-15T14:54:38.443+03:00] adaptBboxToRect [ 676, 648, 696, 666 ] 1025 806 offset 0 0 limit 1025 806 modelFamily undefined scale 1
+[2026-04-15T14:54:38.443+03:00] adaptBboxToRect, result= { left: 693, top: 522, width: 21, height: 16 }
+[2026-04-15T15:57:11.552+03:00] adaptBboxToRect [ 780, 360, 860, 460 ] 1036 795 offset 0 0 limit 1036 795 modelFamily undefined scale 1
+[2026-04-15T15:57:11.552+03:00] adaptBboxToRect, result= { left: 808, top: 286, width: 84, height: 81 }
+[2026-04-15T16:50:43.193+03:00] adaptBboxToRect [ 720, 150, 980, 700 ] 1036 795 offset 0 0 limit 1036 795 modelFamily undefined scale 1
+[2026-04-15T16:50:43.193+03:00] adaptBboxToRect, result= { left: 746, top: 119, width: 270, height: 439 }
+[2026-04-15T16:51:02.676+03:00] adaptBboxToRect [ 570, 690, 880, 720 ] 1036 795 offset 0 0 limit 1036 795 modelFamily undefined scale 1
+[2026-04-15T16:51:02.676+03:00] adaptBboxToRect, result= { left: 591, top: 549, width: 322, height: 24 }
+[2026-04-15T16:51:35.257+03:00] adaptBboxToRect [ 680, 720, 950, 750 ] 1036 795 offset 0 0 limit 1036 795 modelFamily undefined scale 1
+[2026-04-15T16:51:35.257+03:00] adaptBboxToRect, result= { left: 704, top: 572, width: 281, height: 25 }
+[2026-04-15T16:56:33.267+03:00] adaptBboxToRect [ 720, 360, 800, 480 ] 1036 795 offset 0 0 limit 1036 795 modelFamily undefined scale 1
+[2026-04-15T16:56:33.267+03:00] adaptBboxToRect, result= { left: 746, top: 286, width: 84, height: 97 }

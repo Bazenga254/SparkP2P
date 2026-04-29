@@ -3069,7 +3069,7 @@ async function idleScan(page) {
       } else if (minsWaiting >= 10 && !buyReminderSentOrders.has(order.orderNumber)) {
         console.log(`[SparkP2P] â° Buy order ${order.orderNumber} â€” 10 min reminder to seller`);
         await sendBinanceChatMessage(page,
-          `Hi, just a friendly reminder â€” I sent the payment ${minsWaiting} minutes ago. Could you please release the crypto when you get a chance? Thank you! ðŸ˜Š`
+          `Hi, just a friendly reminder â€” I sent the payment ${minsWaiting} minutes ago. Could you please release the crypto when you get a chance? Thank you!`
         );
         buyReminderSentOrders.add(order.orderNumber);
       }
@@ -3142,9 +3142,9 @@ Method selection rules:
         buyGreetingSentOrders.add(order.orderNumber);
         let greetMsg = '';
         if (method === 'mpesa') {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! ðŸ™`;
+          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you!`;
         } else {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you! ðŸ™`;
+          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you!`;
         }
         await sendBinanceChatMessage(page, greetMsg);
         console.log(`[SparkP2P] ðŸ'‹ Greeting sent for buy order ${order.orderNumber} (method: ${method})`);
@@ -3233,10 +3233,10 @@ Method selection rules:
         let postPayMsg = '';
         if (_localIsBank) {
           const refPart = imResult.referenceId ? ` Ref: ${imResult.referenceId}.` : '';
-          postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! ðŸ™`;
+          postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you!`;
         } else {
           const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
-          postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! ðŸ™`;
+          postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you!`;
         }
         await sendBinanceChatMessage(page, postPayMsg);
       }
@@ -6550,9 +6550,9 @@ Method selection rules:
         const firstName = paymentDetails.name.split(' ')[0];
         const amt = Math.floor(parseFloat(paymentDetails.amount));
         if (method === 'mpesa') {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! ðŸ™`;
+          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you!`;
         } else if (method === 'im_bank' || method === 'other_bank') {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you! ðŸ™`;
+          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you!`;
         }
         if (greetMsg) {
           await sendBinanceChatMessage(page, greetMsg);
@@ -6648,7 +6648,7 @@ Method selection rules:
         buyPostPaymentMsgSentOrders.add(order_number);
         const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
         const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
-        const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! ðŸ™`;
+        const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you!`;
         await sendBinanceChatMessage(page, chatMsg);
       }
 
@@ -6975,6 +6975,78 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   let formFilled = false; // true once all fields are entered
   let accountSelected = false; // true once debit account has been chosen
 
+  // ── STEP 0: Open debit account dropdown via JS-dispatched events ──────────
+  // BB-PAYORD-DEBIT-ACCOUNT-SELECTOR ignores CDP mouse.click() entirely.
+  // JS dispatchEvent() fires in the page's own event queue — Angular hears it.
+  console.log('[I&M] STEP 0: Opening debit account dropdown via JS pointer/mouse events');
+  for (let attempt = 0; attempt < 4 && !accountSelected; attempt++) {
+    // Fire pointer+mouse events on every candidate trigger inside the component
+    const clickResult = await imPage.evaluate(() => {
+      const comp = document.querySelector('bb-payord-debit-account-selector');
+      if (!comp) return { status: 'no-component' };
+      const candidates = [
+        comp.querySelector('[class*="chevron"], [class*="arrow"], [class*="icon"]'),
+        comp.querySelector('button'),
+        comp.querySelector('input[role="combobox"]'),
+        comp.querySelector('input'),
+        comp,
+      ].filter(Boolean);
+      for (const el of candidates) {
+        el.focus();
+        ['pointerover','pointerenter','pointerdown','pointerup',
+         'mouseenter','mousemove','mousedown','mouseup','click']
+        .forEach(type => {
+          const Ctor = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+          el.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, composed: true }));
+        });
+        return { status: 'fired', tag: el.tagName, cls: (el.className || '').substring(0, 60) };
+      }
+      return { status: 'no-trigger' };
+    }).catch(() => ({ status: 'error' }));
+    console.log(`[I&M] STEP 0 attempt ${attempt + 1}: ${JSON.stringify(clickResult)}`);
+    await new Promise(r => setTimeout(r, 1000));
+
+    // Also try keyboard: focus the input and press Space / ArrowDown
+    await imPage.evaluate(() => {
+      const input = document.querySelector('bb-payord-debit-account-selector input');
+      if (input) input.focus();
+    }).catch(() => {});
+    await imPage.keyboard.press('Space');
+    await new Promise(r => setTimeout(r, 400));
+    await imPage.keyboard.press('ArrowDown');
+    await new Promise(r => setTimeout(r, 800));
+
+    // Check if options appeared in DOM
+    const optCoords = await imPage.evaluate((acct) => {
+      const search = acct || 'BONITO CHELUGET';
+      const all = Array.from(document.querySelectorAll(
+        'mat-option, .mat-option, [role="option"], li, div, span'
+      ));
+      for (const el of all) {
+        const txt = el.textContent.trim();
+        if (!txt.includes(search)) continue;
+        if (txt.toLowerCase().includes('select an account')) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 0)
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: txt.substring(0, 50), tag: el.tagName };
+      }
+      return null;
+    }, traderImAccount || 'BONITO CHELUGET').catch(() => null);
+
+    if (optCoords) {
+      await imPage.mouse.click(optCoords.x, optCoords.y);
+      accountSelected = true;
+      console.log(`[I&M] STEP 0 ✅ Account selected: "${optCoords.text}" at (${Math.round(optCoords.x)}, ${Math.round(optCoords.y)})`);
+      await new Promise(r => setTimeout(r, 1000));
+      await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
+      await new Promise(r => setTimeout(r, 400));
+      break;
+    }
+    console.log(`[I&M] STEP 0 attempt ${attempt + 1}: dropdown not open yet, retrying...`);
+    await new Promise(r => setTimeout(r, 500));
+  }
+  if (!accountSelected) console.log('[I&M] STEP 0: dropdown did not open via JS events — Vision loop will handle it');
+
   while (step < IM_MAX_STEPS) {
     step++;
     await new Promise(r => setTimeout(r, 1500));
@@ -7074,8 +7146,8 @@ FORM FILLING ORDER â€” do ONE action per response, strictly in this order:
 0. If you see an open account list (screen="account_list", rows like "SPARK FREELANCE" or "BONITO CHELUGET" visible) → click the row containing "${traderImAccount || 'BONITO CHELUGET SAMOEI'}" â€” return screen="account_list"
 1. If debit account shows "Select an account" and NO list is open → click the â–¼ dropdown arrow to open it
 2. (account_list handled by step 0 above)
-3. ${r1 ? '⚠️ SKIP – \"Other Phone\" was already clicked before this loop. Do NOT click it again.' : 'CRITICAL – If \"Own Phone\" is selected (green) → click the \"Other Phone\" radio circle immediately.'}
-4. ${r2 ? '⚠️ SKIP – \"One-off Beneficiary\" was already clicked before this loop.' : '⚠️ SKIP – \"One-off Beneficiary\" does not exist on this account. Ignore this step entirely and proceed to step 5.'}
+3. ${radiosConfirmed ? 'âš ï¸ SKIP THIS STEP â€” "Other Phone" and "One-off Beneficiary" were already clicked programmatically before this loop. They ARE selected. Do NOT click them again under any circumstances.' : 'CRITICAL â€” Check the "Own Phone" / "Other Phone" radio buttons. If "Own Phone" is selected (its circle is filled/green) → click the "Other Phone" radio circle IMMEDIATELY.'}
+4. ${radiosConfirmed ? 'âš ï¸ SKIP THIS STEP â€” already handled.' : 'If "One-off Beneficiary" radio is NOT filled/selected (green) → click the "One-off Beneficiary" radio circle.'}
 5. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
 5b. AUTOCOMPLETE â€” After typing the phone, if a dropdown suggestion list appears below the phone field (showing contact names like "Bonito Cheluget Samoei"), press Tab (action="press_key", value="Tab") to dismiss it and move to the next field.
 6. If network (Safaricom/Airtel) not selected → click ${network}
@@ -8011,29 +8083,69 @@ async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
 
 async function sendBinanceChatMessage(page, message) {
   try {
+    await page.bringToFront();
+
     // Wait up to 15s for the chat panel to render (Binance chat loads async)
     let chatInput = null;
     for (let i = 0; i < 6; i++) {
       chatInput = await page.$(
         '[placeholder*="Enter message" i], [placeholder*="message" i], ' +
-        '[placeholder*="Type" i], textarea, [contenteditable="true"]'
+        '[placeholder*="Type" i], ' +
+        '[class*="chat"] [contenteditable="true"], ' +
+        '[class*="message"] [contenteditable="true"], ' +
+        'textarea, [contenteditable="true"]'
       );
       if (chatInput) break;
       await new Promise(r => setTimeout(r, 2500));
     }
     if (!chatInput) { console.log('[SparkP2P] Chat input not found after retries'); return false; }
 
-    // Click to focus, then type
+    // Use element.evaluate() -- avoids "Illegal invocation" that occurs when passing
+    // an ElementHandle to page.evaluate() in Puppeteer
+    await chatInput.scrollIntoViewIfNeeded().catch(() => {});
     await chatInput.click();
-    await new Promise(r => setTimeout(r, 500));
-    await chatInput.type(message, { delay: 20 });
     await new Promise(r => setTimeout(r, 300));
+    await chatInput.evaluate((el, msg) => {
+      el.focus();
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'input' || tag === 'textarea') {
+        const proto = tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const ns = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (ns) ns.call(el, msg); else el.value = msg;
+        el.dispatchEvent(new Event('input',  { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      } else {
+        el.textContent = '';
+        document.execCommand('insertText', false, msg);
+      }
+    }, message);
+    await new Promise(r => setTimeout(r, 400));
 
-    // Press Enter directly on the element (not page.keyboard) to avoid focus loss
-    await chatInput.press('Enter');
+    // Try clicking the send button first (more reliable than Enter for Binance's React chat)
+    const sendClicked = await page.evaluate(() => {
+      const input = document.querySelector('[placeholder*="Enter message" i], [placeholder*="message" i]');
+      if (!input) return false;
+      // Walk up to find the container, then look for a send button sibling
+      let container = input.parentElement;
+      for (let i = 0; i < 4; i++) {
+        if (!container) break;
+        const btns = Array.from(container.querySelectorAll('button, [role="button"], span[class*="send"], div[class*="send"]'));
+        const sendBtn = btns.find(b => !b.contains(input) && b.getBoundingClientRect().width > 0);
+        if (sendBtn) { sendBtn.click(); return true; }
+        container = container.parentElement;
+      }
+      return false;
+    }).catch(() => false);
+
+    if (sendClicked) {
+      console.log('[SparkP2P] Chat: clicked send button');
+    } else {
+      // Fallback: page-level Enter (input is focused from evaluate above)
+      await page.keyboard.press('Enter');
+      console.log('[SparkP2P] Chat: pressed Enter (send button not found)');
+    }
     await new Promise(r => setTimeout(r, 1200));
 
-    // Verify: if input is now empty or has changed, message was sent
     console.log(`[SparkP2P] Chat message sent: ${message.substring(0, 60)}`);
     return true;
   } catch (e) {
@@ -8466,7 +8578,7 @@ For "reply" cases:
 - Asking for proof/confirmation → "I have sent the payment. M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} for KSh ${orderDetails.amount}. Please confirm and release."
 - Asking about amount/ref → provide the details above
 - Asking how long / still waiting → "I sent the payment ${minutesSincePayment} minute(s) ago. Ref: ${orderDetails.referenceId || 'N/A'}. Kindly check and release. Thank you!"
-- Seller greeting/hello → "Hello! I have sent KSh ${orderDetails.amount}. Ref: ${orderDetails.referenceId || 'N/A'}. Please release when confirmed. ðŸ™"`;
+- Seller greeting/hello → "Hello! I have sent KSh ${orderDetails.amount}. Ref: ${orderDetails.referenceId || 'N/A'}. Please release when confirmed."`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -8518,10 +8630,10 @@ For "reply" cases:
           console.log(`[SparkP2P] âœ… Re-sent payment screenshot in chat for order ${orderNum}`);
         } else {
           // If image send failed, fall back to sending reference details as text
-          await sendBinanceChatMessage(page, `M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} | Amount: KSh ${orderDetails.amount} | To: ${orderDetails.name} (${orderDetails.phone || ''}). Please check your M-Pesa and release. ðŸ™`);
+          await sendBinanceChatMessage(page, `M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} | Amount: KSh ${orderDetails.amount} | To: ${orderDetails.name} (${orderDetails.phone || ''}). Please check your M-Pesa and release.`);
         }
       } else {
-        await sendBinanceChatMessage(page, `M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} | Amount: KSh ${orderDetails.amount} | To: ${orderDetails.name} (${orderDetails.phone || ''}). Please check and release. ðŸ™`);
+        await sendBinanceChatMessage(page, `M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} | Amount: KSh ${orderDetails.amount} | To: ${orderDetails.name} (${orderDetails.phone || ''}). Please check and release.`);
       }
     }
 

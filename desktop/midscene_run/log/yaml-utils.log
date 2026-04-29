@@ -1,0 +1,27 @@
+[2026-04-15T14:22:02.884+03:00] will call buildDetailedLocateParam the "Enter message here" input box at the bottom of the chat panel on the right side of the screen undefined
+[2026-04-15T14:24:26.270+03:00] will call buildDetailedLocateParam the "Enter message here" input box at the bottom of the chat panel on the right side of the screen undefined
+[2026-04-15T14:38:06.727+03:00] will call buildDetailedLocateParam the "Enter message here" input box at the bottom of the chat panel on the right side of the screen undefined
+[2026-04-15T14:41:37.348+03:00] will call buildDetailedLocateParam the "Enter message here" input box at the bottom of the chat panel on the right side of the screen undefined
+[2026-04-15T14:52:12.847+03:00] will call buildDetailedLocateParam the "Enter message here" chat input box at the bottom of the right-side chat panel undefined
+[2026-04-15T14:52:19.350+03:00] will call buildDetailedLocateParam the Send button next to the chat message input undefined
+[2026-04-15T14:54:29.931+03:00] will call buildDetailedLocateParam the "Enter message here" chat input box at the bottom of the right-side chat panel undefined
+[2026-04-15T14:54:36.367+03:00] will call buildDetailedLocateParam the Send button next to the chat message input undefined
+[2026-04-15T15:57:08.461+03:00] will call buildDetailedLocateParam the payment image or photo thumbnail sent by the buyer in the chat messages on the right side — click it to open the enlarged/lightbox view undefined
+[2026-04-15T16:50:39.513+03:00] will call buildDetailedLocateParam  {
+  direction: 'down',
+  scrollType: 'scrollToBottom',
+  locate: 'the chat messages panel on the right side of the page'
+}
+[2026-04-15T16:50:59.036+03:00] will call buildDetailedLocateParam the narrow rectangular text input bar at the very bottom of the right-side chat panel, below all the chat messages, where it says "Enter message here" or similar placeholder text {
+  value: 'Your funds of KES 2000 have NOT been received yet. Please send us your M-Pesa confirmation message or bank statement that clearly shows the M-Pesa transaction code. Example: "UDE5J13AGR Confirmed. Ksh 2,000.00 sent to SPARK FREELANCE..." Thank you!'
+}
+[2026-04-15T16:51:30.109+03:00] will call buildDetailedLocateParam the narrow rectangular text input bar at the very bottom of the right-side chat panel { keyName: 'Enter' }
+[2026-04-15T16:53:21.696+03:00] will call buildDetailedLocateParam  {
+  direction: 'down',
+  scrollType: 'scrollToBottom',
+  locate: 'the chat messages panel on the right side of the page'
+}
+[2026-04-15T16:56:30.773+03:00] will call buildDetailedLocateParam the photo or image thumbnail inside the chat messages on the right panel — it is a rectangular image sent by the buyer showing a phone screen or payment receipt, located in the middle of the chat conversation area (not a button, not an icon) undefined
+[2026-04-15T16:57:52.915+03:00] will call buildDetailedLocateParam the narrow rectangular text input bar at the very bottom of the right-side chat panel, below all the chat messages, where it says "Enter message here" or similar placeholder text {
+  value: 'Reminder: Your funds of KES 2000 have not been confirmed yet. Please TYPE your M-Pesa confirmation code in this chat so I can verify and release your crypto immediately. Thank you for your patience!'
+}

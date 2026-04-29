@@ -414,8 +414,7 @@ export default function Onboarding() {
                 </div>
               </div>
               <a
-                href="https://sparkp2p.com/SparkP2P-Setup.exe"
-                download
+                href="/api/download/latest"
                 className="onb-btn-secondary"
               >
                 <Download size={16} />

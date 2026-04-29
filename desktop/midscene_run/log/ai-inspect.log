@@ -1,0 +1,16 @@
+[2026-04-15T14:22:05.319+03:00] resRect { left: 840, top: 537, width: 282, height: 28 }
+[2026-04-15T14:24:28.969+03:00] resRect { left: 840, top: 537, width: 282, height: 28 }
+[2026-04-15T14:38:09.073+03:00] resRect { left: 841, top: 517, width: 281, height: 26 }
+[2026-04-15T14:41:41.237+03:00] resRect { left: 840, top: 517, width: 282, height: 26 }
+[2026-04-15T14:52:15.060+03:00] resRect { left: 729, top: 520, width: 269, height: 19 }
+[2026-04-15T14:54:32.067+03:00] resRect { left: 729, top: 520, width: 269, height: 19 }
+[2026-04-15T14:54:38.443+03:00] resRect { left: 693, top: 522, width: 21, height: 16 }
+[2026-04-15T15:57:11.553+03:00] resRect { left: 808, top: 286, width: 84, height: 81 }
+[2026-04-15T16:50:43.193+03:00] resRect { left: 746, top: 119, width: 270, height: 439 }
+[2026-04-15T16:50:43.194+03:00] AiJudgeOrderSensitive: deepThink=false, description=the chat messages panel on the right side of the page
+[2026-04-15T16:51:02.676+03:00] resRect { left: 591, top: 549, width: 322, height: 24 }
+[2026-04-15T16:51:02.677+03:00] AiJudgeOrderSensitive: deepThink=false, description=the narrow rectangular text input bar at the very bottom of the right-side chat panel, below all the chat messages, where it says "Enter message here" or similar placeholder text
+[2026-04-15T16:51:35.257+03:00] resRect { left: 704, top: 572, width: 281, height: 25 }
+[2026-04-15T16:51:35.257+03:00] AiJudgeOrderSensitive: deepThink=false, description=the narrow rectangular text input bar at the very bottom of the right-side chat panel
+[2026-04-15T16:56:33.267+03:00] resRect { left: 746, top: 286, width: 84, height: 97 }
+[2026-04-15T16:56:33.267+03:00] AiJudgeOrderSensitive: deepThink=false, description=the photo or image thumbnail inside the chat messages on the right panel — it is a rectangular image sent by the buyer showing a phone screen or payment receipt, located in the middle of the chat conversation area (not a button, not an icon)
