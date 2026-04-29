@@ -758,12 +758,10 @@ export default function Employee() {
                             <td>
                               {r.invite_sent
                                 ? <span className="emp-badge green">Sent</span>
-                                : r.is_qualified
-                                  ? <button className="emp-action-btn" disabled={surveyInviting === r.id}
-                                      onClick={e => { e.stopPropagation(); handleSendInvite(r.id); }}>
-                                      {surveyInviting === r.id ? 'Sending...' : 'Send Invite'}
-                                    </button>
-                                  : <span style={{ color: '#4b5563', fontSize: 12 }}>—</span>}
+                                : <button className="emp-action-btn" disabled={surveyInviting === r.id}
+                                    onClick={e => { e.stopPropagation(); handleSendInvite(r.id); }}>
+                                    {surveyInviting === r.id ? 'Sending...' : 'Send Invite'}
+                                  </button>}
                             </td>
                             <td style={{ fontSize: 12, color: '#6b7280' }}>
                               {r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : '-'}
@@ -827,7 +825,7 @@ export default function Employee() {
                       ))}
                     </div>
                     {/* Action */}
-                    {surveySelected.is_qualified && !surveySelected.invite_sent && (
+                    {!surveySelected.invite_sent && (
                       <div style={{ padding: '16px 24px', borderTop: '1px solid #1f2937' }}>
                         <button className="emp-action-btn" style={{ width: '100%', padding: '10px', fontSize: 14 }}
                           disabled={surveyInviting === surveySelected.id}
