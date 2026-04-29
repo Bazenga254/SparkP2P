@@ -256,10 +256,20 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
             detail="Account suspended",
         )
 
-    # Step 2: Verify OTP
+    # Step 2: Verify OTP (SMS code OR Google Authenticator TOTP)
     if data.otp_code:
-        stored_otp = _login_otp_codes.get(data.email)
-        if not stored_otp or stored_otp != data.otp_code:
+        sms_valid = _login_otp_codes.get(data.email) == data.otp_code
+
+        totp_valid = False
+        if trader.totp_secret:
+            try:
+                import pyotp
+                from app.core.security import decrypt_data
+                totp_valid = pyotp.TOTP(decrypt_data(trader.totp_secret)).verify(data.otp_code, valid_window=1)
+            except Exception:
+                pass
+
+        if not sms_valid and not totp_valid:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired OTP code",

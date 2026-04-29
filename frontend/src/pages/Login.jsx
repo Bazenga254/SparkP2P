@@ -578,7 +578,7 @@ export default function Login() {
                   required
                 />
                 <span className="login-field-hint">
-                  Code sent to {phoneHint}
+                  Code sent to {phoneHint} &nbsp;·&nbsp; or use your <strong>Google Authenticator</strong> code
                 </span>
               </div>
             )}
