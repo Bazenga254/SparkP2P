@@ -7074,8 +7074,8 @@ FORM FILLING ORDER â€” do ONE action per response, strictly in this order:
 0. If you see an open account list (screen="account_list", rows like "SPARK FREELANCE" or "BONITO CHELUGET" visible) → click the row containing "${traderImAccount || 'BONITO CHELUGET SAMOEI'}" â€” return screen="account_list"
 1. If debit account shows "Select an account" and NO list is open → click the â–¼ dropdown arrow to open it
 2. (account_list handled by step 0 above)
-3. ${radiosConfirmed ? 'âš ï¸ SKIP THIS STEP â€” "Other Phone" and "One-off Beneficiary" were already clicked programmatically before this loop. They ARE selected. Do NOT click them again under any circumstances.' : 'CRITICAL â€” Check the "Own Phone" / "Other Phone" radio buttons. If "Own Phone" is selected (its circle is filled/green) → click the "Other Phone" radio circle IMMEDIATELY.'}
-4. ${radiosConfirmed ? 'âš ï¸ SKIP THIS STEP â€” already handled.' : 'If "One-off Beneficiary" radio is NOT filled/selected (green) → click the "One-off Beneficiary" radio circle.'}
+3. ${r1 ? '⚠️ SKIP – \"Other Phone\" was already clicked before this loop. Do NOT click it again.' : 'CRITICAL – If \"Own Phone\" is selected (green) → click the \"Other Phone\" radio circle immediately.'}
+4. ${r2 ? '⚠️ SKIP – \"One-off Beneficiary\" was already clicked before this loop.' : '⚠️ SKIP – \"One-off Beneficiary\" does not exist on this account. Ignore this step entirely and proceed to step 5.'}
 5. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
 5b. AUTOCOMPLETE â€” After typing the phone, if a dropdown suggestion list appears below the phone field (showing contact names like "Bonito Cheluget Samoei"), press Tab (action="press_key", value="Tab") to dismiss it and move to the next field.
 6. If network (Safaricom/Airtel) not selected → click ${network}
