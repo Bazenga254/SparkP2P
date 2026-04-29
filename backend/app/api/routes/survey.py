@@ -61,7 +61,11 @@ async def check_submission(phone: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/submit")
 async def submit_survey(data: SurveySubmit, db: AsyncSession = Depends(get_db)):
-    disqualified = data.q1_is_merchant.lower() != "yes"
+    not_merchant = data.q1_is_merchant.lower() != "yes"
+    low_frequency = data.q2_trade_frequency is not None and data.q2_trade_frequency not in QUALIFYING_FREQUENCIES
+    low_volume = data.q3_daily_volume is not None and data.q3_daily_volume not in QUALIFYING_VOLUMES
+
+    disqualified = not_merchant or low_frequency or low_volume
 
     is_qualified = (
         not disqualified
