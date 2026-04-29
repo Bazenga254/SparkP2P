@@ -748,7 +748,7 @@ export default function Employee() {
                         .map(r => (
                           <tr key={r.id} style={{ cursor: 'pointer', background: surveySelected?.id === r.id ? 'rgba(245,158,11,0.06)' : '' }}
                             onClick={() => setSurveySelected(surveySelected?.id === r.id ? null : r)}>
-                            <td>{r.name}</td>
+                            <td>{r.full_name}</td>
                             <td className="mono">{r.phone}</td>
                             <td>
                               <span className={`emp-badge ${r.is_qualified ? 'green' : r.disqualified ? 'red' : 'dim'}`}>
@@ -766,7 +766,7 @@ export default function Employee() {
                                   : <span style={{ color: '#4b5563', fontSize: 12 }}>—</span>}
                             </td>
                             <td style={{ fontSize: 12, color: '#6b7280' }}>
-                              {r.created_at ? new Date(r.created_at).toLocaleDateString() : '-'}
+                              {r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : '-'}
                             </td>
                             <td><ChevronRight size={14} style={{ color: '#6b7280' }} /></td>
                           </tr>
@@ -782,18 +782,19 @@ export default function Employee() {
               {surveySelected && (
                 <div className="emp-card" style={{ width: 320, flexShrink: 0 }}>
                   <div className="emp-card-header">
-                    <h3>{surveySelected.name}</h3>
+                    <h3>{surveySelected.full_name}</h3>
                     <button onClick={() => setSurveySelected(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 18 }}>×</button>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     {[
-                      { q: 'Verified Merchant?', a: surveySelected.q1_verified_merchant },
-                      { q: 'Trading Frequency', a: surveySelected.q2_trading_frequency },
-                      { q: 'Monthly Volume', a: surveySelected.q3_monthly_volume },
-                      { q: 'Current Tool', a: surveySelected.q4_current_tool },
-                      { q: 'Biggest Challenge', a: surveySelected.q5_biggest_challenge },
-                      { q: 'Automation Interest', a: surveySelected.q6_automation_interest },
-                      { q: 'Beta Price', a: surveySelected.q7_beta_price },
+                      { q: 'Verified Merchant?', a: surveySelected.q1_is_merchant },
+                      { q: 'Trading Frequency', a: surveySelected.q2_trade_frequency },
+                      { q: 'Monthly Volume', a: surveySelected.q3_daily_volume },
+                      { q: 'Account Frozen?', a: surveySelected.q4_account_frozen },
+                      { q: 'Has Automation?', a: surveySelected.q5_has_automation },
+                      { q: 'Automation Name', a: surveySelected.q5_automation_name },
+                      { q: 'Biggest Challenge', a: surveySelected.q6_biggest_challenge },
+                      { q: 'Daily Transactions', a: surveySelected.q7_daily_transactions },
                     ].map(({ q, a }) => a && (
                       <div key={q} style={{ borderBottom: '1px solid #1f2937', paddingBottom: 10 }}>
                         <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{q}</div>
