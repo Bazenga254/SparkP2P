@@ -10151,12 +10151,14 @@ setInterval(async () => {
 
 let isOnline = true;
 let offlineSince = null;
+let connectivityFailures = 0;
+const CONNECTIVITY_FAILURES_NEEDED = 2;
 
 async function checkConnectivity() {
   try {
     const r = await fetch(`${API_BASE}/health`, {
       headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(8000),
     });
     return r.ok || r.status < 500;
   } catch {
@@ -10222,17 +10224,26 @@ async function recoverSessions() {
 
 setInterval(async () => {
   const online = await checkConnectivity();
-  if (online && !isOnline) {
-    const downtime = offlineSince ? Math.round((Date.now() - offlineSince) / 1000) : '?';
-    console.log(`[SparkP2P] Internet reconnected after ${downtime}s offline`);
-    isOnline = true;
-    offlineSince = null;
-    await recoverSessions();
-  } else if (!online && isOnline) {
-    isOnline = false;
-    offlineSince = Date.now();
-    console.log('[SparkP2P] Internet disconnected — automation paused');
-    sendBotLog('warning', 'Internet disconnected — automation paused. Binance ads remain live.');
+  if (online) {
+    connectivityFailures = 0;
+    if (!isOnline) {
+      const downtime = offlineSince ? Math.round((Date.now() - offlineSince) / 1000) : '?';
+      console.log(`[SparkP2P] Internet reconnected after ${downtime}s offline`);
+      isOnline = true;
+      offlineSince = null;
+      await recoverSessions();
+    }
+  } else {
+    connectivityFailures++;
+    if (connectivityFailures >= CONNECTIVITY_FAILURES_NEEDED && isOnline) {
+      isOnline = false;
+      offlineSince = Date.now();
+      connectivityFailures = 0;
+      console.log('[SparkP2P] Internet disconnected — automation paused');
+      sendBotLog('warning', 'Internet disconnected — automation paused. Binance ads remain live.');
+    } else if (connectivityFailures < CONNECTIVITY_FAILURES_NEEDED) {
+      console.log(`[SparkP2P] Connectivity check failed (${connectivityFailures}/${CONNECTIVITY_FAILURES_NEEDED}) — waiting to confirm`);
+    }
   }
 }, 15000);
 
