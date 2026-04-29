@@ -3517,6 +3517,7 @@ export default function Admin() {
                               { key: 'chat', label: 'Chat' },
                               { key: 'transactions', label: 'Transactions' },
                               { key: 'withdrawals', label: 'Withdrawals' },
+                              { key: 'survey', label: 'Survey Responses' },
                             ].map(({ key, label }) => {
                               const enabled = emp.permissions?.[key] ?? false;
                               return (

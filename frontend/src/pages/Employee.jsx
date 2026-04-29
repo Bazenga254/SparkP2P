@@ -10,6 +10,8 @@ import {
   getChatHistory,
   getAdminTransactions,
   getMyPermissions,
+  getSurveyResponses,
+  sendSurveyInvite,
 } from '../services/api';
 import {
   LayoutDashboard,
@@ -25,6 +27,7 @@ import {
   CheckCircle,
   XCircle,
   Ban,
+  ClipboardList,
 } from 'lucide-react';
 
 const ALL_SIDEBAR_ITEMS = [
@@ -32,6 +35,7 @@ const ALL_SIDEBAR_ITEMS = [
   { key: 'disputes', icon: AlertTriangle, label: 'Active Disputes', permission: 'disputes' },
   { key: 'orders', icon: ShoppingCart, label: 'All Orders', permission: 'orders' },
   { key: 'chat', icon: MessageCircle, label: 'Chat', permission: 'chat' },
+  { key: 'survey', icon: ClipboardList, label: 'Survey Responses', permission: 'survey' },
 ];
 
 function getGreeting() {
@@ -178,11 +182,34 @@ export default function Employee() {
 
   const fmtKES = (v) => `KES ${(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
+  const [surveyResponses, setSurveyResponses] = useState([]);
+  const [surveySelected, setSurveySelected] = useState(null);
+  const [surveyInviting, setSurveyInviting] = useState(null);
+  const [surveyFilter, setSurveyFilter] = useState('all');
+
+  useEffect(() => {
+    if (activeTab === 'survey') {
+      getSurveyResponses().then(res => setSurveyResponses(res.data)).catch(() => {});
+    }
+  }, [activeTab]);
+
+  const handleSendInvite = async (id) => {
+    setSurveyInviting(id);
+    try {
+      await sendSurveyInvite(id);
+      setSurveyResponses(prev => prev.map(r => r.id === id ? { ...r, invite_sent: true } : r));
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Failed to send invite');
+    }
+    setSurveyInviting(null);
+  };
+
   const pageTitles = {
     dashboard: 'Dashboard',
     disputes: 'Active Disputes',
     orders: 'All Orders',
     chat: 'Chat',
+    survey: 'Survey Responses',
     'dispute-detail': 'Dispute Details',
   };
 
@@ -671,6 +698,111 @@ export default function Employee() {
               <p className="emp-empty" style={{ padding: 40 }}>
                 Select a dispute to start chatting. Go to Active Disputes and click on one.
               </p>
+            </div>
+          )}
+
+          {/* ==================== SURVEY RESPONSES ==================== */}
+          {activeTab === 'survey' && (
+            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+              <div className="emp-card" style={{ flex: 1 }}>
+                <div className="emp-card-header">
+                  <h3>Survey Responses</h3>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {['all', 'qualified', 'disqualified'].map(f => (
+                      <button key={f} onClick={() => setSurveyFilter(f)}
+                        style={{ padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                          background: surveyFilter === f ? '#f59e0b' : '#1f2937', color: surveyFilter === f ? '#000' : '#9ca3af' }}>
+                        {f.charAt(0).toUpperCase() + f.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+                  {[
+                    { label: 'Total', val: surveyResponses.length, color: '#60a5fa' },
+                    { label: 'Qualified', val: surveyResponses.filter(r => r.is_qualified).length, color: '#10b981' },
+                    { label: 'Disqualified', val: surveyResponses.filter(r => r.disqualified).length, color: '#ef4444' },
+                    { label: 'Invited', val: surveyResponses.filter(r => r.invite_sent).length, color: '#f59e0b' },
+                  ].map(s => (
+                    <div key={s.label} style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '10px 14px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: s.color }}>{s.val}</div>
+                      <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="emp-table-wrap">
+                  <table className="emp-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Phone</th>
+                        <th>Status</th>
+                        <th>Invite</th>
+                        <th>Date</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {surveyResponses
+                        .filter(r => surveyFilter === 'all' || (surveyFilter === 'qualified' ? r.is_qualified : r.disqualified))
+                        .map(r => (
+                          <tr key={r.id} style={{ cursor: 'pointer', background: surveySelected?.id === r.id ? 'rgba(245,158,11,0.06)' : '' }}
+                            onClick={() => setSurveySelected(surveySelected?.id === r.id ? null : r)}>
+                            <td>{r.name}</td>
+                            <td className="mono">{r.phone}</td>
+                            <td>
+                              <span className={`emp-badge ${r.is_qualified ? 'green' : r.disqualified ? 'red' : 'dim'}`}>
+                                {r.is_qualified ? 'Qualified' : r.disqualified ? 'Disqualified' : 'Pending'}
+                              </span>
+                            </td>
+                            <td>
+                              {r.invite_sent
+                                ? <span className="emp-badge green">Sent</span>
+                                : r.is_qualified
+                                  ? <button className="emp-action-btn" disabled={surveyInviting === r.id}
+                                      onClick={e => { e.stopPropagation(); handleSendInvite(r.id); }}>
+                                      {surveyInviting === r.id ? 'Sending...' : 'Send Invite'}
+                                    </button>
+                                  : <span style={{ color: '#4b5563', fontSize: 12 }}>—</span>}
+                            </td>
+                            <td style={{ fontSize: 12, color: '#6b7280' }}>
+                              {r.created_at ? new Date(r.created_at).toLocaleDateString() : '-'}
+                            </td>
+                            <td><ChevronRight size={14} style={{ color: '#6b7280' }} /></td>
+                          </tr>
+                        ))}
+                      {surveyResponses.length === 0 && (
+                        <tr><td colSpan={6} className="emp-empty">No survey responses yet</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {surveySelected && (
+                <div className="emp-card" style={{ width: 320, flexShrink: 0 }}>
+                  <div className="emp-card-header">
+                    <h3>{surveySelected.name}</h3>
+                    <button onClick={() => setSurveySelected(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 18 }}>×</button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {[
+                      { q: 'Verified Merchant?', a: surveySelected.q1_verified_merchant },
+                      { q: 'Trading Frequency', a: surveySelected.q2_trading_frequency },
+                      { q: 'Monthly Volume', a: surveySelected.q3_monthly_volume },
+                      { q: 'Current Tool', a: surveySelected.q4_current_tool },
+                      { q: 'Biggest Challenge', a: surveySelected.q5_biggest_challenge },
+                      { q: 'Automation Interest', a: surveySelected.q6_automation_interest },
+                      { q: 'Beta Price', a: surveySelected.q7_beta_price },
+                    ].map(({ q, a }) => a && (
+                      <div key={q} style={{ borderBottom: '1px solid #1f2937', paddingBottom: 10 }}>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>{q}</div>
+                        <div style={{ fontSize: 13, color: '#e5e7eb' }}>{a}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
