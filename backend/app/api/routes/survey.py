@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_admin_trader, get_db
+from app.api.deps import get_admin_trader, get_db, get_employee_or_admin
 from app.models.survey import SurveyResponse
 from app.services.sms import send_sms
 
@@ -97,8 +97,12 @@ async def submit_survey(data: SurveySubmit, db: AsyncSession = Depends(get_db)):
 @router.get("/responses")
 async def get_survey_responses(
     db: AsyncSession = Depends(get_db),
-    _admin=Depends(get_admin_trader),
+    current_user=Depends(get_employee_or_admin),
 ):
+    if not current_user.is_admin:
+        perms = current_user.permissions or {}
+        if not perms.get("survey"):
+            raise HTTPException(status_code=403, detail="Survey access not permitted")
     result = await db.execute(
         select(SurveyResponse).order_by(SurveyResponse.submitted_at.desc())
     )
@@ -130,8 +134,12 @@ async def get_survey_responses(
 async def send_invite(
     response_id: int,
     db: AsyncSession = Depends(get_db),
-    _admin=Depends(get_admin_trader),
+    current_user=Depends(get_employee_or_admin),
 ):
+    if not current_user.is_admin:
+        perms = current_user.permissions or {}
+        if not perms.get("survey"):
+            raise HTTPException(status_code=403, detail="Survey access not permitted")
     result = await db.execute(
         select(SurveyResponse).where(SurveyResponse.id == response_id)
     )
