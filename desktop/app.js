@@ -7241,7 +7241,7 @@ Return ONLY valid JSON, no other text.` },
       const domConfirms = confirmText.includes('payment success') || confirmText.includes('transaction successful') ||
         confirmText.includes('transfer successful') || confirmText.includes('sent successfully') ||
         confirmText.includes('transaction complete') || confirmText.includes('money sent') ||
-        confirmText.includes(“you've sent”) || confirmText.includes('you have sent');
+        confirmText.includes("you've sent") || confirmText.includes('you have sent');
       if (!domConfirms) {
         console.log(`[I&M Vision] ⚠️ Vision says success but DOM text does not confirm (step ${step}) — waiting 3s for page`);
         await new Promise(r => setTimeout(r, 3000));
