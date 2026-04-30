@@ -654,9 +654,10 @@ function createTray() {
           } else {
             pauseNavigation = true;
             scanningInProgress = false;
+            await unlockChromeBrowser().catch(() => {});
             await hideElectronOverlay();
             startPauseInactivityTimer();
-            console.log('[SparkP2P] Bot PAUSED via tray — Chrome accessible');
+            console.log('[SparkP2P] Bot PAUSED via tray — isTrusted filter removed, Chrome accessible');
           }
           tray.setContextMenu(buildTrayMenu());
         },
@@ -679,9 +680,10 @@ function createTray() {
       } else {
         pauseNavigation = true;
         scanningInProgress = false;
+        await unlockChromeBrowser().catch(() => {});
         await hideElectronOverlay();
         startPauseInactivityTimer();
-        console.log('[SparkP2P] Bot PAUSED via shortcut — Chrome accessible');
+        console.log('[SparkP2P] Bot PAUSED via shortcut — isTrusted filter removed, Chrome accessible');
       }
       tray.setContextMenu(buildTrayMenu());
     });
@@ -11280,7 +11282,7 @@ ipcMain.handle('connect-im', () => { connectIm(); return { opened: true }; });
 ipcMain.handle('connect-mpesa', () => { connectMpesaPortal(); return { opened: true }; });
 ipcMain.handle('unlock-browser', async () => { await unlockChromeBrowser(); console.log('[SparkP2P] Browser manually unlocked'); return { ok: true }; });
 ipcMain.handle('lock-browser', async () => { const p = await getPage(); if (p) await lockChromeBrowser(); return { ok: true }; });
-ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await hideElectronOverlay(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED — Electron overlay hidden, Chrome accessible'); return { ok: true }; });
+ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser().catch(() => {}); await hideElectronOverlay(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED — isTrusted filter removed, Chrome fully accessible'); return { ok: true }; });
 ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); await lockChromeBrowser(); if (token && pollerRunning) showLockScreen(); console.log('[SparkP2P] Navigation RESUMED — Electron overlay active'); return { ok: true }; });
 
 // ── Lock Screen IPC handlers ───────────────────────────────────────────────
