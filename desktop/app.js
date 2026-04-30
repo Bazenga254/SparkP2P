@@ -132,6 +132,11 @@ const partialPayments = {}; // orderNumber → [{code, amount}] â€” accumul
 const lastDeficitSent = {}; // orderNumber → deficit amount last messaged â€” prevents spamming same deficit twice
 let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for monitorActiveOrder compat)
 let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
+let imIntrusionCount = 0;       // unauthorized I&M access attempts this session
+let _imNavHandler = null;       // stored framenavigated handler reference for removal
+let _imExpectedPhone = null;    // expected phone for field verification during payment
+let _imExpectedAmount = null;   // expected amount for field verification during payment
+let _imExpectedAccount = null;  // expected account number for bank transfer verification
 let connectingBinance = false; // Prevents concurrent connectBinance() calls
 let scanningInProgress = false; // Prevents concurrent initialScan() calls
 let sessionStartTime = null;   // When Binance login was last confirmed
@@ -1089,7 +1094,7 @@ async function lockChromeBrowser() {
   const binancePage = await getPage('binance.com').catch(() => null);
   const pages = [binancePage, gmailPage, imPage, mpesaOrgPage].filter(p => p && !p.isClosed());
   for (const p of pages) await injectLockFilter(p);
-  console.log('[SparkP2P] isTrusted filter active on all tabs — human input blocked, CDP unaffected');
+  console.log('[SparkP2P] isTrusted filter active on all tabs');
 }
 
 async function unlockChromeBrowser() {
@@ -1098,6 +1103,77 @@ async function unlockChromeBrowser() {
   const pages = [binancePage, gmailPage, imPage, mpesaOrgPage].filter(p => p && !p.isClosed());
   for (const p of pages) await removeLockFilter(p);
   console.log('[SparkP2P] isTrusted filter removed — full human access restored');
+}
+
+// ── I&M payment window management ────────────────────────────────────────────
+// I&M is locked at all times except during active payment execution.
+// While unlocked, a URL monitor catches navigation away from payment pages,
+// and a field verifier checks phone/amount before every Continue click.
+// Either breach increments imIntrusionCount; at 3 the bot pauses entirely.
+
+async function unlockImForPayment(phone, amount, accountNumber) {
+  _imExpectedPhone   = phone   ? String(phone).replace(/^0/, '').replace(/\s/g, '') : null;
+  _imExpectedAmount  = amount  ? Math.floor(parseFloat(amount)) : null;
+  _imExpectedAccount = accountNumber ? String(accountNumber).replace(/\s/g, '') : null;
+  if (!imPage || imPage.isClosed()) return;
+  await removeLockFilter(imPage).catch(() => {});
+
+  if (_imNavHandler) imPage.off('framenavigated', _imNavHandler);
+  const allowed = [
+    '/inm-retail/transfers/send-money-to-mobile',
+    '/inm-retail/transfers/local-transfers',
+    '/inm-retail/transfers/pesalink',
+    '/inm-retail/dashboard',
+  ];
+  _imNavHandler = async (frame) => {
+    if (!frame || frame !== imPage?.mainFrame()) return;
+    const url = frame.url();
+    if (!url || url === 'about:blank' || !url.includes('digital.imbank.com')) return;
+    if (allowed.some(p => url.includes(p))) return; // expected bot navigation
+    imIntrusionCount++;
+    console.log(`[Lock] 🚨 I&M URL intrusion #${imIntrusionCount}: ${url}`);
+    sendBotLog('warning', `⚠️ Unauthorized I&M navigation detected (${imIntrusionCount}/3)`);
+    await injectLockFilter(imPage).catch(() => {});
+    if (imIntrusionCount >= 3) {
+      pauseNavigation = true;
+      await lockChromeBrowser().catch(() => {});
+      sendBotLog('error', '🚨 Bot paused: 3 unauthorized I&M access attempts. Complete orders manually and secure your device.');
+    }
+  };
+  imPage.on('framenavigated', _imNavHandler);
+  console.log('[Lock] I&M unlocked for payment — URL + field intrusion monitor active');
+}
+
+async function lockImAfterPayment() {
+  if (_imNavHandler && imPage && !imPage.isClosed()) {
+    imPage.off('framenavigated', _imNavHandler);
+    _imNavHandler = null;
+  }
+  _imExpectedPhone = null; _imExpectedAmount = null; _imExpectedAccount = null;
+  if (!imPage || imPage.isClosed()) return;
+  await injectLockFilter(imPage).catch(() => {});
+  console.log('[Lock] I&M re-locked after payment');
+}
+
+async function checkImFieldTampering(page) {
+  if (!_imExpectedPhone && !_imExpectedAmount && !_imExpectedAccount) return { ok: true };
+  return await page.evaluate((exp) => {
+    const norm = s => String(s || '').replace(/\D/g, '').replace(/^254/, '').replace(/^0/, '');
+    const inputs = Array.from(document.querySelectorAll('input'));
+    let foundPhone = null, foundAmount = null, foundAccount = null;
+    for (const inp of inputs) {
+      const key = (inp.id || inp.name || inp.placeholder || inp.getAttribute('formcontrolname') || '').toLowerCase();
+      const val = (inp.value || '').trim();
+      if (!val) continue;
+      if (key.includes('phone') || key.includes('mobile')) foundPhone = val.replace(/\D/g, '');
+      if (key.includes('amount')) { const n = parseFloat(val.replace(/[^0-9.]/g, '')); if (!isNaN(n) && n > 0) foundAmount = n; }
+      if (key.includes('account') || key.includes('accno')) foundAccount = val.replace(/\s/g, '');
+    }
+    const phoneOk   = !exp.phone   || !foundPhone   || norm(foundPhone)   === norm(exp.phone);
+    const amountOk  = !exp.amount  || !foundAmount  || Math.abs(foundAmount - exp.amount) < 2;
+    const accountOk = !exp.account || !foundAccount || foundAccount.includes(exp.account) || exp.account.includes(foundAccount);
+    return { ok: phoneOk && amountOk && accountOk, foundPhone, foundAmount, foundAccount, phoneOk, amountOk, accountOk };
+  }, { phone: _imExpectedPhone, amount: _imExpectedAmount, account: _imExpectedAccount }).catch(() => ({ ok: true }));
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -6942,7 +7018,9 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   if (!amount || Number(amount) <= 0) throw new Error(`Amount is invalid (${amount}) â€” cannot send payment`);
 
   imWithdrawalRunning = true;
+  imIntrusionCount = 0;
   const cleanPhone = String(phone).replace(/^0/, '').replace(/\s/g, ''); // strip leading 0
+  await unlockImForPayment(cleanPhone, amount); // remove lock, start intrusion monitor
   console.log(`[SparkP2P] ðŸ'³ Starting I&M Vision payment: KSh ${amount} → ${name} (+254${cleanPhone})`);
 
   await imPage.bringToFront();
@@ -7201,6 +7279,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       console.log(`[I&M Vision] âœ… Payment SUCCESS at step ${step}`);
       const receiptSS = await takeImSuccessScreenshot(imPage) || screenshot;
       imWithdrawalRunning = false;
+      await lockImAfterPayment();
       return { success: true, screenshot: receiptSS, referenceId };
     }
 
@@ -7302,6 +7381,7 @@ Return ONLY valid JSON, no other text.` },
       }
       const receiptSS2 = await takeImSuccessScreenshot(imPage) || screenshot;
       imWithdrawalRunning = false;
+      await lockImAfterPayment();
       return { success: true, screenshot: receiptSS2, referenceId };
     }
 
@@ -7485,6 +7565,23 @@ Return ONLY valid JSON, no other text.` },
 
       // For "Continue" clicks: always try DOM-first (Vision coords unreliable at 80% zoom for below-fold buttons)
       if (isContinue) {
+        // Security: verify phone + amount match the original order before submitting
+        const fieldCheck = await checkImFieldTampering(imPage);
+        if (!fieldCheck.ok) {
+          imIntrusionCount++;
+          console.log(`[Lock] 🚨 Field tampering #${imIntrusionCount}: phone=${fieldCheck.foundPhone}(exp:${_imExpectedPhone}) amount=${fieldCheck.foundAmount}(exp:${_imExpectedAmount})`);
+          sendBotLog('warning', `⚠️ I&M form field tampering detected (${imIntrusionCount}/3) — aborting payment attempt`);
+          await injectLockFilter(imPage).catch(() => {}); // freeze intruder immediately
+          if (imIntrusionCount >= 3) {
+            pauseNavigation = true;
+            await lockChromeBrowser().catch(() => {});
+            sendBotLog('error', '🚨 Bot paused: 3 I&M form tampering attempts. Complete orders manually and secure your device.');
+          }
+          imWithdrawalRunning = false;
+          await lockImAfterPayment();
+          return { success: false, screenshot, referenceId: null };
+        }
+
         // Guard: ensure reference/narration field is filled before clicking Continue
         const refStr = String(reference).substring(0, 30);
         const refFilled = await imPage.evaluate((ref) => {
@@ -7569,6 +7666,7 @@ Return ONLY valid JSON, no other text.` },
   const finalText = await imPage.evaluate(() => document.body.innerText).catch(() => '');
   screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
   imWithdrawalRunning = false;
+  await lockImAfterPayment();
   console.log(`[I&M Vision] âŒ Exceeded ${IM_MAX_STEPS} steps. Page: ${finalText.substring(0, 100)}`);
   return { success: false, screenshot, referenceId: null };
 }
@@ -7587,7 +7685,9 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   if (!accountNumber) throw new Error('Account number missing for bank transfer.');
   if (!amount || Number(amount) <= 0) throw new Error(`Invalid amount: ${amount}`);
   imWithdrawalRunning = true;
+  imIntrusionCount = 0;
   const amountInt = Math.floor(parseFloat(amount));
+  await unlockImForPayment(null, amountInt, accountNumber); // unlock I&M, start intrusion monitor
   const refStr = String(reference).substring(0, 50);
   const targetBank = (bankName || 'I & M Bank Ltd').trim();
   console.log(`[SparkP2P] ðŸ¦ Bank Transfer: KSh ${amountInt} → ${name} (${targetBank} A/C ${accountNumber})`);
@@ -7951,6 +8051,7 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       if (refMatch) referenceId = refMatch[1].trim();
       console.log(`[BankTransfer] âœ… SUCCESS â€” Ref: ${referenceId}`);
       imWithdrawalRunning = false;
+      await lockImAfterPayment();
       return { success: true, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot), referenceId };
     }
 
@@ -8044,6 +8145,7 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
 
     if (action.screen === 'success' || action.action === 'done') {
       imWithdrawalRunning = false;
+      await lockImAfterPayment();
       return { success: true, screenshot: await takeImSuccessScreenshot(imPage) || screenshot, referenceId };
     }
     if (action.action === 'type_pin') {
@@ -8151,6 +8253,7 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
   }
 
   imWithdrawalRunning = false;
+      await lockImAfterPayment();
   console.log(`[BankTransfer] âŒ Exceeded ${IM_MAX_STEPS} steps`);
   return { success: false, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => null), referenceId: null };
 }
