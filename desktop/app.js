@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage } = require('electron');
+﻿const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -481,7 +481,24 @@ function createMainWindow() {
   });
 
   loadDashboard();
-  mainWindow.on('close', () => { app.isQuitting = true; app.quit(); });
+  mainWindow.on('close', async (e) => {
+    e.preventDefault();
+    const { response, checkboxChecked } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: 'Terminate Session',
+      message: 'You are about to terminate your session',
+      detail: 'All other trades from here on will be completed manually.',
+      checkboxLabel: 'Yes, I understand',
+      checkboxChecked: false,
+      buttons: ['Cancel', 'Close App'],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (response === 1 && checkboxChecked) {
+      app.isQuitting = true;
+      app.quit();
+    }
+  });
   // Reset pause inactivity timer on any user activity in the app window
   mainWindow.webContents.on('before-input-event', () => resetPauseTimerOnActivity());
   mainWindow.on('focus', () => resetPauseTimerOnActivity());
