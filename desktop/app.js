@@ -375,10 +375,15 @@ async function injectLockFilter(page) {
   if (existingId) await page.removeScriptToEvaluateOnNewDocument(existingId).catch(() => {});
   const script = `(function(){
     if(window.__spLocked) return; window.__spLocked=true;
-    const _b=e=>{if(e.isTrusted){e.stopImmediatePropagation();e.preventDefault();}};
+    window.__LOCK_ACTIVE__=true;
+    const _b=e=>{if(window.__LOCK_ACTIVE__ && e.isTrusted){e.stopImmediatePropagation();e.preventDefault();}};
     const _ev=['click','mousedown','mouseup','dblclick','contextmenu','keydown','keyup','keypress'];
     _ev.forEach(t=>document.addEventListener(t,_b,true));
-    window.__spUnlock=()=>{_ev.forEach(t=>document.removeEventListener(t,_b,true));delete window.__spLocked;delete window.__spUnlock;};
+    window.__spUnlock=()=>{
+      window.__LOCK_ACTIVE__=false;
+      _ev.forEach(t=>document.removeEventListener(t,_b,true));
+      delete window.__spLocked; delete window.__spUnlock; delete window.__LOCK_ACTIVE__;
+    };
   })();`;
   await page.evaluate(script).catch(() => {});
   const { identifier } = await page.evaluateOnNewDocument(script).catch(() => ({ identifier: null }));
@@ -7101,31 +7106,29 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     // â”€â”€ Account dropdown shortcut (Layer 1 → Layer 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Skip once account is already selected â€” avoids clicking the header repeatedly
     if (!accountSelected) {
-    const domCoords = await imPage.evaluate((acct) => {
+    const clicked = await imPage.evaluate((acct) => {
       const search = acct || 'BONITO CHELUGET';
       const all = Array.from(document.querySelectorAll(
         'mat-option, .mat-option, [role="option"], li, div, span, td'
       ));
       for (const el of all) {
         const txt = el.textContent.trim();
-        // Must contain search term but NOT be the "Select an account" header/trigger
         if (!txt.includes(search)) continue;
         if (txt.toLowerCase().includes('select an account')) continue;
         const r = el.getBoundingClientRect();
         if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 0) {
-          return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: txt.substring(0, 50), tag: el.tagName };
+          el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          return { text: txt.substring(0, 50), tag: el.tagName };
         }
       }
       return null;
     }, traderImAccount || '00108094726050').catch(() => null);
 
-    if (domCoords && domCoords.x > 0 && domCoords.y > 0) {
-      await imPage.mouse.click(domCoords.x, domCoords.y);
-      console.log(`[I&M] âœ… L1 clicked <${domCoords.tag}> "${domCoords.text}" at (${Math.round(domCoords.x)}, ${Math.round(domCoords.y)})`);
-      await imPage.keyboard.press('Escape'); // close the dropdown
+    if (clicked) {
+      console.log(`[I&M] âœ… L1 dispatchEvent on <${clicked.tag}> "${clicked.text}"`);
+      await imPage.evaluate(() => document.body.click()).catch(() => {}); // close CDK overlay
       accountSelected = true;
       await new Promise(r => setTimeout(r, 1000));
-      // Scroll down now so Vision sees phone/amount/reference fields
       await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
       await new Promise(r => setTimeout(r, 500));
       console.log('[I&M] Scrolled down after account selection');
@@ -7383,6 +7386,41 @@ Return ONLY valid JSON, no other text.` },
         }
       }
       await new Promise(r => setTimeout(r, 3000));
+      continue;
+    }
+
+    // Angular mat-option: dispatchEvent instead of coordinate click (CDP mouse.click ignored by Angular zone.js)
+    if (action.screen === 'account_list' && action.action === 'click') {
+      const acctSearch = traderImAccount || 'BONITO CHELUGET SAMOEI';
+      const acctClicked = await imPage.evaluate((search) => {
+        const all = Array.from(document.querySelectorAll(
+          'mat-option, .mat-option, [role="option"], li, div, span'
+        ));
+        for (const el of all) {
+          const txt = el.textContent.trim();
+          if (!txt.includes(search)) continue;
+          if (txt.toLowerCase().includes('select an account')) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && r.top > 0) {
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            return txt.substring(0, 50);
+          }
+        }
+        return null;
+      }, acctSearch).catch(() => null);
+
+      if (acctClicked) {
+        console.log(`[I&M Vision] âœ… account_list dispatchEvent on "${acctClicked}"`);
+        await imPage.evaluate(() => document.body.click()).catch(() => {}); // close CDK overlay
+        accountSelected = true;
+        await new Promise(r => setTimeout(r, 1500));
+        await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
+        await new Promise(r => setTimeout(r, 500));
+      } else if (action.x && action.y) {
+        console.log(`[I&M Vision] account_list element not found — coord fallback`);
+        await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
+        await new Promise(r => setTimeout(r, 1500));
+      }
       continue;
     }
 
