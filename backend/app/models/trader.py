@@ -76,6 +76,9 @@ class Trader(Base):
     max_single_trade = Column(Integer, default=500000)  # KES
     spread_percentage = Column(Float, default=2.0)
 
+    # Bot trade mode: 'both' | 'buy_only' | 'sell_only'
+    bot_trade_mode = Column(String(20), default='both')
+
     # Batch settlement config
     batch_settlement_enabled = Column(Boolean, default=True)
     batch_threshold = Column(Integer, default=50000)  # KES - settle when balance hits this

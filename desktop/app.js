@@ -129,6 +129,7 @@ const partialPayments = {}; // orderNumber → [{code, amount}] â€” accumul
 const lastDeficitSent = {}; // orderNumber → deficit amount last messaged â€” prevents spamming same deficit twice
 let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for monitorActiveOrder compat)
 let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
+let botTradeMode = 'both';      // 'both' | 'buy_only' | 'sell_only' — fetched from backend on start
 let connectingBinance = false; // Prevents concurrent connectBinance() calls
 let scanningInProgress = false; // Prevents concurrent initialScan() calls
 let sessionStartTime = null;   // When Binance login was last confirmed
@@ -1144,7 +1145,8 @@ async function onLoginDetected() {
       if (profileRes.ok) {
         const profileData = await profileRes.json();
         traderIsAdmin = !!(profileData.is_admin);
-        console.log(`[SparkP2P] Trader role: ${traderIsAdmin ? 'admin' : 'trader'}`);
+        botTradeMode = profileData.bot_trade_mode || 'both';
+        console.log(`[SparkP2P] Trader role: ${traderIsAdmin ? 'admin' : 'trader'}, trade mode: ${botTradeMode}`);
       }
     } catch (e) { traderIsAdmin = false; }
   }
@@ -2553,6 +2555,9 @@ async function idleScan(page) {
   if (orders.sell.length > 0) {
     console.log(`[SparkP2P] ðŸ”” ${orders.sell.length} sell order(s) â€” cycling through all`);
   }
+  if (botTradeMode === 'buy_only') {
+    if (orders.sell.length > 0) console.log(`[SparkP2P] Skipping ${orders.sell.length} sell order(s) — mode: buy_only`);
+  } else {
   for (const order of orders.sell) {
     if (pauseNavigation) break;
     const seenMs = Date.now() - (orderFirstSeenAt[order.orderNumber] || Date.now());
@@ -2958,10 +2963,14 @@ async function idleScan(page) {
     }
   }
 
+  }  // end sell orders block
   // â”€â”€ Step 5: Cycle through ALL buy orders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (orders.buy.length > 0) {
     console.log(`[SparkP2P] ðŸ'³ ${orders.buy.length} buy order(s) â€” cycling through all`);
   }
+  if (botTradeMode === 'sell_only') {
+    if (orders.buy.length > 0) console.log('[SparkP2P] Skipping buy orders — mode: sell_only');
+  } else {
   for (const order of orders.buy) {
     if (pauseNavigation) break;
     console.log(`[SparkP2P] Checking buy order ${order.orderNumber}`);
@@ -3303,6 +3312,7 @@ Method selection rules:
   if (allActiveNums.length === 0) {
     console.log('[SparkP2P] No active orders â€” staying idle');
   }
+  }  // end buy orders block
 }
 
 // â”€â”€ Click an order row using DOM (reliable, no mouse needed) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

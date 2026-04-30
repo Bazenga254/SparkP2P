@@ -73,6 +73,7 @@ class TradingConfigRequest(BaseModel):
     max_single_trade: Optional[int] = None
     batch_settlement_enabled: Optional[bool] = None
     batch_threshold: Optional[int] = None
+    bot_trade_mode: Optional[str] = None  # 'both' | 'buy_only' | 'sell_only'
 
 
 class DepositRequest(BaseModel):
@@ -125,6 +126,7 @@ class TraderProfileResponse(BaseModel):
     gmail_connected: bool = False
     mpesa_portal_connected: bool = False
     has_totp: bool = False
+    bot_trade_mode: str = 'both'
     batch_settlement_enabled: bool = True
     batch_threshold: int = 50000
 
@@ -431,6 +433,7 @@ async def get_profile(
         has_totp=bool(trader.totp_secret),
         batch_settlement_enabled=bool(trader.batch_settlement_enabled),
         batch_threshold=trader.batch_threshold or 50000,
+        bot_trade_mode=trader.bot_trade_mode or 'both',
     )
 
 
@@ -699,6 +702,8 @@ async def update_trading_config(
         trader.batch_settlement_enabled = data.batch_settlement_enabled
     if data.batch_threshold is not None:
         trader.batch_threshold = data.batch_threshold
+    if data.bot_trade_mode is not None and data.bot_trade_mode in ('both', 'buy_only', 'sell_only'):
+        trader.bot_trade_mode = data.bot_trade_mode
 
     await db.commit()
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import SupportChat from '../components/SupportChat';
 
@@ -417,6 +417,9 @@ export default function Dashboard() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [openSupportChat, setOpenSupportChat] = useState(false);
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [botTradeMode, setBotTradeMode] = useState('both');
+  const [savingConfig, setSavingConfig] = useState(false);
   const [showPaybill, setShowPaybill] = useState(false);
   const [copied, setCopied] = useState('');
   const [binanceData, setBinanceData] = useState(null);
@@ -457,7 +460,7 @@ export default function Dashboard() {
         getBinanceAccountData(),
         getWalletTransactions(100, 'negative'),
       ]);
-      if (results[0].status === 'fulfilled') setProfile(results[0].value.data);
+      if (results[0].status === 'fulfilled') { setProfile(results[0].value.data); setBotTradeMode(results[0].value.data.bot_trade_mode || 'both'); }
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
       if (results[3].status === 'fulfilled') setOrders(results[3].value.data);
@@ -1054,6 +1057,9 @@ export default function Dashboard() {
               </div>
             )}
           </div>
+          <button className="icon-btn" onClick={() => setShowConfigModal(true)} title="Configure Bot">
+            <SlidersHorizontal size={18} />
+          </button>
           <button className="icon-btn" onClick={loadData} disabled={refreshing}>
             <RefreshCw size={18} className={refreshing ? 'spinning' : ''} />
           </button>
@@ -2337,6 +2343,58 @@ export default function Dashboard() {
         </div>
       )}
       <SupportChat forceOpen={openSupportChat} onOpen={() => setOpenSupportChat(false)} />
+
+      {/* ── Configure Bot Modal ── */}
+      {showConfigModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={e => { if (e.target === e.currentTarget) setShowConfigModal(false); }}>
+          <div style={{ background: '#13151f', border: '1px solid #1f2937', borderRadius: 14, padding: 28, width: 400, maxWidth: '90vw' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <SlidersHorizontal size={20} color="#f59e0b" />
+                <h3 style={{ color: '#fff', fontSize: 16, fontWeight: 700, margin: 0 }}>Configure Bot</h3>
+              </div>
+              <button onClick={() => setShowConfigModal(false)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', padding: 4 }}><X size={18} /></button>
+            </div>
+
+            <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20 }}>
+              Choose which order types the bot should process. By default the bot handles both buying and selling.
+            </p>
+
+            {[
+              { value: 'both', label: 'Buy & Sell (default)', desc: 'Bot processes all orders — buying and selling crypto.' },
+              { value: 'buy_only', label: 'Buy orders only', desc: 'Bot pays sellers and acquires crypto. Sell orders are ignored.' },
+              { value: 'sell_only', label: 'Sell orders only', desc: 'Bot releases crypto to buyers. Buy orders are ignored.' },
+            ].map(opt => (
+              <label key={opt.value} onClick={() => setBotTradeMode(opt.value)}
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 14px', borderRadius: 10, border: `1px solid ${botTradeMode === opt.value ? '#f59e0b' : '#1f2937'}`, background: botTradeMode === opt.value ? 'rgba(245,158,11,0.06)' : 'transparent', marginBottom: 10, cursor: 'pointer', transition: 'all 0.15s' }}>
+                <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${botTradeMode === opt.value ? '#f59e0b' : '#374151'}`, background: botTradeMode === opt.value ? '#f59e0b' : 'transparent', flexShrink: 0, marginTop: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {botTradeMode === opt.value && <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#000' }} />}
+                </div>
+                <div>
+                  <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600, marginBottom: 2 }}>{opt.label}</div>
+                  <div style={{ color: '#6b7280', fontSize: 12 }}>{opt.desc}</div>
+                </div>
+              </label>
+            ))}
+
+            <button
+              onClick={async () => {
+                setSavingConfig(true);
+                try {
+                  await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode });
+                  setShowConfigModal(false);
+                } catch (e) {}
+                setSavingConfig(false);
+              }}
+              disabled={savingConfig}
+              style={{ width: '100%', marginTop: 8, padding: '11px 0', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#000', fontWeight: 700, fontSize: 14, cursor: 'pointer', opacity: savingConfig ? 0.6 : 1 }}
+            >
+              {savingConfig ? 'Saving...' : 'Save Configuration'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
