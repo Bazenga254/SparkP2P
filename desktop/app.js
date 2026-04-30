@@ -498,6 +498,13 @@ function createMainWindow() {
     if (response === 1 && checkboxChecked) {
       app.isQuitting = true;
       app.quit();
+    } else if (response === 1 && !checkboxChecked) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Confirmation Required',
+        message: 'Please tick "Yes, I understand" before closing.',
+        buttons: ['OK'],
+      });
     }
   });
   // Reset pause inactivity timer on any user activity in the app window
@@ -6558,11 +6565,12 @@ Method selection rules:
       // â”€â”€ Step 2: Execute I&M Bank payment â€” skip if already paid for this order â”€
       const payMethod = (paymentDetails.method || 'mpesa').toLowerCase();
       let imResult = { success: false, screenshot: null };
+      const IM_MAX_RETRIES = 3;
       if (imPaymentDoneMap[order_number]) {
         console.log(`[SparkP2P] âš ï¸ I&M payment already sent for ${order_number} â€” skipping to Transferred button`);
         imResult = { success: true, ...imPaymentDoneMap[order_number] };
       } else {
-        const IM_MAX_RETRIES = 3;
+
         for (let attempt = 1; attempt <= IM_MAX_RETRIES; attempt++) {
           try {
             console.log(`[SparkP2P] I&M payment attempt ${attempt}/${IM_MAX_RETRIES} (method: ${payMethod})...`);
