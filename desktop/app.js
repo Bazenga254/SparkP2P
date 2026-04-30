@@ -357,11 +357,11 @@ function createLockWindow() {
   lockWindow = new BrowserWindow({
     x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
     frame: false, transparent: true, alwaysOnTop: true,
-    fullscreen: true, skipTaskbar: true, resizable: false, movable: false,
+    skipTaskbar: true, resizable: false, movable: false,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
   lockWindow.loadFile(path.join(__dirname, 'lock.html'));
-  lockWindow.setAlwaysOnTop(true, 'screen-saver');
+  lockWindow.setAlwaysOnTop(true, 'pop-up-menu');
   lockWindow.hide();
   lockWindow.on('closed', () => { lockWindow = null; lockScreenActive = false; });
 }
