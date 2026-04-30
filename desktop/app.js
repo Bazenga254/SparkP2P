@@ -114,6 +114,7 @@ let traderAccountNumber = null; // e.g. "P2PT0001" â€” used in paybill paym
 let traderPhoneNumber = null;  // Trader's own phone number â€” included in buy greeting message
 let traderImAccount = null;    // Trader's I&M settlement account number â€” used to select debit account
 const DEV_UNLOCK = false; // browser lock enabled
+const BOT_DISABLED = true; // set to false to re-enable automation
 let browserLocked = false;
 let lockFrameListener = null;
 let lockGmailFrameListener = null;
@@ -1826,6 +1827,7 @@ function scheduleNextPoll(delayMs) {
 }
 
 function startPoller() {
+  if (BOT_DISABLED) { console.log('[SparkP2P] BOT_DISABLED — automation skipped'); return; }
   if (pollerRunning) return;
   pollerRunning = true;
   console.log('[SparkP2P] Bot started');
