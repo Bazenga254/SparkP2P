@@ -2470,6 +2470,21 @@ async function idleScan(page) {
   console.log(`[SparkP2P] â”€â”€ IDLE SCAN #${stats.polls + 1} â”€â”€`);
   if (pauseNavigation) return;
 
+  // Refresh botTradeMode from backend on every scan so UI changes take effect immediately
+  if (token) {
+    try {
+      const modeRes = await fetch(`${API_BASE}/traders/profile`, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (modeRes.ok) {
+        const modeData = await modeRes.json();
+        const newMode = modeData.bot_trade_mode || 'both';
+        if (newMode !== botTradeMode) {
+          console.log(`[SparkP2P] Trade mode updated: ${botTradeMode} → ${newMode}`);
+          botTradeMode = newMode;
+        }
+      }
+    } catch (_) {}
+  }
+
   // â”€â”€ Step 1: Check active orders FIRST â€” skip wallet scan if an order needs attention â”€â”€
   console.log('[SparkP2P] Step 1: Checking active orders (tab=0)...');
   await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
@@ -3099,8 +3114,48 @@ async function idleScan(page) {
       }
 
       // Extract payment details from the order page we are already on
+      // L1: DOM extraction first — reliable for phone/name/amount without Vision OCR errors
       let paymentDetails = null;
-      if (anthropicApiKey) {
+      try {
+        paymentDetails = await page.evaluate(() => {
+          const getText = (labelRegex) => {
+            const els = Array.from(document.querySelectorAll('div, span, td, p'));
+            for (const el of els) {
+              if (el.childElementCount > 0) continue;
+              const t = (el.textContent || '').trim();
+              if (!labelRegex.test(t)) continue;
+              // try next sibling or parent's next sibling
+              const parent = el.parentElement;
+              const nextSib = el.nextElementSibling || (parent && parent.nextElementSibling);
+              if (nextSib) {
+                const val = (nextSib.textContent || '').trim();
+                if (val && val !== t) return val;
+              }
+              // try parent's second child
+              if (parent && parent.children.length >= 2) {
+                const val = (parent.children[1].textContent || '').trim();
+                if (val && val !== t) return val;
+              }
+            }
+            return null;
+          };
+          const phone = getText(/^phone number$/i);
+          const name = getText(/^name$/i);
+          const via = getText(/^transfer via$/i) || '';
+          const ref = getText(/^reference message$/i);
+          const amtEl = document.body.innerText.match(/KSh\s*([\d,]+\.?\d*)/);
+          const amount = amtEl ? parseFloat(amtEl[1].replace(/,/g, '')) : null;
+          if (!phone || !amount) return null;
+          const method = /i\s*&\s*m/i.test(via) ? 'im_bank' : /mpesa|safaricom|m-pesa/i.test(via) ? 'mpesa' : 'mpesa';
+          const network = /airtel/i.test(via) ? 'airtel' : 'safaricom';
+          return { method, phone, name: name || '', amount, reference: ref || '', network };
+        }).catch(() => null);
+        if (paymentDetails?.phone) console.log(`[SparkP2P] L1 DOM extracted phone: ${paymentDetails.phone}, amount: ${paymentDetails.amount}`);
+      } catch (_) {}
+
+      // L2: Vision fallback — only if DOM extraction missed phone or amount
+      if (anthropicApiKey && (!paymentDetails?.phone || !paymentDetails?.amount)) {
+        const domPhone = paymentDetails?.phone || null; // preserve DOM phone if Vision overwrites
         const paySS = await page.screenshot({ encoding: 'base64' }).catch(() => null);
         if (paySS) {
           const extractRes = await fetch('https://api.anthropic.com/v1/messages', {
@@ -3114,9 +3169,9 @@ async function idleScan(page) {
                 { type: 'text', text: `Extract the payment details from this Binance P2P buy order page.
 Return JSON only (no other text):
 {
-  "method": "mpesa | im_bank | other_bank",
-  "phone": "07XXXXXXXX or 254XXXXXXXXX â€” phone number if M-Pesa, else null",
-  "account_number": "bank account number if paying to a bank account, else null",
+  “method”: “mpesa | im_bank | other_bank”,
+  “phone”: “07XXXXXXXX or 254XXXXXXXXX â€” phone number if M-Pesa, else null”,
+  “account_number”: “bank account number if paying to a bank account, else null”,
   "bank_name": "bank name e.g. 'I & M Bank', 'Equity Bank', 'KCB' â€” if bank transfer, else null",
   "name": "seller full name",
   "amount": 1234,
@@ -3133,7 +3188,14 @@ Method selection rules:
           if (extractRes?.ok) {
             const d = await extractRes.json();
             const m = (d.content?.[0]?.text || '').match(/\{[\s\S]*\}/);
-            if (m) { try { paymentDetails = JSON.parse(m[0]); } catch (_) {} }
+            if (m) {
+              try {
+                const visionData = JSON.parse(m[0]);
+                // Always prefer DOM phone over Vision phone — DOM is exact, Vision can misread digits
+                if (domPhone) visionData.phone = domPhone;
+                paymentDetails = visionData;
+              } catch (_) {}
+            }
           }
         }
       }
