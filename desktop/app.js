@@ -7125,8 +7125,13 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       if (selected) {
         accountSelected = true;
         console.log(`[I&M] STEP 0 âœ… Account selected via dispatchEvent: "${selected}"`);
-        await imPage.evaluate(() => document.body.click()).catch(() => {}); // close CDK overlay
-        await new Promise(r => setTimeout(r, 1000));
+        // Click CDK backdrop if present, then Escape — body.click() alone doesn't close the overlay
+        await imPage.evaluate(() => {
+          const backdrop = document.querySelector('.cdk-overlay-backdrop');
+          if (backdrop) backdrop.click(); else document.body.click();
+        }).catch(() => {});
+        await imPage.keyboard.press('Escape');
+        await new Promise(r => setTimeout(r, 800));
         await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
         await new Promise(r => setTimeout(r, 400));
         break;
@@ -7164,9 +7169,13 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
     if (clicked) {
       console.log(`[I&M] âœ… L1 dispatchEvent on <${clicked.tag}> "${clicked.text}"`);
-      await imPage.evaluate(() => document.body.click()).catch(() => {}); // close CDK overlay
+      await imPage.evaluate(() => {
+        const backdrop = document.querySelector('.cdk-overlay-backdrop');
+        if (backdrop) backdrop.click(); else document.body.click();
+      }).catch(() => {});
+      await imPage.keyboard.press('Escape');
       accountSelected = true;
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 800));
       await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
       await new Promise(r => setTimeout(r, 500));
       console.log('[I&M] Scrolled down after account selection');
@@ -7449,9 +7458,13 @@ Return ONLY valid JSON, no other text.` },
 
       if (acctClicked) {
         console.log(`[I&M Vision] âœ… account_list dispatchEvent on "${acctClicked}"`);
-        await imPage.evaluate(() => document.body.click()).catch(() => {}); // close CDK overlay
+        await imPage.evaluate(() => {
+          const backdrop = document.querySelector('.cdk-overlay-backdrop');
+          if (backdrop) backdrop.click(); else document.body.click();
+        }).catch(() => {});
+        await imPage.keyboard.press('Escape');
         accountSelected = true;
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 1000));
         await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
         await new Promise(r => setTimeout(r, 500));
       } else if (action.x && action.y) {
