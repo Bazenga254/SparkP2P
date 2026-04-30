@@ -7008,6 +7008,10 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     }
     } // end !accountSelected
 
+    // Scroll to bottom so Continue/Submit button is visible in the screenshot
+    await imPage.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' })).catch(() => {});
+    await new Promise(r => setTimeout(r, 300));
+
     screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
     if (!screenshot) { console.log('[I&M Vision] Could not take screenshot'); continue; }
 
