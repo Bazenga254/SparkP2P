@@ -436,12 +436,16 @@ app.on('before-quit', (event) => {
   // Tell the backend the bot stopped intentionally so offline alerts are suppressed
   const notifyAndExit = async () => {
     if (token) {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 3000);
       try {
         await fetch(`${API_BASE}/ext/bot-stopped`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}` },
+          signal: controller.signal,
         });
       } catch (e) {}
+      clearTimeout(t);
     }
     if (updateReadyToInstall && autoUpdater) {
       autoUpdater.quitAndInstall(false, true); // install silently and relaunch
