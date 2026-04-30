@@ -115,6 +115,9 @@ let traderPhoneNumber = null;  // Trader's own phone number â€” included in
 let traderImAccount = null;    // Trader's I&M settlement account number â€” used to select debit account
 const DEV_UNLOCK = true; // true = no CSS overlay on browser tabs
 const BOT_DISABLED = false; // set to true to disable automation
+const LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes inactivity before screen locks
+let lastActivityTime = Date.now();
+let screenLocked = false;
 let browserLocked = false;
 let lockFrameListener = null;
 let lockGmailFrameListener = null;
@@ -542,11 +545,65 @@ function createMainWindow() {
       ).catch(() => {});
     }
     captureToken();
+    // Inject activity tracker
+    mainWindow.webContents.executeJavaScript(`(function(){if(window.__sp2pAT)return;window.__sp2pAT=true;['mousemove','mousedown','keydown','scroll','click'].forEach(function(e){document.addEventListener(e,function(){window.sparkp2p&&window.sparkp2p.reportActivity&&window.sparkp2p.reportActivity();},{passive:true,capture:true});});})();`).catch(() => {});
+    lastActivityTime = Date.now();
+    // Re-inject lock overlay if screen was locked before navigation
+    if (screenLocked) {
+      setTimeout(() => { if (screenLocked && mainWindow && !mainWindow.isDestroyed()) injectLockOverlay(); }, 800);
+    }
   });
   mainWindow.webContents.on('did-navigate-in-page', captureToken);
   // Also poll for token every 5 seconds (catches SPA login) â€” cleared on window destroy
   const captureInterval = setInterval(captureToken, 5000);
-  mainWindow.once('destroyed', () => clearInterval(captureInterval));
+  mainWindow.once('destroyed', () => { clearInterval(captureInterval); clearInterval(lockCheckInterval); });
+
+  // ── Inactivity screen lock ────────────────────────────────────────────────
+  function injectLockOverlay() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const script = '(function(){'
+      + 'if(document.getElementById(“sp2p-lock”))return;'
+      + 'var el=document.createElement(“div”);'
+      + 'el.id=”sp2p-lock”;'
+      + 'el.style.cssText=”position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(6,6,18,0.90);backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif”;'
+      + 'el.innerHTML=\'<div style=”background:#0f1623;border:1px solid #1f2937;border-radius:20px;padding:48px 40px;text-align:center;max-width:380px;width:90%;box-shadow:0 32px 80px rgba(0,0,0,0.85)”>'
+      + '<div style=”font-size:56px;margin-bottom:12px”>🔒</div>'
+      + '<div style=”font-size:22px;font-weight:700;color:#f59e0b;margin-bottom:8px”>Session Locked</div>'
+      + '<div style=”font-size:13px;color:#6b7280;margin-bottom:28px;line-height:1.6”>5 minutes of inactivity.<br>Enter your Google Authenticator<br>code to resume.</div>'
+      + '<input id=”sp2p-lock-code” type=”text” inputmode=”numeric” maxlength=”6” placeholder=”000000” autocomplete=”one-time-code” style=”width:100%;padding:16px;font-size:28px;letter-spacing:12px;text-align:center;background:#1f2937;border:2px solid #374151;border-radius:12px;color:#fff;outline:none;box-sizing:border-box;margin-bottom:8px”>'
+      + '<div id=”sp2p-lock-err” style=”min-height:20px;font-size:13px;color:#ef4444;margin-bottom:12px”></div>'
+      + '<button id=”sp2p-lock-btn” style=”width:100%;padding:14px;background:#f59e0b;color:#000;font-weight:700;font-size:16px;border:none;border-radius:12px;cursor:pointer”>Unlock</button>'
+      + '<div style=”margin-top:20px;font-size:11px;color:#2d3748”>SparkP2P — Automated P2P Trading</div>'
+      + '</div>\';'
+      + 'document.body.appendChild(el);'
+      + 'var inp=document.getElementById(“sp2p-lock-code”);'
+      + 'var btn=document.getElementById(“sp2p-lock-btn”);'
+      + 'var err=document.getElementById(“sp2p-lock-err”);'
+      + 'inp.focus();'
+      + 'function tryUnlock(){'
+      +   'var code=inp.value.replace(/[^0-9]/g,””);'
+      +   'if(code.length!==6){err.textContent=”Enter the 6-digit code from Google Authenticator”;return;}'
+      +   'btn.disabled=true;btn.textContent=”Verifying…”;err.textContent=””;'
+      +   'window.sparkp2p.verifyLockTotp(code).then(function(ok){'
+      +     'if(ok){el.remove();}'
+      +     'else{err.textContent=”Incorrect code — try again”;inp.value=””;inp.focus();btn.disabled=false;btn.textContent=”Unlock”;}'
+      +   '}).catch(function(){err.textContent=”Verification error — try again”;btn.disabled=false;btn.textContent=”Unlock”;});'
+      + '}'
+      + 'btn.addEventListener(“click”,tryUnlock);'
+      + 'inp.addEventListener(“keydown”,function(e){if(e.key===”Enter”)tryUnlock();});'
+      + 'inp.addEventListener(“input”,function(){inp.value=inp.value.replace(/[^0-9]/g,””);if(inp.value.length===6)tryUnlock();});'
+      + '})();';
+    mainWindow.webContents.executeJavaScript(script).catch(() => {});
+  }
+
+  const lockCheckInterval = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || screenLocked || !token) return;
+    if (Date.now() - lastActivityTime >= LOCK_TIMEOUT_MS) {
+      screenLocked = true;
+      console.log('[SparkP2P] Screen locked after 5min inactivity');
+      injectLockOverlay();
+    }
+  }, 30000); // check every 30 seconds
 
   // Intercept WebSocket remote browser â€” open Chrome instead (only if not already connecting/connected)
   mainWindow.webContents.session.webRequest.onBeforeRequest(
@@ -3874,6 +3931,33 @@ function generateTOTP(secret) {
   const hmac = crypto.createHmac('sha1', key).update(msg).digest();
   const offset = hmac[19] & 0x0f;
   const code = ((hmac[offset] & 0x7f) << 24 | hmac[offset+1] << 16 | hmac[offset+2] << 8 | hmac[offset+3]) % 1000000;
+  return code.toString().padStart(6, '0');
+}
+
+function verifyTOTP(secret, userCode) {
+  if (!secret || !userCode) return false;
+  const input = String(userCode).replace(/[^0-9]/g, '');
+  if (input.length !== 6) return false;
+  const baseCounter = Math.floor(Date.now() / 1000 / 30);
+  for (let d = -1; d <= 1; d++) {
+    const expected = generateTOTPAtCounter(secret, baseCounter + d);
+    if (expected === input) return true;
+  }
+  return false;
+}
+
+function generateTOTPAtCounter(secret, counter) {
+  const crypto = require('crypto');
+  const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = secret.toUpperCase().replace(/\s|=/g, '');
+  let bits = '';
+  for (const ch of clean) { const v = BASE32.indexOf(ch); if (v !== -1) bits += v.toString(2).padStart(5, '0'); }
+  const keyBytes = []; for (let i = 0; i + 8 <= bits.length; i += 8) keyBytes.push(parseInt(bits.slice(i, i+8), 2));
+  const key = Buffer.from(keyBytes);
+  const msg = Buffer.alloc(8); msg.writeUInt32BE(Math.floor(counter / 0x100000000), 0); msg.writeUInt32BE(counter >>> 0, 4);
+  const hmac = crypto.createHmac('sha1', key).update(msg).digest();
+  const off = hmac[19] & 0x0f;
+  const code = ((hmac[off] & 0x7f) << 24 | hmac[off+1] << 16 | hmac[off+2] << 8 | hmac[off+3]) % 1000000;
   return code.toString().padStart(6, '0');
 }
 
@@ -11235,6 +11319,14 @@ ipcMain.handle('save-gmail-credentials', (_e, email, appPassword) => { saveGmail
 ipcMain.handle('load-gmail-credentials', () => { const c = loadGmailCredentials(); return c ? { email: c.email, hasPassword: !!c.appPassword } : null; });
 ipcMain.handle('clear-gmail-credentials', () => { clearGmailCredentials(); return true; });
 ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });
+ipcMain.on('user-activity', () => { lastActivityTime = Date.now(); });
+ipcMain.handle('verify-lock-totp', (_, code) => {
+  if (!totpSecret) { screenLocked = false; return true; } // no TOTP configured — allow through
+  const valid = verifyTOTP(totpSecret, String(code));
+  if (valid) { screenLocked = false; lastActivityTime = Date.now(); console.log('[SparkP2P] Screen unlocked via TOTP'); }
+  else { console.log('[SparkP2P] Lock screen: wrong TOTP attempt'); }
+  return valid;
+});
 ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; console.log('[SparkP2P] AI key set (legacy)'); return { ok: true }; });
 ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; saveAnthropicKey(key); aiScanner.initAI(key); console.log('[SparkP2P] Claude configured and saved to disk'); return { ok: true }; });
 ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin: !!traderPin, hasTOTP: !!totpSecret, hasAI: !!anthropicApiKey, hasVision: !!anthropicApiKey, version: app.getVersion() }));
