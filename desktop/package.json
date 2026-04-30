@@ -1,6 +1,6 @@
 {
   "name": "sparkp2p",
-  "version": "1.1.68",
+  "version": "1.1.69",
   "description": "SparkP2P Bot - Automated Binance P2P Trading",
   "main": "app.js",
   "scripts": {

@@ -415,6 +415,7 @@ async function hideElectronOverlay() {
 
 async function hideLockScreen() {
   await hideElectronOverlay();
+  await unlockChromeBrowser().catch(() => {}); // remove isTrusted filter so human can click Chrome tabs
   sendLockAccessAlert();
   console.log('[Lock] Screen unlocked by user');
   sendBotLog('success', 'Screen unlocked');
@@ -7275,10 +7276,12 @@ Return ONLY valid JSON, no other text.` },
     console.log(`[I&M Vision] Step ${step}: screen="${action.screen}" action="${action.action}" desc="${action.description || ''}" val="${action.value || ''}"`);
 
     // â”€â”€ Guard: block Vision from re-clicking radio buttons already set by L1 â”€â”€
-    if (radiosConfirmed && action.action === 'click') {
+    if (radiosConfirmed && (action.action || '').toLowerCase() === 'click') {
       const desc = (action.description || '').toLowerCase();
-      if (desc.includes('other phone') || desc.includes('one-off') || desc.includes('one off') || desc.includes('beneficiary')) {
-        console.log(`[I&M Vision] â›” Blocked redundant radio click "${action.description}" â€” radios already confirmed`);
+      if (desc.includes('other phone') || desc.includes('own phone') ||
+          desc.includes('one-off') || desc.includes('one off') || desc.includes('beneficiary') ||
+          desc.includes('radio')) {
+        console.log(`[I&M Vision] â›” Blocked redundant radio click “${action.description}” â€” radios already confirmed`);
         continue; // skip this step, take fresh screenshot next iteration
       }
     }
