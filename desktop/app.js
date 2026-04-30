@@ -487,7 +487,9 @@ function createMainWindow() {
   });
 
   loadDashboard();
+  let userConfirmedClose = false;
   mainWindow.on('close', async (e) => {
+    if (userConfirmedClose) return; // user already confirmed — let the close proceed
     e.preventDefault();
     const { response, checkboxChecked } = await dialog.showMessageBox(mainWindow, {
       type: 'warning',
@@ -501,7 +503,7 @@ function createMainWindow() {
       cancelId: 0,
     });
     if (response === 1 && checkboxChecked) {
-      app.isQuitting = true;
+      userConfirmedClose = true;
       app.quit();
     } else if (response === 1 && !checkboxChecked) {
       dialog.showMessageBox(mainWindow, {
