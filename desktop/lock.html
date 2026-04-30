@@ -4,147 +4,140 @@
 <meta charset="UTF-8">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; }
-body { display: flex; align-items: center; justify-content: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.58); display: flex; align-items: center; justify-content: center; }
-.card {
-  background: rgba(13,15,30,0.96);
-  border: 1.5px solid rgba(245,158,11,0.35);
-  border-radius: 18px;
-  padding: 38px 42px 32px;
-  width: 430px;
-  text-align: center;
-  backdrop-filter: blur(16px);
-  box-shadow: 0 24px 72px rgba(0,0,0,0.65);
+html, body {
+  width: 100%; height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
-.lock-icon { font-size: 46px; margin-bottom: 14px; }
-h2 { color: #f59e0b; font-size: 22px; font-weight: 700; margin-bottom: 6px; }
-.subtitle { color: #9ca3af; font-size: 13px; margin-bottom: 28px; line-height: 1.6; }
-.divider { height: 1px; background: rgba(255,255,255,0.08); margin: 0 0 22px; }
-.label { color: #9ca3af; font-size: 11px; font-weight: 600; text-align: left; margin-bottom: 7px; letter-spacing: 0.8px; text-transform: uppercase; }
-.question { color: #f59e0b; font-size: 13px; font-style: italic; text-align: left; margin-bottom: 8px; line-height: 1.4; }
+
+/* Fullscreen invisible area — visual presence only, mouse passthrough handled via IPC */
+.blocker {
+  position: fixed;
+  inset: 0;
+}
+
+/* Small corner widget */
+.widget {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  width: 240px;
+  background: rgba(10, 12, 24, 0.92);
+  border: 1px solid rgba(245,158,11,0.5);
+  border-radius: 14px;
+  padding: 12px 14px 10px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.55);
+  cursor: default;
+  pointer-events: all;
+}
+
+.widget-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 9px;
+}
+.lock-icon { font-size: 13px; }
+.title { color: #f59e0b; font-size: 12px; font-weight: 700; letter-spacing: 0.2px; }
+
+.dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #10b981;
+  animation: pulse 1.6s ease-in-out infinite;
+  margin-left: auto;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
 input {
   width: 100%;
-  background: rgba(255,255,255,0.05);
-  border: 1.5px solid rgba(255,255,255,0.1);
-  border-radius: 10px;
-  padding: 13px 16px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  padding: 8px 10px;
   color: #fff;
-  font-size: 20px;
-  letter-spacing: 8px;
-  margin-bottom: 20px;
-  outline: none;
+  font-size: 18px;
+  letter-spacing: 7px;
   text-align: center;
-  transition: border-color 0.2s, background 0.2s;
+  outline: none;
+  transition: border-color 0.15s;
+  margin-bottom: 7px;
 }
-input.answer-inp { font-size: 14px; letter-spacing: 0; text-align: left; }
-input:focus { border-color: #f59e0b; background: rgba(245,158,11,0.04); }
+input:focus { border-color: #f59e0b; }
+input::placeholder { letter-spacing: 3px; font-size: 13px; color: rgba(255,255,255,0.25); }
+
 .btn {
   width: 100%;
   background: linear-gradient(135deg, #f59e0b, #d97706);
   color: #0d0f1e;
   border: none;
-  border-radius: 10px;
-  padding: 14px;
-  font-size: 15px;
+  border-radius: 7px;
+  padding: 7px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
-  margin-top: 2px;
   letter-spacing: 0.3px;
   transition: opacity 0.15s;
 }
-.btn:hover { opacity: 0.88; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .error {
-  color: #ef4444;
-  font-size: 13px;
-  margin-top: 14px;
-  padding: 10px 14px;
-  background: rgba(239,68,68,0.1);
-  border: 1px solid rgba(239,68,68,0.2);
-  border-radius: 8px;
+  color: #f87171;
+  font-size: 11px;
+  margin-top: 6px;
+  text-align: center;
   display: none;
 }
-.badge {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 20px;
-  padding: 10px 16px;
-  background: rgba(16,185,129,0.09);
-  border: 1px solid rgba(16,185,129,0.18);
-  border-radius: 8px;
-}
-.dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; animation: pulse 1.6s ease-in-out infinite; }
-.badge-text { color: #10b981; font-size: 13px; font-weight: 500; }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 </style>
 </head>
 <body>
-<div class="overlay">
-  <div class="card">
-    <div class="lock-icon">🔒</div>
-    <h2>SparkP2P Locked</h2>
-    <p class="subtitle">Your bot is working safely beneath this screen.<br>Enter credentials to take control.</p>
-    <div class="divider"></div>
+<div class="blocker"></div>
 
-    <div class="label">Google Authenticator Code</div>
-    <input type="text" id="totp" maxlength="6" placeholder="000000" autocomplete="off" inputmode="numeric" />
-
-    <div class="question" id="secQuestion">Loading...</div>
-    <div class="label">Your Answer</div>
-    <input type="password" id="answer" class="answer-inp" placeholder="Enter your answer" autocomplete="off" />
-
-    <button class="btn" id="btn" onclick="unlock()">Unlock Bot</button>
-    <div class="error" id="err"></div>
-
-    <div class="badge">
-      <div class="dot"></div>
-      <span class="badge-text" id="statusText">Bot is active</span>
-    </div>
+<div class="widget">
+  <div class="widget-header">
+    <span class="lock-icon">🔒</span>
+    <span class="title">SparkP2P Bot Active</span>
+    <span class="dot" id="dot"></span>
   </div>
+
+  <input type="text" id="totp" maxlength="6" placeholder="Authenticator" autocomplete="off" inputmode="numeric" />
+  <button class="btn" id="btn" onclick="unlock()">Unlock</button>
+  <div class="error" id="err"></div>
 </div>
 
 <script>
 const { ipcRenderer } = require('electron');
 
-ipcRenderer.invoke('lock-get-question').then(q => {
-  document.getElementById('secQuestion').textContent = q || 'Security not configured — contact support.';
-}).catch(() => { document.getElementById('secQuestion').textContent = 'Could not load security question.'; });
-
 ipcRenderer.invoke('get-bot-status').then(s => {
-  document.getElementById('statusText').textContent = s?.running ? 'Bot is actively trading' : 'Bot is paused';
+  document.getElementById('dot').style.background = s?.running ? '#10b981' : '#f59e0b';
 }).catch(() => {});
 
 async function unlock() {
-  const totp   = document.getElementById('totp').value.replace(/\s/g, '');
-  const answer = document.getElementById('answer').value.trim();
-  const btn    = document.getElementById('btn');
-  const err    = document.getElementById('err');
+  const totp = document.getElementById('totp').value.replace(/\s/g, '');
+  const btn  = document.getElementById('btn');
+  const err  = document.getElementById('err');
 
-  if (totp.length !== 6) { showErr('Enter the 6-digit Google Authenticator code.'); return; }
-  if (!answer) { showErr('Enter your security answer.'); return; }
+  if (totp.length !== 6) { showErr('Enter 6-digit code'); return; }
 
   btn.disabled = true;
-  btn.textContent = 'Verifying...';
+  btn.textContent = '...';
   err.style.display = 'none';
 
   try {
-    const result = await ipcRenderer.invoke('lock-unlock', { totp, answer });
-    if (result.success) {
-      err.style.display = 'none';
-    } else {
-      showErr(result.message || 'Incorrect code or answer. Try again.');
+    const result = await ipcRenderer.invoke('lock-unlock', { totp });
+    if (!result.success) {
+      showErr(result.message || 'Invalid code');
       document.getElementById('totp').value = '';
       document.getElementById('totp').focus();
     }
   } catch (e) {
-    showErr('Verification failed. Try again.');
+    showErr('Failed. Try again.');
   }
 
   btn.disabled = false;
-  btn.textContent = 'Unlock Bot';
+  btn.textContent = 'Unlock';
 }
 
 function showErr(msg) {
@@ -153,15 +146,14 @@ function showErr(msg) {
   err.style.display = 'block';
 }
 
-document.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { unlock(); return; }
-  if (e.key === 'Tab' && document.activeElement === document.getElementById('totp')) {
-    e.preventDefault();
-    document.getElementById('answer').focus();
-  }
-});
-
+document.addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
 document.getElementById('totp').focus();
+
+// Forward scroll events to Chrome so trader can monitor live bot actions
+// Clicks are still blocked by the overlay — only scroll passes through
+document.addEventListener('wheel', (e) => {
+  ipcRenderer.send('lock-forward-scroll', { deltaX: e.deltaX, deltaY: e.deltaY });
+}, { passive: true });
 </script>
 </body>
 </html>

@@ -36,10 +36,11 @@ http.createServer(async (req, res) => {
   } else if (req.url === '/resume') {
     pauseNavigation = false;
     clearPauseInactivityTimer();
-    await lockChromeBrowser().catch(() => {}); // Bot takes Chrome back
-    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed"))').catch(() => {});
-    console.log('[SparkP2P] Bot RESUMED â€” Chrome locked back to bot');
-    sendBotLog('success', 'Bot resumed — Chrome locked back to bot');
+    await lockChromeBrowser().catch(() => {});
+    if (token && pollerRunning) showLockScreen();
+    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“bot-resumed”))').catch(() => {});
+    console.log('[SparkP2P] Bot RESUMED — screen locked');
+    sendBotLog('success', 'Bot resumed — screen locked');
     res.end(JSON.stringify({ ok: true, paused: false }));
   } else if (req.url === '/status') {
     res.end(JSON.stringify({
@@ -196,11 +197,13 @@ function sendBotLog(level, message) {
 function startPauseInactivityTimer() {
   clearPauseInactivityTimer();
   pauseInactivityTimer = setTimeout(async () => {
-    if (!pauseNavigation) return; // already resumed
-    console.log('[SparkP2P] 3 minute pause elapsed â€” auto-resuming and locking all screens');
+    if (!pauseNavigation) return;
+    console.log('[SparkP2P] 3 minute pause elapsed — auto-resuming, showing lock screen');
     pauseNavigation = false;
     await lockChromeBrowser().catch(() => {});
-    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed", { detail: { reason: "inactivity" } }))').catch(() => {});
+    if (token && pollerRunning) showLockScreen();
+    sendBotLog('warning', 'Pause timed out — bot resumed, enter Authenticator code to take control');
+    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“bot-resumed”, { detail: { reason: “inactivity” } }))').catch(() => {});
   }, PAUSE_AUTO_RESUME_MS);
 }
 
@@ -363,34 +366,26 @@ function createLockWindow() {
   lockWindow.on('closed', () => { lockWindow = null; lockScreenActive = false; });
 }
 
-function blockHumanInput(block) {
-  const ps = `Add-Type -TypeDefinition @'
-using System.Runtime.InteropServices;
-public class W { [DllImport("user32.dll")] public static extern bool BlockInput(bool b); }
-'@; [W]::BlockInput($${block ? 'true' : 'false'})`;
-  try { execSync(`powershell -NonInteractive -Command "${ps.replace(/\n/g, ' ')}"`, { timeout: 3000 }); }
-  catch (e) { console.log('[Lock] BlockInput call failed (may need admin rights):', e.message); }
-}
-
 async function showLockScreen() {
   if (!lockWindow || lockWindow.isDestroyed()) createLockWindow();
-  // Reload so status text is fresh
   lockWindow.webContents.reload();
   await new Promise(r => setTimeout(r, 400));
   lockWindow.show();
   lockWindow.focus();
   lockScreenActive = true;
-  blockHumanInput(true);
   console.log('[Lock] Screen locked — bot continues via CDP');
-  sendBotLog('warning', 'Screen locked — enter Google Authenticator code to unlock');
+  sendBotLog('warning', 'Screen locked — enter Authenticator code to unlock');
+}
+
+async function hideElectronOverlay() {
+  if (lockWindow && !lockWindow.isDestroyed()) lockWindow.hide();
+  lockScreenActive = false;
 }
 
 async function hideLockScreen() {
-  if (lockWindow && !lockWindow.isDestroyed()) lockWindow.hide();
-  lockScreenActive = false;
-  blockHumanInput(false);
+  await hideElectronOverlay();
   sendLockAccessAlert();
-  console.log('[Lock] Screen unlocked');
+  console.log('[Lock] Screen unlocked by user');
   sendBotLog('success', 'Screen unlocked');
 }
 
@@ -628,13 +623,14 @@ function createTray() {
             pauseNavigation = false;
             clearPauseInactivityTimer();
             await lockChromeBrowser();
+            if (token && pollerRunning) showLockScreen();
             console.log('[SparkP2P] Bot RESUMED via tray');
           } else {
             pauseNavigation = true;
-            scanningInProgress = false; // force-exit any running cycle immediately
-            await unlockChromeBrowser();
+            scanningInProgress = false;
+            await hideElectronOverlay();
             startPauseInactivityTimer();
-            console.log('[SparkP2P] Bot PAUSED via tray â€” Chrome unlocked for manual use');
+            console.log('[SparkP2P] Bot PAUSED via tray — Chrome accessible');
           }
           tray.setContextMenu(buildTrayMenu());
         },
@@ -652,13 +648,14 @@ function createTray() {
         pauseNavigation = false;
         clearPauseInactivityTimer();
         await lockChromeBrowser();
+        if (token && pollerRunning) showLockScreen();
         console.log('[SparkP2P] Bot RESUMED via shortcut');
       } else {
         pauseNavigation = true;
-        scanningInProgress = false; // force-exit any running cycle immediately
-        await unlockChromeBrowser();
+        scanningInProgress = false;
+        await hideElectronOverlay();
         startPauseInactivityTimer();
-        console.log('[SparkP2P] Bot PAUSED via shortcut â€” Chrome unlocked for manual use');
+        console.log('[SparkP2P] Bot PAUSED via shortcut — Chrome accessible');
       }
       tray.setContextMenu(buildTrayMenu());
     });
@@ -877,6 +874,13 @@ async function onGmailConfirmed() {
     await gmailPage.waitForNetworkIdle({ idleTime: 800, timeout: 4000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 500));
   }
+  // Auto-open I&M Bank tab now that Gmail is confirmed
+  if (!connectingIm && (!imPage || imPage.isClosed())) {
+    setTimeout(() => {
+      console.log('[SparkP2P] Auto-connecting I&M Bank after Gmail confirmed...');
+      connectIm().catch(() => {});
+    }, 2000);
+  }
   // Lock ALL bot-controlled tabs (sets browserLocked = true)
   await lockChromeBrowser().catch(() => {});
   console.log('[SparkP2P] Gmail locked successfully');
@@ -1046,96 +1050,13 @@ async function injectLockOverlay(page) {
 }
 
 async function lockChromeBrowser() {
-  if (DEV_UNLOCK) { console.log('[SparkP2P] DEV_UNLOCK â€” browser lock skipped'); return; }
+  if (DEV_UNLOCK) { console.log('[SparkP2P] DEV_UNLOCK — browser lock skipped'); return; }
   browserLocked = true;
-
-  // Lock Binance tab
-  const binancePage = await getPage('binance.com');
-  if (binancePage) {
-    await injectLockOverlay(binancePage);
-    if (lockFrameListener) binancePage.off('framenavigated', lockFrameListener);
-    lockFrameListener = async (frame) => {
-      if (frame === binancePage.mainFrame()) {
-        await new Promise(r => setTimeout(r, 600));
-        await injectLockOverlay(binancePage).catch(() => {});
-      }
-    };
-    binancePage.on('framenavigated', lockFrameListener);
-  }
-
-  // Lock Gmail tab
-  if (gmailPage && !gmailPage.isClosed()) {
-    await injectLockOverlay(gmailPage);
-    if (lockGmailFrameListener) gmailPage.off('framenavigated', lockGmailFrameListener);
-    lockGmailFrameListener = async (frame) => {
-      if (frame === gmailPage.mainFrame()) {
-        await new Promise(r => setTimeout(r, 600));
-        await injectLockOverlay(gmailPage).catch(() => {});
-      }
-    };
-    gmailPage.on('framenavigated', lockGmailFrameListener);
-  }
-
-  // Lock I&M tab
-  if (imPage && !imPage.isClosed()) {
-    await injectLockOverlay(imPage);
-    if (lockImFrameListener) imPage.off('framenavigated', lockImFrameListener);
-    lockImFrameListener = async (frame) => {
-      if (frame === imPage.mainFrame()) {
-        await new Promise(r => setTimeout(r, 600));
-        await injectLockOverlay(imPage).catch(() => {});
-      }
-    };
-    imPage.on('framenavigated', lockImFrameListener);
-  }
-
-  // Lock M-PESA org portal tab
-  if (mpesaOrgPage && !mpesaOrgPage.isClosed()) {
-    await injectLockOverlay(mpesaOrgPage);
-    if (lockMpesaFrameListener) mpesaOrgPage.off('framenavigated', lockMpesaFrameListener);
-    lockMpesaFrameListener = async (frame) => {
-      if (frame === mpesaOrgPage.mainFrame()) {
-        await new Promise(r => setTimeout(r, 600));
-        await injectLockOverlay(mpesaOrgPage).catch(() => {});
-      }
-    };
-    mpesaOrgPage.on('framenavigated', lockMpesaFrameListener);
-  }
-
-  console.log('[SparkP2P] Chrome browser locked (Binance + Gmail + I&M + M-PESA)');
+  console.log('[SparkP2P] Chrome browser locked');
 }
 
 async function unlockChromeBrowser() {
   browserLocked = false;
-  const removeLock = async (page) => {
-    if (!page || page.isClosed()) return;
-    await page.evaluate(() => {
-      const el = document.getElementById('sparkp2p-browser-lock');
-      if (el) el.remove();
-      // Stop the re-inject interval and observer so they don't fight the unlock
-      if (window.__sparkLockInterval) { clearInterval(window.__sparkLockInterval); window.__sparkLockInterval = null; }
-      if (window.__sparkLockObserver) { window.__sparkLockObserver.disconnect(); window.__sparkLockObserver = null; }
-    }).catch(() => {});
-  };
-
-  const binancePage = await getPage('binance.com');
-  if (binancePage) {
-    if (lockFrameListener) { binancePage.off('framenavigated', lockFrameListener); lockFrameListener = null; }
-    await removeLock(binancePage);
-  }
-  if (gmailPage && !gmailPage.isClosed()) {
-    if (lockGmailFrameListener) { gmailPage.off('framenavigated', lockGmailFrameListener); lockGmailFrameListener = null; }
-  }
-  if (imPage && !imPage.isClosed()) {
-    if (lockImFrameListener) { imPage.off('framenavigated', lockImFrameListener); lockImFrameListener = null; }
-  }
-  if (mpesaOrgPage && !mpesaOrgPage.isClosed()) {
-    if (lockMpesaFrameListener) { mpesaOrgPage.off('framenavigated', lockMpesaFrameListener); lockMpesaFrameListener = null; }
-  }
-  await removeLock(gmailPage);
-  await removeLock(imPage);
-  await removeLock(mpesaOrgPage);
-
   console.log('[SparkP2P] Chrome browser unlocked');
 }
 
@@ -1242,14 +1163,7 @@ async function onLoginDetected() {
     else console.log('[SparkP2P] Gmail not detected â€” open Gmail in Chrome manually if needed');
   }).catch(() => {});
 
-  // Auto-reconnect I&M Bank and M-PESA portal — admin accounts only.
-  // Regular traders never need these banking portals open.
-  if (traderIsAdmin) {
-    setTimeout(() => {
-      console.log('[SparkP2P] Auto-connecting I&M Bank (admin)...');
-      connectIm().catch(() => {});
-    }, 5000);
-  }
+  // I&M Bank auto-connects after Gmail confirms (see onGmailConfirmed)
 
   // Suppress window.open() on Binance pages (prevents popup tabs)
   const mainPage = await getPage();
@@ -1899,6 +1813,7 @@ function scheduleNextPoll(delayMs) {
 function startPoller() {
   if (pollerRunning) return;
   pollerRunning = true;
+  if (token) showLockScreen();
   console.log('[SparkP2P] Bot started');
   // Notify backend that bot is running — clears bot_intentionally_stopped flag
   if (token) {
@@ -1909,6 +1824,7 @@ function startPoller() {
 
 function stopPoller() {
   pollerRunning = false;
+  hideElectronOverlay();
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   activeOrderNumber = null;
   activeOrderFiatAmount = 0;
@@ -11332,21 +11248,30 @@ ipcMain.handle('connect-im', () => { connectIm(); return { opened: true }; });
 ipcMain.handle('connect-mpesa', () => { connectMpesaPortal(); return { opened: true }; });
 ipcMain.handle('unlock-browser', async () => { await unlockChromeBrowser(); console.log('[SparkP2P] Browser manually unlocked'); return { ok: true }; });
 ipcMain.handle('lock-browser', async () => { const p = await getPage(); if (p) await lockChromeBrowser(); return { ok: true }; });
-ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED â€” Chrome unlocked for manual use'); return { ok: true }; });
-ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED â€” Chrome locked back to bot'); return { ok: true }; });
+ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await hideElectronOverlay(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED — Electron overlay hidden, Chrome accessible'); return { ok: true }; });
+ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); await lockChromeBrowser(); if (token && pollerRunning) showLockScreen(); console.log('[SparkP2P] Navigation RESUMED — Electron overlay active'); return { ok: true }; });
 
 // ── Lock Screen IPC handlers ───────────────────────────────────────────────
 ipcMain.handle('lock-screen', async () => { await showLockScreen(); return { ok: true }; });
+ipcMain.on('lock-forward-scroll', async (_, { deltaX, deltaY }) => {
+  const activePage = (imPage && !imPage.isClosed()) ? imPage : await getPage().catch(() => null);
+  if (activePage && !activePage.isClosed()) activePage.mouse.wheel({ deltaX, deltaY }).catch(() => {});
+});
 
-ipcMain.handle('lock-unlock', async (_, { totp, answer }) => {
-  if (!lockTotpSecret) return { success: false, message: 'Lock not configured. Set up security in Settings first.' };
-  if (!speakeasy) return { success: false, message: 'TOTP library not available.' };
-  const totpValid = speakeasy.totp.verify({ secret: lockTotpSecret, encoding: 'base32', token: String(totp), window: 1 });
-  if (!totpValid) return { success: false, message: 'Invalid Google Authenticator code. Try again.' };
-  const answerHash = crypto.createHash('sha256').update(answer.toLowerCase().trim()).digest('hex');
-  if (answerHash !== lockSecAnswerHash) return { success: false, message: 'Incorrect security answer.' };
-  await hideLockScreen();
-  return { success: true };
+ipcMain.handle('lock-unlock', async (_, { totp }) => {
+  if (!token) return { success: false, message: 'Not logged in. Please log in first.' };
+  try {
+    const res = await fetch(`${API_BASE}/traders/verify-totp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ code: String(totp).trim() }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) { await hideLockScreen(); return { success: true }; }
+    return { success: false, message: data.detail || 'Invalid code. Try again.' };
+  } catch (e) {
+    return { success: false, message: 'Verification failed. Check your internet connection.' };
+  }
 });
 
 ipcMain.handle('lock-get-question', () => lockSecQuestion || 'Security not set up yet. Go to Settings → Security.');
@@ -11368,7 +11293,7 @@ ipcMain.handle('lock-save-setup', (_, { totpSecret, secQuestion, secAnswer }) =>
 });
 
 ipcMain.handle('lock-status', () => ({
-  configured: !!(lockTotpSecret && lockSecQuestion),
+  configured: !!token,
   active: lockScreenActive,
 }));
 ipcMain.handle('open-gmail-tab', async () => {
