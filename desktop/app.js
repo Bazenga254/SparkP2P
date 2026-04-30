@@ -6957,26 +6957,27 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   // DPR â€” only used for Vision screenshot coordinate division (NOT for DOM coords)
   let imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
   console.log(`[I&M] DPR = ${imDpr}`);
-  // Helper: click a radio button by label text â€” L1 DOM, L2 Vision fallback
+  // Helper: click a radio button by label text â€” L1 DOM dispatchEvent, L2 Vision fallback
   const clickRadio = async (labelText) => {
-    // L1: scan all clickable elements for matching text, use bounding rect coords
-    const domCoords = await imPage.evaluate((txt) => {
+    // L1: dispatchEvent directly on element (Angular mat-radio-button ignores CDP mouse.click)
+    const clicked = await imPage.evaluate((txt) => {
       const els = Array.from(document.querySelectorAll(
-        'mat-radio-button, [role="radio"], label, input[type="radio"]'
+        'mat-radio-button, [role=”radio”], label, input[type=”radio”]'
       ));
       for (const el of els) {
         if (!(el.textContent || el.value || '').toLowerCase().includes(txt.toLowerCase())) continue;
-        // For input[type=radio], click its parent label or mat-radio-button
         const target = el.closest('mat-radio-button, label') || el;
         const r = target.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        if (r.width > 0 && r.height > 0) {
+          target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
       }
       return null;
     }, labelText).catch(() => null);
 
-    if (domCoords) {
-      await imPage.mouse.click(domCoords.x, domCoords.y);
-      console.log(`[I&M] âœ… L1 radio "${labelText}" at (${Math.round(domCoords.x)}, ${Math.round(domCoords.y)})`);
+    if (clicked) {
+      console.log(`[I&M] âœ… L1 radio “${labelText}” dispatchEvent at (${Math.round(clicked.x)}, ${Math.round(clicked.y)})`);
       return true;
     }
     // L2: Vision screenshot → coordinates
@@ -7086,13 +7087,50 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     }, traderImAccount || 'BONITO CHELUGET').catch(() => null);
 
     if (optCoords) {
-      await imPage.mouse.click(optCoords.x, optCoords.y);
-      accountSelected = true;
-      console.log(`[I&M] STEP 0 ✅ Account selected: "${optCoords.text}" at (${Math.round(optCoords.x)}, ${Math.round(optCoords.y)})`);
-      await new Promise(r => setTimeout(r, 1000));
-      await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
-      await new Promise(r => setTimeout(r, 400));
-      break;
+      // Type into the dropdown search box first to filter to the exact account
+      const searchTerm = (traderImAccount || 'BONITO CHELUGET').split(' ')[0];
+      await imPage.evaluate((term) => {
+        const searchInput = document.querySelector(
+          '.cdk-overlay-pane input, mat-select-panel input, input[placeholder*="earch"], bb-payord-debit-account-selector input[type="text"]'
+        );
+        if (searchInput) {
+          searchInput.focus();
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (nativeSetter) nativeSetter.call(searchInput, term); else searchInput.value = term;
+          searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+          searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, searchTerm).catch(() => {});
+      await new Promise(r => setTimeout(r, 600));
+
+      // dispatchEvent on the (now filtered) option — Angular mat-option needs this
+      const selected = await imPage.evaluate((acct) => {
+        const search = acct || 'BONITO CHELUGET';
+        const all = Array.from(document.querySelectorAll(
+          'mat-option, .mat-option, [role="option"], li, div, span'
+        ));
+        for (const el of all) {
+          const txt = el.textContent.trim();
+          if (!txt.includes(search)) continue;
+          if (txt.toLowerCase().includes('select an account')) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 0) {
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            return txt.substring(0, 50);
+          }
+        }
+        return null;
+      }, traderImAccount || 'BONITO CHELUGET').catch(() => null);
+
+      if (selected) {
+        accountSelected = true;
+        console.log(`[I&M] STEP 0 âœ… Account selected via dispatchEvent: "${selected}"`);
+        await imPage.evaluate(() => document.body.click()).catch(() => {}); // close CDK overlay
+        await new Promise(r => setTimeout(r, 1000));
+        await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
+        await new Promise(r => setTimeout(r, 400));
+        break;
+      }
     }
     console.log(`[I&M] STEP 0 attempt ${attempt + 1}: dropdown not open yet, retrying...`);
     await new Promise(r => setTimeout(r, 500));
