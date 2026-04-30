@@ -1724,9 +1724,14 @@ async function readOrders(activeOnly = false) {
         If none today, return {"completed_buy_order_numbers": []}.
       `);
       if (aiResult?.completed_buy_order_numbers) {
-        completed_buy = aiResult.completed_buy_order_numbers
+        const raw = aiResult.completed_buy_order_numbers
           .map(n => String(n).replace(/\D/g, ''))
           .filter(n => n.length >= 15);
+        // Only report completion for orders where we actually sent I&M payment — prevents AI hallucination
+        // of order numbers triggering false "Buy done" notifications
+        completed_buy = raw.filter(n => imPaymentDoneMap[n]);
+        const skipped = raw.filter(n => !imPaymentDoneMap[n]);
+        if (skipped.length) console.log(`[SparkP2P] Completed-tab found ${skipped.length} buy order(s) not in payment map — skipping: ${skipped.join(', ')}`);
       }
     }
 
@@ -2296,8 +2301,12 @@ async function reconcileStuckOrders(page) {
         Return JSON: { “completed_buy_order_numbers”: [“num1”, “num2”, ...] }
         If none: { “completed_buy_order_numbers”: [] }
       `);
-      completedBuyNums = (res?.completed_buy_order_numbers || [])
+      const rawCompleted = (res?.completed_buy_order_numbers || [])
         .map(n => String(n).replace(/\D/g, '')).filter(n => n.length >= 15);
+      // Only complete orders we actually paid for — prevents false notifications from AI misreads
+      completedBuyNums = rawCompleted.filter(n => imPaymentDoneMap[n]);
+      const skippedCompleted = rawCompleted.filter(n => !imPaymentDoneMap[n]);
+      if (skippedCompleted.length) console.log(`[SparkP2P] Reconcile: skipping ${skippedCompleted.length} completed order(s) not in payment map: ${skippedCompleted.join(', ')}`);
     }
 
     if (cancelledNums.length || completedBuyNums.length) {
@@ -7226,14 +7235,25 @@ Return ONLY valid JSON, no other text.` },
 
     // â”€â”€ Execute the action â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (action.screen === 'success' || action.action === 'done') {
-      // Handled above by text detection â€” but catch it here too
+      // Vision says success — cross-verify with DOM text before trusting it.
+      // Prevents blank/gray pages from being misread as success and triggering false notifications.
+      const confirmText = await imPage.evaluate(() => document.body.innerText.toLowerCase()).catch(() => '');
+      const domConfirms = confirmText.includes('payment success') || confirmText.includes('transaction successful') ||
+        confirmText.includes('transfer successful') || confirmText.includes('sent successfully') ||
+        confirmText.includes('transaction complete') || confirmText.includes('money sent') ||
+        confirmText.includes(“you've sent”) || confirmText.includes('you have sent');
+      if (!domConfirms) {
+        console.log(`[I&M Vision] ⚠️ Vision says success but DOM text does not confirm (step ${step}) — waiting 3s for page`);
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
       const receiptSS2 = await takeImSuccessScreenshot(imPage) || screenshot;
       imWithdrawalRunning = false;
       return { success: true, screenshot: receiptSS2, referenceId };
     }
 
     if (action.screen === 'dashboard' || action.action === 'navigate') {
-      console.log('[I&M Vision] On dashboard â€” navigating back to form');
+      console.log('[I&M Vision] On dashboard — navigating back to form');
       await imPage.goto('https://digital.imbank.com/inm-retail/transfers/send-money-to-mobile/form',
         { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
       await new Promise(r => setTimeout(r, 3000));
