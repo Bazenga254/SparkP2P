@@ -113,8 +113,8 @@ let totpSecret = null;   // Google Authenticator base32 secret â€” stored i
 let traderAccountNumber = null; // e.g. "P2PT0001" â€” used in paybill payment replies
 let traderPhoneNumber = null;  // Trader's own phone number â€” included in buy greeting message
 let traderImAccount = null;    // Trader's I&M settlement account number â€” used to select debit account
-const DEV_UNLOCK = false; // browser lock enabled
-const BOT_DISABLED = true; // set to false to re-enable automation
+const DEV_UNLOCK = true; // true = no CSS overlay on browser tabs
+const BOT_DISABLED = false; // set to true to disable automation
 let browserLocked = false;
 let lockFrameListener = null;
 let lockGmailFrameListener = null;
