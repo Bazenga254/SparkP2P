@@ -299,24 +299,22 @@ export default function SettingsPanel({ profile, onUpdate }) {
     try {
       const res = await api.post('/traders/pause-bot/request-otp');
       setPauseSecQ(res.data.security_question || '');
-      setPauseMsg(`OTP sent to ${res.data.message?.replace('OTP sent to ', '') || 'your phone'}`);
       setPauseStep('otp');
     } catch (err) {
-      setPauseMsg(err.response?.data?.detail || 'Failed to send OTP. Please try again.');
+      setPauseMsg(err.response?.data?.detail || 'Failed to load verification. Please try again.');
     }
     setPauseLoading(false);
   };
 
   const handleConfirmPause = async () => {
-    if (!pauseOtpCode) { setPauseMsg('Enter the OTP sent to your phone.'); return; }
     if (pauseSecQ && !pauseSecAnswer) { setPauseMsg('Enter your security answer.'); return; }
+    if (!pauseTotpCode) { setPauseMsg('Enter your Google Authenticator code.'); return; }
     setPauseLoading(true);
     setPauseMsg('');
     try {
       await api.post('/traders/pause-bot/confirm', {
-        otp_code: pauseOtpCode,
         security_answer: pauseSecAnswer,
-        totp_code: pauseTotpCode || undefined,
+        totp_code: pauseTotpCode,
       });
       // Verification passed — now actually pause
       if (window.sparkp2p?.pauseNavigation) {
@@ -1601,26 +1599,16 @@ export default function SettingsPanel({ profile, onUpdate }) {
 
             {pauseStep === 'otp' && (<>
               <h3 style={{ color: '#fff', marginBottom: 6 }}>Verify Identity</h3>
-              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>Enter the OTP sent to your phone and your security answer to confirm.</p>
+              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>Enter your security answer and Google Authenticator code to confirm.</p>
 
               {pauseMsg && (
                 <div style={{ padding: '8px 12px', borderRadius: 8, marginBottom: 12, fontSize: 13,
-                  background: pauseMsg.includes('sent') ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)',
-                  color: pauseMsg.includes('sent') ? '#4ade80' : '#f87171',
-                  border: `1px solid ${pauseMsg.includes('sent') ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                  background: 'rgba(239,68,68,0.08)', color: '#f87171',
+                  border: '1px solid rgba(239,68,68,0.3)',
                 }}>
                   {pauseMsg}
                 </div>
               )}
-
-              <div style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>OTP Code</label>
-                <input
-                  type="text" maxLength={6} placeholder="6-digit code"
-                  value={pauseOtpCode} onChange={e => setPauseOtpCode(e.target.value)}
-                  className="adm-input" style={{ width: '100%' }}
-                />
-              </div>
 
               {pauseSecQ && (
                 <div style={{ marginBottom: 12 }}>
@@ -1636,7 +1624,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
               <div style={{ marginBottom: 16 }}>
                 <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Google Authenticator Code</label>
                 <input
-                  type="text" maxLength={6} placeholder="6-digit code from your app (if enabled)"
+                  type="text" maxLength={6} placeholder="6-digit code from your app"
                   value={pauseTotpCode} onChange={e => setPauseTotpCode(e.target.value)}
                   className="adm-input" style={{ width: '100%' }}
                 />

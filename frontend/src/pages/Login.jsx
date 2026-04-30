@@ -29,6 +29,7 @@ export default function Login() {
   const [lockoutCountdown, setLockoutCountdown] = useState('');
   const [attemptsRemaining, setAttemptsRemaining] = useState(null);
   const [resendCooldown, setResendCooldown] = useState(0); // seconds
+  const [resendCount, setResendCount] = useState(0);
   const [showReset, setShowReset] = useState(false);
   const [rememberMe, setRememberMe] = useState(() => !!localStorage.getItem('remembered_email'));
   const [googleProfile, setGoogleProfile] = useState(null); // {token, name, id, role} — needs phone+KYC
@@ -184,6 +185,7 @@ export default function Login() {
       await login(form.email, form.password);
       setOtpCode('');
       setError('');
+      setResendCount(prev => prev + 1);
       // Start 30s cooldown
       setResendCooldown(30);
       const interval = setInterval(() => {
@@ -246,6 +248,7 @@ export default function Login() {
           // Step 1: OTP sent to phone
           setOtpRequired(true);
           setPhoneHint(res.data.phone_hint || '');
+          setResendCount(0);
           setError('');
         } else {
           // Step 2: OTP verified, got token
@@ -578,7 +581,7 @@ export default function Login() {
                   required
                 />
                 <span className="login-field-hint">
-                  Code sent to {phoneHint} &nbsp;·&nbsp; or use your <strong>Google Authenticator</strong> code
+                  SMS code sent to {phoneHint}. You can also enter your <strong>Google Authenticator</strong> code in the same box above.
                 </span>
               </div>
             )}
@@ -647,6 +650,29 @@ export default function Login() {
                   {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Try again'}
                 </span>
               </p>
+            )}
+
+            {!isRegister && otpRequired && resendCount >= 2 && (
+              <div style={{
+                background: '#1c1f2e',
+                border: '1px solid rgba(245,158,11,0.4)',
+                borderRadius: 10,
+                padding: '12px 14px',
+                marginTop: 4,
+                display: 'flex',
+                gap: 10,
+                alignItems: 'flex-start',
+              }}>
+                <span style={{ fontSize: 18, lineHeight: 1 }}>🔐</span>
+                <div>
+                  <p style={{ fontSize: 13, color: '#f59e0b', fontWeight: 600, marginBottom: 3 }}>
+                    Still no code? Use Google Authenticator
+                  </p>
+                  <p style={{ fontSize: 12, color: '#9ca3af', margin: 0 }}>
+                    Open your Authenticator app, find <strong style={{ color: '#d1d5db' }}>SparkP2P</strong>, and enter the 6-digit code above instead.
+                  </p>
+                </div>
+              </div>
             )}
           </form>
 

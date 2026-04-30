@@ -1649,18 +1649,8 @@ async def connect_im(
 
 @router.post("/pause-bot/request-otp")
 async def request_pause_otp(trader: Trader = Depends(get_current_trader)):
-    """Send OTP to trader's phone before allowing bot pause."""
-    import random
-    from app.api.routes.auth import _login_otp_codes
-    otp_code = str(random.randint(100000, 999999))
-    _login_otp_codes[f"pause_{trader.email}"] = otp_code
-    try:
-        from app.services.sms import sms_verification_code
-        sms_verification_code(trader.phone, otp_code)
-    except Exception:
-        pass
+    """Return security question for pause-bot verification."""
     return {
-        "message": f"OTP sent to ***{trader.phone[-4:]}",
         "security_question": trader.security_question or "What is your mother's maiden name?",
     }
 
@@ -1732,9 +1722,8 @@ async def verify_totp_code(
 
 
 class PauseBotRequest(BaseModel):
-    otp_code: str
     security_answer: str
-    totp_code: Optional[str] = None  # Google Authenticator 6-digit code (required for admin)
+    totp_code: Optional[str] = None
 
 
 def _verify_totp(secret: str, code: str) -> bool:
@@ -1761,31 +1750,23 @@ def _verify_totp(secret: str, code: str) -> bool:
 
 @router.post("/pause-bot/confirm")
 async def confirm_pause_bot(data: PauseBotRequest, trader: Trader = Depends(get_current_trader)):
-    """Verify OTP + security answer + (for admin) Google Authenticator TOTP."""
-    from app.api.routes.auth import _login_otp_codes
+    """Verify security answer + Google Authenticator TOTP to authorise bot pause."""
     from app.core.security import verify_password
-
-    stored = _login_otp_codes.get(f"pause_{trader.email}")
-    if not stored or stored != data.otp_code:
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP code.")
 
     if not trader.security_answer_hash or not verify_password(data.security_answer.strip().lower(), trader.security_answer_hash):
         raise HTTPException(status_code=400, detail="Incorrect security answer.")
 
-    # Admin must also verify Google Authenticator — but only if TOTP is configured
-    if trader.is_admin and trader.totp_secret:
+    if trader.totp_secret:
         if not data.totp_code:
             raise HTTPException(status_code=400, detail="Google Authenticator code is required.")
-        totp_secret = None
         from app.core.security import decrypt_data
         try:
             totp_secret = decrypt_data(trader.totp_secret)
         except Exception:
             totp_secret = trader.totp_secret
-        if not totp_secret or not _verify_totp(totp_secret, data.totp_code):
+        if not _verify_totp(totp_secret, data.totp_code):
             raise HTTPException(status_code=400, detail="Invalid Google Authenticator code.")
 
-    del _login_otp_codes[f"pause_{trader.email}"]
     return {"authorized": True}
 
 
