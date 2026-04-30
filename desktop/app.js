@@ -323,13 +323,14 @@ function clearImPin() {
   imPin = null;
 }
 
-// ── Lock Screen credentials (TOTP secret + security question) ─────────────
+// ── Lock Screen ────────────────────────────────────────────────────────────
 let lockWindow = null;
 let lockScreenActive = false;
 let lockTotpSecret = null;
 let lockSecQuestion = null;
 let lockSecAnswerHash = null;
 const LOCK_CREDS_FILE = path.join(app.getPath('userData'), 'lock-creds.enc');
+const lockFilterIds = new Map(); // page → evaluateOnNewDocument identifier
 
 function saveLockCredentials({ totpSecret, secQuestion, secAnswerHash }) {
   try {
@@ -355,7 +356,9 @@ function createLockWindow() {
   if (lockWindow && !lockWindow.isDestroyed()) return;
   const { bounds } = screen.getPrimaryDisplay();
   lockWindow = new BrowserWindow({
-    x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+    width: 272, height: 150,
+    x: bounds.x + bounds.width - 284,
+    y: bounds.y + bounds.height - 162,
     frame: false, transparent: true, alwaysOnTop: true,
     skipTaskbar: true, resizable: false, movable: false,
     webPreferences: { nodeIntegration: true, contextIsolation: false },
@@ -364,6 +367,29 @@ function createLockWindow() {
   lockWindow.setAlwaysOnTop(true, 'pop-up-menu');
   lockWindow.hide();
   lockWindow.on('closed', () => { lockWindow = null; lockScreenActive = false; });
+}
+
+async function injectLockFilter(page) {
+  if (!page || page.isClosed()) return;
+  const existingId = lockFilterIds.get(page);
+  if (existingId) await page.removeScriptToEvaluateOnNewDocument(existingId).catch(() => {});
+  const script = `(function(){
+    if(window.__spLocked) return; window.__spLocked=true;
+    const _b=e=>{if(e.isTrusted){e.stopImmediatePropagation();e.preventDefault();}};
+    const _ev=['click','mousedown','mouseup','dblclick','contextmenu','keydown','keyup','keypress'];
+    _ev.forEach(t=>document.addEventListener(t,_b,true));
+    window.__spUnlock=()=>{_ev.forEach(t=>document.removeEventListener(t,_b,true));delete window.__spLocked;delete window.__spUnlock;};
+  })();`;
+  await page.evaluate(script).catch(() => {});
+  const { identifier } = await page.evaluateOnNewDocument(script).catch(() => ({ identifier: null }));
+  if (identifier) lockFilterIds.set(page, identifier);
+}
+
+async function removeLockFilter(page) {
+  if (!page || page.isClosed()) return;
+  await page.evaluate(() => { if (window.__spUnlock) window.__spUnlock(); }).catch(() => {});
+  const id = lockFilterIds.get(page);
+  if (id) { await page.removeScriptToEvaluateOnNewDocument(id).catch(() => {}); lockFilterIds.delete(page); }
 }
 
 async function showLockScreen() {
@@ -1050,14 +1076,20 @@ async function injectLockOverlay(page) {
 }
 
 async function lockChromeBrowser() {
-  if (DEV_UNLOCK) { console.log('[SparkP2P] DEV_UNLOCK — browser lock skipped'); return; }
+  if (DEV_UNLOCK) { console.log('[SparkP2P] DEV_UNLOCK — lock skipped'); return; }
   browserLocked = true;
-  console.log('[SparkP2P] Chrome browser locked');
+  const binancePage = await getPage('binance.com').catch(() => null);
+  const pages = [binancePage, gmailPage, imPage, mpesaOrgPage].filter(p => p && !p.isClosed());
+  for (const p of pages) await injectLockFilter(p);
+  console.log('[SparkP2P] isTrusted filter active on all tabs — human input blocked, CDP unaffected');
 }
 
 async function unlockChromeBrowser() {
   browserLocked = false;
-  console.log('[SparkP2P] Chrome browser unlocked');
+  const binancePage = await getPage('binance.com').catch(() => null);
+  const pages = [binancePage, gmailPage, imPage, mpesaOrgPage].filter(p => p && !p.isClosed());
+  for (const p of pages) await removeLockFilter(p);
+  console.log('[SparkP2P] isTrusted filter removed — full human access restored');
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -11253,10 +11285,6 @@ ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clear
 
 // ── Lock Screen IPC handlers ───────────────────────────────────────────────
 ipcMain.handle('lock-screen', async () => { await showLockScreen(); return { ok: true }; });
-ipcMain.on('lock-forward-scroll', async (_, { deltaX, deltaY }) => {
-  const activePage = (imPage && !imPage.isClosed()) ? imPage : await getPage().catch(() => null);
-  if (activePage && !activePage.isClosed()) activePage.mouse.wheel({ deltaX, deltaY }).catch(() => {});
-});
 
 ipcMain.handle('lock-unlock', async (_, { totp }) => {
   if (!token) return { success: false, message: 'Not logged in. Please log in first.' };
