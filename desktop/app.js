@@ -7088,7 +7088,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
     if (optCoords) {
       // Type into the dropdown search box first to filter to the exact account
-      const searchTerm = (traderImAccount || 'BONITO CHELUGET').split(' ')[0];
+      const searchTerm = traderImAccount || '00108094726050';
       await imPage.evaluate((term) => {
         const searchInput = document.querySelector(
           '.cdk-overlay-pane input, mat-select-panel input, input[placeholder*="earch"], bb-payord-debit-account-selector input[type="text"]'
