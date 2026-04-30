@@ -1,7 +1,4 @@
-﻿const { app, BrowserWindow, screen, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage } = require('electron');
-const crypto = require('crypto');
-let speakeasy; try { speakeasy = require('speakeasy'); } catch (_) {}
-let QRCode;    try { QRCode    = require('qrcode');    } catch (_) {}
+﻿const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -36,11 +33,10 @@ http.createServer(async (req, res) => {
   } else if (req.url === '/resume') {
     pauseNavigation = false;
     clearPauseInactivityTimer();
-    await lockChromeBrowser().catch(() => {});
-    if (token && pollerRunning) showLockScreen();
-    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“bot-resumed”))').catch(() => {});
-    console.log('[SparkP2P] Bot RESUMED — screen locked');
-    sendBotLog('success', 'Bot resumed — screen locked');
+    await lockChromeBrowser().catch(() => {}); // Bot takes Chrome back
+    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed"))').catch(() => {});
+    console.log('[SparkP2P] Bot RESUMED â€” Chrome locked back to bot');
+    sendBotLog('success', 'Bot resumed — Chrome locked back to bot');
     res.end(JSON.stringify({ ok: true, paused: false }));
   } else if (req.url === '/status') {
     res.end(JSON.stringify({
@@ -132,11 +128,6 @@ const partialPayments = {}; // orderNumber → [{code, amount}] â€” accumul
 const lastDeficitSent = {}; // orderNumber → deficit amount last messaged â€” prevents spamming same deficit twice
 let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for monitorActiveOrder compat)
 let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
-let imIntrusionCount = 0;       // unauthorized I&M access attempts this session
-let _imNavHandler = null;       // stored framenavigated handler reference for removal
-let _imExpectedPhone = null;    // expected phone for field verification during payment
-let _imExpectedAmount = null;   // expected amount for field verification during payment
-let _imExpectedAccount = null;  // expected account number for bank transfer verification
 let connectingBinance = false; // Prevents concurrent connectBinance() calls
 let scanningInProgress = false; // Prevents concurrent initialScan() calls
 let sessionStartTime = null;   // When Binance login was last confirmed
@@ -202,13 +193,11 @@ function sendBotLog(level, message) {
 function startPauseInactivityTimer() {
   clearPauseInactivityTimer();
   pauseInactivityTimer = setTimeout(async () => {
-    if (!pauseNavigation) return;
-    console.log('[SparkP2P] 3 minute pause elapsed — auto-resuming, showing lock screen');
+    if (!pauseNavigation) return; // already resumed
+    console.log('[SparkP2P] 3 minute pause elapsed â€” auto-resuming and locking all screens');
     pauseNavigation = false;
     await lockChromeBrowser().catch(() => {});
-    if (token && pollerRunning) showLockScreen();
-    sendBotLog('warning', 'Pause timed out — bot resumed, enter Authenticator code to take control');
-    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“bot-resumed”, { detail: { reason: “inactivity” } }))').catch(() => {});
+    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed", { detail: { reason: "inactivity" } }))').catch(() => {});
   }, PAUSE_AUTO_RESUME_MS);
 }
 
@@ -328,115 +317,6 @@ function clearImPin() {
   imPin = null;
 }
 
-// ── Lock Screen ────────────────────────────────────────────────────────────
-let lockWindow = null;
-let lockScreenActive = false;
-let lockTotpSecret = null;
-let lockSecQuestion = null;
-let lockSecAnswerHash = null;
-const LOCK_CREDS_FILE = path.join(app.getPath('userData'), 'lock-creds.enc');
-const lockFilterIds = new Map(); // page → evaluateOnNewDocument identifier
-
-function saveLockCredentials({ totpSecret, secQuestion, secAnswerHash }) {
-  try {
-    const data = JSON.stringify({ totpSecret, secQuestion, secAnswerHash });
-    const enc = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(data) : Buffer.from(data);
-    fs.writeFileSync(LOCK_CREDS_FILE, enc);
-    lockTotpSecret = totpSecret; lockSecQuestion = secQuestion; lockSecAnswerHash = secAnswerHash;
-    console.log('[Lock] Credentials saved securely');
-  } catch (e) { console.error('[Lock] Failed to save credentials:', e.message); }
-}
-
-function loadLockCredentials() {
-  try {
-    if (!fs.existsSync(LOCK_CREDS_FILE)) return;
-    const enc = fs.readFileSync(LOCK_CREDS_FILE);
-    const data = JSON.parse(safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(enc) : enc.toString());
-    lockTotpSecret = data.totpSecret; lockSecQuestion = data.secQuestion; lockSecAnswerHash = data.secAnswerHash;
-    console.log('[Lock] Credentials loaded from secure storage');
-  } catch (e) { console.error('[Lock] Failed to load credentials:', e.message); }
-}
-
-function createLockWindow() {
-  if (lockWindow && !lockWindow.isDestroyed()) return;
-  const { bounds } = screen.getPrimaryDisplay();
-  lockWindow = new BrowserWindow({
-    width: 272, height: 150,
-    x: bounds.x + bounds.width - 284,
-    y: bounds.y + bounds.height - 162,
-    frame: false, transparent: true, alwaysOnTop: true,
-    skipTaskbar: true, resizable: false, movable: false,
-    webPreferences: { nodeIntegration: true, contextIsolation: false },
-  });
-  lockWindow.loadFile(path.join(__dirname, 'lock.html'));
-  lockWindow.setAlwaysOnTop(true, 'pop-up-menu');
-  lockWindow.hide();
-  lockWindow.on('closed', () => { lockWindow = null; lockScreenActive = false; });
-}
-
-async function injectLockFilter(page) {
-  if (!page || page.isClosed()) return;
-  const existingId = lockFilterIds.get(page);
-  if (existingId) await page.removeScriptToEvaluateOnNewDocument(existingId).catch(() => {});
-  const script = `(function(){
-    if(window.__spLocked) return; window.__spLocked=true;
-    window.__LOCK_ACTIVE__=true;
-    const _b=e=>{if(window.__LOCK_ACTIVE__ && e.isTrusted){e.stopImmediatePropagation();e.preventDefault();}};
-    const _ev=['click','mousedown','mouseup','dblclick','contextmenu','keydown','keyup','keypress'];
-    _ev.forEach(t=>document.addEventListener(t,_b,true));
-    window.__spUnlock=()=>{
-      window.__LOCK_ACTIVE__=false;
-      _ev.forEach(t=>document.removeEventListener(t,_b,true));
-      delete window.__spLocked; delete window.__spUnlock; delete window.__LOCK_ACTIVE__;
-    };
-  })();`;
-  await page.evaluate(script).catch(() => {});
-  const { identifier } = await page.evaluateOnNewDocument(script).catch(() => ({ identifier: null }));
-  if (identifier) lockFilterIds.set(page, identifier);
-}
-
-async function removeLockFilter(page) {
-  if (!page || page.isClosed()) return;
-  await page.evaluate(() => { if (window.__spUnlock) window.__spUnlock(); }).catch(() => {});
-  const id = lockFilterIds.get(page);
-  if (id) { await page.removeScriptToEvaluateOnNewDocument(id).catch(() => {}); lockFilterIds.delete(page); }
-}
-
-async function showLockScreen() {
-  if (!lockWindow || lockWindow.isDestroyed()) createLockWindow();
-  lockWindow.webContents.reload();
-  await new Promise(r => setTimeout(r, 400));
-  lockWindow.show();
-  lockWindow.focus();
-  lockScreenActive = true;
-  console.log('[Lock] Screen locked — bot continues via CDP');
-  sendBotLog('warning', 'Screen locked — enter Authenticator code to unlock');
-}
-
-async function hideElectronOverlay() {
-  if (lockWindow && !lockWindow.isDestroyed()) lockWindow.hide();
-  lockScreenActive = false;
-}
-
-async function hideLockScreen() {
-  await hideElectronOverlay();
-  await unlockChromeBrowser().catch(() => {}); // remove isTrusted filter so human can click Chrome tabs
-  sendLockAccessAlert();
-  console.log('[Lock] Screen unlocked by user');
-  sendBotLog('success', 'Screen unlocked');
-}
-
-function sendLockAccessAlert() {
-  if (!token) return;
-  const time = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Nairobi' });
-  const date = new Date().toLocaleDateString('en-KE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Africa/Nairobi' });
-  fetch(`${API_BASE}/notifications/bot-access`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    body: JSON.stringify({ time, date, phone: traderPhoneNumber }),
-  }).catch(() => {});
-}
-
 function saveGmailCredentials(email, appPassword) {
   try {
     const data = JSON.stringify({ email, appPassword });
@@ -464,7 +344,7 @@ function clearGmailCredentials() {
 }
 
 // Load PIN on startup (after app is ready â€” safeStorage requires app to be ready)
-app.whenReady().then(() => { loadImPin(); loadLockCredentials(); createLockWindow(); });
+app.whenReady().then(() => loadImPin());
 function saveTokenToDisk(t) {
   try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token: t, savedAt: Date.now() })); } catch (e) {}
 }
@@ -660,15 +540,13 @@ function createTray() {
             pauseNavigation = false;
             clearPauseInactivityTimer();
             await lockChromeBrowser();
-            if (token && pollerRunning) showLockScreen();
             console.log('[SparkP2P] Bot RESUMED via tray');
           } else {
             pauseNavigation = true;
-            scanningInProgress = false;
-            await unlockChromeBrowser().catch(() => {});
-            await hideElectronOverlay();
+            scanningInProgress = false; // force-exit any running cycle immediately
+            await unlockChromeBrowser();
             startPauseInactivityTimer();
-            console.log('[SparkP2P] Bot PAUSED via tray — isTrusted filter removed, Chrome accessible');
+            console.log('[SparkP2P] Bot PAUSED via tray â€” Chrome unlocked for manual use');
           }
           tray.setContextMenu(buildTrayMenu());
         },
@@ -686,15 +564,13 @@ function createTray() {
         pauseNavigation = false;
         clearPauseInactivityTimer();
         await lockChromeBrowser();
-        if (token && pollerRunning) showLockScreen();
         console.log('[SparkP2P] Bot RESUMED via shortcut');
       } else {
         pauseNavigation = true;
-        scanningInProgress = false;
-        await unlockChromeBrowser().catch(() => {});
-        await hideElectronOverlay();
+        scanningInProgress = false; // force-exit any running cycle immediately
+        await unlockChromeBrowser();
         startPauseInactivityTimer();
-        console.log('[SparkP2P] Bot PAUSED via shortcut — isTrusted filter removed, Chrome accessible');
+        console.log('[SparkP2P] Bot PAUSED via shortcut â€” Chrome unlocked for manual use');
       }
       tray.setContextMenu(buildTrayMenu());
     });
@@ -913,13 +789,6 @@ async function onGmailConfirmed() {
     await gmailPage.waitForNetworkIdle({ idleTime: 800, timeout: 4000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 500));
   }
-  // Auto-open I&M Bank tab now that Gmail is confirmed
-  if (!connectingIm && (!imPage || imPage.isClosed())) {
-    setTimeout(() => {
-      console.log('[SparkP2P] Auto-connecting I&M Bank after Gmail confirmed...');
-      connectIm().catch(() => {});
-    }, 2000);
-  }
   // Lock ALL bot-controlled tabs (sets browserLocked = true)
   await lockChromeBrowser().catch(() => {});
   console.log('[SparkP2P] Gmail locked successfully');
@@ -1089,91 +958,97 @@ async function injectLockOverlay(page) {
 }
 
 async function lockChromeBrowser() {
-  if (DEV_UNLOCK) { console.log('[SparkP2P] DEV_UNLOCK — lock skipped'); return; }
+  if (DEV_UNLOCK) { console.log('[SparkP2P] DEV_UNLOCK â€” browser lock skipped'); return; }
   browserLocked = true;
-  const binancePage = await getPage('binance.com').catch(() => null);
-  const pages = [binancePage, gmailPage, imPage, mpesaOrgPage].filter(p => p && !p.isClosed());
-  for (const p of pages) await injectLockFilter(p);
-  console.log('[SparkP2P] isTrusted filter active on all tabs');
+
+  // Lock Binance tab
+  const binancePage = await getPage('binance.com');
+  if (binancePage) {
+    await injectLockOverlay(binancePage);
+    if (lockFrameListener) binancePage.off('framenavigated', lockFrameListener);
+    lockFrameListener = async (frame) => {
+      if (frame === binancePage.mainFrame()) {
+        await new Promise(r => setTimeout(r, 600));
+        await injectLockOverlay(binancePage).catch(() => {});
+      }
+    };
+    binancePage.on('framenavigated', lockFrameListener);
+  }
+
+  // Lock Gmail tab
+  if (gmailPage && !gmailPage.isClosed()) {
+    await injectLockOverlay(gmailPage);
+    if (lockGmailFrameListener) gmailPage.off('framenavigated', lockGmailFrameListener);
+    lockGmailFrameListener = async (frame) => {
+      if (frame === gmailPage.mainFrame()) {
+        await new Promise(r => setTimeout(r, 600));
+        await injectLockOverlay(gmailPage).catch(() => {});
+      }
+    };
+    gmailPage.on('framenavigated', lockGmailFrameListener);
+  }
+
+  // Lock I&M tab
+  if (imPage && !imPage.isClosed()) {
+    await injectLockOverlay(imPage);
+    if (lockImFrameListener) imPage.off('framenavigated', lockImFrameListener);
+    lockImFrameListener = async (frame) => {
+      if (frame === imPage.mainFrame()) {
+        await new Promise(r => setTimeout(r, 600));
+        await injectLockOverlay(imPage).catch(() => {});
+      }
+    };
+    imPage.on('framenavigated', lockImFrameListener);
+  }
+
+  // Lock M-PESA org portal tab
+  if (mpesaOrgPage && !mpesaOrgPage.isClosed()) {
+    await injectLockOverlay(mpesaOrgPage);
+    if (lockMpesaFrameListener) mpesaOrgPage.off('framenavigated', lockMpesaFrameListener);
+    lockMpesaFrameListener = async (frame) => {
+      if (frame === mpesaOrgPage.mainFrame()) {
+        await new Promise(r => setTimeout(r, 600));
+        await injectLockOverlay(mpesaOrgPage).catch(() => {});
+      }
+    };
+    mpesaOrgPage.on('framenavigated', lockMpesaFrameListener);
+  }
+
+  console.log('[SparkP2P] Chrome browser locked (Binance + Gmail + I&M + M-PESA)');
 }
 
 async function unlockChromeBrowser() {
   browserLocked = false;
-  const binancePage = await getPage('binance.com').catch(() => null);
-  const pages = [binancePage, gmailPage, imPage, mpesaOrgPage].filter(p => p && !p.isClosed());
-  for (const p of pages) await removeLockFilter(p);
-  console.log('[SparkP2P] isTrusted filter removed — full human access restored');
-}
-
-// ── I&M payment window management ────────────────────────────────────────────
-// I&M is locked at all times except during active payment execution.
-// While unlocked, a URL monitor catches navigation away from payment pages,
-// and a field verifier checks phone/amount before every Continue click.
-// Either breach increments imIntrusionCount; at 3 the bot pauses entirely.
-
-async function unlockImForPayment(phone, amount, accountNumber) {
-  _imExpectedPhone   = phone   ? String(phone).replace(/^0/, '').replace(/\s/g, '') : null;
-  _imExpectedAmount  = amount  ? Math.floor(parseFloat(amount)) : null;
-  _imExpectedAccount = accountNumber ? String(accountNumber).replace(/\s/g, '') : null;
-  if (!imPage || imPage.isClosed()) return;
-  await removeLockFilter(imPage).catch(() => {});
-
-  if (_imNavHandler) imPage.off('framenavigated', _imNavHandler);
-  const allowed = [
-    '/inm-retail/transfers/send-money-to-mobile',
-    '/inm-retail/transfers/local-transfers',
-    '/inm-retail/transfers/pesalink',
-    '/inm-retail/dashboard',
-  ];
-  _imNavHandler = async (frame) => {
-    if (!frame || frame !== imPage?.mainFrame()) return;
-    const url = frame.url();
-    if (!url || url === 'about:blank' || !url.includes('digital.imbank.com')) return;
-    if (allowed.some(p => url.includes(p))) return; // expected bot navigation
-    imIntrusionCount++;
-    console.log(`[Lock] 🚨 I&M URL intrusion #${imIntrusionCount}: ${url}`);
-    sendBotLog('warning', `⚠️ Unauthorized I&M navigation detected (${imIntrusionCount}/3)`);
-    await injectLockFilter(imPage).catch(() => {});
-    if (imIntrusionCount >= 3) {
-      pauseNavigation = true;
-      await lockChromeBrowser().catch(() => {});
-      sendBotLog('error', '🚨 Bot paused: 3 unauthorized I&M access attempts. Complete orders manually and secure your device.');
-    }
+  const removeLock = async (page) => {
+    if (!page || page.isClosed()) return;
+    await page.evaluate(() => {
+      const el = document.getElementById('sparkp2p-browser-lock');
+      if (el) el.remove();
+      // Stop the re-inject interval and observer so they don't fight the unlock
+      if (window.__sparkLockInterval) { clearInterval(window.__sparkLockInterval); window.__sparkLockInterval = null; }
+      if (window.__sparkLockObserver) { window.__sparkLockObserver.disconnect(); window.__sparkLockObserver = null; }
+    }).catch(() => {});
   };
-  imPage.on('framenavigated', _imNavHandler);
-  console.log('[Lock] I&M unlocked for payment — URL + field intrusion monitor active');
-}
 
-async function lockImAfterPayment() {
-  if (_imNavHandler && imPage && !imPage.isClosed()) {
-    imPage.off('framenavigated', _imNavHandler);
-    _imNavHandler = null;
+  const binancePage = await getPage('binance.com');
+  if (binancePage) {
+    if (lockFrameListener) { binancePage.off('framenavigated', lockFrameListener); lockFrameListener = null; }
+    await removeLock(binancePage);
   }
-  _imExpectedPhone = null; _imExpectedAmount = null; _imExpectedAccount = null;
-  if (!imPage || imPage.isClosed()) return;
-  await injectLockFilter(imPage).catch(() => {});
-  console.log('[Lock] I&M re-locked after payment');
-}
+  if (gmailPage && !gmailPage.isClosed()) {
+    if (lockGmailFrameListener) { gmailPage.off('framenavigated', lockGmailFrameListener); lockGmailFrameListener = null; }
+  }
+  if (imPage && !imPage.isClosed()) {
+    if (lockImFrameListener) { imPage.off('framenavigated', lockImFrameListener); lockImFrameListener = null; }
+  }
+  if (mpesaOrgPage && !mpesaOrgPage.isClosed()) {
+    if (lockMpesaFrameListener) { mpesaOrgPage.off('framenavigated', lockMpesaFrameListener); lockMpesaFrameListener = null; }
+  }
+  await removeLock(gmailPage);
+  await removeLock(imPage);
+  await removeLock(mpesaOrgPage);
 
-async function checkImFieldTampering(page) {
-  if (!_imExpectedPhone && !_imExpectedAmount && !_imExpectedAccount) return { ok: true };
-  return await page.evaluate((exp) => {
-    const norm = s => String(s || '').replace(/\D/g, '').replace(/^254/, '').replace(/^0/, '');
-    const inputs = Array.from(document.querySelectorAll('input'));
-    let foundPhone = null, foundAmount = null, foundAccount = null;
-    for (const inp of inputs) {
-      const key = (inp.id || inp.name || inp.placeholder || inp.getAttribute('formcontrolname') || '').toLowerCase();
-      const val = (inp.value || '').trim();
-      if (!val) continue;
-      if (key.includes('phone') || key.includes('mobile')) foundPhone = val.replace(/\D/g, '');
-      if (key.includes('amount')) { const n = parseFloat(val.replace(/[^0-9.]/g, '')); if (!isNaN(n) && n > 0) foundAmount = n; }
-      if (key.includes('account') || key.includes('accno')) foundAccount = val.replace(/\s/g, '');
-    }
-    const phoneOk   = !exp.phone   || !foundPhone   || norm(foundPhone)   === norm(exp.phone);
-    const amountOk  = !exp.amount  || !foundAmount  || Math.abs(foundAmount - exp.amount) < 2;
-    const accountOk = !exp.account || !foundAccount || foundAccount.includes(exp.account) || exp.account.includes(foundAccount);
-    return { ok: phoneOk && amountOk && accountOk, foundPhone, foundAmount, foundAccount, phoneOk, amountOk, accountOk };
-  }, { phone: _imExpectedPhone, amount: _imExpectedAmount, account: _imExpectedAccount }).catch(() => ({ ok: true }));
+  console.log('[SparkP2P] Chrome browser unlocked');
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -1279,7 +1154,14 @@ async function onLoginDetected() {
     else console.log('[SparkP2P] Gmail not detected â€” open Gmail in Chrome manually if needed');
   }).catch(() => {});
 
-  // I&M Bank auto-connects after Gmail confirms (see onGmailConfirmed)
+  // Auto-reconnect I&M Bank and M-PESA portal — admin accounts only.
+  // Regular traders never need these banking portals open.
+  if (traderIsAdmin) {
+    setTimeout(() => {
+      console.log('[SparkP2P] Auto-connecting I&M Bank (admin)...');
+      connectIm().catch(() => {});
+    }, 5000);
+  }
 
   // Suppress window.open() on Binance pages (prevents popup tabs)
   const mainPage = await getPage();
@@ -1806,14 +1688,9 @@ async function readOrders(activeOnly = false) {
         If none today, return {"completed_buy_order_numbers": []}.
       `);
       if (aiResult?.completed_buy_order_numbers) {
-        const raw = aiResult.completed_buy_order_numbers
+        completed_buy = aiResult.completed_buy_order_numbers
           .map(n => String(n).replace(/\D/g, ''))
           .filter(n => n.length >= 15);
-        // Only report completion for orders where we actually sent I&M payment — prevents AI hallucination
-        // of order numbers triggering false "Buy done" notifications
-        completed_buy = raw.filter(n => imPaymentDoneMap[n]);
-        const skipped = raw.filter(n => !imPaymentDoneMap[n]);
-        if (skipped.length) console.log(`[SparkP2P] Completed-tab found ${skipped.length} buy order(s) not in payment map — skipping: ${skipped.join(', ')}`);
       }
     }
 
@@ -1934,7 +1811,6 @@ function scheduleNextPoll(delayMs) {
 function startPoller() {
   if (pollerRunning) return;
   pollerRunning = true;
-  if (token) showLockScreen();
   console.log('[SparkP2P] Bot started');
   // Notify backend that bot is running — clears bot_intentionally_stopped flag
   if (token) {
@@ -1945,7 +1821,6 @@ function startPoller() {
 
 function stopPoller() {
   pollerRunning = false;
-  hideElectronOverlay();
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   activeOrderNumber = null;
   activeOrderFiatAmount = 0;
@@ -2335,8 +2210,8 @@ async function verifyMpesaPayment(orderNumber, fiatAmount, page = null, preExtra
 // Runs every 10 polls. Reads Binance cancelled+completed history (all dates, not
 // just today) and reports them to SparkP2P so disputed/expired orders get updated.
 async function reconcileStuckOrders(page) {
-  if (!page || !token || pauseNavigation) return { pendingBuyOrders: [] };
-  console.log('[SparkP2P] 🔄 Reconciling stuck orders against Binance history...');
+  if (!page || !token || pauseNavigation) return;
+  console.log('[SparkP2P] ðŸ”„ Reconciling stuck orders against Binance history...');
 
   try {
     // Navigate to Binance order history tab
@@ -2345,7 +2220,7 @@ async function reconcileStuckOrders(page) {
 
     // Read cancelled orders (all dates)
     await page.evaluate(() => {
-      const tabs = Array.from(document.querySelectorAll('div[class*=”tab”], span[class*=”tab”], button'));
+      const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
       const t = tabs.find(el => el.textContent.trim() === 'Canceled' || el.textContent.trim() === 'Cancelled');
       if (t) t.click();
     }).catch(() => {});
@@ -2357,9 +2232,9 @@ async function reconcileStuckOrders(page) {
       const res = await aiScanner.analyzeText(cancelledText, `
         This is text from a Binance P2P cancelled orders history page.
         Extract ALL order numbers visible (any date, not just today).
-        Order numbers are 18-20 digit integers — copy EXACTLY as shown.
-        Return JSON: { “cancelled_order_numbers”: [“num1”, “num2”, ...] }
-        If none found: { “cancelled_order_numbers”: [] }
+        Order numbers are 18-20 digit integers â€” copy EXACTLY as shown.
+        Return JSON: { "cancelled_order_numbers": ["num1", "num2", ...] }
+        If none found: { "cancelled_order_numbers": [] }
       `);
       cancelledNums = (res?.cancelled_order_numbers || [])
         .map(n => String(n).replace(/\D/g, '')).filter(n => n.length >= 15);
@@ -2367,7 +2242,7 @@ async function reconcileStuckOrders(page) {
 
     // Read completed BUY orders (all dates)
     await page.evaluate(() => {
-      const tabs = Array.from(document.querySelectorAll('div[class*=”tab”], span[class*=”tab”], button'));
+      const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
       const t = tabs.find(el => el.textContent.trim() === 'Completed');
       if (t) t.click();
     }).catch(() => {});
@@ -2379,16 +2254,12 @@ async function reconcileStuckOrders(page) {
       const res = await aiScanner.analyzeText(completedText, `
         This is text from a Binance P2P completed orders history page.
         Extract ALL BUY order numbers visible (any date).
-        Order numbers are 18-20 digit integers — copy EXACTLY as shown.
-        Return JSON: { “completed_buy_order_numbers”: [“num1”, “num2”, ...] }
-        If none: { “completed_buy_order_numbers”: [] }
+        Order numbers are 18-20 digit integers â€” copy EXACTLY as shown.
+        Return JSON: { "completed_buy_order_numbers": ["num1", "num2", ...] }
+        If none: { "completed_buy_order_numbers": [] }
       `);
-      const rawCompleted = (res?.completed_buy_order_numbers || [])
+      completedBuyNums = (res?.completed_buy_order_numbers || [])
         .map(n => String(n).replace(/\D/g, '')).filter(n => n.length >= 15);
-      // Only complete orders we actually paid for — prevents false notifications from AI misreads
-      completedBuyNums = rawCompleted.filter(n => imPaymentDoneMap[n]);
-      const skippedCompleted = rawCompleted.filter(n => !imPaymentDoneMap[n]);
-      if (skippedCompleted.length) console.log(`[SparkP2P] Reconcile: skipping ${skippedCompleted.length} completed order(s) not in payment map: ${skippedCompleted.join(', ')}`);
     }
 
     if (cancelledNums.length || completedBuyNums.length) {
@@ -2401,37 +2272,12 @@ async function reconcileStuckOrders(page) {
           completed_buy_order_numbers: completedBuyNums,
         }),
       }).catch(() => {});
-      console.log(`[SparkP2P] ✅ Reconciled: ${cancelledNums.length} cancelled, ${completedBuyNums.length} completed buy`);
+      console.log(`[SparkP2P] âœ… Reconciled: ${cancelledNums.length} cancelled, ${completedBuyNums.length} completed buy`);
     } else {
       console.log('[SparkP2P] Reconcile: no cancelled/completed orders found in history');
     }
-
-    // Check active orders tab — if a buy order is still pending, resume it immediately
-    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 2000));
-    const activeText = await page.evaluate(() => document.body.innerText).catch(() => '');
-    let pendingBuyOrders = [];
-    if (activeText && anthropicApiKey && !activeText.includes('No records')) {
-      const res = await aiScanner.analyzeText(activeText, `
-        This is text from a Binance P2P active orders page.
-        Find any BUY orders with status “Pending payment” or “Payment pending” that still have a countdown timer.
-        Order numbers are 18-20 digit integers — copy EXACTLY as shown.
-        Return JSON: { “pending_buy_orders”: [“num1”, “num2”, ...] }
-        If none: { “pending_buy_orders”: [] }
-      `);
-      pendingBuyOrders = (res?.pending_buy_orders || [])
-        .map(n => String(n).replace(/\D/g, '')).filter(n => n.length >= 15)
-        .filter(n => !cancelledNums.includes(n) && !completedBuyNums.includes(n));
-    }
-
-    if (pendingBuyOrders.length) {
-      console.log(`[SparkP2P] 🔔 Found ${pendingBuyOrders.length} active buy order(s) still pending after outage — will process immediately`);
-    }
-
-    return { pendingBuyOrders };
   } catch (e) {
     console.log(`[SparkP2P] reconcileStuckOrders error: ${e.message}`);
-    return { pendingBuyOrders: [] };
   }
 }
 
@@ -3198,7 +3044,7 @@ async function idleScan(page) {
       } else if (minsWaiting >= 10 && !buyReminderSentOrders.has(order.orderNumber)) {
         console.log(`[SparkP2P] â° Buy order ${order.orderNumber} â€” 10 min reminder to seller`);
         await sendBinanceChatMessage(page,
-          `Hi, just a friendly reminder â€” I sent the payment ${minsWaiting} minutes ago. Could you please release the crypto when you get a chance? Thank you!`
+          `Hi, just a friendly reminder â€” I sent the payment ${minsWaiting} minutes ago. Could you please release the crypto when you get a chance? Thank you! ðŸ˜Š`
         );
         buyReminderSentOrders.add(order.orderNumber);
       }
@@ -3271,9 +3117,9 @@ Method selection rules:
         buyGreetingSentOrders.add(order.orderNumber);
         let greetMsg = '';
         if (method === 'mpesa') {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you!`;
+          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! ðŸ™`;
         } else {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you!`;
+          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you! ðŸ™`;
         }
         await sendBinanceChatMessage(page, greetMsg);
         console.log(`[SparkP2P] ðŸ'‹ Greeting sent for buy order ${order.orderNumber} (method: ${method})`);
@@ -3362,10 +3208,10 @@ Method selection rules:
         let postPayMsg = '';
         if (_localIsBank) {
           const refPart = imResult.referenceId ? ` Ref: ${imResult.referenceId}.` : '';
-          postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you!`;
+          postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! ðŸ™`;
         } else {
           const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
-          postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you!`;
+          postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! ðŸ™`;
         }
         await sendBinanceChatMessage(page, postPayMsg);
       }
@@ -6679,9 +6525,9 @@ Method selection rules:
         const firstName = paymentDetails.name.split(' ')[0];
         const amt = Math.floor(parseFloat(paymentDetails.amount));
         if (method === 'mpesa') {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you!`;
+          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! ðŸ™`;
         } else if (method === 'im_bank' || method === 'other_bank') {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you!`;
+          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you! ðŸ™`;
         }
         if (greetMsg) {
           await sendBinanceChatMessage(page, greetMsg);
@@ -6777,7 +6623,7 @@ Method selection rules:
         buyPostPaymentMsgSentOrders.add(order_number);
         const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
         const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
-        const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you!`;
+        const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! ðŸ™`;
         await sendBinanceChatMessage(page, chatMsg);
       }
 
@@ -7018,9 +6864,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   if (!amount || Number(amount) <= 0) throw new Error(`Amount is invalid (${amount}) â€” cannot send payment`);
 
   imWithdrawalRunning = true;
-  imIntrusionCount = 0;
   const cleanPhone = String(phone).replace(/^0/, '').replace(/\s/g, ''); // strip leading 0
-  await unlockImForPayment(cleanPhone, amount); // remove lock, start intrusion monitor
   console.log(`[SparkP2P] ðŸ'³ Starting I&M Vision payment: KSh ${amount} → ${name} (+254${cleanPhone})`);
 
   await imPage.bringToFront();
@@ -7036,27 +6880,26 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   // DPR â€” only used for Vision screenshot coordinate division (NOT for DOM coords)
   let imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
   console.log(`[I&M] DPR = ${imDpr}`);
-  // Helper: click a radio button by label text â€” L1 DOM dispatchEvent, L2 Vision fallback
+  // Helper: click a radio button by label text â€” L1 DOM, L2 Vision fallback
   const clickRadio = async (labelText) => {
-    // L1: dispatchEvent directly on element (Angular mat-radio-button ignores CDP mouse.click)
-    const clicked = await imPage.evaluate((txt) => {
+    // L1: scan all clickable elements for matching text, use bounding rect coords
+    const domCoords = await imPage.evaluate((txt) => {
       const els = Array.from(document.querySelectorAll(
-        'mat-radio-button, [role=”radio”], label, input[type=”radio”]'
+        'mat-radio-button, [role="radio"], label, input[type="radio"]'
       ));
       for (const el of els) {
         if (!(el.textContent || el.value || '').toLowerCase().includes(txt.toLowerCase())) continue;
+        // For input[type=radio], click its parent label or mat-radio-button
         const target = el.closest('mat-radio-button, label') || el;
         const r = target.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) {
-          target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-        }
+        if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
       return null;
     }, labelText).catch(() => null);
 
-    if (clicked) {
-      console.log(`[I&M] âœ… L1 radio “${labelText}” dispatchEvent at (${Math.round(clicked.x)}, ${Math.round(clicked.y)})`);
+    if (domCoords) {
+      await imPage.mouse.click(domCoords.x, domCoords.y);
+      console.log(`[I&M] âœ… L1 radio "${labelText}" at (${Math.round(domCoords.x)}, ${Math.round(domCoords.y)})`);
       return true;
     }
     // L2: Vision screenshot → coordinates
@@ -7107,120 +6950,6 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   let formFilled = false; // true once all fields are entered
   let accountSelected = false; // true once debit account has been chosen
 
-  // ── STEP 0: Open debit account dropdown via JS-dispatched events ──────────
-  // BB-PAYORD-DEBIT-ACCOUNT-SELECTOR ignores CDP mouse.click() entirely.
-  // JS dispatchEvent() fires in the page's own event queue — Angular hears it.
-  console.log('[I&M] STEP 0: Opening debit account dropdown via JS pointer/mouse events');
-  for (let attempt = 0; attempt < 4 && !accountSelected; attempt++) {
-    // Fire pointer+mouse events on every candidate trigger inside the component
-    const clickResult = await imPage.evaluate(() => {
-      const comp = document.querySelector('bb-payord-debit-account-selector');
-      if (!comp) return { status: 'no-component' };
-      const candidates = [
-        comp.querySelector('[class*="chevron"], [class*="arrow"], [class*="icon"]'),
-        comp.querySelector('button'),
-        comp.querySelector('input[role="combobox"]'),
-        comp.querySelector('input'),
-        comp,
-      ].filter(Boolean);
-      for (const el of candidates) {
-        el.focus();
-        ['pointerover','pointerenter','pointerdown','pointerup',
-         'mouseenter','mousemove','mousedown','mouseup','click']
-        .forEach(type => {
-          const Ctor = type.startsWith('pointer') ? PointerEvent : MouseEvent;
-          el.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, composed: true }));
-        });
-        return { status: 'fired', tag: el.tagName, cls: (el.className || '').substring(0, 60) };
-      }
-      return { status: 'no-trigger' };
-    }).catch(() => ({ status: 'error' }));
-    console.log(`[I&M] STEP 0 attempt ${attempt + 1}: ${JSON.stringify(clickResult)}`);
-    await new Promise(r => setTimeout(r, 1000));
-
-    // Also try keyboard: focus the input and press Space / ArrowDown
-    await imPage.evaluate(() => {
-      const input = document.querySelector('bb-payord-debit-account-selector input');
-      if (input) input.focus();
-    }).catch(() => {});
-    await imPage.keyboard.press('Space');
-    await new Promise(r => setTimeout(r, 400));
-    await imPage.keyboard.press('ArrowDown');
-    await new Promise(r => setTimeout(r, 800));
-
-    // Check if options appeared in DOM
-    const optCoords = await imPage.evaluate((acct) => {
-      const search = acct || 'BONITO CHELUGET';
-      const all = Array.from(document.querySelectorAll(
-        'mat-option, .mat-option, [role="option"], li, div, span'
-      ));
-      for (const el of all) {
-        const txt = el.textContent.trim();
-        if (!txt.includes(search)) continue;
-        if (txt.toLowerCase().includes('select an account')) continue;
-        const r = el.getBoundingClientRect();
-        if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 0)
-          return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: txt.substring(0, 50), tag: el.tagName };
-      }
-      return null;
-    }, traderImAccount || 'BONITO CHELUGET').catch(() => null);
-
-    if (optCoords) {
-      // Type into the dropdown search box first to filter to the exact account
-      const searchTerm = traderImAccount || '00108094726050';
-      await imPage.evaluate((term) => {
-        const searchInput = document.querySelector(
-          '.cdk-overlay-pane input, mat-select-panel input, input[placeholder*="earch"], bb-payord-debit-account-selector input[type="text"]'
-        );
-        if (searchInput) {
-          searchInput.focus();
-          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-          if (nativeSetter) nativeSetter.call(searchInput, term); else searchInput.value = term;
-          searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-          searchInput.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      }, searchTerm).catch(() => {});
-      await new Promise(r => setTimeout(r, 600));
-
-      // dispatchEvent on the (now filtered) option — Angular mat-option needs this
-      const selected = await imPage.evaluate((acct) => {
-        const search = acct || 'BONITO CHELUGET';
-        const all = Array.from(document.querySelectorAll(
-          'mat-option, .mat-option, [role="option"], li, div, span'
-        ));
-        for (const el of all) {
-          const txt = el.textContent.trim();
-          if (!txt.includes(search)) continue;
-          if (txt.toLowerCase().includes('select an account')) continue;
-          const r = el.getBoundingClientRect();
-          if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 0) {
-            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-            return txt.substring(0, 50);
-          }
-        }
-        return null;
-      }, traderImAccount || 'BONITO CHELUGET').catch(() => null);
-
-      if (selected) {
-        accountSelected = true;
-        console.log(`[I&M] STEP 0 âœ… Account selected via dispatchEvent: "${selected}"`);
-        // Click CDK backdrop if present, then Escape — body.click() alone doesn't close the overlay
-        await imPage.evaluate(() => {
-          const backdrop = document.querySelector('.cdk-overlay-backdrop');
-          if (backdrop) backdrop.click(); else document.body.click();
-        }).catch(() => {});
-        await imPage.keyboard.press('Escape');
-        await new Promise(r => setTimeout(r, 800));
-        await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
-        await new Promise(r => setTimeout(r, 400));
-        break;
-      }
-    }
-    console.log(`[I&M] STEP 0 attempt ${attempt + 1}: dropdown not open yet, retrying...`);
-    await new Promise(r => setTimeout(r, 500));
-  }
-  if (!accountSelected) console.log('[I&M] STEP 0: dropdown did not open via JS events — Vision loop will handle it');
-
   while (step < IM_MAX_STEPS) {
     step++;
     await new Promise(r => setTimeout(r, 1500));
@@ -7228,33 +6957,31 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
     // â”€â”€ Account dropdown shortcut (Layer 1 → Layer 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Skip once account is already selected â€” avoids clicking the header repeatedly
     if (!accountSelected) {
-    const clicked = await imPage.evaluate((acct) => {
+    const domCoords = await imPage.evaluate((acct) => {
       const search = acct || 'BONITO CHELUGET';
       const all = Array.from(document.querySelectorAll(
         'mat-option, .mat-option, [role="option"], li, div, span, td'
       ));
       for (const el of all) {
         const txt = el.textContent.trim();
+        // Must contain search term but NOT be the "Select an account" header/trigger
         if (!txt.includes(search)) continue;
         if (txt.toLowerCase().includes('select an account')) continue;
         const r = el.getBoundingClientRect();
         if (r.width > 80 && r.height > 10 && r.height < 120 && r.top > 0) {
-          el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-          return { text: txt.substring(0, 50), tag: el.tagName };
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: txt.substring(0, 50), tag: el.tagName };
         }
       }
       return null;
     }, traderImAccount || '00108094726050').catch(() => null);
 
-    if (clicked) {
-      console.log(`[I&M] âœ… L1 dispatchEvent on <${clicked.tag}> "${clicked.text}"`);
-      await imPage.evaluate(() => {
-        const backdrop = document.querySelector('.cdk-overlay-backdrop');
-        if (backdrop) backdrop.click(); else document.body.click();
-      }).catch(() => {});
-      await imPage.keyboard.press('Escape');
+    if (domCoords && domCoords.x > 0 && domCoords.y > 0) {
+      await imPage.mouse.click(domCoords.x, domCoords.y);
+      console.log(`[I&M] âœ… L1 clicked <${domCoords.tag}> "${domCoords.text}" at (${Math.round(domCoords.x)}, ${Math.round(domCoords.y)})`);
+      await imPage.keyboard.press('Escape'); // close the dropdown
       accountSelected = true;
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 1000));
+      // Scroll down now so Vision sees phone/amount/reference fields
       await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
       await new Promise(r => setTimeout(r, 500));
       console.log('[I&M] Scrolled down after account selection');
@@ -7279,7 +7006,6 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       console.log(`[I&M Vision] âœ… Payment SUCCESS at step ${step}`);
       const receiptSS = await takeImSuccessScreenshot(imPage) || screenshot;
       imWithdrawalRunning = false;
-      await lockImAfterPayment();
       return { success: true, screenshot: receiptSS, referenceId };
     }
 
@@ -7355,38 +7081,24 @@ Return ONLY valid JSON, no other text.` },
     console.log(`[I&M Vision] Step ${step}: screen="${action.screen}" action="${action.action}" desc="${action.description || ''}" val="${action.value || ''}"`);
 
     // â”€â”€ Guard: block Vision from re-clicking radio buttons already set by L1 â”€â”€
-    if (radiosConfirmed && (action.action || '').toLowerCase() === 'click') {
+    if (radiosConfirmed && action.action === 'click') {
       const desc = (action.description || '').toLowerCase();
-      if (desc.includes('other phone') || desc.includes('own phone') ||
-          desc.includes('one-off') || desc.includes('one off') || desc.includes('beneficiary') ||
-          desc.includes('radio')) {
-        console.log(`[I&M Vision] â›” Blocked redundant radio click “${action.description}” â€” radios already confirmed`);
+      if (desc.includes('other phone') || desc.includes('one-off') || desc.includes('one off') || desc.includes('beneficiary')) {
+        console.log(`[I&M Vision] â›” Blocked redundant radio click "${action.description}" â€” radios already confirmed`);
         continue; // skip this step, take fresh screenshot next iteration
       }
     }
 
     // â”€â”€ Execute the action â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (action.screen === 'success' || action.action === 'done') {
-      // Vision says success — cross-verify with DOM text before trusting it.
-      // Prevents blank/gray pages from being misread as success and triggering false notifications.
-      const confirmText = await imPage.evaluate(() => document.body.innerText.toLowerCase()).catch(() => '');
-      const domConfirms = confirmText.includes('payment success') || confirmText.includes('transaction successful') ||
-        confirmText.includes('transfer successful') || confirmText.includes('sent successfully') ||
-        confirmText.includes('transaction complete') || confirmText.includes('money sent') ||
-        confirmText.includes("you've sent") || confirmText.includes('you have sent');
-      if (!domConfirms) {
-        console.log(`[I&M Vision] ⚠️ Vision says success but DOM text does not confirm (step ${step}) — waiting 3s for page`);
-        await new Promise(r => setTimeout(r, 3000));
-        continue;
-      }
+      // Handled above by text detection â€” but catch it here too
       const receiptSS2 = await takeImSuccessScreenshot(imPage) || screenshot;
       imWithdrawalRunning = false;
-      await lockImAfterPayment();
       return { success: true, screenshot: receiptSS2, referenceId };
     }
 
     if (action.screen === 'dashboard' || action.action === 'navigate') {
-      console.log('[I&M Vision] On dashboard — navigating back to form');
+      console.log('[I&M Vision] On dashboard â€” navigating back to form');
       await imPage.goto('https://digital.imbank.com/inm-retail/transfers/send-money-to-mobile/form',
         { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
       await new Promise(r => setTimeout(r, 3000));
@@ -7519,45 +7231,6 @@ Return ONLY valid JSON, no other text.` },
       continue;
     }
 
-    // Angular mat-option: dispatchEvent instead of coordinate click (CDP mouse.click ignored by Angular zone.js)
-    if (action.screen === 'account_list' && action.action === 'click') {
-      const acctSearch = traderImAccount || 'BONITO CHELUGET SAMOEI';
-      const acctClicked = await imPage.evaluate((search) => {
-        const all = Array.from(document.querySelectorAll(
-          'mat-option, .mat-option, [role="option"], li, div, span'
-        ));
-        for (const el of all) {
-          const txt = el.textContent.trim();
-          if (!txt.includes(search)) continue;
-          if (txt.toLowerCase().includes('select an account')) continue;
-          const r = el.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0 && r.top > 0) {
-            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-            return txt.substring(0, 50);
-          }
-        }
-        return null;
-      }, acctSearch).catch(() => null);
-
-      if (acctClicked) {
-        console.log(`[I&M Vision] âœ… account_list dispatchEvent on "${acctClicked}"`);
-        await imPage.evaluate(() => {
-          const backdrop = document.querySelector('.cdk-overlay-backdrop');
-          if (backdrop) backdrop.click(); else document.body.click();
-        }).catch(() => {});
-        await imPage.keyboard.press('Escape');
-        accountSelected = true;
-        await new Promise(r => setTimeout(r, 1000));
-        await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
-        await new Promise(r => setTimeout(r, 500));
-      } else if (action.x && action.y) {
-        console.log(`[I&M Vision] account_list element not found — coord fallback`);
-        await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
-        await new Promise(r => setTimeout(r, 1500));
-      }
-      continue;
-    }
-
     if (action.action === 'click' && action.description) {
       const descLower = action.description.toLowerCase();
       const isTransition = ['continue', 'submit', 'complete'].some(w => descLower.includes(w));
@@ -7565,23 +7238,6 @@ Return ONLY valid JSON, no other text.` },
 
       // For "Continue" clicks: always try DOM-first (Vision coords unreliable at 80% zoom for below-fold buttons)
       if (isContinue) {
-        // Security: verify phone + amount match the original order before submitting
-        const fieldCheck = await checkImFieldTampering(imPage);
-        if (!fieldCheck.ok) {
-          imIntrusionCount++;
-          console.log(`[Lock] 🚨 Field tampering #${imIntrusionCount}: phone=${fieldCheck.foundPhone}(exp:${_imExpectedPhone}) amount=${fieldCheck.foundAmount}(exp:${_imExpectedAmount})`);
-          sendBotLog('warning', `⚠️ I&M form field tampering detected (${imIntrusionCount}/3) — aborting payment attempt`);
-          await injectLockFilter(imPage).catch(() => {}); // freeze intruder immediately
-          if (imIntrusionCount >= 3) {
-            pauseNavigation = true;
-            await lockChromeBrowser().catch(() => {});
-            sendBotLog('error', '🚨 Bot paused: 3 I&M form tampering attempts. Complete orders manually and secure your device.');
-          }
-          imWithdrawalRunning = false;
-          await lockImAfterPayment();
-          return { success: false, screenshot, referenceId: null };
-        }
-
         // Guard: ensure reference/narration field is filled before clicking Continue
         const refStr = String(reference).substring(0, 30);
         const refFilled = await imPage.evaluate((ref) => {
@@ -7666,7 +7322,6 @@ Return ONLY valid JSON, no other text.` },
   const finalText = await imPage.evaluate(() => document.body.innerText).catch(() => '');
   screenshot = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
   imWithdrawalRunning = false;
-  await lockImAfterPayment();
   console.log(`[I&M Vision] âŒ Exceeded ${IM_MAX_STEPS} steps. Page: ${finalText.substring(0, 100)}`);
   return { success: false, screenshot, referenceId: null };
 }
@@ -7685,9 +7340,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   if (!accountNumber) throw new Error('Account number missing for bank transfer.');
   if (!amount || Number(amount) <= 0) throw new Error(`Invalid amount: ${amount}`);
   imWithdrawalRunning = true;
-  imIntrusionCount = 0;
   const amountInt = Math.floor(parseFloat(amount));
-  await unlockImForPayment(null, amountInt, accountNumber); // unlock I&M, start intrusion monitor
   const refStr = String(reference).substring(0, 50);
   const targetBank = (bankName || 'I & M Bank Ltd').trim();
   console.log(`[SparkP2P] ðŸ¦ Bank Transfer: KSh ${amountInt} → ${name} (${targetBank} A/C ${accountNumber})`);
@@ -8051,7 +7704,6 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       if (refMatch) referenceId = refMatch[1].trim();
       console.log(`[BankTransfer] âœ… SUCCESS â€” Ref: ${referenceId}`);
       imWithdrawalRunning = false;
-      await lockImAfterPayment();
       return { success: true, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot), referenceId };
     }
 
@@ -8145,7 +7797,6 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
 
     if (action.screen === 'success' || action.action === 'done') {
       imWithdrawalRunning = false;
-      await lockImAfterPayment();
       return { success: true, screenshot: await takeImSuccessScreenshot(imPage) || screenshot, referenceId };
     }
     if (action.action === 'type_pin') {
@@ -8253,7 +7904,6 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
   }
 
   imWithdrawalRunning = false;
-      await lockImAfterPayment();
   console.log(`[BankTransfer] âŒ Exceeded ${IM_MAX_STEPS} steps`);
   return { success: false, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => null), referenceId: null };
 }
@@ -8336,69 +7986,19 @@ async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
 
 async function sendBinanceChatMessage(page, message) {
   try {
-    await page.bringToFront();
-
-    // Wait up to 15s for the chat panel to render (Binance chat loads async)
+    // Wait up to 10s for the chat panel to render
     let chatInput = null;
-    for (let i = 0; i < 6; i++) {
-      chatInput = await page.$(
-        '[placeholder*="Enter message" i], [placeholder*="message" i], ' +
-        '[placeholder*="Type" i], ' +
-        '[class*="chat"] [contenteditable="true"], ' +
-        '[class*="message"] [contenteditable="true"], ' +
-        'textarea, [contenteditable="true"]'
-      );
+    for (let i = 0; i < 5; i++) {
+      chatInput = await page.$('[placeholder*="message" i], [placeholder*="Enter message" i], [placeholder*="Type" i], textarea');
       if (chatInput) break;
-      await new Promise(r => setTimeout(r, 2500));
+      await new Promise(r => setTimeout(r, 2000));
     }
     if (!chatInput) { console.log('[SparkP2P] Chat input not found after retries'); return false; }
-
-    // Use element.evaluate() -- avoids "Illegal invocation" that occurs when passing
-    // an ElementHandle to page.evaluate() in Puppeteer
-    await chatInput.scrollIntoViewIfNeeded().catch(() => {});
     await chatInput.click();
-    await new Promise(r => setTimeout(r, 300));
-    await chatInput.evaluate((el, msg) => {
-      el.focus();
-      const tag = el.tagName.toLowerCase();
-      if (tag === 'input' || tag === 'textarea') {
-        const proto = tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-        const ns = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-        if (ns) ns.call(el, msg); else el.value = msg;
-        el.dispatchEvent(new Event('input',  { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-      } else {
-        el.textContent = '';
-        document.execCommand('insertText', false, msg);
-      }
-    }, message);
     await new Promise(r => setTimeout(r, 400));
-
-    // Try clicking the send button first (more reliable than Enter for Binance's React chat)
-    const sendClicked = await page.evaluate(() => {
-      const input = document.querySelector('[placeholder*="Enter message" i], [placeholder*="message" i]');
-      if (!input) return false;
-      // Walk up to find the container, then look for a send button sibling
-      let container = input.parentElement;
-      for (let i = 0; i < 4; i++) {
-        if (!container) break;
-        const btns = Array.from(container.querySelectorAll('button, [role="button"], span[class*="send"], div[class*="send"]'));
-        const sendBtn = btns.find(b => !b.contains(input) && b.getBoundingClientRect().width > 0);
-        if (sendBtn) { sendBtn.click(); return true; }
-        container = container.parentElement;
-      }
-      return false;
-    }).catch(() => false);
-
-    if (sendClicked) {
-      console.log('[SparkP2P] Chat: clicked send button');
-    } else {
-      // Fallback: page-level Enter (input is focused from evaluate above)
-      await page.keyboard.press('Enter');
-      console.log('[SparkP2P] Chat: pressed Enter (send button not found)');
-    }
-    await new Promise(r => setTimeout(r, 1200));
-
+    await chatInput.type(message, { delay: 30 });
+    await page.keyboard.press('Enter');
+    await new Promise(r => setTimeout(r, 1000));
     console.log(`[SparkP2P] Chat message sent: ${message.substring(0, 60)}`);
     return true;
   } catch (e) {
@@ -8831,7 +8431,7 @@ For "reply" cases:
 - Asking for proof/confirmation → "I have sent the payment. M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} for KSh ${orderDetails.amount}. Please confirm and release."
 - Asking about amount/ref → provide the details above
 - Asking how long / still waiting → "I sent the payment ${minutesSincePayment} minute(s) ago. Ref: ${orderDetails.referenceId || 'N/A'}. Kindly check and release. Thank you!"
-- Seller greeting/hello → "Hello! I have sent KSh ${orderDetails.amount}. Ref: ${orderDetails.referenceId || 'N/A'}. Please release when confirmed."`;
+- Seller greeting/hello → "Hello! I have sent KSh ${orderDetails.amount}. Ref: ${orderDetails.referenceId || 'N/A'}. Please release when confirmed. ðŸ™"`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -8883,10 +8483,10 @@ For "reply" cases:
           console.log(`[SparkP2P] âœ… Re-sent payment screenshot in chat for order ${orderNum}`);
         } else {
           // If image send failed, fall back to sending reference details as text
-          await sendBinanceChatMessage(page, `M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} | Amount: KSh ${orderDetails.amount} | To: ${orderDetails.name} (${orderDetails.phone || ''}). Please check your M-Pesa and release.`);
+          await sendBinanceChatMessage(page, `M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} | Amount: KSh ${orderDetails.amount} | To: ${orderDetails.name} (${orderDetails.phone || ''}). Please check your M-Pesa and release. ðŸ™`);
         }
       } else {
-        await sendBinanceChatMessage(page, `M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} | Amount: KSh ${orderDetails.amount} | To: ${orderDetails.name} (${orderDetails.phone || ''}). Please check and release.`);
+        await sendBinanceChatMessage(page, `M-Pesa Ref: ${orderDetails.referenceId || 'N/A'} | Amount: KSh ${orderDetails.amount} | To: ${orderDetails.name} (${orderDetails.phone || ''}). Please check and release. ðŸ™`);
       }
     }
 
@@ -10607,21 +10207,12 @@ async function recoverSessions() {
   // Reconcile Binance order state before resuming automation.
   // This syncs any orders the trader completed/cancelled manually during the outage
   // so the VPS DB matches Binance reality and the bot doesn't re-process them.
-  // Also detects any buy orders still pending and processes them immediately.
   sendBotLog('info', 'Reconciling Binance orders completed during outage...');
   try {
     const binancePage = await getPage('binance.com').catch(() => null);
     if (binancePage && pollerRunning) {
-      const { pendingBuyOrders } = await reconcileStuckOrders(binancePage);
-      if (pendingBuyOrders.length) {
-        sendBotLog('success', `Reconciliation done — ${pendingBuyOrders.length} active buy order(s) found, processing now`);
-        // Trigger an immediate poll cycle so the bot processes the pending buy order right away
-        // without waiting for the next 60s interval
-        await sleep(1000);
-        pollCycle().catch(e => console.log('[SparkP2P] Post-outage immediate poll error:', e.message));
-      } else {
-        sendBotLog('success', 'Reconciliation done — no pending orders, bot resuming normally');
-      }
+      await reconcileStuckOrders(binancePage);
+      sendBotLog('success', 'Reconciliation done — bot resuming from current Binance state (manually handled orders are skipped)');
     } else {
       sendBotLog('info', 'Sessions recovered — automation resumed');
     }
@@ -11497,50 +11088,8 @@ ipcMain.handle('connect-im', () => { connectIm(); return { opened: true }; });
 ipcMain.handle('connect-mpesa', () => { connectMpesaPortal(); return { opened: true }; });
 ipcMain.handle('unlock-browser', async () => { await unlockChromeBrowser(); console.log('[SparkP2P] Browser manually unlocked'); return { ok: true }; });
 ipcMain.handle('lock-browser', async () => { const p = await getPage(); if (p) await lockChromeBrowser(); return { ok: true }; });
-ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser().catch(() => {}); await hideElectronOverlay(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED — isTrusted filter removed, Chrome fully accessible'); return { ok: true }; });
-ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); await lockChromeBrowser(); if (token && pollerRunning) showLockScreen(); console.log('[SparkP2P] Navigation RESUMED — Electron overlay active'); return { ok: true }; });
-
-// ── Lock Screen IPC handlers ───────────────────────────────────────────────
-ipcMain.handle('lock-screen', async () => { await showLockScreen(); return { ok: true }; });
-
-ipcMain.handle('lock-unlock', async (_, { totp }) => {
-  if (!token) return { success: false, message: 'Not logged in. Please log in first.' };
-  try {
-    const res = await fetch(`${API_BASE}/traders/verify-totp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ code: String(totp).trim() }),
-    });
-    const data = await res.json();
-    if (res.ok && data.success) { await hideLockScreen(); return { success: true }; }
-    return { success: false, message: data.detail || 'Invalid code. Try again.' };
-  } catch (e) {
-    return { success: false, message: 'Verification failed. Check your internet connection.' };
-  }
-});
-
-ipcMain.handle('lock-get-question', () => lockSecQuestion || 'Security not set up yet. Go to Settings → Security.');
-
-ipcMain.handle('lock-generate-totp', async () => {
-  if (!speakeasy) return { error: 'speakeasy not available' };
-  const secret = speakeasy.generateSecret({ name: 'SparkP2P Bot', issuer: 'SparkP2P', length: 20 });
-  let qrDataUrl = null;
-  if (QRCode) {
-    try { qrDataUrl = await QRCode.toDataURL(secret.otpauth_url); } catch (_) {}
-  }
-  return { secret: secret.base32, otpauthUrl: secret.otpauth_url, qrDataUrl };
-});
-
-ipcMain.handle('lock-save-setup', (_, { totpSecret, secQuestion, secAnswer }) => {
-  const hash = crypto.createHash('sha256').update(secAnswer.toLowerCase().trim()).digest('hex');
-  saveLockCredentials({ totpSecret, secQuestion, secAnswerHash: hash });
-  return { ok: true };
-});
-
-ipcMain.handle('lock-status', () => ({
-  configured: !!token,
-  active: lockScreenActive,
-}));
+ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED â€” Chrome unlocked for manual use'); return { ok: true }; });
+ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED â€” Chrome locked back to bot'); return { ok: true }; });
 ipcMain.handle('open-gmail-tab', async () => {
   // If Chrome is not running yet, launch it to Gmail directly
   if (!browser) {
