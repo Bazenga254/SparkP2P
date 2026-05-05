@@ -128,7 +128,7 @@ class SettlementEngine:
             )
         return success
 
-    async def batch_settle(self, trader_id: int, simulate: bool = False, amount: float = None) -> bool:
+    async def batch_settle(self, trader_id: int, simulate: bool = False, amount: float = None, bypass_threshold: bool = False) -> bool:
         """Settle accumulated balance to trader in one transaction.
 
         Fee breakdown:
@@ -160,7 +160,8 @@ class SettlementEngine:
             return False
 
         # Check threshold — don't withdraw below trader's configured threshold
-        if trader.batch_threshold and wallet.balance < trader.batch_threshold:
+        # bypass_threshold=True skips this check (used for auto-fire after a prior withdrawal completes)
+        if not bypass_threshold and trader.batch_threshold and wallet.balance < trader.batch_threshold:
             logger.info(
                 f"Trader {trader.id} balance KES {wallet.balance} below threshold "
                 f"KES {trader.batch_threshold} — skipping withdrawal"

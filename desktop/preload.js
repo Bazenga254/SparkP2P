@@ -24,9 +24,10 @@ contextBridge.exposeInMainWorld('sparkp2p', {
   takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
   runAIScan: () => ipcRenderer.invoke('run-ai-scan'),
   restartApp: () => ipcRenderer.invoke('restart-app'),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
   manualMpesaSweep: (amount) => ipcRenderer.invoke('manual-mpesa-sweep', amount),
   getLogs: () => ipcRenderer.invoke('get-bot-logs'),
   onLog: (callback) => ipcRenderer.on('bot-log', (_event, data) => callback(data)),
-  reportActivity: () => ipcRenderer.send('user-activity'),
   verifyLockTotp: (code) => ipcRenderer.invoke('verify-lock-totp', code),
 });

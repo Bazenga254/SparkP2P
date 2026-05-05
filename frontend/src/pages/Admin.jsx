@@ -287,9 +287,18 @@ export default function Admin() {
     setSurveyInviting(id);
     setSurveyMsg('');
     try {
-      await sendSurveyInvite(id);
-      setSurveyMsg('Invite sent!');
+      const res = await sendSurveyInvite(id);
+      const { phone_digits, wa_message } = res.data;
+      setSurveyMsg('Opening WhatsApp — paste and send the message!');
       loadSurveyResponses();
+      if (phone_digits && wa_message) {
+        const url = `https://web.whatsapp.com/send?phone=${phone_digits}&text=${encodeURIComponent(wa_message)}`;
+        setTimeout(() => {
+          // In Electron, open in system browser (Chrome) — not the Electron window
+          if (window.sparkp2p?.openExternal) window.sparkp2p.openExternal(url);
+          else window.open(url, '_blank');
+        }, 300);
+      }
     } catch (e) {
       setSurveyMsg(e?.response?.data?.detail || 'Failed to send invite');
     } finally {
@@ -3852,7 +3861,17 @@ export default function Admin() {
                               </td>
                               <td style={{ padding: '12px 14px' }}>
                                 {r.invite_sent ? (
-                                  <span style={{ color: '#60a5fa', fontSize: 12 }}>✓ Invite sent</span>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{ color: '#60a5fa', fontSize: 12 }}>✓ Invite sent</span>
+                                    <button
+                                      className="adm-btn-secondary"
+                                      style={{ fontSize: 11, padding: '2px 8px', opacity: surveyInviting === r.id ? 0.6 : 1 }}
+                                      disabled={surveyInviting === r.id}
+                                      onClick={() => handleSendSurveyInvite(r.id)}
+                                    >
+                                      {surveyInviting === r.id ? '…' : 'Resend'}
+                                    </button>
+                                  </div>
                                 ) : (
                                   <button
                                     className="adm-btn-secondary"

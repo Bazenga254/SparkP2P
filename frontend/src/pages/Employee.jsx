@@ -196,8 +196,16 @@ export default function Employee() {
   const handleSendInvite = async (id) => {
     setSurveyInviting(id);
     try {
-      await sendSurveyInvite(id);
+      const res = await sendSurveyInvite(id);
+      const { phone_digits, wa_message } = res.data;
       setSurveyResponses(prev => prev.map(r => r.id === id ? { ...r, invite_sent: true } : r));
+      if (phone_digits && wa_message) {
+        const url = `https://web.whatsapp.com/send?phone=${phone_digits}&text=${encodeURIComponent(wa_message)}`;
+        setTimeout(() => {
+          if (window.sparkp2p?.openExternal) window.sparkp2p.openExternal(url);
+          else window.open(url, '_blank');
+        }, 300);
+      }
     } catch (e) {
       alert(e.response?.data?.detail || 'Failed to send invite');
     }

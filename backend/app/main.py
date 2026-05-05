@@ -4,8 +4,10 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
@@ -343,9 +345,20 @@ async def _check_stuck_batches():
 
 
 async def batch_scheduler():
-    """Hourly loop: close collecting batches and queue M-PESA sweeps."""
+    """Close collecting batch at :55 of each wall-clock hour (East Africa Time)."""
+    EAT = timezone(timedelta(hours=3))
     while True:
-        await asyncio.sleep(BATCH_INTERVAL_SECONDS)
+        now = datetime.now(EAT)
+        # Next :55:00 mark in EAT
+        target = now.replace(minute=55, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(hours=1)
+        sleep_secs = (target - now).total_seconds()
+        logger.info(
+            f"[BatchScheduler] Next batch sweep at {target.strftime('%I:%M %p EAT')} "
+            f"(in {sleep_secs / 60:.1f} min)"
+        )
+        await asyncio.sleep(sleep_secs)
         await _close_collecting_batch()
 
 
@@ -407,6 +420,25 @@ app.include_router(browser.router, prefix="/api/browser", tags=["Browser Automat
 app.include_router(im_bank.router, prefix="/api/im", tags=["I&M Bank"])
 app.include_router(support.router, prefix="/api", tags=["Support"])
 app.include_router(survey.router, prefix="/api/survey", tags=["Survey"])
+
+
+@app.get("/api/download/latest")
+async def download_latest():
+    """Redirect to the latest SparkP2P Windows installer on GitHub."""
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(
+                "https://api.github.com/repos/Bazenga254/SparkP2P/releases/latest",
+                headers={"User-Agent": "SparkP2P-Server"},
+            )
+            data = resp.json()
+            exe = next((a for a in data.get("assets", []) if a["name"].endswith(".exe")), None)
+            if exe:
+                return RedirectResponse(exe["browser_download_url"])
+    except Exception:
+        pass
+    # Fallback: send to releases page
+    return RedirectResponse("https://github.com/Bazenga254/SparkP2P/releases/latest")
 
 
 @app.get("/health")

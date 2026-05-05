@@ -420,6 +420,8 @@ export default function Dashboard() {
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [botTradeMode, setBotTradeMode] = useState('both');
   const [savingConfig, setSavingConfig] = useState(false);
+  const [configSaved, setConfigSaved] = useState(false);
+  const configSavedAt = useRef(0); // timestamp of last successful config save — prevents stale loadData responses from overwriting the saved value
   const [showPaybill, setShowPaybill] = useState(false);
   const [copied, setCopied] = useState('');
   const [binanceData, setBinanceData] = useState(null);
@@ -438,12 +440,39 @@ export default function Dashboard() {
   const [sendMessage, setSendMessage] = useState('');
   const [sendStatus, setSendStatus] = useState(null); // null, 'success', 'error'
   const [updateVersion, setUpdateVersion] = useState(null); // set when desktop update is ready
+  const [updateDownloading, setUpdateDownloading] = useState(null); // { version, percent } while downloading
+  const [checkingUpdate, setCheckingUpdate] = useState(false); // manual check in progress
+  const [upToDate, setUpToDate] = useState(null); // { version } when already on latest
+  const upToDateTimerRef = useRef(null);
 
-  // Listen for update-ready event from Electron main process
+  // Listen for update events from Electron main process
   useEffect(() => {
-    const handler = (e) => setUpdateVersion(e.detail?.version || 'latest');
-    window.addEventListener('sparkp2p-update-ready', handler);
-    return () => window.removeEventListener('sparkp2p-update-ready', handler);
+    const readyHandler = (e) => {
+      setUpdateDownloading(null);
+      setCheckingUpdate(false);
+      setUpToDate(null);
+      setUpdateVersion(e.detail?.version || 'latest');
+    };
+    const downloadingHandler = (e) => {
+      setCheckingUpdate(false);
+      setUpToDate(null);
+      setUpdateDownloading(prev => ({ ...prev, ...e.detail }));
+    };
+    const upToDateHandler = (e) => {
+      setCheckingUpdate(false);
+      setUpToDate(e.detail);
+      clearTimeout(upToDateTimerRef.current);
+      upToDateTimerRef.current = setTimeout(() => setUpToDate(null), 5000);
+    };
+    window.addEventListener('sparkp2p-update-ready', readyHandler);
+    window.addEventListener('sparkp2p-update-downloading', downloadingHandler);
+    window.addEventListener('sparkp2p-up-to-date', upToDateHandler);
+    return () => {
+      window.removeEventListener('sparkp2p-update-ready', readyHandler);
+      window.removeEventListener('sparkp2p-update-downloading', downloadingHandler);
+      window.removeEventListener('sparkp2p-up-to-date', upToDateHandler);
+      clearTimeout(upToDateTimerRef.current);
+    };
   }, []);
 
   const loadData = async () => {
@@ -460,7 +489,7 @@ export default function Dashboard() {
         getBinanceAccountData(),
         getWalletTransactions(100, 'negative'),
       ]);
-      if (results[0].status === 'fulfilled') { setProfile(results[0].value.data); setBotTradeMode(results[0].value.data.bot_trade_mode || 'both'); }
+      if (results[0].status === 'fulfilled') { setProfile(results[0].value.data); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(results[0].value.data.bot_trade_mode || 'both'); } }
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
       if (results[3].status === 'fulfilled') setOrders(results[3].value.data);
@@ -938,32 +967,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* App update ready banner */}
-      {updateVersion && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 10000,
-          background: '#0c2a1a', borderBottom: '2px solid #10b981',
-          padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 14,
-        }}>
-          <span style={{ fontSize: 20 }}>🚀</span>
-          <div style={{ flex: 1, color: '#6ee7b7', fontSize: 13 }}>
-            <strong style={{ color: '#10b981' }}>SparkP2P v{updateVersion} is ready.</strong>
-            {' '}Restart the app now to install the update.
-          </div>
-          <button
-            onClick={() => window.sparkp2p?.restartApp?.()}
-            style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: '#10b981', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap' }}
-          >
-            Restart & Update
-          </button>
-          <button
-            onClick={() => setUpdateVersion(null)}
-            style={{ background: 'transparent', border: '1px solid #10b981', color: '#6ee7b7', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}
-          >
-            Later
-          </button>
-        </div>
-      )}
 
       {/* Identity mismatch alert */}
       {identityError && (
@@ -1057,9 +1060,73 @@ export default function Dashboard() {
               </div>
             )}
           </div>
-          <button className="icon-btn" onClick={() => setShowConfigModal(true)} title="Configure Bot">
-            <SlidersHorizontal size={18} />
-          </button>
+          {/* Update button — only shown in desktop Electron app */}
+          {window.sparkp2p?.isDesktop && (
+            <div style={{ position: 'relative' }}>
+              <button
+                className="icon-btn"
+                title={
+                  updateVersion ? `v${updateVersion} ready — click to install` :
+                  updateDownloading ? `Downloading update${updateDownloading.version ? ` v${updateDownloading.version}` : ''}... ${updateDownloading.percent ?? 0}%` :
+                  checkingUpdate ? 'Checking for updates...' :
+                  'Check for updates'
+                }
+                disabled={!!updateDownloading || checkingUpdate}
+                onClick={() => {
+                  if (updateVersion) { window.sparkp2p?.restartApp?.(); return; }
+                  setCheckingUpdate(true);
+                  setUpToDate(null);
+                  window.sparkp2p?.checkForUpdates?.();
+                  setTimeout(() => setCheckingUpdate(false), 15000);
+                }}
+                style={{
+                  color: updateVersion ? '#10b981' : updateDownloading ? '#3b82f6' : checkingUpdate ? '#60a5fa' : undefined,
+                  position: 'relative',
+                }}
+              >
+                <ArrowUpCircle size={18} className={updateDownloading || checkingUpdate ? 'spinning' : ''} />
+                {updateVersion && (
+                  <span style={{
+                    position: 'absolute', top: -4, right: -4,
+                    width: 8, height: 8, borderRadius: '50%',
+                    background: '#10b981', border: '2px solid var(--bg)',
+                    boxShadow: '0 0 6px #10b981',
+                    animation: 'pulse-green 1.5s ease-in-out infinite',
+                  }} />
+                )}
+                {updateDownloading && !updateVersion && (
+                  <span style={{
+                    position: 'absolute', top: -6, right: -6,
+                    background: '#3b82f6', color: '#fff', borderRadius: 8,
+                    fontSize: 8, fontWeight: 700, padding: '1px 3px', lineHeight: 1,
+                    minWidth: 18, textAlign: 'center',
+                  }}>
+                    {updateDownloading.percent ?? 0}%
+                  </span>
+                )}
+              </button>
+              {/* Up-to-date popup */}
+              {upToDate && (
+                <div style={{
+                  position: 'absolute', top: 38, right: 0, zIndex: 200,
+                  background: '#0c2a1a', border: '1px solid #10b981',
+                  borderRadius: 10, padding: '10px 14px', whiteSpace: 'nowrap',
+                  boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+                  animation: 'fadeIn 0.2s ease',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: '#10b981', fontSize: 16 }}>✓</span>
+                    <div>
+                      <div style={{ color: '#10b981', fontWeight: 700, fontSize: 13 }}>You are up to date!</div>
+                      <div style={{ color: '#6ee7b7', fontSize: 12, marginTop: 2 }}>
+                        SparkP2P v{upToDate.version} is the latest version.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <button className="icon-btn" onClick={loadData} disabled={refreshing}>
             <RefreshCw size={18} className={refreshing ? 'spinning' : ''} />
           </button>
@@ -1086,6 +1153,14 @@ export default function Dashboard() {
             Connect Binance
           </button>
         )}
+        <button
+          className="tab-btn"
+          style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#f59e0b', fontWeight: 600 }}
+          onClick={() => setShowConfigModal(true)}
+          title="Configure Bot"
+        >
+          <SlidersHorizontal size={14} /> Configure
+        </button>
         <div style={{ position: 'relative', marginLeft: 'auto' }}>
           <button
             className="tab-btn"
@@ -2378,17 +2453,25 @@ export default function Dashboard() {
               </label>
             ))}
 
+            {configSaved && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 0', borderRadius: 8, background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)', marginBottom: 8 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span style={{ color: '#10b981', fontWeight: 600, fontSize: 14 }}>Bot configured successfully</span>
+              </div>
+            )}
             <button
               onClick={async () => {
                 setSavingConfig(true);
                 try {
                   await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode });
-                  setShowConfigModal(false);
+                  configSavedAt.current = Date.now();
+                  setConfigSaved(true);
+                  setTimeout(() => { setConfigSaved(false); setShowConfigModal(false); }, 1500);
                 } catch (e) {}
                 setSavingConfig(false);
               }}
-              disabled={savingConfig}
-              style={{ width: '100%', marginTop: 8, padding: '11px 0', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#000', fontWeight: 700, fontSize: 14, cursor: 'pointer', opacity: savingConfig ? 0.6 : 1 }}
+              disabled={savingConfig || configSaved}
+              style={{ width: '100%', marginTop: 8, padding: '11px 0', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#000', fontWeight: 700, fontSize: 14, cursor: savingConfig || configSaved ? 'default' : 'pointer', opacity: savingConfig || configSaved ? 0.6 : 1 }}
             >
               {savingConfig ? 'Saving...' : 'Save Configuration'}
             </button>

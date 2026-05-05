@@ -62,6 +62,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [imPinTotp, setImPinTotp] = useState('');
   const [imPinVerifLoading, setImPinVerifLoading] = useState(false);
   const [imPinVerifMsg, setImPinVerifMsg] = useState('');
+  const [imPinResending, setImPinResending] = useState(false);
 
   // Binance
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
@@ -366,6 +367,16 @@ export default function SettingsPanel({ profile, onUpdate }) {
       setImPinVerifMsg('OTP sent to your phone.');
     } catch { setImPinVerifMsg('Failed to send OTP. Please try again.'); }
     setImPinVerifLoading(false);
+  };
+
+  const handleResendOtp = async () => {
+    setImPinResending(true);
+    setImPinVerifMsg('');
+    try {
+      await api.post('/traders/pause-bot/request-otp');
+      setImPinVerifMsg('OTP resent to your phone.');
+    } catch { setImPinVerifMsg('Failed to resend OTP. Please try again.'); }
+    setImPinResending(false);
   };
 
   const handleVerifyImPin = async () => {
@@ -862,6 +873,12 @@ export default function SettingsPanel({ profile, onUpdate }) {
                   style={{ width: '100%', padding: '12px', borderRadius: 8, border: 'none', background: imPinVerifLoading ? '#374151' : '#6366f1', color: imPinVerifLoading ? '#6b7280' : '#fff', fontWeight: 700, cursor: imPinVerifLoading ? 'not-allowed' : 'pointer', fontSize: 14 }}
                 >
                   {imPinVerifLoading ? 'Verifying...' : 'Verify Identity'}
+                </button>
+                <button
+                  onClick={handleResendOtp} disabled={imPinResending}
+                  style={{ width: '100%', marginTop: 10, padding: '9px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: imPinResending ? '#6b7280' : '#9ca3af', cursor: imPinResending ? 'not-allowed' : 'pointer', fontSize: 13 }}
+                >
+                  {imPinResending ? 'Resending...' : 'Resend OTP'}
                 </button>
               </>
             )}
@@ -1531,26 +1548,51 @@ export default function SettingsPanel({ profile, onUpdate }) {
             <p className="help-text">Automatically pay sellers when you place a buy order.</p>
 
             <label>Daily Trade Limit</label>
-            <input type="number" value={dailyLimit} onChange={(e) => setDailyLimit(Number(e.target.value))} />
+            <input
+              type="text"
+              value={Number(dailyLimit).toLocaleString()}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^0-9]/g, '');
+                setDailyLimit(raw === '' ? 0 : parseInt(raw, 10));
+              }}
+            />
 
             <label>Max Single Trade (KES)</label>
-            <input type="number" value={maxTrade} onChange={(e) => setMaxTrade(Number(e.target.value))} />
+            <input
+              type="text"
+              value={Number(maxTrade).toLocaleString()}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^0-9]/g, '');
+                setMaxTrade(raw === '' ? 0 : parseInt(raw, 10));
+              }}
+            />
 
             <div className="toggle-row">
               <label>Batch Settlement</label>
               <input type="checkbox" checked={batchEnabled} onChange={(e) => setBatchEnabled(e.target.checked)} />
             </div>
-            <p className="help-text">Accumulate funds and settle in batches to save on fees.</p>
+            <p className="help-text">Accumulate earnings until your threshold is reached, then disburse in the next hourly cycle.</p>
+            {!batchEnabled && (
+              <p className="help-text" style={{ color: '#f59e0b', marginTop: '4px' }}>
+                ⚠️ Batch Settlement is OFF — M-Pesa users can withdraw any amount at any time. Only one withdrawal can be pending at a time; the next will auto-initiate for your full balance once the current one completes. I&M Bank users should enable Batch Settlement to control disbursement timing.
+              </p>
+            )}
 
             {batchEnabled && (
               <>
                 <label>Batch Threshold (KES)</label>
                 <input
-                  type="number"
-                  value={batchThreshold}
-                  onChange={(e) => setBatchThreshold(Number(e.target.value))}
+                  type="text"
+                  value={Number(batchThreshold).toLocaleString()}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/[^0-9]/g, '');
+                    setBatchThreshold(raw === '' ? 0 : parseInt(raw, 10));
+                  }}
                 />
-                <p className="help-text">Auto-settle when balance reaches this amount.</p>
+                <p className="help-text">
+                  Earnings accumulate until this amount is reached, then queue for the next hourly disbursement.
+                  Only one disbursement runs at a time — if one is pending, the next will fire automatically for your full balance once it completes.
+                </p>
               </>
             )}
 

@@ -19,7 +19,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -532,7 +532,6 @@ async def verify_payment(
             )
             direct_payment = pay_result.scalar_one_or_none()
             if direct_payment:
-                # Accept any completed-like status (handles DB/enum case mismatch)
                 status_val = str(direct_payment.status).upper().replace('PAYMENTSTATUS.', '')
                 if status_val not in ('COMPLETED', 'PAYMENT_RECEIVED'):
                     continue
@@ -546,34 +545,7 @@ async def verify_payment(
                     "payer_name": direct_payment.sender_name,
                 }
 
-    # ── Step 2: Amount + time-window match against Payment table ─────────────
-    # Runs ALWAYS when fiat_amount is provided. No status filter in WHERE for
-    # same reason as Step 1 (DB/enum case mismatch). Extended to 24h window
-    # so payments made earlier in the day are still matched.
-    if data.fiat_amount:
-        window = datetime.now(timezone.utc) - timedelta(hours=24)
-        amount_result = await db.execute(
-            select(Payment).where(
-                Payment.trader_id == trader.id,
-                Payment.amount.between(data.fiat_amount - 5, data.fiat_amount + 5),
-                Payment.created_at >= window,
-                Payment.direction == PaymentDirection.INBOUND,
-            ).order_by(Payment.id.desc())
-        )
-        for row in amount_result.scalars().all():
-            status_val = str(row.status).upper().replace('PAYMENTSTATUS.', '')
-            if status_val in ('COMPLETED', 'PAYMENT_RECEIVED'):
-                logger.info(f"M-Pesa payment matched by amount KES {data.fiat_amount} for order {data.binance_order_number}")
-                return {
-                    "verified": True,
-                    "reason": f"M-Pesa payment matched by amount KES {data.fiat_amount}",
-                    "mpesa_receipt": row.mpesa_transaction_id,
-                    "amount_received": row.amount,
-                    "payer_phone": row.phone,
-                    "payer_name": row.sender_name,
-                }
-
-    # ── Step 3: Order-status check ────────────────────────────────────────────
+    # ── Step 2: Fetch order — needed for time-window and double-spend guard ───
     result = await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,
@@ -589,7 +561,62 @@ async def verify_payment(
             "reason": f"Order {data.binance_order_number} not found in our system. No M-Pesa payment received.",
         }
 
-    # If status is PAYMENT_RECEIVED/RELEASED/COMPLETED the C2B callback matched it
+    # ── Step 3: Amount-match with double-spend protection ────────────────────
+    # Window starts at order creation — payments before the order are never valid.
+    # Excludes payments already linked to a DIFFERENT order (order_id must be NULL
+    # or this order's id). If multiple unlinked payments have the same amount, we
+    # cannot safely pick one — ask buyer to type their M-Pesa code instead.
+    if data.fiat_amount:
+        amount_result = await db.execute(
+            select(Payment).where(
+                Payment.trader_id == trader.id,
+                Payment.amount.between(data.fiat_amount - 5, data.fiat_amount + 5),
+                Payment.created_at >= order.created_at,
+                Payment.direction == PaymentDirection.INBOUND,
+                or_(Payment.order_id.is_(None), Payment.order_id == order.id),
+            ).order_by(Payment.id.desc())
+        )
+        candidates = [
+            row for row in amount_result.scalars().all()
+            if str(row.status).upper().replace('PAYMENTSTATUS.', '') in ('COMPLETED', 'PAYMENT_RECEIVED')
+        ]
+        linked_to_this = [c for c in candidates if c.order_id == order.id]
+        unlinked = [c for c in candidates if c.order_id is None]
+
+        if linked_to_this:
+            row = linked_to_this[0]
+            logger.info(f"M-Pesa payment linked to order {data.binance_order_number}: {row.mpesa_transaction_id}")
+            return {
+                "verified": True,
+                "reason": f"M-Pesa payment KES {row.amount} confirmed for this order",
+                "mpesa_receipt": row.mpesa_transaction_id,
+                "amount_received": row.amount,
+                "payer_phone": row.phone,
+                "payer_name": row.sender_name,
+            }
+        elif len(unlinked) == 1:
+            row = unlinked[0]
+            logger.info(f"M-Pesa payment matched by amount KES {data.fiat_amount} for order {data.binance_order_number}")
+            return {
+                "verified": True,
+                "reason": f"M-Pesa payment matched by amount KES {data.fiat_amount}",
+                "mpesa_receipt": row.mpesa_transaction_id,
+                "amount_received": row.amount,
+                "payer_phone": row.phone,
+                "payer_name": row.sender_name,
+            }
+        elif len(unlinked) > 1:
+            logger.warning(
+                f"Ambiguous: {len(unlinked)} unlinked payments of KES {data.fiat_amount} "
+                f"for order {data.binance_order_number} — cannot auto-release"
+            )
+            return {
+                "verified": False,
+                "reason": f"ambiguous_multiple_matches: {len(unlinked)} payments of KES {data.fiat_amount} found. Ask buyer to type their M-Pesa code.",
+            }
+
+    # ── Step 4: Order-status check ────────────────────────────────────────────
+    # If the C2B webhook already matched and flipped the order status, trust it.
     if order.status in (OrderStatus.PAYMENT_RECEIVED, OrderStatus.RELEASED, OrderStatus.COMPLETED):
         pay_result = await db.execute(
             select(Payment).where(
@@ -1227,6 +1254,22 @@ async def bank_withdrawal_complete(
     from app.services import system_health
     import asyncio
     asyncio.create_task(system_health.report_success("im_bank"))
+
+    # Auto-fire next withdrawal for any balance accumulated since this one was queued.
+    # This implements the "one pending at a time → auto-fire for full balance on completion" rule.
+    # batch_settle() will block if another pending already exists (race-safe).
+    try:
+        from app.services.settlement.engine import SettlementEngine, BANK_MIN_WITHDRAWAL
+        settlement = SettlementEngine(db)
+        fresh_wallet = await settlement._get_wallet(tx.trader_id)
+        if fresh_wallet and fresh_wallet.balance >= BANK_MIN_WITHDRAWAL:
+            logger.info(
+                f"[BankWithdrawal] Auto-firing next withdrawal for trader {tx.trader_id}: "
+                f"KES {fresh_wallet.balance:,.0f} accumulated"
+            )
+            await settlement.batch_settle(tx.trader_id, bypass_threshold=True)
+    except Exception as e:
+        logger.warning(f"[BankWithdrawal] Auto-fire next withdrawal failed for trader {tx.trader_id}: {e}")
 
     return {"status": "ok", "tx_id": tx.id}
 

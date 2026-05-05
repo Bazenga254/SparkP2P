@@ -152,14 +152,28 @@ async def send_invite(
         raise HTTPException(status_code=404, detail="Response not found")
 
     first = resp.full_name.strip().split()[0] if resp.full_name else "Merchant"
-    msg = (
-        f"Hi {first}! You've qualified to join the SparkP2P Merchant Group. "
-        f"Click to join on WhatsApp: {WA_GROUP_INVITE}"
+
+    # WhatsApp message sent manually by admin via WhatsApp Web
+    wa_message = (
+        f"Hi {first}! 🎉\n\n"
+        f"Congratulations — you've qualified for early access to SparkP2P!\n\n"
+        f"We're adding you to our exclusive WhatsApp group and hosting a live walkthrough "
+        f"*today at 7:00 PM* 🎯\n\n"
+        f"👉 Join our WhatsApp group: {WA_GROUP_INVITE}\n\n"
+        f"This is an invite-only session — limited spots available 🔒"
     )
-    sent = send_sms(resp.phone, msg)
-    if sent:
-        resp.invite_sent = True
-        resp.invite_sent_at = datetime.now(timezone.utc)
-        await db.commit()
-        return {"success": True}
-    raise HTTPException(status_code=500, detail="SMS failed to send")
+
+    # Also fire an SMS as a fallback notification
+    sms_msg = (
+        f"Hi {first}! You qualified for SparkP2P early access. "
+        f"Join our WhatsApp group: {WA_GROUP_INVITE}"
+    )
+    send_sms(resp.phone, sms_msg)  # best-effort — don't fail if SMS fails
+
+    resp.invite_sent = True
+    resp.invite_sent_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    # Return the phone digits and message so the frontend can open WhatsApp Web
+    phone_digits = resp.phone.lstrip("+").replace(" ", "")
+    return {"success": True, "phone_digits": phone_digits, "wa_message": wa_message}

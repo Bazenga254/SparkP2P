@@ -1185,10 +1185,19 @@ async def request_withdrawal(
             )
         queued_net = batch_result["net_amount"]
         queued_fee = batch_result["fee_amount"]
+        # Calculate the next :55 mark in EAT so the message shows the exact time
+        from datetime import timezone as _tz, timedelta as _td
+        _EAT = _tz(_td(hours=3))
+        _now = datetime.now(_EAT)
+        _next55 = _now.replace(minute=55, second=0, microsecond=0)
+        if _now >= _next55:
+            _next55 += _td(hours=1)
+        _sweep_time = _next55.strftime("%-I:%M %p")  # e.g. "10:55 AM"
         return {
             "status": "queued",
             "message": (
-                f"KES {queued_net:,.0f} queued for the next hourly batch transfer to your I&M account. "
+                f"KES {queued_net:,.0f} queued for the {_sweep_time} batch transfer to your I&M account. "
+                f"The sweep runs at {_sweep_time} — funds are disbursed to your bank account shortly after. "
                 f"You will receive an SMS and email once the transfer completes."
             ),
             "amount_sent": queued_net,
@@ -1654,10 +1663,18 @@ async def connect_im(
 
 @router.post("/pause-bot/request-otp")
 async def request_pause_otp(trader: Trader = Depends(get_current_trader)):
-    """Return security question for pause-bot verification."""
-    return {
-        "security_question": trader.security_question or "What is your mother's maiden name?",
-    }
+    """Send SMS OTP to trader's phone for I&M PIN change verification."""
+    import random
+    from app.api.routes.auth import _login_otp_codes
+    otp_code = str(random.randint(100000, 999999))
+    _login_otp_codes[f"pause_{trader.email}"] = otp_code
+    try:
+        from app.services.sms import sms_verification_code
+        sms_verification_code(trader.phone, otp_code)
+    except Exception as e:
+        logger.warning(f"PIN change OTP SMS failed for {trader.email}: {e}")
+    masked = trader.phone[-4:] if trader.phone else "****"
+    return {"status": "sent", "message": f"OTP sent to number ending {masked}"}
 
 
 class SetupTotpVerifyRequest(BaseModel):
