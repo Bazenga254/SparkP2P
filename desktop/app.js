@@ -9613,14 +9613,15 @@ async function connectIm() {
       connectingIm = false;
       mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“im-connected”))').catch(() => {});
       sendBotLog('success', 'I&M Bank portal connected');
+      // Always switch Chrome focus back to Binance — even if poller was already running
+      const binancePage = await getPage('binance.com').catch(() => null);
+      if (binancePage) await binancePage.bringToFront().catch(() => {});
       const setup = await checkSetupComplete();
       if (setup.complete && !pollerRunning) {
         pauseNavigation = false;
         mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“setup-complete”))').catch(() => {});
-        console.log('[SparkP2P] I&M logged in — returning to Binance tab to start scanning');
-        sendBotLog('success', 'I&M connected — switching to Binance to start scanning');
-        const binancePage = await getPage('binance.com').catch(() => null);
-        if (binancePage) await binancePage.bringToFront().catch(() => {});
+        console.log('[SparkP2P] I&M logged in — starting scanner');
+        sendBotLog('success', 'I&M connected — starting scanner');
         await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
         startPoller();
       }
@@ -9639,12 +9640,13 @@ async function connectIm() {
           body: JSON.stringify({ message: 'I&M digital platform seems to be offline. I am unable to connect to it. The bot will continue processing sell orders on Binance. Please contact your bank for more clarifications.' }),
         }).catch(() => {});
       }
+      // Always switch Chrome focus back to Binance
+      const binanceFallback = await getPage('binance.com').catch(() => null);
+      if (binanceFallback) await binanceFallback.bringToFront().catch(() => {});
       // Start bot on Binance immediately — don't wait for I&M
       if (!pollerRunning) {
         pauseNavigation = false;
         mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“setup-complete”))').catch(() => {});
-        const binancePage = await getPage('binance.com').catch(() => null);
-        if (binancePage) await binancePage.bringToFront().catch(() => {});
         await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
         startPoller();
       }
