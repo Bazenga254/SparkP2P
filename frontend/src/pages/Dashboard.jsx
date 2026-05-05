@@ -421,7 +421,11 @@ export default function Dashboard() {
   const [botTradeMode, setBotTradeMode] = useState('both');
   const [savingConfig, setSavingConfig] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
-  const configSavedAt = useRef(0); // timestamp of last successful config save — prevents stale loadData responses from overwriting the saved value
+  const configSavedAt = useRef(0);
+  const [ddEnabled, setDdEnabled] = useState(false);
+  const [ddMin30d, setDdMin30d] = useState(20);
+  const [ddMinAll, setDdMinAll] = useState(0);
+  const [ddAutoCancelNew, setDdAutoCancelNew] = useState(false); // timestamp of last successful config save — prevents stale loadData responses from overwriting the saved value
   const [showPaybill, setShowPaybill] = useState(false);
   const [copied, setCopied] = useState('');
   const [binanceData, setBinanceData] = useState(null);
@@ -489,7 +493,7 @@ export default function Dashboard() {
         getBinanceAccountData(),
         getWalletTransactions(100, 'negative'),
       ]);
-      if (results[0].status === 'fulfilled') { setProfile(results[0].value.data); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(results[0].value.data.bot_trade_mode || 'both'); } }
+      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); } }
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
       if (results[3].status === 'fulfilled') setOrders(results[3].value.data);
@@ -2423,7 +2427,7 @@ export default function Dashboard() {
       {showConfigModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           onClick={e => { if (e.target === e.currentTarget) setShowConfigModal(false); }}>
-          <div style={{ background: '#13151f', border: '1px solid #1f2937', borderRadius: 14, padding: 28, width: 400, maxWidth: '90vw' }}>
+          <div style={{ background: '#13151f', border: '1px solid #1f2937', borderRadius: 14, padding: 28, width: 460, maxWidth: '90vw', maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <SlidersHorizontal size={20} color="#f59e0b" />
@@ -2453,6 +2457,62 @@ export default function Dashboard() {
               </label>
             ))}
 
+            {/* ── Counterparty Screening ── */}
+            <div style={{ borderTop: '1px solid #1f2937', marginTop: 8, paddingTop: 20, marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <div>
+                  <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 700 }}>Counterparty Screening</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>Screen buyers before sharing payment details</div>
+                </div>
+                <div onClick={() => setDdEnabled(v => !v)}
+                  style={{ width: 40, height: 22, borderRadius: 11, background: ddEnabled ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0 }}>
+                  <div style={{ position: 'absolute', top: 3, left: ddEnabled ? 20 : 3, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+                </div>
+              </div>
+
+              {ddEnabled && (
+                <div style={{ background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 10, padding: '14px 16px', marginTop: 12 }}>
+
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <div>
+                        <span style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600 }}>Min 30-day trades</span>
+                        <span style={{ marginLeft: 6, fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.12)', padding: '1px 6px', borderRadius: 4 }}>Tier 1 — Required</span>
+                      </div>
+                      <span style={{ color: '#f59e0b', fontWeight: 700, fontSize: 14 }}>{ddMin30d}</span>
+                    </div>
+                    <input type="range" min={0} max={100} value={ddMin30d} onChange={e => setDdMin30d(+e.target.value)}
+                      style={{ width: '100%', accentColor: '#f59e0b' }} />
+                    <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>Buyer must have traded this many times in the last 30 days. Returning clients bypass this check.</div>
+                  </div>
+
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <div>
+                        <span style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600 }}>Min all-time trades</span>
+                        <span style={{ marginLeft: 6, fontSize: 11, color: '#9ca3af', background: 'rgba(255,255,255,0.06)', padding: '1px 6px', borderRadius: 4 }}>Tier 2 — Soft</span>
+                      </div>
+                      <span style={{ color: '#e5e7eb', fontWeight: 700, fontSize: 14 }}>{ddMinAll === 0 ? 'Off' : ddMinAll}</span>
+                    </div>
+                    <input type="range" min={0} max={500} step={10} value={ddMinAll} onChange={e => setDdMinAll(+e.target.value)}
+                      style={{ width: '100%', accentColor: '#6366f1' }} />
+                    <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>Waived if Tier 1 passes. Set to 0 to disable.</div>
+                  </div>
+
+                  <div onClick={() => setDdAutoCancelNew(v => !v)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '10px 12px', borderRadius: 8, background: ddAutoCancelNew ? 'rgba(239,68,68,0.08)' : 'rgba(255,255,255,0.03)', border: `1px solid ${ddAutoCancelNew ? 'rgba(239,68,68,0.3)' : '#1f2937'}` }}>
+                    <div style={{ width: 36, height: 20, borderRadius: 10, background: ddAutoCancelNew ? '#ef4444' : '#374151', position: 'relative', flexShrink: 0, transition: 'background 0.2s' }}>
+                      <div style={{ position: 'absolute', top: 2, left: ddAutoCancelNew ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+                    </div>
+                    <div>
+                      <div style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600 }}>Auto-cancel brand-new accounts</div>
+                      <div style={{ color: '#6b7280', fontSize: 11 }}>Automatically cancel orders from accounts with fewer than 5 all-time trades</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {configSaved && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 0', borderRadius: 8, background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)', marginBottom: 8 }}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -2463,7 +2523,7 @@ export default function Dashboard() {
               onClick={async () => {
                 setSavingConfig(true);
                 try {
-                  await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode });
+                  await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, dd_auto_cancel_new: ddAutoCancelNew });
                   configSavedAt.current = Date.now();
                   setConfigSaved(true);
                   setTimeout(() => { setConfigSaved(false); setShowConfigModal(false); }, 1500);
