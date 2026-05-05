@@ -47,6 +47,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [pauseSecQ, setPauseSecQ] = useState('');
   const [pauseSecAnswer, setPauseSecAnswer] = useState('');
   const [pauseTotpCode, setPauseTotpCode] = useState('');
+  const [pauseHasTotp, setPauseHasTotp] = useState(false);
   const [pauseLoading, setPauseLoading] = useState(false);
   const [pauseMsg, setPauseMsg] = useState('');
 
@@ -300,6 +301,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
     try {
       const res = await api.post('/traders/pause-bot/request-otp');
       setPauseSecQ(res.data.security_question || '');
+      setPauseHasTotp(!!res.data.has_totp);
       setPauseStep('otp');
     } catch (err) {
       setPauseMsg(err.response?.data?.detail || 'Failed to load verification. Please try again.');
@@ -309,7 +311,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
 
   const handleConfirmPause = async () => {
     if (pauseSecQ && !pauseSecAnswer) { setPauseMsg('Enter your security answer.'); return; }
-    if (!pauseTotpCode) { setPauseMsg('Enter your Google Authenticator code.'); return; }
+    if (pauseHasTotp && !pauseTotpCode) { setPauseMsg('Enter your Google Authenticator code.'); return; }
     setPauseLoading(true);
     setPauseMsg('');
     try {
@@ -1641,7 +1643,11 @@ export default function SettingsPanel({ profile, onUpdate }) {
 
             {pauseStep === 'otp' && (<>
               <h3 style={{ color: '#fff', marginBottom: 6 }}>Verify Identity</h3>
-              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>Enter your security answer and Google Authenticator code to confirm.</p>
+              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
+                {pauseHasTotp
+                  ? 'Enter your security answer and Google Authenticator code to confirm.'
+                  : 'Enter your security answer to confirm.'}
+              </p>
 
               {pauseMsg && (
                 <div style={{ padding: '8px 12px', borderRadius: 8, marginBottom: 12, fontSize: 13,
@@ -1663,18 +1669,20 @@ export default function SettingsPanel({ profile, onUpdate }) {
                 </div>
               )}
 
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Google Authenticator Code</label>
-                <input
-                  type="text" maxLength={6} placeholder="6-digit code from your app"
-                  value={pauseTotpCode} onChange={e => setPauseTotpCode(e.target.value)}
-                  className="adm-input" style={{ width: '100%' }}
-                />
-              </div>
+              {pauseHasTotp && (
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>Google Authenticator Code</label>
+                  <input
+                    type="text" maxLength={6} placeholder="6-digit code from your app"
+                    value={pauseTotpCode} onChange={e => setPauseTotpCode(e.target.value)}
+                    className="adm-input" style={{ width: '100%' }}
+                  />
+                </div>
+              )}
 
               <div style={{ display: 'flex', gap: 10 }}>
                 <button
-                  onClick={() => { setShowPauseModal(false); setPauseStep('warning'); setPauseOtpCode(''); setPauseSecAnswer(''); setPauseTotpCode(''); setPauseMsg(''); }}
+                  onClick={() => { setShowPauseModal(false); setPauseStep('warning'); setPauseOtpCode(''); setPauseSecAnswer(''); setPauseTotpCode(''); setPauseHasTotp(false); setPauseMsg(''); }}
                   style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 14 }}
                 >
                   Cancel

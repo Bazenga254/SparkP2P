@@ -1675,7 +1675,7 @@ async def connect_im(
 
 @router.post("/pause-bot/request-otp")
 async def request_pause_otp(trader: Trader = Depends(get_current_trader)):
-    """Send SMS OTP to trader's phone for I&M PIN change verification."""
+    """Send SMS OTP to trader's phone for bot pause verification."""
     import random
     from app.api.routes.auth import _login_otp_codes
     otp_code = str(random.randint(100000, 999999))
@@ -1686,7 +1686,12 @@ async def request_pause_otp(trader: Trader = Depends(get_current_trader)):
     except Exception as e:
         logger.warning(f"PIN change OTP SMS failed for {trader.email}: {e}")
     masked = trader.phone[-4:] if trader.phone else "****"
-    return {"status": "sent", "message": f"OTP sent to number ending {masked}"}
+    return {
+        "status": "sent",
+        "message": f"OTP sent to number ending {masked}",
+        "security_question": trader.security_question or "",
+        "has_totp": bool(trader.totp_secret),
+    }
 
 
 class SetupTotpVerifyRequest(BaseModel):
