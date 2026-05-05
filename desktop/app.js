@@ -8500,17 +8500,45 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
 
     // â”€â”€ Post-account-selection L1 fill (runs once after account confirmed) â”€â”€â”€
     if (accountSelected && !formFilled) {
-      formFilled = true;
       await new Promise(r => setTimeout(r, 1000));
 
-      // One-off Beneficiary
-      await imPage.evaluate(() => {
-        const all = Array.from(document.querySelectorAll('label, span, div'));
+      // One-off Beneficiary — use imPage.mouse.click (real mouse event) so Angular radio fires
+      const oneOffCoords = await imPage.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('*'));
         for (const el of all) {
-          if ((el.textContent || '').trim() === 'One-off Beneficiary' && el.getBoundingClientRect().width > 0) { el.click(); return; }
+          const txt = (el.textContent || '').trim();
+          const r = el.getBoundingClientRect();
+          if (txt.includes('One-off') && r.width > 0 && r.width < 350 && r.height > 0 && r.height < 60) {
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+          }
         }
-      }).catch(() => {});
-      await new Promise(r => setTimeout(r, 1500));
+        return null;
+      }).catch(() => null);
+      if (oneOffCoords) {
+        await imPage.mouse.click(oneOffCoords.x, oneOffCoords.y);
+        console.log(`[BankTransfer] Clicked One-off Beneficiary at (${Math.round(oneOffCoords.x)}, ${Math.round(oneOffCoords.y)})`);
+      } else {
+        console.log('[BankTransfer] One-off Beneficiary element not found — will retry');
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
+      await new Promise(r => setTimeout(r, 1800));
+
+      // Verify Angular registered the radio change — One-off fields (bank name input) must now be visible
+      const oneOffVisible = await imPage.evaluate(() => {
+        const inputs = Array.from(document.querySelectorAll('input'));
+        return inputs.some(i => {
+          const ph = (i.placeholder || '').toLowerCase(), fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
+          return ph.includes('bank') || fc.includes('bank') || ph.includes('account number') || fc.includes('account');
+        });
+      }).catch(() => false);
+      if (!oneOffVisible) {
+        console.log('[BankTransfer] One-off fields not visible after click — retrying radio selection');
+        await new Promise(r => setTimeout(r, 1000));
+        continue; // retry on next iteration
+      }
+      formFilled = true; // Only mark filled once One-off form fields are confirmed visible
+      await new Promise(r => setTimeout(r, 500));
 
       // Bank name (type + select from dropdown)
       const bankInputCoords2 = await imPage.evaluate(() => {
@@ -8821,23 +8849,26 @@ TARGET PAYMENT:
 - Payment purpose: Other
 
 IMPORTANT: The following were already filled programmatically â€” do NOT re-fill them unless clearly wrong:
-- "One-off Beneficiary" radio: ALREADY SELECTED
-- Bank name: ALREADY SET to "${targetBank}"
+- “One-off Beneficiary” radio: ALREADY SELECTED
+- Bank name: ALREADY SET to “${targetBank}”
 - Account number: ALREADY TYPED (${accountNumber}) and Validated
 - Amount: ALREADY SET to ${amountInt}
 - Reference: ALREADY FILLED
 - Pesalink radio: ALREADY SELECTED
-- Payment Purpose: ALREADY SET to "Other"
+- Payment Purpose: ALREADY SET to “Other”
+
+CRITICAL: If the form still shows “Saved Beneficiary” selected OR any required field shows a validation error OR amount is empty → DO NOT click Continue. Instead return action=”refill” so the bot can re-fill the form.
 
 ALL form fields have been filled. Your ONLY jobs are:
-1. If currency shows "-" → click the currency dropdown and select KES
-2. If you see a green "Continue" button → click it immediately
-3. On review/confirmation screen → click "Submit" or "Confirm"
-4. On PIN screen → action="type_pin"
-5. After PIN → if you see "Okay" or "Complete" or "Done" button → click it. If not visible → action="scroll"
-6. On success/completion screen → action="done"
+1. If currency shows “-” → click the currency dropdown and select KES
+2. If you see a green “Continue” button AND no red validation errors visible → click it
+3. On review/confirmation screen → click “Submit” or “Confirm”
+4. On PIN screen → action=”type_pin”
+5. After PIN → if you see “Okay” or “Complete” or “Done” button → click it. If not visible → action=”scroll”
+6. On success/completion screen → action=”done”
+7. If form has validation errors or fields are empty → action=”refill”
 
-If a button you need is not visible, return action="scroll" to scroll down.
+If a button you need is not visible, return action=”scroll” to scroll down.
 DO NOT click Validate, DO NOT re-enter any fields.
 
 Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"click|type|type_pin|scroll|done","description":"what you are doing","value":"text if typing","x":NNN,"y":NNN}` },
@@ -8856,6 +8887,12 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
     if (action.screen === 'success' || action.action === 'done') {
       imWithdrawalRunning = false;
       return { success: true, screenshot: await takeImSuccessScreenshot(imPage) || screenshot, referenceId };
+    }
+    if (action.action === 'refill') {
+      console.log('[BankTransfer] Vision detected unfilled form — resetting formFilled to retry L1 fill');
+      formFilled = false;
+      await new Promise(r => setTimeout(r, 1000));
+      continue;
     }
     if (action.action === 'type_pin') {
       // Focus the PIN input first
