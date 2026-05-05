@@ -1,8 +1,10 @@
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
+from typing import Optional
 from sqlalchemy import select, func, case, extract
 from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +42,7 @@ async def admin_login(data: AdminLoginRequest, db: AsyncSession = Depends(get_db
 
     # Find or create admin account
     result = await db.execute(
-        select(Trader).where(Trader.is_admin == True)
+        select(Trader).where(Trader.is_admin == True).order_by(Trader.id.asc()).limit(1)
     )
     admin = result.scalar_one_or_none()
 
@@ -2126,3 +2128,51 @@ async def bot_alert(
         logger.error(f"[BotAlert] SMS failed: {e}")
 
     return {"status": "ok"}
+
+
+# ── Dev/Debug: Raw Binance order detail inspector ─────────────────
+
+class OrderInspectRequest(BaseModel):
+    order_number: str
+    trader_id: Optional[int] = None  # defaults to first active trader with Binance session
+
+
+@router.post("/inspect-order-detail")
+async def inspect_order_detail(
+    data: OrderInspectRequest,
+    db: AsyncSession = Depends(get_db),
+    _: Trader = Depends(get_admin_trader),
+):
+    """
+    Fetch raw Binance order detail for any order number using a trader's live session.
+    Used to discover what counterparty fields Binance returns (completion rate, trade count, etc.)
+    """
+    from app.services.binance.client import BinanceP2PClient
+    from app.core.security import decrypt_data
+
+    # Pick trader with active Binance session
+    if data.trader_id:
+        result = await db.execute(select(Trader).where(Trader.id == data.trader_id))
+    else:
+        result = await db.execute(
+            select(Trader).where(Trader.binance_cookies.isnot(None)).limit(1)
+        )
+    trader = result.scalar_one_or_none()
+    if not trader or not trader.binance_cookies:
+        raise HTTPException(status_code=404, detail="No trader with active Binance session found")
+
+    try:
+        cookies = json.loads(decrypt_data(trader.binance_cookies))
+        csrf = trader.binance_csrf_token or ""
+        uuid = trader.binance_bnc_uuid or ""
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to decrypt session: {e}")
+
+    client = BinanceP2PClient(cookies=cookies, csrf_token=csrf, bnc_uuid=uuid)
+
+    try:
+        raw = await client.get_order_detail(data.order_number)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Binance API error: {e}")
+
+    return {"order_number": data.order_number, "trader_id": trader.id, "raw": raw}

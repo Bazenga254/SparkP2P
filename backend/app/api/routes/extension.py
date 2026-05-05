@@ -2046,3 +2046,70 @@ async def sync_paybill_statement(
     await db.commit()
     logger.info(f"[PaybillSync] Inserted {inserted}, skipped {skipped} duplicates")
     return {"inserted": inserted, "skipped": skipped}
+
+
+# ── Counterparty due diligence: log raw order detail ─────────────
+
+class OrderDetailReport(BaseModel):
+    order_number: str
+    trade_type: str = ""
+    raw: dict
+
+
+@router.post("/report-order-detail")
+async def report_order_detail(
+    data: OrderDetailReport,
+    trader: Trader = Depends(get_current_trader),
+):
+    """
+    Receive full Binance order detail from the bot.
+    Logs all counterparty fields for due diligence analysis.
+    """
+    raw = data.raw
+    # Extract counterparty fields Binance returns
+    counterparty_fields = {k: v for k, v in raw.items() if any(kw in k.lower() for kw in [
+        'buyer', 'seller', 'user', 'nick', 'rate', 'count', 'trade', 'complete',
+        'feedback', 'kyc', 'verify', 'month', 'total', 'finish', 'register', 'first',
+    ])}
+    logger.info(
+        f"[OrderDetail] Order {data.order_number} | Trader {trader.id} | "
+        f"Type:{data.trade_type} | CounterpartyFields: {counterparty_fields}"
+    )
+    logger.info(f"[OrderDetail] FULL RAW for {data.order_number}: {raw}")
+    return {"status": "logged"}
+
+
+# ── Trader notifications from bot ─────────────────────────────────
+
+class NotifyTraderRequest(BaseModel):
+    message: str
+
+
+@router.post("/notify-trader")
+async def notify_trader(
+    data: NotifyTraderRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Bot calls this to send an in-app notification to the trader."""
+    from app.api.routes.traders import add_notification
+    add_notification(trader.id, "Bot Alert", data.message, "warning")
+    logger.info(f"[NotifyTrader] Trader {trader.id}: {data.message[:100]}")
+    return {"status": "notified"}
+
+
+class ScreenshotRequest(BaseModel):
+    screenshot: str  # base64
+    reason: str = ""
+    url: str = ""
+    timestamp: str = ""
+
+
+@router.post("/screenshot")
+async def receive_screenshot(
+    data: ScreenshotRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Receive screenshot from bot for monitoring. Logs metadata only."""
+    size_kb = round(len(data.screenshot) * 3 / 4 / 1024)
+    logger.info(f"[Screenshot] Trader {trader.id} | Reason:{data.reason} | Size:{size_kb}KB | URL:{data.url[:60]}")
+    return {"status": "received"}

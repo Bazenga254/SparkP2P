@@ -74,6 +74,10 @@ class TradingConfigRequest(BaseModel):
     batch_settlement_enabled: Optional[bool] = None
     batch_threshold: Optional[int] = None
     bot_trade_mode: Optional[str] = None  # 'both' | 'buy_only' | 'sell_only'
+    dd_enabled: Optional[bool] = None
+    dd_min_30d_trades: Optional[int] = None
+    dd_min_all_trades: Optional[int] = None
+    dd_auto_cancel_new: Optional[bool] = None
 
 
 class DepositRequest(BaseModel):
@@ -704,6 +708,14 @@ async def update_trading_config(
         trader.batch_threshold = data.batch_threshold
     if data.bot_trade_mode is not None and data.bot_trade_mode in ('both', 'buy_only', 'sell_only'):
         trader.bot_trade_mode = data.bot_trade_mode
+    if data.dd_enabled is not None:
+        trader.dd_enabled = data.dd_enabled
+    if data.dd_min_30d_trades is not None:
+        trader.dd_min_30d_trades = data.dd_min_30d_trades
+    if data.dd_min_all_trades is not None:
+        trader.dd_min_all_trades = data.dd_min_all_trades
+    if data.dd_auto_cancel_new is not None:
+        trader.dd_auto_cancel_new = data.dd_auto_cancel_new
 
     await db.commit()
 

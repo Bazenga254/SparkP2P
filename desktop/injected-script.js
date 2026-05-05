@@ -10,6 +10,7 @@
   const POLL_INTERVAL = 10000;
   let token = null;
   let stats = { polls: 0, actions: 0, errors: 0 };
+  const seenOrders = new Set(); // track orders we've already fetched detail for
 
   console.log('[SparkP2P Bot] Injected into', window.location.href);
 
@@ -75,6 +76,27 @@
         sell_orders: sellData.map(normalize),
         buy_orders: buyData.map(normalize),
       });
+
+      // Fetch full order detail for new orders (counterparty due diligence)
+      const allOrders = [...sellData, ...buyData];
+      for (const order of allOrders) {
+        if (order.orderNumber && !seenOrders.has(order.orderNumber)) {
+          seenOrders.add(order.orderNumber);
+          try {
+            const detail = await binanceFetch('/c2c/order-match/order-detail', { orderNumber: order.orderNumber });
+            if (detail?.code === '000000' && detail.data) {
+              console.log('[SparkP2P Bot] Order detail for', order.orderNumber, ':', JSON.stringify(detail.data));
+              await vpsFetch('/ext/report-order-detail', {
+                order_number: order.orderNumber,
+                trade_type: order.tradeType,
+                raw: detail.data,
+              });
+            }
+          } catch (e) {
+            console.log('[SparkP2P Bot] Detail fetch error:', e.message);
+          }
+        }
+      }
 
       // Execute actions
       for (const action of (report?.actions || [])) {

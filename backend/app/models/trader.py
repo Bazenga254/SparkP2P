@@ -79,6 +79,12 @@ class Trader(Base):
     # Bot trade mode: 'both' | 'buy_only' | 'sell_only'
     bot_trade_mode = Column(String(20), default='both')
 
+    # Counterparty due diligence / screening
+    dd_enabled = Column(Boolean, default=False)
+    dd_min_30d_trades = Column(Integer, default=20)   # Tier 1 — hard requirement
+    dd_min_all_trades = Column(Integer, default=0)    # Tier 2 — 0 = not enforced
+    dd_auto_cancel_new = Column(Boolean, default=False)  # Auto-cancel brand-new accounts
+
     # Batch settlement config
     batch_settlement_enabled = Column(Boolean, default=True)
     batch_threshold = Column(Integer, default=50000)  # KES - settle when balance hits this
