@@ -1425,8 +1425,26 @@ async function onLoginDetected() {
 
   // Open Gmail tab (tab 2) — onGmailConfirmed() handles I&M opening and bot start
   const gmailOk = await openGmailTab().catch(() => false);
-  if (gmailOk) console.log('[SparkP2P] Gmail ready — I&M and bot start handled by onGmailConfirmed');
-  else console.log('[SparkP2P] Gmail tab opened — waiting for login (I&M + bot will start after Gmail confirms)');
+  if (gmailOk) {
+    console.log('[SparkP2P] Gmail ready — I&M and bot start handled by onGmailConfirmed');
+  } else {
+    console.log('[SparkP2P] Gmail not confirmed — starting bot in Binance-only mode (Gmail optional for OTP reads)');
+    // Bot starts with Binance alone; Gmail login poller runs in background and will sync cookies when user signs in
+    const setup = await checkSetupComplete();
+    if (setup.complete && !pollerRunning) {
+      mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
+      if (traderImAccount && (!imPage || imPage.isClosed())) {
+        console.log('[SparkP2P] Opening I&M Bank tab...');
+        connectIm().catch(() => {});
+      } else {
+        console.log('[SparkP2P] All connections established — starting bot');
+        await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
+        startPoller();
+      }
+    } else if (!setup.complete) {
+      console.log('[SparkP2P] Setup incomplete:', setup.missing.join(', '));
+    }
+  }
 
   // Suppress window.open() on Binance pages (prevents popup tabs)
   const mainPage = await getPage();
@@ -1467,9 +1485,9 @@ async function fetchAndApplyCredentials() {
   }
 }
 
-// Check that Binance + Gmail are connected (I&M is optional â€” buy-side only)
+// Check that Binance is connected (Gmail and I&M Bank are both optional)
 async function checkSetupComplete() {
-  if (!token) return { complete: false, missing: ['binance', 'gmail'] };
+  if (!token) return { complete: false, missing: ['binance'] };
   try {
     const res = await fetch(`${API_BASE}/traders/me`, {
       headers: { 'Authorization': `Bearer ${token}` },
@@ -1478,8 +1496,7 @@ async function checkSetupComplete() {
     const profile = await res.json();
     const missing = [];
     if (!profile.binance_connected) missing.push('Binance');
-    if (!profile.gmail_connected) missing.push('Gmail');
-    // I&M Bank is optional â€” bot runs sell-side without it
+    // Gmail and I&M Bank are optional — bot runs without them; Gmail only needed for OTP reads
     return { complete: missing.length === 0, missing };
   } catch (e) {
     return { complete: false, missing: [] };
@@ -9795,10 +9812,9 @@ function startImKeepAlive() {
         if (imKeepAliveTimer) { clearInterval(imKeepAliveTimer); imKeepAliveTimer = null; }
         // Clear backend connected flag
         if (token) {
-          await fetch(`${API_BASE}/traders/connect-im`, {
+          await fetch(`${API_BASE}/traders/disconnect-im`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ cookies: [], disconnected: true }),
+            headers: { 'Authorization': `Bearer ${token}` },
           }).catch(() => {});
         }
         // Auto-reconnect â€” re-opens the I&M tab and waits for QR scan
