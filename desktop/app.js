@@ -95,6 +95,20 @@ function removePaidOrder(orderNum) {
     fs.writeFileSync(paidOrdersFile, JSON.stringify(store, null, 2));
   } catch (e) {}
 }
+
+// ── Persistent reported-completed-buy store — prevents duplicate SMS across restarts ──
+const reportedCompletedFile = path.join(logDir, 'reported_completed.json');
+function loadReportedCompleted() {
+  try { return JSON.parse(fs.readFileSync(reportedCompletedFile, 'utf8')); } catch (e) { return []; }
+}
+function saveReportedCompleted(numSet) {
+  try {
+    const arr = [...numSet];
+    const trimmed = arr.slice(Math.max(0, arr.length - 1000)); // keep last 1000
+    fs.writeFileSync(reportedCompletedFile, JSON.stringify(trimmed));
+  } catch (e) {}
+}
+
 const CDP_PORT = 9222;
 const POLL_INTERVAL_ACTIVE = 60000; // 1 minute â€” cycle through all active orders
 const POLL_INTERVAL_IDLE   = 30000; // 30 seconds â€” no orders, scan faster
@@ -124,6 +138,7 @@ let lockImFrameListener = null;
 let lockMpesaFrameListener = null;
 let overlayWindow = null;       // Transparent Electron window that blocks Chrome mouse input
 let overlayPositionTimer = null; // Interval that keeps overlay synced to Chrome window position
+let overlayActive = false;      // True only while overlay should be visible — guards against async race re-show
 let _criClient = null;           // Persistent chrome-remote-interface connection for window bounds
 let chromeProcess = null; // Child process reference for killing Chrome on quit
 let chromeGeneration = 0; // Incremented each launch â€” old exit handlers check this to avoid nuking new connections
@@ -152,6 +167,9 @@ const buyPaymentSentAt = {};        // { orderNum: timestamp } â€” when I&M
 const buyReminderSentOrders = new Set(); // buy orderNums where we sent the 10-min reminder to seller
 const buyOrderDetailsMap = {};       // { orderNum: { sellerName, amount, phone, method } } â€” for chat/dispute
 const imPaymentDoneMap = {};         // { orderNum: { screenshot, referenceId } } â€” I&M payment done, skip on retry
+const imPaymentFailedOrders = new Set(); // orderNums where I&M payment failed all retries — skip until order clears
+const reportedCompletedBuyOrders = new Set();  // order numbers already sent as completed_buy_order_numbers — prevents duplicate SMS
+const reportedCompletedSellOrders = new Set(); // order numbers already sent as completed_sell_order_numbers — prevents duplicate SMS
 const buyGreetingSentOrders = new Set();    // orderNums where greeting was already sent
 const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent KSh..." was already sent
 // Restore paid orders from disk on startup (survives bot restarts)
@@ -162,8 +180,20 @@ const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent K
     imPaymentDoneMap[num] = _paidOnDisk[num];
     buyGreetingSentOrders.add(num);
     buyPostPaymentMsgSentOrders.add(num);
+    // Restore payment-sent tracking so ghost detection and dispute timeouts survive restarts.
+    // Only restore orders paid within the last 24 hours to avoid stale tracking.
+    const paidAt = _paidOnDisk[num]?.paidAt || 0;
+    if (paidAt && Date.now() - paidAt < 24 * 60 * 60 * 1000) {
+      buyPaymentSentAt[num] = paidAt;
+    }
   });
   if (_nums.length) console.log(`[SparkP2P] Restored ${_nums.length} paid order(s) from disk: ${_nums.join(', ')}`);
+}
+// Restore completed buy orders from disk — prevents duplicate SMS when bot restarts
+{
+  const _completedOnDisk = loadReportedCompleted();
+  _completedOnDisk.forEach(n => reportedCompletedBuyOrders.add(n));
+  if (_completedOnDisk.length) console.log(`[SparkP2P] Restored ${_completedOnDisk.length} completed buy order(s) from disk (duplicate SMS guard)`);
 }
 let buyPaymentScreenshot = null;  // Base64 screenshot of I&M success â€” uploaded to Binance chat
 let gmailPage = null;          // Persistent Gmail tab â€” opened alongside Binance, kept alive
@@ -774,9 +804,28 @@ async function launchChrome(url) {
     }
     console.log('[SparkP2P] Chrome closed by user');
     chromeProcess = null;
-    // Do NOT call browser.disconnect() here â€” Puppeteer fires 'disconnected' automatically
-    // when Chrome exits. Manually calling disconnect() races with the automatic event
-    // and can null out a connection that was already replaced by a new session.
+    // Puppeteer fires 'disconnected' automatically when Chrome exits.
+    // Give it 2 seconds; if it hasn't fired, manually trigger cleanup so
+    // the overlay is dismissed and the UI shows “Binance Disconnected”.
+    setTimeout(() => {
+      if (!browser) return; // 'disconnected' already fired — nothing to do
+      console.log('[SparkP2P] Chrome exit: forcing cleanup (Puppeteer disconnect event did not fire)');
+      hideOverlay(); // dismiss overlay immediately
+      try { browser.disconnect(); } catch(e) {} // triggers 'disconnected' handler if possible
+      // Final safety: if disconnect() also didn't clean up, do it directly
+      setTimeout(() => {
+        if (!browser) return;
+        browser = null;
+        stopPoller();
+        browserLocked = false;
+        connectingBinance = false;
+        scanningInProgress = false;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show();
+          mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“binance-disconnected”))').catch(() => {});
+        }
+      }, 1000);
+    }, 2000);
   });
   console.log('[SparkP2P] Chrome launched');
   await new Promise(r => setTimeout(r, 8000)); // Give Chrome time to start and restore session
@@ -904,6 +953,7 @@ async function connectPuppeteer() {
     browser.on('disconnected', () => {
       console.log('[SparkP2P] Binance Chrome disconnected');
       sendBotLog('error', 'Binance disconnected — bot stopped');
+      hideOverlay();
       browser = null;
       chromeProcess = null;
       stopPoller();
@@ -934,7 +984,38 @@ async function connectPuppeteer() {
 const _zoomSessions = new WeakMap();
 let _zoomSession = null; // kept for legacy references â€” mirrors last setZoom80 call
 
+// Device-type zoom level: 0.5 for laptops, 0.8 for desktops/TVs
+let _deviceZoomLevel = null;
+
+async function getDeviceZoomLevel() {
+  if (_deviceZoomLevel !== null) return _deviceZoomLevel;
+  try {
+    // Battery presence = laptop (most reliable check on Windows)
+    const { execSync } = require('child_process');
+    const out = execSync('powershell -NoProfile -Command “(Get-WmiObject -Class Win32_Battery | Measure-Object).Count”', { timeout: 5000, windowsHide: true }).toString().trim();
+    if (parseInt(out) > 0) {
+      _deviceZoomLevel = 0.5;
+      console.log('[SparkP2P] Device: laptop detected (battery found) — zoom 50%');
+      return _deviceZoomLevel;
+    }
+  } catch (_) {}
+  try {
+    // Fallback: screens narrower than 1920px are treated as laptop displays
+    const { screen } = require('electron');
+    const d = screen.getPrimaryDisplay();
+    if (d.size.width < 1920) {
+      _deviceZoomLevel = 0.5;
+      console.log(`[SparkP2P] Device: small screen (${d.size.width}x${d.size.height}) — zoom 50%`);
+      return _deviceZoomLevel;
+    }
+  } catch (_) {}
+  _deviceZoomLevel = 0.8;
+  console.log('[SparkP2P] Device: desktop/TV detected — zoom 80%');
+  return _deviceZoomLevel;
+}
+
 async function setZoom80(page) {
+  const zoomLevel = await getDeviceZoomLevel();
   try {
     let session = _zoomSessions.get(page);
     if (!session || !session._connection) {
@@ -942,11 +1023,11 @@ async function setZoom80(page) {
       _zoomSessions.set(page, session);
     }
     _zoomSession = session; // keep global in sync
-    await session.send('Emulation.setPageScaleFactor', { pageScaleFactor: 0.8 });
+    await session.send('Emulation.setPageScaleFactor', { pageScaleFactor: zoomLevel });
   } catch (_) {
     _zoomSessions.delete(page);
     _zoomSession = null;
-    try { await page.evaluate(() => { document.documentElement.style.zoom = '80%'; }); } catch (__) {}
+    try { await page.evaluate((z) => { document.documentElement.style.zoom = `${Math.round(z * 100)}%`; }, zoomLevel); } catch (__) {}
   }
 }
 
@@ -1029,20 +1110,22 @@ async function onGmailConfirmed() {
   // Re-fetch credentials in case the initial fetch failed (e.g. outage during startup)
   if (!traderImAccount) await fetchAndApplyCredentials().catch(() => {});
 
-  // Re-check setup completeness
+  // Always open I&M if configured and not already open — even if bot started without it
+  if (traderImAccount && (!imPage || imPage.isClosed())) {
+    console.log('[SparkP2P] Gmail confirmed — opening I&M Bank (tab 3)...');
+    pauseNavigation = false;
+    mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“setup-complete”))').catch(() => {});
+    connectIm().catch(() => {});
+    return;
+  }
+
   const setup = await checkSetupComplete();
   if (setup.complete && !pollerRunning) {
     pauseNavigation = false;
     mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“setup-complete”))').catch(() => {});
-    if (traderImAccount && (!imPage || imPage.isClosed())) {
-      // I&M configured — open portal tab; bot starts once I&M login is confirmed
-      console.log('[SparkP2P] Gmail confirmed — opening I&M Bank (tab 3)...');
-      connectIm().catch(() => {});
-    } else {
-      console.log('[SparkP2P] All connections established — starting bot');
-      await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
-      startPoller();
-    }
+    console.log('[SparkP2P] All connections established â€” starting bot');
+    await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
+    startPoller();
   }
 }
 
@@ -1251,6 +1334,7 @@ html,body{width:100%;height:100%;background:transparent;overflow:hidden;cursor:n
 
 async function showOverlay() {
   if (DEV_UNLOCK) return;
+  overlayActive = true;
   createOverlayWindow();
   let bounds = await getChromeBounds();
   console.log('[SparkP2P] Overlay bounds from CDP:', JSON.stringify(bounds));
@@ -1260,7 +1344,7 @@ async function showOverlay() {
     bounds = { left: Math.round(width * 0.3), top: 0, width: Math.round(width * 0.7), height, windowState: 'normal' };
     console.log('[SparkP2P] Overlay using fallback bounds:', JSON.stringify(bounds));
   }
-  if (bounds.windowState !== 'minimized') {
+  if (overlayActive && bounds.windowState !== 'minimized') {
     overlayWindow.setBounds({ x: bounds.left || 0, y: bounds.top || 0, width: bounds.width || 1024, height: bounds.height || 768 });
     overlayWindow.showInactive();
     console.log('[SparkP2P] Overlay shown');
@@ -1272,8 +1356,10 @@ async function showOverlay() {
   }
   if (overlayPositionTimer) clearInterval(overlayPositionTimer);
   overlayPositionTimer = setInterval(async () => {
+    if (!overlayActive) { clearInterval(overlayPositionTimer); overlayPositionTimer = null; return; }
     if (!overlayWindow || overlayWindow.isDestroyed()) { clearInterval(overlayPositionTimer); overlayPositionTimer = null; return; }
     const b = await getChromeBounds();
+    if (!overlayActive) return; // hideOverlay() may have fired while awaiting bounds
     if (!b) return;
     if (b.windowState === 'minimized') { if (overlayWindow.isVisible()) overlayWindow.hide(); return; }
     overlayWindow.setBounds({ x: b.left || 0, y: b.top || 0, width: b.width || 1024, height: b.height || 768 });
@@ -1282,6 +1368,7 @@ async function showOverlay() {
 }
 
 function hideOverlay() {
+  overlayActive = false; // set first — stops async timer callbacks from re-showing
   if (overlayPositionTimer) { clearInterval(overlayPositionTimer); overlayPositionTimer = null; }
   if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
   // Restore mainWindow to normal stacking — no longer needs to float above overlay
@@ -1334,36 +1421,38 @@ async function connectBinance() {
   if (connectingBinance || pollerRunning) return; // Already connecting or running
   connectingBinance = true;
 
-  // Check if we already have a Binance page open
-  let existingPage = browser ? await getPage('binance.com') : null;
-
-  if (!existingPage) {
-    // No Binance page â€” launch Chrome fresh
-    if (browser) { try { await browser.disconnect(); } catch(e) {} browser = null; }
-    await launchChrome('https://accounts.binance.com/en/login');
-    await connectPuppeteer();
-    if (!browser) {
-      console.error('[SparkP2P] Could not connect to Chrome â€” try clicking Connect Binance again');
-      connectingBinance = false;
-      return;
-    }
-    console.log('[SparkP2P] Puppeteer OK â€” checking login state immediately');
-    if (await isLoggedIn()) {
-      console.log('[SparkP2P] Session already restored â€” starting bot');
-      await onLoginDetected();
-      return;
-    }
-    console.log('[SparkP2P] Not logged in yet â€” polling every 2s');
+  // Always do a clean Chrome relaunch — this restores saved session cookies just like
+  // restarting the app does, avoiding stale Puppeteer connection issues.
+  if (browser) { try { await browser.disconnect(); } catch(e) {} browser = null; }
+  await launchChrome('https://accounts.binance.com/en/login');
+  await connectPuppeteer();
+  if (!browser) {
+    console.error('[SparkP2P] Could not connect to Chrome â€” try clicking Connect Binance again');
+    connectingBinance = false;
+    return;
   }
-
-  console.log('[SparkP2P] Waiting for login...');
+  console.log('[SparkP2P] Puppeteer OK â€” checking login state immediately');
+  if (await isLoggedIn()) {
+    console.log('[SparkP2P] Session already restored â€” starting bot');
+    await onLoginDetected();
+    return;
+  }
+  console.log('[SparkP2P] Not logged in yet â€” waiting for login...');
 
   let attempts = 0;
   let detected = false; // Guard against duplicate login detection
   const check = setInterval(async () => {
     if (detected) return; // Already handling login
     attempts++;
-    if (attempts > 300) { clearInterval(check); connectingBinance = false; return; } // 10 min timeout
+    if (attempts > 300) {
+      // 10 min passed with no login — do one more clean relaunch and restart the loop
+      clearInterval(check);
+      connectingBinance = false;
+      console.log('[SparkP2P] Login wait timed out — relaunching Chrome and retrying');
+      sendBotLog('warning', 'Binance login wait timed out — relaunching Chrome. Please log in.');
+      connectBinance();
+      return;
+    }
 
     if (await isLoggedIn()) {
       if (detected) return; // Double-check after async
@@ -1413,9 +1502,10 @@ async function onLoginDetected() {
     }
   }
   if (_binancePage) {
-    await _binancePage.evaluateOnNewDocument(() => {
-      document.addEventListener('DOMContentLoaded', () => { document.documentElement.style.zoom = '80%'; });
-    }).catch(() => {});
+    const _zl = await getDeviceZoomLevel();
+    await _binancePage.evaluateOnNewDocument((z) => {
+      document.addEventListener('DOMContentLoaded', () => { document.documentElement.style.zoom = `${Math.round(z * 100)}%`; });
+    }, _zl).catch(() => {});
     await setZoom80(_binancePage);
     _binancePage.on('load', () => setZoom80(_binancePage).catch(() => {}));
   }
@@ -1910,8 +2000,9 @@ async function readOrders(activeOnly = false) {
         const tradeType = typeMatch[1].toUpperCase();
         const usdtMatch = ctx.match(/([\d,]+\.?\d*)\s*USDT/);
         const crypto = usdtMatch ? parseFloat(usdtMatch[1].replace(/,/g, '')) : 0;
-        const kesMatch = ctx.match(/([\d,]+\.?\d*)\s*KES/);
-        const fiat = kesMatch ? parseFloat(kesMatch[1].replace(/,/g, '')) : 0;
+        // Use the first KES value >= 1000 to avoid picking up the per-unit rate (e.g. 128.52 KES/USDT)
+        const kesValues = [...ctx.matchAll(/([\d,]+\.?\d*)\s*KES/g)].map(m => parseFloat(m[1].replace(/,/g, '')));
+        const fiat = kesValues.find(v => v >= 1000) || kesValues[0] || 0;
         const priceGuesses = [...ctx.matchAll(/\b(1[0-9]{2}\.\d{1,4})\b/g)].map(pg => parseFloat(pg[1]));
         const price = priceGuesses.find(p => p >= 100 && p <= 200) || (crypto > 0 ? fiat / crypto : 0);
         seenActive.add(orderNumber);
@@ -2128,6 +2219,11 @@ function stopPoller() {
   activeBuyOrderNumber = null;
   codeFallbackAskedForOrder = null;
   scanningInProgress = false;
+  // Tell backend the bot stopped so offline SMS alerts are suppressed.
+  // Uses fire-and-forget — no await needed since this is a synchronous function.
+  if (token) {
+    fetch(`${API_BASE}/ext/bot-stopped`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
+  }
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -2256,7 +2352,7 @@ OR if no M-Pesa confirmation visible in the bottom message:
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-5',  // Sonnet for better OCR accuracy on this critical step
+            model: 'claude-sonnet-4-5',
             max_tokens: 400,
             messages: [{ role: 'user', content: [
               { type: 'image', source: { type: 'base64', media_type: 'image/png', data: enlargedSS.toString('base64') } },
@@ -2539,7 +2635,7 @@ async function reconcileStuckOrders(page) {
       }
     }
 
-    // Read completed BUY orders (all dates)
+    // Read completed BUY orders with full financial details so missing orders can be created in DB
     await page.evaluate(() => {
       const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
       const t = tabs.find(el => el.textContent.trim() === 'Completed');
@@ -2549,6 +2645,8 @@ async function reconcileStuckOrders(page) {
 
     const completedText = await page.evaluate(() => document.body.innerText).catch(() => '');
     let completedBuyNums = [];
+    let completedBuyOrders = []; // full data for buy orders not yet in DB
+    let completedSellNums = [];
     if (completedText && !completedText.includes('No records')) {
       const seenCB = new Set();
       const cbPat = /\b(\d{18,20})\b/g;
@@ -2556,27 +2654,68 @@ async function reconcileStuckOrders(page) {
       while ((cb = cbPat.exec(completedText)) !== null) {
         const orderNumber = cb[1];
         if (seenCB.has(orderNumber)) continue;
-        const ctxStart = Math.max(0, cb.index - 400);
-        const ctxEnd   = Math.min(completedText.length, cb.index + 100);
-        const ctx = completedText.slice(ctxStart, ctxEnd);
+        const ctxBefore = completedText.slice(Math.max(0, cb.index - 400), cb.index);
+        const ctxAfter  = completedText.slice(cb.index + orderNumber.length, Math.min(completedText.length, cb.index + orderNumber.length + 300));
+        const ctx = ctxBefore + ctxAfter;
         const typeMatch = ctx.match(/\b(Buy|Sell)\b/i);
-        if (typeMatch && typeMatch[1].toLowerCase() === 'sell') continue;
+        const isSell = typeMatch && typeMatch[1].toLowerCase() === 'sell';
         seenCB.add(orderNumber);
+
+        if (isSell) {
+          completedSellNums.push(orderNumber);
+          continue;
+        }
+
         completedBuyNums.push(orderNumber);
+
+        // Parse financial details from text after the order number.
+        // Binance history format: "<rate> KES\n<fiatAmt> KES\n<cryptoAmt> USDT\n<counterparty>"
+        const kesMatches = [...ctxAfter.matchAll(/([\d,]+(?:\.\d+)?)\s*KES/g)];
+        const usdtMatch  = ctxAfter.match(/([\d,]+(?:\.\d+)?)\s*USDT/);
+        const cpMatch    = ctxAfter.match(/\n([A-Za-z][A-Za-z0-9_\-]+)\s*\n/);
+        const rate       = kesMatches.length > 0 ? parseFloat(kesMatches[0][1].replace(/,/g, '')) : 0;
+        const fiatAmount = kesMatches.length > 1 ? parseFloat(kesMatches[1][1].replace(/,/g, '')) : 0;
+        const cryptoAmt  = usdtMatch ? parseFloat(usdtMatch[1].replace(/,/g, '')) : 0;
+        const counterparty = cpMatch ? cpMatch[1] : null;
+
+        // Only include if we parsed a meaningful fiat amount (>= 100 KES)
+        if (fiatAmount >= 100) {
+          completedBuyOrders.push({
+            orderNumber,
+            tradeType: 'BUY',
+            totalPrice: fiatAmount,
+            amount: cryptoAmt,
+            price: rate,
+            asset: 'USDT',
+            sellerNickname: counterparty,
+          });
+        }
       }
     }
 
-    if (cancelledNums.length || completedBuyNums.length) {
-      await fetch(`${API_BASE}/ext/report-orders`, {
+    // Filter already-reported numbers to avoid duplicate SMS
+    const newCompletedBuyNums = completedBuyNums.filter(n => !reportedCompletedBuyOrders.has(n));
+    const newCompletedBuyOrders = completedBuyOrders.filter(o => !reportedCompletedBuyOrders.has(o.orderNumber));
+    const newCompletedSellNums = completedSellNums.filter(n => !reportedCompletedSellOrders.has(n));
+
+    if (cancelledNums.length || newCompletedBuyNums.length || newCompletedSellNums.length) {
+      const reconcileRes = await fetch(`${API_BASE}/ext/report-orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
-          sell_orders: [], buy_orders: [],
+          sell_orders: [],
+          buy_orders: newCompletedBuyOrders,
           cancelled_order_numbers: cancelledNums,
-          completed_buy_order_numbers: completedBuyNums,
+          completed_buy_order_numbers: newCompletedBuyNums,
+          completed_sell_order_numbers: newCompletedSellNums,
         }),
-      }).catch(() => {});
-      console.log(`[SparkP2P] âœ… Reconciled: ${cancelledNums.length} cancelled, ${completedBuyNums.length} completed buy`);
+      }).catch(() => null);
+      if (reconcileRes?.ok) {
+        newCompletedBuyNums.forEach(n => reportedCompletedBuyOrders.add(n));
+        newCompletedSellNums.forEach(n => reportedCompletedSellOrders.add(n));
+        if (newCompletedBuyNums.length) saveReportedCompleted(reportedCompletedBuyOrders);
+      }
+      console.log(`[SparkP2P] ✅ Reconciled: ${cancelledNums.length} cancelled, ${newCompletedBuyNums.length} completed buy, ${newCompletedSellNums.length} completed sell`);
     } else {
       console.log('[SparkP2P] Reconcile: no cancelled/completed orders found in history');
     }
@@ -2777,26 +2916,43 @@ async function idleScan(page) {
 
   const hasActiveOrders = orders.sell.length > 0 || orders.buy.length > 0;
 
-  // â”€â”€ Step 2: No active orders â€” now safe to scan wallets + full history â”€â”€â”€â”€
-  if (!hasActiveOrders) {
-    console.log('[SparkP2P] No active orders â€” scanning wallets + history...');
-    const balances = await scanWalletBalances(page);
-    await uploadBalances(balances);
-    if (pauseNavigation) return;
+  // Detect buy orders we already paid for that have vanished from the active tab.
+  // This happens the moment a seller releases crypto — Binance moves the order to
+  // Completed immediately, so readOrders(true) won't see it anymore.
+  // We must scan the Completed tab for these even when other active orders exist,
+  // otherwise the order stays stuck as “payment sent” until the 10-poll reconcile.
+  const currentActiveNums = [...orders.sell, ...orders.buy].map(o => o.orderNumber);
+  const ghostPaidNums = Object.keys(buyPaymentSentAt).filter(n => !currentActiveNums.includes(n));
+  if (ghostPaidNums.length > 0) {
+    console.log(`[SparkP2P] Ghost paid order(s) detected (paid but left active tab): ${ghostPaidNums.join(', ')} — scanning Completed tab now`);
+    sendBotLog('info', `Paid order left active tab — checking Completed tab: ${ghostPaidNums.join(', ')}`);
+  }
+
+  // â”€â”€ Step 2: No active orders (or ghost paid orders) â€” scan wallets + full history â”€â”€â”€â”€
+  if (!hasActiveOrders || ghostPaidNums.length > 0) {
+    if (!hasActiveOrders) {
+      console.log('[SparkP2P] No active orders â€” scanning wallets + history...');
+      const balances = await scanWalletBalances(page);
+      await uploadBalances(balances);
+      if (pauseNavigation) return;
+    }
 
     // Full readOrders scan (includes cancelled + completed history)
     const fullOrders = await readOrders(false);
     orders.cancelled = fullOrders.cancelled || [];
-    orders.completed_buy = fullOrders.completed_buy || [];
-    console.log(`[SparkP2P] History: ${orders.cancelled.length} cancelled, ${orders.completed_buy.length} completed buy`);
+    // Filter out order numbers already reported — prevents duplicate SMS
+    orders.completed_buy = (fullOrders.completed_buy || []).filter(n => !reportedCompletedBuyOrders.has(n));
+    console.log(`[SparkP2P] History: ${orders.cancelled.length} cancelled, ${orders.completed_buy.length} completed buy (new)`);
     if (pauseNavigation) return;
 
-    // Scan My Ads prices (every ~1 min)
-    const secsSinceLastScan = (Date.now() - lastAdPriceScan) / 1000;
-    if (secsSinceLastScan >= 55) {
-      await scanMyAdPrices();
-    } else {
-      console.log(`[SparkP2P] Ad price scan skipped â€” last scan ${Math.round(secsSinceLastScan)}s ago`);
+    if (!hasActiveOrders) {
+      // Scan My Ads prices (every ~1 min) — only when fully idle
+      const secsSinceLastScan = (Date.now() - lastAdPriceScan) / 1000;
+      if (secsSinceLastScan >= 55) {
+        await scanMyAdPrices();
+      } else {
+        console.log(`[SparkP2P] Ad price scan skipped â€” last scan ${Math.round(secsSinceLastScan)}s ago`);
+      }
     }
   } else {
     console.log(`[SparkP2P] Active orders detected â€” skipping wallet scan, going straight to orders`);
@@ -2821,6 +2977,7 @@ async function idleScan(page) {
       buyReminderSentOrders.delete(num);
       delete buyOrderDetailsMap[num];
       delete imPaymentDoneMap[num];
+      imPaymentFailedOrders.delete(num);
       buyGreetingSentOrders.delete(num);
       buyPostPaymentMsgSentOrders.delete(num);
       removePaidOrder(num);
@@ -2830,18 +2987,38 @@ async function idleScan(page) {
   }
 
   // Report orders to VPS â€” protect ALL active orders from auto-cancel
-  const res = await fetch(`${API_BASE}/ext/report-orders`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    body: JSON.stringify({
-        sell_orders: orders.sell.map(norm),
-        buy_orders: orders.buy.map(norm),
-        cancelled_order_numbers: orders.cancelled || [],
-        completed_buy_order_numbers: orders.completed_buy || [],
-        active_order_numbers: allActiveNums,
-      }),
-  }).catch(() => null);
+  // Retry up to 3 times so a transient network hiccup doesn't silently lose an order
+  const reportPayload = JSON.stringify({
+    sell_orders: orders.sell.map(norm),
+    buy_orders: orders.buy.map(norm),
+    cancelled_order_numbers: orders.cancelled || [],
+    completed_buy_order_numbers: orders.completed_buy || [],
+    active_order_numbers: allActiveNums,
+  });
+  // Add completed buy orders to the in-memory set now (prevents same-cycle duplicates).
+  // Disk save happens AFTER a successful API response — if the request fails, the
+  // order is NOT written to disk so the next reconcile cycle can retry it.
+  if ((orders.completed_buy || []).length) {
+    orders.completed_buy.forEach(n => reportedCompletedBuyOrders.add(n));
+  }
+
+  let res = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    res = await fetch(`${API_BASE}/ext/report-orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: reportPayload,
+    }).catch(e => { console.error(`[SparkP2P] report-orders attempt ${attempt} failed:`, e.message); return null; });
+    if (res?.ok) break;
+    if (attempt < 3) await new Promise(r => setTimeout(r, 2000 * attempt));
+  }
+  if (!res?.ok && allActiveNums.length > 0) {
+    console.error(`[SparkP2P] ⚠️ report-orders failed after 3 attempts — ${allActiveNums.length} active orders NOT recorded in DB: ${allActiveNums.join(', ')}`);
+    sendBotLog('error', `report-orders failed — ${allActiveNums.length} active orders may not appear in dashboard`);
+  }
   if (res?.ok) {
+    // Persist completed orders to disk only after backend confirms receipt
+    if ((orders.completed_buy || []).length) saveReportedCompleted(reportedCompletedBuyOrders);
     const { actions } = await res.json().catch(() => ({ actions: [] }));
     for (const a of (actions || [])) {
       const isBuyAction = ['pay', 'mark_as_paid'].includes(a.action);
@@ -3401,16 +3578,25 @@ async function idleScan(page) {
         buyLower.includes('order completed') || buyLower.includes('crypto received')) {
       console.log(`[SparkP2P] âœ… Buy order ${order.orderNumber} COMPLETED â€” crypto received!`);
       const orderNum = order.orderNumber;
-      await fetch(`${API_BASE}/ext/report-buy-completed`, {
+      const buyCompRes = await fetch(`${API_BASE}/ext/report-buy-completed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ order_number: orderNum }),
-      }).catch(e => console.error('[SparkP2P] report-buy-completed failed:', e.message));
+      }).catch(e => { console.error('[SparkP2P] report-buy-completed failed:', e.message); return null; });
+      if (buyCompRes?.ok) {
+        // Only block reconcile/idleScan from re-reporting once backend confirmed receipt
+        reportedCompletedBuyOrders.add(orderNum);
+        saveReportedCompleted(reportedCompletedBuyOrders);
+      } else if (!buyCompRes) {
+        console.warn(`[SparkP2P] report-buy-completed failed for ${orderNum} — reconcile will retry`);
+        sendBotLog('warn', `Buy order ${orderNum} completion report failed — will retry automatically`);
+      }
       delete orderFirstSeenAt[orderNum];
       delete buyPaymentSentAt[orderNum];
       buyReminderSentOrders.delete(orderNum);
       delete buyOrderDetailsMap[orderNum];
       delete imPaymentDoneMap[orderNum];
+      imPaymentFailedOrders.delete(orderNum);
       buyGreetingSentOrders.delete(orderNum);
       buyPostPaymentMsgSentOrders.delete(orderNum);
       removePaidOrder(orderNum);
@@ -3487,6 +3673,22 @@ async function idleScan(page) {
       }
       console.log(`[SparkP2P] Buy order ${order.orderNumber} â€” waiting ${minsWaiting}m for release (${buyScreen})`);
 
+    // ── Payment sent but tracking lost (restart / manual pay) ────────────────
+    // If Binance shows “awaiting seller's release” but we have no buyPaymentSentAt
+    // entry, the payment already happened. Set the timestamp now so the monitoring
+    // block fires on the next cycle. DO NOT fall into the payment flow.
+    } else if (
+      buyScreen === 'awaiting_release' ||
+      buyLower.includes('awaiting seller') ||
+      buyLower.includes('pending the seller to release') ||
+      buyLower.includes('seller to release') ||
+      buyLower.includes('waiting for the seller')
+    ) {
+      buyPaymentSentAt[order.orderNumber] = Date.now();
+      savePaidOrder(order.orderNumber, { source: 'restored', amount: order.fiatAmount });
+      console.log(`[SparkP2P] ⚠️ Buy order ${order.orderNumber} — “awaiting release” detected but tracking was lost — restored payment tracking, monitoring next cycle`);
+      sendBotLog('warn', `Buy order ${order.orderNumber}: payment tracking restored — awaiting seller release. Will monitor for release or timeout.`);
+
     } else {
       // Payment not yet sent â€” extract details from page and pay directly
       if (!orderFirstSeenAt[order.orderNumber]) {
@@ -3499,22 +3701,42 @@ async function idleScan(page) {
       try {
         paymentDetails = await page.evaluate(() => {
           const getText = (labelRegex) => {
-            const els = Array.from(document.querySelectorAll('div, span, td, p'));
+            const els = Array.from(document.querySelectorAll('div, span, td, p, th, li'));
             for (const el of els) {
-              if (el.childElementCount > 0) continue;
-              const t = (el.textContent || '').trim();
-              if (!labelRegex.test(t)) continue;
-              // try next sibling or parent's next sibling
+              const raw = (el.innerText || el.textContent || '').trim();
+              if (!raw || raw.length > 120) continue;
+              const nl = raw.indexOf('\n');
+              const firstLine = (nl > -1 ? raw.substring(0, nl) : raw).trim();
+              if (!labelRegex.test(firstLine)) continue;
+              if (nl > -1) {
+                // Container element — value must come from within, not from nextSibling
+                // (nextSibling would be the next field's container, not this field's value)
+                if (el.children.length >= 2) {
+                  const craw = (el.children[1].innerText || el.children[1].textContent || '').trim();
+                  const cnl = craw.indexOf('\n');
+                  const val = (cnl > -1 ? craw.substring(0, cnl) : craw).trim();
+                  if (val && val !== firstLine && val.length < 200) return val;
+                }
+                const secondLine = raw.substring(nl + 1).trim();
+                const sl2 = secondLine.indexOf('\n');
+                const val2 = (sl2 > -1 ? secondLine.substring(0, sl2) : secondLine).trim();
+                if (val2 && val2 !== firstLine && val2.length < 200) return val2;
+                continue;
+              }
+              // Pure label element — look at siblings
               const parent = el.parentElement;
               const nextSib = el.nextElementSibling || (parent && parent.nextElementSibling);
               if (nextSib) {
-                const val = (nextSib.textContent || '').trim();
-                if (val && val !== t) return val;
+                const nraw = (nextSib.innerText || nextSib.textContent || '').trim();
+                const nnl = nraw.indexOf('\n');
+                const val = (nnl > -1 ? nraw.substring(0, nnl) : nraw).trim();
+                if (val && val !== firstLine && val.length < 200) return val;
               }
-              // try parent's second child
               if (parent && parent.children.length >= 2) {
-                const val = (parent.children[1].textContent || '').trim();
-                if (val && val !== t) return val;
+                const craw = (parent.children[1].innerText || parent.children[1].textContent || '').trim();
+                const cnl = craw.indexOf('\n');
+                const val = (cnl > -1 ? craw.substring(0, cnl) : craw).trim();
+                if (val && val !== firstLine && val.length < 200) return val;
               }
             }
             return null;
@@ -3530,16 +3752,35 @@ async function idleScan(page) {
           const ref = getText(/^reference message$/i);
           const amtEl = bodyText.match(/KSh\s*([\d,]+\.?\d*)/);
           const amount = amtEl ? parseFloat(amtEl[1].replace(/,/g, '')) : null;
-          if (!phone || !amount) return null;
+          // Bank account extraction — use bodyText regex first (most reliable on Binance),
+          // fall back to DOM navigation if bodyText doesn't contain the expected pattern.
+          const acctBodyMatch = bodyText.match(/Bank Card\/Account Number[\s\S]{0,10}?\n\s*([\d\s]+)\s*\n/i)
+            || bodyText.match(/Account Number[\s\S]{0,10}?\n\s*([\d\s]+)\s*\n/i);
+          const rawAcctBody = acctBodyMatch ? acctBodyMatch[1].trim() : null;
+          const rawAcctDom = getText(/^bank card[/]account number$/i) || getText(/^account number$/i);
+          const rawAcct = rawAcctBody || rawAcctDom;
+          const account_number = rawAcct ? rawAcct.replace(/[^0-9]/g, '') : null;
+
+          const bankBodyMatch = bodyText.match(/Bank name[\s\S]{0,5}?\n\s*([^\n]+)\s*\n/i);
+          const bank_name = (bankBodyMatch ? bankBodyMatch[1].trim() : null) || getText(/^bank name$/i) || null;
+          if (!amount) return null;
+          if (!phone && account_number && bank_name) {
+            // Bank transfer order
+            const method = /i\s*&\s*m/i.test(bank_name) ? 'im_bank' : 'other_bank';
+            return { method, phone: null, account_number, bank_name, name: name || '', amount, reference: ref || '', network: null };
+          }
+          if (!phone) return null;
           const method = /i\s*&\s*m/i.test(via) ? 'im_bank' : /mpesa|safaricom|m-pesa/i.test(via) ? 'mpesa' : 'mpesa';
           const network = /airtel/i.test(via) ? 'airtel' : 'safaricom';
           return { method, phone, name: name || '', amount, reference: ref || '', network };
         }).catch(() => null);
         if (paymentDetails?.phone) console.log(`[SparkP2P] L1 DOM extracted phone: ${paymentDetails.phone}, amount: ${paymentDetails.amount}`);
+        else if (paymentDetails?.account_number) console.log(`[SparkP2P] L1 DOM extracted bank account: ${paymentDetails.account_number} (${paymentDetails.bank_name}), amount: ${paymentDetails.amount}`);
       } catch (_) {}
 
-      // L2: Vision fallback — only if DOM extraction missed phone or amount
-      if (anthropicApiKey && (!paymentDetails?.phone || !paymentDetails?.amount)) {
+      // L2: Vision fallback — only if DOM extraction missed both phone and bank account details
+      if (anthropicApiKey && !paymentDetails?.account_number && (!paymentDetails?.phone || !paymentDetails?.amount)) {
+        console.log('[SparkP2P] L1 DOM extraction incomplete — falling back to Vision OCR');
         const domPhone = paymentDetails?.phone || null; // preserve DOM phone if Vision overwrites
         const paySS = await page.screenshot({ encoding: 'base64' }).catch(() => null);
         if (paySS) {
@@ -3614,9 +3855,13 @@ Method selection rules:
 
       console.log(`[SparkP2P] ðŸ'³ Buy order ${order.orderNumber} â€” paying KSh ${amt} to ${paymentDetails.name} via ${method}`);
 
-      // Execute I&M payment â€” skip if already paid for this order (prevents double-charge on retry)
+      // Execute I&M payment â€” skip if already paid or already failed for this order
       let imResult = { success: false, screenshot: null };
       let imNameMismatchAborted = false;
+      if (imPaymentFailedOrders.has(order.orderNumber)) {
+        console.log(`[SparkP2P] I&M payment previously failed for ${order.orderNumber} â€” skipping to avoid perpetual loop`);
+        continue;
+      }
       if (imPaymentDoneMap[order.orderNumber]) {
         console.log(`[SparkP2P] âš ï¸ I&M payment already sent for ${order.orderNumber} â€” skipping to Transferred button`);
         imResult = { success: true, ...imPaymentDoneMap[order.orderNumber] };
@@ -3682,6 +3927,73 @@ Method selection rules:
               continue; // retry without 8s delay
             }
 
+            // Invalid account number — navigate back to Binance and re-read account number
+            if (imResult.invalidAccount) {
+              console.log('[SparkP2P] ❌ Account number invalid — re-reading from Binance order page');
+              try {
+                await page.bringToFront();
+                await page.goto(
+                  'https://p2p.binance.com/en/fiatOrderDetail?orderNo=' + order.orderNumber,
+                  { waitUntil: 'domcontentloaded', timeout: 15000 }
+                ).catch(() => {});
+                await new Promise(r => setTimeout(r, 2500));
+                const freshDetails = await page.evaluate(() => {
+                  const getText = (labelRegex) => {
+                    const els = Array.from(document.querySelectorAll('div, span, td, p, th, li'));
+                    for (const el of els) {
+                      const raw = (el.innerText || el.textContent || '').trim();
+                      if (!raw || raw.length > 120) continue;
+                      const nl2 = raw.indexOf('\n');
+                      const firstLine = (nl2 > -1 ? raw.substring(0, nl2) : raw).trim();
+                      if (!labelRegex.test(firstLine)) continue;
+                      if (nl2 > -1) {
+                        if (el.children.length >= 2) {
+                          const craw2 = (el.children[1].innerText || el.children[1].textContent || '').trim();
+                          const cnl2 = craw2.indexOf('\n');
+                          const val = (cnl2 > -1 ? craw2.substring(0, cnl2) : craw2).trim();
+                          if (val && val !== firstLine && val.length < 200) return val;
+                        }
+                        const secondLine = raw.substring(nl2 + 1).trim();
+                        const sl2 = secondLine.indexOf('\n');
+                        const val2 = (sl2 > -1 ? secondLine.substring(0, sl2) : secondLine).trim();
+                        if (val2 && val2 !== firstLine && val2.length < 200) return val2;
+                        continue;
+                      }
+                      const parent = el.parentElement;
+                      const nextSib = el.nextElementSibling || (parent && parent.nextElementSibling);
+                      if (nextSib) {
+                        const nraw2 = (nextSib.innerText || nextSib.textContent || '').trim();
+                        const nnl2 = nraw2.indexOf('\n');
+                        const val = (nnl2 > -1 ? nraw2.substring(0, nnl2) : nraw2).trim();
+                        if (val && val !== firstLine && val.length < 200) return val;
+                      }
+                      if (parent && parent.children.length >= 2) {
+                        const craw2 = (parent.children[1].innerText || parent.children[1].textContent || '').trim();
+                        const cnl2 = craw2.indexOf('\n');
+                        const val = (cnl2 > -1 ? craw2.substring(0, cnl2) : craw2).trim();
+                        if (val && val !== firstLine && val.length < 200) return val;
+                      }
+                    }
+                    return null;
+                  };
+                  const rawAcct = getText(/^bank card[/]account number$/i) || getText(/^account number$/i);
+                  const account_number = rawAcct ? rawAcct.replace(/[^0-9]/g, '') : null;
+                  const bank_name = getText(/^bank name$/i) || null;
+                  return { account_number, bank_name };
+                }).catch(() => ({ account_number: null, bank_name: null }));
+                if (freshDetails.account_number && freshDetails.account_number !== currentPaymentDetails.account_number) {
+                  console.log('[SparkP2P] Account corrected: ' + currentPaymentDetails.account_number + ' → ' + freshDetails.account_number);
+                  currentPaymentDetails = { ...currentPaymentDetails, account_number: freshDetails.account_number };
+                } else {
+                  console.log('[SparkP2P] Account number unchanged after re-read: ' + freshDetails.account_number);
+                }
+                if (freshDetails.bank_name) currentPaymentDetails = { ...currentPaymentDetails, bank_name: freshDetails.bank_name };
+              } catch (rereadErr) {
+                console.error('[SparkP2P] Re-read error: ' + rereadErr.message);
+              }
+              continue; // retry with potentially corrected account number
+            }
+
             console.log(`[SparkP2P] I&M attempt ${attempt} failed${attempt < IM_MAX_RETRIES ? ' â€” retrying in 8s...' : ''}`);
           } catch (e) {
             console.error(`[SparkP2P] I&M attempt ${attempt} threw: ${e.message}`);
@@ -3692,6 +4004,9 @@ Method selection rules:
 
       if (!imResult.success && !imNameMismatchAborted) {
         console.error(`[SparkP2P] âŒ I&M payment failed after 3 attempts for ${order.orderNumber}`);
+        imPaymentFailedOrders.add(order.orderNumber);
+        const binanceFallback = await getPage('binance.com').catch(() => null);
+        if (binanceFallback) await binanceFallback.bringToFront().catch(() => {});
         await fetch(`${API_BASE}/ext/report-buy-expired`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -3725,11 +4040,15 @@ Method selection rules:
       await page.bringToFront();
       await page.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
         { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-      await new Promise(r => setTimeout(r, 3000));
+      // Wait for the chat panel to render (Binance P2P uses contenteditable div, not textarea)
+      await page.waitForFunction(
+        () => !!document.querySelector('[placeholder*="message" i], [placeholder*="Enter message" i], textarea, div[contenteditable="true"]'),
+        { timeout: 15000 }
+      ).catch(() => {});
+      await new Promise(r => setTimeout(r, 2000));
 
-      // Send post-payment chat message (once only)
+      // Send post-payment chat message (once only — only mark sent if it succeeds)
       if (!buyPostPaymentMsgSentOrders.has(order.orderNumber)) {
-        buyPostPaymentMsgSentOrders.add(order.orderNumber);
         const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
         let postPayMsg = '';
         if (_localIsBank) {
@@ -3739,7 +4058,9 @@ Method selection rules:
           const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
           postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`;
         }
-        await sendBinanceChatMessage(page, postPayMsg);
+        const postMsgSent = await sendBinanceChatMessage(page, postPayMsg);
+        if (postMsgSent) buyPostPaymentMsgSentOrders.add(order.orderNumber);
+        else console.log(`[SparkP2P] ⚠️ Post-payment message not sent for ${order.orderNumber} — will retry next cycle`);
       }
 
       // Check if already in "Pending the Seller to Release" state
@@ -3787,6 +4108,12 @@ Method selection rules:
             await new Promise(r => setTimeout(r, 3000));
           }
         }
+      }
+
+      // Send I&M receipt in Binance chat if modal upload didn't confirm
+      if (imResult.screenshot && !proofConfirmed) {
+        console.log('[SparkP2P] Modal upload did not confirm — sending I&M receipt in Binance chat');
+        await sendImageInBinanceChat(page, imResult.screenshot).catch(e => console.log('[SparkP2P] Chat receipt error:', e.message?.substring(0, 60)));
       }
 
       await takeScreenshot(`buy_paid_${order.orderNumber}`, page);
@@ -7841,8 +8168,8 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   console.log(`[I&M] DPR = ${imDpr}`);
   // Helper: click a radio button by label text â€” L1 DOM, L2 Vision fallback
   const clickRadio = async (labelText) => {
-    // L1: scan all clickable elements for matching text, use bounding rect coords
-    const domCoords = await imPage.evaluate((txt) => {
+    // L1: dispatchEvent inside the page — Angular mat-radio-button ignores CDP mouse.click
+    const clicked = await imPage.evaluate((txt) => {
       const els = Array.from(document.querySelectorAll(
         'mat-radio-button, [role="radio"], label, input[type="radio"]'
       ));
@@ -7851,14 +8178,16 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
         // For input[type=radio], click its parent label or mat-radio-button
         const target = el.closest('mat-radio-button, label') || el;
         const r = target.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        if (r.width > 0 && r.height > 0) {
+          target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
       }
       return null;
     }, labelText).catch(() => null);
 
-    if (domCoords) {
-      await imPage.mouse.click(domCoords.x, domCoords.y);
-      console.log(`[I&M] âœ… L1 radio "${labelText}" at (${Math.round(domCoords.x)}, ${Math.round(domCoords.y)})`);
+    if (clicked) {
+      console.log(`[I&M] âœ… L1 radio "${labelText}" dispatchEvent at (${Math.round(clicked.x)}, ${Math.round(clicked.y)})`);
       return true;
     }
     // L2: Vision screenshot → coordinates
@@ -7895,8 +8224,9 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   await new Promise(r => setTimeout(r, 1000));
 
   // Only mark radios confirmed if BOTH clicks actually succeeded
-  const radiosConfirmed = r1 && r2;
-  console.log(`[I&M] Pre-radios done (otherPhone=${r1}, oneOff=${r2}, confirmed=${radiosConfirmed}) â€” handing off to Vision loop`);
+  let radiosConfirmed = r1 && r2;
+  const phoneL1Filled = false; // Vision handles phone entry
+  console.log(`[I&M] Pre-radios done (otherPhone=${r1}, oneOff=${r2}, confirmed=${radiosConfirmed}) — handing off to Vision loop`);
 
   // I&M amount field only accepts whole numbers â€” truncate decimals
   const amountInt = Math.floor(parseFloat(amount));
@@ -7940,9 +8270,15 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       if (domCoords && domCoords.x > 0 && domCoords.y > 0) {
         await imPage.mouse.click(domCoords.x, domCoords.y);
         console.log(`[I&M] ✅ L1 clicked <${domCoords.tag}> “${domCoords.text}” at (${Math.round(domCoords.x)}, ${Math.round(domCoords.y)})`);
-        await imPage.keyboard.press('Escape');
         accountSelected = true;
         await new Promise(r => setTimeout(r, 1000));
+        // Re-click radios — account selection resets the form to defaults
+        const pa1 = await clickRadio('Other Phone');
+        await new Promise(r => setTimeout(r, 600));
+        const pa2 = await clickRadio('One-off Beneficiary');
+        await new Promise(r => setTimeout(r, 400));
+        if (pa1 && pa2) radiosConfirmed = true;
+        console.log(`[I&M] Post-account radios: otherPhone=${pa1}, oneOff=${pa2}, confirmed=${radiosConfirmed}`);
         await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
         await new Promise(r => setTimeout(r, 500));
         console.log('[I&M] Scrolled down after account selection');
@@ -7990,6 +8326,13 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
           console.log(`[I&M] ✅ L1b selected account “${domCoords2.text}”`);
           accountSelected = true;
           await new Promise(r => setTimeout(r, 1000));
+          // Re-click radios — account selection resets the form to defaults
+          const pb1 = await clickRadio('Other Phone');
+          await new Promise(r => setTimeout(r, 600));
+          const pb2 = await clickRadio('One-off Beneficiary');
+          await new Promise(r => setTimeout(r, 400));
+          if (pb1 && pb2) radiosConfirmed = true;
+          console.log(`[I&M] Post-account radios: otherPhone=${pb1}, oneOff=${pb2}, confirmed=${radiosConfirmed}`);
           await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
           await new Promise(r => setTimeout(r, 500));
           continue;
@@ -8011,6 +8354,20 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
     const pageText = await imPage.evaluate(() => document.body.innerText).catch(() => '');
     const lower = pageText.toLowerCase();
+
+    // ── Auto-dismiss I&M phone validation popup ───────────────────────────────
+    if (lower.includes('unable to validate the mobile number') || lower.includes('phone number validation')) {
+      console.log('[I&M Vision] Phone validation popup detected — clicking Proceed');
+      const clicked = await imPage.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+        for (const btn of btns) {
+          const t = (btn.textContent || '').trim().toLowerCase();
+          if (t === 'proceed') { btn.click(); return true; }
+        }
+        return false;
+      }).catch(() => false);
+      if (clicked) { console.log('[I&M Vision] Proceed clicked — continuing'); await new Promise(r => setTimeout(r, 1500)); continue; }
+    }
 
     // â”€â”€ Detect success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const isSuccess = lower.includes('payment success') || lower.includes('transaction successful') ||
@@ -8066,10 +8423,10 @@ FORM FILLING ORDER â€” do ONE action per response, strictly in this order:
 0. If you see an open account list (screen="account_list", rows like "SPARK FREELANCE" or "BONITO CHELUGET" visible) → click the row containing "${traderImAccount || 'BONITO CHELUGET SAMOEI'}" â€” return screen="account_list"
 1. If debit account shows "Select an account" and NO list is open → click the â–¼ dropdown arrow to open it
 2. (account_list handled by step 0 above)
-3. ${radiosConfirmed ? 'âš ï¸ SKIP THIS STEP â€” "Other Phone" and "One-off Beneficiary" were already clicked programmatically before this loop. They ARE selected. Do NOT click them again under any circumstances.' : 'CRITICAL â€” Check the "Own Phone" / "Other Phone" radio buttons. If "Own Phone" is selected (its circle is filled/green) → click the "Other Phone" radio circle IMMEDIATELY.'}
-4. ${radiosConfirmed ? 'âš ï¸ SKIP THIS STEP â€” already handled.' : 'If "One-off Beneficiary" radio is NOT filled/selected (green) → click the "One-off Beneficiary" radio circle.'}
-5. If phone number field does not contain ${cleanPhone} → type phone: ${cleanPhone}
-5b. AUTOCOMPLETE â€” After typing the phone, if a dropdown suggestion list appears below the phone field (showing contact names like "Bonito Cheluget Samoei"), press Tab (action="press_key", value="Tab") to dismiss it and move to the next field.
+3. ${radiosConfirmed ? '⚠️ SKIP THIS STEP — "Other Phone" and "One-off Beneficiary" were already set programmatically. Do NOT click them again.' : 'CRITICAL — Check the "Other Phone" radio button. If "Own Phone" is still selected → click the "Other Phone" radio circle IMMEDIATELY.'}
+4. ${radiosConfirmed ? '⚠️ SKIP THIS STEP — already handled.' : 'Check "One-off Beneficiary" radio. If "Saved Beneficiary" is selected instead → click the "One-off Beneficiary" radio circle.'}
+5. ${phoneL1Filled ? `⚠️ SKIP — phone number was pre-filled by automation. The field already contains ${cleanPhone}. Do NOT type it again under any circumstances.` : `PHONE — Look carefully at the phone number field. If it contains ANY digits (e.g. 7XXXXXXXX), it is already filled — do NOT type again. Only type ${cleanPhone} if the field is completely empty.`}
+5b. AUTOCOMPLETE — If a suggestion card (e.g. "Sophia Muthoni Munene") appears below the phone field, press Tab (action="press_key", value="Tab") first to dismiss it. After dismissing, re-check the phone — if it already has digits, do NOT retype.
 6. If network (Safaricom/Airtel) not selected → click ${network}
 7. If amount field is empty or shows 0 → type amount: ${amountInt}. If it shows ANY non-zero number (e.g. 1,930 or 1930) treat it as correctly filled â€” do NOT retype it
 8. If reference/narration field is empty (shows 0/50 or nothing) → type reference: ${String(reference).substring(0,30)}
@@ -8207,16 +8564,15 @@ Return ONLY valid JSON, no other text.` },
         }).catch(() => null);
 
         if (imVerifiedName && name) {
-          const norm = s => s.toUpperCase().replace(/[^A-Z\s]/g, '').replace(/\s+/g, ' ').trim().split(' ').filter(w => w.length > 1);
+          const norm = s => s.toUpperCase().replace(/[^A-Zs]/g, '').replace(/s+/g, ' ').trim().split(' ').filter(w => w.length > 1);
           const binanceParts = norm(name);
           const imParts = norm(imVerifiedName);
           const commonWords = binanceParts.filter(w => imParts.includes(w));
-          if (DEV_FORCE_NAME_MISMATCH || commonWords.length === 0) {
-            console.log(`[I&M] Name mismatch -- Binance: "${name}" | I&M verified: "${imVerifiedName}"`);
-            imWithdrawalRunning = false;
-            return { success: false, namesMismatch: true, imVerifiedName };
+          if (commonWords.length === 0) {
+            console.log(`[I&M] Name warning -- Binance: "${name}" | I&M verified: "${imVerifiedName}" -- proceeding anyway`);
+          } else {
+            console.log(`[I&M] Name verified OK -- I&M: "${imVerifiedName}" matches Binance "${name}" (${commonWords.length} word(s))`);
           }
-          console.log(`[I&M] Name verified OK -- I&M: "${imVerifiedName}" matches Binance "${name}" (${commonWords.length} word(s))`);
         } else if (imVerifiedName) {
           console.log(`[I&M] I&M verified name: "${imVerifiedName}" (no Binance name to compare -- proceeding)`);
         } else {
@@ -8224,6 +8580,24 @@ Return ONLY valid JSON, no other text.` },
         }
       }
 
+      continue;
+    }
+
+    // Account list: Vision clicked an account row — set accountSelected and re-click radios
+    if (action.screen === 'account_list' && action.action === 'click' && action.x && action.y) {
+      await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
+      console.log(`[I&M Vision] Account row clicked at (${Math.round(action.x / imDpr)}, ${Math.round(action.y / imDpr)})`);
+      accountSelected = true;
+      await new Promise(r => setTimeout(r, 1200));
+      // Re-click radios since account selection resets them
+      const pv1 = await clickRadio('Other Phone');
+      await new Promise(r => setTimeout(r, 600));
+      const pv2 = await clickRadio('One-off Beneficiary');
+      await new Promise(r => setTimeout(r, 400));
+      if (pv1 && pv2) radiosConfirmed = true;
+      console.log(`[I&M Vision] Post-account radios: otherPhone=${pv1}, oneOff=${pv2}, confirmed=${radiosConfirmed}`);
+      await imPage.evaluate(() => window.scrollBy(0, 400)).catch(() => {});
+      await new Promise(r => setTimeout(r, 500));
       continue;
     }
 
@@ -8400,7 +8774,12 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
   imWithdrawalRunning = true;
   const amountInt = Math.floor(parseFloat(amount));
   const refStr = String(reference).substring(0, 50);
-  const targetBank = (bankName || 'I & M Bank Ltd').trim();
+  const targetBank = (() => {
+    const raw = (bankName || '').trim();
+    const n = raw.toLowerCase().replace(/[&\s]/g, '');
+    if (!n || n === 'im' || n === 'i&m' || n === 'imbank' || n === 'i&mbank') return 'I & M Bank Ltd';
+    return raw;
+  })();
   console.log(`[SparkP2P] ðŸ¦ Bank Transfer: KSh ${amountInt} → ${name} (${targetBank} A/C ${accountNumber})`);
 
   await imPage.bringToFront();
@@ -8482,7 +8861,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
           continue;
         }
       } else {
-        // Dropdown not open yet â€” open it
+        // Dropdown not open yet — open it, or detect it's already selected
         const trigger = await imPage.evaluate(() => {
           const el = Array.from(document.querySelectorAll('*')).find(e =>
             (e.textContent || '').trim() === 'Select an account' && e.getBoundingClientRect().width > 100);
@@ -8495,6 +8874,22 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
           await new Promise(r => setTimeout(r, 1500));
           continue;
         }
+        // No search box and no “Select an account” trigger — an account is already selected.
+        // This happens when the browser restores the last session state on page load.
+        const alreadySelected = await imPage.evaluate(() => {
+          // Look for an element showing a selected account (contains “KES ACC” or has account number format)
+          return Array.from(document.querySelectorAll('*')).some(el => {
+            const txt = (el.textContent || '').trim();
+            const r = el.getBoundingClientRect();
+            return r.width > 50 && r.width < 600 && r.height > 0 && r.height < 80 &&
+                   (/KES ACC/i.test(txt) || /KES\s+[\d,]+/.test(txt)) && txt.length < 100;
+          });
+        }).catch(() => false);
+        if (alreadySelected) {
+          console.log('[BankTransfer] Debit account already selected — proceeding to form fill');
+          accountSelected = true;
+          continue;
+        }
       }
     }
 
@@ -8502,21 +8897,27 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
     if (accountSelected && !formFilled) {
       await new Promise(r => setTimeout(r, 1000));
 
-      // One-off Beneficiary — use imPage.mouse.click (real mouse event) so Angular radio fires
-      const oneOffCoords = await imPage.evaluate(() => {
-        const all = Array.from(document.querySelectorAll('*'));
-        for (const el of all) {
-          const txt = (el.textContent || '').trim();
-          const r = el.getBoundingClientRect();
-          if (txt.includes('One-off') && r.width > 0 && r.width < 350 && r.height > 0 && r.height < 60) {
+      // One-off Beneficiary — use specific selectors, no size filters (size varies by screen resolution/zoom)
+      const oneOffClicked = await imPage.evaluate(() => {
+        const candidates = Array.from(document.querySelectorAll(
+          'mat-radio-button, [role="radio"], label, input[type="radio"]'
+        ));
+        for (const el of candidates) {
+          if (!(el.textContent || el.value || '').toLowerCase().includes('one-off')) continue;
+          const target = el.closest('mat-radio-button, label') || el;
+          const r = target.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            // Also fire on the inner input to ensure Angular change detection triggers
+            const input = target.querySelector('input[type="radio"]') || (el.type === 'radio' ? el : null);
+            if (input) { input.click(); input.dispatchEvent(new Event('change', { bubbles: true })); }
             return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
           }
         }
         return null;
       }).catch(() => null);
-      if (oneOffCoords) {
-        await imPage.mouse.click(oneOffCoords.x, oneOffCoords.y);
-        console.log(`[BankTransfer] Clicked One-off Beneficiary at (${Math.round(oneOffCoords.x)}, ${Math.round(oneOffCoords.y)})`);
+      if (oneOffClicked) {
+        console.log(`[BankTransfer] One-off Beneficiary dispatchEvent at (${Math.round(oneOffClicked.x)}, ${Math.round(oneOffClicked.y)})`);
       } else {
         console.log('[BankTransfer] One-off Beneficiary element not found — will retry');
         await new Promise(r => setTimeout(r, 1500));
@@ -8524,8 +8925,36 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       }
       await new Promise(r => setTimeout(r, 1800));
 
-      // Verify Angular registered the radio change — One-off fields (bank name input) must now be visible
+      // Verify Angular registered the radio change.
+      // The “Bank name” field is a mat-select (dropdown), not a plain <input>, so we check:
+      //   1. The radio button aria-checked/mat-radio-checked state
+      //   2. Visible label text that only appears in the One-off section
+      //   3. Any mat-select element visible (bank name dropdown)
+      //   4. Legacy input placeholder check as final fallback
       const oneOffVisible = await imPage.evaluate(() => {
+        // Check 1: Angular radio state
+        const radios = Array.from(document.querySelectorAll('mat-radio-button, [role=”radio”]'));
+        const oneOff = radios.find(r => (r.textContent || '').toLowerCase().includes('one-off'));
+        if (oneOff) {
+          const checked = oneOff.classList.contains('mat-radio-checked') ||
+                          oneOff.classList.contains('mat-mdc-radio-checked') ||
+                          oneOff.getAttribute('aria-checked') === 'true' ||
+                          !!oneOff.querySelector('input[type=”radio”]:checked');
+          if (checked) return true;
+        }
+        // Check 2: field labels that only appear when One-off section is expanded
+        const allEls = Array.from(document.querySelectorAll('*'));
+        const hasFieldLabel = allEls.some(el => {
+          const txt = (el.textContent || '').trim();
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.width < 400 && r.height > 0 &&
+                 (txt === 'Account number' || txt === 'Account name' || txt === 'Bank code' || txt === 'Bank name');
+        });
+        if (hasFieldLabel) return true;
+        // Check 3: mat-select visible (bank name dropdown)
+        const matSels = Array.from(document.querySelectorAll('mat-select'));
+        if (matSels.some(s => { const r = s.getBoundingClientRect(); return r.width > 0 && r.height > 0; })) return true;
+        // Check 4: legacy input check
         const inputs = Array.from(document.querySelectorAll('input'));
         return inputs.some(i => {
           const ph = (i.placeholder || '').toLowerCase(), fc = (i.getAttribute('formcontrolname') || '').toLowerCase();
@@ -8537,39 +8966,72 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         await new Promise(r => setTimeout(r, 1000));
         continue; // retry on next iteration
       }
-      formFilled = true; // Only mark filled once One-off form fields are confirmed visible
+      formFilled = true;
       await new Promise(r => setTimeout(r, 500));
 
-      // Bank name (type + select from dropdown)
-      const bankInputCoords2 = await imPage.evaluate(() => {
-        const labels = Array.from(document.querySelectorAll('label, div, span, p, h6'));
-        const lbl = labels.find(el => (el.textContent || '').trim().toLowerCase() === 'bank name' && el.getBoundingClientRect().width > 0);
-        if (lbl) { const parent = lbl.parentElement?.parentElement || lbl.parentElement; const inp = parent?.querySelector('input'); if (inp) { const r = inp.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; } }
-        const inputs = Array.from(document.querySelectorAll('input'));
-        const bi = inputs.find(i => (i.placeholder || '').toLowerCase().includes('bank') || (i.getAttribute('formcontrolname') || '').toLowerCase().includes('bank'));
-        if (bi) { const r = bi.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+      // Bank name — supports mat-select (pure dropdown), native select, or input (autocomplete)
+      const bankFieldInfo = await imPage.evaluate(() => {
+        const allEls = Array.from(document.querySelectorAll('*'));
+        const lbl = allEls.find(el => {
+          const txt = (el.textContent || '').trim().toLowerCase();
+          const r = el.getBoundingClientRect();
+          return txt === 'bank name' && r.width > 0 && r.width < 300 && r.height > 0;
+        });
+        const container = lbl
+          ? (lbl.closest('mat-form-field') || lbl.parentElement?.parentElement || lbl.parentElement)
+          : null;
+        const scope = container || document;
+        const matSel = scope.querySelector('mat-select');
+        if (matSel) { const r = matSel.getBoundingClientRect(); if (r.width > 0 && r.height > 0) return { type: 'mat-select', x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+        const sel = scope.querySelector('select');
+        if (sel) { const r = sel.getBoundingClientRect(); if (r.width > 0 && r.height > 0) return { type: 'select', x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+        const inp = scope.querySelector('input');
+        if (inp) { const r = inp.getBoundingClientRect(); if (r.width > 0 && r.height > 0) return { type: 'input', x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
         return null;
       }).catch(() => null);
-      if (bankInputCoords2) {
-        await imPage.mouse.click(bankInputCoords2.x, bankInputCoords2.y);
-        await new Promise(r => setTimeout(r, 300));
-        await imPage.keyboard.type(targetBank.substring(0, 5), { delay: 80 });
-        await new Promise(r => setTimeout(r, 1800));
+      if (bankFieldInfo) {
+        await imPage.mouse.click(bankFieldInfo.x, bankFieldInfo.y);
+        await new Promise(r => setTimeout(r, 600));
+        if (bankFieldInfo.type === 'input') {
+          // Autocomplete: type the first chars of the exact bank name so autocomplete finds it
+          const typePrefix = targetBank.substring(0, 5);
+          await imPage.keyboard.type(typePrefix, { delay: 80 });
+          await new Promise(r => setTimeout(r, 1800));
+        } else {
+          // mat-select / select: click opened the panel — wait for options to render
+          await new Promise(r => setTimeout(r, 1200));
+        }
         const bankSelected2 = await imPage.evaluate((bank) => {
-          const opts = Array.from(document.querySelectorAll('[class*="option" i], [role="option"], li, .ng-option, .dropdown-item'));
-          const match = opts.find(o => (o.textContent || '').trim().toLowerCase().includes(bank.substring(0, 6).toLowerCase()) && o.getBoundingClientRect().width > 0);
+          const opts = Array.from(document.querySelectorAll('mat-option, [role=”option”], [class*=”option” i], .ng-option, .dropdown-item'));
+          const nm = s => s.toLowerCase().replace(/[&\s]/g, '');
+          const match = opts.find(o => {
+            const txt = (o.textContent || '').trim();
+            const r = o.getBoundingClientRect();
+            if (r.height <= 0) return false;
+            const ntxt = nm(txt), nbank = nm(bank);
+            return ntxt.includes(nbank.substring(0, 6)) || nbank.includes(ntxt.substring(0, 6));
+          });
           if (match) { match.click(); return (match.textContent || '').trim(); }
           return null;
         }, targetBank).catch(() => null);
-        if (bankSelected2) console.log(`[BankTransfer] âœ… Bank selected: ${bankSelected2}`);
+        if (bankSelected2) {
+          console.log(`[BankTransfer] ✅ Bank selected: ${bankSelected2}`);
+        } else {
+          console.log(`[BankTransfer] ⚠️ Bank option not found for “${targetBank}” — Vision will handle`);
+        }
         await new Promise(r => setTimeout(r, 1000));
+      } else {
+        console.log(`[BankTransfer] ⚠️ Bank name field not found — Vision will handle`);
       }
 
       // Account number + Validate
       const acctInput2 = await imPage.evaluate(() => {
         // Find input near "Account number" label (label-proximity approach)
         const labels = Array.from(document.querySelectorAll('label, div, span, p, h6, mat-label'));
-        const lbl = labels.find(el => (el.textContent || '').trim().toLowerCase() === 'account number' && el.getBoundingClientRect().width > 0);
+        const lbl = labels.find(el => {
+          const txt = (el.textContent || '').trim().toLowerCase().replace(/[*\s]+$/, '');
+          return txt === 'account number' && el.getBoundingClientRect().width > 0;
+        });
         if (lbl) {
           const parent = lbl.parentElement?.parentElement || lbl.parentElement;
           const inp = parent?.querySelector('input');
@@ -8596,8 +9058,23 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
           if (btn) { btn.click(); return true; }
           return false;
         }).catch(() => false);
-        if (validated2) { console.log('[BankTransfer] âœ… Validate clicked'); await new Promise(r => setTimeout(r, 3500)); }
-        else { console.log('[BankTransfer] âš ï¸ Validate button not found or disabled'); }
+        if (validated2) {
+          console.log('[BankTransfer] ✅ Validate clicked');
+          await new Promise(r => setTimeout(r, 3500));
+          // Check for validation error (invalid account number)
+          const validateFailed = await imPage.evaluate(() => {
+            const text = (document.body.innerText || '').toLowerCase();
+            return text.includes('account number entered is invalid') ||
+                   text.includes('please confirm the account number') ||
+                   text.includes('invalid account') ||
+                   text.includes('account name is required');
+          }).catch(() => false);
+          if (validateFailed) {
+            console.log('[BankTransfer] ❌ Validate failed — account number invalid or not resolved');
+            imWithdrawalRunning = false;
+            return { success: false, invalidAccount: true };
+          }
+        } else { console.log('[BankTransfer] ⚠️ Validate button not found or disabled'); }
       } else {
         console.log('[BankTransfer] âš ï¸ Account number input not found â€” skipped');
       }
@@ -8713,36 +9190,66 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       await new Promise(r => setTimeout(r, 500));
       console.log('[BankTransfer] âœ… Pesalink selected');
 
-      // Payment Purpose = Other â€” options load lazily on click, so: click→wait for options→select
+      // Payment Purpose = Other — find by scanning all selects for the one with payment purpose options
       const purposeDone = await (async () => {
         try {
-          // select[1] is the payment purpose select (confirmed from debug logs)
           const handles = await imPage.$$('select');
-          const handle = handles[1];
-          if (!handle) { console.log('[BankTransfer] âš ï¸ select[1] not found'); return false; }
+          if (!handles.length) { console.log('[BankTransfer] ⚠️ No <select> elements found'); return false; }
 
-          // Scroll into view
+          // Find the payment purpose select by: aria-label/name/formcontrolname containing “purpose”,
+          // or by being the select whose options include “Other” after triggering Angular lazy load.
+          // Do NOT rely on a hardcoded index — the count of selects varies by screen/form state.
+          let handle = null;
+
+          // Pass 1: find by attribute (no option loading needed)
+          for (const h of handles) {
+            const match = await h.evaluate(el => {
+              const attrs = [el.name, el.id, el.getAttribute('formcontrolname'),
+                             el.getAttribute('aria-label'), el.getAttribute('ng-reflect-name')];
+              return attrs.some(a => a && a.toLowerCase().includes('purpose'));
+            }).catch(() => false);
+            if (match) { handle = h; console.log('[BankTransfer] Found purpose select by attribute'); break; }
+          }
+
+          // Pass 2: trigger each select and check if its options include “Other”
+          if (!handle) {
+            for (const h of handles) {
+              await h.evaluate(el => {
+                el.scrollIntoView({ block: 'center', behavior: 'instant' });
+                el.focus();
+                el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                el.dispatchEvent(new Event('focus', { bubbles: true }));
+              }).catch(() => {});
+              await new Promise(r => setTimeout(r, 800));
+              await imPage.keyboard.press('Escape').catch(() => {});
+              const opts = await h.evaluate(el =>
+                Array.from(el.options).map(o => o.text.trim().toLowerCase())
+              ).catch(() => []);
+              if (opts.some(t => t.includes('other'))) {
+                handle = h;
+                console.log(`[BankTransfer] Found purpose select by options scan: [${opts.join(', ')}]`);
+                break;
+              }
+            }
+          }
+
+          if (!handle) { console.log('[BankTransfer] ⚠️ Payment purpose select not found on any pass'); return false; }
+
           await handle.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
           await new Promise(r => setTimeout(r, 300));
 
-          // Retry up to 3 times â€” Angular loads options lazily on focus/click
+          // Retry up to 3 times — Angular loads options lazily on focus/click
           let otherOpt = null;
           for (let attempt = 1; attempt <= 3; attempt++) {
-            // Try focus + click + dispatch events to trigger Angular's option loader
             await handle.focus().catch(() => {});
             await handle.click().catch(() => {});
             await handle.evaluate(el => {
               el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
               el.dispatchEvent(new Event('focus', { bubbles: true }));
             }).catch(() => {});
-            console.log(`[BankTransfer] Purpose select attempt ${attempt} â€” waiting for options`);
+            console.log(`[BankTransfer] Purpose select attempt ${attempt} — waiting for options`);
 
-            await imPage.waitForFunction(() => {
-              const sels = document.querySelectorAll('select');
-              return sels[1] && sels[1].options.length > 1;
-            }, { timeout: 4000 }).catch(() => {});
-
-            // Press Escape to close OS dropdown without selecting anything
+            await imPage.waitForFunction((h) => h.options.length > 1, { timeout: 4000 }, handle).catch(() => {});
             await imPage.keyboard.press('Escape').catch(() => {});
             await new Promise(r => setTimeout(r, 300));
 
@@ -8755,10 +9262,10 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
             if (otherOpt) break;
           }
 
-          if (!otherOpt) { console.log('[BankTransfer] âš ï¸ No "Other" option found after 3 attempts'); return false; }
+          if (!otherOpt) { console.log('[BankTransfer] ⚠️ No “Other” option found after 3 attempts'); return false; }
 
           await handle.select(otherOpt.value);
-          console.log(`[BankTransfer] âœ… Payment Purpose set to "${otherOpt.text}" (value="${otherOpt.value}")`);
+          console.log(`[BankTransfer] ✅ Payment Purpose set to “${otherOpt.text}” (value=”${otherOpt.value}”)`);
           await new Promise(r => setTimeout(r, 400));
           return true;
         } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
@@ -9085,7 +9592,7 @@ async function sendBinanceChatMessage(page, message) {
     // Wait up to 10s for the chat panel to render before handing off
     let chatInput = null;
     for (let i = 0; i < 5; i++) {
-      chatInput = await page.$('[placeholder*="message" i], [placeholder*="Enter message" i], [placeholder*="Type" i], textarea');
+      chatInput = await page.$('[placeholder*="message" i], [placeholder*="Enter message" i], [placeholder*="Type" i], textarea, div[contenteditable="true"]');
       if (chatInput) break;
       await new Promise(r => setTimeout(r, 2000));
     }
@@ -9133,58 +9640,92 @@ async function uploadPaymentProofToBinance(page, screenshotBase64) {
       let uploadBtn = null;
       for (const btn of allBtns) {
         const txt = await page.evaluate(el => el.textContent, btn).catch(() => '');
-        if (txt.toLowerCase().includes('upload') || txt.toLowerCase().includes('payment proof')) {
-          uploadBtn = btn; break;
+        const tl = txt.toLowerCase();
+        if (tl.includes('upload') || tl.includes('payment proof') ||
+            tl.includes('transferred') || tl.includes('notify seller') || tl.includes('i have paid')) {
+          uploadBtn = btn;
+          break;
         }
       }
-      if (!uploadBtn) { console.log('[SparkP2P] "Upload Payment Proof" button not found'); return result; }
+      if (!uploadBtn) { console.log('[SparkP2P] Payment Confirmation button not found — skipping modal upload'); return result; }
       await uploadBtn.click();
-      console.log('[SparkP2P] Clicked "Upload Payment Proof" â€” waiting for modal...');
+      console.log('[SparkP2P] Clicked payment button — waiting for modal...');
       await new Promise(r => setTimeout(r, 2500));
     } else {
       console.log('[SparkP2P] Payment Confirmation modal already open');
     }
 
     // â”€â”€ Step B: Click the "Upload" icon INSIDE the modal → FileChooser â”€â”€â”€â”€â”€â”€â”€â”€
-    // Must use FileChooser (not direct uploadFile) so React event handlers fire
-    // and Binance shows the proof preview before Confirm becomes active.
+    // Inject file into Binance modal using React-compatible DataTransfer
+    // uploadFile() via CDP does not fire React's synthetic onChange — use base64 DataTransfer instead
     let uploaded = false;
     try {
-      // Get coords of the upload icon inside modal via DOM, then use mouse.click()
-      const uploadIconCoords = await page.evaluate(() => {
-        const selectors = [
-          '[role="dialog"] label', '[role="dialog"] button',
-          '[class*="modal" i] label', '[class*="modal" i] button',
-          '[class*="upload" i]',
-        ];
-        for (const sel of selectors) {
-          for (const el of Array.from(document.querySelectorAll(sel))) {
-            const txt = (el.textContent || '').trim().toLowerCase();
-            if ((txt === 'upload' || (txt.includes('upload') && txt.length < 15)) &&
-                !txt.includes('proof') && !txt.includes('confirm')) {
-              const r = el.getBoundingClientRect();
-              if (r.width > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      const fileBuffer = fs.readFileSync(tmpPath);
+      const fileBase64 = fileBuffer.toString('base64');
+      const fileName = require('path').basename(tmpPath);
+
+      const reactUploaded = await page.evaluate(({ b64, name }) => {
+        // Find the hidden file input inside the modal
+        const input = document.querySelector('[role="dialog"] input[type="file"]') ||
+                      document.querySelector('[class*="modal" i] input[type="file"]') ||
+                      document.querySelector('input[type="file"]');
+        if (!input) return false;
+        // Build a File object from base64 data inside the browser context
+        const binStr = atob(b64);
+        const bytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+        const file = new File([bytes], name, { type: 'image/jpeg', lastModified: Date.now() });
+        // Attach via DataTransfer so React sees it
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        Object.defineProperty(input, 'files', { value: dt.files, configurable: true });
+        // Fire events React listens to
+        input.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+        input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        return true;
+      }, { b64: fileBase64, name: fileName }).catch(() => false);
+
+      if (reactUploaded) {
+        uploaded = true;
+        console.log('[SparkP2P] File injected via DataTransfer (React-compatible, no OS dialog)');
+        await new Promise(r => setTimeout(r, 2500)); // wait for Binance to show preview
+      } else {
+        // L2: click the upload icon and intercept FileChooser
+        const uploadIconCoords = await page.evaluate(() => {
+          const selectors = [
+            '[role="dialog"] label', '[role="dialog"] button',
+            '[class*="modal" i] label', '[class*="modal" i] button',
+            '[class*="upload" i]',
+          ];
+          for (const sel of selectors) {
+            for (const el of Array.from(document.querySelectorAll(sel))) {
+              const txt = (el.textContent || '').trim().toLowerCase();
+              if ((txt === 'upload' || (txt.includes('upload') && txt.length < 15)) &&
+                  !txt.includes('proof') && !txt.includes('confirm')) {
+                const r = el.getBoundingClientRect();
+                if (r.width > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+              }
             }
           }
-        }
-        return null;
-      }).catch(() => null);
+          return null;
+        }).catch(() => null);
 
-      if (uploadIconCoords) {
-        const [fileChooser] = await Promise.all([
-          page.waitForFileChooser({ timeout: 8000 }),
-          page.mouse.click(uploadIconCoords.x, uploadIconCoords.y),
-        ]);
-        await fileChooser.accept([tmpPath]);
-        uploaded = true;
-        console.log('[SparkP2P] âœ… Upload icon clicked â€” file accepted via FileChooser');
-      } else {
-        console.log('[SparkP2P] Upload icon not found inside modal');
+        if (uploadIconCoords) {
+          const [fileChooser] = await Promise.all([
+            page.waitForFileChooser({ timeout: 8000 }),
+            page.mouse.click(uploadIconCoords.x, uploadIconCoords.y),
+          ]);
+          await fileChooser.accept([tmpPath]);
+          uploaded = true;
+          console.log('[SparkP2P] Upload icon clicked via FileChooser fallback');
+          await new Promise(r => setTimeout(r, 2500));
+        } else {
+          console.log('[SparkP2P] Upload input/icon not found inside modal');
+        }
       }
     } catch (e) {
-      console.log('[SparkP2P] Modal FileChooser error:', e.message);
+      console.log('[SparkP2P] Modal upload error:', e.message);
     }
-
     if (!uploaded) { console.log('[SparkP2P] Could not upload inside modal'); return result; }
     result.uploaded = true;
 
@@ -9635,9 +10176,11 @@ async function connectIm() {
     let attempts = 0;
     let loginPageStreak = 0;
     let verifying = false;
+    let navListenerDone = false;
     const IM_OFFLINE_THRESHOLD = 40; // 40 × 3s = 2 minutes of consecutive LOGIN_PAGE/error
 
     const onImLoggedIn = async () => {
+      navListenerDone = true; // stop nav listener from double-firing
       console.log('[SparkP2P] I&M login confirmed by Vision! Syncing cookies...');
       await syncImCookies();
       const freshCookies = await imPage.cookies('https://digital.imbank.com').catch(() => []);
@@ -9748,6 +10291,52 @@ async function connectIm() {
         if (loginPageStreak >= IM_OFFLINE_THRESHOLD) { await declareImOffline(); }
       } catch (e) { verifying = false; }
     }, 3000);
+
+    // Instant-detect listener: fires the moment the user's browser navigates to I&M dashboard.
+    // This survives declareImOffline() so a late login (after 2-min window) is caught immediately
+    // without waiting for the 5-minute recovery poller.
+    let navVerifying = false;
+    const onImNav = async (frame) => {
+      if (navListenerDone || navVerifying) return;
+      if (!imPage || frame !== imPage.mainFrame()) return;
+      const url = frame.url();
+      const isDashboard = url.includes('imbank.com') &&
+        !url.includes('/openid-connect/') &&
+        !url.includes('/auth/realms/') &&
+        !url.includes('login') &&
+        !url.includes('Login');
+      if (!isDashboard) return;
+      navVerifying = true;
+      await new Promise(r => setTimeout(r, 2000)); // let page render
+      if (!imPage || imPage.isClosed() || navListenerDone) { navVerifying = false; return; }
+      try {
+        const ss = await imPage.screenshot({ encoding: 'base64' }).catch(() => null);
+        if (!ss || !anthropicApiKey) { navVerifying = false; return; }
+        const resp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001', max_tokens: 50,
+            messages: [{ role: 'user', content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ss } },
+              { type: 'text', text: 'Is this an I&M Bank online banking dashboard showing account information (logged in)? Or is it a login/QR code screen? Reply with only: LOGGED_IN or LOGIN_PAGE' },
+            ]}],
+          }),
+        });
+        const d = await resp.json();
+        const verdict = (d.content?.[0]?.text || '').trim().toUpperCase();
+        console.log(`[SparkP2P] I&M nav-listener Vision check: ${verdict}`);
+        if (verdict === 'LOGGED_IN') {
+          imPage.off('framenavigated', onImNav);
+          clearInterval(check);
+          if (imRecoveryTimer) { clearInterval(imRecoveryTimer); imRecoveryTimer = null; }
+          await onImLoggedIn();
+        }
+      } catch (e) { console.log('[SparkP2P] I&M nav-listener error:', e.message); }
+      navVerifying = false;
+    };
+    imPage.on('framenavigated', onImNav);
+
   } catch (e) {
     console.log('[SparkP2P] I&M connect error:', e.message);
     connectingIm = false;
@@ -9760,9 +10349,14 @@ function startImRecoveryPoller() {
   imRecoveryTimer = setInterval(async () => {
     try {
       if (!imPage || imPage.isClosed()) return;
-      // Reload to get the latest state
-      await imPage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-      await new Promise(r => setTimeout(r, 2000));
+      const currentUrl = imPage.url();
+      // Only reload if stuck on login/error page — don't disrupt an active or in-progress session
+      const onLoginOrError = currentUrl.includes('/openid-connect/') || currentUrl.includes('/auth/realms/') ||
+        currentUrl.includes('login') || !currentUrl.includes('imbank.com');
+      if (onLoginOrError) {
+        await imPage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 2000));
+      }
       const url = imPage.url();
       const pageText = await imPage.evaluate(() => document.body?.innerText || '').catch(() => '');
       const isServerError = /bad gateway|502|503|service unavailable|upstream/i.test(pageText);
@@ -9792,8 +10386,13 @@ function startImRecoveryPoller() {
         clearInterval(imRecoveryTimer); imRecoveryTimer = null;
         console.log('[SparkP2P] I&M back online and already logged in!');
         sendBotLog('success', 'I&M Bank is back online and logged in');
-        // Resume normal I&M operation
+        // Resume normal I&M operation — sync cookies immediately so backend enables I&M payments now
+        await syncImCookies();
+        const kaCookies = await imPage.cookies('https://digital.imbank.com').catch(() => []);
+        if (kaCookies.length) saveImCookiesLocal(kaCookies);
         startImKeepAlive();
+        const binancePageRecovery = await getPage('binance.com').catch(() => null);
+        if (binancePageRecovery) await binancePageRecovery.bringToFront().catch(() => {});
         mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“im-connected”))').catch(() => {});
         if (token) {
           fetch(`${API_BASE}/ext/notify-trader`, {
@@ -9838,7 +10437,14 @@ async function syncImCookies() {
 function startImKeepAlive() {
   if (imKeepAliveTimer) clearInterval(imKeepAliveTimer);
   imKeepAliveTimer = setInterval(async () => {
-    if (!imPage || imPage.isClosed()) { imPage = null; return; }
+    if (!imPage || imPage.isClosed()) {
+      imPage = null;
+      if (traderImAccount && pollerRunning && !connectingIm) {
+        console.log('[SparkP2P] I&M tab closed — auto-reopening...');
+        connectIm().catch(() => {});
+      }
+      return;
+    }
     try {
       const url = imPage.url();
 

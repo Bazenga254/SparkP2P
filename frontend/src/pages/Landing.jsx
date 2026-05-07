@@ -164,7 +164,8 @@ export default function Landing() {
 
   return (
     <div className="landing">
-      {/* Navigation */}
+
+      {/* ── Navigation ─────────────────────────────────────────── */}
       <nav className="land-nav">
         <div className="land-nav-inner">
           <div className="land-nav-brand">
@@ -173,13 +174,15 @@ export default function Landing() {
           </div>
           <div className="land-nav-links">
             <a href="#features">Features</a>
-            <a href="#faq">FAQ</a>
+            <a href="#why">Why Us</a>
+            <a href="#how-it-works">How It Works</a>
             <a href="#download">Download</a>
-            <Link to="/install">Install Guide</Link>
+            <a href="#faq">FAQ</a>
             <Link to="/contact">Contact</Link>
+          </div>
+          <div className="land-nav-actions">
             <Link to="/login" className="land-nav-login">Login</Link>
           </div>
-          {/* Mobile right side */}
           <div className="land-nav-mobile-actions">
             <Link to="/login" className="land-nav-login">Login</Link>
             <button
@@ -196,24 +199,33 @@ export default function Landing() {
       {/* Mobile drawer */}
       <div className={`land-mobile-drawer${menuOpen ? ' open' : ''}`}>
         <a href="#features" onClick={closeMenu}>Features</a>
-        <a href="#faq" onClick={closeMenu}>FAQ</a>
+        <a href="#why" onClick={closeMenu}>Why Us</a>
+        <a href="#how-it-works" onClick={closeMenu}>How It Works</a>
         <a href="#download" onClick={closeMenu}>Download</a>
+        <a href="#faq" onClick={closeMenu}>FAQ</a>
       </div>
 
-      {/* Hero */}
+      {/* ── Hero ───────────────────────────────────────────────── */}
       <section className="land-hero">
         <div className="land-hero-content">
-          <div className="land-hero-badge">Trusted by P2P Traders</div>
+          <div className="land-hero-badge">
+            <span className="land-hero-badge-dot"></span>
+            Trusted by P2P Traders across Kenya
+          </div>
           <h1>Automate Your<br /><span className="land-highlight">Binance P2P Trading</span></h1>
           <p className="land-hero-sub">
-            Stop manually releasing crypto and verifying payments. SparkP2P handles everything — powered by Spark AI.
+            Stop manually releasing crypto and verifying payments. SparkP2P handles everything — M-Pesa verification, auto-release, real-time tracking — powered by Spark AI.
           </p>
           <div className="land-hero-actions">
-            <Link to="/login" className="land-cta-primary">Get Started</Link>
-            <a href="#how-it-works" className="land-cta-secondary">See How It Works</a>
+            <Link to="/login" className="land-cta-primary">Get Started Free</Link>
+            <a href="#how-it-works" className="land-cta-secondary">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5v14l11-7z"/>
+              </svg>
+              See How It Works
+            </a>
           </div>
         </div>
-        {/* Mobile-only hero CTA card */}
         <div className="land-hero-mobile-cta">
           <p>Payments verified. Crypto released. All on autopilot.</p>
           <Link to="/login" className="land-cta-primary" style={{ display: 'inline-block', marginTop: 16 }}>Get Started Free</Link>
@@ -263,7 +275,34 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Features */}
+      {/* ── Stats Bar ──────────────────────────────────────────── */}
+      <section className="land-stats-bar">
+        <div className="land-section-inner">
+          <div className="land-stats-grid">
+            <div className="land-stat">
+              <span className="land-stat-num">500<span className="land-stat-plus">+</span></span>
+              <span className="land-stat-label">Active Traders</span>
+            </div>
+            <div className="land-stat-divider" />
+            <div className="land-stat">
+              <span className="land-stat-num">24/7</span>
+              <span className="land-stat-label">Automated Trading</span>
+            </div>
+            <div className="land-stat-divider" />
+            <div className="land-stat">
+              <span className="land-stat-num">&lt;10s</span>
+              <span className="land-stat-label">Avg. Release Time</span>
+            </div>
+            <div className="land-stat-divider" />
+            <div className="land-stat">
+              <span className="land-stat-num">KES 50M<span className="land-stat-plus">+</span></span>
+              <span className="land-stat-label">Volume Processed</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Features ───────────────────────────────────────────── */}
       <section className="land-features" id="features">
         <div className="land-section-inner">
           <div className="land-section-header">
@@ -273,7 +312,6 @@ export default function Landing() {
           </div>
           <div className="land-features-grid">
 
-            {/* Row 1 */}
             <div className="land-feature-card">
               <div className="land-feature-icon green-glow">
                 <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -290,7 +328,7 @@ export default function Landing() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                 </svg>
               </div>
-              <h3>Buy & Sell Automation</h3>
+              <h3>Buy &amp; Sell Automation</h3>
               <p>Both trading sides handled. Buy orders auto-pay via M-Pesa. Sell orders auto-verify and release to buyers.</p>
             </div>
 
@@ -304,15 +342,14 @@ export default function Landing() {
               <p>Live dashboard showing your spread, daily volume, completed orders, and net KES profit — updated after every trade.</p>
             </div>
 
-            {/* Row 2 */}
             <div className="land-feature-card">
               <div className="land-feature-icon purple-glow">
                 <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
                 </svg>
               </div>
-              <h3>Instant Wallet & Withdrawals</h3>
-              <p>Earnings land in your SparkP2P wallet after every trade. Withdraw anytime to M-Pesa or I&M Bank — funds arrive in minutes.</p>
+              <h3>Instant Wallet &amp; Withdrawals</h3>
+              <p>Earnings land in your SparkP2P wallet after every trade. Withdraw anytime to M-Pesa or I&amp;M Bank — funds arrive in minutes.</p>
             </div>
 
             <div className="land-feature-card">
@@ -335,7 +372,6 @@ export default function Landing() {
               <p>Reach the SparkP2P team directly from your dashboard. Get help with setup, withdrawals, or anything else — no email tickets.</p>
             </div>
 
-            {/* Row 3 */}
             <div className="land-feature-card">
               <div className="land-feature-icon accent-glow">
                 <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -370,7 +406,69 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* How It Works */}
+      {/* ── Why SparkP2P ───────────────────────────────────────── */}
+      <section className="land-why" id="why">
+        <div className="land-section-inner">
+          <div className="land-why-inner">
+            <div className="land-why-text">
+              <span className="land-section-tag">Why SparkP2P</span>
+              <h2>Built for Serious<br /><span className="land-highlight">P2P Traders</span></h2>
+              <p className="land-why-desc">
+                SparkP2P is the only desktop tool that combines real-time M-Pesa verification, AI-powered order management, and instant settlement — all in one app built for Kenyan traders.
+              </p>
+              <ul className="land-why-list">
+                <li>
+                  <span className="land-why-check">✓</span>
+                  <div>
+                    <strong>No API Keys Required</strong>
+                    <p>Works with your existing Chrome session — zero credentials stored on our servers.</p>
+                  </div>
+                </li>
+                <li>
+                  <span className="land-why-check">✓</span>
+                  <div>
+                    <strong>Both Buy &amp; Sell Sides</strong>
+                    <p>Full automation for sell order releases and buy order M-Pesa payments.</p>
+                  </div>
+                </li>
+                <li>
+                  <span className="land-why-check">✓</span>
+                  <div>
+                    <strong>Real-Time M-Pesa Matching</strong>
+                    <p>Instantly matches payment amounts to orders — no manual checking required.</p>
+                  </div>
+                </li>
+                <li>
+                  <span className="land-why-check">✓</span>
+                  <div>
+                    <strong>Instant Withdrawals</strong>
+                    <p>Earnings swept to M-Pesa or I&amp;M Bank within minutes of each completed trade.</p>
+                  </div>
+                </li>
+              </ul>
+            </div>
+            <div className="land-why-cards">
+              <div className="land-why-card">
+                <div className="land-why-card-num">01</div>
+                <h4>Set Up Once</h4>
+                <p>10-minute setup — connect Binance, configure M-Pesa, and you're live. No coding, no API keys, no hassle.</p>
+              </div>
+              <div className="land-why-card">
+                <div className="land-why-card-num">02</div>
+                <h4>Trade 24/7</h4>
+                <p>SparkP2P runs in the background while you sleep, work, or travel — never miss an order again.</p>
+              </div>
+              <div className="land-why-card">
+                <div className="land-why-card-num">03</div>
+                <h4>Earn More</h4>
+                <p>More completed orders, zero delays, instant payouts — your entire P2P business on autopilot.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── How It Works ───────────────────────────────────────── */}
       <section className="land-how" id="how-it-works">
         <div className="land-section-inner">
           <div className="land-section-header">
@@ -413,48 +511,76 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Pricing — hidden (free access period) */}
+      {/* ── CTA Banner ─────────────────────────────────────────── */}
+      <section className="land-cta-banner">
+        <div className="land-section-inner">
+          <div className="land-cta-banner-inner">
+            <div className="land-cta-banner-text">
+              <h2>Ready to Automate Your<br /><span className="land-highlight">P2P Trading?</span></h2>
+              <p>Join hundreds of traders running SparkP2P around the clock.</p>
+            </div>
+            <div className="land-cta-banner-actions">
+              <Link to="/login" className="land-cta-primary">Get Started Today</Link>
+              <Link to="/contact" className="land-cta-secondary">Talk to Us</Link>
+            </div>
+          </div>
+        </div>
+      </section>
 
-      {/* Download Section */}
+      {/* ── Download ───────────────────────────────────────────── */}
       <section className="land-download" id="download">
         <div className="land-section-inner">
-          <h2>Download SparkP2P</h2>
-          <p className="land-section-sub">Get the desktop app for automated P2P trading. Install once, trade forever.</p>
+          <div className="land-section-header">
+            <span className="land-section-tag">Download</span>
+            <h2>Get <span className="land-highlight">SparkP2P</span></h2>
+            <p className="land-section-desc">Install once on Windows and trade forever. Auto-updates keep you on the latest version.</p>
+          </div>
           <div className="land-download-grid">
-            <div className="land-download-card">
+            <div className="land-download-card featured-dl">
               <div className="land-download-icon">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 12l2-2m0 0l7-7 7 7m-9-5v12m-4 4h12"/></svg>
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="3" y="3" width="8" height="8"/><rect x="13" y="3" width="8" height="8"/>
+                  <rect x="3" y="13" width="8" height="8"/><rect x="13" y="13" width="8" height="8"/>
+                </svg>
               </div>
               <h3>Windows</h3>
-              <p>Windows 10 / 11</p>
-              <a href="/api/download/latest" className="land-download-btn">Download .exe</a>
+              <p>Windows 10 / 11 &nbsp;·&nbsp; 64-bit</p>
+              <a href="/api/download/latest" className="land-download-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                Download .exe
+              </a>
             </div>
             <div className="land-download-card">
-              <div className="land-download-icon">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z"/><path d="M12 8v8m-4-4h8"/></svg>
+              <div className="land-download-icon muted">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z"/>
+                  <path d="M12 8v8m-4-4h8"/>
+                </svg>
               </div>
               <h3>macOS</h3>
-              <p>Intel & Apple Silicon</p>
+              <p>Intel &amp; Apple Silicon</p>
               <span className="land-download-soon">Coming Soon</span>
             </div>
             <div className="land-download-card">
-              <div className="land-download-icon">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+              <div className="land-download-icon muted">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                </svg>
               </div>
               <h3>Linux</h3>
               <p>Ubuntu / Debian</p>
               <span className="land-download-soon">Coming Soon</span>
             </div>
           </div>
-          <div style={{ textAlign: 'center', marginTop: 24, maxWidth: 520, margin: '24px auto 0' }}>
-            <p style={{ color: '#6b7280', fontSize: 13 }}>
-              {latestVersion ? `v${latestVersion}` : 'Latest version'} &middot; Auto-updates enabled &middot; Requires Google Chrome installed
-            </p>
-            <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
-              If Chrome blocks the download, click the <strong style={{ color: '#e5e7eb' }}>&#8942;</strong> (three dots) next to the download and select <strong style={{ color: '#e5e7eb' }}>"Keep"</strong>. The file is safe — downloaded directly from our servers.
+          <div className="land-download-meta">
+            <p>{latestVersion ? `v${latestVersion}` : 'Latest version'} &middot; Auto-updates enabled &middot; Requires Google Chrome installed</p>
+            <p className="land-download-note">
+              If Chrome blocks the download, click the <strong>&#8942;</strong> next to it and select <strong>"Keep"</strong>. The file is safe — downloaded directly from our servers.
             </p>
             <p style={{ marginTop: 16 }}>
-              <Link to="/install" style={{ color: '#6b8eff', fontSize: 13, textDecoration: 'none', fontWeight: 600 }}>
+              <Link to="/install" className="land-download-guide-link">
                 Need help installing? View step-by-step guide →
               </Link>
             </p>
@@ -462,13 +588,16 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* FAQ */}
+      {/* ── FAQ ────────────────────────────────────────────────── */}
       <section className="land-faq" id="faq">
         <div className="land-section-inner">
           <div className="land-section-header">
             <span className="land-section-tag">FAQ</span>
             <h2>Frequently Asked<br /><span className="land-highlight">Questions</span></h2>
-            <p className="land-section-desc">Everything you need to know about SparkP2P. Can't find an answer? <a href="mailto:support@sparkp2p.com" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Contact us</a>.</p>
+            <p className="land-section-desc">
+              Everything you need to know about SparkP2P. Can't find an answer?{' '}
+              <a href="mailto:support@sparkp2p.com" style={{ color: 'var(--accent)', textDecoration: 'none' }}>Contact us</a>.
+            </p>
           </div>
           <div className="land-faq-categories">
             {FAQS.map(cat => (
@@ -487,27 +616,45 @@ export default function Landing() {
 
       <PublicChat />
 
-      {/* Footer */}
+      {/* ── Footer ─────────────────────────────────────────────── */}
       <footer className="land-footer">
         <div className="land-footer-inner">
-          <div className="land-footer-brand">
-            <img src="/logo.png" alt="SparkP2P" className="land-footer-logo" />
-            <span>SparkP2P</span>
-            <span className="land-footer-powered">Powered by Spark AI</span>
+          <div className="land-footer-brand-col">
+            <div className="land-footer-brand">
+              <img src="/logo.png" alt="SparkP2P" className="land-footer-logo" />
+              <span>SparkP2P</span>
+            </div>
+            <p className="land-footer-tagline">
+              Automated Binance P2P trading for Kenya's top traders. Powered by Spark AI.
+            </p>
           </div>
-          <div className="land-footer-links">
+          <div className="land-footer-col">
+            <h5>Product</h5>
             <a href="#features">Features</a>
-            <a href="#faq">FAQ</a>
+            <a href="#why">Why SparkP2P</a>
+            <a href="#how-it-works">How It Works</a>
             <a href="#download">Download</a>
             <Link to="/install">Install Guide</Link>
-            <Link to="/login">Login</Link>
-            <Link to="/contact">Contact</Link>
           </div>
-          <div className="land-footer-copy">
-            &copy; {new Date().getFullYear()} SparkP2P. All rights reserved.
+          <div className="land-footer-col">
+            <h5>Support</h5>
+            <a href="#faq">FAQ</a>
+            <Link to="/contact">Contact Us</Link>
+            <Link to="/login">Login</Link>
+          </div>
+          <div className="land-footer-col">
+            <h5>Contact</h5>
+            <a href="mailto:support@sparkp2p.com">support@sparkp2p.com</a>
+          </div>
+        </div>
+        <div className="land-footer-bottom">
+          <div className="land-footer-bottom-inner">
+            <span>&copy; {new Date().getFullYear()} SparkP2P. All rights reserved.</span>
+            <span className="land-footer-powered">Powered by Spark AI</span>
           </div>
         </div>
       </footer>
+
     </div>
   );
 }

@@ -22,6 +22,8 @@ function getWithdrawalFee(method, amount) {
 }
 const fmtKES = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 const fmtKESFee = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDateEAT = (ts) => new Date(ts).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' });
+const fmtTimeEAT = (ts) => new Date(ts).toLocaleTimeString('en-KE', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 const SUPPORTED_COINS = ['USDT', 'USDC', 'BTC', 'ETH', 'BNB', 'BUSD'];
 
@@ -541,6 +543,22 @@ export default function Dashboard() {
     };
   }, []);
 
+  // Refresh profile every 30s so bot status stays live after the initial scan
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try { const res = await getProfile(); setProfile(res.data); } catch (_) {}
+    }, 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Refresh orders every 20s so new Binance orders appear automatically
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try { const res = await getOrders({ limit: 20 }); setOrders(res.data); } catch (_) {}
+    }, 20000);
+    return () => clearInterval(id);
+  }, []);
+
   const [setupMissing, setSetupMissing] = useState([]);
   const [setupDismissed, setSetupDismissed] = useState(false);
 
@@ -693,6 +711,10 @@ export default function Dashboard() {
         const next = [...prev, entry];
         return next.length > 400 ? next.slice(-400) : next;
       });
+      // Immediately refresh orders when bot detects a new Binance order
+      if ((entry?.message || '').includes('New order detected')) {
+        getOrders({ limit: 20 }).then(r => setOrders(r.data)).catch(() => {});
+      }
     });
   }, []);
 
@@ -935,38 +957,26 @@ export default function Dashboard() {
 
       {/* Setup incomplete banner */}
       {showSetupBanner && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
-          background: '#1c0808', borderBottom: '2px solid #ef4444',
-          padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 14,
-        }}>
-          <span style={{ fontSize: 22 }}>⚠️</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ color: '#f87171', fontWeight: 700, fontSize: 14 }}>
-              Bot Paused — Setup Incomplete
-            </div>
-            <div style={{ color: '#fca5a5', fontSize: 13, marginTop: 2 }}>
-              The following must be connected before trading can start:{' '}
+        <div className="setup-banner">
+          <span className="setup-banner-icon">⚠️</span>
+          <div className="setup-banner-body">
+            <div className="setup-banner-title">Bot Paused — Setup Incomplete</div>
+            <div className="setup-banner-desc">
+              Connect{' '}
               {bannerMissing.map((m, i) => (
                 <span key={m}>
                   <strong style={{ color: '#fff' }}>{m}</strong>
                   {i < bannerMissing.length - 1 ? ', ' : ''}
                 </span>
-              ))}.
-              {' '}Go to <strong>Settings → Binance tab</strong> to connect them.
+              ))}
+              {' '}in Settings → Binance tab.
             </div>
           </div>
-          <button
-            onClick={() => setActiveTab('settings')}
-            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#ef4444', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap' }}
-          >
+          <button className="setup-banner-btn" onClick={() => setActiveTab('settings')}>
             Go to Settings
           </button>
-          <button
-            onClick={() => setSetupDismissed(true)}
-            style={{ background: 'transparent', border: '1px solid #ef4444', color: '#f87171', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13 }}
-          >
-            Dismiss
+          <button className="setup-banner-dismiss" onClick={() => setSetupDismissed(true)}>
+            ✕
           </button>
         </div>
       )}
@@ -1230,6 +1240,18 @@ export default function Dashboard() {
               <div className="card greeting-card">
                 <div className="greeting-text">
                   <span className="greeting-hello">Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 18 ? 'Afternoon' : 'Evening'}, {user?.full_name}!</span>
+                  {(() => {
+                    const ts = profile?.last_extension_sync || user?.last_extension_sync;
+                    const diff = ts ? (Date.now() - new Date(ts).getTime()) / 1000 : null;
+                    const online = diff !== null && diff < 60;
+                    const label = !ts ? 'Bot Never Connected' : online ? 'Bot Online' : diff < 3600 ? `Last seen ${Math.floor(diff/60)}m ago` : diff < 86400 ? `Last seen ${Math.floor(diff/3600)}h ago` : `Last seen ${Math.floor(diff/86400)}d ago`;
+                    return (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: online ? '#10b981' : '#9ca3af', marginBottom: 2 }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: online ? '#10b981' : '#6b7280', flexShrink: 0 }} />
+                        {label}
+                      </span>
+                    );
+                  })()}
                   <span className="greeting-sub">Today's Earnings</span>
                   <span className="greeting-amount">KES {(stats?.today?.net_profit || 0).toLocaleString()}</span>
                 </div>
@@ -1449,7 +1471,7 @@ export default function Dashboard() {
                       </span>
                     )}
                     <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
-                      {binanceData.updated_at ? `Synced: ${new Date(binanceData.updated_at).toLocaleTimeString()}` : ''}
+                      {binanceData.updated_at ? `Synced: ${fmtTimeEAT(binanceData.updated_at)}` : ''}
                     </span>
                   </div>
                   {binanceData.balances?.length > 0 ? (
@@ -1518,7 +1540,7 @@ export default function Dashboard() {
                       <Clock size={20} />
                       <h3>Binance Order History</h3>
                       <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
-                        Last synced: {binanceData.updated_at ? new Date(binanceData.updated_at).toLocaleTimeString() : 'Never'}
+                        Last synced: {binanceData.updated_at ? fmtTimeEAT(binanceData.updated_at) : 'Never'}
                       </span>
                     </div>
                     <table className="data-table">
@@ -1583,7 +1605,7 @@ export default function Dashboard() {
                       {order.status.replace('_', ' ')}
                     </td>
                     <td className="mono">{order.account_reference || '-'}</td>
-                    <td>{new Date(order.created_at).toLocaleString()}</td>
+                    <td>{fmtDateEAT(order.created_at)}</td>
                     <td style={{
                       fontVariantNumeric: 'tabular-nums',
                       color: overdue ? '#f97316' : live ? '#facc15' : '#9ca3af',
@@ -1665,7 +1687,7 @@ export default function Dashboard() {
                               </td>
                               <td className="mono">{dep.mpesa_receipt || '-'}</td>
                               <td>KES {dep.balance_after?.toLocaleString() || '-'}</td>
-                              <td>{new Date(dep.created_at).toLocaleString()}</td>
+                              <td>{fmtDateEAT(dep.created_at)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1804,7 +1826,7 @@ export default function Dashboard() {
                                   </span>
                                 </td>
                                 <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: '#9ca3af' }}>
-                                  {new Date(withdrawal.created_at).toLocaleString()}
+                                  {fmtDateEAT(withdrawal.created_at)}
                                 </td>
                                 <td style={{ textAlign: 'right' }}>
                                   {hasFees && (
@@ -1892,7 +1914,7 @@ export default function Dashboard() {
                   const badges = { success: '✓', error: '✕', warning: '⚠', info: '·' };
                   const color = colors[log.level] || '#6b7280';
                   const badge = badges[log.level] || '·';
-                  const time = new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                  const time = fmtTimeEAT(log.time);
                   return (
                     <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '4px 6px', borderRadius: 4, background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
                       <span style={{ color, minWidth: 14, marginTop: 1 }}>{badge}</span>
