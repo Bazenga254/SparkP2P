@@ -40,6 +40,10 @@ const sidebarSections = [
   },
 ];
 
+const fmtDateEAT = (ts) => new Date(ts).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' });
+const fmtTimeEAT = (ts) => new Date(ts).toLocaleTimeString('en-KE', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const fmtDateOnlyEAT = (ts) => new Date(ts).toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi' });
+
 function getGreeting() {
   const h = new Date().getHours();
   if (h < 12) return 'Good morning';
@@ -79,6 +83,9 @@ export default function Admin() {
   }, [dashHidden]);
   const [resetPwLoading, setResetPwLoading] = useState(false);
   const [resetPwMsg, setResetPwMsg] = useState('');
+  const [imAccountInput, setImAccountInput] = useState('');
+  const [imAccountSaving, setImAccountSaving] = useState(false);
+  const [imAccountMsg, setImAccountMsg] = useState('');
   const [resolveRef, setResolveRef] = useState('');
   const [resolveAmount, setResolveAmount] = useState('');
   const [resolveLoading, setResolveLoading] = useState(false);
@@ -747,6 +754,7 @@ export default function Admin() {
     setResetPwMsg('');
     setShowSecurityAnswer(false);
     setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
+    setImAccountInput(trader.settlement_account || ''); setImAccountMsg('');
     try {
       const [detailRes, walletRes, txRes, ordersRes, pnlRes] = await Promise.all([
         api.get(`/admin/traders/${trader.id}/detail`),
@@ -778,6 +786,21 @@ export default function Admin() {
 
   const fmtKES = (v) => `KES ${(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
   const fmtKESFee = (v) => `KES ${(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const fmtLastSeen = (botTs, webTs) => {
+    const now = Date.now();
+    const botDiff = botTs ? (now - new Date(botTs).getTime()) / 1000 : null;
+    const webDiff = webTs ? (now - new Date(webTs).getTime()) / 1000 : null;
+    const botOnline = botDiff !== null && botDiff < 60;
+    const webOnline = webDiff !== null && webDiff < 300; // 5-min window (stats poll every 2 min)
+    if (botOnline) return { label: 'Bot Online', online: true };
+    if (webOnline) return { label: 'Online', online: true };
+    // Use whichever activity was more recent for the "last seen" label
+    const diff = [botDiff, webDiff].filter(d => d !== null).reduce((a, b) => Math.min(a, b), Infinity);
+    if (diff === Infinity) return { label: 'Never', online: false };
+    if (diff < 3600) return { label: `${Math.floor(diff / 60)}m ago`, online: false };
+    if (diff < 86400) return { label: `${Math.floor(diff / 3600)}h ago`, online: false };
+    return { label: `${Math.floor(diff / 86400)}d ago`, online: false };
+  };
 
   // Compute max volume for chart scaling
   const maxVolume = analytics?.monthly_volumes?.length
@@ -1144,7 +1167,7 @@ export default function Admin() {
                     <span className="adm-stat-value">
                       {dashHidden ? '••••••' : (paybillBalance?.available != null ? fmtKES(paybillBalance.available) : '—')}
                     </span>
-                    {!dashHidden && paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Updated: {new Date(paybillBalance.updated_at).toLocaleTimeString()} · {paybillBalance.source === 'realtime' ? 'live' : 'Safaricom'}</span>}
+                    {!dashHidden && paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Updated: {fmtTimeEAT(paybillBalance.updated_at)} · {paybillBalance.source === 'realtime' ? 'live' : 'Safaricom'}</span>}
                     {!dashHidden && !paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Click to refresh</span>}
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4' }}>
@@ -1368,7 +1391,7 @@ export default function Admin() {
                                 {tx.status}
                               </span>
                             </td>
-                            <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '-'}</td>
+                            <td>{tx.created_at ? fmtDateEAT(tx.created_at) : '-'}</td>
                           </tr>
                         ))}
                         {transactions.transactions.length === 0 && (
@@ -1471,7 +1494,7 @@ export default function Admin() {
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite' }} />
                         Live · updates every 10s
                       </span>
-                      {fiatLastUpdated && <span style={{ fontSize: 11, color: '#4b5563' }}>Last: {fiatLastUpdated.toLocaleTimeString()}</span>}
+                      {fiatLastUpdated && <span style={{ fontSize: 11, color: '#4b5563' }}>Last: {fmtTimeEAT(fiatLastUpdated)}</span>}
                     </div>
                     <div className="adm-table-wrap">
                       <table className="adm-table">
@@ -1503,7 +1526,7 @@ export default function Admin() {
                               <td className="mono" style={{ color: '#f59e0b' }}>{tx.mpesa_transaction_id}</td>
                               <td className="mono">{tx.bill_ref_number}</td>
                               <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
-                              <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '-'}</td>
+                              <td>{tx.created_at ? fmtDateEAT(tx.created_at) : '-'}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1555,7 +1578,7 @@ export default function Admin() {
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite' }} />
                         Live · updates every 10s
                       </span>
-                      {txLastUpdated && <span style={{ fontSize: 11, color: '#4b5563' }}>Last: {txLastUpdated.toLocaleTimeString()}</span>}
+                      {txLastUpdated && <span style={{ fontSize: 11, color: '#4b5563' }}>Last: {fmtTimeEAT(txLastUpdated)}</span>}
                     </div>
                     <div className="adm-table-wrap">
                       <table className="adm-table">
@@ -1580,7 +1603,7 @@ export default function Admin() {
                               <td>{o.counterparty}</td>
                               <td style={{ color: '#ef4444', fontSize: 12 }}>{o.platform_fee ? fmtKES(o.platform_fee) : '—'}</td>
                               <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
-                              <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '-'}</td>
+                              <td>{o.created_at ? fmtDateEAT(o.created_at) : '-'}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1619,7 +1642,7 @@ export default function Admin() {
                       <th>Name</th>
                       <th>Email</th>
                       <th>Phone</th>
-                      <th>Binance</th>
+                      <th>Bot</th>
                       <th>Trades</th>
                       <th>Volume</th>
                       <th>Tier</th>
@@ -1635,9 +1658,12 @@ export default function Admin() {
                         <td>{t.email}</td>
                         <td>{t.phone}</td>
                         <td>
-                          <span className={`adm-badge ${t.binance_connected ? 'green' : 'dim'}`}>
-                            {t.binance_connected ? 'Yes' : 'No'}
-                          </span>
+                          {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_web_active); return (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: s.online ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.15)', color: s.online ? '#10b981' : '#9ca3af', border: `1px solid ${s.online ? 'rgba(16,185,129,0.3)' : 'rgba(107,114,128,0.3)'}` }}>
+                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.online ? '#10b981' : '#6b7280', flexShrink: 0 }} />
+                              {s.label}
+                            </span>
+                          ); })()}
                         </td>
                         <td>{t.total_trades}</td>
                         <td>KES {t.total_volume.toLocaleString()}</td>
@@ -1717,6 +1743,12 @@ export default function Admin() {
                             <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${tierColor}22`, color: tierColor, border: `1px solid ${tierColor}44` }}>{t.tier === 'standard' ? 'Free' : t.tier}</span>
                             <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(156,163,175,0.15)', color: '#9ca3af', border: '1px solid rgba(156,163,175,0.3)' }}>{t.role || 'trader'}</span>
                             {t.binance_connected && <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' }}>Binance ✓</span>}
+                            {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_login); return (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: s.online ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.12)', color: s.online ? '#10b981' : '#9ca3af', border: `1px solid ${s.online ? 'rgba(16,185,129,0.3)' : 'rgba(107,114,128,0.25)'}` }}>
+                                <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.online ? '#10b981' : '#6b7280', flexShrink: 0 }} />
+                                {s.online ? s.label : `Last seen ${s.label}`}
+                              </span>
+                            ); })()}
                           </div>
                         </div>
                         {/* Quick actions */}
@@ -1761,8 +1793,10 @@ export default function Admin() {
                             ['Phone', t.phone],
                             ['Trades', t.total_trades ?? '—'],
                             ['Volume', fmtKES(t.total_volume)],
-                            ['Joined', t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'],
-                            ['Last Login', t.last_login ? new Date(t.last_login).toLocaleString() : '—'],
+                            ['Joined', t.created_at ? fmtDateOnlyEAT(t.created_at) : '—'],
+                            ['Last Login', t.last_login ? fmtDateEAT(t.last_login) : '—'],
+                            ['Bot Last Sync', t.last_seen_at ? fmtDateEAT(t.last_seen_at) : '—'],
+                            ['Web Last Active', t.last_login ? fmtDateEAT(t.last_login) : '—'],
                             ['Security Q', t.security_question || '—'],
                           ].map(([label, value]) => (
                             <div key={label}>
@@ -1892,7 +1926,7 @@ export default function Admin() {
                                   <tbody>
                                     {[...traderPnl.daily].reverse().map(row => (
                                       <tr key={row.date}>
-                                        <td style={{ color: '#9ca3af' }}>{new Date(row.date + 'T00:00:00').toLocaleDateString('en-KE', { weekday: 'short', month: 'short', day: 'numeric' })}</td>
+                                        <td style={{ color: '#9ca3af' }}>{new Date(row.date + 'T12:00:00Z').toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', weekday: 'short', month: 'short', day: 'numeric' })}</td>
                                         <td><span style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', padding: '2px 8px', borderRadius: 10, fontSize: 12, fontWeight: 600 }}>{row.trades}</span></td>
                                         <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 600 }}>{row.revenue > 0 ? `+KES ${row.revenue.toLocaleString()}` : '—'}</td>
                                         <td style={{ textAlign: 'right', color: '#ef4444' }}>{row.fees > 0 ? `-KES ${row.fees.toLocaleString()}` : '—'}</td>
@@ -1918,7 +1952,7 @@ export default function Admin() {
                       <div className="adm-card-header">
                         <h3>Withdrawal Method</h3>
                         {t.settlement_changed_at && (
-                          <span className="adm-card-count">Changed {new Date(t.settlement_changed_at).toLocaleDateString()}</span>
+                          <span className="adm-card-count">Changed {fmtDateOnlyEAT(t.settlement_changed_at)}</span>
                         )}
                       </div>
                       <div style={{ padding: '16px 20px 20px' }}>
@@ -2016,6 +2050,45 @@ export default function Admin() {
                       </div>
                     </div>
 
+                    {/* I&M Debit Account */}
+                    <div className="adm-card" style={{ marginBottom: 16 }}>
+                      <div className="adm-card-header">
+                        <h3>I&amp;M Bank Debit Account</h3>
+                        <span className="adm-card-count" style={{ color: t.settlement_account ? '#10b981' : '#ef4444' }}>
+                          {t.settlement_account ? `Set: ${t.settlement_account}` : 'Not configured — bot cannot open I&M'}
+                        </span>
+                      </div>
+                      <div style={{ padding: '12px 20px 20px' }}>
+                        <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
+                          The I&M Bank account number the bot uses to make P2P payments on this trader's behalf. Without this the I&M tab will not open.
+                        </p>
+                        <div style={{ display: 'flex', gap: 10 }}>
+                          <input
+                            value={imAccountInput}
+                            onChange={e => setImAccountInput(e.target.value)}
+                            placeholder="e.g. 00108094726050"
+                            style={{ flex: 1, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }}
+                          />
+                          <button
+                            disabled={imAccountSaving}
+                            onClick={async () => {
+                              setImAccountSaving(true); setImAccountMsg('');
+                              try {
+                                await api.put(`/admin/traders/${t.id}/im-account?account=${encodeURIComponent(imAccountInput.trim())}`);
+                                setViewingTrader(prev => ({ ...prev, settlement_account: imAccountInput.trim() }));
+                                setImAccountMsg('Saved!');
+                              } catch (e) { setImAccountMsg('Failed to save.'); }
+                              setImAccountSaving(false);
+                            }}
+                            style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', fontWeight: 700, fontSize: 13, cursor: imAccountSaving ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+                          >
+                            {imAccountSaving ? 'Saving…' : 'Save'}
+                          </button>
+                        </div>
+                        {imAccountMsg && <div style={{ marginTop: 8, fontSize: 12, color: imAccountMsg === 'Saved!' ? '#10b981' : '#ef4444' }}>{imAccountMsg}</div>}
+                      </div>
+                    </div>
+
                     {/* Resolve Payment */}
                     <div className="adm-card" style={{ marginBottom: 16, border: '1px solid rgba(245,158,11,0.3)' }}>
                       <div className="adm-card-header">
@@ -2099,7 +2172,7 @@ export default function Admin() {
                       return (
                         <div className="adm-card" style={{ marginBottom: 16 }}>
                           <div className="adm-card-header">
-                            <h3>Recent Transactions</h3>
+                            <h3>Recent Activity</h3>
                             <span className="adm-card-count">{viewingTraderTx.length} total</span>
                           </div>
                           <div className="adm-table-wrap">
@@ -2124,11 +2197,11 @@ export default function Admin() {
                                     <td style={{ textTransform: 'capitalize' }}>{(tx.transaction_type || '').replace(/_/g, ' ')}</td>
                                     <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
                                     <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>{tx.direction === 'inbound' ? '+' : '-'}{fmtKESFee(tx.amount)}</td>
-                                    <td style={{ color: '#9ca3af' }}>{fmtKES(tx.balance_after)}</td>
-                                    <td className="mono" style={{ color: '#f59e0b', fontSize: 11 }}>{tx.mpesa_transaction_id || '—'}</td>
+                                    <td style={{ color: '#9ca3af' }}>{tx.balance_after != null ? fmtKES(tx.balance_after) : '—'}</td>
+                                    <td className="mono" style={{ color: '#f59e0b', fontSize: 11 }}>{tx.mpesa_transaction_id || tx.bill_ref_number || '—'}</td>
                                     <td style={{ fontSize: 12, color: '#9ca3af', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.description || '—'}</td>
                                     <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
-                                    <td>{tx.created_at ? new Date(tx.created_at).toLocaleString() : '—'}</td>
+                                    <td>{tx.created_at ? fmtDateEAT(tx.created_at) : '—'}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -2187,7 +2260,7 @@ export default function Admin() {
                                     <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${(o.price).toLocaleString()}/${o.asset || 'USDT'}` : '—'}</td>
                                     <td style={{ fontSize: 12 }}>{o.counterparty || '—'}</td>
                                     <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
-                                    <td>{o.created_at ? new Date(o.created_at).toLocaleString() : '—'}</td>
+                                    <td>{o.created_at ? fmtDateEAT(o.created_at) : '—'}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -2255,7 +2328,7 @@ export default function Admin() {
                             <td><span className={`adm-badge ${d.side === 'BUY' ? 'green' : 'red'}`}>{d.side}</span></td>
                             <td>KES {d.fiat_amount.toLocaleString()}</td>
                             <td>{d.risk_score || '-'}</td>
-                            <td>{new Date(d.created_at).toLocaleString()}</td>
+                            <td>{fmtDateEAT(d.created_at)}</td>
                             <td>
                               <button
                                 onClick={() => { setResolveModal(d); setResolveAction('cancel'); setResolveNote(''); }}
@@ -2394,7 +2467,7 @@ export default function Admin() {
                               #{ticket.id} — {ticket.subject || 'No subject'}
                             </div>
                             <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
-                              Trader #{ticket.trader_id} · {new Date(ticket.updated_at).toLocaleString()}
+                              Trader #{ticket.trader_id} · {fmtDateEAT(ticket.updated_at)}
                               {ticket.escalation_reason && (
                                 <span style={{ color: '#f59e0b', marginLeft: 6 }}>
                                   ⚡ {ticket.escalation_reason}
@@ -2436,7 +2509,7 @@ export default function Admin() {
                                       wordBreak: 'break-word',
                                     }}>
                                       <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginBottom: 3 }}>
-                                        {m.role === 'user' ? 'Trader' : m.role === 'admin' ? 'Admin' : 'AI Support'} · {m.ts ? new Date(m.ts).toLocaleTimeString() : ''}
+                                        {m.role === 'user' ? 'Trader' : m.role === 'admin' ? 'Admin' : 'AI Support'} · {m.ts ? fmtTimeEAT(m.ts) : ''}
                                       </div>
                                       {m.content}
                                       {m.attachment_url && (
@@ -2581,7 +2654,7 @@ export default function Admin() {
                             <td>{p.sender_name || '—'}</td>
                             <td className="mono" style={{ color: p.bill_ref_number ? '#f59e0b' : '#ef4444' }}>{p.bill_ref_number || 'No account'}</td>
                             <td className="mono" style={{ fontSize: 11 }}>{p.mpesa_transaction_id || '—'}</td>
-                            <td style={{ color: '#6b7280', fontSize: 12 }}>{new Date(p.created_at).toLocaleString()}</td>
+                            <td style={{ color: '#6b7280', fontSize: 12 }}>{fmtDateEAT(p.created_at)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -2614,7 +2687,7 @@ export default function Admin() {
                             </td>
                             <td style={{ color: '#6b7280', fontSize: 12 }}>{p.remarks || '—'}</td>
                             <td className="mono" style={{ fontSize: 11 }}>{p.mpesa_transaction_id || '—'}</td>
-                            <td style={{ color: '#6b7280', fontSize: 12 }}>{new Date(p.created_at).toLocaleString()}</td>
+                            <td style={{ color: '#6b7280', fontSize: 12 }}>{fmtDateEAT(p.created_at)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -2697,7 +2770,7 @@ export default function Admin() {
                         <tbody>
                           {revBreakdown.transactions.map((tx) => (
                             <tr key={tx.id}>
-                              <td style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>{new Date(tx.date).toLocaleString()}</td>
+                              <td style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>{fmtDateEAT(tx.date)}</td>
                               <td>
                                 <div style={{ fontWeight: 500, fontSize: 13 }}>{tx.trader_name}</div>
                                 <div style={{ fontSize: 11, color: '#6b7280' }}>{tx.trader_phone}</div>
@@ -2860,14 +2933,14 @@ export default function Admin() {
                           </span>
                         </td>
                         <td style={{ fontSize: 12, color: '#9ca3af' }}>
-                          {wd.created_at ? new Date(wd.created_at).toLocaleString() : '—'}
+                          {wd.created_at ? fmtDateEAT(wd.created_at) : '—'}
                         </td>
                         <td style={{ fontSize: 12 }}>
                           {wd.processed_by ? (
                             <>
                               <div style={{ fontWeight: 500 }}>{wd.processed_by}</div>
                               <div style={{ color: '#6b7280', fontSize: 11 }}>
-                                {wd.processed_at ? new Date(wd.processed_at).toLocaleString() : ''}
+                                {wd.processed_at ? fmtDateEAT(wd.processed_at) : ''}
                               </div>
                             </>
                           ) : <span style={{ color: '#4b5563' }}>—</span>}
@@ -3096,7 +3169,7 @@ export default function Admin() {
                             <tbody>
                               {pageLogs.map(log => (
                                 <tr key={log.id}>
-                                  <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{log.created_at ? new Date(log.created_at).toLocaleString() : '—'}</td>
+                                  <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{log.created_at ? fmtDateEAT(log.created_at) : '—'}</td>
                                   <td>#{log.actor_id}</td>
                                   <td><span style={{ background: log.actor_role === 'admin' ? '#7c3aed22' : '#0e3a5a', color: log.actor_role === 'admin' ? '#a78bfa' : '#38bdf8', borderRadius: 4, padding: '2px 7px', fontSize: 11, fontWeight: 600 }}>{log.actor_role}</span></td>
                                   <td style={{ fontSize: 12, color: '#f59e0b' }}>{log.action}</td>
@@ -3208,10 +3281,10 @@ export default function Admin() {
                             {sw.mpesa_conversation_id ? sw.mpesa_conversation_id.substring(0, 20) + '...' : '—'}
                           </td>
                           <td style={{ padding: '10px 12px', color: '#6b7280', fontSize: 11 }}>
-                            {sw.created_at ? new Date(sw.created_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                            {sw.created_at ? new Date(sw.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '—'}
                           </td>
                           <td style={{ padding: '10px 12px', color: '#6b7280', fontSize: 11 }}>
-                            {sw.completed_at ? new Date(sw.completed_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                            {sw.completed_at ? new Date(sw.completed_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '—'}
                           </td>
                           <td style={{ padding: '10px 12px' }}>
                             {sw.status === 'failed' && (
@@ -3299,7 +3372,7 @@ export default function Admin() {
                           return (
                             <tr key={tx.id} style={{ borderBottom: '1px solid var(--border)' }}>
                               <td style={{ padding: '10px 12px', color: '#9ca3af', fontSize: 11, whiteSpace: 'nowrap' }}>
-                                {tx.created_at ? new Date(tx.created_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                                {tx.created_at ? new Date(tx.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '—'}
                               </td>
                               <td style={{ padding: '10px 12px' }}>
                                 <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
@@ -3857,7 +3930,7 @@ export default function Admin() {
                                 )}
                               </td>
                               <td style={{ padding: '12px 14px', color: '#6b7280', whiteSpace: 'nowrap' }}>
-                                {r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : '—'}
+                                {r.submitted_at ? fmtDateOnlyEAT(r.submitted_at) : '—'}
                               </td>
                               <td style={{ padding: '12px 14px' }}>
                                 {r.invite_sent ? (

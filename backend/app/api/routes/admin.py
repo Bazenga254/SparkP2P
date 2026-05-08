@@ -93,7 +93,15 @@ async def admin_dashboard(
     )
     active_traders = result.scalar()
 
-    # Today's completed/released orders only
+    # All orders created today (any status)
+    result = await db.execute(
+        select(func.count(Order.id)).where(
+            Order.created_at >= today_start,
+        )
+    )
+    today_orders = result.scalar()
+
+    # Completed/released orders today + their volume
     completed_statuses = [OrderStatus.RELEASED, OrderStatus.COMPLETED]
     result = await db.execute(
         select(
@@ -104,7 +112,7 @@ async def admin_dashboard(
             Order.status.in_(completed_statuses),
         )
     )
-    today_orders, today_volume = result.one()
+    completed_today, today_volume = result.one()
 
     # Today's withdrawal fees — only count completed fees (not pending/cancelled/failed)
     result = await db.execute(
@@ -121,9 +129,6 @@ async def admin_dashboard(
         )
     )
     today_revenue = float(result.scalar() or 0)
-
-    # Completed orders today (subset of the above)
-    completed_today = today_orders
 
     # Disputed orders
     result = await db.execute(
@@ -213,6 +218,8 @@ async def list_traders(
             "total_trades": t.total_trades,
             "total_volume": t.total_volume,
             "created_at": t.created_at.isoformat() if t.created_at else "",
+            "last_seen_at": t.last_extension_sync.isoformat() if t.last_extension_sync else None,
+            "last_web_active": t.last_login.isoformat() if t.last_login else None,
         }
         for t in traders
     ]
@@ -331,6 +338,20 @@ async def get_trader_detail(
         detail=f"Viewed detail for {trader.full_name}",
     )
 
+    # Live counts from orders table — more accurate than stale model columns
+    counts_r = await db.execute(
+        select(
+            func.count(Order.id).label("cnt"),
+            func.coalesce(func.sum(Order.fiat_amount), 0).label("vol"),
+        ).where(
+            Order.trader_id == trader_id,
+            Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
+        )
+    )
+    counts_row = counts_r.one()
+    live_trades = int(counts_row.cnt or 0)
+    live_volume = float(counts_row.vol or 0)
+
     return {
         "security_question": trader.security_question or "",
         "security_answer": (getattr(trader, 'security_answer_plain', '') or "") if is_full_admin else "— restricted —",
@@ -344,8 +365,9 @@ async def get_trader_detail(
         "phone": trader.phone or "" if is_full_admin else mask_phone(trader.phone),
         "created_at": str(trader.created_at) if trader.created_at else "",
         "last_login": trader.last_login.isoformat() if trader.last_login else "",
-        "total_trades": trader.total_trades or 0,
-        "total_volume": float(trader.total_volume or 0),
+        "last_seen_at": trader.last_extension_sync.isoformat() if trader.last_extension_sync else None,
+        "total_trades": max(trader.total_trades or 0, live_trades),
+        "total_volume": max(float(trader.total_volume or 0), live_volume),
     }
 
 
@@ -388,19 +410,31 @@ async def get_trader_transactions(
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a trader's recent wallet transactions."""
+    """Get a trader's recent activity: wallet transactions + P2P orders combined."""
     from app.models.wallet import WalletTransaction
     from sqlalchemy import desc
-    result = await db.execute(
+
+    wallet_result = await db.execute(
         select(WalletTransaction)
         .where(WalletTransaction.trader_id == trader_id)
         .order_by(desc(WalletTransaction.created_at))
         .limit(limit)
     )
-    txns = result.scalars().all()
-    return [
-        {
+    txns = wallet_result.scalars().all()
+
+    orders_result = await db.execute(
+        select(Order)
+        .where(Order.trader_id == trader_id)
+        .order_by(desc(Order.created_at))
+        .limit(limit)
+    )
+    orders = orders_result.scalars().all()
+
+    rows = []
+    for t in txns:
+        rows.append({
             "id": t.id,
+            "record_type": "wallet",
             "transaction_type": t.transaction_type.value if hasattr(t.transaction_type, 'value') else str(t.transaction_type),
             "direction": "inbound" if t.amount >= 0 else "outbound",
             "amount": abs(t.amount),
@@ -410,9 +444,26 @@ async def get_trader_transactions(
             "bill_ref_number": "",
             "status": t.status or "completed",
             "created_at": t.created_at.isoformat() if t.created_at else "",
-        }
-        for t in txns
-    ]
+        })
+    for o in orders:
+        side = o.side.value if hasattr(o.side, 'value') else str(o.side)
+        status = o.status.value if hasattr(o.status, 'value') else str(o.status)
+        rows.append({
+            "id": o.id,
+            "record_type": "order",
+            "transaction_type": f"p2p_{side}",
+            "direction": "inbound" if side == "sell" else "outbound",
+            "amount": o.fiat_amount,
+            "balance_after": None,
+            "description": f"P2P {side.upper()} — {o.counterparty_name or 'Unknown'} — {o.binance_order_number or ''}",
+            "mpesa_transaction_id": "",
+            "bill_ref_number": o.binance_order_number or "",
+            "status": status,
+            "created_at": o.created_at.isoformat() if o.created_at else "",
+        })
+
+    rows.sort(key=lambda r: r["created_at"], reverse=True)
+    return rows[:limit]
 
 
 @router.get("/traders/{trader_id}/orders")
@@ -672,6 +723,23 @@ async def update_trader_tier(
     await db.commit()
 
     return {"status": "updated", "trader_id": trader_id, "tier": tier}
+
+
+@router.put("/traders/{trader_id}/im-account")
+async def update_trader_im_account(
+    trader_id: int,
+    account: str,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set a trader's I&M Bank debit account number used by the bot to make payments."""
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    trader.settlement_account = account.strip() or None
+    await db.commit()
+    return {"status": "updated", "trader_id": trader_id, "im_account": trader.settlement_account}
 
 
 @router.get("/orders/disputed")
@@ -1930,7 +1998,7 @@ async def get_trader_pnl(
 
     since = since_eat.astimezone(timezone.utc)
 
-    # Fetch all wallet transactions for trader in period
+    # Fetch all wallet transactions for trader in period (for revenue and fees)
     result = await db.execute(
         select(WalletTransaction)
         .where(
@@ -1942,9 +2010,27 @@ async def get_trader_pnl(
     )
     txns = result.scalars().all()
 
-    # Build per-day buckets (keyed by Kenya date)
+    # Fetch completed sell orders in period — used for trade counts so they are
+    # always accurate even when wallet SELL_CREDIT transactions are missing.
+    orders_result = await db.execute(
+        select(Order).where(
+            Order.trader_id == trader_id,
+            Order.status == OrderStatus.RELEASED,
+            Order.created_at >= since,
+        )
+    )
+    sell_orders = orders_result.scalars().all()
+
     from collections import defaultdict
-    buckets: dict = defaultdict(lambda: {"revenue": 0.0, "fees": 0.0, "trades": 0})
+
+    # Per-day sell order counts keyed by Kenya date
+    order_buckets: dict = defaultdict(int)
+    for o in sell_orders:
+        day_key = o.created_at.astimezone(EAT).strftime("%Y-%m-%d")
+        order_buckets[day_key] += 1
+
+    # Build per-day revenue/fee buckets (keyed by Kenya date)
+    buckets: dict = defaultdict(lambda: {"revenue": 0.0, "fees": 0.0})
 
     REVENUE_TYPES = {TransactionType.SELL_CREDIT}
     FEE_TYPES = {TransactionType.PLATFORM_FEE, TransactionType.SETTLEMENT_FEE, TransactionType.DAILY_VOLUME_FEE}
@@ -1953,7 +2039,6 @@ async def get_trader_pnl(
         day_key = t.created_at.astimezone(EAT).strftime("%Y-%m-%d")
         if t.transaction_type in REVENUE_TYPES:
             buckets[day_key]["revenue"] += t.amount
-            buckets[day_key]["trades"] += 1
         elif t.transaction_type in FEE_TYPES and not (t.description or "").startswith("[CANCELLED"):
             buckets[day_key]["fees"] += abs(t.amount)
 
@@ -1961,14 +2046,14 @@ async def get_trader_pnl(
     daily = []
     for i in range(days):
         d = (since_eat + timedelta(days=i)).strftime("%Y-%m-%d")
-        b = buckets.get(d, {"revenue": 0.0, "fees": 0.0, "trades": 0})
+        b = buckets.get(d, {"revenue": 0.0, "fees": 0.0})
         net = round(b["revenue"] - b["fees"], 2)
         daily.append({
             "date": d,
             "revenue": round(b["revenue"], 2),
             "fees": round(b["fees"], 2),
             "net": net,
-            "trades": b["trades"],
+            "trades": order_buckets.get(d, 0),
         })
 
     total_revenue = round(sum(d["revenue"] for d in daily), 2)
