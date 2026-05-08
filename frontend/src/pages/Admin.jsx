@@ -1359,17 +1359,17 @@ export default function Admin() {
 
               {/* Row 5: Recent Transactions + Top Traders */}
               <div className="adm-two-col" style={{ marginTop: 16 }}>
-                {/* Recent Transactions */}
+                {/* Recent Orders */}
                 <div className="adm-card" style={{ flex: '3 1 0' }}>
                   <div className="adm-card-header">
-                    <h3>Recent Transactions</h3>
-                    <span className="adm-card-count">{transactions.total} total</span>
+                    <h3>Recent Orders</h3>
+                    <span className="adm-card-count">{orders.total} today</span>
                   </div>
                   <div className="adm-table-wrap">
                     <table className="adm-table">
                       <thead>
                         <tr>
-                          <th>Type</th>
+                          <th>Side</th>
                           <th>Amount</th>
                           <th>Trader</th>
                           <th>Status</th>
@@ -1377,25 +1377,25 @@ export default function Admin() {
                         </tr>
                       </thead>
                       <tbody>
-                        {transactions.transactions.slice(0, 10).map((tx) => (
-                          <tr key={tx.id}>
+                        {orders.orders.slice(0, 10).map((o) => (
+                          <tr key={o.id}>
                             <td>
-                              <span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>
-                                {tx.direction === 'inbound' ? 'IN' : 'OUT'}
+                              <span className={`adm-badge ${o.side === 'sell' ? 'green' : 'yellow'}`}>
+                                {o.side?.toUpperCase()}
                               </span>
                             </td>
-                            <td>{fmtKES(tx.amount)}</td>
-                            <td>{tx.trader_name}</td>
+                            <td>{fmtKES(o.fiat_amount)}</td>
+                            <td>{o.trader_name}</td>
                             <td>
-                              <span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>
-                                {tx.status}
+                              <span className={`adm-badge ${o.status === 'completed' || o.status === 'released' ? 'green' : o.status === 'cancelled' ? 'red' : 'dim'}`}>
+                                {o.status}
                               </span>
                             </td>
-                            <td>{tx.created_at ? fmtDateEAT(tx.created_at) : '-'}</td>
+                            <td>{o.created_at ? fmtDateEAT(o.created_at) : '-'}</td>
                           </tr>
                         ))}
-                        {transactions.transactions.length === 0 && (
-                          <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 30 }}>No transactions today</td></tr>
+                        {orders.orders.length === 0 && (
+                          <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 30 }}>No orders today</td></tr>
                         )}
                       </tbody>
                     </table>
