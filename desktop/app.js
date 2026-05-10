@@ -2885,10 +2885,73 @@ async function detectOrderState(page) {
 
 // ── Counterparty Due Diligence helpers ────────────────────────────────────────
 
-function extractBuyerStats(pageText) {
-  // "48 orders / 30 days" — 30-day count
+async function fetchCounterpartyStats(page, orderNumber, side) {
+  // side: 'buyer' for sell orders (we screen who's buying from us)
+  //       'seller' for buy orders (we screen who we're paying)
+  // Uses Binance's internal browser API — same endpoints the P2P web UI calls.
+  // No API keys needed: runs inside the logged-in browser session via page.evaluate().
+  try {
+    const stats = await page.evaluate(async (orderNo, counterpartySide) => {
+      try {
+        // Step 1: Fetch order detail to get the counterparty's Binance userNo
+        const detailRes = await fetch('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/trade/get', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderNo }),
+          credentials: 'include',
+        });
+        if (!detailRes.ok) return null;
+        const detail = await detailRes.json();
+        const d = detail?.data;
+        if (!d) return null;
+
+        const userNo = counterpartySide === 'buyer'
+          ? (d.buyerUserNo || d.buyerNo || d.buyer?.userNo)
+          : (d.sellerUserNo || d.sellerNo || d.seller?.userNo || d.advertiserUserNo);
+        if (!userNo) return null;
+
+        // Step 2: Fetch the counterparty's public profile stats
+        const profileRes = await fetch('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/user/profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userNo }),
+          credentials: 'include',
+        });
+        if (!profileRes.ok) return null;
+        const profile = await profileRes.json();
+        const p = profile?.data;
+        if (!p) return null;
+
+        // Field names vary slightly across Binance API versions — try all known variants
+        const trades_30d =
+          p.monthOrderCount ??
+          p.recentOrderNum ??
+          p.userTradeStatistic?.recentOrderNum ??
+          null;
+
+        const trades_all =
+          p.totalOrderCount ??
+          p.allOrderCount ??
+          p.userTradeStatistic?.totalFinishOrder ??
+          p.userTradeStatistic?.allTrade ??
+          null;
+
+        return { trades_30d, trades_all };
+      } catch (_) {
+        return null;
+      }
+    }, orderNumber, side);
+
+    if (stats) {
+      console.log(`[SparkP2P] DD stats via API — 30d: ${stats.trades_30d ?? 'n/a'}, all: ${stats.trades_all ?? 'n/a'}`);
+      return stats;
+    }
+  } catch (_) {}
+
+  // Fallback: parse page text (less reliable but better than nothing)
+  console.log('[SparkP2P] DD: API fetch failed — falling back to page text parsing');
+  const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
   const d30 = pageText.match(/(\d[\d,]*)\s*(?:orders?|trades?)\s*\/\s*30\s*days?/i);
-  // "152 orders" all-time — match only if NOT followed by "/30 days"
   const allMatch = pageText.match(/(\d[\d,]*)\s*(?:orders?|trades?)(?!\s*\/\s*30)/i);
   return {
     trades_30d: d30 ? parseInt(d30[1].replace(/,/g, ''), 10) : null,
@@ -3753,7 +3816,7 @@ async function idleScan(page) {
       // Payment not yet sent -- screen seller first (DD), then extract details and pay
       if (!orderFirstSeenAt[order.orderNumber] && ddEnabled) {
         const sellerNick = order.counterparty || '';
-        const sellerStats = extractBuyerStats(buyText);
+        const sellerStats = await fetchCounterpartyStats(page, order.orderNumber, 'seller');
         const sellerReturning = await checkReturningBuyer(sellerNick);
 
         if (sellerReturning) {
@@ -8087,7 +8150,7 @@ Method selection rules:
             } else {
         // -- Counterparty DD screening - runs before payment instructions are sent --
         if (ddEnabled && action.buyer_nickname) {
-          const stats = extractBuyerStats(pageText);
+          const stats = await fetchCounterpartyStats(page, order_number, 'buyer');
           const isReturning = await checkReturningBuyer(action.buyer_nickname);
 
           if (isReturning) {
