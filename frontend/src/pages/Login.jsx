@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { login, register, sendVerificationCode } from '../services/api';
+import { login, register, sendVerificationCode, validateReferralCode } from '../services/api';
 
 const PASSWORD_RULES = [
   { label: 'At least 8 characters', test: (p) => p.length >= 8 },
@@ -45,9 +45,22 @@ export default function Login() {
   const { loginUser } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const [referralCode, setReferralCode] = useState(searchParams.get('ref') || '');
+  const [referralName, setReferralName] = useState('');
 
   // Show inactivity message if redirected
   const inactivityLogout = searchParams.get('reason') === 'inactivity';
+
+  // Validate referral code if present in URL
+  useEffect(() => {
+    const ref = searchParams.get('ref');
+    if (ref) {
+      setIsRegister(true);
+      validateReferralCode(ref)
+        .then(res => setReferralName(res.data?.affiliate_name || ''))
+        .catch(() => setReferralName(''));
+    }
+  }, []);
 
   // Handle Google OAuth callback
   useEffect(() => {
@@ -242,6 +255,7 @@ export default function Login() {
           email_code: form.email_code,
           security_question: form.security_question,
           security_answer: form.security_answer,
+          ...(referralCode ? { referral_code: referralCode } : {}),
         });
         const role = res.data.role || 'trader';
         loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
@@ -400,6 +414,11 @@ export default function Login() {
           </p>
 
           <form onSubmit={handleSubmit}>
+            {isRegister && referralCode && (
+              <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#f59e0b' }}>
+                🎁 {referralName ? `You were invited by ${referralName}` : 'You\'re signing up via a referral link'} — your referrer earns a commission when you trade.
+              </div>
+            )}
             {isRegister && (
               <>
                 {/* Name disclaimer */}

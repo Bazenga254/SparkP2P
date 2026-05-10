@@ -126,4 +126,11 @@ export const updateEmployeePermissions = (id, permissions) => api.put(`/admin/em
 export const deleteEmployee = (id) => api.delete(`/admin/employees/${id}`);
 export const getMyPermissions = () => api.get('/traders/my-permissions');
 
+// Affiliates
+export const getMyAffiliate = () => api.get('/affiliates/me');
+export const getMyReferrals = () => api.get('/affiliates/me/referrals');
+export const getMyPayouts = () => api.get('/affiliates/me/payouts');
+export const applyForAffiliate = (message = '') => api.post('/affiliates/apply', { message });
+export const validateReferralCode = (code) => api.get(`/affiliates/validate/${code}`);
+
 export default api;

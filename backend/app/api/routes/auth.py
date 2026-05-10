@@ -38,6 +38,7 @@ class RegisterRequest(BaseModel):
     email_code: str  # Verification code
     security_question: str  # Cannot be changed after registration
     security_answer: str  # Hashed before storing
+    referral_code: Optional[str] = None  # Affiliate referral code used at sign-up
 
     @field_validator("full_name")
     @classmethod
@@ -150,6 +151,19 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     full_name = data.full_name.strip() if data.full_name else f"{data.first_name.strip()} {data.last_name.strip()}"
     full_name = full_name.upper()
 
+    # Validate referral code if provided
+    referred_by_code = None
+    if data.referral_code:
+        from app.models.affiliate import Affiliate, AffiliateStatus
+        ref_result = await db.execute(
+            select(Affiliate).where(
+                Affiliate.referral_code == data.referral_code.upper(),
+                Affiliate.status == AffiliateStatus.APPROVED,
+            )
+        )
+        if ref_result.scalar_one_or_none():
+            referred_by_code = data.referral_code.upper()
+
     trader = Trader(
         email=data.email,
         phone=data.phone,
@@ -159,6 +173,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         security_answer_hash=hash_password(data.security_answer.strip().lower()),
         security_answer_plain=data.security_answer.strip().lower(),
         status=TraderStatus.PENDING,
+        referred_by_code=referred_by_code,
     )
     db.add(trader)
     await db.flush()

@@ -3,7 +3,7 @@ import api from '../services/api';
 import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle } from 'lucide-react';
 import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee } from '../services/api';
 
 const sidebarSections = [
@@ -22,6 +22,7 @@ const sidebarSections = [
       { key: 'traders', icon: Users, label: 'All Traders' },
       { key: 'disputes', icon: AlertTriangle, label: 'Disputes' },
       { key: 'unmatched', icon: Banknote, label: 'Unmatched Payments' },
+      { key: 'affiliates', icon: Share2, label: 'Affiliates' },
     ],
   },
   {
@@ -197,6 +198,13 @@ export default function Admin() {
   const [surveyInviting, setSurveyInviting] = useState(null);
   const [surveyMsg, setSurveyMsg] = useState('');
 
+  // Affiliates
+  const [affiliateList, setAffiliateList] = useState([]);
+  const [affiliateStats, setAffiliateStats] = useState(null);
+  const [affiliateFilter, setAffiliateFilter] = useState('all'); // all | pending | approved | rejected
+  const [affiliateLoading, setAffiliateLoading] = useState(false);
+  const [affiliateActionMsg, setAffiliateActionMsg] = useState('');
+
   // Paybill Transactions
   const [paybillTxs, setPaybillTxs] = useState({ transactions: [], total: 0, pages: 1, summary: {} });
   const [paybillPeriod, setPaybillPeriod] = useState('today');
@@ -276,6 +284,45 @@ export default function Admin() {
     } finally {
       setEmpDeleting(null);
     }
+  };
+
+  const loadAffiliates = async () => {
+    setAffiliateLoading(true);
+    try {
+      const [listRes, statsRes] = await Promise.all([
+        api.get('/affiliates/admin/list'),
+        api.get('/affiliates/admin/stats'),
+      ]);
+      setAffiliateList(listRes.data.affiliates || []);
+      setAffiliateStats(statsRes.data);
+    } catch (e) {
+      console.error('Failed to load affiliates', e);
+    } finally {
+      setAffiliateLoading(false);
+    }
+  };
+
+  const handleAffiliateApprove = async (id) => {
+    try {
+      const res = await api.post(`/affiliates/admin/${id}/approve`);
+      setAffiliateActionMsg(res.data.message);
+      loadAffiliates();
+    } catch (e) {
+      setAffiliateActionMsg(e.response?.data?.detail || 'Error');
+    }
+    setTimeout(() => setAffiliateActionMsg(''), 4000);
+  };
+
+  const handleAffiliateReject = async (id) => {
+    const reason = prompt('Rejection reason (optional):') ?? '';
+    try {
+      await api.post(`/affiliates/admin/${id}/reject`, { reason });
+      setAffiliateActionMsg('Rejected');
+      loadAffiliates();
+    } catch (e) {
+      setAffiliateActionMsg(e.response?.data?.detail || 'Error');
+    }
+    setTimeout(() => setAffiliateActionMsg(''), 4000);
   };
 
   const loadSurveyResponses = async () => {
@@ -653,6 +700,7 @@ export default function Admin() {
     if (activeTab === 'paybill') { loadPaybillTxs('today', 1); }
     if (activeTab === 'survey') { loadSurveyResponses(); }
     if (activeTab === 'settings') { loadEmployees(); }
+    if (activeTab === 'affiliates') { loadAffiliates(); }
   }, [activeTab]);
 
   useEffect(() => {
@@ -3843,6 +3891,115 @@ export default function Admin() {
               </div>
             </div>
           )}
+          {/* ==================== AFFILIATES ==================== */}
+          {activeTab === 'affiliates' && (
+            <div>
+              {affiliateActionMsg && (
+                <div style={{ background: '#10b981', color: '#fff', padding: '10px 16px', borderRadius: 8, marginBottom: 16, fontWeight: 600 }}>
+                  {affiliateActionMsg}
+                </div>
+              )}
+
+              {/* Stats row */}
+              {affiliateStats && (
+                <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+                  {[
+                    { label: 'Total', value: affiliateStats.total, color: '#9ca3af' },
+                    { label: 'Pending', value: affiliateStats.pending, color: '#f59e0b' },
+                    { label: 'Approved', value: affiliateStats.approved, color: '#10b981' },
+                    { label: 'Total Owed', value: `KES ${(affiliateStats.total_owed || 0).toLocaleString()}`, color: '#f97316' },
+                  ].map(s => (
+                    <div key={s.label} className="adm-card" style={{ flex: '1 1 120px', padding: '14px 18px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.value}</div>
+                      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Filter tabs */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                {['all', 'pending', 'approved', 'rejected'].map(f => (
+                  <button key={f} onClick={() => setAffiliateFilter(f)}
+                    style={{ padding: '6px 16px', borderRadius: 20, border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: 13,
+                      background: affiliateFilter === f ? '#f59e0b' : '#1f2937', color: affiliateFilter === f ? '#000' : '#9ca3af' }}>
+                    {f.charAt(0).toUpperCase() + f.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              {affiliateLoading ? (
+                <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>Loading...</div>
+              ) : (
+                <div className="adm-card" style={{ padding: 0, overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: '#111827', borderBottom: '1px solid #374151' }}>
+                        {['Trader', 'Email', 'Status', 'Referral Code', 'Referrals', 'Pending (KES)', 'Total Earned', 'Applied', 'Actions'].map(h => (
+                          <th key={h} style={{ padding: '10px 12px', textAlign: 'left', color: '#6b7280', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {affiliateList
+                        .filter(a => affiliateFilter === 'all' || a.status === affiliateFilter)
+                        .map((a, i) => (
+                          <tr key={a.id} style={{ borderBottom: '1px solid #1f2937', background: i % 2 === 0 ? 'transparent' : '#0d1117' }}>
+                            <td style={{ padding: '10px 12px', fontWeight: 600, color: '#f9fafb' }}>{a.trader_name}</td>
+                            <td style={{ padding: '10px 12px', color: '#9ca3af' }}>{a.trader_email}</td>
+                            <td style={{ padding: '10px 12px' }}>
+                              <span style={{ padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700,
+                                background: a.status === 'approved' ? '#065f46' : a.status === 'pending' ? '#78350f' : '#450a0a',
+                                color: a.status === 'approved' ? '#34d399' : a.status === 'pending' ? '#fcd34d' : '#fca5a5' }}>
+                                {a.status.toUpperCase()}
+                              </span>
+                            </td>
+                            <td style={{ padding: '10px 12px', fontFamily: 'monospace', color: '#60a5fa' }}>
+                              {a.referral_code || '—'}
+                            </td>
+                            <td style={{ padding: '10px 12px', textAlign: 'center', color: '#f9fafb' }}>{a.referral_count}</td>
+                            <td style={{ padding: '10px 12px', color: '#f97316', fontWeight: 700 }}>
+                              {a.pending_balance.toLocaleString()}
+                            </td>
+                            <td style={{ padding: '10px 12px', color: '#10b981', fontWeight: 600 }}>
+                              {a.total_earned.toLocaleString()}
+                            </td>
+                            <td style={{ padding: '10px 12px', color: '#6b7280', fontSize: 12 }}>
+                              {a.applied_at ? new Date(a.applied_at).toLocaleDateString('en-KE') : '—'}
+                            </td>
+                            <td style={{ padding: '10px 12px' }}>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                {a.status !== 'approved' && (
+                                  <button onClick={() => handleAffiliateApprove(a.id)}
+                                    style={{ padding: '4px 10px', background: '#10b981', border: 'none', borderRadius: 6, color: '#fff', fontSize: 12, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <Check size={12} /> Approve
+                                  </button>
+                                )}
+                                {a.status !== 'rejected' && (
+                                  <button onClick={() => handleAffiliateReject(a.id)}
+                                    style={{ padding: '4px 10px', background: '#ef4444', border: 'none', borderRadius: 6, color: '#fff', fontSize: 12, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <XCircle size={12} /> Reject
+                                  </button>
+                                )}
+                                {a.status === 'approved' && (
+                                  <span style={{ color: '#34d399', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <Check size={12} /> Active
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                  {affiliateList.filter(a => affiliateFilter === 'all' || a.status === affiliateFilter).length === 0 && (
+                    <p className="adm-empty">No affiliates in this category.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ==================== SURVEY RESPONSES ==================== */}
           {activeTab === 'survey' && (
             <div>

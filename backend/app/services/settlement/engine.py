@@ -137,6 +137,20 @@ class SettlementEngine:
             trader.total_trades += 1
             trader.total_volume += order.fiat_amount
 
+            # Credit affiliate commission if this trader was referred
+            try:
+                from app.api.routes.affiliates import credit_affiliate_commission
+                await credit_affiliate_commission(
+                    db=self.db,
+                    order_id=order.id,
+                    trader_id=trader.id,
+                    referred_by_code=trader.referred_by_code,
+                    platform_fee=platform_fee,
+                    settlement_fee=settlement_fee,
+                )
+            except Exception as e:
+                logger.warning(f"Affiliate commission credit failed for order {order.id}: {e}")
+
             await self.db.commit()
             logger.info(
                 f"Order {order.binance_order_number} settled: "

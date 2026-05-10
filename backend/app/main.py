@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_db, async_session
-from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support, survey
+from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support, survey, affiliates
 from app.services.binance.poller import order_poller
 from app.services.message_templates import seed_default_templates
 from app.services import bot_monitor
@@ -420,25 +420,7 @@ app.include_router(browser.router, prefix="/api/browser", tags=["Browser Automat
 app.include_router(im_bank.router, prefix="/api/im", tags=["I&M Bank"])
 app.include_router(support.router, prefix="/api", tags=["Support"])
 app.include_router(survey.router, prefix="/api/survey", tags=["Survey"])
-
-
-@app.get("/api/download/latest")
-async def download_latest():
-    """Redirect to the latest SparkP2P Windows installer on GitHub."""
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            resp = await client.get(
-                "https://api.github.com/repos/Bazenga254/SparkP2P/releases/latest",
-                headers={"User-Agent": "SparkP2P-Server"},
-            )
-            data = resp.json()
-            exe = next((a for a in data.get("assets", []) if a["name"].endswith(".exe")), None)
-            if exe:
-                return RedirectResponse(exe["browser_download_url"])
-    except Exception:
-        pass
-    # Fallback: send to releases page
-    return RedirectResponse("https://github.com/Bazenga254/SparkP2P/releases/latest")
+app.include_router(affiliates.router, prefix="/api/affiliates", tags=["Affiliates"])
 
 
 @app.get("/health")
@@ -452,7 +434,7 @@ import httpx as _httpx
 from fastapi.responses import RedirectResponse
 
 _release_cache: dict = {}
-_GITHUB_REPO = "Bazenga254/SparkP2P"
+_GITHUB_REPO = "Bazenga254/SparkP2P-releases"
 _CACHE_TTL = 300  # 5 minutes
 
 

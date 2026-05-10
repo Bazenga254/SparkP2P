@@ -31,6 +31,7 @@ class BinanceOrderPoller:
         self.poll_interval = poll_interval  # seconds
         self.running = False
         self._daily_fee_last_run: str = ""  # YYYY-MM-DD of last daily fee run
+        self._affiliate_payout_last_run: str = ""  # YYYY-MM-DD of last Friday payout run
 
     async def start(self):
         """Start the housekeeping loop."""
@@ -57,8 +58,25 @@ class BinanceOrderPoller:
             await self._check_trader_heartbeats(db)
             await self._activate_pending_settlements(db)
             await self._check_settlement_thresholds(db)
+            await self._reconcile_stale_buy_orders(db)
+            await self._run_affiliate_friday_payouts(db)
             # Volume fee removed — revenue from subscriptions + settlement fees only
             # await self._run_daily_volume_fee(db)
+
+    async def _run_affiliate_friday_payouts(self, db: AsyncSession):
+        """Process affiliate payouts every Friday for balances >= KES 5,000."""
+        now = datetime.now(timezone.utc)
+        if now.weekday() != 4:  # 4 = Friday
+            return
+        today_str = now.strftime("%Y-%m-%d")
+        if self._affiliate_payout_last_run == today_str:
+            return
+        try:
+            from app.api.routes.affiliates import process_friday_payouts
+            await process_friday_payouts(db)
+            self._affiliate_payout_last_run = today_str
+        except Exception as e:
+            logger.error(f"Affiliate Friday payout failed: {e}")
 
     async def _run_daily_volume_fee(self, db: AsyncSession):
         """
@@ -87,10 +105,12 @@ class BinanceOrderPoller:
     async def _check_stale_orders(self, db: AsyncSession):
         """
         Mark orders as expired if they've been pending too long.
-        Binance P2P orders typically expire after 15 minutes.
-        We give 20 minutes to account for processing delays.
+        Binance P2P sellers can set payment windows up to 24 hours, so we use
+        a 25-hour cutoff to avoid prematurely expiring long-window orders.
+        The bot reports cancellations/expirations in real-time via reconcileStuckOrders;
+        this is only a safety net for orders the bot never cleaned up.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=20)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=25)
 
         result = await db.execute(
             select(Order).where(
@@ -153,15 +173,29 @@ class BinanceOrderPoller:
 
         for trader in traders:
             try:
-                # Activate the pending method
                 from app.models import SettlementMethod
-                trader.settlement_method = SettlementMethod(trader.pending_settlement_method)
-                trader.settlement_phone = trader.pending_settlement_phone
-                trader.settlement_paybill = trader.pending_settlement_paybill
-                trader.settlement_account = trader.pending_settlement_account
-                trader.settlement_bank_name = trader.pending_settlement_bank_name
+                pending = trader.pending_settlement_method
 
-                # Clear pending
+                if pending == "im_update":
+                    # Targeted I&M update — only change account, preserve M-Pesa phone
+                    trader.settlement_account = trader.pending_settlement_account
+                    trader.settlement_paybill = trader.pending_settlement_paybill or "542542"
+                    trader.settlement_bank_name = trader.pending_settlement_bank_name or "I&M"
+                    trader.settlement_method = SettlementMethod.BANK_PAYBILL
+                elif pending == "mpesa_update":
+                    # Targeted M-Pesa update — only change phone, preserve I&M account
+                    trader.settlement_phone = trader.pending_settlement_phone
+                    if not trader.settlement_account:
+                        trader.settlement_method = SettlementMethod.MPESA
+                else:
+                    # Legacy full-replacement (till / custom paybill / old-style)
+                    trader.settlement_method = SettlementMethod(pending)
+                    trader.settlement_phone = trader.pending_settlement_phone
+                    trader.settlement_paybill = trader.pending_settlement_paybill
+                    trader.settlement_account = trader.pending_settlement_account
+                    trader.settlement_bank_name = trader.pending_settlement_bank_name
+
+                # Clear pending fields
                 trader.pending_settlement_method = None
                 trader.pending_settlement_phone = None
                 trader.pending_settlement_paybill = None
@@ -246,6 +280,41 @@ class BinanceOrderPoller:
                     await engine.batch_settle(trader.id)
             except Exception as e:
                 logger.error(f"Settlement check failed for trader {trader.id}: {e}")
+
+
+    async def _reconcile_stale_buy_orders(self, db: AsyncSession):
+        """
+        Auto-complete BUY orders stuck in PAYMENT_SENT for more than 2 hours.
+        Binance P2P sellers almost always release within 30 minutes of receiving
+        payment — 2 hours is a very conservative cutoff. If the desktop bot missed
+        the completion event (restart, crash, Binance disconnected), this catches it.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+
+        result = await db.execute(
+            select(Order).where(
+                Order.side == OrderSide.BUY,
+                Order.status == OrderStatus.PAYMENT_SENT,
+                Order.payment_sent_at.isnot(None),
+                Order.payment_sent_at < cutoff,
+            )
+        )
+        stale_orders = result.scalars().all()
+
+        for order in stale_orders:
+            hours_waiting = (
+                datetime.now(timezone.utc) - order.payment_sent_at
+            ).total_seconds() / 3600
+            logger.warning(
+                f"BUY order {order.binance_order_number} stuck in PAYMENT_SENT "
+                f"for {hours_waiting:.1f}h — auto-completing"
+            )
+            order.status = OrderStatus.COMPLETED
+            order.released_at = datetime.now(timezone.utc)
+
+        if stale_orders:
+            await db.commit()
+            logger.info(f"Auto-completed {len(stale_orders)} stale BUY order(s)")
 
 
 # Singleton

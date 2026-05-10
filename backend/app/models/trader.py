@@ -123,6 +123,9 @@ class Trader(Base):
     # e.g. {"disputes": true, "orders": true, "chat": true, "transactions": false, "withdrawals": false}
     permissions = Column(JSON, nullable=True)
 
+    # Affiliate referral tracking
+    referred_by_code = Column(String(20), nullable=True)  # referral code used at sign-up
+
     # Login security
     failed_login_attempts = Column(Integer, default=0)
     locked_until = Column(DateTime(timezone=True), nullable=True)

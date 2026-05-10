@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import SupportChat from '../components/SupportChat';
 
@@ -456,6 +456,12 @@ export default function Dashboard() {
   const [checkingUpdate, setCheckingUpdate] = useState(false); // manual check in progress
   const [upToDate, setUpToDate] = useState(null); // { version } when already on latest
   const upToDateTimerRef = useRef(null);
+  const [affiliateData, setAffiliateData] = useState(null); // { affiliate: {...} | null }
+  const [affiliateReferrals, setAffiliateReferrals] = useState(null);
+  const [affiliateApplying, setAffiliateApplying] = useState(false);
+  const [affiliateApplyMsg, setAffiliateApplyMsg] = useState('');
+  const [affiliateCopied, setAffiliateCopied] = useState(false);
+  const [expandedReferral, setExpandedReferral] = useState(null);
 
   // Listen for update events from Electron main process
   useEffect(() => {
@@ -543,6 +549,17 @@ export default function Dashboard() {
     setRefreshing(false);
   };
 
+  const loadAffiliateData = async () => {
+    try {
+      const res = await getMyAffiliate();
+      setAffiliateData(res.data);
+      if (res.data?.affiliate?.status === 'approved') {
+        const refRes = await getMyReferrals();
+        setAffiliateReferrals(refRes.data);
+      }
+    } catch (e) {}
+  };
+
   // Listen for identity mismatch event from desktop bot
   useEffect(() => {
     const handler = (e) => setIdentityError(e.detail?.message || 'Identity verification failed. Please log in with your registered Binance account.');
@@ -619,6 +636,7 @@ export default function Dashboard() {
     const timer = setTimeout(() => {
       if (localStorage.getItem('token')) {
         loadData();
+        loadAffiliateData();
       }
     }, 100);
     const interval = setInterval(() => {
@@ -1183,6 +1201,15 @@ export default function Dashboard() {
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
+        {affiliateData?.affiliate && (
+          <button
+            className={`tab-btn ${activeTab === 'affiliates' ? 'active' : ''}`}
+            onClick={() => setActiveTab('affiliates')}
+            style={{ display: 'flex', alignItems: 'center', gap: 5 }}
+          >
+            <Share2 size={13} /> Affiliates
+          </button>
+        )}
         {!profile?.binance_connected && (
           <button
             className="tab-btn"
@@ -1443,6 +1470,36 @@ export default function Dashboard() {
 
             {/* Spread Calculator */}
             <SpreadCalculator />
+
+            {/* Affiliate Quick-Action Card */}
+            {affiliateData !== null && (
+              <div className="card" style={{ marginBottom: 16 }}>
+                <div className="card-header" style={{ cursor: 'pointer' }} onClick={() => setActiveTab('affiliates')}>
+                  <Share2 size={20} style={{ color: '#f59e0b' }} />
+                  <h3>Affiliates</h3>
+                  {affiliateData?.affiliate?.status === 'approved' && (
+                    <span style={{ marginLeft: 'auto', display: 'flex', gap: 20, fontSize: 13, color: '#9ca3af' }}>
+                      <span><strong style={{ color: '#f59e0b' }}>{affiliateReferrals?.summary?.total_referrals || 0}</strong> referrals</span>
+                      <span>Pending: <strong style={{ color: '#10b981' }}>KES {(affiliateData.affiliate.pending_balance || 0).toLocaleString()}</strong></span>
+                    </span>
+                  )}
+                  {affiliateData?.affiliate?.status === 'pending' && (
+                    <span style={{ marginLeft: 'auto', fontSize: 12, color: '#f59e0b', fontWeight: 600 }}>⏳ Application under review</span>
+                  )}
+                  {affiliateData?.affiliate?.status === 'rejected' && (
+                    <span style={{ marginLeft: 'auto', fontSize: 12, color: '#ef4444', fontWeight: 600 }}>Application rejected</span>
+                  )}
+                  <span style={{ marginLeft: affiliateData?.affiliate ? 12 : 'auto', color: '#3b82f6', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    {affiliateData?.affiliate ? 'View →' : 'Apply as Affiliate →'}
+                  </span>
+                </div>
+                {!affiliateData?.affiliate && (
+                  <div style={{ padding: '8px 0 4px', color: '#9ca3af', fontSize: 13 }}>
+                    Earn 10% commission on fees from every trader you refer. <button onClick={() => setActiveTab('affiliates')} style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', fontWeight: 600, padding: 0 }}>Apply now →</button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Row 4: Recent Orders */}
             <div className="card orders-card">
@@ -1967,6 +2024,179 @@ export default function Dashboard() {
                 })}
                 <div ref={logsEndRef} />
               </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Affiliates Tab ── */}
+        {activeTab === 'affiliates' && (
+          <div>
+            {/* No affiliate record yet — Apply form */}
+            {!affiliateData?.affiliate && (
+              <div className="card" style={{ maxWidth: 520, margin: '0 auto' }}>
+                <div className="card-header">
+                  <Share2 size={20} style={{ color: '#f59e0b' }} />
+                  <h3>Become an Affiliate</h3>
+                </div>
+                <p style={{ color: '#9ca3af', fontSize: 14, margin: '8px 0 20px' }}>
+                  Earn <strong style={{ color: '#f59e0b' }}>10% commission</strong> on all fees we collect from every trader you refer — every single order they make. Payouts every Friday for balances ≥ KES 5,000.
+                </p>
+                {affiliateApplyMsg ? (
+                  <div style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', borderRadius: 8, padding: '12px 16px', color: '#10b981', fontSize: 14 }}>
+                    {affiliateApplyMsg}
+                  </div>
+                ) : (
+                  <button
+                    onClick={async () => {
+                      setAffiliateApplying(true);
+                      try {
+                        await applyForAffiliate();
+                        setAffiliateApplyMsg('Application submitted! We will review and respond shortly.');
+                        await loadAffiliateData();
+                      } catch (e) {
+                        setAffiliateApplyMsg(e?.response?.data?.detail || 'Failed to submit application.');
+                      }
+                      setAffiliateApplying(false);
+                    }}
+                    disabled={affiliateApplying}
+                    style={{ width: '100%', padding: '12px 0', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#000', fontWeight: 700, fontSize: 15, cursor: affiliateApplying ? 'not-allowed' : 'pointer', opacity: affiliateApplying ? 0.7 : 1 }}
+                  >
+                    {affiliateApplying ? 'Submitting...' : 'Apply as Affiliate'}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Pending / Rejected state */}
+            {affiliateData?.affiliate && affiliateData.affiliate.status !== 'approved' && (
+              <div className="card" style={{ maxWidth: 520, margin: '0 auto', textAlign: 'center' }}>
+                <Share2 size={40} style={{ color: affiliateData.affiliate.status === 'rejected' ? '#ef4444' : '#f59e0b', margin: '0 auto 12px' }} />
+                {affiliateData.affiliate.status === 'pending' && (
+                  <>
+                    <h3 style={{ color: '#f59e0b', marginBottom: 8 }}>Application Under Review</h3>
+                    <p style={{ color: '#9ca3af', fontSize: 14 }}>We've received your application and will review it shortly. You'll be notified once approved.</p>
+                  </>
+                )}
+                {affiliateData.affiliate.status === 'rejected' && (
+                  <>
+                    <h3 style={{ color: '#ef4444', marginBottom: 8 }}>Application Rejected</h3>
+                    <p style={{ color: '#9ca3af', fontSize: 14 }}>Unfortunately your application was not approved at this time. Contact support for details.</p>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Approved affiliate dashboard */}
+            {affiliateData?.affiliate?.status === 'approved' && (
+              <>
+                {/* Stats row */}
+                <div className="overview-stats-row" style={{ marginBottom: 16 }}>
+                  <div className="mini-stat-card">
+                    <Users size={18} style={{ color: '#3b82f6', marginBottom: 4 }} />
+                    <span className="mini-stat-value">{affiliateReferrals?.summary?.total_referrals || 0}</span>
+                    <span className="mini-stat-label">Referrals</span>
+                  </div>
+                  <div className="mini-stat-card">
+                    <TrendingUp size={18} style={{ color: '#10b981', marginBottom: 4 }} />
+                    <span className="mini-stat-value">KES {(affiliateData.affiliate.pending_balance || 0).toLocaleString()}</span>
+                    <span className="mini-stat-label">Pending Payout</span>
+                  </div>
+                  <div className="mini-stat-card">
+                    <DollarSign size={18} style={{ color: '#f59e0b', marginBottom: 4 }} />
+                    <span className="mini-stat-value">KES {(affiliateData.affiliate.total_earned || 0).toLocaleString()}</span>
+                    <span className="mini-stat-label">Total Earned</span>
+                  </div>
+                  <div className="mini-stat-card">
+                    <BarChart2 size={18} style={{ color: '#8b5cf6', marginBottom: 4 }} />
+                    <span className="mini-stat-value">KES {(affiliateReferrals?.summary?.this_week_earnings || 0).toLocaleString()}</span>
+                    <span className="mini-stat-label">This Week</span>
+                  </div>
+                </div>
+
+                {/* Referral link card */}
+                <div className="card" style={{ marginBottom: 16 }}>
+                  <div className="card-header">
+                    <Share2 size={18} style={{ color: '#f59e0b' }} />
+                    <h3>Your Referral Link</h3>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                    <div style={{ flex: 1, background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontFamily: 'monospace', fontSize: 13, color: '#e5e7eb', wordBreak: 'break-all' }}>
+                      {affiliateData.affiliate.referral_link || `https://sparkp2p.com/login?ref=${affiliateData.affiliate.referral_code}`}
+                    </div>
+                    <button
+                      onClick={() => {
+                        const link = affiliateData.affiliate.referral_link || `https://sparkp2p.com/login?ref=${affiliateData.affiliate.referral_code}`;
+                        navigator.clipboard.writeText(link).then(() => { setAffiliateCopied(true); setTimeout(() => setAffiliateCopied(false), 2000); });
+                      }}
+                      style={{ padding: '10px 16px', borderRadius: 8, border: 'none', background: affiliateCopied ? '#10b981' : '#3b82f6', color: '#fff', fontWeight: 600, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      <Copy size={14} /> {affiliateCopied ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <p style={{ color: '#6b7280', fontSize: 12, marginTop: 8 }}>
+                    Code: <strong style={{ color: '#f59e0b' }}>{affiliateData.affiliate.referral_code}</strong> · Share this link and earn 10% of all fees from every trader who signs up through it.
+                  </p>
+                </div>
+
+                {/* Referrals list */}
+                <div className="card">
+                  <div className="card-header">
+                    <Users size={18} />
+                    <h3>Your Referrals</h3>
+                    <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{(affiliateReferrals?.referrals || []).length} trader{(affiliateReferrals?.referrals || []).length !== 1 ? 's' : ''}</span>
+                  </div>
+                  {(affiliateReferrals?.referrals || []).length === 0 ? (
+                    <p className="empty-msg" style={{ padding: '20px 0' }}>No referrals yet. Share your link to start earning.</p>
+                  ) : (
+                    <div style={{ marginTop: 8 }}>
+                      {(affiliateReferrals?.referrals || []).map((ref, i) => (
+                        <div key={i} style={{ borderBottom: i < affiliateReferrals.referrals.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                          <div
+                            style={{ display: 'flex', alignItems: 'center', padding: '12px 4px', cursor: ref.weekly_breakdown?.length > 0 ? 'pointer' : 'default' }}
+                            onClick={() => ref.weekly_breakdown?.length > 0 && setExpandedReferral(expandedReferral === i ? null : i)}
+                          >
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontWeight: 600, color: '#e5e7eb', fontSize: 14 }}>{ref.trader_name}</div>
+                              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                                Joined {ref.joined_at ? new Date(ref.joined_at).toLocaleDateString('en-KE') : '—'}
+                              </div>
+                            </div>
+                            <div style={{ textAlign: 'right', marginRight: ref.weekly_breakdown?.length > 0 ? 8 : 0 }}>
+                              <div style={{ fontWeight: 700, color: '#10b981', fontSize: 14 }}>KES {(ref.total_earned || 0).toLocaleString()}</div>
+                              <div style={{ fontSize: 11, color: '#6b7280' }}>Total earned</div>
+                            </div>
+                            {ref.weekly_breakdown?.length > 0 && (
+                              expandedReferral === i ? <ChevronUp size={16} color="#6b7280" /> : <ChevronDown size={16} color="#6b7280" />
+                            )}
+                          </div>
+                          {expandedReferral === i && ref.weekly_breakdown?.length > 0 && (
+                            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 }}>
+                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                                <thead>
+                                  <tr style={{ color: '#6b7280' }}>
+                                    <th style={{ textAlign: 'left', padding: '4px 0', fontWeight: 500 }}>Week</th>
+                                    <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Orders</th>
+                                    <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Commission</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {ref.weekly_breakdown.map((w, wi) => (
+                                    <tr key={wi} style={{ color: '#d1d5db' }}>
+                                      <td style={{ padding: '4px 0' }}>Week of {new Date(w.week_start).toLocaleDateString('en-KE')}</td>
+                                      <td style={{ padding: '4px 0', textAlign: 'right' }}>{w.order_count}</td>
+                                      <td style={{ padding: '4px 0', textAlign: 'right', color: '#10b981', fontWeight: 600 }}>KES {(w.commission || 0).toLocaleString()}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </div>
         )}
