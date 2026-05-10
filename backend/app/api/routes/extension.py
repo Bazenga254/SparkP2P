@@ -19,7 +19,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -60,6 +60,7 @@ class ReportOrdersRequest(BaseModel):
     buy_orders: list[BinanceOrderData] = []
     cancelled_order_numbers: list[str] = []       # Order numbers from Binance Cancelled history tab
     completed_buy_order_numbers: list[str] = []   # BUY order numbers from Binance Completed history tab
+    completed_sell_order_numbers: list[str] = []  # SELL order numbers from Binance Completed history tab
     active_order_numbers: list[str] = []          # Orders bot is actively processing (never auto-cancel these)
 
 
@@ -134,23 +135,68 @@ async def report_orders(
                 Order.binance_order_number == order_number,
                 Order.trader_id == trader.id,
                 Order.side == OrderSide.BUY,
-                Order.status == OrderStatus.PAYMENT_SENT,
-            )
+            ).with_for_update()
         )
         completed_order = comp_result.scalar_one_or_none()
         if completed_order:
-            await _complete_buy_order(completed_order, trader, db)
+            if completed_order.status not in [OrderStatus.COMPLETED, OrderStatus.RELEASED]:
+                if completed_order.status == OrderStatus.PENDING:
+                    completed_order.status = OrderStatus.PAYMENT_SENT
+                await _complete_buy_order(completed_order, trader, db, notify=False)
+        else:
+            # Order completed while bot was offline and full data couldn't be parsed — create stub.
+            stub = Order(
+                trader_id=trader.id,
+                binance_order_number=order_number,
+                side=OrderSide.BUY,
+                status=OrderStatus.COMPLETED,
+                fiat_amount=0,
+                crypto_amount=0,
+                exchange_rate=0,
+                released_at=datetime.now(timezone.utc),
+            )
+            db.add(stub)
+            logger.info(f"Recorded offline-completed buy order {order_number} for trader {trader.id}")
 
-    # Also auto-cancel PENDING orders absent from the active list for >3 minutes
-    # (fallback in case the cancelled tab scan misses something)
-    # Never auto-cancel orders the bot is actively processing on the order detail page
+    # Mark completed sell orders (we released crypto — from Binance Completed history tab)
+    for order_number in data.completed_sell_order_numbers:
+        sell_comp_result = await db.execute(
+            select(Order).where(
+                Order.binance_order_number == order_number,
+                Order.trader_id == trader.id,
+                Order.side == OrderSide.SELL,
+            )
+        )
+        sell_completed = sell_comp_result.scalar_one_or_none()
+        if sell_completed:
+            if sell_completed.status not in [OrderStatus.RELEASED, OrderStatus.COMPLETED]:
+                await _complete_sell_order(sell_completed, trader, db)
+        else:
+            stub = Order(
+                trader_id=trader.id,
+                binance_order_number=order_number,
+                side=OrderSide.SELL,
+                status=OrderStatus.RELEASED,
+                fiat_amount=0,
+                crypto_amount=0,
+                exchange_rate=0,
+                released_at=datetime.now(timezone.utc),
+            )
+            db.add(stub)
+            logger.info(f"Recorded offline-completed sell order {order_number} for trader {trader.id}")
+
+    # Auto-cancel PENDING SELL orders absent from the active list for >8 minutes.
+    # BUY orders are excluded: the bot manages their full lifecycle explicitly (I&M payment
+    # can take 5+ minutes, leaving a second pending buy order unprotected for the entire
+    # duration). Buy-side cancellations are handled by the Binance Cancelled tab scan.
     reported_numbers = {o.orderNumber for o in data.sell_orders + data.buy_orders}
     protected_numbers = set(data.active_order_numbers)
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=3)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=8)
     stale_result = await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,
             Order.status == OrderStatus.PENDING,
+            Order.side == OrderSide.SELL,
             Order.created_at < cutoff,
         )
     )
@@ -164,19 +210,21 @@ async def report_orders(
                 f"(absent from bot report for trader {trader.id})"
             )
 
-    # Reactivate any order the bot is actively processing that got wrongly cancelled
+    # Reactivate any order the bot is actively processing that got wrongly cancelled or expired.
+    # Binance P2P allows payment windows up to 24 hours; the poller must not pre-empt the bot.
     for order_number in protected_numbers:
         react_result = await db.execute(
             select(Order).where(
                 Order.trader_id == trader.id,
                 Order.binance_order_number == order_number,
-                Order.status == OrderStatus.CANCELLED,
+                Order.status.in_([OrderStatus.CANCELLED, OrderStatus.EXPIRED]),
             )
         )
         reactivate = react_result.scalar_one_or_none()
         if reactivate:
+            old_status = reactivate.status.value
             reactivate.status = OrderStatus.PENDING
-            logger.info(f"Order {order_number} reactivated — bot is actively processing it on Binance")
+            logger.info(f"Order {order_number} reactivated ({old_status} → PENDING) — bot is actively processing it on Binance")
 
     # Update last sync timestamp — used by frontend to detect initial scan complete
     trader.last_extension_sync = datetime.now(timezone.utc)
@@ -312,14 +360,14 @@ async def report_buy_completed(
             Order.binance_order_number == data.order_number,
             Order.trader_id == trader.id,
             Order.side == OrderSide.BUY,
-        )
+        ).with_for_update()
     )
     order = result.scalar_one_or_none()
 
     if not order:
         raise HTTPException(status_code=404, detail="Buy order not found")
 
-    if order.status == OrderStatus.COMPLETED:
+    if order.status in [OrderStatus.COMPLETED, OrderStatus.RELEASED]:
         return {"status": "ok", "message": "Already completed"}
 
     if order.status != OrderStatus.PAYMENT_SENT:
@@ -909,23 +957,49 @@ async def verify_identity(
 
 # ── Internal helpers ──────────────────────────────────────────────
 
-async def _complete_buy_order(order: Order, trader: Trader, db: AsyncSession) -> None:
+async def _complete_buy_order(order: Order, trader: Trader, db: AsyncSession, notify: bool = True) -> None:
     """
     Mark a buy order as completed — seller has released crypto to the buyer's Binance wallet.
-    Called when the desktop app reports the order in the Completed history tab.
-    The KES was already debited when B2C was sent, so no wallet changes are needed here.
-    """
-    order.status = OrderStatus.COMPLETED
-    order.settled_at = datetime.now(timezone.utc)
+    notify=True  → real-time detection (report-buy-completed): send SMS + in-app notification.
+    notify=False → historical scan (completed_buy_order_numbers): update DB silently, no SMS.
 
-    # Update trader lifetime stats
+    Uses an atomic UPDATE ... WHERE status NOT IN (COMPLETED, RELEASED) RETURNING id so that
+    two concurrent calls for the same order can never both send SMS — only the one that wins
+    the UPDATE gets a returned row and proceeds; the loser bails out immediately.
+    """
+    if order.status == OrderStatus.COMPLETED:
+        logger.debug(f"Buy order {order.binance_order_number} already COMPLETED — skipping")
+        return
+
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        sql_update(Order)
+        .where(
+            Order.id == order.id,
+            Order.status.notin_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+        )
+        .values(status=OrderStatus.COMPLETED, settled_at=now)
+        .returning(Order.id)
+    )
+    if result.scalar_one_or_none() is None:
+        logger.info(f"Buy order {order.binance_order_number} already COMPLETED by concurrent request — skipping SMS")
+        order.status = OrderStatus.COMPLETED
+        return
+
+    # We own this completion — sync in-memory object and update stats
+    order.status = OrderStatus.COMPLETED
+    order.settled_at = now
     trader.total_trades += 1
     trader.total_volume += order.fiat_amount
 
     logger.info(
         f"Buy order {order.binance_order_number} COMPLETED — "
         f"{order.crypto_amount} {order.crypto_currency} received by trader {trader.full_name}"
+        + ("" if notify else " (historical scan — no SMS)")
     )
+
+    if not notify:
+        return
 
     # In-app notification
     try:
@@ -949,6 +1023,54 @@ async def _complete_buy_order(order: Order, trader: Trader, db: AsyncSession) ->
         )
     except Exception as e:
         logger.warning(f"SMS failed for buy order completion {order.binance_order_number}: {e}")
+
+
+async def _complete_sell_order(order: Order, trader: Trader, db: AsyncSession) -> None:
+    """
+    Mark a sell order as released — we sold crypto and the buyer paid KES.
+    Called when the bot reports the order in the Binance Completed history tab.
+    Runs settlement to credit the trader's wallet and sends SMS notification.
+    """
+    order.status = OrderStatus.RELEASED
+    order.released_at = datetime.now(timezone.utc)
+
+    trader.total_trades += 1
+    trader.total_volume += order.fiat_amount
+
+    logger.info(
+        f"Sell order {order.binance_order_number} RELEASED (reconcile) — "
+        f"KES {order.fiat_amount:,.0f} for trader {trader.full_name}"
+    )
+
+    try:
+        from app.api.routes.traders import add_notification
+        add_notification(
+            trader.id,
+            f"Sell Complete: KES {order.fiat_amount:,.0f} Received",
+            f"Order {order.binance_order_number} — {order.crypto_amount} {order.crypto_currency} released",
+            "release",
+        )
+    except Exception as e:
+        logger.warning(f"In-app notification failed for sell order {order.binance_order_number}: {e}")
+
+    try:
+        from app.services.sms import send_sms
+        send_sms(
+            trader.phone,
+            f"SparkP2P: Sell done! KES {order.fiat_amount:,.0f} received. "
+            f"{order.crypto_amount} {order.crypto_currency} released. Ref: {order.binance_order_number[-8:]}",
+        )
+    except Exception as e:
+        logger.warning(f"SMS failed for sell order completion {order.binance_order_number}: {e}")
+
+    try:
+        settlement = SettlementEngine(db)
+        if trader.batch_settlement_enabled:
+            await settlement.auto_settle_if_threshold(trader.id)
+        else:
+            await settlement.settle_order(order)
+    except Exception as e:
+        logger.warning(f"Settlement failed for sell order {order.binance_order_number}: {e}")
 
 
 async def _process_reported_sell_order(
@@ -1102,17 +1224,34 @@ async def _process_reported_buy_order(
 
 # ─── I&M Bank withdrawal job queue ───────────────────────────────────────────
 
+def _current_sweep_window_start() -> datetime:
+    """Return the start of the current 15-minute sweep window (UTC).
+    Windows are fixed at :00, :15, :30, :45 past every hour.
+    Only withdrawals created BEFORE this timestamp are released to the bot.
+    """
+    now = datetime.now(timezone.utc)
+    boundary_minute = (now.minute // 15) * 15
+    return now.replace(minute=boundary_minute, second=0, microsecond=0)
+
+
 @router.get("/pending-bank-withdrawals")
 async def get_pending_bank_withdrawals(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Desktop app polls this to get pending I&M bank withdrawals queued for execution."""
+    """Desktop app polls this to get pending I&M bank withdrawals queued for execution.
+
+    Batch sweep model: only releases withdrawals from the PREVIOUS 15-minute window.
+    Withdrawals created in the current window accumulate until the next sweep fires.
+    """
     if not trader.is_admin and trader.role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
 
-    # Only return withdrawals where the M-PESA sweep has already completed.
-    # If a sweep is still pending, the money isn't in the I&M business account yet.
+    # Only process withdrawals created before the current 15-min window started.
+    # This batches all requests that arrived in the same window into one sweep run.
+    window_start = _current_sweep_window_start()
+
+    # Also skip traders where the M-PESA sweep is still pending (money not in I&M yet).
     traders_with_pending_sweep = select(ImSweep.trader_id).where(ImSweep.status == "pending")
 
     result = await db.execute(
@@ -1122,6 +1261,7 @@ async def get_pending_bank_withdrawals(
             WalletTransaction.settlement_method.in_(["bank", "bank_paybill"]),
             WalletTransaction.status == "pending",
             WalletTransaction.transaction_type == TransactionType.WITHDRAWAL,
+            WalletTransaction.created_at < window_start,
             WalletTransaction.trader_id.notin_(traders_with_pending_sweep),
         ).order_by(WalletTransaction.created_at)
     )

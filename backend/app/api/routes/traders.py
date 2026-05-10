@@ -95,6 +95,7 @@ class WalletResponse(BaseModel):
     daily_trades: int
     pending_withdrawal: bool = False
     pending_withdrawal_amount: float = 0.0
+    next_sweep_at: str = ""
 
 
 class TraderProfileResponse(BaseModel):
@@ -106,6 +107,8 @@ class TraderProfileResponse(BaseModel):
     binance_username: Optional[str]
     settlement_method: Optional[str]
     settlement_destination: Optional[str]
+    settlement_im_account: Optional[str] = None   # masked I&M account (primary)
+    settlement_mpesa_phone: Optional[str] = None  # masked M-Pesa phone (fallback)
     auto_release_enabled: bool
     auto_pay_enabled: bool
     daily_trade_limit: int
@@ -399,6 +402,8 @@ async def get_profile(
         binance_username=trader.binance_username,
         settlement_method=trader.settlement_method.value if trader.settlement_method else None,
         settlement_destination=destination,
+        settlement_im_account=("***" + trader.settlement_account[-4:]) if trader.settlement_account else None,
+        settlement_mpesa_phone=("***" + trader.settlement_phone[-4:]) if trader.settlement_phone else None,
         auto_release_enabled=trader.auto_release_enabled,
         auto_pay_enabled=trader.auto_pay_enabled,
         daily_trade_limit=trader.daily_trade_limit,
@@ -607,9 +612,20 @@ async def update_settlement(
     from app.core.security import verify_password
     from datetime import datetime, timezone
 
-    # True first-time: no settlement ever set
-    is_truly_first_time = not trader.settlement_phone and not trader.settlement_paybill
-    # Free first change: settlement was set during onboarding but never changed via Settings
+    # Determine which specific field is being updated (targeted dual-method logic)
+    updating_im = data.method == SettlementMethod.BANK_PAYBILL and data.account
+    updating_mpesa = data.method == SettlementMethod.MPESA and data.phone
+
+    # First-time check is per-method: first time setting THIS specific method is free
+    if updating_im:
+        is_truly_first_time = not trader.settlement_account
+    elif updating_mpesa:
+        is_truly_first_time = not trader.settlement_phone
+    else:
+        # Legacy (till/paybill): check both
+        is_truly_first_time = not trader.settlement_phone and not trader.settlement_paybill
+
+    # Free first change: settlement exists but was set during onboarding and never changed via Settings
     is_free_first_change = not is_truly_first_time and trader.settlement_changed_at is None
     is_first_time = is_truly_first_time or is_free_first_change
 
@@ -633,22 +649,51 @@ async def update_settlement(
         # Clear OTP
         _login_otp_codes.pop(f"settle_{trader.email}", None)
 
-    # Save as PENDING — don't replace the active method yet
-    # Active method continues to work during 48hr cooldown
-    trader.pending_settlement_method = data.method.value
-    trader.pending_settlement_phone = data.phone
-    trader.pending_settlement_paybill = data.paybill
-    trader.pending_settlement_account = data.account
-    trader.pending_settlement_bank_name = data.bank_name
+    # Save as PENDING — only update the fields relevant to the method being changed.
+    # This preserves the OTHER method's configuration (dual-method: I&M primary + M-Pesa fallback).
+    if updating_im:
+        # Only the I&M account is changing — don't touch M-Pesa phone
+        trader.pending_settlement_method = "im_update"
+        trader.pending_settlement_account = data.account
+        trader.pending_settlement_paybill = "542542"
+        trader.pending_settlement_bank_name = "I&M"
+        trader.pending_settlement_phone = None  # not changing phone
+    elif updating_mpesa:
+        # Only the M-Pesa phone is changing — don't touch I&M account
+        trader.pending_settlement_method = "mpesa_update"
+        trader.pending_settlement_phone = data.phone
+        trader.pending_settlement_account = None  # not changing account
+        trader.pending_settlement_paybill = None
+        trader.pending_settlement_bank_name = None
+    else:
+        # Legacy full-replacement (till / custom paybill)
+        trader.pending_settlement_method = data.method.value
+        trader.pending_settlement_phone = data.phone
+        trader.pending_settlement_paybill = data.paybill
+        trader.pending_settlement_account = data.account
+        trader.pending_settlement_bank_name = data.bank_name
+
     trader.settlement_changed_at = datetime.now(timezone.utc)
 
     # If first-time (truly new or free first post-onboarding change), activate immediately
     if is_first_time:
-        trader.settlement_method = data.method
-        trader.settlement_phone = data.phone
-        trader.settlement_paybill = data.paybill
-        trader.settlement_account = data.account
-        trader.settlement_bank_name = data.bank_name
+        if updating_im:
+            trader.settlement_account = data.account
+            trader.settlement_paybill = "542542"
+            trader.settlement_bank_name = "I&M"
+            # I&M is primary method when both are present or when only I&M
+            trader.settlement_method = SettlementMethod.BANK_PAYBILL
+        elif updating_mpesa:
+            trader.settlement_phone = data.phone
+            # Set method: I&M primary if account already set, else M-Pesa
+            if not trader.settlement_account:
+                trader.settlement_method = SettlementMethod.MPESA
+        else:
+            trader.settlement_method = data.method
+            trader.settlement_phone = data.phone
+            trader.settlement_paybill = data.paybill
+            trader.settlement_account = data.account
+            trader.settlement_bank_name = data.bank_name
         trader.pending_settlement_method = None
         if is_truly_first_time:
             # No previous settlement — keep changed_at=None so first post-onboarding change is also free
@@ -1061,6 +1106,15 @@ async def get_wallet(
     )
     pending_txn = pending_r.scalar_one_or_none()
 
+    # Compute next 15-min sweep boundary (UTC: :00/:15/:30/:45 every hour)
+    from datetime import timedelta
+    now_utc = datetime.now(timezone.utc)
+    boundary_minute = ((now_utc.minute // 15) + 1) * 15
+    if boundary_minute >= 60:
+        next_sweep = now_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    else:
+        next_sweep = now_utc.replace(minute=boundary_minute, second=0, microsecond=0)
+
     return WalletResponse(
         balance=wallet.balance,
         reserved=wallet.reserved,
@@ -1071,6 +1125,7 @@ async def get_wallet(
         daily_trades=wallet.daily_trades,
         pending_withdrawal=pending_txn is not None,
         pending_withdrawal_amount=abs(pending_txn.amount) if pending_txn else 0.0,
+        next_sweep_at=next_sweep.isoformat(),
     )
 
 
@@ -1161,15 +1216,31 @@ async def request_withdrawal(
             ),
         )
 
+    # Dual-method routing: I&M is primary (if configured + connected), M-Pesa is fallback
+    im_configured = bool(trader.settlement_account)
+    mpesa_configured = bool(trader.settlement_phone)
+    is_bank = im_configured and trader.im_connected  # True → use I&M; False → use M-Pesa
+
+    if not is_bank and not mpesa_configured:
+        detail = (
+            "I&M Bank is configured but not connected — please open the desktop app to reconnect. "
+            "Add an M-Pesa number as fallback in Settings → Settlement to withdraw when I&M is offline."
+        ) if im_configured else "No withdrawal method configured. Set up I&M Bank or M-Pesa in Settings → Settlement."
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
     # For bank withdrawals, check tier eligibility
-    if trader.settlement_method.value != "mpesa":
+    if is_bank:
         eligibility = get_bank_withdrawal_eligibility(withdraw_amount)
         if not eligibility["eligible"]:
             min_req = eligibility.get("min_required", 0)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{eligibility['reason']}. Keep trading to reach KES {min_req:,}.",
-            )
+            if mpesa_configured:
+                # I&M minimum not met but M-Pesa fallback is available — use M-Pesa
+                is_bank = False
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"{eligibility['reason']}. Keep trading to reach KES {min_req:,}.",
+                )
 
     # Calculate fees
     safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, withdraw_amount)
@@ -1180,8 +1251,6 @@ async def request_withdrawal(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Amount too low to cover fees (KES {total_fee})",
         )
-
-    is_bank = trader.settlement_method.value != "mpesa"
 
     if is_bank:
         # ── Bank (I&M) traders: queue into hourly batch ───────────────────────
@@ -1270,22 +1339,31 @@ async def preview_withdrawal(
     if wallet.balance < MIN_WITHDRAWAL:
         return {"can_withdraw": False, "reason": f"Minimum withdrawal is KES {MIN_WITHDRAWAL:,}"}
 
-    if trader.settlement_method.value != "mpesa":
+    # Dual-method: I&M primary (if configured + connected), else M-Pesa
+    im_configured = bool(trader.settlement_account)
+    mpesa_configured = bool(trader.settlement_phone)
+    use_im = im_configured and bool(trader.im_connected)
+
+    if use_im:
         eligibility = get_bank_withdrawal_eligibility(wallet.balance)
         if not eligibility["eligible"]:
             min_req = eligibility.get("min_required", 0)
             bal = round(wallet.balance, 2)
-            return {
-                "can_withdraw": False,
-                "reason": (
-                    f"Minimum I&M Bank withdrawal is KES {min_req:,}. "
-                    f"Your balance is KES {bal:,.2f}. "
-                    f"You need KES {max(0, min_req - bal):,.2f} more to withdraw."
-                ),
-                "min_required": min_req,
-                "balance": bal,
-                "cooldown_active": False,
-            }
+            if mpesa_configured:
+                # Auto-fall through to M-Pesa (don't block)
+                use_im = False
+            else:
+                return {
+                    "can_withdraw": False,
+                    "reason": (
+                        f"Minimum I&M Bank withdrawal is KES {min_req:,}. "
+                        f"Your balance is KES {bal:,.2f}. "
+                        f"You need KES {max(0, min_req - bal):,.2f} more to withdraw."
+                    ),
+                    "min_required": min_req,
+                    "balance": bal,
+                    "cooldown_active": False,
+                }
 
     balance = round(wallet.balance, 2)
     safaricom_fee, platform_markup, total_fee = get_total_settlement_fee(trader, balance)
@@ -1301,6 +1379,7 @@ async def preview_withdrawal(
             cooldown_active = True
             cooldown_hours = int((cooldown_end - datetime.now(timezone.utc)).total_seconds() / 3600)
 
+    active_method = "bank_paybill" if use_im else "mpesa"
     return {
         "can_withdraw": net_amount > 0 and not cooldown_active,
         "balance": balance,
@@ -1308,7 +1387,7 @@ async def preview_withdrawal(
         "you_receive": max(net_amount, 0),
         "cooldown_active": cooldown_active,
         "cooldown_hours": cooldown_hours,
-        "settlement_method": trader.settlement_method.value,
+        "settlement_method": active_method,
         "min_withdrawal": MIN_WITHDRAWAL,
         "force_full_withdrawal": balance < MIN_WITHDRAWAL * 2,
     }
@@ -1675,22 +1754,28 @@ async def connect_im(
 
 @router.post("/pause-bot/request-otp")
 async def request_pause_otp(trader: Trader = Depends(get_current_trader)):
-    """Send SMS OTP to trader's phone for bot pause verification."""
+    """Prepare pause verification. SMS OTP only sent when trader has no TOTP configured."""
     import random
     from app.api.routes.auth import _login_otp_codes
-    otp_code = str(random.randint(100000, 999999))
-    _login_otp_codes[f"pause_{trader.email}"] = otp_code
-    try:
-        from app.services.sms import sms_verification_code
-        sms_verification_code(trader.phone, otp_code)
-    except Exception as e:
-        logger.warning(f"PIN change OTP SMS failed for {trader.email}: {e}")
+    has_totp = bool(trader.totp_secret)
     masked = trader.phone[-4:] if trader.phone else "****"
+    if not has_totp:
+        # No Google Authenticator — fall back to SMS OTP
+        otp_code = str(random.randint(100000, 999999))
+        _login_otp_codes[f"pause_{trader.email}"] = otp_code
+        try:
+            from app.services.sms import sms_verification_code
+            sms_verification_code(trader.phone, otp_code)
+        except Exception as e:
+            logger.warning(f"Pause OTP SMS failed for {trader.email}: {e}")
+        message = f"OTP sent to number ending {masked}"
+    else:
+        message = "Enter your Google Authenticator code to confirm."
     return {
         "status": "sent",
-        "message": f"OTP sent to number ending {masked}",
+        "message": message,
         "security_question": trader.security_question or "",
-        "has_totp": bool(trader.totp_secret),
+        "has_totp": has_totp,
     }
 
 
@@ -1862,11 +1947,11 @@ async def get_today_stats(
     midnight_eat = now_eat.replace(hour=0, minute=0, second=0, microsecond=0)
     midnight_utc = midnight_eat - eat_offset  # convert back to UTC for DB query
 
-    # Completed orders since midnight EAT
+    # Completed orders since midnight EAT (RELEASED = sell done, COMPLETED = buy done)
     orders_q = await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,
-            Order.status == OrderStatus.COMPLETED,
+            Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
             Order.created_at >= midnight_utc,
         )
     )
@@ -1896,6 +1981,10 @@ async def get_today_stats(
     buy_debits = sum(t.amount for t in txns_today if t.transaction_type == TransactionType.BUY_DEBIT)
     # buy_debit amounts are negative; gross profit = net KES flow from trading
     gross_profit = sell_credits + buy_debits
+
+    # Treat every stats poll as a web-presence heartbeat so admin can see the trader is online
+    trader.last_login = datetime.now(timezone.utc)
+    await db.commit()
 
     return {
         "trades_count": trades_count,

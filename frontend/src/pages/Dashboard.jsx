@@ -24,6 +24,7 @@ function getWithdrawalFee(method, amount) {
   if (method === 'mpesa') return mpesaB2CFee(amount) + 25;
   return bankFlatFee(amount);
 }
+const fmtCountdown = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 const fmtKES = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 const fmtKESFee = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtDateEAT = (ts) => new Date(ts).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' });
@@ -399,6 +400,7 @@ export default function Dashboard() {
   const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
   const [depositPage, setDepositPage] = useState(1);
   const [withdrawalPage, setWithdrawalPage] = useState(1);
+  const [sweepSecondsLeft, setSweepSecondsLeft] = useState(0);
   const [activeTab, setActiveTab] = useState('overview');
   const [botLogs, setBotLogs] = useState([]);
   const logsEndRef = useRef(null);
@@ -483,6 +485,25 @@ export default function Dashboard() {
       window.removeEventListener('sparkp2p-up-to-date', upToDateHandler);
       clearTimeout(upToDateTimerRef.current);
     };
+  }, []);
+
+  // Sweep countdown timer — ticks every second, resets at each 15-min boundary
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      const m = now.getMinutes();
+      const nextM = (Math.floor(m / 15) + 1) * 15;
+      const next = new Date(now);
+      if (nextM >= 60) {
+        next.setHours(next.getHours() + 1, 0, 0, 0);
+      } else {
+        next.setMinutes(nextM, 0, 0);
+      }
+      setSweepSecondsLeft(Math.max(0, Math.floor((next - now) / 1000)));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
   }, []);
 
   const loadData = async () => {
@@ -1752,9 +1773,26 @@ export default function Dashboard() {
               const totalWdPages = Math.ceil(rows.length / WD_PAGE_SIZE);
               const wdSlice = rows.slice((withdrawalPage - 1) * WD_PAGE_SIZE, withdrawalPage * WD_PAGE_SIZE);
 
+              const hasPending = wallet?.pending_withdrawal;
+
               return (
                 <div className="card">
-                  <h3>Withdrawals</h3>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                    <h3 style={{ margin: 0 }}>Withdrawals</h3>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 10, padding: '6px 14px' }}>
+                      <span style={{ fontSize: 11, color: '#a5b4fc' }}>Next I&M sweep in</span>
+                      <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 16, color: sweepSecondsLeft < 60 ? '#f59e0b' : '#6366f1', minWidth: 40, textAlign: 'center' }}>{fmtCountdown(sweepSecondsLeft)}</span>
+                    </div>
+                  </div>
+                  {hasPending && (
+                    <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 10, padding: '10px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ fontSize: 18 }}>⏳</span>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: '#c7d2fe' }}>Withdrawal of {fmtKES(wallet.pending_withdrawal_amount)} is queued</div>
+                        <div style={{ fontSize: 12, color: '#818cf8', marginTop: 2 }}>Processing in the next sweep — <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{fmtCountdown(sweepSecondsLeft)}</span> remaining</div>
+                      </div>
+                    </div>
+                  )}
                   {rows.length > 0 ? (
                     <>
                     <table className="data-table">
