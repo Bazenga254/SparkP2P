@@ -14,11 +14,15 @@ function mpesaB2CFee(amount) {
   for (const [threshold, fee] of B2C_FEES) { if (amount <= threshold) return fee; }
   return 105;
 }
+const BANK_FLAT_FEES = [[20000,10],[50000,25],[150000,35],[300000,45],[500000,60]];
+function bankFlatFee(amount) {
+  for (const [threshold, fee] of BANK_FLAT_FEES) { if (amount <= threshold) return fee; }
+  return 60;
+}
 function getWithdrawalFee(method, amount) {
   if (amount <= 0) return 0;
   if (method === 'mpesa') return mpesaB2CFee(amount) + 25;
-  // bank_paybill, bank, till, paybill — 0.05% flat
-  return Math.round(amount * 0.0005 * 100) / 100;
+  return bankFlatFee(amount);
 }
 const fmtKES = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 const fmtKESFee = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -333,7 +337,7 @@ function SpreadCalculator() {
               <div style={{ fontSize: 11, color: '#9ca3af' }}>Withdrawal Fee</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>− {fmtKESFee(wdFee)}</div>
               <div style={{ fontSize: 11, color: '#6b7280' }}>
-                {feePct > 0 ? `${feePct.toFixed(3)}% of amount` : withdrawMethod === 'mpesa' ? 'tiered rate' : '0.05% flat'}
+                {withdrawMethod === 'mpesa' ? 'tiered rate' : 'flat fee'}
               </div>
             </div>
 

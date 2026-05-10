@@ -49,16 +49,32 @@ def _safaricom_b2c_fee(amount: float) -> int:
     return 105
 
 
+_BANK_FEES = [
+    (20_000,  10),
+    (50_000,  25),
+    (150_000, 35),
+    (300_000, 45),
+    (500_000, 60),
+]
+
+
+def _bank_flat_fee(amount: float) -> int:
+    for threshold, fee in _BANK_FEES:
+        if amount <= threshold:
+            return fee
+    return 60
+
+
 def get_bank_withdrawal_eligibility(amount: float) -> dict:
     """Check if amount is eligible for I&M bank withdrawal and return fee.
 
-    Flat 0.05% fee for all amounts from KES 5,000+.
+    Tiered flat fee schedule (KES 10–60) for amounts from KES 1,000+.
 
     Returns dict with 'eligible' bool, 'fee', and 'reason' if blocked.
     """
     if amount < BANK_MIN_WITHDRAWAL:
         return {"eligible": False, "fee": 0, "reason": f"Minimum I&M Bank withdrawal is KES {BANK_MIN_WITHDRAWAL:,}", "min_required": BANK_MIN_WITHDRAWAL}
-    return {"eligible": True, "fee": round(amount * 0.0005, 2), "min_required": None}
+    return {"eligible": True, "fee": _bank_flat_fee(amount), "min_required": None}
 
 
 def get_total_settlement_fee(trader, amount: float, is_manual_withdrawal: bool = True) -> tuple:

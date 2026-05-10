@@ -80,18 +80,17 @@ export default function SettingsPanel({ profile, onUpdate }) {
     return () => document.removeEventListener('mousedown', handler);
   }, [showFeeInfo]);
 
-  // Settlement
-  const [settlementMethod, setSettlementMethod] = useState(profile?.settlement_method || 'mpesa');
-  const [settlementPhone, setSettlementPhone] = useState('');
-  const [selectedBank, setSelectedBank] = useState('');
-  const [showChangeForm, setShowChangeForm] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [settlementOtp, setSettlementOtp] = useState('');
-  const [securityAnswer, setSecurityAnswer] = useState('');
+  // Settlement — dual method (I&M primary, M-Pesa fallback)
+  const [settleEdit, setSettleEdit] = useState(null); // null | 'im' | 'mpesa'
+  const [settleImInput, setSettleImInput] = useState('');
+  const [settleMpesaInput, setSettleMpesaInput] = useState('');
+  const [settleOtpSent, setSettleOtpSent] = useState(false);
+  const [settleOtp, setSettleOtp] = useState('');
+  const [settleSecAnswer, setSettleSecAnswer] = useState('');
   const [settleSQ, setSettleSQ] = useState('');
-  const [bankAccount, setBankAccount] = useState('');
-  const [customPaybill, setCustomPaybill] = useState('');
-  const [paybillAccount, setPaybillAccount] = useState('');
+  // Legacy state (kept to avoid breaking handleSaveSettlement references in fee info section)
+  const [settlementMethod] = useState(profile?.settlement_method || 'mpesa');
+  const [showChangeForm] = useState(false);
 
   // Binance verification method — pre-populate from profile
   const [verifyMethod, setVerifyMethod] = useState(profile?.binance_verify_method || 'none');
@@ -438,57 +437,59 @@ export default function SettingsPanel({ profile, onUpdate }) {
     return () => clearInterval(mpesaPollRef.current);
   }, [mpesaConnecting]);
 
-  const handleRequestOTP = async () => {
+  const handleSettleRequestOTP = async () => {
     setLoading(true);
     try {
       const res = await requestSettlementOTP();
-      setOtpSent(true);
+      setSettleOtpSent(true);
       setSettleSQ(res.data.security_question || '');
-      showMsg(res.data.message || 'OTP sent');
+      showMsg(res.data.message || 'OTP sent to your phone');
     } catch (err) {
       showMsg(err.response?.data?.detail || 'Failed to send OTP');
     }
     setLoading(false);
   };
 
-  const handleSaveSettlement = async (e) => {
+  const handleSaveSettle = async (e) => {
     e.preventDefault();
     const isFreeChange = profile?.settlement_first_change_free;
     if (!isFreeChange) {
-      if (!settlementOtp) { showMsg('Enter the OTP code sent to your phone'); return; }
-      if (!securityAnswer) { showMsg('Enter your security answer'); return; }
+      if (!settleOtp) { showMsg('Enter the OTP code sent to your phone'); return; }
+      if (!settleSecAnswer) { showMsg('Enter your security answer'); return; }
     }
     setLoading(true);
     try {
-      const data = { method: settlementMethod };
+      const payload = {};
       if (!isFreeChange) {
-        data.otp_code = settlementOtp;
-        data.security_answer = securityAnswer;
+        payload.otp_code = settleOtp;
+        payload.security_answer = settleSecAnswer;
       }
-      if (settlementMethod === 'mpesa') {
-        data.phone = settlementPhone;
-      } else if (settlementMethod === 'bank_paybill') {
-        data.paybill = BANK_PAYBILLS[selectedBank] || customPaybill;
-        data.account = bankAccount;
-        data.bank_name = selectedBank;
-      } else if (settlementMethod === 'till') {
-        data.paybill = customPaybill;
-      } else if (settlementMethod === 'paybill') {
-        data.paybill = customPaybill;
-        data.account = paybillAccount;
+      if (settleEdit === 'im') {
+        if (!settleImInput.trim()) { showMsg('Enter your I&M Bank account number'); setLoading(false); return; }
+        payload.method = 'bank_paybill';
+        payload.account = settleImInput.trim();
+        payload.bank_name = 'I&M';
+      } else {
+        if (!settleMpesaInput.trim()) { showMsg('Enter your M-Pesa phone number'); setLoading(false); return; }
+        payload.method = 'mpesa';
+        payload.phone = settleMpesaInput.trim().replace(/^0/, '254');
       }
-      const res = await updateSettlement(data);
+      const res = await updateSettlement(payload);
       showMsg(res.data.message || 'Payment method updated!');
-      setShowChangeForm(false);
-      setOtpSent(false);
-      setSettlementOtp('');
-      setSecurityAnswer('');
+      setSettleEdit(null);
+      setSettleOtpSent(false);
+      setSettleOtp('');
+      setSettleSecAnswer('');
       onUpdate();
     } catch (err) {
       showMsg(err.response?.data?.detail || 'Failed to save settlement settings');
     }
     setLoading(false);
   };
+
+  // Legacy stub — kept so fee-info section that references handleSaveSettlement still compiles
+  const handleSaveSettlement = handleSaveSettle;
+  const handleRequestOTP = handleSettleRequestOTP;
 
   const handleSaveTrading = async (e) => {
     e.preventDefault();
@@ -975,17 +976,21 @@ export default function SettingsPanel({ profile, onUpdate }) {
 
                   {/* I&M Bank */}
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: '#60a5fa', marginBottom: 6 }}>🏦 I&M Bank (~1 hour)</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#60a5fa', marginBottom: 6 }}>🏦 I&M Bank (~15 mins)</div>
                     <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
                       <thead>
                         <tr style={{ color: '#9ca3af' }}>
-                          <th style={{ textAlign: 'left', paddingBottom: 4 }}>Min. Amount</th>
+                          <th style={{ textAlign: 'left', paddingBottom: 4 }}>Amount</th>
                           <th style={{ textAlign: 'right', paddingBottom: 4 }}>Fee</th>
                         </tr>
                       </thead>
                       <tbody style={{ color: '#e5e7eb' }}>
                         {[
-                          ['KES 1,000+', '0.05%'],
+                          ['KES 1,000 – 20,000',   'KES 10'],
+                          ['KES 20,001 – 50,000',  'KES 25'],
+                          ['KES 50,001 – 150,000', 'KES 35'],
+                          ['KES 150,001 – 300,000','KES 45'],
+                          ['KES 300,001 – 500,000','KES 60'],
                         ].map(([range, fee]) => (
                           <tr key={range}>
                             <td style={{ padding: '2px 0' }}>{range}</td>
@@ -994,7 +999,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
                         ))}
                       </tbody>
                     </table>
-                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>Flat 0.05% fee on all I&M Bank withdrawals</div>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>Tiered flat fee · funds arrive in ~15 mins</div>
                   </div>
                 </div>
               )}
@@ -1002,186 +1007,176 @@ export default function SettingsPanel({ profile, onUpdate }) {
           </div>
           <p className="help-text">How you want to receive your funds after trades.</p>
 
-          {/* Current Settlement Display */}
-          <div style={{ background: 'var(--bg)', borderRadius: 10, padding: 16, marginBottom: 16, border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 8 }}>Current Method</div>
-            <div style={{ fontSize: 16, fontWeight: 600, color: '#10b981' }}>
-              {profile?.settlement_method === 'mpesa' ? 'M-Pesa' :
-               profile?.settlement_method === 'bank_paybill' ? 'Bank Account' :
-               profile?.settlement_method === 'till' ? 'Till Number' :
-               profile?.settlement_method === 'paybill' ? 'Paybill' : 'Not set'}
+          {/* Cooldown warning */}
+          {profile?.settlement_cooldown_until && settleCooldown && (
+            <div style={{
+              marginBottom: 16, padding: 12, borderRadius: 8,
+              background: 'rgba(245,158,11,0.1)', border: '1px solid #f59e0b',
+              fontSize: 12, color: '#f59e0b',
+            }}>
+              <div style={{ marginBottom: 6 }}>Security cooldown — withdrawals unlock in:</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 24, fontWeight: 700, letterSpacing: 2, color: '#f59e0b', textAlign: 'center' }}>{settleCooldown}</div>
+              <div style={{ marginTop: 4, textAlign: 'center', fontSize: 10, color: '#9ca3af' }}>hh : mm : ss</div>
             </div>
-            <div style={{ fontSize: 13, color: '#fff', marginTop: 4 }}>
-              {profile?.settlement_destination
-                ? profile.settlement_destination.replace(/^(.*)(.{4})$/, (_, start, end) => '*'.repeat(start.length) + end)
-                : 'No destination configured'}
-            </div>
-            {profile?.settlement_cooldown_until && settleCooldown && (
-              <div style={{
-                marginTop: 10, padding: 12, borderRadius: 8,
-                background: 'rgba(245,158,11,0.1)', border: '1px solid #f59e0b',
-                fontSize: 12, color: '#f59e0b',
-              }}>
-                <div style={{ marginBottom: 6 }}>Security cooldown — active for withdrawals in:</div>
-                <div style={{ fontFamily: 'monospace', fontSize: 28, fontWeight: 700, letterSpacing: 2, color: '#f59e0b', textAlign: 'center' }}>
-                  {settleCooldown}
-                </div>
-                <div style={{ marginTop: 4, textAlign: 'center', fontSize: 10, color: '#9ca3af' }}>
-                  hh : mm : ss
+          )}
+
+          {/* I&M Bank — Primary */}
+          <div style={{
+            borderRadius: 10, border: profile?.settlement_im_account ? '1px solid rgba(96,165,250,0.4)' : '1px solid var(--border)',
+            marginBottom: 12, overflow: 'hidden',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 20 }}>🏦</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#60a5fa' }}>I&M Bank <span style={{ fontSize: 10, fontWeight: 400, background: 'rgba(96,165,250,0.15)', color: '#60a5fa', padding: '2px 6px', borderRadius: 4, marginLeft: 4 }}>PRIORITY</span></div>
+                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+                    {profile?.settlement_im_account
+                      ? <>Account ending <strong style={{ color: '#e5e7eb' }}>{profile.settlement_im_account.slice(-4)}</strong> &nbsp;
+                        {profile?.im_connected
+                          ? <span style={{ color: '#10b981' }}>● Active</span>
+                          : <span style={{ color: '#f59e0b' }}>● Offline (M-Pesa fallback in use)</span>}
+                      </>
+                      : <span style={{ color: '#6b7280' }}>Not configured — M-Pesa will be used</span>}
+                  </div>
                 </div>
               </div>
-            )}
-          </div>
-
-          {!showChangeForm ? (
-            <button
-              onClick={() => !profile?.settlement_cooldown_until && setShowChangeForm(true)}
-              disabled={!!profile?.settlement_cooldown_until}
-              style={{
-                padding: '10px 20px', borderRadius: 8, border: '1px solid var(--border)',
-                background: 'transparent',
-                color: profile?.settlement_cooldown_until ? '#6b7280' : '#f59e0b',
-                cursor: profile?.settlement_cooldown_until ? 'not-allowed' : 'pointer',
-                fontSize: 13,
-                opacity: profile?.settlement_cooldown_until ? 0.6 : 1,
-              }}
-            >
-              {profile?.settlement_cooldown_until && settleCooldown ? `Locked — ${settleCooldown}` : 'Change Payment Method'}
-            </button>
-          ) : (
-            <>
-              {/* Step 1: Request OTP (skipped for free first-change accounts) */}
-              {!otpSent && !profile?.settlement_first_change_free ? (
-                <div style={{ marginTop: 16 }}>
-                  <div style={{
-                    padding: 14, borderRadius: 8, background: 'rgba(245,158,11,0.1)',
-                    border: '1px solid #f59e0b', marginBottom: 16, fontSize: 13, color: '#f59e0b',
-                  }}>
-                    For security, changing your payment method requires phone OTP verification and your security answer.
-                    The new method will have a 48-hour cooldown before it can be used for withdrawals.
+              {settleEdit !== 'im' && (
+                <button
+                  onClick={() => { setSettleEdit('im'); setSettleImInput(''); setSettleOtpSent(false); setSettleOtp(''); setSettleSecAnswer(''); }}
+                  disabled={!!profile?.settlement_cooldown_until}
+                  style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #60a5fa', background: 'transparent', color: '#60a5fa', cursor: 'pointer', fontSize: 12, opacity: profile?.settlement_cooldown_until ? 0.4 : 1 }}
+                >
+                  {profile?.settlement_im_account ? 'Change' : 'Set Up'}
+                </button>
+              )}
+            </div>
+            {settleEdit === 'im' && (
+              <form onSubmit={handleSaveSettle} style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
+                {profile?.settlement_first_change_free && (
+                  <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', marginBottom: 12, fontSize: 12, color: '#10b981' }}>
+                    First update is free — no OTP required.
                   </div>
-                  <button
-                    onClick={handleRequestOTP}
-                    disabled={loading}
-                    style={{
-                      padding: '12px 24px', borderRadius: 8, border: 'none',
-                      background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer',
-                    }}
-                  >
-                    {loading ? 'Sending OTP...' : 'Send Verification Code'}
+                )}
+                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>I&M Bank Account Number</label>
+                <input type="text" placeholder="e.g. 00108094726050" value={settleImInput}
+                  onChange={e => setSettleImInput(e.target.value)} required
+                  style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12 }} />
+
+                {!profile?.settlement_first_change_free && !settleOtpSent && (
+                  <button type="button" onClick={handleSettleRequestOTP} disabled={loading}
+                    style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer', fontSize: 13, marginBottom: 12 }}>
+                    {loading ? 'Sending...' : 'Send Verification Code'}
                   </button>
-                  <button
-                    onClick={() => setShowChangeForm(false)}
-                    style={{
-                      marginLeft: 10, padding: '12px 24px', borderRadius: 8,
-                      border: '1px solid var(--border)', background: 'transparent',
-                      color: '#9ca3af', cursor: 'pointer',
-                    }}
-                  >
+                )}
+                {(!profile?.settlement_first_change_free && settleOtpSent) && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>OTP Code</label>
+                      <input type="text" placeholder="6-digit code" maxLength={6} value={settleOtp}
+                        onChange={e => setSettleOtp(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>{settleSQ || profile?.security_question || 'Security Answer'}</label>
+                      <input type="text" placeholder="Your answer" value={settleSecAnswer}
+                        onChange={e => setSettleSecAnswer(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }} />
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {(profile?.settlement_first_change_free || settleOtpSent) && (
+                    <button type="submit" disabled={loading}
+                      style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: '#60a5fa', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}>
+                      {loading ? 'Saving...' : 'Save I&M Account'}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => { setSettleEdit(null); setSettleOtpSent(false); }}
+                    style={{ padding: '9px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}>
                     Cancel
                   </button>
                 </div>
-              ) : (
-                /* Step 2: New Method form (OTP + security answer only for non-free changes) */
-                <form onSubmit={handleSaveSettlement} style={{ marginTop: 16 }}>
-                  {profile?.settlement_first_change_free && (
-                    <div style={{
-                      padding: 12, borderRadius: 8, background: 'rgba(16,185,129,0.1)',
-                      border: '1px solid #10b981', marginBottom: 12, fontSize: 13, color: '#10b981',
-                    }}>
-                      Your first payment method update is free — no OTP or cooldown required.
-                    </div>
-                  )}
+              </form>
+            )}
+          </div>
 
-                  <label>New Method</label>
-                  <select value={settlementMethod} onChange={(e) => setSettlementMethod(e.target.value)}>
-                    <option value="mpesa">M-Pesa (B2C)</option>
-                    <option value="bank_paybill">Bank Account (via Bank Paybill)</option>
-                    <option value="till">Till Number (Buy Goods)</option>
-                    <option value="paybill">My Own Paybill</option>
-                  </select>
-
-                  {settlementMethod === 'mpesa' && (
-                    <>
-                      <label>M-Pesa Phone Number</label>
-                      <input type="tel" placeholder="0712345678" value={settlementPhone}
-                        onChange={(e) => setSettlementPhone(e.target.value)} required />
-                    </>
-                  )}
-                  {settlementMethod === 'bank_paybill' && (
-                    <>
-                      <label>Bank</label>
-                      <select value={selectedBank} onChange={(e) => setSelectedBank(e.target.value)} required>
-                        <option value="">Select Bank</option>
-                        {Object.keys(BANK_PAYBILLS).map((bank) => (
-                          <option key={bank} value={bank}>{bank} ({BANK_PAYBILLS[bank]})</option>
-                        ))}
-                      </select>
-                      <label>Account Number</label>
-                      <input type="text" placeholder="Your bank account number" value={bankAccount}
-                        onChange={(e) => setBankAccount(e.target.value)} required />
-                    </>
-                  )}
-                  {settlementMethod === 'till' && (
-                    <>
-                      <label>Till Number</label>
-                      <input type="text" placeholder="Your Till number" value={customPaybill}
-                        onChange={(e) => setCustomPaybill(e.target.value)} required />
-                    </>
-                  )}
-                  {settlementMethod === 'paybill' && (
-                    <>
-                      <label>Paybill Number</label>
-                      <input type="text" placeholder="Your Paybill shortcode" value={customPaybill}
-                        onChange={(e) => setCustomPaybill(e.target.value)} required />
-                      <label>Account Number</label>
-                      <input type="text" placeholder="Account number" value={paybillAccount}
-                        onChange={(e) => setPaybillAccount(e.target.value)} />
-                    </>
-                  )}
-
-                  {!profile?.settlement_first_change_free && (
-                    <div style={{ marginTop: 16, padding: 16, background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 14 }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: 13, color: '#f59e0b', marginBottom: 6, fontWeight: 600 }}>Verification Code (OTP)</label>
-                        <input type="text" placeholder="Enter 6-digit code" value={settlementOtp}
-                          onChange={(e) => setSettlementOtp(e.target.value)} maxLength={6} required
-                          style={{ width: '100%', boxSizing: 'border-box' }} />
-                        <span style={{ fontSize: 11, color: '#6b7280', marginTop: 4, display: 'block' }}>Check your phone and email for the code</span>
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: 13, color: '#f59e0b', marginBottom: 6, fontWeight: 600 }}>
-                          Security Question
-                        </label>
-                        <p style={{ fontSize: 13, color: '#9ca3af', margin: '0 0 6px', fontStyle: 'italic' }}>
-                          {settleSQ || profile?.security_question || 'Not set'}
-                        </p>
-                        <input type="text" placeholder="Your security answer" value={securityAnswer}
-                          onChange={(e) => setSecurityAnswer(e.target.value)} required
-                          style={{ width: '100%', boxSizing: 'border-box' }} />
-                      </div>
-                    </div>
-                  )}
-
-                  <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-                    <button type="submit" disabled={loading}>
-                      {loading ? 'Saving...' : 'Update Payment Method'}
-                    </button>
-                    <button type="button"
-                      onClick={() => { setShowChangeForm(false); setOtpSent(false); setSettlementOtp(''); setSecurityAnswer(''); }}
-                      style={{
-                        padding: '10px 20px', borderRadius: 8, border: '1px solid var(--border)',
-                        background: 'transparent', color: '#9ca3af', cursor: 'pointer',
-                      }}
-                    >
-                      Cancel
-                    </button>
+          {/* M-Pesa — Fallback */}
+          <div style={{
+            borderRadius: 10, border: profile?.settlement_mpesa_phone ? '1px solid rgba(16,185,129,0.4)' : '1px solid var(--border)',
+            overflow: 'hidden',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 20 }}>📱</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#10b981' }}>M-Pesa <span style={{ fontSize: 10, fontWeight: 400, background: 'rgba(16,185,129,0.15)', color: '#10b981', padding: '2px 6px', borderRadius: 4, marginLeft: 4 }}>FALLBACK</span></div>
+                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+                    {profile?.settlement_mpesa_phone
+                      ? <>Phone ending <strong style={{ color: '#e5e7eb' }}>{profile.settlement_mpesa_phone.slice(-4)}</strong> &nbsp;
+                        {!profile?.settlement_im_account || !profile?.im_connected
+                          ? <span style={{ color: '#10b981' }}>● Active</span>
+                          : <span style={{ color: '#9ca3af' }}>● Standby (I&M is primary)</span>}
+                      </>
+                      : <span style={{ color: '#6b7280' }}>Not configured — add as fallback if I&M goes offline</span>}
                   </div>
-                </form>
+                </div>
+              </div>
+              {settleEdit !== 'mpesa' && (
+                <button
+                  onClick={() => { setSettleEdit('mpesa'); setSettleMpesaInput(''); setSettleOtpSent(false); setSettleOtp(''); setSettleSecAnswer(''); }}
+                  disabled={!!profile?.settlement_cooldown_until}
+                  style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #10b981', background: 'transparent', color: '#10b981', cursor: 'pointer', fontSize: 12, opacity: profile?.settlement_cooldown_until ? 0.4 : 1 }}
+                >
+                  {profile?.settlement_mpesa_phone ? 'Change' : 'Set Up'}
+                </button>
               )}
-            </>
-          )}
+            </div>
+            {settleEdit === 'mpesa' && (
+              <form onSubmit={handleSaveSettle} style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
+                {profile?.settlement_first_change_free && (
+                  <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', marginBottom: 12, fontSize: 12, color: '#10b981' }}>
+                    First update is free — no OTP required.
+                  </div>
+                )}
+                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>M-Pesa Phone Number</label>
+                <input type="tel" placeholder="0712345678" value={settleMpesaInput}
+                  onChange={e => setSettleMpesaInput(e.target.value)} required
+                  style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12 }} />
+
+                {!profile?.settlement_first_change_free && !settleOtpSent && (
+                  <button type="button" onClick={handleSettleRequestOTP} disabled={loading}
+                    style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer', fontSize: 13, marginBottom: 12 }}>
+                    {loading ? 'Sending...' : 'Send Verification Code'}
+                  </button>
+                )}
+                {(!profile?.settlement_first_change_free && settleOtpSent) && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>OTP Code</label>
+                      <input type="text" placeholder="6-digit code" maxLength={6} value={settleOtp}
+                        onChange={e => setSettleOtp(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }} />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>{settleSQ || profile?.security_question || 'Security Answer'}</label>
+                      <input type="text" placeholder="Your answer" value={settleSecAnswer}
+                        onChange={e => setSettleSecAnswer(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }} />
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {(profile?.settlement_first_change_free || settleOtpSent) && (
+                    <button type="submit" disabled={loading}
+                      style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: '#10b981', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}>
+                      {loading ? 'Saving...' : 'Save M-Pesa Number'}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => { setSettleEdit(null); setSettleOtpSent(false); }}
+                    style={{ padding: '9px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
         </div>
       )}
 
@@ -1636,7 +1631,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
                   disabled={pauseLoading}
                   style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 14 }}
                 >
-                  {pauseLoading ? 'Sending OTP...' : 'I Understand — Proceed'}
+                  {pauseLoading ? (profile?.has_totp ? 'Loading...' : 'Sending OTP...') : 'I Understand — Proceed'}
                 </button>
               </div>
             </>)}

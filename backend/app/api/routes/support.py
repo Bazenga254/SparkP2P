@@ -41,7 +41,7 @@ KNOWLEDGE BASE:
        KES 10,001 – 25,000 → KES 90
        KES 25,001 – 50,000 → KES 130
        KES 50,001 – 150,000 → KES 130
-   - I&M Bank withdrawals: Manual processing by admin, takes up to 1 hour. Minimum: KES 1,000. Fee: 0.05% of amount.
+   - I&M Bank withdrawals: Processed in ~15 minutes. Minimum: KES 1,000. Tiered flat fee: KES 1,000–20,000 → KES 10; KES 20,001–50,000 → KES 25; KES 50,001–150,000 → KES 35; KES 150,001–300,000 → KES 45; KES 300,001–500,000 → KES 60.
    - When asked about fees, present both tables cleanly. Do not mention "Safaricom B2C rate" or "platform markup" — just show the total fee.
    - 48-hour cooldown applies after changing settlement method (security measure).
    - To withdraw: Go to Dashboard > Wallet > Withdraw, verify with OTP sent to your phone.
