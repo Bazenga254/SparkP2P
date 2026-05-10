@@ -2501,22 +2501,42 @@ export default function Dashboard() {
             </div>
 
             <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20 }}>
-              Choose which order types the bot should process. By default the bot handles both buying and selling.
+              Choose which order types the bot should automate. Orders outside the selected mode stay visible on Binance — you complete them manually.
             </p>
 
             {[
-              { value: 'both', label: 'Buy & Sell (default)', desc: 'Bot processes all orders — buying and selling crypto.' },
-              { value: 'buy_only', label: 'Buy orders only', desc: 'Bot pays sellers and acquires crypto. Sell orders are ignored.' },
-              { value: 'sell_only', label: 'Sell orders only', desc: 'Bot releases crypto to buyers. Buy orders are ignored.' },
+              {
+                value: 'both',
+                label: 'Buy & Sell (default)',
+                desc: 'Bot fully automates both sides — pays sellers for incoming buy orders and releases USDT to buyers for sell orders.',
+                note: null,
+              },
+              {
+                value: 'buy_only',
+                label: 'Buy orders only',
+                desc: 'Bot pays sellers and acquires USDT automatically when buyers place orders.',
+                note: 'Sell orders will not be automated. If a buyer places a sell order your ad is still live, you must release USDT to them manually on Binance.',
+              },
+              {
+                value: 'sell_only',
+                label: 'Sell orders only',
+                desc: 'Bot receives M-Pesa payments and releases USDT to buyers automatically.',
+                note: 'Buy orders will not be automated. If a seller lists an offer matching your buy ad, you must pay them and complete the order manually on Binance.',
+              },
             ].map(opt => (
               <label key={opt.value} onClick={() => setBotTradeMode(opt.value)}
                 style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 14px', borderRadius: 10, border: `1px solid ${botTradeMode === opt.value ? '#f59e0b' : '#1f2937'}`, background: botTradeMode === opt.value ? 'rgba(245,158,11,0.06)' : 'transparent', marginBottom: 10, cursor: 'pointer', transition: 'all 0.15s' }}>
-                <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${botTradeMode === opt.value ? '#f59e0b' : '#374151'}`, background: botTradeMode === opt.value ? '#f59e0b' : 'transparent', flexShrink: 0, marginTop: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${botTradeMode === opt.value ? '#f59e0b' : '#374151'}`, background: botTradeMode === opt.value ? '#f59e0b' : 'transparent', flexShrink: 0, marginTop: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {botTradeMode === opt.value && <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#000' }} />}
                 </div>
                 <div>
-                  <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600, marginBottom: 2 }}>{opt.label}</div>
-                  <div style={{ color: '#6b7280', fontSize: 12 }}>{opt.desc}</div>
+                  <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600, marginBottom: 3 }}>{opt.label}</div>
+                  <div style={{ color: '#9ca3af', fontSize: 12, lineHeight: 1.4 }}>{opt.desc}</div>
+                  {opt.note && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.18)', borderRadius: 6, padding: '5px 8px', lineHeight: 1.4 }}>
+                      ⚠ {opt.note}
+                    </div>
+                  )}
                 </div>
               </label>
             ))}
