@@ -2879,7 +2879,56 @@ async function detectOrderState(page) {
   return 'unknown';
 }
 
-// â”€â”€ Idle full scan â€” runs when no active order â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Sync Binance ads to match the current botTradeMode:
+// sell_only -> BUY ad offline, SELL ad online
+// buy_only  -> SELL ad offline, BUY ad online
+// both      -> both online
+async function syncAdsToMode(page) {
+  if (!token || pauseNavigation) return;
+  const wanted = {
+    sell_only: { Buy: 'Offline', Sell: 'Online'  },
+    buy_only:  { Buy: 'Online',  Sell: 'Offline' },
+    both:      { Buy: 'Online',  Sell: 'Online'  },
+  }[botTradeMode] || { Buy: 'Online', Sell: 'Online' };
+
+  try {
+    console.log(`[SparkP2P] Syncing ads to mode: ${botTradeMode}`);
+    await page.goto(MY_ADS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 3000));
+    if (pauseNavigation) return;
+
+    const changes = await page.evaluate((wanted) => {
+      const seen = new Set();
+      const results = [];
+      for (const el of document.querySelectorAll('*')) {
+        const direct = Array.from(el.childNodes)
+          .filter(n => n.nodeType === 3).map(n => n.textContent.trim()).join('');
+        if (direct !== 'Online' && direct !== 'Offline') continue;
+        const currentStatus = direct;
+        const row = el.closest('tr') || el.closest('[class*=”row”]') || el.closest('[class*=”adItem”]') || el.parentElement?.parentElement;
+        if (!row) continue;
+        const rowText = row.textContent;
+        const adType = rowText.includes('Buy') ? 'Buy' : rowText.includes('Sell') ? 'Sell' : null;
+        if (!adType || seen.has(adType)) continue;
+        seen.add(adType);
+        const target = wanted[adType];
+        if (currentStatus === target) { results.push(`${adType}: already ${target}`); continue; }
+        const icon = el.nextElementSibling || el.parentElement;
+        if (icon) { icon.click(); results.push(`${adType}: ${currentStatus} -> ${target}`); }
+      }
+      return results;
+    }, wanted);
+
+    await new Promise(r => setTimeout(r, 1500));
+    console.log(`[SparkP2P] Ad sync: ${changes.length ? changes.join(', ') : 'no ads found'}`);
+    sendBotLog('info', `Ad sync (${botTradeMode}): ${changes.join(', ') || 'no ads found'}`);
+  } catch (e) {
+    console.log(`[SparkP2P] Ad sync error: ${e.message}`);
+  }
+}
+
+let _lastAdSync = 0;
+
 async function idleScan(page) {
   console.log(`[SparkP2P] â”€â”€ IDLE SCAN #${stats.polls + 1} â”€â”€`);
   _cycleVision = 0;
@@ -2893,9 +2942,16 @@ async function idleScan(page) {
       if (modeRes.ok) {
         const modeData = await modeRes.json();
         const newMode = modeData.bot_trade_mode || 'both';
-        if (newMode !== botTradeMode) {
-          console.log(`[SparkP2P] Trade mode updated: ${botTradeMode} → ${newMode}`);
+        const modeChanged = newMode !== botTradeMode;
+        if (modeChanged) {
+          console.log(`[SparkP2P] Trade mode updated: ${botTradeMode} -> ${newMode}`);
           botTradeMode = newMode;
+        }
+        // Sync Binance ads on mode change or every 10 minutes
+        const adSyncDue = modeChanged || (Date.now() - _lastAdSync > 10 * 60 * 1000);
+        if (adSyncDue) {
+          _lastAdSync = Date.now();
+          await syncAdsToMode(page);
         }
       }
     } catch (_) {}
