@@ -7898,6 +7898,9 @@ Method selection rules:
       }
 
       // â”€â”€ Step 1b: Send greeting once per order â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      const MPESA_MAX = 250_000;
+      const isSplitNeeded = !isBankTransfer && Math.floor(paymentDetails.amount) > MPESA_MAX;
+
       if (!buyGreetingSentOrders.has(order_number)) {
         buyGreetingSentOrders.add(order_number);
         const method = (paymentDetails.method || 'mpesa').toLowerCase();
@@ -7905,7 +7908,13 @@ Method selection rules:
         const firstName = paymentDetails.name.split(' ')[0];
         const amt = Math.floor(parseFloat(paymentDetails.amount));
         if (method === 'mpesa') {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! 🙏`;
+          if (isSplitNeeded) {
+            const splitPart1 = MPESA_MAX;
+            const splitPart2 = amt - MPESA_MAX;
+            greetMsg = `Hello ${firstName}, I will be sending you KES ${amt.toLocaleString()} to your M-Pesa number ${paymentDetails.phone} in two transactions. M-Pesa allows a maximum of KES 250,000 per transaction, so you will first receive KES ${splitPart1.toLocaleString()} followed by KES ${splitPart2.toLocaleString()}. Please be ready to receive both. Thank you! 🙏`;
+          } else {
+            greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! 🙏`;
+          }
         } else if (method === 'im_bank' || method === 'other_bank') {
           greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you! 🙏`;
         }
@@ -7920,8 +7929,109 @@ Method selection rules:
       const payMethod = (paymentDetails.method || 'mpesa').toLowerCase();
       let imResult = { success: false, screenshot: null };
       const IM_MAX_RETRIES = 3;
-      if (imPaymentDoneMap[order_number]) {
-        console.log(`[SparkP2P] âš ï¸ I&M payment already sent for ${order_number} â€” skipping to Transferred button`);
+
+      if (isSplitNeeded) {
+        // Split M-Pesa payment: two transactions because M-Pesa max is KES 250,000
+        const totalAmt = Math.floor(paymentDetails.amount);
+        const splitChunks = [MPESA_MAX, totalAmt - MPESA_MAX];
+        let splitLastResult = { success: false, screenshot: null, referenceId: null };
+        let splitAllDone = true;
+
+        for (let ci = 0; ci < splitChunks.length; ci++) {
+          const chunkKey = `${order_number}_chunk${ci + 1}`;
+          const chunkAmt = splitChunks[ci];
+
+          if (imPaymentDoneMap[chunkKey]) {
+            console.log(`[SparkP2P] Split chunk ${ci + 1} already paid for ${order_number} — skipping`);
+            splitLastResult = { success: true, ...imPaymentDoneMap[chunkKey] };
+          } else {
+            let chunkResult = { success: false, screenshot: null, referenceId: null };
+            for (let attempt = 1; attempt <= IM_MAX_RETRIES; attempt++) {
+              try {
+                console.log(`[SparkP2P] Split chunk ${ci + 1}/${splitChunks.length} attempt ${attempt}/${IM_MAX_RETRIES} — KES ${chunkAmt.toLocaleString()}...`);
+                chunkResult = await executeImPayment({
+                  phone: paymentDetails.phone,
+                  name: paymentDetails.name,
+                  amount: chunkAmt,
+                  reference: order_number,
+                  network: paymentDetails.network || 'safaricom',
+                });
+                if (chunkResult.success) {
+                  imPaymentDoneMap[chunkKey] = { screenshot: chunkResult.screenshot, referenceId: chunkResult.referenceId };
+                  savePaidOrder(chunkKey, { screenshot: chunkResult.screenshot, referenceId: chunkResult.referenceId });
+                  break;
+                }
+                console.log(`[SparkP2P] Split chunk ${ci + 1} attempt ${attempt} failed — ${attempt < IM_MAX_RETRIES ? 'retrying in 8s...' : 'giving up'}`);
+              } catch (e) {
+                console.error(`[SparkP2P] Split chunk ${ci + 1} attempt ${attempt} threw: ${e.message}`);
+                await takeScreenshot(`Split chunk ${ci + 1} error: ${e.message.substring(0, 40)}`);
+              }
+              if (attempt < IM_MAX_RETRIES) await new Promise(r => setTimeout(r, 8000));
+            }
+            if (!chunkResult.success) {
+              console.error(`[SparkP2P] Split chunk ${ci + 1} FAILED for ${order_number} — aborting`);
+              await takeScreenshot(`Split chunk ${ci + 1} FAILED: ${order_number}`);
+              const alreadySentAmt = splitChunks.slice(0, ci).reduce((a, b) => a + b, 0);
+              await fetch(`${API_BASE}/ext/report-buy-expired`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({
+                  order_number,
+                  seller_name: paymentDetails.name || 'Unknown',
+                  amount: paymentDetails.amount || 0,
+                  minutes_waited: 0,
+                  reason: `Split M-Pesa payment failed on chunk ${ci + 1} of ${splitChunks.length} after ${IM_MAX_RETRIES} attempts. KES ${alreadySentAmt.toLocaleString()} may already have been sent. Please verify and complete the order manually.`,
+                }),
+              }).catch(() => {});
+              splitAllDone = false;
+              break;
+            }
+            splitLastResult = chunkResult;
+          }
+
+          // After each chunk: switch to Binance and send screenshot to chat
+          await page.bringToFront();
+          await page.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order_number}`, {
+            waitUntil: 'domcontentloaded', timeout: 15000,
+          }).catch(() => {});
+          await new Promise(r => setTimeout(r, 3000));
+          await dismissBinanceModals(page);
+
+          const chunkChatKey = `${order_number}_chunk${ci + 1}_chat`;
+          if (!buyPostPaymentMsgSentOrders.has(chunkChatKey)) {
+            buyPostPaymentMsgSentOrders.add(chunkChatKey);
+            const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+            const refPart = splitLastResult.referenceId ? ` M-Pesa Ref: ${splitLastResult.referenceId}.` : '';
+            const firstName2 = paymentDetails.name.split(' ')[0];
+            let chunkMsg;
+            if (ci === 0) {
+              chunkMsg = `Hello ${firstName2}, I have sent the first payment of KSh ${chunkAmt.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} The second payment of KSh ${splitChunks[1].toLocaleString()} is coming shortly.`;
+            } else {
+              chunkMsg = `Hello ${firstName2}, I have sent the final payment of KSh ${chunkAmt.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Both payments totalling KSh ${totalAmt.toLocaleString()} have been sent. Please check and release the crypto. Thank you!`;
+            }
+            await sendBinanceChatMessage(page, chunkMsg);
+          }
+
+          // Send chunk screenshot as chat image
+          const chunkImgKey = `${order_number}_chunk${ci + 1}_img`;
+          if (splitLastResult.screenshot && !buyPostPaymentMsgSentOrders.has(chunkImgKey)) {
+            buyPostPaymentMsgSentOrders.add(chunkImgKey);
+            await sendImageInBinanceChat(page, splitLastResult.screenshot);
+          }
+
+          if (!splitAllDone) break;
+        }
+
+        if (!splitAllDone) return; // Hard stop — partial payment, trader must handle manually
+
+        // Wire into existing post-payment flow
+        imResult = { success: true, screenshot: splitLastResult.screenshot, referenceId: splitLastResult.referenceId };
+        imPaymentDoneMap[order_number] = { screenshot: splitLastResult.screenshot, referenceId: splitLastResult.referenceId };
+        savePaidOrder(order_number, { screenshot: splitLastResult.screenshot, referenceId: splitLastResult.referenceId });
+        buyPostPaymentMsgSentOrders.add(order_number); // suppress generic post-payment message below
+
+      } else if (imPaymentDoneMap[order_number]) {
+        console.log(`[SparkP2P] I&M payment already sent for ${order_number} — skipping to Transferred button`);
         imResult = { success: true, ...imPaymentDoneMap[order_number] };
       } else {
         let nameMismatchCount2 = 0;
@@ -7957,7 +8067,6 @@ Method selection rules:
                 const sf2 = (currentPaymentDetails2.name || 'Seller').split(' ')[0];
                 await sendBinanceChatMessage(page, `Hi ${sf2}, I tried to send KSh ${Math.floor(currentPaymentDetails2.amount)} to M-Pesa number ${currentPaymentDetails2.phone}, but the name registered on that number (${imResult.imVerifiedName || 'unknown'}) doesn't match what's on your Binance listing. Could you confirm that ${currentPaymentDetails2.phone} is your correct M-Pesa number? I may have to cancel this order if the details cannot be verified. Thank you.`);
                 console.log(`[SparkP2P] Name mismatch message sent to seller for ${order_number}`);
-                // Notify trader — payment was NOT sent
                 const elapsedMins2 = orderFirstSeenAt[order_number] ? Math.floor((Date.now() - orderFirstSeenAt[order_number]) / 60000) : 0;
                 const remainingMins2 = Math.max(1, 30 - elapsedMins2);
                 await fetch(`${API_BASE}/ext/report-buy-expired`, {
@@ -7973,7 +8082,6 @@ Method selection rules:
                 }).catch(() => {});
                 break;
               }
-              // Re-extract from Binance before retry
               try {
                 const freshPhone2 = await page.evaluate(() => { const b = document.body.innerText || ''; const m = b.match(/\b(07\d{8}|254\d{9}|\+254\d{9})\b/); return m ? m[1] : null; }).catch(() => null);
                 const freshName2 = await page.evaluate(() => { const b = document.body.innerText || ''; const m = b.match(/(?:^|\n)[ \t]*Name[ \t]*\r?\n[ \t]*([A-Za-z][A-Za-z .'-]{2,60})[ \t]*(?:\r?\n|$)/m); return m ? m[1].trim() : null; }).catch(() => null);
@@ -7981,10 +8089,10 @@ Method selection rules:
                 if (freshName2) currentPaymentDetails2 = { ...currentPaymentDetails2, name: freshName2 };
                 console.log(`[SparkP2P] Re-extracted: phone=${freshPhone2 || 'unchanged'}, name=${freshName2 || 'unchanged'}`);
               } catch (_) {}
-              continue; // retry without 8s delay
+              continue;
             }
 
-            console.log(`[SparkP2P] I&M payment attempt ${attempt} failed â€” ${attempt < IM_MAX_RETRIES ? 'retrying in 8s...' : 'giving up'}`);
+            console.log(`[SparkP2P] I&M payment attempt ${attempt} failed — ${attempt < IM_MAX_RETRIES ? 'retrying in 8s...' : 'giving up'}`);
           } catch (e) {
             console.error(`[SparkP2P] I&M payment attempt ${attempt} threw: ${e.message}`);
             await takeScreenshot(`I&M attempt ${attempt} error: ${e.message.substring(0, 40)}`);
@@ -7992,8 +8100,6 @@ Method selection rules:
           if (attempt < IM_MAX_RETRIES) await new Promise(r => setTimeout(r, 8000));
         }
       }
-
-      // â”€â”€ HARD STOP if all retries failed â€” do NOT notify Binance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       if (!imResult.success) {
         console.error(`[SparkP2P] âŒ I&M payment FAILED after ${IM_MAX_RETRIES} attempts for order ${order_number} â€” aborting`);
         await takeScreenshot(`I&M payment FAILED x${IM_MAX_RETRIES}: ${order_number}`);

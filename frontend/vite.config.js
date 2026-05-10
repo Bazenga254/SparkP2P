@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const APP_VERSION = '1.4.77';
+const APP_VERSION = '1.4.78';
 
 export default defineConfig({
   define: {
