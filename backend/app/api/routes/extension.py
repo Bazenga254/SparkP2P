@@ -53,6 +53,8 @@ class BinanceOrderData(BaseModel):
     sellerPaymentPhone: Optional[str] = None
     sellerPaymentAccount: Optional[str] = None
     counterparty: Optional[str] = None
+    buyer_30d_trades: Optional[int] = None   # scraped from order page — used for DD screening
+    buyer_all_trades: Optional[int] = None   # scraped from order page — used for DD screening
 
 
 class ReportOrdersRequest(BaseModel):
@@ -1144,13 +1146,18 @@ async def _process_reported_sell_order(
         exchange_rate=rate,
         account_reference=account_ref,
         counterparty_name=order_data.buyerNickname,
+        fraud_check_result={
+            "buyer_30d_trades": order_data.buyer_30d_trades,
+            "buyer_all_trades": order_data.buyer_all_trades,
+        } if (order_data.buyer_30d_trades is not None or order_data.buyer_all_trades is not None) else None,
     )
     db.add(order)
     await db.commit()
 
     logger.info(f"New sell order tracked: {order_number} for trader {trader.full_name}")
 
-    # Tell extension to send payment instructions via chat
+    # Tell extension to send payment instructions via chat.
+    # buyer_nickname is included so the bot can run DD screening before sending.
     paybill = settings.MPESA_SHORTCODE
     message = (
         f"Hi! Please send KES {amount:,.0f} to:\n"
@@ -1160,7 +1167,7 @@ async def _process_reported_sell_order(
         f"You will receive a confirmation message once payment is received. "
         f"Your crypto will be released automatically."
     )
-    return {"action": "send_message", "order_number": order_number, "message": message}
+    return {"action": "send_message", "order_number": order_number, "message": message, "buyer_nickname": order_data.buyerNickname or ""}
 
 
 async def _process_reported_buy_order(
@@ -1220,6 +1227,27 @@ async def _process_reported_buy_order(
 
     await db.commit()
     return None
+
+
+# ─── Counterparty screening helpers ──────────────────────────────────────────
+
+@router.get("/check-returning-buyer")
+async def check_returning_buyer(
+    nickname: str,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns whether a buyer nickname has any completed sell orders with this trader.
+    Returning clients bypass DD screening thresholds."""
+    result = await db.execute(
+        select(Order.id).where(
+            Order.trader_id == trader.id,
+            Order.counterparty_name == nickname,
+            Order.status == OrderStatus.COMPLETED,
+        ).limit(1)
+    )
+    existing = result.scalar_one_or_none()
+    return {"is_returning": existing is not None}
 
 
 # ─── I&M Bank withdrawal job queue ───────────────────────────────────────────

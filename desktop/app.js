@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage, dialog, powerMonitor, screen: electronScreen, shell } = require('electron');
+﻿﻿const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage, dialog, powerMonitor, screen: electronScreen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -152,6 +152,10 @@ const lastDeficitSent = {}; // orderNumber → deficit amount last messaged â�
 let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for monitorActiveOrder compat)
 let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
 let botTradeMode = 'both';      // 'both' | 'buy_only' | 'sell_only' — fetched from backend on start
+let ddEnabled = false;          // Counterparty screening on/off
+let ddMin30d = 20;              // Tier 1: minimum 30-day trade count
+let ddMinAll = 0;               // Tier 2: minimum all-time trade count (0 = off)
+let ddAutoCancelNew = false;    // Auto-cancel accounts with <5 all-time trades
 let connectingBinance = false; // Prevents concurrent connectBinance() calls
 let scanningInProgress = false; // Prevents concurrent initialScan() calls
 let sessionStartTime = null;   // When Binance login was last confirmed
@@ -2879,6 +2883,84 @@ async function detectOrderState(page) {
   return 'unknown';
 }
 
+// ── Counterparty Due Diligence helpers ────────────────────────────────────────
+
+function extractBuyerStats(pageText) {
+  // "48 orders / 30 days" — 30-day count
+  const d30 = pageText.match(/(\d[\d,]*)\s*(?:orders?|trades?)\s*\/\s*30\s*days?/i);
+  // "152 orders" all-time — match only if NOT followed by "/30 days"
+  const allMatch = pageText.match(/(\d[\d,]*)\s*(?:orders?|trades?)(?!\s*\/\s*30)/i);
+  return {
+    trades_30d: d30 ? parseInt(d30[1].replace(/,/g, ''), 10) : null,
+    trades_all: allMatch ? parseInt(allMatch[1].replace(/,/g, ''), 10) : null,
+  };
+}
+
+async function checkReturningBuyer(nickname) {
+  if (!nickname || !token) return false;
+  try {
+    const r = await fetch(
+      `${API_BASE}/ext/check-returning-buyer?nickname=${encodeURIComponent(nickname)}`,
+      { headers: { 'Authorization': `Bearer ${token}` } }
+    ).catch(() => null);
+    if (r?.ok) return (await r.json()).is_returning;
+  } catch (_) {}
+  return false;
+}
+
+async function cancelOrderOnBinance(page, orderNumber, reason) {
+  const cancelled = await page.evaluate(() => {
+    const phrases = ['cancel order', 'cancel', 'cancel the order'];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    while (walker.nextNode()) {
+      const el = walker.currentNode;
+      if (el.tagName !== 'BUTTON' && el.tagName !== 'A') continue;
+      const t = (el.textContent || '').trim().toLowerCase();
+      if (phrases.some(p => t === p || t.startsWith(p))) { el.click(); return true; }
+    }
+    return false;
+  }).catch(() => false);
+
+  if (!cancelled) {
+    console.log(`[SparkP2P] DD cancel: cancel button not found for ${orderNumber}`);
+    return false;
+  }
+
+  await new Promise(r => setTimeout(r, 2000));
+  await page.evaluate(() => {
+    const phrases = ['confirm', 'yes', 'confirm cancel', 'yes, cancel'];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    while (walker.nextNode()) {
+      const el = walker.currentNode;
+      if (el.tagName !== 'BUTTON') continue;
+      const t = (el.textContent || '').trim().toLowerCase();
+      if (phrases.some(p => t === p || t.startsWith(p))) { el.click(); return true; }
+    }
+    return false;
+  }).catch(() => {});
+  await new Promise(r => setTimeout(r, 1500));
+
+  delete orderFirstSeenAt[orderNumber];
+  orderReminderSent.delete(orderNumber);
+  delete orderLastBotReplyAt[orderNumber];
+  codeFallbackAskedOrders.delete(orderNumber);
+  delete partialPayments[orderNumber];
+  delete lastDeficitSent[orderNumber];
+  verifiedOrders.delete(orderNumber);
+
+  await fetch(`${API_BASE}/ext/report-orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [orderNumber] }),
+  }).catch(() => {});
+
+  sendBotLog('warn', `DD screening: cancelled order ${orderNumber} — ${reason}`);
+  console.log(`[SparkP2P] DD: cancelled ${orderNumber} — ${reason}`);
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function idleScan(page) {
   console.log(`[SparkP2P] â”€â”€ IDLE SCAN #${stats.polls + 1} â”€â”€`);
   _cycleVision = 0;
@@ -2897,6 +2979,10 @@ async function idleScan(page) {
           console.log(`[SparkP2P] Trade mode updated: ${botTradeMode} -> ${newMode}`);
           botTradeMode = newMode;
         }
+        ddEnabled       = modeData.dd_enabled        || false;
+        ddMin30d        = modeData.dd_min_30d_trades  || 20;
+        ddMinAll        = modeData.dd_min_all_trades  || 0;
+        ddAutoCancelNew = modeData.dd_auto_cancel_new || false;
       }
     } catch (_) {}
   }
@@ -7974,7 +8060,39 @@ Method selection rules:
                           }).catch(() => false);
       if (alreadyPaid) {
         console.log(`[SparkP2P] â­ Skipping send_message â€” buyer already paid (verify_payment state)`);
-      } else {
+            } else {
+        // -- Counterparty DD screening - runs before payment instructions are sent --
+        if (ddEnabled && action.buyer_nickname) {
+          const stats = extractBuyerStats(pageText);
+          const isReturning = await checkReturningBuyer(action.buyer_nickname);
+
+          if (isReturning) {
+            console.log(`[SparkP2P] DD: ${action.buyer_nickname} is returning client -- bypassing screening`);
+          } else {
+            let failReason = null;
+
+            // Auto-cancel brand-new accounts (< 5 all-time trades)
+            if (ddAutoCancelNew && stats.trades_all !== null && stats.trades_all < 5) {
+              failReason = `brand-new account (${stats.trades_all} all-time trades, minimum 5)`;
+            }
+            // Tier 1 -- 30-day minimum (hard requirement)
+            if (!failReason && stats.trades_30d !== null && stats.trades_30d < ddMin30d) {
+              failReason = `low recent activity (${stats.trades_30d} trades in 30 days, minimum ${ddMin30d})`;
+            }
+            // Tier 2 -- all-time minimum (only enforced if Tier 1 passed or no 30d data)
+            if (!failReason && ddMinAll > 0 && stats.trades_all !== null && stats.trades_all < ddMinAll) {
+              failReason = `low total trades (${stats.trades_all} all-time, minimum ${ddMinAll})`;
+            }
+
+            if (failReason) {
+              console.log(`[SparkP2P] DD: ${action.buyer_nickname} FAILED -- ${failReason}`);
+              await cancelOrderOnBinance(page, order_number, failReason);
+              return;
+            }
+            console.log(`[SparkP2P] DD: ${action.buyer_nickname} passed (30d: ${stats.trades_30d ?? 'n/a'}, all: ${stats.trades_all ?? 'n/a'})`);
+          }
+        }
+
         await sendChatMessage(page, action.message || '');
         console.log(`[SparkP2P] Message sent: ${(action.message || '').substring(0, 60)}`);
       }

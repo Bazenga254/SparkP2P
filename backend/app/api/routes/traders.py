@@ -136,6 +136,10 @@ class TraderProfileResponse(BaseModel):
     bot_trade_mode: str = 'both'
     batch_settlement_enabled: bool = True
     batch_threshold: int = 50000
+    dd_enabled: bool = False
+    dd_min_30d_trades: int = 20
+    dd_min_all_trades: int = 0
+    dd_auto_cancel_new: bool = False
 
 
 # In-memory store for phone verification results
@@ -443,6 +447,10 @@ async def get_profile(
         batch_settlement_enabled=bool(trader.batch_settlement_enabled),
         batch_threshold=trader.batch_threshold or 50000,
         bot_trade_mode=trader.bot_trade_mode or 'both',
+        dd_enabled=bool(trader.dd_enabled),
+        dd_min_30d_trades=trader.dd_min_30d_trades or 20,
+        dd_min_all_trades=trader.dd_min_all_trades or 0,
+        dd_auto_cancel_new=bool(trader.dd_auto_cancel_new),
     )
 
 
