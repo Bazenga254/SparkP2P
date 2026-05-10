@@ -1,4 +1,4 @@
-﻿﻿const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage, dialog, powerMonitor, screen: electronScreen, shell } = require('electron');
+﻿﻿﻿const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage, dialog, powerMonitor, screen: electronScreen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -3750,7 +3750,31 @@ async function idleScan(page) {
       sendBotLog('warn', `Buy order ${order.orderNumber}: payment tracking restored — awaiting seller release. Will monitor for release or timeout.`);
 
     } else {
-      // Payment not yet sent â€” extract details from page and pay directly
+      // Payment not yet sent -- screen seller first (DD), then extract details and pay
+      if (!orderFirstSeenAt[order.orderNumber] && ddEnabled) {
+        const sellerNick = order.counterparty || '';
+        const sellerStats = extractBuyerStats(buyText);
+        const sellerReturning = await checkReturningBuyer(sellerNick);
+
+        if (sellerReturning) {
+          console.log(`[SparkP2P] DD: seller ${sellerNick} is returning -- bypassing screening`);
+        } else {
+          let failReason = null;
+          if (ddAutoCancelNew && sellerStats.trades_all !== null && sellerStats.trades_all < 5)
+            failReason = `brand-new account (${sellerStats.trades_all} all-time trades, minimum 5)`;
+          if (!failReason && sellerStats.trades_30d !== null && sellerStats.trades_30d < ddMin30d)
+            failReason = `low recent activity (${sellerStats.trades_30d} trades in 30 days, minimum ${ddMin30d})`;
+          if (!failReason && ddMinAll > 0 && sellerStats.trades_all !== null && sellerStats.trades_all < ddMinAll)
+            failReason = `low total trades (${sellerStats.trades_all} all-time, minimum ${ddMinAll})`;
+
+          if (failReason) {
+            console.log(`[SparkP2P] DD: seller ${sellerNick} FAILED -- ${failReason}`);
+            await cancelOrderOnBinance(page, order.orderNumber, failReason);
+            continue;
+          }
+          console.log(`[SparkP2P] DD: seller ${sellerNick} passed (30d: ${sellerStats.trades_30d ?? 'n/a'}, all: ${sellerStats.trades_all ?? 'n/a'})`);
+        }
+      }
       if (!orderFirstSeenAt[order.orderNumber]) {
         orderFirstSeenAt[order.orderNumber] = Date.now();
       }
