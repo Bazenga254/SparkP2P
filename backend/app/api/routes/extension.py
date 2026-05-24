@@ -534,34 +534,39 @@ async def get_pending_actions(
     """
     actions: list[dict] = []
 
-    # Sell side: payment received, needs release
-    result = await db.execute(
-        select(Order).where(
-            Order.trader_id == trader.id,
-            Order.side == OrderSide.SELL,
-            Order.status == OrderStatus.PAYMENT_RECEIVED,
+    # Sell side: payment received, needs release — only if mode allows sell automation
+    sell_automated = (trader.bot_trade_mode or 'both') in ('both', 'sell_only')
+    if sell_automated:
+        result = await db.execute(
+            select(Order).where(
+                Order.trader_id == trader.id,
+                Order.side == OrderSide.SELL,
+                Order.status == OrderStatus.PAYMENT_RECEIVED,
+            )
         )
-    )
-    for order in result.scalars().all():
-        if trader.auto_release_enabled:
-            actions.append({
-                "action": "release",
-                "order_number": order.binance_order_number,
-            })
+        for order in result.scalars().all():
+            if trader.auto_release_enabled:
+                actions.append({
+                    "action": "release",
+                    "order_number": order.binance_order_number,
+                })
 
     # Buy side: orders where VPS already sent B2C payment, extension needs to mark as paid
-    result = await db.execute(
-        select(Order).where(
-            Order.trader_id == trader.id,
-            Order.side == OrderSide.BUY,
-            Order.status == OrderStatus.PAYMENT_SENT,
+    # Only if mode allows buy automation
+    buy_automated = (trader.bot_trade_mode or 'both') in ('both', 'buy_only')
+    if buy_automated:
+        result = await db.execute(
+            select(Order).where(
+                Order.trader_id == trader.id,
+                Order.side == OrderSide.BUY,
+                Order.status == OrderStatus.PAYMENT_SENT,
+            )
         )
-    )
-    for order in result.scalars().all():
-        actions.append({
-            "action": "mark_as_paid",
-            "order_number": order.binance_order_number,
-        })
+        for order in result.scalars().all():
+            actions.append({
+                "action": "mark_as_paid",
+                "order_number": order.binance_order_number,
+            })
 
     return {"actions": actions}
 
@@ -1199,7 +1204,8 @@ async def _process_reported_sell_order(
                 logger.info(f"Order {order_number} marked {existing.status.value} from Binance status")
             return None
         # Already tracked — check if payment was received and needs release
-        if existing.status == OrderStatus.PAYMENT_RECEIVED and trader.auto_release_enabled:
+        sell_automated = (trader.bot_trade_mode or 'both') in ('both', 'sell_only')
+        if existing.status == OrderStatus.PAYMENT_RECEIVED and trader.auto_release_enabled and sell_automated:
             existing.status = OrderStatus.RELEASING
             # Include confirmation chat message if pending
             chat_msg = existing.pending_chat_message
@@ -1244,6 +1250,11 @@ async def _process_reported_sell_order(
 
     logger.info(f"New sell order tracked: {order_number} for trader {trader.full_name}")
 
+    # Only send payment instructions if sell automation is enabled
+    sell_automated = (trader.bot_trade_mode or 'both') in ('both', 'sell_only')
+    if not sell_automated:
+        return None
+
     # Tell extension to send payment instructions via chat.
     # buyer_nickname is included so the bot can run DD screening before sending.
     paybill = settings.MPESA_SHORTCODE
@@ -1284,8 +1295,9 @@ async def _process_reported_buy_order(
     existing = result.scalar_one_or_none()
 
     if existing:
-        # If we already sent payment, tell extension to mark as paid
-        if existing.status == OrderStatus.PAYMENT_SENT:
+        # If we already sent payment, tell extension to mark as paid (only if buy mode active)
+        buy_automated = (trader.bot_trade_mode or 'both') in ('both', 'buy_only')
+        if existing.status == OrderStatus.PAYMENT_SENT and buy_automated:
             return {"action": "mark_as_paid", "order_number": order_number}
         return None
 
