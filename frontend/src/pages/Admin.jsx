@@ -703,7 +703,7 @@ export default function Admin() {
 
   useEffect(() => {
     if (activeTab === 'disputes') { setUnreadTicketCount(0); loadSupportTickets(ticketCategory, ticketPage); }
-    if (activeTab === 'withdrawals') { loadWithdrawals(); loadSweeps('all'); }
+    if (activeTab === 'withdrawals') { loadWithdrawals(); }
     if (activeTab === 'paybill') { loadPaybillTxs('today', 1); }
     if (activeTab === 'survey') { loadSurveyResponses(); }
     if (activeTab === 'settings') { loadEmployees(); }
@@ -3038,18 +3038,7 @@ export default function Admin() {
               <div className="adm-card-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                   <h3>Withdrawals</h3>
-                  {/* Method toggle */}
-                  <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                    {[['all','All'], ['mpesa','M-Pesa']].map(([val, label]) => (
-                      <button key={val} onClick={() => { setWdMethod(val); setWdPage(1); loadWithdrawals(val, wdStatus, wdPeriod, 1); }}
-                        style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                          background: wdMethod === val ? '#f59e0b' : 'transparent',
-                          color: wdMethod === val ? '#000' : '#9ca3af',
-                        }}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+
                   {/* Status toggle */}
                   <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
                     {[['all','All Status'], ['pending','Pending'], ['completed','Completed']].map(([val, label]) => (
@@ -3402,104 +3391,6 @@ export default function Admin() {
               </div>
             );
           })()}
-
-          {/* ==================== AUTO-SWEEPS ==================== */}
-          {activeTab === 'withdrawals' && (
-            <div className="adm-card" style={{ marginTop: 20 }}>
-              <div className="adm-card-header" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 16 }}>⚡</span> Auto-Sweeps
-                  <span style={{ fontSize: 11, background: 'rgba(16,185,129,0.15)', color: '#10b981', borderRadius: 6, padding: '2px 8px', fontWeight: 400 }}>
-                    Paybill 4041355 → I&M Bank
-                  </span>
-                </h3>
-                {/* Status filter */}
-                <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)', marginLeft: 'auto' }}>
-                  {[['all','All'], ['pending','Pending'], ['completed','Completed'], ['failed','Failed']].map(([val, label]) => (
-                    <button key={val} onClick={() => { setSweepSubTab(val); loadSweeps(val); }}
-                      style={{ padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                        background: sweepSubTab === val ? (val === 'failed' ? '#ef4444' : val === 'completed' ? '#10b981' : '#f59e0b') : 'transparent',
-                        color: sweepSubTab === val ? '#000' : 'var(--text-muted)' }}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <button onClick={() => loadSweeps(sweepSubTab)} style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text)', cursor: 'pointer', fontSize: 12 }}>
-                  ↺ Refresh
-                </button>
-              </div>
-
-              {sweepsLoading ? (
-                <div style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>Loading sweeps...</div>
-              ) : sweeps.length === 0 ? (
-                <div style={{ padding: 24, textAlign: 'center', color: '#6b7280', fontSize: 13 }}>
-                  No sweeps yet. Sweeps are triggered automatically when traders withdraw.
-                </div>
-              ) : (
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ borderBottom: '1px solid var(--border)', color: '#6b7280', fontSize: 11 }}>
-                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>ID</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>Amount</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>Status</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>Destination</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>M-Pesa Ref</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>Initiated</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'left' }}>Completed</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'left' }}></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sweeps.map(sw => (
-                        <tr key={sw.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                          <td style={{ padding: '10px 12px', color: '#6b7280' }}>#{sw.id}</td>
-                          <td style={{ padding: '10px 12px', fontWeight: 700, color: '#fff' }}>
-                            KES {sw.amount?.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                          </td>
-                          <td style={{ padding: '10px 12px' }}>
-                            <span style={{
-                              fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
-                              background: sw.status === 'completed' ? 'rgba(16,185,129,0.15)' : sw.status === 'failed' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
-                              color: sw.status === 'completed' ? '#10b981' : sw.status === 'failed' ? '#ef4444' : '#f59e0b',
-                            }}>
-                              {sw.status}
-                            </span>
-                            {sw.status === 'failed' && sw.failure_reason && (
-                              <div style={{ fontSize: 10, color: '#ef4444', marginTop: 3 }}>{sw.failure_reason.substring(0, 60)}</div>
-                            )}
-                          </td>
-                          <td style={{ padding: '10px 12px', color: '#9ca3af', fontSize: 12 }}>
-                            Paybill {sw.sweep_paybill}<br />
-                            <span style={{ color: '#6b7280' }}>Acc: {sw.sweep_account}</span>
-                          </td>
-                          <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: '#6b7280' }}>
-                            {sw.mpesa_conversation_id ? sw.mpesa_conversation_id.substring(0, 20) + '...' : '—'}
-                          </td>
-                          <td style={{ padding: '10px 12px', color: '#6b7280', fontSize: 11 }}>
-                            {sw.created_at ? new Date(sw.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '—'}
-                          </td>
-                          <td style={{ padding: '10px 12px', color: '#6b7280', fontSize: 11 }}>
-                            {sw.completed_at ? new Date(sw.completed_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '—'}
-                          </td>
-                          <td style={{ padding: '10px 12px' }}>
-                            {sw.status === 'failed' && (
-                              <button
-                                onClick={() => handleRetrySweep(sw.id)}
-                                disabled={sweepRetrying === sw.id}
-                                style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, fontSize: 11, cursor: 'pointer', opacity: sweepRetrying === sw.id ? 0.6 : 1 }}>
-                                {sweepRetrying === sw.id ? '...' : 'Retry'}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* ==================== PAYBILL TRANSACTIONS ==================== */}
           {activeTab === 'paybill' && (
