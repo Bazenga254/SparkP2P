@@ -419,6 +419,7 @@ export default function Dashboard() {
   const [ordersPage, setOrdersPage] = useState(1);
   const [ordersHasMore, setOrdersHasMore] = useState(true);
   const ORDERS_PER_PAGE = 20;
+  const [ordersFilter, setOrdersFilter] = useState('all'); // 'all' | 'incoming' | 'outgoing'
   const [showTierModal, setShowTierModal] = useState(false);
   const [tierModalSelection, setTierModalSelection] = useState('');
   const [tierModalSaving, setTierModalSaving] = useState(false);
@@ -960,12 +961,7 @@ export default function Dashboard() {
     if (profile?.phone) setDepositPhone(profile.phone);
   }, [profile]);
 
-  // Load deposit history when transactions tab is opened
-  useEffect(() => {
-    if (activeTab === 'transactions') {
-      getDepositHistory(20).then(res => setDepositHistory(res.data)).catch(() => {});
-    }
-  }, [activeTab]);
+
 
   const getStatusColor = (status) => {
     const colors = {
@@ -1239,7 +1235,7 @@ export default function Dashboard() {
       </header>
 
       <nav className="dash-tabs">
-        {['overview', 'orders', 'transactions', 'logs', 'settings'].map((tab) => (
+        {['overview', 'orders', 'logs', 'settings'].map((tab) => (
           <button
             key={tab}
             className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
@@ -1758,372 +1754,114 @@ export default function Dashboard() {
           </>
         )}
 
-        {activeTab === 'orders' && (
-          <div className="card">
-            <h3>All Orders</h3>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Side</th>
-                  <th>Amount</th>
-                  <th>Crypto</th>
-                  <th>Rate</th>
-                  <th>Status</th>
-                  <th>Reference</th>
-                  <th>Time</th>
-                  <th>Duration</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map((order) => {
-                  const { secs, live, overdue } = getOrderDuration(order);
-                  return (
-                  <tr key={order.id}>
-                    <td className={`side-${order.side}`}>{order.side.toUpperCase()}</td>
-                    <td>KES {order.fiat_amount.toLocaleString()}</td>
-                    <td>{order.crypto_amount} {order.crypto_currency}</td>
-                    <td>{order.exchange_rate}</td>
-                    <td style={{ color: getStatusColor(order.status) }}>
-                      {order.status.replace('_', ' ')}
-                    </td>
-                    <td className="mono">{order.account_reference || '-'}</td>
-                    <td>{fmtDateEAT(order.created_at)}</td>
-                    <td style={{
-                      fontVariantNumeric: 'tabular-nums',
-                      color: overdue ? '#f97316' : live ? '#facc15' : '#9ca3af',
-                      fontWeight: live ? 600 : 400,
-                      whiteSpace: 'nowrap',
-                    }}>
-                      {overdue && <span title="Binance timer expired — order still active" style={{ marginRight: 4 }}>⚠️</span>}
-                      {formatDuration(secs)}
-                      {live && <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.6 }}>●</span>}
-                    </td>
-                  </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {/* Pagination */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 16 }}>
-              <button
-                onClick={() => setOrdersPage(p => Math.max(1, p - 1))}
-                disabled={ordersPage === 1}
-                style={{
-                  padding: '6px 16px', borderRadius: 8, border: 'none', cursor: ordersPage === 1 ? 'not-allowed' : 'pointer',
-                  background: ordersPage === 1 ? '#1f2937' : '#374151', color: ordersPage === 1 ? '#6b7280' : '#f9fafb',
-                  fontWeight: 600, fontSize: 13,
-                }}
-              >← Prev</button>
-              {[...Array(Math.max(ordersPage + (ordersHasMore ? 1 : 0), ordersPage))].map((_, i) => {
-                const p = i + 1;
-                if (p > ordersPage + (ordersHasMore ? 1 : 0)) return null;
-                return (
-                  <button key={p} onClick={() => setOrdersPage(p)} style={{
-                    padding: '6px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
-                    background: p === ordersPage ? 'linear-gradient(135deg,#10b981,#059669)' : '#374151',
-                    color: '#f9fafb', fontWeight: 600, fontSize: 13,
-                  }}>{p}</button>
-                );
-              })}
-              <button
-                onClick={() => setOrdersPage(p => p + 1)}
-                disabled={!ordersHasMore}
-                style={{
-                  padding: '6px 16px', borderRadius: 8, border: 'none', cursor: !ordersHasMore ? 'not-allowed' : 'pointer',
-                  background: !ordersHasMore ? '#1f2937' : '#374151', color: !ordersHasMore ? '#6b7280' : '#f9fafb',
-                  fontWeight: 600, fontSize: 13,
-                }}
-              >Next →</button>
-            </div>
-          </div>
-        )}
+        {activeTab === 'orders' && (() => {
+          const loadFiltered = async (filter, page) => {
+            const side = filter === 'incoming' ? 'sell' : filter === 'outgoing' ? 'buy' : undefined;
+            const res = await getOrders({ limit: 20, offset: (page - 1) * 20, ...(side ? { side } : {}) });
+            setOrders(res.data);
+            setOrdersHasMore(res.data.length === 20);
+          };
 
-        {activeTab === 'transactions' && (
-          <>
-            {/* Sub-tabs */}
-            <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-              {['deposits', 'withdrawals'].map((t) => (
-                <button
-                  key={t}
-                  onClick={() => { setTxnTab(t); setDepositPage(1); setWithdrawalPage(1); }}
-                  style={{
-                    padding: '8px 22px', borderRadius: 8, border: 'none', cursor: 'pointer',
-                    fontWeight: 600, fontSize: 13,
-                    background: txnTab === t ? 'linear-gradient(135deg, #10b981, #059669)' : '#1f2937',
-                    color: txnTab === t ? '#fff' : '#9ca3af',
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  {t.charAt(0).toUpperCase() + t.slice(1)}
-                </button>
-              ))}
-            </div>
+          const handleFilterChange = (f) => {
+            setOrdersFilter(f);
+            setOrdersPage(1);
+            loadFiltered(f, 1);
+          };
 
-            {/* Deposits Tab */}
-            {txnTab === 'deposits' && (
-              <div className="card">
-                <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <h3>Deposit History</h3>
-                  <button
-                    onClick={() => setShowDepositModal(true)}
-                    style={{
-                      padding: '6px 16px', borderRadius: 8, border: 'none',
-                      background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff',
-                      fontWeight: 600, fontSize: 12, cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', gap: 4,
-                    }}
-                  >
-                    <Plus size={14} /> New Deposit
-                  </button>
+          const handlePageChange = (p) => {
+            setOrdersPage(p);
+            loadFiltered(ordersFilter, p);
+          };
+
+          const incomingCount = orders.filter(o => o.side === 'sell').length;
+          const outgoingCount = orders.filter(o => o.side === 'buy').length;
+
+          return (
+            <div className="card">
+              {/* Sub-tab filter */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {[
+                    { key: 'all',      label: 'All Orders',  color: '#9ca3af' },
+                    { key: 'incoming', label: '↓ Incoming',  color: '#10b981' },
+                    { key: 'outgoing', label: '↑ Outgoing',  color: '#3b82f6' },
+                  ].map(({ key, label, color }) => (
+                    <button key={key} onClick={() => handleFilterChange(key)}
+                      style={{ padding: '7px 18px', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 13, transition: 'all 0.15s',
+                        background: ordersFilter === key ? color : '#1f2937',
+                        color: ordersFilter === key ? (key === 'all' ? '#111' : '#fff') : '#6b7280' }}>
+                      {label}
+                    </button>
+                  ))}
                 </div>
-                {depositHistory.length > 0 ? (() => {
-                  const PAGE_SIZE = 20;
-                  const totalDepPages = Math.ceil(depositHistory.length / PAGE_SIZE);
-                  const depSlice = depositHistory.slice((depositPage - 1) * PAGE_SIZE, depositPage * PAGE_SIZE);
-                  return (
-                    <>
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>Amount</th>
-                            <th>Status</th>
-                            <th>Receipt</th>
-                            <th>Balance After</th>
-                            <th>Time</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {depSlice.map((dep) => (
-                            <tr key={dep.id}>
-                              <td className="positive">+KES {dep.amount.toLocaleString()}</td>
-                              <td style={{ color: dep.status === 'completed' ? '#10b981' : dep.status === 'failed' ? '#ef4444' : '#f59e0b' }}>
-                                {dep.status}
-                              </td>
-                              <td className="mono">{dep.mpesa_receipt || '-'}</td>
-                              <td>KES {dep.balance_after?.toLocaleString() || '-'}</td>
-                              <td>{fmtDateEAT(dep.created_at)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      {totalDepPages > 1 && (
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid #1f2937', marginTop: 0 }}>
-                          <span style={{ fontSize: 12, color: '#6b7280' }}>
-                            Page {depositPage} of {totalDepPages} &nbsp;·&nbsp; {depositHistory.length} total
-                          </span>
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            <button
-                              onClick={() => setDepositPage(p => Math.max(1, p - 1))}
-                              disabled={depositPage === 1}
-                              style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #374151', background: depositPage === 1 ? 'transparent' : '#1f2937', color: depositPage === 1 ? '#4b5563' : '#fff', fontSize: 12, cursor: depositPage === 1 ? 'default' : 'pointer' }}
-                            >← Prev</button>
-                            <button
-                              onClick={() => setDepositPage(p => Math.min(totalDepPages, p + 1))}
-                              disabled={depositPage === totalDepPages}
-                              style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #374151', background: depositPage === totalDepPages ? 'transparent' : '#1f2937', color: depositPage === totalDepPages ? '#4b5563' : '#fff', fontSize: 12, cursor: depositPage === totalDepPages ? 'default' : 'pointer' }}
-                            >Next →</button>
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  );
-                })() : (
-                  <p className="empty-msg">No deposits yet. Deposit funds to enable auto-pay for buy orders.</p>
-                )}
+                <div style={{ display: 'flex', gap: 16 }}>
+                  <span style={{ fontSize: 12, color: '#10b981' }}>↓ Incoming = buyers pay you (sell orders)</span>
+                  <span style={{ fontSize: 12, color: '#3b82f6' }}>↑ Outgoing = you pay sellers (buy orders)</span>
+                </div>
               </div>
-            )}
 
-            {/* Withdrawals Tab */}
-            {txnTab === 'withdrawals' && (() => {
-              // Group withdrawal + its fees (platform_fee, settlement_fee) by minute-timestamp into one combined row
-              const groups = {}; // minuteKey → { withdrawal, fees: [] }
-              const order = [];  // preserve insertion order
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Amount (KES)</th>
+                    <th>Crypto</th>
+                    <th>Rate</th>
+                    <th>Status</th>
+                    <th>Reference</th>
+                    <th>Time</th>
+                    <th>Duration</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orders.length === 0 ? (
+                    <tr><td colSpan={8} style={{ textAlign: 'center', color: '#6b7280', padding: '32px 0' }}>No orders found</td></tr>
+                  ) : orders.map((order) => {
+                    const { secs, live, overdue } = getOrderDuration(order);
+                    const isIncoming = order.side === 'sell';
+                    return (
+                      <tr key={order.id}>
+                        <td>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700,
+                            background: isIncoming ? 'rgba(16,185,129,0.12)' : 'rgba(59,130,246,0.12)',
+                            color: isIncoming ? '#10b981' : '#3b82f6',
+                            border: `1px solid ${isIncoming ? 'rgba(16,185,129,0.3)' : 'rgba(59,130,246,0.3)'}` }}>
+                            {isIncoming ? '↓ Incoming' : '↑ Outgoing'}
+                          </span>
+                        </td>
+                        <td style={{ fontWeight: 600 }}>KES {order.fiat_amount.toLocaleString()}</td>
+                        <td>{order.crypto_amount} {order.crypto_currency}</td>
+                        <td style={{ color: '#9ca3af' }}>{order.exchange_rate}</td>
+                        <td style={{ color: getStatusColor(order.status) }}>
+                          {order.status.replace(/_/g, ' ')}
+                        </td>
+                        <td className="mono" style={{ fontSize: 12 }}>{order.account_reference || '—'}</td>
+                        <td style={{ fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap' }}>{fmtDateEAT(order.created_at)}</td>
+                        <td style={{ fontVariantNumeric: 'tabular-nums', color: overdue ? '#f97316' : live ? '#facc15' : '#9ca3af', fontWeight: live ? 600 : 400, whiteSpace: 'nowrap' }}>
+                          {overdue && <span title="Binance timer expired" style={{ marginRight: 4 }}>⚠️</span>}
+                          {formatDuration(secs)}
+                          {live && <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.6 }}>●</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
 
-              withdrawalTxns.forEach(txn => {
-                const minuteKey = txn.created_at.slice(0, 16);
-                if (!groups[minuteKey]) { groups[minuteKey] = { withdrawal: null, fees: [] }; order.push(minuteKey); }
-                if (txn.type === 'withdrawal') groups[minuteKey].withdrawal = txn;
-                else if (txn.type === 'platform_fee' || txn.type === 'settlement_fee') groups[minuteKey].fees.push(txn);
-              });
+              {/* Pagination */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 16 }}>
+                <button onClick={() => handlePageChange(Math.max(1, ordersPage - 1))} disabled={ordersPage === 1}
+                  style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: ordersPage === 1 ? 'not-allowed' : 'pointer',
+                    background: ordersPage === 1 ? '#1f2937' : '#374151', color: ordersPage === 1 ? '#6b7280' : '#f9fafb', fontWeight: 600, fontSize: 13 }}>← Prev</button>
+                <span style={{ fontSize: 13, color: '#6b7280' }}>Page {ordersPage}</span>
+                <button onClick={() => handlePageChange(ordersPage + 1)} disabled={!ordersHasMore}
+                  style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: !ordersHasMore ? 'not-allowed' : 'pointer',
+                    background: !ordersHasMore ? '#1f2937' : '#374151', color: !ordersHasMore ? '#6b7280' : '#f9fafb', fontWeight: 600, fontSize: 13 }}>Next →</button>
+              </div>
+            </div>
+          );
+        })()}
 
-              const rows = order.map(k => groups[k]);
-
-              const getDestination = (txn) => {
-                const method = (txn.settlement_method || '').toLowerCase();
-                const desc = (txn.description || '').toLowerCase();
-                if (method === 'mpesa' || desc.includes('mpesa') || desc.includes('m-pesa') || desc.includes('safaricom'))
-                  return { label: 'Safaricom M-Pesa', color: '#10b981', bg: 'rgba(16,185,129,0.1)' };
-                if (method === 'bank' || method === 'bank_paybill' || desc.includes('bank') || desc.includes('paybill'))
-                  return { label: 'I&M Bank', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' };
-                return null;
-              };
-
-              const WD_PAGE_SIZE = 20;
-              const totalWdPages = Math.ceil(rows.length / WD_PAGE_SIZE);
-              const wdSlice = rows.slice((withdrawalPage - 1) * WD_PAGE_SIZE, withdrawalPage * WD_PAGE_SIZE);
-
-              const hasPending = wallet?.pending_withdrawal;
-
-              return (
-                <div className="card">
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
-                    <h3 style={{ margin: 0 }}>Withdrawals</h3>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 10, padding: '6px 14px' }}>
-                      <span style={{ fontSize: 11, color: '#a5b4fc' }}>Next I&M sweep in</span>
-                      <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 16, color: sweepSecondsLeft < 60 ? '#f59e0b' : '#6366f1', minWidth: 40, textAlign: 'center' }}>{fmtCountdown(sweepSecondsLeft)}</span>
-                    </div>
-                  </div>
-                  {hasPending && (
-                    <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 10, padding: '10px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ fontSize: 18 }}>⏳</span>
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: 13, color: '#c7d2fe' }}>Withdrawal of {fmtKES(wallet.pending_withdrawal_amount)} is queued</div>
-                        <div style={{ fontSize: 12, color: '#818cf8', marginTop: 2 }}>Processing in the next sweep — <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{fmtCountdown(sweepSecondsLeft)}</span> remaining</div>
-                      </div>
-                    </div>
-                  )}
-                  {rows.length > 0 ? (
-                    <>
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Reference</th>
-                          <th>Amount</th>
-                          <th>Balance After</th>
-                          <th>Sent To</th>
-                          <th>Status</th>
-                          <th>Time</th>
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {wdSlice.map((group, idx) => {
-                          const { withdrawal, fees } = group;
-                          if (!withdrawal) return null;
-                          const totalFees = fees.reduce((s, f) => s + f.amount, 0);
-                          const totalDeducted = withdrawal.amount + totalFees; // both negative
-                          const destination = getDestination(withdrawal);
-                          const key = withdrawal.id;
-                          const isExpanded = !!expandedWithdrawals[key];
-                          const hasFees = fees.length > 0;
-                          const refNum = `SPK-${String(withdrawal.id).padStart(6, '0')}`;
-                          const wdStatus = (withdrawal.status || 'pending').toLowerCase();
-                          const isBatchQueued = wdStatus === 'pending' && withdrawal.description?.includes('Batch withdrawal');
-                          const statusBadge = wdStatus === 'completed'
-                            ? { label: 'Completed', color: '#10b981', bg: 'rgba(16,185,129,0.1)' }
-                            : wdStatus === 'cancelled'
-                            ? { label: 'Cancelled', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' }
-                            : wdStatus === 'failed'
-                            ? { label: 'Failed', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' }
-                            : isBatchQueued
-                            ? { label: 'Queued (Batch)', color: '#6366f1', bg: 'rgba(99,102,241,0.1)' }
-                            : { label: 'Pending', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' };
-
-                          const feeLabels = {
-                            platform_fee: 'Service fee',
-                            settlement_fee: 'Safaricom fee',
-                          };
-
-                          return (
-                            <React.Fragment key={key}>
-                              <tr style={{ cursor: hasFees ? 'pointer' : 'default' }}
-                                  onClick={() => hasFees && setExpandedWithdrawals(prev => ({ ...prev, [key]: !prev[key] }))}>
-                                <td>
-                                  <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#9ca3af', letterSpacing: '0.5px' }}>
-                                    {refNum}
-                                  </span>
-                                </td>
-                                <td>
-                                  <span className="negative" style={{ fontWeight: 600 }}>
-                                    {fmtKES(Math.abs(totalDeducted))}
-                                  </span>
-                                  {hasFees && (
-                                    <span style={{ marginLeft: 6, fontSize: 11, color: '#6b7280' }}>
-                                      (incl. {fmtKESFee(Math.abs(totalFees))} fees)
-                                    </span>
-                                  )}
-                                </td>
-                                <td>KES {(withdrawal.balance_after ?? 0).toLocaleString()}</td>
-                                <td>
-                                  {destination ? (
-                                    <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, color: destination.color, background: destination.bg }}>
-                                      {destination.label}
-                                    </span>
-                                  ) : '—'}
-                                </td>
-                                <td>
-                                  <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, color: statusBadge.color, background: statusBadge.bg }}>
-                                    {statusBadge.label}
-                                  </span>
-                                </td>
-                                <td style={{ whiteSpace: 'nowrap', fontSize: 12, color: '#9ca3af' }}>
-                                  {fmtDateEAT(withdrawal.created_at)}
-                                </td>
-                                <td style={{ textAlign: 'right' }}>
-                                  {hasFees && (
-                                    <span style={{ fontSize: 12, color: '#6b7280', userSelect: 'none' }}>
-                                      {isExpanded ? '▲ hide' : '▼ fees'}
-                                    </span>
-                                  )}
-                                </td>
-                              </tr>
-                              {isExpanded && (
-                                <>
-                                  <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
-                                    <td colSpan={7} style={{ paddingTop: 0, paddingBottom: 0 }}>
-                                      <div style={{ padding: '8px 16px', borderLeft: '2px solid #374151', marginLeft: 8 }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13, color: '#d1d5db' }}>
-                                          <span>Net withdrawal</span>
-                                          <span className="negative">{fmtKES(Math.abs(withdrawal.amount))}</span>
-                                        </div>
-                                        {fees.map(f => (
-                                          <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13, color: '#9ca3af' }}>
-                                            <span>{feeLabels[f.type] || f.type.replace(/_/g, ' ')}</span>
-                                            <span className="negative">{fmtKESFee(Math.abs(f.amount))}</span>
-                                          </div>
-                                        ))}
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #374151', paddingTop: 4, marginTop: 4, fontSize: 13, fontWeight: 600, color: '#f9fafb' }}>
-                                          <span>Total deducted</span>
-                                          <span className="negative">{fmtKES(Math.abs(totalDeducted))}</span>
-                                        </div>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                </>
-                              )}
-                            </React.Fragment>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    {totalWdPages > 1 && (
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid #1f2937' }}>
-                        <span style={{ fontSize: 12, color: '#6b7280' }}>
-                          Page {withdrawalPage} of {totalWdPages} &nbsp;·&nbsp; {rows.length} total
-                        </span>
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <button
-                            onClick={() => setWithdrawalPage(p => Math.max(1, p - 1))}
-                            disabled={withdrawalPage === 1}
-                            style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #374151', background: withdrawalPage === 1 ? 'transparent' : '#1f2937', color: withdrawalPage === 1 ? '#4b5563' : '#fff', fontSize: 12, cursor: withdrawalPage === 1 ? 'default' : 'pointer' }}
-                          >← Prev</button>
-                          <button
-                            onClick={() => setWithdrawalPage(p => Math.min(totalWdPages, p + 1))}
-                            disabled={withdrawalPage === totalWdPages}
-                            style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #374151', background: withdrawalPage === totalWdPages ? 'transparent' : '#1f2937', color: withdrawalPage === totalWdPages ? '#4b5563' : '#fff', fontSize: 12, cursor: withdrawalPage === totalWdPages ? 'default' : 'pointer' }}
-                          >Next →</button>
-                        </div>
-                      </div>
-                    )}
-                    </>
-                  ) : (
-                    <p className="empty-msg">No withdrawals yet.</p>
-                  )}
-                </div>
-              );
-            })()}
-          </>
-        )}
 
         {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} initialSection={settingsInitialSection} />}
 
