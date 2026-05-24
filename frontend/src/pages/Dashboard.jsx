@@ -2809,10 +2809,10 @@ export default function Dashboard() {
         {/* ==================== BUY CREDITS TAB ==================== */}
         {activeTab === 'credits' && (() => {
           const PLANS = [
-            { key: 'starter',  label: 'Starter',  amount: 5000,  credits: 167,  rate: 30,  color: '#6b7280', accent: '#9ca3af', badge: null },
-            { key: 'pro',      label: 'Pro',       amount: 10000, credits: 500,  rate: 20,  color: '#f59e0b', accent: '#f59e0b', badge: 'Popular' },
-            { key: 'pro_max',  label: 'Pro Max',   amount: 20000, credits: 2000, rate: 10,  color: '#10b981', accent: '#10b981', badge: 'Best Value' },
-            { key: 'advanced', label: 'Advanced',  amount: 40000, credits: 8000, rate: 5,   color: '#8b5cf6', accent: '#8b5cf6', badge: null },
+            { key: 'starter',  label: 'Starter',  icon: '⚡', amount: 5000,  credits: 167,  rate: 30, savings: 25, grad: 'linear-gradient(135deg,#374151,#1f2937)', accent: '#9ca3af', glow: '107,114,128', badge: null },
+            { key: 'pro',      label: 'Pro',       icon: '🔥', amount: 10000, credits: 500,  rate: 20, savings: 50, grad: 'linear-gradient(135deg,#78350f,#451a03)', accent: '#f59e0b', glow: '245,158,11',  badge: 'Most Popular' },
+            { key: 'pro_max',  label: 'Pro Max',   icon: '🚀', amount: 20000, credits: 2000, rate: 10, savings: 75, grad: 'linear-gradient(135deg,#064e3b,#022c22)', accent: '#10b981', glow: '16,185,129',  badge: 'Best Value' },
+            { key: 'advanced', label: 'Advanced',  icon: '💎', amount: 40000, credits: 8000, rate: 5,  savings: 87, grad: 'linear-gradient(135deg,#4c1d95,#2e1065)', accent: '#a78bfa', glow: '139,92,246',  badge: null },
           ];
 
           const handleBuyCredits = async () => {
@@ -2831,7 +2831,7 @@ export default function Dashboard() {
                     clearInterval(interval);
                     setCreditPolling(false);
                     setCreditCheckoutId(null);
-                    setCreditMsg({ type: 'success', text: 'Payment confirmed! Credits have been added to your account.' });
+                    setCreditMsg({ type: 'success', text: '✔ Payment confirmed! Credits have been added to your account.' });
                     setCreditPlan(null);
                     setCreditPhone('');
                     if (typeof loadData === 'function') loadData();
@@ -2845,76 +2845,149 @@ export default function Dashboard() {
             setCreditBuying(false);
           };
 
+          const sel = PLANS.find(p => p.key === creditPlan);
+
           return (
-            <div style={{ maxWidth: 800, margin: '0 auto', padding: '8px 0' }}>
-              <div style={{ marginBottom: 24 }}>
-                <h2 style={{ color: '#fff', fontSize: 20, fontWeight: 700, margin: '0 0 6px' }}>Buy Trade Credits</h2>
-                <p style={{ color: '#9ca3af', fontSize: 13, margin: 0 }}>Credits are permanent and never expire. 1 credit = 1 bot-completed buy order.</p>
-                <div style={{ marginTop: 8, padding: '8px 14px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ color: '#6b7280', fontSize: 12 }}>Current balance:</span>
-                  <span style={{ color: '#10b981', fontWeight: 700, fontSize: 14 }}>{(profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0)} credits</span>
+            <div style={{ maxWidth: 900, margin: '0 auto', padding: '4px 0 40px' }}>
+
+              {/* Header */}
+              <div style={{ textAlign: 'center', marginBottom: 36 }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: 20, padding: '5px 14px', marginBottom: 16 }}>
+                  <DollarSign size={13} color="#10b981" />
+                  <span style={{ color: '#10b981', fontSize: 12, fontWeight: 600 }}>Trade Credits — Never Expire</span>
+                </div>
+                <h2 style={{ color: '#fff', fontSize: 26, fontWeight: 800, margin: '0 0 8px', letterSpacing: '-0.5px' }}>Choose Your Credit Pack</h2>
+                <p style={{ color: '#6b7280', fontSize: 13, margin: '0 0 12px' }}>1 credit = 1 bot-completed buy order. Buy once, use forever.</p>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, background: '#0d1117', border: '1px solid #1f2937', borderRadius: 10, padding: '8px 18px' }}>
+                  <span style={{ color: '#6b7280', fontSize: 12 }}>Your balance</span>
+                  <span style={{ width: 1, height: 14, background: '#1f2937' }} />
+                  <span style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>{(profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0)}</span>
+                  <span style={{ color: '#6b7280', fontSize: 12 }}>credits</span>
                 </div>
               </div>
 
               {/* Plan cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 14, marginBottom: 28 }}>
-                {PLANS.map(p => (
-                  <div key={p.key}
-                    onClick={() => setCreditPlan(p.key)}
-                    style={{ position: 'relative', background: creditPlan === p.key ? `rgba(${p.key === 'starter' ? '107,114,128' : p.key === 'pro' ? '245,158,11' : p.key === 'pro_max' ? '16,185,129' : '139,92,246'},0.12)` : '#13151f', border: `2px solid ${creditPlan === p.key ? p.accent : '#1f2937'}`, borderRadius: 14, padding: '20px 16px', cursor: 'pointer', transition: 'border-color 0.15s', userSelect: 'none' }}>
-                    {p.badge && (
-                      <div style={{ position: 'absolute', top: -11, left: '50%', transform: 'translateX(-50%)', background: p.accent, color: '#000', fontSize: 10, fontWeight: 800, padding: '2px 10px', borderRadius: 20, whiteSpace: 'nowrap' }}>{p.badge}</div>
-                    )}
-                    <div style={{ color: p.accent, fontWeight: 800, fontSize: 15, marginBottom: 6 }}>{p.label}</div>
-                    <div style={{ color: '#fff', fontSize: 22, fontWeight: 800, marginBottom: 2 }}>KES {p.amount.toLocaleString()}</div>
-                    <div style={{ color: p.accent, fontSize: 20, fontWeight: 700, marginBottom: 8 }}>{p.credits.toLocaleString()} <span style={{ fontSize: 13, fontWeight: 500, color: '#9ca3af' }}>credits</span></div>
-                    <div style={{ color: '#6b7280', fontSize: 11 }}>KES {p.rate}/credit</div>
-                    {creditPlan === p.key && (
-                      <div style={{ marginTop: 10, textAlign: 'center', color: p.accent, fontSize: 12, fontWeight: 700 }}>Selected</div>
-                    )}
-                  </div>
-                ))}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 32 }}>
+                {PLANS.map(p => {
+                  const isSelected = creditPlan === p.key;
+                  const isFeatured = p.badge === 'Most Popular';
+                  return (
+                    <div key={p.key} onClick={() => { setCreditPlan(p.key); setCreditMsg(null); }}
+                      style={{ position: 'relative', borderRadius: 18, cursor: 'pointer', userSelect: 'none', transition: 'transform 0.15s, box-shadow 0.15s',
+                        transform: isSelected ? 'translateY(-4px)' : isFeatured ? 'translateY(-2px)' : 'none',
+                        boxShadow: isSelected ? `0 0 0 2px ${p.accent}, 0 12px 40px rgba(${p.glow},0.3)` : isFeatured ? `0 8px 30px rgba(${p.glow},0.2)` : '0 2px 8px rgba(0,0,0,0.3)',
+                        border: `1px solid ${isSelected ? p.accent : isFeatured ? `rgba(${p.glow},0.4)` : '#1f2937'}`,
+                        background: '#0d1117', overflow: 'hidden' }}>
+
+                      {/* Gradient top stripe */}
+                      <div style={{ height: 4, background: p.grad.replace('135deg', '90deg'), backgroundImage: `linear-gradient(90deg, ${p.accent}88, ${p.accent})` }} />
+
+                      {/* Badge */}
+                      {p.badge && (
+                        <div style={{ position: 'absolute', top: 16, right: 14, background: p.accent, color: p.accent === '#f59e0b' ? '#000' : '#000', fontSize: 9, fontWeight: 800, padding: '3px 9px', borderRadius: 20, letterSpacing: '0.5px', textTransform: 'uppercase' }}>{p.badge}</div>
+                      )}
+
+                      <div style={{ padding: '18px 20px 20px' }}>
+                        {/* Icon + name */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                          <div style={{ width: 36, height: 36, borderRadius: 10, background: `rgba(${p.glow},0.15)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{p.icon}</div>
+                          <div>
+                            <div style={{ color: p.accent, fontWeight: 800, fontSize: 13, letterSpacing: '0.3px' }}>{p.label}</div>
+                            <div style={{ color: '#4b5563', fontSize: 10 }}>Save {p.savings}%</div>
+                          </div>
+                        </div>
+
+                        {/* Credits — main focal point */}
+                        <div style={{ marginBottom: 4 }}>
+                          <span style={{ fontSize: 36, fontWeight: 900, color: '#fff', lineHeight: 1, letterSpacing: '-1px' }}>{p.credits.toLocaleString()}</span>
+                          <span style={{ fontSize: 14, color: '#6b7280', marginLeft: 5, fontWeight: 500 }}>credits</span>
+                        </div>
+
+                        {/* Divider */}
+                        <div style={{ height: 1, background: '#1a1d27', margin: '12px 0' }} />
+
+                        {/* Price */}
+                        <div style={{ marginBottom: 3 }}>
+                          <span style={{ color: '#fff', fontSize: 20, fontWeight: 800 }}>KES {p.amount.toLocaleString()}</span>
+                        </div>
+                        <div style={{ color: '#4b5563', fontSize: 11 }}>KES {p.rate} per credit</div>
+
+                        {/* Select button */}
+                        <button style={{ width: '100%', marginTop: 16, padding: '9px 0', borderRadius: 9, border: isSelected ? 'none' : `1px solid ${p.accent}44`, cursor: 'pointer', fontWeight: 700, fontSize: 13, transition: 'background 0.15s',
+                          background: isSelected ? p.accent : 'transparent',
+                          color: isSelected ? (p.accent === '#9ca3af' ? '#111' : '#000') : p.accent }}>
+                          {isSelected ? '✓ Selected' : 'Select Plan'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* Phone + pay */}
-              {creditPlan && (
-                <div style={{ background: '#13151f', border: '1px solid #1f2937', borderRadius: 12, padding: 20, maxWidth: 420 }}>
-                  <h3 style={{ color: '#fff', fontSize: 14, fontWeight: 700, margin: '0 0 4px' }}>
-                    Pay with M-Pesa
-                  </h3>
-                  <p style={{ color: '#6b7280', fontSize: 12, margin: '0 0 14px' }}>
-                    {PLANS.find(p => p.key === creditPlan)?.label} — KES {PLANS.find(p => p.key === creditPlan)?.amount.toLocaleString()} for {PLANS.find(p => p.key === creditPlan)?.credits.toLocaleString()} credits
-                  </p>
-                  <input
-                    type="tel"
-                    placeholder="M-Pesa phone (e.g. 0712345678)"
-                    value={creditPhone}
-                    onChange={e => setCreditPhone(e.target.value)}
-                    disabled={creditBuying || creditPolling}
-                    style={{ width: '100%', boxSizing: 'border-box', background: '#0d1117', border: '1px solid #1f2937', borderRadius: 8, color: '#fff', padding: '9px 12px', fontSize: 13, marginBottom: 12 }}
-                  />
-                  {creditMsg && (
-                    <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12,
-                      background: creditMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(59,130,246,0.1)',
-                      color: creditMsg.type === 'success' ? '#10b981' : creditMsg.type === 'error' ? '#ef4444' : creditMsg.type === 'warning' ? '#f59e0b' : '#60a5fa',
-                      border: `1px solid ${creditMsg.type === 'success' ? 'rgba(16,185,129,0.25)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.25)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.25)' : 'rgba(59,130,246,0.25)'}` }}>
-                      {creditMsg.text}
+              {/* Payment panel */}
+              {sel && (
+                <div style={{ background: '#0d1117', border: `1px solid rgba(${sel.glow},0.3)`, borderRadius: 18, padding: 28, boxShadow: `0 0 40px rgba(${sel.glow},0.08)` }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 20 }}>
+
+                    {/* Summary */}
+                    <div style={{ flex: '1 1 220px' }}>
+                      <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Order Summary</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                        <div style={{ width: 40, height: 40, borderRadius: 10, background: `rgba(${sel.glow},0.15)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{sel.icon}</div>
+                        <div>
+                          <div style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{sel.label} Pack</div>
+                          <div style={{ color: '#6b7280', fontSize: 12 }}>{sel.credits.toLocaleString()} permanent credits</div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 20 }}>
+                        <div><div style={{ color: '#6b7280', fontSize: 11 }}>Total</div><div style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>KES {sel.amount.toLocaleString()}</div></div>
+                        <div><div style={{ color: '#6b7280', fontSize: 11 }}>Rate</div><div style={{ color: sel.accent, fontWeight: 700, fontSize: 14 }}>KES {sel.rate}/credit</div></div>
+                        <div><div style={{ color: '#6b7280', fontSize: 11 }}>Savings</div><div style={{ color: '#10b981', fontWeight: 700, fontSize: 14 }}>{sel.savings}% off</div></div>
+                      </div>
                     </div>
-                  )}
-                  <button
-                    onClick={handleBuyCredits}
-                    disabled={creditBuying || creditPolling || !creditPhone.trim()}
-                    style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: 'none', background: creditBuying || creditPolling ? '#374151' : '#10b981', color: creditBuying || creditPolling ? '#9ca3af' : '#000', fontWeight: 700, fontSize: 14, cursor: creditBuying || creditPolling || !creditPhone.trim() ? 'not-allowed' : 'pointer' }}>
-                    {creditPolling ? 'Waiting for payment...' : creditBuying ? 'Sending STK Push...' : `Pay KES ${PLANS.find(p => p.key === creditPlan)?.amount.toLocaleString()}`}
-                  </button>
-                  {creditPolling && (
-                    <p style={{ color: '#6b7280', fontSize: 12, marginTop: 10, textAlign: 'center' }}>Check your phone for the M-Pesa prompt and enter your PIN.</p>
-                  )}
+
+                    {/* Payment form */}
+                    <div style={{ flex: '1 1 280px' }}>
+                      <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Pay via M-Pesa</div>
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <input
+                          type="tel"
+                          placeholder="e.g. 0712 345 678"
+                          value={creditPhone}
+                          onChange={e => setCreditPhone(e.target.value)}
+                          disabled={creditBuying || creditPolling}
+                          style={{ flex: 1, background: '#13151f', border: `1px solid ${sel.accent}33`, borderRadius: 10, color: '#fff', padding: '11px 14px', fontSize: 14, outline: 'none' }}
+                        />
+                        <button
+                          onClick={handleBuyCredits}
+                          disabled={creditBuying || creditPolling || !creditPhone.trim()}
+                          style={{ flexShrink: 0, padding: '11px 22px', borderRadius: 10, border: 'none', background: (creditBuying || creditPolling || !creditPhone.trim()) ? '#1f2937' : sel.accent, color: (creditBuying || creditPolling || !creditPhone.trim()) ? '#4b5563' : (sel.accent === '#9ca3af' ? '#111' : '#000'), fontWeight: 800, fontSize: 14, cursor: (creditBuying || creditPolling || !creditPhone.trim()) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
+                          {creditPolling ? 'Waiting...' : creditBuying ? 'Sending...' : 'Pay Now'}
+                        </button>
+                      </div>
+                      {creditPolling && (
+                        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', animation: 'pulse 1.5s ease-in-out infinite' }} />
+                          <span style={{ color: '#9ca3af', fontSize: 12 }}>Check your phone for the M-Pesa PIN prompt...</span>
+                        </div>
+                      )}
+                      {creditMsg && (
+                        <div style={{ marginTop: 10, padding: '8px 14px', borderRadius: 9, fontSize: 12,
+                          background: creditMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(59,130,246,0.08)',
+                          color: creditMsg.type === 'success' ? '#10b981' : creditMsg.type === 'error' ? '#ef4444' : creditMsg.type === 'warning' ? '#f59e0b' : '#60a5fa',
+                          border: `1px solid ${creditMsg.type === 'success' ? 'rgba(16,185,129,0.2)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.2)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.15)'}` }}>
+                          {creditMsg.text}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
+
             </div>
           );
         })()}
+
 
       <SupportChat forceOpen={openSupportChat} onOpen={() => setOpenSupportChat(false)} />
 
