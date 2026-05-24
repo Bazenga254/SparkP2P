@@ -1453,6 +1453,48 @@ export default function Dashboard() {
             </div>
 
 
+
+            {/* ── Trade Credits Progress Bar ── */}
+            {(() => {
+              const totalCredits = (profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0);
+              const refMax = totalCredits >= 2000 ? 8000 : totalCredits >= 500 ? 2000 : totalCredits >= 167 ? 500 : 167;
+              const pct = Math.min(100, Math.round((totalCredits / refMax) * 100));
+              const barColor = pct > 50 ? '#10b981' : pct > 20 ? '#f59e0b' : '#ef4444';
+              const label = totalCredits === 0 ? 'No credits — buy a pack to start trading' : pct <= 20 ? 'Credits running low — top up soon' : 'Trade credits available';
+              return (
+                <div style={{ margin: '0 0 16px', padding: '14px 20px', background: '#0d1117', border: `1px solid ${pct <= 20 ? 'rgba(239,68,68,0.25)' : pct <= 50 ? 'rgba(245,158,11,0.2)' : 'rgba(16,185,129,0.15)'}`, borderRadius: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ fontSize: 14 }}>🎯</span>
+                      <div>
+                        <span style={{ color: '#d1d5db', fontSize: 13, fontWeight: 600 }}>Trade Credits</span>
+                        <span style={{ color: pct <= 20 ? '#ef4444' : '#6b7280', fontSize: 11, marginLeft: 10 }}>{label}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                      <div style={{ textAlign: 'right' }}>
+                        <span style={{ color: barColor, fontWeight: 800, fontSize: 18 }}>{totalCredits.toLocaleString()}</span>
+                        <span style={{ color: '#4b5563', fontSize: 12, marginLeft: 4 }}>/ {refMax.toLocaleString()}</span>
+                      </div>
+                      <button onClick={() => setActiveTab('credits')}
+                        style={{ padding: '5px 14px', borderRadius: 8, border: `1px solid ${barColor}44`, background: 'transparent', color: barColor, fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        + Buy Credits
+                      </button>
+                    </div>
+                  </div>
+                  {/* Track */}
+                  <div style={{ height: 8, background: '#1a1d27', borderRadius: 99, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${pct}%`, borderRadius: 99, background: `linear-gradient(90deg, ${barColor}99, ${barColor})`, transition: 'width 0.6s ease' }} />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5 }}>
+                    <span style={{ color: '#374151', fontSize: 10 }}>0</span>
+                    <span style={{ color: barColor, fontSize: 10, fontWeight: 600 }}>{pct}% remaining</span>
+                    <span style={{ color: '#374151', fontSize: 10 }}>{refMax.toLocaleString()}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Row 3: Buy/Sell Breakdown + Profit */}
             <div className="overview-grid-mid">
               {/* Buying Summary */}
@@ -2858,12 +2900,28 @@ export default function Dashboard() {
                 </div>
                 <h2 style={{ color: '#fff', fontSize: 26, fontWeight: 800, margin: '0 0 8px', letterSpacing: '-0.5px' }}>Choose Your Credit Pack</h2>
                 <p style={{ color: '#6b7280', fontSize: 13, margin: '0 0 12px' }}>1 credit = 1 bot-completed buy order. Buy once, use forever.</p>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, background: '#0d1117', border: '1px solid #1f2937', borderRadius: 10, padding: '8px 18px' }}>
-                  <span style={{ color: '#6b7280', fontSize: 12 }}>Your balance</span>
-                  <span style={{ width: 1, height: 14, background: '#1f2937' }} />
-                  <span style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>{(profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0)}</span>
-                  <span style={{ color: '#6b7280', fontSize: 12 }}>credits</span>
-                </div>
+                {(() => {
+                  const tc = (profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0);
+                  const rm = tc >= 2000 ? 8000 : tc >= 500 ? 2000 : tc >= 167 ? 500 : 167;
+                  const pp = Math.min(100, Math.round((tc / rm) * 100));
+                  const bc = pp > 50 ? '#10b981' : pp > 20 ? '#f59e0b' : '#ef4444';
+                  return (
+                    <div style={{ display: 'inline-block', background: '#0d1117', border: '1px solid #1f2937', borderRadius: 12, padding: '10px 20px', minWidth: 220 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <span style={{ color: '#6b7280', fontSize: 12 }}>Your balance</span>
+                        <span style={{ color: bc, fontWeight: 800, fontSize: 16 }}>{tc.toLocaleString()} <span style={{ fontSize: 11, fontWeight: 500, color: '#6b7280' }}>credits</span></span>
+                      </div>
+                      <div style={{ height: 6, background: '#1a1d27', borderRadius: 99, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pp}%`, background: `linear-gradient(90deg,${bc}88,${bc})`, borderRadius: 99, transition: 'width 0.6s ease' }} />
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                        <span style={{ color: '#374151', fontSize: 10 }}>0</span>
+                        <span style={{ color: bc, fontSize: 10, fontWeight: 600 }}>{pp}%</span>
+                        <span style={{ color: '#374151', fontSize: 10 }}>{rm.toLocaleString()}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Plan cards */}
