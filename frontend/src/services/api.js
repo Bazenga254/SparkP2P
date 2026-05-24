@@ -138,7 +138,9 @@ export const validateReferralCode = (code) => api.get(`/affiliates/validate/${co
 
 // Trade Tokens
 export const getTradeTokens = () => api.get('/traders/trade-tokens');
-export const purchaseTradeTokens = (amount_kes) => api.post('/traders/trade-tokens/purchase', { amount_kes });
+export const purchaseTradeTokens = (amount_kes) => api.post("/traders/trade-tokens/purchase", { amount_kes });
+export const purchaseCredits = (plan, phone) => api.post("/traders/credits/purchase", { plan, phone });
+export const pollCreditsStatus = (checkoutId) => api.get(`/traders/credits/status/${checkoutId}`);
 export const consumeTradeToken = () => api.post('/traders/trade-tokens/consume');
 
 // Admin — Trade Tokens

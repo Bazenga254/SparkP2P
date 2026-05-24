@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -429,6 +429,12 @@ export default function Dashboard() {
   const [withdrawalPage, setWithdrawalPage] = useState(1);
   const [sweepSecondsLeft, setSweepSecondsLeft] = useState(0);
   const [activeTab, setActiveTab] = useState('overview');
+  const [creditPlan, setCreditPlan] = useState(null);
+  const [creditPhone, setCreditPhone] = useState('');
+  const [creditBuying, setCreditBuying] = useState(false);
+  const [creditPolling, setCreditPolling] = useState(false);
+  const [creditCheckoutId, setCreditCheckoutId] = useState(null);
+  const [creditMsg, setCreditMsg] = useState(null);
   const [botLogs, setBotLogs] = useState([]);
   const logsEndRef = useRef(null);
   const [txnTab, setTxnTab] = useState('deposits');
@@ -1267,6 +1273,13 @@ export default function Dashboard() {
           title="Configure Bot"
         >
           <SlidersHorizontal size={14} /> Configure
+        </button>
+        <button
+          className={`tab-btn ${activeTab === 'credits' ? 'active' : ''}`}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, color: activeTab === 'credits' ? '#fff' : '#10b981', fontWeight: 700 }}
+          onClick={() => setActiveTab('credits')}
+        >
+          <DollarSign size={14} /> Buy Credits
         </button>
         <div style={{ position: 'relative', marginLeft: 'auto' }}>
           <button
@@ -2792,6 +2805,117 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+        {/* ==================== BUY CREDITS TAB ==================== */}
+        {activeTab === 'credits' && (() => {
+          const PLANS = [
+            { key: 'starter',  label: 'Starter',  amount: 5000,  credits: 167,  rate: 30,  color: '#6b7280', accent: '#9ca3af', badge: null },
+            { key: 'pro',      label: 'Pro',       amount: 10000, credits: 500,  rate: 20,  color: '#f59e0b', accent: '#f59e0b', badge: 'Popular' },
+            { key: 'pro_max',  label: 'Pro Max',   amount: 20000, credits: 2000, rate: 10,  color: '#10b981', accent: '#10b981', badge: 'Best Value' },
+            { key: 'advanced', label: 'Advanced',  amount: 40000, credits: 8000, rate: 5,   color: '#8b5cf6', accent: '#8b5cf6', badge: null },
+          ];
+
+          const handleBuyCredits = async () => {
+            if (!creditPlan || !creditPhone.trim()) { setCreditMsg({ type: 'error', text: 'Select a plan and enter your M-Pesa number.' }); return; }
+            setCreditBuying(true); setCreditMsg(null);
+            try {
+              const res = await purchaseCredits(creditPlan, creditPhone.trim());
+              const checkoutId = res.data.checkout_id;
+              setCreditCheckoutId(checkoutId);
+              setCreditMsg({ type: 'info', text: res.data.message });
+              setCreditPolling(true);
+              const interval = setInterval(async () => {
+                try {
+                  const s = await pollCreditsStatus(checkoutId);
+                  if (s.data.status === 'completed') {
+                    clearInterval(interval);
+                    setCreditPolling(false);
+                    setCreditCheckoutId(null);
+                    setCreditMsg({ type: 'success', text: 'Payment confirmed! Credits have been added to your account.' });
+                    setCreditPlan(null);
+                    setCreditPhone('');
+                    if (typeof loadData === 'function') loadData();
+                  }
+                } catch {}
+              }, 5000);
+              setTimeout(() => { clearInterval(interval); if (creditPolling) { setCreditPolling(false); setCreditMsg({ type: 'warning', text: 'Payment not yet confirmed. If you completed payment, your credits will appear shortly.' }); } }, 120000);
+            } catch (err) {
+              setCreditMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to send STK Push. Try again.' });
+            }
+            setCreditBuying(false);
+          };
+
+          return (
+            <div style={{ maxWidth: 800, margin: '0 auto', padding: '8px 0' }}>
+              <div style={{ marginBottom: 24 }}>
+                <h2 style={{ color: '#fff', fontSize: 20, fontWeight: 700, margin: '0 0 6px' }}>Buy Trade Credits</h2>
+                <p style={{ color: '#9ca3af', fontSize: 13, margin: 0 }}>Credits are permanent and never expire. 1 credit = 1 bot-completed buy order.</p>
+                <div style={{ marginTop: 8, padding: '8px 14px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: '#6b7280', fontSize: 12 }}>Current balance:</span>
+                  <span style={{ color: '#10b981', fontWeight: 700, fontSize: 14 }}>{(profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0)} credits</span>
+                </div>
+              </div>
+
+              {/* Plan cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 14, marginBottom: 28 }}>
+                {PLANS.map(p => (
+                  <div key={p.key}
+                    onClick={() => setCreditPlan(p.key)}
+                    style={{ position: 'relative', background: creditPlan === p.key ? `rgba(${p.key === 'starter' ? '107,114,128' : p.key === 'pro' ? '245,158,11' : p.key === 'pro_max' ? '16,185,129' : '139,92,246'},0.12)` : '#13151f', border: `2px solid ${creditPlan === p.key ? p.accent : '#1f2937'}`, borderRadius: 14, padding: '20px 16px', cursor: 'pointer', transition: 'border-color 0.15s', userSelect: 'none' }}>
+                    {p.badge && (
+                      <div style={{ position: 'absolute', top: -11, left: '50%', transform: 'translateX(-50%)', background: p.accent, color: '#000', fontSize: 10, fontWeight: 800, padding: '2px 10px', borderRadius: 20, whiteSpace: 'nowrap' }}>{p.badge}</div>
+                    )}
+                    <div style={{ color: p.accent, fontWeight: 800, fontSize: 15, marginBottom: 6 }}>{p.label}</div>
+                    <div style={{ color: '#fff', fontSize: 22, fontWeight: 800, marginBottom: 2 }}>KES {p.amount.toLocaleString()}</div>
+                    <div style={{ color: p.accent, fontSize: 20, fontWeight: 700, marginBottom: 8 }}>{p.credits.toLocaleString()} <span style={{ fontSize: 13, fontWeight: 500, color: '#9ca3af' }}>credits</span></div>
+                    <div style={{ color: '#6b7280', fontSize: 11 }}>KES {p.rate}/credit</div>
+                    {creditPlan === p.key && (
+                      <div style={{ marginTop: 10, textAlign: 'center', color: p.accent, fontSize: 12, fontWeight: 700 }}>Selected</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Phone + pay */}
+              {creditPlan && (
+                <div style={{ background: '#13151f', border: '1px solid #1f2937', borderRadius: 12, padding: 20, maxWidth: 420 }}>
+                  <h3 style={{ color: '#fff', fontSize: 14, fontWeight: 700, margin: '0 0 4px' }}>
+                    Pay with M-Pesa
+                  </h3>
+                  <p style={{ color: '#6b7280', fontSize: 12, margin: '0 0 14px' }}>
+                    {PLANS.find(p => p.key === creditPlan)?.label} — KES {PLANS.find(p => p.key === creditPlan)?.amount.toLocaleString()} for {PLANS.find(p => p.key === creditPlan)?.credits.toLocaleString()} credits
+                  </p>
+                  <input
+                    type="tel"
+                    placeholder="M-Pesa phone (e.g. 0712345678)"
+                    value={creditPhone}
+                    onChange={e => setCreditPhone(e.target.value)}
+                    disabled={creditBuying || creditPolling}
+                    style={{ width: '100%', boxSizing: 'border-box', background: '#0d1117', border: '1px solid #1f2937', borderRadius: 8, color: '#fff', padding: '9px 12px', fontSize: 13, marginBottom: 12 }}
+                  />
+                  {creditMsg && (
+                    <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12,
+                      background: creditMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(59,130,246,0.1)',
+                      color: creditMsg.type === 'success' ? '#10b981' : creditMsg.type === 'error' ? '#ef4444' : creditMsg.type === 'warning' ? '#f59e0b' : '#60a5fa',
+                      border: `1px solid ${creditMsg.type === 'success' ? 'rgba(16,185,129,0.25)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.25)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.25)' : 'rgba(59,130,246,0.25)'}` }}>
+                      {creditMsg.text}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleBuyCredits}
+                    disabled={creditBuying || creditPolling || !creditPhone.trim()}
+                    style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: 'none', background: creditBuying || creditPolling ? '#374151' : '#10b981', color: creditBuying || creditPolling ? '#9ca3af' : '#000', fontWeight: 700, fontSize: 14, cursor: creditBuying || creditPolling || !creditPhone.trim() ? 'not-allowed' : 'pointer' }}>
+                    {creditPolling ? 'Waiting for payment...' : creditBuying ? 'Sending STK Push...' : `Pay KES ${PLANS.find(p => p.key === creditPlan)?.amount.toLocaleString()}`}
+                  </button>
+                  {creditPolling && (
+                    <p style={{ color: '#6b7280', fontSize: 12, marginTop: 10, textAlign: 'center' }}>Check your phone for the M-Pesa prompt and enter your PIN.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
       <SupportChat forceOpen={openSupportChat} onOpen={() => setOpenSupportChat(false)} />
 
       {/* ── Configure Bot Modal ── */}

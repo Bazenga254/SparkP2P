@@ -2223,3 +2223,153 @@ async def consume_trade_token(
         )
 
     return {"ok": True, "remaining": remaining}
+
+
+# ── Credit Purchase Plans ─────────────────────────────────────────────────────
+
+CREDIT_PLANS = {
+    "starter":  {"amount": 5_000,  "credits": 167,  "rate": 30},
+    "pro":      {"amount": 10_000, "credits": 500,  "rate": 20},
+    "pro_max":  {"amount": 20_000, "credits": 2_000, "rate": 10},
+    "advanced": {"amount": 40_000, "credits": 8_000, "rate": 5},
+}
+
+# In-memory store for pending STK push purchases (checkout_id -> metadata)
+# Entries are cleaned up on callback resolution. Acceptable since STK resolves
+# within seconds; rare restart loss is handled by the "check your balance" UX hint.
+_pending_credit_stk: dict = {}
+
+
+class CreditPurchaseRequest(BaseModel):
+    plan: str   # starter | pro | pro_max | advanced
+    phone: str
+
+
+@router.post("/credits/purchase")
+async def purchase_credits_mpesa(
+    data: CreditPurchaseRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Initiate M-Pesa STK push to buy permanent trade credits."""
+    plan = CREDIT_PLANS.get(data.plan)
+    if not plan:
+        raise HTTPException(status_code=400, detail="Invalid plan. Choose: starter, pro, pro_max, advanced.")
+
+    phone = data.phone.strip().replace(" ", "").replace("-", "")
+    if not phone:
+        raise HTTPException(status_code=400, detail="Phone number is required.")
+
+    from app.core.config import settings
+    callback_url = f"{settings.MPESA_CALLBACK_BASE_URL}/api/traders/credits/callback"
+
+    try:
+        result = await mpesa_client.stk_push(
+            phone=phone,
+            amount=plan["amount"],
+            account_reference=f"SparkP2P-Credits-{trader.id}",
+            description=f"{data.plan.replace('_', ' ').title()} Credits",
+            callback_url=callback_url,
+        )
+    except Exception as e:
+        logger.error(f"Credits STK push failed for trader {trader.id}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to send M-Pesa prompt. Try again.")
+
+    checkout_id = result.get("CheckoutRequestID")
+    if not checkout_id:
+        raise HTTPException(status_code=502, detail="Invalid response from M-Pesa.")
+
+    _pending_credit_stk[checkout_id] = {
+        "trader_id": trader.id,
+        "plan": data.plan,
+        "amount": plan["amount"],
+        "credits": plan["credits"],
+        "rate": plan["rate"],
+        "status": "pending",
+    }
+
+    logger.info(f"Credits STK initiated: trader={trader.id} plan={data.plan} checkout={checkout_id}")
+    return {
+        "ok": True,
+        "checkout_id": checkout_id,
+        "message": f"STK Push sent to {phone}. Enter your M-Pesa PIN to complete purchase.",
+    }
+
+
+@router.post("/credits/callback")
+async def credits_mpesa_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    """M-Pesa STK Push callback for credit purchases. Called by Safaricom."""
+    data = await request.json()
+    logger.info(f"Credits STK Callback: {data}")
+
+    body = data.get("Body", {}).get("stkCallback", {})
+    result_code = body.get("ResultCode")
+    checkout_id = body.get("CheckoutRequestID")
+
+    if not checkout_id:
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+    pending = _pending_credit_stk.pop(checkout_id, None)
+    if not pending:
+        logger.warning(f"Credits callback: unknown checkout_id {checkout_id}")
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+    if result_code != 0:
+        logger.warning(f"Credits STK failed: checkout={checkout_id} code={result_code}")
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+    # Payment succeeded — grant credits
+    trader_id = pending["trader_id"]
+    credits = pending["credits"]
+    amount = pending["amount"]
+    rate = pending["rate"]
+    plan = pending["plan"]
+
+    # Extract M-Pesa receipt
+    mpesa_code = None
+    for item in body.get("CallbackMetadata", {}).get("Item", []):
+        if item.get("Name") == "MpesaReceiptNumber":
+            mpesa_code = item.get("Value")
+            break
+
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        logger.error(f"Credits callback: trader {trader_id} not found")
+        return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+    trader.trade_tokens = (trader.trade_tokens or 0) + credits
+
+    purchase = TradeTokenPurchase(
+        trader_id=trader_id,
+        amount_kes=amount,
+        tokens_granted=credits,
+        rate_per_token=rate,
+        source=f"mpesa_{plan}",
+    )
+    db.add(purchase)
+    await db.commit()
+
+    add_notification(
+        trader_id,
+        "Credits purchased",
+        f"SparkP2P: {credits} trade credits added to your account ({plan.replace('_', ' ').title()} plan). Balance: {trader.trade_tokens}.",
+        "success",
+    )
+
+    logger.info(f"Credits granted: trader={trader_id} credits={credits} plan={plan} mpesa={mpesa_code}")
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+@router.get("/credits/status/{checkout_id}")
+async def credits_purchase_status(
+    checkout_id: str,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Poll for STK push completion. Returns 'pending' or 'completed'."""
+    if checkout_id in _pending_credit_stk:
+        entry = _pending_credit_stk[checkout_id]
+        if entry["trader_id"] != trader.id:
+            raise HTTPException(status_code=403, detail="Not your purchase.")
+        return {"status": "pending"}
+    return {"status": "completed"}
