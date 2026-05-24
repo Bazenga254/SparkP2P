@@ -4,7 +4,7 @@ import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPaym
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle } from 'lucide-react';
-import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, adminGetTradeTokens, adminAddTradeTokens, adminRemoveTradeTokens, getAdminTraderBotLogs } from '../services/api';
+import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, adminGetTradeTokens, adminAddTradeTokens, adminRemoveTradeTokens, getAdminTraderBotLogs } from '../services/api';
 
 const sidebarSections = [
   {
