@@ -171,7 +171,7 @@ export default function Admin() {
 
   // Withdrawals
   const [withdrawals, setWithdrawals] = useState({ withdrawals: [], total: 0, pages: 1, summary: {} });
-  const [wdMethod, setWdMethod] = useState('all');   // all | mpesa | bank_paybill
+  const [wdMethod, setWdMethod] = useState('all');   // all | mpesa
   const [wdStatus, setWdStatus] = useState('all');   // all | pending | completed
   const [wdPeriod, setWdPeriod] = useState('all');
   const [wdPage, setWdPage] = useState(1);
@@ -3040,7 +3040,7 @@ export default function Admin() {
                   <h3>Withdrawals</h3>
                   {/* Method toggle */}
                   <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                    {[['all','All'], ['mpesa','M-Pesa'], ['bank_paybill','I&M Bank']].map(([val, label]) => (
+                    {[['all','All'], ['mpesa','M-Pesa']].map(([val, label]) => (
                       <button key={val} onClick={() => { setWdMethod(val); setWdPage(1); loadWithdrawals(val, wdStatus, wdPeriod, 1); }}
                         style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
                           background: wdMethod === val ? '#f59e0b' : 'transparent',
