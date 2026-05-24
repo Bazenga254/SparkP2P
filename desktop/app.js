@@ -13031,12 +13031,37 @@ ipcMain.handle('save-gmail-credentials', (_e, email, appPassword) => { saveGmail
 ipcMain.handle('load-gmail-credentials', () => { const c = loadGmailCredentials(); return c ? { email: c.email, hasPassword: !!c.appPassword } : null; });
 ipcMain.handle('clear-gmail-credentials', () => { clearGmailCredentials(); return true; });
 ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });
-ipcMain.handle('verify-lock-totp', (_, code) => {
-  if (!totpSecret) { screenLocked = false; return true; } // no TOTP configured — allow through
-  const valid = verifyTOTP(totpSecret, String(code));
-  if (valid) { screenLocked = false; console.log('[SparkP2P] Screen unlocked via TOTP'); }
-  else { console.log('[SparkP2P] Lock screen: wrong TOTP attempt'); }
-  return valid;
+ipcMain.handle('verify-lock-totp', async (_, code) => {
+  // Verify against SparkP2P TOTP (Settings -> Security) not the Binance 2FA secret
+  if (token) {
+    try {
+      const res = await fetch(`${API_BASE}/traders/verify-totp`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: String(code).replace(/[^0-9]/g, '') }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          screenLocked = false;
+          console.log('[SparkP2P] Screen unlocked via SparkP2P TOTP');
+          return true;
+        }
+      }
+    } catch (e) {
+      console.log('[SparkP2P] Lock TOTP backend verify error:', e.message ? e.message.substring(0, 60) : '');
+    }
+  }
+  // Fallback: no network or token — try local Binance TOTP so app is never permanently locked
+  if (totpSecret) {
+    const valid = verifyTOTP(totpSecret, String(code));
+    if (valid) { screenLocked = false; console.log('[SparkP2P] Screen unlocked via fallback local TOTP'); return true; }
+  } else {
+    screenLocked = false;
+    return true;
+  }
+  console.log('[SparkP2P] Lock screen: wrong TOTP attempt');
+  return false;
 });
 ipcMain.handle('set-ai-key', (_, key) => { aiApiKey = key; console.log('[SparkP2P] AI key set (legacy)'); return { ok: true }; });
 ipcMain.handle('set-anthropic-key', (_, key) => { anthropicApiKey = key; saveAnthropicKey(key); aiScanner.initAI(key); console.log('[SparkP2P] Claude configured and saved to disk'); return { ok: true }; });
