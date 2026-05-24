@@ -14,12 +14,13 @@ Flow:
 """
 
 import logging
+from collections import deque
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, or_, update as sql_update
+from sqlalchemy import select, func, or_, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -34,6 +35,11 @@ from app.api.deps import get_current_trader
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ── In-memory bot log store ───────────────────────────────────────
+# Keyed by trader_id. Each deque holds up to 500 recent log entries.
+_trader_bot_logs: dict[int, deque] = {}
+_BOT_LOG_MAX = 500
 
 
 # ── Schemas ──────────────────────────────────────────────────────
@@ -150,6 +156,7 @@ async def report_orders(
             stub = Order(
                 trader_id=trader.id,
                 binance_order_number=order_number,
+                crypto_currency='USDT',
                 side=OrderSide.BUY,
                 status=OrderStatus.COMPLETED,
                 fiat_amount=0,
@@ -269,16 +276,23 @@ async def report_release(
             "release"
         )
 
-        # Send SMS notification
+        # Notify trader via Telegram (free); SMS only if no Telegram linked
         try:
-            from app.services.sms import send_sms
-            send_sms(
-                trader.phone,
-                f"SparkP2P: Order complete! {order.crypto_amount} {order.crypto_currency} released. "
+            from app.api.routes.telegram import notify_trader
+            sent = await notify_trader(
+                trader,
+                f"✅ SparkP2P: Order complete! {order.crypto_amount} {order.crypto_currency} released. "
                 f"KES {order.fiat_amount:,.0f} credited to your wallet. Ref: {data.order_number[-8:]}"
             )
+            if not sent:
+                from app.services.sms import send_sms
+                send_sms(
+                    trader.phone,
+                    f"SparkP2P: Order complete! {order.crypto_amount} {order.crypto_currency} released. "
+                    f"KES {order.fiat_amount:,.0f} credited to your wallet. Ref: {data.order_number[-8:]}"
+                )
         except Exception as e:
-            logger.warning(f"SMS notification failed: {e}")
+            logger.warning(f"Order release notification failed: {e}")
 
         # Trigger settlement
         settlement = SettlementEngine(db)
@@ -556,6 +570,7 @@ class VerifyPaymentData(BaseModel):
     binance_order_number: str
     fiat_amount: float  # Expected KES amount from Binance order
     mpesa_codes_from_chat: Optional[List[str]] = None  # M-Pesa codes extracted from the buyer's chat messages
+    max_age_minutes: Optional[int] = None  # If set: only match payments within this many minutes; uses exact amount (±1 KES)
 
 
 @router.post("/verify-payment")
@@ -570,32 +585,7 @@ async def verify_payment(
     Returns verified=True only if the payment was matched and confirmed by Safaricom.
     This prevents releasing crypto when a buyer fake-clicks "I have paid".
     """
-    # ── Step 1: Try direct M-Pesa code lookup from buyer's chat message ──────
-    # Query by transaction ID only — no status filter in WHERE because the DB
-    # stores status as uppercase ('COMPLETED') while the Python enum value is
-    # lowercase ('completed'), causing SQLAlchemy to produce an invalid enum
-    # comparison that silently returns no rows. Status is checked in Python.
-    if data.mpesa_codes_from_chat:
-        for code in data.mpesa_codes_from_chat:
-            pay_result = await db.execute(
-                select(Payment).where(Payment.mpesa_transaction_id == code)
-            )
-            direct_payment = pay_result.scalar_one_or_none()
-            if direct_payment:
-                status_val = str(direct_payment.status).upper().replace('PAYMENTSTATUS.', '')
-                if status_val not in ('COMPLETED', 'PAYMENT_RECEIVED'):
-                    continue
-                logger.info(f"M-Pesa code {code} matched directly in Payment table for order {data.binance_order_number}")
-                return {
-                    "verified": True,
-                    "reason": f"M-Pesa code {code} confirmed in our records",
-                    "mpesa_receipt": code,
-                    "amount_received": direct_payment.amount,
-                    "payer_phone": direct_payment.phone,
-                    "payer_name": direct_payment.sender_name,
-                }
-
-    # ── Step 2: Fetch order — needed for time-window and double-spend guard ───
+    # ── Step 1: Fetch order — needed for double-spend guard and time-window ──
     result = await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,
@@ -611,17 +601,75 @@ async def verify_payment(
             "reason": f"Order {data.binance_order_number} not found in our system. No M-Pesa payment received.",
         }
 
-    # ── Step 3: Amount-match with double-spend protection ────────────────────
+    # ── Step 2: Try direct M-Pesa code lookup from buyer's chat message ──────
+    # Query by transaction ID only — no status filter in WHERE because the DB
+    # stores status as uppercase ('COMPLETED') while the Python enum value is
+    # lowercase ('completed'), causing SQLAlchemy to produce an invalid enum
+    # comparison that silently returns no rows. Status is checked in Python.
+    if data.mpesa_codes_from_chat:
+        for code in data.mpesa_codes_from_chat:
+            pay_result = await db.execute(
+                select(Payment).where(Payment.mpesa_transaction_id == code)
+            )
+            direct_payment = pay_result.scalar_one_or_none()
+            if direct_payment:
+                status_val = str(direct_payment.status).upper().replace('PAYMENTSTATUS.', '')
+                if status_val not in ('COMPLETED', 'PAYMENT_RECEIVED'):
+                    continue
+                # Reject if this code was already matched to a DIFFERENT order
+                if direct_payment.order_id is not None and direct_payment.order_id != order.id:
+                    logger.warning(
+                        f"M-Pesa code {code} already used for order_id={direct_payment.order_id}, "
+                        f"rejecting for {data.binance_order_number}"
+                    )
+                    return {
+                        "verified": False,
+                        "reason": f"already_used: M-Pesa code {code} was already used in a previous transaction. Ask buyer to send a new payment.",
+                        "mpesa_receipt": code,
+                    }
+                # Reject if the payment predates this order (recycled old screenshot)
+                if direct_payment.created_at < order.created_at:
+                    logger.warning(
+                        f"M-Pesa code {code} (created {direct_payment.created_at}) predates "
+                        f"order {data.binance_order_number} (created {order.created_at}), rejecting"
+                    )
+                    return {
+                        "verified": False,
+                        "reason": f"already_used: M-Pesa code {code} is from a transaction that predates this order. Ask buyer to send a new payment.",
+                        "mpesa_receipt": code,
+                    }
+                logger.info(f"M-Pesa code {code} matched directly in Payment table for order {data.binance_order_number}")
+                # Lock this payment to the order so it can never be reused for another order
+                if direct_payment.order_id is None:
+                    direct_payment.order_id = order.id
+                    await db.commit()
+                return {
+                    "verified": True,
+                    "reason": f"M-Pesa code {code} confirmed in our records",
+                    "mpesa_receipt": code,
+                    "amount_received": direct_payment.amount,
+                    "payer_phone": direct_payment.phone,
+                    "payer_name": direct_payment.sender_name,
+                }
+
+    # ── Step 3: Amount-match (double-spend protection already in WHERE clause) ─
     # Window starts at order creation — payments before the order are never valid.
     # Excludes payments already linked to a DIFFERENT order (order_id must be NULL
     # or this order's id). If multiple unlinked payments have the same amount, we
     # cannot safely pick one — ask buyer to type their M-Pesa code instead.
+    # When max_age_minutes is set (quick-check mode): use exact amount (±1 KES) and
+    # restrict to payments received within that many minutes of now.
     if data.fiat_amount:
+        amount_tolerance = 1 if data.max_age_minutes else 5
+        time_floor = (
+            datetime.now(timezone.utc) - timedelta(minutes=data.max_age_minutes)
+            if data.max_age_minutes else order.created_at
+        )
         amount_result = await db.execute(
             select(Payment).where(
                 Payment.trader_id == trader.id,
-                Payment.amount.between(data.fiat_amount - 5, data.fiat_amount + 5),
-                Payment.created_at >= order.created_at,
+                Payment.amount.between(data.fiat_amount - amount_tolerance, data.fiat_amount + amount_tolerance),
+                Payment.created_at >= time_floor,
                 Payment.direction == PaymentDirection.INBOUND,
                 or_(Payment.order_id.is_(None), Payment.order_id == order.id),
             ).order_by(Payment.id.desc())
@@ -647,6 +695,9 @@ async def verify_payment(
         elif len(unlinked) == 1:
             row = unlinked[0]
             logger.info(f"M-Pesa payment matched by amount KES {data.fiat_amount} for order {data.binance_order_number}")
+            # Lock this payment to the order so it can never be reused for another order
+            row.order_id = order.id
+            await db.commit()
             return {
                 "verified": True,
                 "reason": f"M-Pesa payment matched by amount KES {data.fiat_amount}",
@@ -694,6 +745,29 @@ async def verify_payment(
         "verified": False,
         "reason": f"No M-Pesa payment received yet. Order status: {order.status.value}.",
     }
+
+
+class BotLogRequest(BaseModel):
+    level: str
+    message: str
+    time: str  # ISO timestamp from desktop app
+
+
+@router.post("/bot-log")
+async def receive_bot_log(
+    data: BotLogRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Desktop app pushes each log entry here so admins can view live trader logs."""
+    tid = trader.id
+    if tid not in _trader_bot_logs:
+        _trader_bot_logs[tid] = deque(maxlen=_BOT_LOG_MAX)
+    _trader_bot_logs[tid].append({
+        "level": data.level,
+        "message": data.message,
+        "time": data.time,
+    })
+    return {"ok": True}
 
 
 @router.post("/heartbeat")
@@ -1015,16 +1089,23 @@ async def _complete_buy_order(order: Order, trader: Trader, db: AsyncSession, no
     except Exception as e:
         logger.warning(f"Failed to send in-app notification for buy order {order.binance_order_number}: {e}")
 
-    # SMS notification
+    # Notify trader via Telegram (free); SMS only if no Telegram linked
     try:
-        from app.services.sms import send_sms
-        send_sms(
-            trader.phone,
-            f"SparkP2P: Buy done! {order.crypto_amount} {order.crypto_currency} received on Binance. "
+        from app.api.routes.telegram import notify_trader
+        sent = await notify_trader(
+            trader,
+            f"✅ SparkP2P: Buy done! {order.crypto_amount} {order.crypto_currency} received on Binance. "
             f"Paid KES {order.fiat_amount:,.0f}. Ref: {order.binance_order_number[-8:]}",
         )
+        if not sent:
+            from app.services.sms import send_sms
+            send_sms(
+                trader.phone,
+                f"SparkP2P: Buy done! {order.crypto_amount} {order.crypto_currency} received on Binance. "
+                f"Paid KES {order.fiat_amount:,.0f}. Ref: {order.binance_order_number[-8:]}",
+            )
     except Exception as e:
-        logger.warning(f"SMS failed for buy order completion {order.binance_order_number}: {e}")
+        logger.warning(f"Buy order completion notification failed {order.binance_order_number}: {e}")
 
 
 async def _complete_sell_order(order: Order, trader: Trader, db: AsyncSession) -> None:
@@ -1056,14 +1137,21 @@ async def _complete_sell_order(order: Order, trader: Trader, db: AsyncSession) -
         logger.warning(f"In-app notification failed for sell order {order.binance_order_number}: {e}")
 
     try:
-        from app.services.sms import send_sms
-        send_sms(
-            trader.phone,
-            f"SparkP2P: Sell done! KES {order.fiat_amount:,.0f} received. "
+        from app.api.routes.telegram import notify_trader
+        sent = await notify_trader(
+            trader,
+            f"✅ SparkP2P: Sell done! KES {order.fiat_amount:,.0f} received. "
             f"{order.crypto_amount} {order.crypto_currency} released. Ref: {order.binance_order_number[-8:]}",
         )
+        if not sent:
+            from app.services.sms import send_sms
+            send_sms(
+                trader.phone,
+                f"SparkP2P: Sell done! KES {order.fiat_amount:,.0f} received. "
+                f"{order.crypto_amount} {order.crypto_currency} released. Ref: {order.binance_order_number[-8:]}",
+            )
     except Exception as e:
-        logger.warning(f"SMS failed for sell order completion {order.binance_order_number}: {e}")
+        logger.warning(f"Sell order completion notification failed {order.binance_order_number}: {e}")
 
     try:
         settlement = SettlementEngine(db)
@@ -1167,7 +1255,7 @@ async def _process_reported_sell_order(
         f"You will receive a confirmation message once payment is received. "
         f"Your crypto will be released automatically."
     )
-    return {"action": "send_message", "order_number": order_number, "message": message, "buyer_nickname": order_data.buyerNickname or ""}
+    return {"action": "send_message", "order_number": order_number, "message": message, "buyer_nickname": order_data.buyerNickname or "", "fiat_amount": float(order_data.totalPrice or 0)}
 
 
 async def _process_reported_buy_order(
@@ -2281,3 +2369,166 @@ async def receive_screenshot(
     size_kb = round(len(data.screenshot) * 3 / 4 / 1024)
     logger.info(f"[Screenshot] Trader {trader.id} | Reason:{data.reason} | Size:{size_kb}KB | URL:{data.url[:60]}")
     return {"status": "received"}
+
+
+# ── Choice Bank payment status check ─────────────────────────────────────────
+
+@router.get("/choice-payment-received")
+async def choice_payment_received(
+    order_number: str,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Check whether a SELL order has been fully paid via Choice Bank (PesaLink or M-Pesa).
+    The bot calls this as Step 0.4, before attempting M-Pesa OCR/callback verification.
+    Returns received=True when all accumulated CHOICE_INBOUND payments cover the order total.
+    """
+    order_result = await db.execute(
+        select(Order).where(
+            Order.binance_order_number == order_number,
+            Order.trader_id == trader.id,
+            Order.side == OrderSide.SELL,
+        )
+    )
+    order = order_result.scalar_one_or_none()
+    if not order:
+        return {"received": False, "reason": "order_not_found"}
+
+    if order.status == OrderStatus.PAYMENT_RECEIVED:
+        return {"received": True, "reason": "status_payment_received", "total_paid": order.fiat_amount}
+
+    # Sum all confirmed Choice Bank inbound payments for this order
+    total_result = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.order_id == order.id,
+            Payment.direction == PaymentDirection.INBOUND,
+            Payment.status == PaymentStatus.COMPLETED,
+            Payment.transaction_type == "CHOICE_INBOUND",
+        )
+    )
+    total_paid = float(total_result.scalar() or 0)
+    received = total_paid >= order.fiat_amount - 5
+    return {
+        "received": received,
+        "total_paid": total_paid,
+        "order_amount": order.fiat_amount,
+        "reason": "paid_in_full" if received else f"partial_{total_paid:.0f}_of_{order.fiat_amount:.0f}",
+    }
+
+
+# ── Buy order pre-payment Telegram notification ───────────────────────────────
+
+class NotifyBuyPaymentRequest(BaseModel):
+    order_number: str
+    seller_name: str = ""
+    amount: float
+    method: str = "mpesa"    # "mpesa" | "im_bank" | "other_bank"
+    phone: str = ""
+    account_number: str = ""
+    bank_name: str = ""
+    verified_name: str = ""  # Hakikisha-verified name if available
+
+
+@router.post("/notify-buy-payment")
+async def notify_buy_payment(
+    data: NotifyBuyPaymentRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """
+    Called by the desktop bot immediately before executing a BUY order payment.
+    Sends a Telegram alert to the trader with who is being paid and how.
+    Fire-and-forget — bot does not wait for a response.
+    """
+    from app.api.routes.telegram import notify_trader
+
+    amt_str = f"KES {int(data.amount):,}"
+    name = data.verified_name or data.seller_name or "Unknown"
+    verified_tag = " ✅" if data.verified_name else ""
+
+    if data.method in ("im_bank", "other_bank"):
+        bank = data.bank_name or "Bank"
+        dest = f"{bank} a/c {data.account_number or '?'}"
+    else:
+        dest = f"M-Pesa {data.phone or '?'}"
+
+    msg = (
+        f"🤖 SparkBot — Payment Alert\n\n"
+        f"Sending {amt_str} to:\n"
+        f"👤 {name}{verified_tag}\n"
+        f"📍 {dest}\n"
+        f"📋 Order: ...{data.order_number[-12:]}\n\n"
+        f"Payment is being processed now."
+    )
+
+    await notify_trader(trader, msg)
+    return {"ok": True}
+
+
+# ── Choice Bank outbound payment (BUY order payments to sellers) ──────────────
+
+class ChoicePayRequest(BaseModel):
+    order_number: str
+    payee_account_id: str   # M-Pesa phone (9 digits) or bank account number
+    amount: float
+    payee_name: str = ""
+    bank_code: str = ""     # Empty for M-Pesa mobile; PesaLink bank code for bank transfers
+    remark: str = ""
+
+
+@router.post("/choice-pay")
+async def choice_pay(
+    data: ChoicePayRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Execute a Choice Bank outbound transfer on behalf of the trader.
+    Called by the desktop bot for BUY order payments to sellers.
+    Deducts from the trader's own Choice Bank sub-account (not SparkP2P wallet).
+    """
+    if not trader.choice_account_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No Choice Bank account linked. Complete KYC in the Bank Account tab first.",
+        )
+
+    from app.services.choice_bank.client import transfer
+
+    remark = data.remark or f"SparkP2P BUY {data.order_number[-12:]}"
+    result = await transfer(
+        payer_account_id=trader.choice_account_id,
+        payee_account_id=data.payee_account_id,
+        amount=data.amount,
+        payee_bank_code=data.bank_code,
+        payee_name=data.payee_name,
+        remark=remark,
+    )
+
+    code = result.get("code", "")
+    if code != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Choice Bank transfer failed"))
+
+    tx_data = result.get("data") or {}
+    tx_id = tx_data.get("txId") or tx_data.get("externalTxId") or ""
+
+    payment = Payment(
+        trader_id=trader.id,
+        direction=PaymentDirection.OUTBOUND,
+        status=PaymentStatus.COMPLETED,
+        amount=data.amount,
+        transaction_type="CHOICE_OUTBOUND",
+        phone=data.payee_account_id,
+        mpesa_transaction_id=tx_id or None,
+        remarks=f"BUY {data.order_number[-12:]}: {data.payee_name}",
+    )
+    db.add(payment)
+    await db.commit()
+
+    return {
+        "success": True,
+        "transaction_id": tx_id,
+        "amount": data.amount,
+        "payee": data.payee_account_id,
+        "remark": remark,
+    }

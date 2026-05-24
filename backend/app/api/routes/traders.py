@@ -15,6 +15,7 @@ from app.core.security import encrypt_data, decode_access_token, create_access_t
 from app.models import Trader, SettlementMethod
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.order import Order, OrderStatus
+from app.models.trade_tokens import TradeTokenPurchase
 from app.services.binance.client import BinanceP2PClient
 from app.services.mpesa.client import mpesa_client
 from app.api.deps import get_current_trader
@@ -78,6 +79,7 @@ class TradingConfigRequest(BaseModel):
     dd_min_30d_trades: Optional[int] = None
     dd_min_all_trades: Optional[int] = None
     dd_auto_cancel_new: Optional[bool] = None
+    telegram_approval_enabled: Optional[bool] = None
 
 
 class DepositRequest(BaseModel):
@@ -140,6 +142,11 @@ class TraderProfileResponse(BaseModel):
     dd_min_30d_trades: int = 20
     dd_min_all_trades: int = 0
     dd_auto_cancel_new: bool = False
+    binance_merchant_tier: Optional[str] = None  # 'gold', 'silver', 'bronze'
+    telegram_connected: bool = False
+    telegram_approval_enabled: bool = False
+    trade_tokens: int = 0
+    trade_tokens_expiring: int = 0
 
 
 # In-memory store for phone verification results
@@ -451,6 +458,11 @@ async def get_profile(
         dd_min_30d_trades=trader.dd_min_30d_trades or 20,
         dd_min_all_trades=trader.dd_min_all_trades or 0,
         dd_auto_cancel_new=bool(trader.dd_auto_cancel_new),
+        binance_merchant_tier=trader.binance_merchant_tier or 'bronze',
+        telegram_connected=bool(trader.telegram_chat_id),
+        telegram_approval_enabled=bool(trader.telegram_approval_enabled),
+        trade_tokens=trader.trade_tokens or 0,
+        trade_tokens_expiring=trader.trade_tokens_expiring or 0,
     )
 
 
@@ -769,6 +781,8 @@ async def update_trading_config(
         trader.dd_min_all_trades = data.dd_min_all_trades
     if data.dd_auto_cancel_new is not None:
         trader.dd_auto_cancel_new = data.dd_auto_cancel_new
+    if data.telegram_approval_enabled is not None:
+        trader.telegram_approval_enabled = data.telegram_approval_enabled
 
     await db.commit()
 
@@ -783,6 +797,7 @@ _withdraw_otp_codes: dict[str, str] = {}  # email -> OTP for withdrawal confirma
 
 class UpdateProfileRequest(BaseModel):
     full_name: Optional[str] = None
+    binance_merchant_tier: Optional[str] = None  # 'gold', 'silver', 'bronze'
 
 
 class SetSecurityQuestionRequest(BaseModel):
@@ -801,15 +816,22 @@ async def update_profile(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update editable profile fields (full_name)."""
+    """Update editable profile fields (full_name, binance_merchant_tier)."""
+    updates = {}
     if data.full_name is not None:
         name = data.full_name.strip().upper()
         if len(name) < 3:
             raise HTTPException(status_code=400, detail="Full name must be at least 3 characters")
-        await db.execute(sql_update(Trader).where(Trader.id == trader.id).values(full_name=name))
+        updates["full_name"] = name
+    if data.binance_merchant_tier is not None:
+        if data.binance_merchant_tier not in ("gold", "silver", "bronze"):
+            raise HTTPException(status_code=400, detail="merchant_tier must be gold, silver, or bronze")
+        updates["binance_merchant_tier"] = data.binance_merchant_tier
+    if updates:
+        await db.execute(sql_update(Trader).where(Trader.id == trader.id).values(**updates))
         await db.commit()
-        return {"message": "Profile updated", "full_name": name}
-    return {"message": "Nothing to update", "full_name": trader.full_name}
+        return {"message": "Profile updated", **updates}
+    return {"message": "Nothing to update"}
 
 
 @router.post("/security-question")
@@ -984,6 +1006,8 @@ async def get_desktop_credentials(
         "account_number": account_number,
         "phone_number": trader.phone or "",
         "im_account": trader.settlement_account or "",
+        "choice_account_number": trader.choice_account_number or "",
+        "choice_account_id": trader.choice_account_id or "",
     }
 
 
@@ -2031,3 +2055,171 @@ async def verify_pin_change(data: PinChangeVerifyRequest, trader: Trader = Depen
 
     del _login_otp_codes[f"pause_{trader.email}"]
     return {"authorized": True}
+
+
+# ── Trade Token helpers ──────────────────────────────────────────
+
+def _calc_tokens(amount_kes: float) -> tuple[int, float]:
+    """Return (tokens_granted, rate_per_token) for a given KES purchase amount."""
+    if amount_kes >= 10000:
+        rate = 10.0
+    elif amount_kes >= 5000:
+        rate = 25.0
+    else:
+        rate = 40.0
+    tokens = round(amount_kes / rate)
+    return tokens, rate
+
+
+async def _credit_affiliate_token_revenue(trader: Trader, amount_kes: float, db: AsyncSession):
+    """Credit 10% of token purchase revenue to the trader's referrer affiliate."""
+    if not trader.referred_by_code:
+        return
+    try:
+        from app.models.affiliate import Affiliate, AffiliateEarning
+        result = await db.execute(select(Affiliate).where(Affiliate.referral_code == trader.referred_by_code))
+        affiliate = result.scalar_one_or_none()
+        if not affiliate:
+            return
+        commission = round(amount_kes * 0.10, 2)
+        affiliate.total_earned = (affiliate.total_earned or 0) + commission
+        affiliate.pending_payout = (affiliate.pending_payout or 0) + commission
+        earning = AffiliateEarning(
+            affiliate_id=affiliate.id,
+            referred_trader_id=trader.id,
+            amount=commission,
+            description=f"10% of KES {amount_kes:.0f} trade token purchase",
+        )
+        db.add(earning)
+    except Exception as e:
+        logger.warning(f"Affiliate credit failed for trader {trader.id}: {e}")
+
+
+# ── Trade Token Routes ───────────────────────────────────────────
+
+@router.get("/trade-tokens")
+async def get_trade_tokens(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return current token balance and purchase history."""
+    result = await db.execute(
+        select(TradeTokenPurchase)
+        .where(TradeTokenPurchase.trader_id == trader.id)
+        .order_by(TradeTokenPurchase.created_at.desc())
+        .limit(50)
+    )
+    history = result.scalars().all()
+    return {
+        "trade_tokens": trader.trade_tokens or 0,
+        "trade_tokens_expiring": trader.trade_tokens_expiring or 0,
+        "total": (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0),
+        "history": [
+            {
+                "id": p.id,
+                "amount_kes": p.amount_kes,
+                "tokens_granted": p.tokens_granted,
+                "rate_per_token": p.rate_per_token,
+                "source": p.source,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in history
+        ],
+    }
+
+
+class PurchaseTokensRequest(BaseModel):
+    amount_kes: float
+
+
+@router.post("/trade-tokens/purchase")
+async def purchase_trade_tokens(
+    data: PurchaseTokensRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Purchase trade tokens by deducting from wallet balance."""
+    if data.amount_kes < 1000:
+        raise HTTPException(status_code=400, detail="Minimum purchase is KES 1,000.")
+
+    # Load wallet
+    result = await db.execute(select(Wallet).where(Wallet.trader_id == trader.id))
+    wallet = result.scalar_one_or_none()
+    if not wallet or wallet.balance < data.amount_kes:
+        raise HTTPException(status_code=400, detail="Insufficient wallet balance.")
+
+    tokens, rate = _calc_tokens(data.amount_kes)
+
+    # Deduct from wallet
+    wallet.balance -= data.amount_kes
+    wallet.total_fees_paid = (wallet.total_fees_paid or 0) + data.amount_kes
+
+    tx = WalletTransaction(
+        wallet_id=wallet.id,
+        trader_id=trader.id,
+        transaction_type=TransactionType.PLATFORM_FEE,
+        amount=-data.amount_kes,
+        description=f"Trade token purchase — {tokens} tokens @ KES {rate:.0f}/token",
+        reference=f"TOKEN-{trader.id}-{int(datetime.now(timezone.utc).timestamp())}",
+    )
+    db.add(tx)
+
+    # Grant tokens (permanent)
+    trader.trade_tokens = (trader.trade_tokens or 0) + tokens
+
+    # Record purchase
+    purchase = TradeTokenPurchase(
+        trader_id=trader.id,
+        amount_kes=data.amount_kes,
+        tokens_granted=tokens,
+        rate_per_token=rate,
+        source="balance",
+    )
+    db.add(purchase)
+
+    await db.commit()
+
+    # Credit affiliate 10%
+    await _credit_affiliate_token_revenue(trader, data.amount_kes, db)
+    try:
+        await db.commit()
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "tokens_granted": tokens,
+        "rate_per_token": rate,
+        "new_balance": trader.trade_tokens,
+    }
+
+
+@router.post("/trade-tokens/consume")
+async def consume_trade_token(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Consume 1 token after a bot-completed buy order. Expiring tokens used first."""
+    total = (trader.trade_tokens_expiring or 0) + (trader.trade_tokens or 0)
+    if total <= 0:
+        raise HTTPException(status_code=402, detail="No trade tokens available.")
+
+    if (trader.trade_tokens_expiring or 0) > 0:
+        trader.trade_tokens_expiring -= 1
+    else:
+        trader.trade_tokens -= 1
+
+    await db.commit()
+
+    remaining = (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0)
+
+    # Push low-balance notification when dropping below 20
+    if remaining == 19:
+        add_notification(
+            trader.id,
+            "Trade limit low",
+            "You have 19 trade tokens remaining. Purchase more to keep buy orders running.",
+            "warning",
+        )
+
+    return {"ok": True, "remaining": remaining}

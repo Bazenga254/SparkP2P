@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, purchaseTradeTokens } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -19,9 +19,9 @@ const BANK_PAYBILLS = {
   Absa: '303030',
 };
 
-export default function SettingsPanel({ profile, onUpdate }) {
+export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const navigate = useNavigate();
-  const [activeSection, setActiveSection] = useState('binance');
+  const [activeSection, setActiveSection] = useState(initialSection || 'binance');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [connecting, setConnecting] = useState(false);
@@ -116,6 +116,14 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [sqAnswer, setSqAnswer] = useState('');
   const [savingSq, setSavingSq] = useState(false);
   const [sqJustSaved, setSqJustSaved] = useState(null); // question text right after save
+  // Telegram connection
+  const [tgConnected, setTgConnected] = useState(false);
+  const [tgCode, setTgCode] = useState(null);      // { code, expires_in }
+  const [tgCodeLoading, setTgCodeLoading] = useState(false);
+  const [tgDisconnecting, setTgDisconnecting] = useState(false);
+  const [tgTesting, setTgTesting] = useState(false);
+  const [tgTestResult, setTgTestResult] = useState(null); // 'ok' | 'error'
+
   // Google Authenticator (TOTP) setup
   const [totpSetup, setTotpSetup] = useState(null); // { secret, uri }
   const [totpLoading, setTotpLoading] = useState(false);
@@ -165,6 +173,11 @@ export default function SettingsPanel({ profile, onUpdate }) {
   useEffect(() => {
     setTotpEnabled(!!profile?.has_totp);
   }, [profile?.has_totp]);
+
+  // Load Telegram connection status on mount
+  useEffect(() => {
+    api.get('/telegram/status').then(r => setTgConnected(r.data.connected === true)).catch(() => {});
+  }, []);
 
   // Check if I&M PIN is already saved on this device
   useEffect(() => {
@@ -219,6 +232,34 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const [maxTrade, setMaxTrade] = useState(profile?.max_single_trade || 500000);
   const [batchEnabled, setBatchEnabled] = useState(profile?.batch_settlement_enabled ?? true);
   const [batchThreshold, setBatchThreshold] = useState(profile?.batch_threshold || 50000);
+
+  // Trade tokens
+  const [tokenAmount, setTokenAmount] = useState('');
+  const [tokenBuying, setTokenBuying] = useState(false);
+  const [tokenMsg, setTokenMsg] = useState('');
+  const tradeTokens = (profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0);
+
+  function calcTokenPreview(amtStr) {
+    const amt = parseFloat(amtStr.replace(/[^0-9.]/g, '')) || 0;
+    if (amt < 1000) return null;
+    const rate = amt >= 10000 ? 10 : amt >= 5000 ? 25 : 40;
+    return { tokens: Math.round(amt / rate), rate };
+  }
+
+  const handlePurchaseTokens = async () => {
+    const amt = parseFloat(tokenAmount.replace(/[^0-9.]/g, ''));
+    if (!amt || amt < 1000) { setTokenMsg('Minimum purchase is KES 1,000'); return; }
+    setTokenBuying(true); setTokenMsg('');
+    try {
+      const res = await purchaseTradeTokens(amt);
+      setTokenMsg(`✓ ${res.data.tokens_granted} tokens added to your account`);
+      setTokenAmount('');
+      if (onUpdate) onUpdate();
+    } catch (err) {
+      setTokenMsg(err?.response?.data?.detail || 'Purchase failed — check wallet balance');
+    }
+    setTokenBuying(false);
+  };
 
   const showMsg = (msg) => {
     setMessage(msg);
@@ -279,10 +320,10 @@ export default function SettingsPanel({ profile, onUpdate }) {
   // Redirect to dashboard once all three accounts are connected
   useEffect(() => {
     if (!wasConnectingRef.current) return;
-    if (profile?.binance_connected && gmailConfigured && profile?.im_connected) {
+    if (profile?.binance_connected && gmailConfigured) {
       navigate('/dashboard?scanning=1');
     }
-  }, [profile?.binance_connected, gmailConfigured, profile?.im_connected]);
+  }, [profile?.binance_connected, gmailConfigured]);
 
   // React to desktop app confirming M-PESA portal login
   useEffect(() => {
@@ -340,21 +381,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
     setImConnecting(true);
   };
 
-  // Poll until im_connected = true
-  useEffect(() => {
-    if (!imConnecting) return;
-    imPollRef.current = setInterval(async () => {
-      try {
-        const res = await getProfile();
-        if (res.data.im_connected) {
-          clearInterval(imPollRef.current);
-          setImConnecting(false);
-          if (onUpdate) onUpdate(res.data);
-        }
-      } catch (_) {}
-    }, 3000);
-    return () => clearInterval(imPollRef.current);
-  }, [imConnecting]);
+  // I&M Bank polling removed — no longer used
 
   const handleOpenImPinModal = async () => {
     setShowImPinModal(true);
@@ -491,6 +518,69 @@ export default function SettingsPanel({ profile, onUpdate }) {
   const handleSaveSettlement = handleSaveSettle;
   const handleRequestOTP = handleSettleRequestOTP;
 
+  const handleGenerateTgCode = async () => {
+    setTgCodeLoading(true);
+    setTgCode(null);
+    try {
+      const r = await api.post('/telegram/generate-link-code');
+      setTgCode(r.data);
+      // Poll for connection every 5s for up to 3 minutes
+      const poll = setInterval(async () => {
+        try {
+          const s = await api.get('/telegram/status');
+          if (s.data.connected) {
+            setTgConnected(true);
+            setTgCode(null);
+            clearInterval(poll);
+          }
+        } catch (e) {}
+      }, 5000);
+      setTimeout(() => clearInterval(poll), 180000);
+    } catch (e) {
+      showMsg('Failed to generate code — please try again');
+    } finally {
+      setTgCodeLoading(false);
+    }
+  };
+
+  const handleDisconnectTelegram = async () => {
+    setTgDisconnecting(true);
+    try {
+      await api.post('/telegram/disconnect');
+      setTgConnected(false);
+      setTgCode(null);
+    } catch (e) {
+      showMsg('Failed to disconnect — please try again');
+    } finally {
+      setTgDisconnecting(false);
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    setTgTesting(true);
+    setTgTestResult(null);
+    try {
+      // In the desktop app use IPC (main process has the token and can reach backend)
+      // In the web browser fall back to the normal API call
+      if (window.sparkp2p?.sendTelegramTest) {
+        const result = await window.sparkp2p.sendTelegramTest();
+        if (result?.ok) {
+          setTgTestResult('ok');
+        } else {
+          setTgTestResult('error');
+        }
+      } else {
+        await api.post('/telegram/test');
+        setTgTestResult('ok');
+      }
+    } catch (e) {
+      setTgTestResult('error');
+    } finally {
+      setTgTesting(false);
+      setTimeout(() => setTgTestResult(null), 5000);
+    }
+  };
+
   const handleSaveTrading = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -516,7 +606,7 @@ export default function SettingsPanel({ profile, onUpdate }) {
       {message && <div className="settings-msg">{message}</div>}
 
       <div className="settings-nav">
-        {[['binance', 'Binance'], ['settlement', 'Settlement'], ['trading', 'Trading'], ['security', 'Profile & Security']].map(([key, label]) => (
+        {[['binance', 'Binance'], ['settlement', 'Settlement'], ['trading', 'Trading'], ['security', 'Profile & Security'], ['notifications', 'Notifications']].map(([key, label]) => (
           <button
             key={key}
             className={activeSection === key ? 'active' : ''}
@@ -743,182 +833,6 @@ export default function SettingsPanel({ profile, onUpdate }) {
         />
       )}
 
-      {/* I&M Bank Connection */}
-      {activeSection === 'binance' && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3 style={{ marginBottom: 4 }}>I&amp;M Bank Account</h3>
-          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
-            Used to automatically execute bank withdrawals for traders. Log in once, the session stays alive 24/7.
-          </p>
-          {profile?.im_connected ? (
-            <div className="name-verify-box match">
-              <h4>I&amp;M Bank Connected</h4>
-              <p style={{ fontSize: 13, color: '#9ca3af', marginTop: 8 }}>
-                Session is active. Bank withdrawals will execute automatically when approved.
-              </p>
-              <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-                <button
-                  onClick={handleConnectIm}
-                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #f59e0b', background: 'transparent', color: '#f59e0b', cursor: 'pointer', fontSize: 13 }}
-                >
-                  Re-connect (if session expired)
-                </button>
-                <button
-                  onClick={async () => { await api.post('/traders/disconnect-im'); if (onUpdate) { const r = await getProfile(); onUpdate(r.data); } }}
-                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 13 }}
-                >
-                  Disconnect
-                </button>
-              </div>
-
-            </div>
-          ) : (
-            <div style={{ textAlign: 'center', padding: '30px 20px', background: 'var(--bg)', borderRadius: 12, border: '1px dashed var(--border)' }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>🏦</div>
-              <h4 style={{ color: '#fff', marginBottom: 8 }}>Link Your I&amp;M Bank Account</h4>
-              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20, maxWidth: 400, margin: '0 auto 20px' }}>
-                A secure browser will open I&amp;M digital banking. Log in manually — the app captures your session and keeps it alive so bank transfers execute automatically.
-              </p>
-              {imConnecting ? (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 36, height: 36, border: '3px solid rgba(99,102,241,0.2)', borderTop: '3px solid #6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                  <span style={{ color: '#6366f1', fontSize: 13 }}>Waiting for I&amp;M login...</span>
-                </div>
-              ) : (
-                <button
-                  onClick={handleConnectIm}
-                  style={{ padding: '14px 32px', borderRadius: 10, border: 'none', background: '#6366f1', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 15 }}
-                >
-                  Connect I&amp;M Bank
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* I&M PIN — always visible, stored encrypted on this device only */}
-      {activeSection === 'binance' && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3 style={{ marginBottom: 4 }}>I&amp;M Online Banking PIN</h3>
-          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
-            Used to authorise automated payments. Encrypted with your OS keychain — never stored on our servers.
-          </p>
-
-          {imPinSaved ? (
-            /* ── PIN is set — show big green tick ── */
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '24px 0 8px', gap: 12 }}>
-              <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'rgba(16,185,129,0.15)', border: '2px solid #10b981', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32 }}>✓</div>
-              <p style={{ color: '#10b981', fontWeight: 600, fontSize: 15, margin: 0 }}>PIN saved securely</p>
-              <p style={{ color: '#6b7280', fontSize: 12, margin: 0 }}>Encrypted with Windows Credential Store · Never transmitted</p>
-              <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-                <button
-                  onClick={handleOpenImPinModal}
-                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #6366f1', background: 'transparent', color: '#6366f1', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
-                >
-                  Replace PIN
-                </button>
-                <button
-                  onClick={handleClearImPin}
-                  style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 13 }}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* ── PIN not set — show set button ── */
-            <div style={{ textAlign: 'center', padding: '16px 0' }}>
-              <p style={{ color: '#f59e0b', fontSize: 13, marginBottom: 16 }}>⚠️ PIN not set — automated payments will not work until you add your PIN.</p>
-              <button
-                onClick={handleOpenImPinModal}
-                style={{ padding: '12px 28px', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 14 }}
-              >
-                Set I&amp;M PIN
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* I&M PIN — 2FA verification modal */}
-      {showImPinModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div style={{ background: '#1a1d2e', borderRadius: 14, padding: 28, width: '100%', maxWidth: 420, border: '1px solid #2d3148' }}>
-            <h3 style={{ marginBottom: 6 }}>{imPinVerifStep === 'enter' ? 'Enter New PIN' : 'Verify Your Identity'}</h3>
-            <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20 }}>
-              {imPinVerifStep === 'enter' ? 'Your identity has been verified. Enter your new I&M PIN below.' : 'To protect your account, confirm your identity before changing the PIN.'}
-            </p>
-
-            {imPinVerifStep === 'send' && (
-              <div style={{ textAlign: 'center', padding: '20px 0' }}>
-                <div style={{ width: 32, height: 32, border: '3px solid rgba(99,102,241,0.2)', borderTop: '3px solid #6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
-                <p style={{ color: '#9ca3af', fontSize: 13 }}>Sending OTP to your phone...</p>
-              </div>
-            )}
-
-            {imPinVerifStep === 'verify' && (
-              <>
-                <div style={{ marginBottom: 14 }}>
-                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>SMS OTP Code</label>
-                  <input type="text" maxLength={6} placeholder="6-digit code sent to your phone"
-                    value={imPinOtp} onChange={e => setImPinOtp(e.target.value)}
-                    className="adm-input" style={{ width: '100%' }} />
-                </div>
-                <div style={{ marginBottom: 20 }}>
-                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Google Authenticator Code</label>
-                  <input type="text" maxLength={6} placeholder="6-digit code from your app"
-                    value={imPinTotp} onChange={e => setImPinTotp(e.target.value)}
-                    className="adm-input" style={{ width: '100%' }} />
-                </div>
-                <button
-                  onClick={handleVerifyImPin} disabled={imPinVerifLoading}
-                  style={{ width: '100%', padding: '12px', borderRadius: 8, border: 'none', background: imPinVerifLoading ? '#374151' : '#6366f1', color: imPinVerifLoading ? '#6b7280' : '#fff', fontWeight: 700, cursor: imPinVerifLoading ? 'not-allowed' : 'pointer', fontSize: 14 }}
-                >
-                  {imPinVerifLoading ? 'Verifying...' : 'Verify Identity'}
-                </button>
-                <button
-                  onClick={handleResendOtp} disabled={imPinResending}
-                  style={{ width: '100%', marginTop: 10, padding: '9px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: imPinResending ? '#6b7280' : '#9ca3af', cursor: imPinResending ? 'not-allowed' : 'pointer', fontSize: 13 }}
-                >
-                  {imPinResending ? 'Resending...' : 'Resend OTP'}
-                </button>
-              </>
-            )}
-
-            {imPinVerifStep === 'enter' && (
-              <>
-                <div style={{ marginBottom: 20 }}>
-                  <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>New I&amp;M Online Banking PIN</label>
-                  <input type="password" maxLength={8} inputMode="numeric" placeholder="Enter PIN (dots only)"
-                    value={imPinValue} onChange={e => setImPinValue(e.target.value)}
-                    className="adm-input" style={{ width: '100%', letterSpacing: '0.3em' }}
-                    onKeyDown={e => e.key === 'Enter' && handleSaveImPin()} autoFocus />
-                </div>
-                <button
-                  onClick={handleSaveImPin} disabled={imPinSaving || !imPinValue}
-                  style={{ width: '100%', padding: '12px', borderRadius: 8, border: 'none', background: imPinSaving || !imPinValue ? '#374151' : '#10b981', color: imPinSaving || !imPinValue ? '#6b7280' : '#fff', fontWeight: 700, cursor: imPinSaving || !imPinValue ? 'not-allowed' : 'pointer', fontSize: 14 }}
-                >
-                  {imPinSaving ? 'Saving...' : 'Save PIN Securely'}
-                </button>
-              </>
-            )}
-
-            {imPinVerifMsg && (
-              <p style={{ fontSize: 12, marginTop: 12, color: imPinVerifMsg.includes('sent') ? '#10b981' : '#ef4444', textAlign: 'center' }}>{imPinVerifMsg}</p>
-            )}
-
-            <button
-              onClick={() => { setShowImPinModal(false); setImPinValue(''); setImPinOtp(''); setImPinTotp(''); setImPinVerifMsg(''); }}
-              style={{ width: '100%', marginTop: 12, padding: '10px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-
       {activeSection === 'settlement' && (
         <div className="card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -1019,85 +933,6 @@ export default function SettingsPanel({ profile, onUpdate }) {
               <div style={{ marginTop: 4, textAlign: 'center', fontSize: 10, color: '#9ca3af' }}>hh : mm : ss</div>
             </div>
           )}
-
-          {/* I&M Bank — Primary */}
-          <div style={{
-            borderRadius: 10, border: profile?.settlement_im_account ? '1px solid rgba(96,165,250,0.4)' : '1px solid var(--border)',
-            marginBottom: 12, overflow: 'hidden',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 20 }}>🏦</span>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#60a5fa' }}>I&M Bank <span style={{ fontSize: 10, fontWeight: 400, background: 'rgba(96,165,250,0.15)', color: '#60a5fa', padding: '2px 6px', borderRadius: 4, marginLeft: 4 }}>PRIORITY</span></div>
-                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
-                    {profile?.settlement_im_account
-                      ? <>Account ending <strong style={{ color: '#e5e7eb' }}>{profile.settlement_im_account.slice(-4)}</strong> &nbsp;
-                        {profile?.im_connected
-                          ? <span style={{ color: '#10b981' }}>● Active</span>
-                          : <span style={{ color: '#f59e0b' }}>● Offline (M-Pesa fallback in use)</span>}
-                      </>
-                      : <span style={{ color: '#6b7280' }}>Not configured — M-Pesa will be used</span>}
-                  </div>
-                </div>
-              </div>
-              {settleEdit !== 'im' && (
-                <button
-                  onClick={() => { setSettleEdit('im'); setSettleImInput(''); setSettleOtpSent(false); setSettleOtp(''); setSettleSecAnswer(''); }}
-                  disabled={!!profile?.settlement_cooldown_until}
-                  style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #60a5fa', background: 'transparent', color: '#60a5fa', cursor: 'pointer', fontSize: 12, opacity: profile?.settlement_cooldown_until ? 0.4 : 1 }}
-                >
-                  {profile?.settlement_im_account ? 'Change' : 'Set Up'}
-                </button>
-              )}
-            </div>
-            {settleEdit === 'im' && (
-              <form onSubmit={handleSaveSettle} style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
-                {profile?.settlement_first_change_free && (
-                  <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', marginBottom: 12, fontSize: 12, color: '#10b981' }}>
-                    First update is free — no OTP required.
-                  </div>
-                )}
-                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>I&M Bank Account Number</label>
-                <input type="text" placeholder="e.g. 00108094726050" value={settleImInput}
-                  onChange={e => setSettleImInput(e.target.value)} required
-                  style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12 }} />
-
-                {!profile?.settlement_first_change_free && !settleOtpSent && (
-                  <button type="button" onClick={handleSettleRequestOTP} disabled={loading}
-                    style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer', fontSize: 13, marginBottom: 12 }}>
-                    {loading ? 'Sending...' : 'Send Verification Code'}
-                  </button>
-                )}
-                {(!profile?.settlement_first_change_free && settleOtpSent) && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
-                    <div>
-                      <label style={{ display: 'block', fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>OTP Code</label>
-                      <input type="text" placeholder="6-digit code" maxLength={6} value={settleOtp}
-                        onChange={e => setSettleOtp(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }} />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>{settleSQ || profile?.security_question || 'Security Answer'}</label>
-                      <input type="text" placeholder="Your answer" value={settleSecAnswer}
-                        onChange={e => setSettleSecAnswer(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }} />
-                    </div>
-                  </div>
-                )}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {(profile?.settlement_first_change_free || settleOtpSent) && (
-                    <button type="submit" disabled={loading}
-                      style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: '#60a5fa', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}>
-                      {loading ? 'Saving...' : 'Save I&M Account'}
-                    </button>
-                  )}
-                  <button type="button" onClick={() => { setSettleEdit(null); setSettleOtpSent(false); }}
-                    style={{ padding: '9px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}>
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
 
           {/* M-Pesa — Fallback */}
           <div style={{
@@ -1544,6 +1379,52 @@ export default function SettingsPanel({ profile, onUpdate }) {
             </div>
             <p className="help-text">Automatically pay sellers when you place a buy order.</p>
 
+            {/* ── Available Trade Limit ── */}
+            <div style={{ marginBottom: 20, padding: '16px', background: tradeTokens < 20 ? 'rgba(239,68,68,0.07)' : 'rgba(16,185,129,0.06)', border: `1px solid ${tradeTokens < 20 ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.2)'}`, borderRadius: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ color: '#d1d5db', fontWeight: 600, fontSize: 13 }}>Available Trade Limit</span>
+                <span style={{ fontSize: 22, fontWeight: 800, color: tradeTokens < 20 ? '#ef4444' : '#10b981' }}>{tradeTokens}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
+                <span style={{ color: '#9ca3af', fontSize: 11 }}>Permanent: <b style={{ color: '#d1d5db' }}>{profile?.trade_tokens || 0}</b></span>
+                <span style={{ color: '#9ca3af', fontSize: 11 }}>Expiring (resets midnight): <b style={{ color: '#d1d5db' }}>{profile?.trade_tokens_expiring || 0}</b></span>
+              </div>
+              {tradeTokens < 20 && (
+                <p style={{ color: '#ef4444', fontSize: 12, margin: '0 0 10px' }}>
+                  ⚠️ Your trade limit is low. Buy orders will be skipped when it reaches 0.
+                </p>
+              )}
+              <p style={{ color: '#6b7280', fontSize: 11, margin: '0 0 12px' }}>
+                1 token = 1 bot-completed buy order. Tokens are charged at KES 40 each (KES 5,000+ = KES 25, KES 10,000+ = KES 10). Dual traders earn free expiring tokens nightly based on sell-side revenue.
+              </p>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  placeholder="KES amount (min 1,000)"
+                  value={tokenAmount}
+                  onChange={(e) => setTokenAmount(e.target.value)}
+                  style={{ flex: 1, minWidth: 160, background: '#0d1117', border: '1px solid #1f2937', borderRadius: 7, color: '#fff', padding: '8px 12px', fontSize: 13 }}
+                />
+                <button
+                  type="button"
+                  onClick={handlePurchaseTokens}
+                  disabled={tokenBuying}
+                  style={{ padding: '8px 18px', borderRadius: 7, background: '#f59e0b', border: 'none', color: '#000', fontWeight: 700, fontSize: 13, cursor: tokenBuying ? 'not-allowed' : 'pointer', opacity: tokenBuying ? 0.7 : 1 }}
+                >
+                  {tokenBuying ? 'Processing...' : 'Buy from Balance'}
+                </button>
+              </div>
+              {tokenAmount && calcTokenPreview(tokenAmount) && (
+                <p style={{ color: '#10b981', fontSize: 12, margin: '8px 0 0' }}>
+                  → You will receive <b>{calcTokenPreview(tokenAmount).tokens}</b> tokens @ KES {calcTokenPreview(tokenAmount).rate}/token
+                </p>
+              )}
+              {tokenAmount && !calcTokenPreview(tokenAmount) && parseFloat(tokenAmount.replace(/[^0-9.]/g, '')) > 0 && (
+                <p style={{ color: '#ef4444', fontSize: 12, margin: '8px 0 0' }}>Minimum purchase is KES 1,000</p>
+              )}
+              {tokenMsg && <p style={{ color: tokenMsg.startsWith('✓') ? '#10b981' : '#ef4444', fontSize: 12, margin: '8px 0 0' }}>{tokenMsg}</p>}
+            </div>
+
             <label>Daily Trade Limit</label>
             <input
               type="text"
@@ -1599,6 +1480,85 @@ export default function SettingsPanel({ profile, onUpdate }) {
           </form>
         </div>
       )}
+      {activeSection === 'notifications' && (
+        <div className="card">
+          <h3>Telegram Notifications</h3>
+          <p className="help-text" style={{ marginBottom: 16 }}>
+            Connect your Telegram account to receive sell order approval requests directly in Telegram.
+            For each new sell order you will get a message with the buyer's stats and YES/NO buttons to approve or reject before payment details are sent.
+          </p>
+
+          {tgConnected ? (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, padding: '14px 16px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 10 }}>
+                <span style={{ fontSize: 22 }}>✅</span>
+                <div>
+                  <div style={{ color: '#10b981', fontWeight: 700, fontSize: 15 }}>Telegram Connected</div>
+                  <div style={{ color: '#6b7280', fontSize: 13, marginTop: 2 }}>You will receive sell order approval requests in @Sparkp2p_bot</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  onClick={handleTestTelegram}
+                  disabled={tgTesting}
+                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #10b981', background: 'transparent', color: '#10b981', cursor: 'pointer', fontSize: 14 }}
+                >
+                  {tgTesting ? 'Sending...' : 'Send Test Message'}
+                </button>
+                <button
+                  onClick={handleDisconnectTelegram}
+                  disabled={tgDisconnecting}
+                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 14 }}
+                >
+                  {tgDisconnecting ? 'Disconnecting...' : 'Disconnect Telegram'}
+                </button>
+                {tgTestResult === 'ok' && (
+                  <span style={{ color: '#10b981', fontSize: 13 }}>Message sent — check your Telegram</span>
+                )}
+                {tgTestResult === 'error' && (
+                  <span style={{ color: '#ef4444', fontSize: 13 }}>Failed to send — check bot connection</span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, padding: '14px 16px', background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.3)', borderRadius: 10 }}>
+                <span style={{ fontSize: 22 }}>🔔</span>
+                <div>
+                  <div style={{ color: '#9ca3af', fontWeight: 700, fontSize: 15 }}>Not Connected</div>
+                  <div style={{ color: '#6b7280', fontSize: 13, marginTop: 2 }}>Connect Telegram to enable sell order approval gates</div>
+                </div>
+              </div>
+
+              {tgCode ? (
+                <div style={{ padding: '18px 20px', background: 'rgba(79,70,229,0.08)', border: '1px solid rgba(79,70,229,0.3)', borderRadius: 12, marginBottom: 20 }}>
+                  <div style={{ color: '#a5b4fc', fontWeight: 600, marginBottom: 10, fontSize: 14 }}>Follow these steps:</div>
+                  <ol style={{ color: '#d1d5db', fontSize: 14, lineHeight: 2, paddingLeft: 20, margin: 0 }}>
+                    <li>Open Telegram and search for <strong style={{ color: '#fff' }}>@Sparkp2p_bot</strong></li>
+                    <li>Start the bot by tapping <strong style={{ color: '#fff' }}>Start</strong></li>
+                    <li>Send this message to the bot:</li>
+                  </ol>
+                  <div style={{ margin: '12px 0', padding: '12px 16px', background: '#0f1117', borderRadius: 8, fontFamily: 'monospace', fontSize: 18, fontWeight: 700, color: '#a5b4fc', textAlign: 'center', letterSpacing: 4 }}>
+                    /link {tgCode.code}
+                  </div>
+                  <div style={{ color: '#6b7280', fontSize: 12, textAlign: 'center' }}>
+                    Code expires in {Math.floor(tgCode.expires_in / 60)} minutes. This page will update automatically once connected.
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={handleGenerateTgCode}
+                  disabled={tgCodeLoading}
+                  style={{ padding: '12px 24px', borderRadius: 8, border: 'none', background: '#4f46e5', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 14 }}
+                >
+                  {tgCodeLoading ? 'Generating...' : 'Connect Telegram'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Pause Bot 2FA Modal */}
       {showPauseModal && (
         <div style={{

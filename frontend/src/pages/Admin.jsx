@@ -4,7 +4,7 @@ import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPaym
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle } from 'lucide-react';
-import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee } from '../services/api';
+import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, adminGetTradeTokens, adminAddTradeTokens, adminRemoveTradeTokens, getAdminTraderBotLogs } from '../services/api';
 
 const sidebarSections = [
   {
@@ -104,6 +104,13 @@ export default function Admin() {
   const [txPage, setTxPage] = useState(1);
   const [ordersPage, setOrdersPage] = useState(1);
   const PAGE_SIZE = 15;
+  const [traderTokenData, setTraderTokenData] = useState(null);
+  const [addTokensAmount, setAddTokensAmount] = useState('');
+  const [addTokensNote, setAddTokensNote] = useState('');
+  const [addTokensLoading, setAddTokensLoading] = useState(false);
+  const [addTokensMsg, setAddTokensMsg] = useState('');
+  const [traderBotLogs, setTraderBotLogs] = useState([]);
+  const [botLogsLoading, setBotLogsLoading] = useState(false);
   const [disputes, setDisputes] = useState([]);
   const [resolveModal, setResolveModal] = useState(null); // { dispute }
   const [resolveAction, setResolveAction] = useState('cancel');
@@ -795,6 +802,8 @@ export default function Admin() {
     setViewingTraderTx([]);
     setViewingTraderOrders([]);
     setTraderPnl(null);
+    setTraderTokenData(null);
+    setAddTokensMsg(''); setAddTokensAmount(''); setAddTokensNote('');
     setPnlPeriod('today');
     setViewingTraderLoading(true);
     setTxPage(1);
@@ -804,18 +813,22 @@ export default function Admin() {
     setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
     setImAccountInput(trader.settlement_account || ''); setImAccountMsg('');
     try {
-      const [detailRes, walletRes, txRes, ordersRes, pnlRes] = await Promise.all([
+      const [detailRes, walletRes, txRes, ordersRes, pnlRes, tokenRes, logsRes] = await Promise.all([
         api.get(`/admin/traders/${trader.id}/detail`),
         api.get(`/admin/traders/${trader.id}/wallet`),
         api.get(`/admin/traders/${trader.id}/transactions?limit=60`),
         api.get(`/admin/traders/${trader.id}/orders?limit=60`),
         getTraderPnl(trader.id, 'today'),
+        adminGetTradeTokens(trader.id),
+        getAdminTraderBotLogs(trader.id),
       ]);
       setViewingTrader(prev => ({ ...prev, ...(detailRes.data || {}) }));
       setViewingTraderWallet(walletRes.data);
       setViewingTraderTx(txRes.data || []);
       setViewingTraderOrders(ordersRes.data || []);
       setTraderPnl(pnlRes.data);
+      setTraderTokenData(tokenRes.data);
+      setTraderBotLogs(logsRes.data || []);
     } catch (e) { console.error('Trader detail load error:', e); }
     setViewingTraderLoading(false);
   };
@@ -1485,7 +1498,7 @@ export default function Admin() {
                   <h3>All Transactions</h3>
                   {/* Type toggle */}
                   <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                    {[['fiat', 'Fiat (M-Pesa)'], ['crypto', 'Crypto (Binance)']].map(([key, label]) => (
+                    {[['fiat', 'Fiat (Choice Bank)'], ['crypto', 'Crypto (Binance)']].map(([key, label]) => (
                       <button key={key}
                         onClick={() => setTxType(key)}
                         style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
@@ -1520,7 +1533,7 @@ export default function Admin() {
                 return (
                   <>
                     <div style={{ padding: '12px 0', display: 'flex', gap: 8 }}>
-                      <input type="text" placeholder="Search by M-Pesa code, phone, name..."
+                      <input type="text" placeholder="Search by TX ID, phone, trader, name..."
                         value={txnSearch} onChange={(e) => setTxnSearch(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && loadTransactions(txPeriod, txnSearch, true)}
                         style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
@@ -1549,8 +1562,8 @@ export default function Admin() {
                         <thead>
                           <tr>
                             <th>ID</th><th>Direction</th><th>Type</th><th>Amount</th>
-                            <th>Trader</th><th>Recipient/Sender</th><th>Phone</th>
-                            <th>M-Pesa Code</th><th>Reference</th><th>Status</th><th>Time</th>
+                            <th>Trader</th><th>Counterparty</th><th>Phone/Account</th>
+                            <th>TX ID</th><th>Status</th><th>Time</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1560,19 +1573,14 @@ export default function Admin() {
                             <tr key={tx.id}>
                               <td className="mono">{tx.id}</td>
                               <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
-                              <td>{tx.transaction_type}</td>
+                              <td style={{ fontSize: 11, color: '#9ca3af' }}>{tx.transaction_type === 'CHOICE_INBOUND' ? 'Inbound' : tx.transaction_type === 'CHOICE_OUTBOUND' ? 'Outbound' : tx.transaction_type}</td>
                               <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>
                                 {tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}
                               </td>
                               <td>{tx.trader_name}</td>
                               <td>{tx.sender_name !== '-' ? tx.sender_name : tx.destination !== '-' ? tx.destination : '-'}</td>
-                              <td className="mono">{(() => {
-                                const p = tx.phone !== '-' ? tx.phone : tx.trader_phone;
-                                if (p && p.length > 20) return tx.sender_name !== '-' ? tx.sender_name : 'Hidden';
-                                return p || '-';
-                              })()}</td>
-                              <td className="mono" style={{ color: '#f59e0b' }}>{tx.mpesa_transaction_id}</td>
-                              <td className="mono">{tx.bill_ref_number}</td>
+                              <td className="mono" style={{ fontSize: 11 }}>{tx.phone !== '-' ? tx.phone : '-'}</td>
+                              <td className="mono" style={{ color: '#f59e0b', fontSize: 11 }}>{tx.mpesa_transaction_id !== '-' ? tx.mpesa_transaction_id : '-'}</td>
                               <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
                               <td>{tx.created_at ? fmtDateEAT(tx.created_at) : '-'}</td>
                             </tr>
@@ -1910,6 +1918,146 @@ export default function Admin() {
                           </button>
                           {resetPwMsg && <div style={{ marginTop: 6, fontSize: 12, color: resetPwMsg.includes('Failed') ? '#ef4444' : '#10b981', textAlign: 'center' }}>{resetPwMsg}</div>}
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Trade Tokens Card */}
+                    <div className="adm-card" style={{ marginBottom: 16 }}>
+                      <div className="adm-card-header"><h3>🪙 Trade Tokens</h3></div>
+                      <div style={{ padding: '16px 20px 20px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
+                          {[
+                            ['Permanent', traderTokenData?.trade_tokens ?? '—', '#10b981'],
+                            ['Expiring (resets midnight)', traderTokenData?.trade_tokens_expiring ?? '—', '#f59e0b'],
+                            ['Total Available', traderTokenData?.total ?? '—', '#3b82f6'],
+                          ].map(([label, val, color]) => (
+                            <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
+                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{label}</div>
+                              <div style={{ fontSize: 22, fontWeight: 800, color }}>{val}</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Add tokens */}
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+                          <input
+                            type="number"
+                            min="1"
+                            placeholder="Tokens to add"
+                            value={addTokensAmount}
+                            onChange={e => setAddTokensAmount(e.target.value)}
+                            style={{ width: 140, background: '#0d1117', border: '1px solid #1f2937', borderRadius: 7, color: '#fff', padding: '7px 12px', fontSize: 13 }}
+                          />
+                          <input
+                            type="text"
+                            placeholder="Note (optional)"
+                            value={addTokensNote}
+                            onChange={e => setAddTokensNote(e.target.value)}
+                            style={{ flex: 1, minWidth: 120, background: '#0d1117', border: '1px solid #1f2937', borderRadius: 7, color: '#fff', padding: '7px 12px', fontSize: 13 }}
+                          />
+                          <button
+                            disabled={addTokensLoading}
+                            onClick={async () => {
+                              const n = parseInt(addTokensAmount);
+                              if (!n || n <= 0) { setAddTokensMsg('Enter a valid number'); return; }
+                              setAddTokensLoading(true); setAddTokensMsg('');
+                              try {
+                                const res = await adminAddTradeTokens(t.id, n, addTokensNote);
+                                setAddTokensMsg(`✓ ${n} tokens added — new balance: ${res.data.new_balance}`);
+                                setAddTokensAmount(''); setAddTokensNote('');
+                                const tokenRes = await adminGetTradeTokens(t.id);
+                                setTraderTokenData(tokenRes.data);
+                              } catch (e) { setAddTokensMsg(e?.response?.data?.detail || 'Failed to add tokens'); }
+                              setAddTokensLoading(false);
+                            }}
+                            style={{ padding: '7px 18px', borderRadius: 7, background: '#10b981', border: 'none', color: '#000', fontWeight: 700, fontSize: 13, cursor: addTokensLoading ? 'not-allowed' : 'pointer', opacity: addTokensLoading ? 0.7 : 1 }}
+                          >
+                            {addTokensLoading ? 'Adding...' : 'Add Tokens'}
+                          </button>
+                          <button
+                            disabled={addTokensLoading}
+                            onClick={async () => {
+                              const n = parseInt(addTokensAmount);
+                              if (!n || n <= 0) { setAddTokensMsg('Enter a valid number to remove'); return; }
+                              setAddTokensLoading(true); setAddTokensMsg('');
+                              try {
+                                const res = await adminRemoveTradeTokens(t.id, n, addTokensNote);
+                                setAddTokensMsg(`✓ ${res.data.tokens_removed} tokens removed — new balance: ${res.data.new_balance}`);
+                                setAddTokensAmount(''); setAddTokensNote('');
+                                const tokenRes = await adminGetTradeTokens(t.id);
+                                setTraderTokenData(tokenRes.data);
+                              } catch (e) { setAddTokensMsg(e?.response?.data?.detail || 'Failed to remove tokens'); }
+                              setAddTokensLoading(false);
+                            }}
+                            style={{ padding: '7px 18px', borderRadius: 7, background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.5)', color: '#ef4444', fontWeight: 700, fontSize: 13, cursor: addTokensLoading ? 'not-allowed' : 'pointer', opacity: addTokensLoading ? 0.7 : 1 }}
+                          >
+                            Remove Tokens
+                          </button>
+                        </div>
+                        {addTokensMsg && <div style={{ fontSize: 12, color: addTokensMsg.startsWith('✓') ? '#10b981' : '#ef4444', marginBottom: 12 }}>{addTokensMsg}</div>}
+
+                        {/* Purchase history */}
+                        {traderTokenData?.history?.length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Purchase / Grant History</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 80px 100px', gap: '6px 12px', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>
+                              <span>Date</span><span>Tokens</span><span>KES</span><span>Rate</span><span>Source</span>
+                            </div>
+                            {traderTokenData.history.slice(0, 20).map((p, i) => (
+                              <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 80px 100px', gap: '6px 12px', fontSize: 12, padding: '6px 0', borderTop: '1px solid rgba(255,255,255,0.05)', alignItems: 'center' }}>
+                                <span style={{ color: '#d1d5db' }}>{p.created_at ? new Date(p.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                                <span style={{ color: '#10b981', fontWeight: 700 }}>{p.tokens_granted}</span>
+                                <span>{p.amount_kes > 0 ? `${p.amount_kes.toLocaleString()}` : '—'}</span>
+                                <span>{p.rate_per_token > 0 ? `KES ${p.rate_per_token}` : '—'}</span>
+                                <span style={{ color: p.source === 'admin' ? '#f59e0b' : p.source === 'reimbursement' ? '#3b82f6' : '#9ca3af' }}>{p.source}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Bot Logs Card */}
+                    <div className="adm-card" style={{ marginBottom: 16 }}>
+                      <div className="adm-card-header" style={{ justifyContent: 'space-between' }}>
+                        <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 16 }}>📋</span> Bot Activity Logs
+                        </h3>
+                        <button
+                          onClick={async () => {
+                            setBotLogsLoading(true);
+                            try {
+                              const r = await getAdminTraderBotLogs(viewingTrader.id);
+                              setTraderBotLogs(r.data || []);
+                            } catch (_) {}
+                            setBotLogsLoading(false);
+                          }}
+                          style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid #374151', background: '#1f2937', color: '#9ca3af', fontSize: 12, cursor: 'pointer' }}
+                        >
+                          {botLogsLoading ? 'Refreshing…' : '↻ Refresh'}
+                        </button>
+                      </div>
+                      <div style={{ fontFamily: 'monospace', fontSize: 12, maxHeight: 360, overflowY: 'auto', marginTop: 8 }}>
+                        {traderBotLogs.length === 0 ? (
+                          <div style={{ padding: '24px 0', textAlign: 'center', color: '#6b7280' }}>
+                            No logs yet — logs appear here once the trader's bot sends activity.
+                          </div>
+                        ) : (
+                          traderBotLogs.map((log, i) => {
+                            const colors = { success: '#10b981', error: '#ef4444', warning: '#f59e0b', info: '#6b7280', warn: '#f59e0b' };
+                            const badges = { success: '✓', error: '✕', warning: '⚠', warn: '⚠', info: '·' };
+                            const color = colors[log.level] || '#6b7280';
+                            const badge = badges[log.level] || '·';
+                            const time = log.time ? new Date(log.time).toLocaleTimeString('en-KE', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+                            return (
+                              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '4px 6px', borderRadius: 4, background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                                <span style={{ color, minWidth: 14, marginTop: 1 }}>{badge}</span>
+                                <span style={{ color: '#374151', minWidth: 70, fontSize: 10, marginTop: 2 }}>{time}</span>
+                                <span style={{ color: log.level === 'error' ? '#fca5a5' : log.level === 'success' ? '#6ee7b7' : (log.level === 'warning' || log.level === 'warn') ? '#fcd34d' : '#9ca3af', flex: 1, wordBreak: 'break-word' }}>{log.message}</span>
+                              </div>
+                            );
+                          })
+                        )}
                       </div>
                     </div>
 

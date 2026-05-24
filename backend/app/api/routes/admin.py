@@ -15,6 +15,7 @@ from app.core.security import create_access_token
 from app.models import Trader, TraderStatus, Order, OrderStatus, Payment, PaymentDirection, PaymentStatus, ChatMessage
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.message_template import MessageTemplate
+from app.models.trade_tokens import TradeTokenPurchase
 from app.api.deps import get_admin_trader, get_employee_or_admin, get_client_ip, write_audit_log
 from app.services.message_templates import seed_default_templates, refresh_template_cache
 
@@ -424,7 +425,10 @@ async def get_trader_transactions(
 
     orders_result = await db.execute(
         select(Order)
-        .where(Order.trader_id == trader_id)
+        .where(
+            Order.trader_id == trader_id,
+            Order.fiat_amount > 0,
+        )
         .order_by(desc(Order.created_at))
         .limit(limit)
     )
@@ -742,6 +746,148 @@ async def update_trader_im_account(
     return {"status": "updated", "trader_id": trader_id, "im_account": trader.settlement_account}
 
 
+class AdminAddTokensRequest(BaseModel):
+    tokens: int
+    note: Optional[str] = None
+
+
+@router.post("/traders/{trader_id}/trade-tokens")
+async def admin_add_trade_tokens(
+    trader_id: int,
+    data: AdminAddTokensRequest,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually add permanent trade tokens to a trader's account."""
+    if data.tokens <= 0:
+        raise HTTPException(status_code=400, detail="tokens must be > 0")
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    trader.trade_tokens = (trader.trade_tokens or 0) + data.tokens
+
+    purchase = TradeTokenPurchase(
+        trader_id=trader_id,
+        amount_kes=0,
+        tokens_granted=data.tokens,
+        rate_per_token=0,
+        source="admin",
+    )
+    db.add(purchase)
+    await db.commit()
+
+    # Notify the trader (in-app + SMS)
+    from app.api.routes.traders import add_notification
+    from app.services.sms import send_sms
+    note_text = f" — {data.note}" if data.note else ""
+    msg = f"SparkP2P: {data.tokens} trade token{'s' if data.tokens != 1 else ''} added to your account{note_text}. New balance: {trader.trade_tokens}."
+    add_notification(trader_id, "Trade tokens added", msg, "info")
+    try:
+        send_sms(trader.phone, msg)
+    except Exception as e:
+        logger.warning(f"Token grant SMS failed for trader {trader_id}: {e}")
+
+    return {
+        "ok": True,
+        "tokens_added": data.tokens,
+        "new_balance": trader.trade_tokens,
+        "note": data.note,
+    }
+
+
+class AdminRemoveTokensRequest(BaseModel):
+    tokens: int
+    note: Optional[str] = None
+
+
+@router.delete("/traders/{trader_id}/trade-tokens")
+async def admin_remove_trade_tokens(
+    trader_id: int,
+    data: AdminRemoveTokensRequest,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Subtract trade tokens from a trader's account (permanent first, then expiring)."""
+    if data.tokens <= 0:
+        raise HTTPException(status_code=400, detail="tokens must be > 0")
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    total = (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0)
+    to_remove = min(data.tokens, total)
+
+    # Deduct from permanent first, then expiring
+    perm = trader.trade_tokens or 0
+    if to_remove <= perm:
+        trader.trade_tokens = perm - to_remove
+    else:
+        trader.trade_tokens = 0
+        trader.trade_tokens_expiring = max(0, (trader.trade_tokens_expiring or 0) - (to_remove - perm))
+
+    await db.commit()
+
+    # Notify the trader (in-app + SMS)
+    from app.api.routes.traders import add_notification
+    from app.services.sms import send_sms
+    note_text = f" — {data.note}" if data.note else ""
+    new_total = (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0)
+    msg = f"SparkP2P: {to_remove} trade token{'s' if to_remove != 1 else ''} removed from your account{note_text}. Remaining balance: {new_total}."
+    add_notification(trader_id, "Trade tokens removed", msg, "warning")
+    try:
+        send_sms(trader.phone, msg)
+    except Exception as e:
+        logger.warning(f"Token removal SMS failed for trader {trader_id}: {e}")
+
+    return {
+        "ok": True,
+        "tokens_removed": to_remove,
+        "new_balance": new_total,
+        "note": data.note,
+    }
+
+
+@router.get("/traders/{trader_id}/trade-tokens")
+async def admin_get_trade_tokens(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a trader's token balance and full purchase/grant history."""
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    hist_result = await db.execute(
+        select(TradeTokenPurchase)
+        .where(TradeTokenPurchase.trader_id == trader_id)
+        .order_by(TradeTokenPurchase.created_at.desc())
+        .limit(100)
+    )
+    history = hist_result.scalars().all()
+
+    return {
+        "trade_tokens": trader.trade_tokens or 0,
+        "trade_tokens_expiring": trader.trade_tokens_expiring or 0,
+        "total": (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0),
+        "history": [
+            {
+                "id": p.id,
+                "amount_kes": p.amount_kes,
+                "tokens_granted": p.tokens_granted,
+                "rate_per_token": p.rate_per_token,
+                "source": p.source,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in history
+        ],
+    }
+
+
 @router.get("/orders/disputed")
 async def list_disputed_orders(
     admin: Trader = Depends(get_admin_trader),
@@ -857,11 +1003,13 @@ async def admin_transactions(
     search: str = None,
     limit: int = Query(default=50, le=200),
     offset: int = 0,
+    category: str = None,   # "choice" → filter CHOICE_INBOUND/OUTBOUND only
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all payments with date filters and search.
-    Search by: M-Pesa code, phone number, trader name, or sender name.
+    """List payments with date filters and optional category filter.
+    category=choice returns only Choice Bank inbound/outbound transactions.
+    Search by: TX ID, phone number, trader name, or sender name.
     """
     start = _get_period_start(period)
 
@@ -871,6 +1019,10 @@ async def admin_transactions(
     )
     if start:
         query = query.where(Payment.created_at >= start)
+
+    # Category filter
+    if category == "choice":
+        query = query.where(Payment.transaction_type.in_(["CHOICE_INBOUND", "CHOICE_OUTBOUND"]))
 
     # Search filter
     if search and search.strip():
@@ -892,6 +1044,8 @@ async def admin_transactions(
     count_query = select(func.count(Payment.id))
     if start:
         count_query = count_query.where(Payment.created_at >= start)
+    if category == "choice":
+        count_query = count_query.where(Payment.transaction_type.in_(["CHOICE_INBOUND", "CHOICE_OUTBOUND"]))
     if search and search.strip():
         s = f"%{search.strip()}%"
         count_query = count_query.join(Trader, Payment.trader_id == Trader.id, isouter=True).where(
@@ -1969,6 +2123,17 @@ def _apply_period(q, model_col, period, now):
     elif period == "year":
         return q.where(model_col >= now - timedelta(days=365))
     return q
+
+
+@router.get("/traders/{trader_id}/bot-logs")
+async def get_trader_bot_logs(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+):
+    """Return the most recent bot activity logs for a trader (newest first)."""
+    from app.api.routes.extension import _trader_bot_logs
+    logs = list(_trader_bot_logs.get(trader_id, []))
+    return list(reversed(logs))
 
 
 @router.get("/traders/{trader_id}/pnl")

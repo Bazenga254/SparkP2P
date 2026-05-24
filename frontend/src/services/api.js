@@ -72,8 +72,8 @@ export const updateTraderStatus = (id, status) => api.put(`/admin/traders/${id}/
 export const updateTraderTier = (id, tier) => api.put(`/admin/traders/${id}/tier?tier=${tier}`);
 export const getDisputedOrders = () => api.get('/admin/orders/disputed');
 export const getUnmatchedPayments = () => api.get('/admin/payments/unmatched');
-export const getAdminTransactions = (period = 'today', limit = 50, search = '') =>
-  api.get(`/admin/transactions?period=${period}&limit=${limit}${search ? '&search=' + encodeURIComponent(search) : ''}`);
+export const getAdminTransactions = (period = 'today', limit = 50, search = '', category = 'choice') =>
+  api.get(`/admin/transactions?period=${period}&limit=${limit}&category=${category}${search ? '&search=' + encodeURIComponent(search) : ''}`);
 export const getAdminOrders = (period = 'today', limit = 50, search = '') =>
   api.get(`/admin/orders?period=${period}&limit=${limit}${search ? '&search=' + encodeURIComponent(search) : ''}`);
 export const getAdminAnalytics = () => api.get('/admin/analytics');
@@ -101,6 +101,7 @@ export const closeSupportTicket = (ticketId) => api.put(`/admin/support-tickets/
 export const replyToSupportTicket = (ticketId, message, attachmentUrl = null, attachmentName = null) => api.post(`/admin/support-tickets/${ticketId}/reply`, { message, attachment_url: attachmentUrl, attachment_name: attachmentName });
 export const uploadSupportAttachment = (file) => { const fd = new FormData(); fd.append('file', file); return api.post('/support/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); };
 export const getSystemStatus = () => api.get('/system-status');
+export const sendTelegramTest = () => api.post('/telegram/test');
 
 // Withdrawals
 export const getAdminWithdrawals = (params = {}) => api.get('/admin/withdrawals', { params });
@@ -132,5 +133,18 @@ export const getMyReferrals = () => api.get('/affiliates/me/referrals');
 export const getMyPayouts = () => api.get('/affiliates/me/payouts');
 export const applyForAffiliate = (message = '') => api.post('/affiliates/apply', { message });
 export const validateReferralCode = (code) => api.get(`/affiliates/validate/${code}`);
+
+// Trade Tokens
+export const getTradeTokens = () => api.get('/traders/trade-tokens');
+export const purchaseTradeTokens = (amount_kes) => api.post('/traders/trade-tokens/purchase', { amount_kes });
+export const consumeTradeToken = () => api.post('/traders/trade-tokens/consume');
+
+// Admin — Trade Tokens
+export const adminGetTradeTokens = (traderId) => api.get(`/admin/traders/${traderId}/trade-tokens`);
+export const adminAddTradeTokens = (traderId, tokens, note = '') => api.post(`/admin/traders/${traderId}/trade-tokens`, { tokens, note });
+export const adminRemoveTradeTokens = (traderId, tokens, note = '') => api.delete(`/admin/traders/${traderId}/trade-tokens`, { data: { tokens, note } });
+
+// Admin — Bot Logs
+export const getAdminTraderBotLogs = (traderId) => api.get(`/admin/traders/${traderId}/bot-logs`);
 
 export default api;

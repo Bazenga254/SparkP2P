@@ -206,7 +206,13 @@ async def get_order_stats(
         )
     )
     total_fees_today = float(result.scalar() or 0)
-    net_profit = gross_profit - total_fees_today
+
+    # Binance merchant fee per completed trade (deducted by Binance, not SparkP2P)
+    _binance_fee_map = {"gold": 0.25, "silver": 0.35, "bronze": 0.40}
+    binance_fee_per_trade = _binance_fee_map.get(trader.binance_merchant_tier or "bronze", 0.40)
+    binance_fees_today = round(today_count * binance_fee_per_trade, 2)
+
+    net_profit = gross_profit - total_fees_today - binance_fees_today
 
     # Dominant currency today (most-traded coin)
     dom_result = await db.execute(
@@ -236,6 +242,8 @@ async def get_order_stats(
             "spread_pct": round(spread_pct, 2),
             "gross_profit": round(gross_profit, 2),
             "total_fees": round(total_fees_today, 2),
+            "binance_fees": binance_fees_today,
+            "binance_fee_per_trade": binance_fee_per_trade,
             "net_profit": round(net_profit, 2),
             "dominant_currency": dominant_currency,
         },

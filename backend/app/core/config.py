@@ -77,6 +77,14 @@ class Settings(BaseSettings):
     # Encryption key for storing sensitive data (Binance cookies, 2FA secrets)
     ENCRYPTION_KEY: str = "change-this-encryption-key"
 
+    # Telegram Bot
+    TELEGRAM_BOT_TOKEN: str = ""
+
+    # Choice Bank BaaS
+    CHOICE_BANK_SENDER_ID: str = ""       # sender ID from Choice Bank account manager
+    CHOICE_BANK_SENDER_KEY: str = ""      # private key for signing / verifying
+    CHOICE_BANK_BASE_URL: str = "https://api.choicedigitalbank.com"  # update when confirmed
+
     @property
     def mpesa_base_url(self) -> str:
         if self.MPESA_ENV == "production":

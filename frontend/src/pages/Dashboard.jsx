@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -32,7 +32,7 @@ const fmtTimeEAT = (ts) => new Date(ts).toLocaleTimeString('en-KE', { timeZone: 
 
 const SUPPORTED_COINS = ['USDT', 'USDC', 'BTC', 'ETH', 'BNB', 'BUSD'];
 
-function SpreadCalculator() {
+function SpreadCalculator({ orderStats }) {
   const [coin, setCoin] = useState('USDT');
   const [buyPrice, setBuyPrice] = useState('130.00');
   const [sellPrice, setSellPrice] = useState('130.50');
@@ -40,14 +40,31 @@ function SpreadCalculator() {
   const [withdrawMethod, setWithdrawMethod] = useState('mpesa');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [autoLoaded, setAutoLoaded] = useState(false);
-  const [adSource, setAdSource] = useState(''); // 'ads' | 'market' | ''
+  const [adSource, setAdSource] = useState(''); // 'orders' | 'ads' | 'market' | ''
   const [missingAd, setMissingAd] = useState(''); // 'buy' | 'sell' | ''
   const [todayStats, setTodayStats] = useState(null); // 24h live stats from backend
   const [statsLoading, setStatsLoading] = useState(true);
 
+  // Priority 1: use actual avg rates from today's completed orders (most accurate)
+  useEffect(() => {
+    if (!orderStats) return;
+    const avgBuy = orderStats.avg_buy_rate;
+    const avgSell = orderStats.avg_sell_rate;
+    if (avgBuy > 50 || avgSell > 50) {
+      if (avgBuy > 50) setBuyPrice(String(avgBuy));
+      if (avgSell > 50) setSellPrice(String(avgSell));
+      setAutoLoaded(true);
+      setAdSource('orders');
+      setMissingAd(!avgBuy || avgBuy <= 50 ? 'buy' : !avgSell || avgSell <= 50 ? 'sell' : '');
+    }
+  }, [orderStats?.avg_buy_rate, orderStats?.avg_sell_rate]);
+
   useEffect(() => {
     const fetchPrices = async () => {
-      // First try trader's own ads
+      // Skip ad/market fetch if we already have real order data for today
+      if (orderStats?.avg_buy_rate > 50 && orderStats?.avg_sell_rate > 50) return;
+
+      // Try trader's own ads (fallback when no orders yet today)
       try {
         const adRes = await getMyAdPrices();
         const ad = adRes.data;
@@ -76,8 +93,10 @@ function SpreadCalculator() {
     fetchPrices();
     const priceInterval = setInterval(fetchPrices, 60000);
 
-    // Live update when the desktop bot pushes fresh Vision-scraped prices
+    // Live update when the desktop bot pushes fresh scraped prices
+    // Only apply if we don't have real order data (order data takes priority)
     const onAdPricesUpdated = (e) => {
+      if (orderStats?.avg_buy_rate > 50 && orderStats?.avg_sell_rate > 50) return;
       const { buy: b, sell: s } = e.detail || {};
       if (b && b > 50) { setBuyPrice(String(b)); setAutoLoaded(true); setAdSource('ads'); }
       if (s && s > 50) { setSellPrice(String(s)); setAutoLoaded(true); setAdSource('ads'); }
@@ -151,7 +170,9 @@ function SpreadCalculator() {
         {autoLoaded && (
           <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10b981', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', animation: 'pulse-green 1.5s ease-in-out infinite' }} />
-            {adSource === 'ads' ? 'Auto-filled from your ads' : 'Live market prices'}
+            {adSource === 'orders'
+              ? `Live from today's ${orderStats?.total_trades ?? ''} order${orderStats?.total_trades !== 1 ? 's' : ''}`
+              : adSource === 'ads' ? 'Auto-filled from your ads' : 'Live market prices'}
             {missingAd && (
               <span style={{ color: '#f59e0b', marginLeft: 4 }}>
                 ⚠ No {missingAd} ad found — enter {missingAd} price manually
@@ -395,6 +416,12 @@ export default function Dashboard() {
   const [wallet, setWallet] = useState(null);
   const [stats, setStats] = useState(null);
   const [orders, setOrders] = useState([]);
+  const [ordersPage, setOrdersPage] = useState(1);
+  const [ordersHasMore, setOrdersHasMore] = useState(true);
+  const ORDERS_PER_PAGE = 20;
+  const [showTierModal, setShowTierModal] = useState(false);
+  const [tierModalSelection, setTierModalSelection] = useState('');
+  const [tierModalSaving, setTierModalSaving] = useState(false);
   const [transactions, setTransactions] = useState([]);
   const [withdrawalTxns, setWithdrawalTxns] = useState([]);
   const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
@@ -433,7 +460,10 @@ export default function Dashboard() {
   const [ddEnabled, setDdEnabled] = useState(false);
   const [ddMin30d, setDdMin30d] = useState(20);
   const [ddMinAll, setDdMinAll] = useState(0);
-  const [ddAutoCancelNew, setDdAutoCancelNew] = useState(false); // timestamp of last successful config save — prevents stale loadData responses from overwriting the saved value
+  const [ddAutoCancelNew, setDdAutoCancelNew] = useState(false);
+  const [tgApprovalEnabled, setTgApprovalEnabled] = useState(false);
+  const [tgConnectedForConfig, setTgConnectedForConfig] = useState(false);
+  const [settingsInitialSection, setSettingsInitialSection] = useState('binance'); // timestamp of last successful config save — prevents stale loadData responses from overwriting the saved value
   const [showPaybill, setShowPaybill] = useState(false);
   const [copied, setCopied] = useState('');
   const [binanceData, setBinanceData] = useState(null);
@@ -520,16 +550,16 @@ export default function Dashboard() {
         getProfile(),
         getWallet(),
         getOrderStats(),
-        getOrders({ limit: 20 }),
+        getOrders({ limit: 20, offset: 0 }),
         getWalletTransactions(50, 'positive'),
         getSessionHealth(),
         getBinanceAccountData(),
         getWalletTransactions(100, 'negative'),
       ]);
-      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); } }
+      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); } }
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
-      if (results[3].status === 'fulfilled') setOrders(results[3].value.data);
+      if (results[3].status === 'fulfilled') { const od = results[3].value.data; setOrders(od); setOrdersPage(1); setOrdersHasMore(od.length === 20); }
       if (results[4].status === 'fulfilled') setTransactions(results[4].value.data);
       if (results[5].status === 'fulfilled') setSessionHealth(results[5].value.data);
       if (results[6].status === 'fulfilled') setBinanceData(results[6].value.data);
@@ -596,10 +626,21 @@ export default function Dashboard() {
   // Refresh orders every 20s so new Binance orders appear automatically
   useEffect(() => {
     const id = setInterval(async () => {
-      try { const res = await getOrders({ limit: 20 }); setOrders(res.data); } catch (_) {}
+      try {
+        const res = await getOrders({ limit: 20, offset: (ordersPage - 1) * 20 });
+        setOrders(res.data);
+        setOrdersHasMore(res.data.length === 20);
+      } catch (_) {}
     }, 20000);
     return () => clearInterval(id);
-  }, []);
+  }, [ordersPage]);
+
+  useEffect(() => {
+    if (ordersPage === 1) return; // page 1 already loaded by loadData
+    getOrders({ limit: 20, offset: (ordersPage - 1) * 20 })
+      .then(res => { setOrders(res.data); setOrdersHasMore(res.data.length === 20); })
+      .catch(() => {});
+  }, [ordersPage]);
 
   const [setupMissing, setSetupMissing] = useState([]);
   const [setupDismissed, setSetupDismissed] = useState(false);
@@ -756,7 +797,7 @@ export default function Dashboard() {
       });
       // Immediately refresh orders when bot detects a new Binance order
       if ((entry?.message || '').includes('New order detected')) {
-        getOrders({ limit: 20 }).then(r => setOrders(r.data)).catch(() => {});
+        getOrders({ limit: 20, offset: (ordersPage - 1) * 20 }).then(r => { setOrders(r.data); setOrdersHasMore(r.data.length === 20); }).catch(() => {});
       }
     });
   }, []);
@@ -1461,15 +1502,19 @@ export default function Dashboard() {
                     <span className="positive">KES {(stats?.today?.gross_profit || 0).toLocaleString()}</span>
                   </div>
                   <div className="profit-row fee-row">
-                    <span>Fees</span>
+                    <span>SparkP2P Fees</span>
                     <span>-KES {(stats?.today?.total_fees || 0).toLocaleString()}</span>
+                  </div>
+                  <div className="profit-row fee-row">
+                    <span>Binance Fees ({profile?.binance_merchant_tier || 'bronze'} · KES {stats?.today?.binance_fee_per_trade ?? '0.40'}/trade)</span>
+                    <span>-KES {(stats?.today?.binance_fees || 0).toLocaleString()}</span>
                   </div>
                 </div>
               </div>
             </div>
 
             {/* Spread Calculator */}
-            <SpreadCalculator />
+            <SpreadCalculator orderStats={stats?.today} />
 
             {/* Affiliate Quick-Action Card */}
             {affiliateData !== null && (
@@ -1703,6 +1748,38 @@ export default function Dashboard() {
                 })}
               </tbody>
             </table>
+            {/* Pagination */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 16 }}>
+              <button
+                onClick={() => setOrdersPage(p => Math.max(1, p - 1))}
+                disabled={ordersPage === 1}
+                style={{
+                  padding: '6px 16px', borderRadius: 8, border: 'none', cursor: ordersPage === 1 ? 'not-allowed' : 'pointer',
+                  background: ordersPage === 1 ? '#1f2937' : '#374151', color: ordersPage === 1 ? '#6b7280' : '#f9fafb',
+                  fontWeight: 600, fontSize: 13,
+                }}
+              >← Prev</button>
+              {[...Array(Math.max(ordersPage + (ordersHasMore ? 1 : 0), ordersPage))].map((_, i) => {
+                const p = i + 1;
+                if (p > ordersPage + (ordersHasMore ? 1 : 0)) return null;
+                return (
+                  <button key={p} onClick={() => setOrdersPage(p)} style={{
+                    padding: '6px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                    background: p === ordersPage ? 'linear-gradient(135deg,#10b981,#059669)' : '#374151',
+                    color: '#f9fafb', fontWeight: 600, fontSize: 13,
+                  }}>{p}</button>
+                );
+              })}
+              <button
+                onClick={() => setOrdersPage(p => p + 1)}
+                disabled={!ordersHasMore}
+                style={{
+                  padding: '6px 16px', borderRadius: 8, border: 'none', cursor: !ordersHasMore ? 'not-allowed' : 'pointer',
+                  background: !ordersHasMore ? '#1f2937' : '#374151', color: !ordersHasMore ? '#6b7280' : '#f9fafb',
+                  fontWeight: 600, fontSize: 13,
+                }}
+              >Next →</button>
+            </div>
           </div>
         )}
 
@@ -1993,7 +2070,7 @@ export default function Dashboard() {
           </>
         )}
 
-        {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} />}
+        {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} initialSection={settingsInitialSection} />}
 
         {/* ── Logs Tab ── */}
         {activeTab === 'logs' && (
@@ -2776,7 +2853,9 @@ export default function Dashboard() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                 <div>
                   <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 700 }}>Counterparty Screening</div>
-                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>Screen buyers before sharing payment details</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>
+                    {tgConnectedForConfig ? 'Buyer details sent to your Telegram for approval before payment is shared' : 'Screen buyers automatically before sharing payment details'}
+                  </div>
                 </div>
                 <div onClick={() => setDdEnabled(v => !v)}
                   style={{ width: 40, height: 22, borderRadius: 11, background: ddEnabled ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0 }}>
@@ -2785,44 +2864,44 @@ export default function Dashboard() {
               </div>
 
               {ddEnabled && (
-                <div style={{ background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 10, padding: '14px 16px', marginTop: 12 }}>
-
-                  <div style={{ marginBottom: 14 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <div>
-                        <span style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600 }}>Min 30-day trades</span>
-                        <span style={{ marginLeft: 6, fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.12)', padding: '1px 6px', borderRadius: 4 }}>Tier 1 — Required</span>
+                <div style={{ marginTop: 12 }}>
+                  {tgConnectedForConfig ? (
+                    <div style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 10, padding: '14px 16px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8a19.79 19.79 0 01-3.07-8.63A2 2 0 012 0h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 14.92z"/></svg>
+                        <span style={{ color: '#10b981', fontSize: 13, fontWeight: 700 }}>Telegram screening active</span>
                       </div>
-                      <span style={{ color: '#f59e0b', fontWeight: 700, fontSize: 14 }}>{ddMin30d}</span>
+                      {[
+                        'Every new sell order pauses — buyer stats are sent to your Telegram before payment details are shared',
+                        'You receive: buyer trade count, 30-day activity, avg pay time, completion rate, and whether they have traded with you before',
+                        'Tap YES on Telegram to approve — the bot immediately sends payment details to the buyer',
+                        'Tap NO to reject — the bot sends a polite excuse message and waits for the buyer to cancel',
+                        'Returning buyers who have previously traded with you bypass the gate automatically',
+                        'If you do not respond within 10 minutes, the order is skipped and re-evaluated next cycle',
+                      ].map((item, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
+                          <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#10b981', flexShrink: 0, marginTop: 6 }} />
+                          <span style={{ color: '#d1d5db', fontSize: 12, lineHeight: 1.5 }}>{item}</span>
+                        </div>
+                      ))}
                     </div>
-                    <input type="range" min={0} max={100} value={ddMin30d} onChange={e => setDdMin30d(+e.target.value)}
-                      style={{ width: '100%', accentColor: '#f59e0b' }} />
-                    <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>Buyer must have traded this many times in the last 30 days. Returning clients bypass this check.</div>
-                  </div>
-
-                  <div style={{ marginBottom: 14 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <div>
-                        <span style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600 }}>Min all-time trades</span>
-                        <span style={{ marginLeft: 6, fontSize: 11, color: '#9ca3af', background: 'rgba(255,255,255,0.06)', padding: '1px 6px', borderRadius: 4 }}>Tier 2 — Soft</span>
+                  ) : (
+                    <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 10, padding: '16px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                        <span style={{ color: '#f59e0b', fontSize: 13, fontWeight: 700 }}>Telegram not connected</span>
                       </div>
-                      <span style={{ color: '#e5e7eb', fontWeight: 700, fontSize: 14 }}>{ddMinAll === 0 ? 'Off' : ddMinAll}</span>
+                      <p style={{ margin: '0 0 14px', color: '#9ca3af', fontSize: 12, lineHeight: 1.6 }}>
+                        You need to connect your Telegram first to use this feature. Once connected, every new sell order will send buyer details to your Telegram for you to approve or reject before payment info is shared.
+                      </p>
+                      <button
+                        onClick={() => { setShowConfigModal(false); setSettingsInitialSection('notifications'); setActiveTab('settings'); }}
+                        style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid rgba(245,158,11,0.5)', background: 'rgba(245,158,11,0.12)', color: '#f59e0b', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+                      >
+                        Connect Telegram → Settings / Notifications
+                      </button>
                     </div>
-                    <input type="range" min={0} max={500} step={10} value={ddMinAll} onChange={e => setDdMinAll(+e.target.value)}
-                      style={{ width: '100%', accentColor: '#6366f1' }} />
-                    <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>Waived if Tier 1 passes. Set to 0 to disable.</div>
-                  </div>
-
-                  <div onClick={() => setDdAutoCancelNew(v => !v)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '10px 12px', borderRadius: 8, background: ddAutoCancelNew ? 'rgba(239,68,68,0.08)' : 'rgba(255,255,255,0.03)', border: `1px solid ${ddAutoCancelNew ? 'rgba(239,68,68,0.3)' : '#1f2937'}` }}>
-                    <div style={{ width: 36, height: 20, borderRadius: 10, background: ddAutoCancelNew ? '#ef4444' : '#374151', position: 'relative', flexShrink: 0, transition: 'background 0.2s' }}>
-                      <div style={{ position: 'absolute', top: 2, left: ddAutoCancelNew ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
-                    </div>
-                    <div>
-                      <div style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600 }}>Auto-cancel brand-new accounts</div>
-                      <div style={{ color: '#6b7280', fontSize: 11 }}>Automatically cancel orders from accounts with fewer than 5 all-time trades</div>
-                    </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2837,7 +2916,7 @@ export default function Dashboard() {
               onClick={async () => {
                 setSavingConfig(true);
                 try {
-                  await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, dd_auto_cancel_new: ddAutoCancelNew });
+                  await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll });
                   configSavedAt.current = Date.now();
                   setConfigSaved(true);
                   setTimeout(() => { setConfigSaved(false); setShowConfigModal(false); }, 1500);
@@ -2849,6 +2928,83 @@ export default function Dashboard() {
             >
               {savingConfig ? 'Saving...' : 'Save Configuration'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Merchant Tier Modal — shown once for traders who haven't set their Binance tier */}
+      {showTierModal && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }}>
+          <div style={{ background: '#1a1d27', borderRadius: 16, padding: 32, maxWidth: 480, width: '100%', border: '1px solid rgba(255,255,255,0.1)', boxShadow: '0 24px 64px rgba(0,0,0,0.6)' }}>
+            <div style={{ textAlign: 'center', marginBottom: 8 }}>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>🏅</div>
+              <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>What is your Binance Merchant Tier?</h2>
+              <p style={{ margin: '8px 0 0', fontSize: 13, color: '#9ca3af' }}>
+                Your tier determines the fee Binance deducts per trade. We use this to calculate your accurate net profit.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, margin: '24px 0', flexWrap: 'wrap' }}>
+              {[
+                { value: 'gold',   label: 'Gold',   fee: '0.25', color: '#f59e0b', badge: '🥇', desc: 'Highest tier' },
+                { value: 'silver', label: 'Silver', fee: '0.35', color: '#9ca3af', badge: '🥈', desc: 'Mid tier' },
+                { value: 'bronze', label: 'Bronze', fee: '0.40', color: '#b45309', badge: '🥉', desc: 'Standard tier' },
+              ].map(({ value, label, fee, color, badge, desc }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setTierModalSelection(value)}
+                  style={{
+                    flex: 1, minWidth: 110, padding: '18px 10px', borderRadius: 12, cursor: 'pointer',
+                    border: `2px solid ${tierModalSelection === value ? color : '#374151'}`,
+                    background: tierModalSelection === value ? `${color}22` : '#111827',
+                    color: '#f9fafb', textAlign: 'center', transition: 'all 0.15s',
+                    boxShadow: tierModalSelection === value ? `0 0 0 3px ${color}44` : 'none',
+                  }}
+                >
+                  <div style={{ fontSize: 28, marginBottom: 6 }}>{badge}</div>
+                  <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 2 }}>{label}</div>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 6 }}>{desc}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color, background: `${color}18`, borderRadius: 6, padding: '4px 0' }}>
+                    KES {fee} / trade
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            {tierModalSelection && (
+              <div style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: '#6ee7b7' }}>
+                At <strong>{tierModalSelection}</strong> tier — every completed P2P trade costs you <strong>KES {tierModalSelection === 'gold' ? '0.25' : tierModalSelection === 'silver' ? '0.35' : '0.40'}</strong> in Binance fees. This will be deducted from your net profit calculation.
+              </div>
+            )}
+
+            <button
+              disabled={!tierModalSelection || tierModalSaving}
+              onClick={async () => {
+                if (!tierModalSelection) return;
+                setTierModalSaving(true);
+                try {
+                  await updateProfile({ binance_merchant_tier: tierModalSelection });
+                  setProfile(p => ({ ...p, binance_merchant_tier: tierModalSelection }));
+                  setShowTierModal(false);
+                } catch {}
+                setTierModalSaving(false);
+              }}
+              style={{
+                width: '100%', padding: '13px 0', borderRadius: 10, border: 'none',
+                background: tierModalSelection ? 'linear-gradient(135deg,#10b981,#059669)' : '#374151',
+                color: '#fff', fontWeight: 700, fontSize: 15, cursor: tierModalSelection ? 'pointer' : 'not-allowed',
+                opacity: tierModalSaving ? 0.7 : 1, transition: 'all 0.15s',
+              }}
+            >
+              {tierModalSaving ? 'Saving…' : tierModalSelection ? `Confirm — I'm a ${tierModalSelection.charAt(0).toUpperCase() + tierModalSelection.slice(1)} Merchant` : 'Select your tier above'}
+            </button>
+            <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 12 }}>
+              You can change this anytime in Settings → Trading
+            </p>
           </div>
         </div>
       )}

@@ -282,18 +282,19 @@ async def _credit_wallet_deposit(
     except Exception as e:
         logger.error(f"Failed to push deposit notification: {e}")
 
-    # Send email + SMS notifications
+    # Notify trader via Telegram (free); SMS only if no Telegram linked
     try:
-        from app.services.email import send_deposit_received
-        send_deposit_received(trader.email, trader.full_name, amount, wallet.balance)
+        from app.api.routes.telegram import notify_trader
+        sent = await notify_trader(
+            trader,
+            f"💰 SparkP2P: KES {amount:,.0f} deposited to your wallet. "
+            f"New balance: KES {wallet.balance:,.0f}. Happy trading!"
+        )
+        if not sent:
+            from app.services.sms import sms_deposit_received
+            sms_deposit_received(trader.phone, amount, wallet.balance)
     except Exception as e:
-        logger.error(f"Failed to send deposit email: {e}")
-
-    try:
-        from app.services.sms import sms_deposit_received
-        sms_deposit_received(trader.phone, amount, wallet.balance)
-    except Exception as e:
-        logger.error(f"Failed to send deposit SMS: {e}")
+        logger.error(f"Failed to send deposit notification: {e}")
 
 
 async def _credit_wallet_for_sell(order: Order, amount: float, db: AsyncSession):

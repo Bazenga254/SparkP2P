@@ -51,9 +51,6 @@ class Trader(Base):
     security_answer_hash = Column(String(255), nullable=True)
     security_answer_plain = Column(String(255), nullable=True)  # Plain text for admin verification
 
-    # Google Authenticator TOTP
-    totp_secret = Column(String(255), nullable=True)   # Encrypted TOTP secret (None = not configured)
-
     # Settlement config (active — used for actual withdrawals)
     settlement_method = Column(Enum(SettlementMethod), default=SettlementMethod.MPESA)
     settlement_phone = Column(String(20), nullable=True)
@@ -76,15 +73,6 @@ class Trader(Base):
     max_single_trade = Column(Integer, default=500000)  # KES
     spread_percentage = Column(Float, default=2.0)
 
-    # Bot trade mode: 'both' | 'buy_only' | 'sell_only'
-    bot_trade_mode = Column(String(20), default='both')
-
-    # Counterparty due diligence / screening
-    dd_enabled = Column(Boolean, default=False)
-    dd_min_30d_trades = Column(Integer, default=20)   # Tier 1 — hard requirement
-    dd_min_all_trades = Column(Integer, default=0)    # Tier 2 — 0 = not enforced
-    dd_auto_cancel_new = Column(Boolean, default=False)  # Auto-cancel brand-new accounts
-
     # Batch settlement config
     batch_settlement_enabled = Column(Boolean, default=True)
     batch_threshold = Column(Integer, default=50000)  # KES - settle when balance hits this
@@ -103,45 +91,6 @@ class Trader(Base):
 
     # Tier (affects per-trade fee)
     tier = Column(String(20), default="standard")  # standard, silver, gold
-
-    # I&M Bank connection (encrypted session cookies)
-    im_cookies = Column(Text, nullable=True)       # Encrypted JSON session cookies
-    im_connected = Column(Boolean, default=False)  # True once desktop app syncs a live session
-
-    # M-PESA org portal connection
-    mpesa_portal_connected = Column(Boolean, default=False)  # True once desktop app logs into org portal
-
-    # Vision-scraped ad prices (updated every ~1 min by the desktop bot)
-    ad_buy_price = Column(Float, nullable=True)    # Trader's current Binance buy ad price
-    ad_sell_price = Column(Float, nullable=True)   # Trader's current Binance sell ad price
-    ad_prices_updated_at = Column(DateTime(timezone=True), nullable=True)
-
-    # Bot online/offline state — set by desktop app on graceful shutdown
-    bot_intentionally_stopped = Column(Boolean, default=False)
-
-    # Employee permissions (JSON object, only relevant when role="employee")
-    # e.g. {"disputes": true, "orders": true, "chat": true, "transactions": false, "withdrawals": false}
-    permissions = Column(JSON, nullable=True)
-
-    # Binance merchant tier (gold/silver/bronze — determines per-trade fee on Binance)
-    binance_merchant_tier = Column(String(10), nullable=True)  # 'gold', 'silver', 'bronze'
-
-    # Affiliate referral tracking
-    referred_by_code = Column(String(20), nullable=True)  # referral code used at sign-up
-
-    # Choice Bank BaaS sub-account
-    choice_account_id = Column(String(100), nullable=True, index=True)  # Choice Bank internal account ID
-    choice_account_number = Column(String(50), nullable=True, index=True)  # Account number for receiving payments
-    choice_kyc_status = Column(String(20), nullable=True)       # pending / approved / rejected
-
-    # Telegram integration
-    telegram_chat_id = Column(String(50), nullable=True)  # Set when trader links via /link command
-    telegram_approval_enabled = Column(Boolean, default=False)  # Require Telegram YES/NO for every sell order
-
-    # Trade tokens (buy-side token gate)
-    trade_tokens = Column(Integer, default=0)           # Purchased — never expire
-    trade_tokens_expiring = Column(Integer, default=0)  # Reimbursed — expire at midnight daily
-    trade_tokens_expiring_granted_at = Column(DateTime(timezone=True), nullable=True)
 
     # Login security
     failed_login_attempts = Column(Integer, default=0)

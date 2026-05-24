@@ -907,6 +907,21 @@ body {
   align-items: center;
   position: relative;
   overflow: hidden;
+  background: url('/hero-trader.webp') center center / cover no-repeat;
+}
+
+.land-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to right,
+    rgba(10, 11, 18, 0.88) 0%,
+    rgba(10, 11, 18, 0.65) 50%,
+    rgba(10, 11, 18, 0.50) 100%
+  );
+  pointer-events: none;
+  z-index: 0;
 }
 
 .land-hero-content {
@@ -915,33 +930,24 @@ body {
   z-index: 2;
 }
 
+
 .land-hero-visual {
   position: relative;
   height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 1;
 }
 
 .land-hero-visual::before {
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at 60% 50%, rgba(245,158,11,0.12) 0%, rgba(245,158,11,0.04) 40%, transparent 70%);
-  border-radius: 40% 0 0 40% / 50% 0 0 50%;
+  background: radial-gradient(ellipse at 60% 50%, rgba(245,158,11,0.08) 0%, rgba(245,158,11,0.02) 40%, transparent 70%);
   pointer-events: none;
 }
 
-.land-hero::after {
-  content: '';
-  position: absolute;
-  top: -20%;
-  left: -10%;
-  width: 60%;
-  height: 140%;
-  background: radial-gradient(ellipse, rgba(245,158,11,0.04) 0%, transparent 60%);
-  pointer-events: none;
-}
 
 .land-hero-badge {
   display: inline-block;
