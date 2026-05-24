@@ -317,6 +317,73 @@ async def delete_employee(
     return {"status": "deleted"}
 
 
+@router.delete("/traders/{trader_id}")
+async def delete_trader(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Permanently delete a trader account.
+    Blocked if the trader has any orders — historical data must be preserved.
+    Only allowed for traders with zero orders (new/test accounts).
+    Cannot delete your own account.
+    """
+    if trader_id == admin.id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
+
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found.")
+
+    # Block if they have orders
+    order_count_result = await db.execute(
+        select(func.count(Order.id)).where(Order.trader_id == trader_id)
+    )
+    order_count = order_count_result.scalar() or 0
+    if order_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete: this trader has {order_count} order(s) on record. "
+                   "Historical trade data must be preserved. Suspend the account instead."
+        )
+
+    # Safe to delete — remove related records first
+    from app.models.wallet import Wallet, WalletTransaction
+    from app.models.subscription import Subscription
+    from app.models.affiliate import Affiliate, AffiliateReferral
+    from app.models.support_ticket import SupportTicket
+
+    # Wallet transactions → wallet → payments → affiliate → subscription → support tickets → trader
+    await db.execute(
+        WalletTransaction.__table__.delete().where(WalletTransaction.trader_id == trader_id)
+    )
+    await db.execute(
+        Wallet.__table__.delete().where(Wallet.trader_id == trader_id)
+    )
+    await db.execute(
+        Payment.__table__.update().where(Payment.trader_id == trader_id).values(trader_id=None)
+    )
+    await db.execute(
+        AffiliateReferral.__table__.delete().where(AffiliateReferral.referred_trader_id == trader_id)
+    )
+    await db.execute(
+        Affiliate.__table__.delete().where(Affiliate.trader_id == trader_id)
+    )
+    await db.execute(
+        Subscription.__table__.delete().where(Subscription.trader_id == trader_id)
+    )
+    await db.execute(
+        SupportTicket.__table__.delete().where(SupportTicket.trader_id == trader_id)
+    )
+
+    await db.delete(trader)
+    await db.commit()
+
+    logger.info(f"[Admin] Trader {trader_id} ({trader.full_name}) deleted by admin {admin.id}")
+    return {"deleted": True, "trader_id": trader_id, "name": trader.full_name}
+
+
 @router.get("/traders/{trader_id}/detail")
 async def get_trader_detail(
     request: Request,

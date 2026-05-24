@@ -295,6 +295,16 @@ export default function Admin() {
     }
   };
 
+  const handleDeleteTrader = async (traderId, name) => {
+    if (!window.confirm(`Permanently delete "${name}"?\n\nThis cannot be undone. Traders with orders cannot be deleted — suspend them instead.`)) return;
+    try {
+      await deleteTrader(traderId);
+      setTraders(prev => prev.filter(t => t.id !== traderId));
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Delete failed.');
+    }
+  };
+
   const loadAffiliates = async () => {
     setAffiliateLoading(true);
     try {
@@ -1760,13 +1770,19 @@ export default function Admin() {
                               {t.status}
                             </span>
                           </td>
-                          <td>
+                          <td style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <select className="adm-select" value={t.status} onChange={(e) => handleStatusChange(t.id, e.target.value)}>
                               <option value="pending">Pending</option>
                               <option value="active">Active</option>
                               <option value="paused">Paused</option>
                               <option value="suspended">Suspended</option>
                             </select>
+                            <button
+                              onClick={() => handleDeleteTrader(t.id, t.full_name)}
+                              title="Delete trader"
+                              style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 13, lineHeight: 1, flexShrink: 0 }}>
+                              🗑
+                            </button>
                           </td>
                         </tr>
                       ))}

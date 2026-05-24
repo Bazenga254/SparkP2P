@@ -125,6 +125,7 @@ export const sendSurveyInvite = (id) => api.post(`/survey/${id}/send-invite`);
 export const getEmployees = () => api.get('/admin/employees');
 export const updateEmployeePermissions = (id, permissions) => api.put(`/admin/employees/${id}/permissions`, permissions);
 export const deleteEmployee = (id) => api.delete(`/admin/employees/${id}`);
+export const deleteTrader = (id) => api.delete(`/admin/traders/${id}`);
 export const getMyPermissions = () => api.get('/traders/my-permissions');
 
 // Affiliates
