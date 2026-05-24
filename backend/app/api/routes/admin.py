@@ -348,33 +348,54 @@ async def delete_trader(
                    "Historical trade data must be preserved. Suspend the account instead."
         )
 
-    # Safe to delete — remove related records first
+    # Safe to delete — remove related records in FK-safe order
     from app.models.wallet import Wallet, WalletTransaction
     from app.models.subscription import Subscription
-    from app.models.affiliate import Affiliate, AffiliateReferral
+    from app.models.affiliate import Affiliate, AffiliateEarning, AffiliatePayout
     from app.models.support_ticket import SupportTicket
+    from app.models.chat import ChatMessage
+    from app.models.im_sweep import ImSweep
+    from sqlalchemy import text
 
-    # Wallet transactions → wallet → payments → affiliate → subscription → support tickets → trader
+    # 1. Null out trader_id on payments (they have nullable trader_id)
+    await db.execute(
+        Payment.__table__.update().where(Payment.trader_id == trader_id).values(trader_id=None)
+    )
+    # 2. Null out trader_id on im_sweeps
+    await db.execute(
+        ImSweep.__table__.update().where(ImSweep.trader_id == trader_id).values(trader_id=None)
+    )
+    # 3. Delete wallet transactions then wallet
     await db.execute(
         WalletTransaction.__table__.delete().where(WalletTransaction.trader_id == trader_id)
     )
     await db.execute(
         Wallet.__table__.delete().where(Wallet.trader_id == trader_id)
     )
+    # 4. Affiliate earnings/payouts that reference this trader as a referred trader
     await db.execute(
-        Payment.__table__.update().where(Payment.trader_id == trader_id).values(trader_id=None)
+        AffiliateEarning.__table__.delete().where(AffiliateEarning.referred_trader_id == trader_id)
     )
-    await db.execute(
-        AffiliateReferral.__table__.delete().where(AffiliateReferral.referred_trader_id == trader_id)
+    # 5. If trader is an affiliate: delete their earnings and payouts first, then the affiliate row
+    aff_result = await db.execute(
+        select(Affiliate.id).where(Affiliate.trader_id == trader_id)
     )
-    await db.execute(
-        Affiliate.__table__.delete().where(Affiliate.trader_id == trader_id)
-    )
+    aff_id = aff_result.scalar_one_or_none()
+    if aff_id:
+        await db.execute(AffiliateEarning.__table__.delete().where(AffiliateEarning.affiliate_id == aff_id))
+        await db.execute(AffiliatePayout.__table__.delete().where(AffiliatePayout.affiliate_id == aff_id))
+        await db.execute(Affiliate.__table__.delete().where(Affiliate.id == aff_id))
+    # 6. Subscription
     await db.execute(
         Subscription.__table__.delete().where(Subscription.trader_id == trader_id)
     )
+    # 7. Support tickets
     await db.execute(
         SupportTicket.__table__.delete().where(SupportTicket.trader_id == trader_id)
+    )
+    # 8. Chat messages (null sender, or delete — sender_id is NOT NULL so we delete)
+    await db.execute(
+        ChatMessage.__table__.delete().where(ChatMessage.sender_id == trader_id)
     )
 
     await db.delete(trader)
