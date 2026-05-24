@@ -191,6 +191,8 @@ export default function Admin() {
   const [sweepRetrying, setSweepRetrying] = useState(null); // sweep id being retried
   const [sweepSubTab, setSweepSubTab] = useState('all'); // all | pending | completed | failed
 
+  const [traderRoleFilter, setTraderRoleFilter] = useState('traders'); // 'traders' | 'employees'
+
   // Employees
   const [employees, setEmployees] = useState([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
@@ -1685,78 +1687,95 @@ export default function Admin() {
           )}
 
           {/* ==================== TRADERS ==================== */}
-          {activeTab === 'traders' && !viewingTrader && (
-            <div className="adm-card">
-              <div className="adm-card-header">
-                <h3>All Traders</h3>
-                <span className="adm-card-count">{traders.length} total</span>
-              </div>
-              <div className="adm-table-wrap">
-                <table className="adm-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Email</th>
-                      <th>Phone</th>
-                      <th>Bot</th>
-                      <th>Trades</th>
-                      <th>Volume</th>
-                      <th>Tier</th>
-                      <th>Role</th>
-                      <th>Status</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {traders.map((t) => (
-                      <tr key={t.id}>
-                        <td><button style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline', padding: 0 }} onClick={() => openTraderPage(t)}>{t.full_name}</button></td>
-                        <td>{t.email}</td>
-                        <td>{t.phone}</td>
-                        <td>
-                          {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_web_active); return (
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: s.online ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.15)', color: s.online ? '#10b981' : '#9ca3af', border: `1px solid ${s.online ? 'rgba(16,185,129,0.3)' : 'rgba(107,114,128,0.3)'}` }}>
-                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.online ? '#10b981' : '#6b7280', flexShrink: 0 }} />
-                              {s.label}
-                            </span>
-                          ); })()}
-                        </td>
-                        <td>{t.total_trades}</td>
-                        <td>KES {t.total_volume.toLocaleString()}</td>
-                        <td>
-                          <select className="adm-select" value={t.tier} onChange={(e) => handleTierChange(t.id, e.target.value)}>
-                            <option value="standard">Free</option>
-                            <option value="starter">Starter</option>
-                            <option value="pro">Pro</option>
-                          </select>
-                        </td>
-                        <td>
-                          <select className="adm-select" value={t.role || 'trader'} onChange={(e) => handleRoleChange(t.id, e.target.value)}>
-                            <option value="trader">Trader</option>
-                            <option value="employee">Employee</option>
-                            <option value="admin">Admin</option>
-                          </select>
-                        </td>
-                        <td>
-                          <span className={`adm-badge ${t.status === 'active' ? 'green' : t.status === 'suspended' ? 'red' : 'yellow'}`}>
-                            {t.status}
-                          </span>
-                        </td>
-                        <td>
-                          <select className="adm-select" value={t.status} onChange={(e) => handleStatusChange(t.id, e.target.value)}>
-                            <option value="pending">Pending</option>
-                            <option value="active">Active</option>
-                            <option value="paused">Paused</option>
-                            <option value="suspended">Suspended</option>
-                          </select>
-                        </td>
+          {activeTab === 'traders' && !viewingTrader && (() => {
+            const filteredTraders = traderRoleFilter === 'traders'
+              ? traders.filter(t => !t.role || t.role === 'trader' || t.role === 'admin')
+              : traders.filter(t => t.role === 'employee');
+            return (
+              <div className="adm-card">
+                <div className="adm-card-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
+                      {[['traders', 'Traders'], ['employees', 'Employees']].map(([key, label]) => (
+                        <button key={key} onClick={() => setTraderRoleFilter(key)}
+                          style={{ padding: '5px 18px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                            background: traderRoleFilter === key ? '#f59e0b' : 'transparent',
+                            color: traderRoleFilter === key ? '#000' : '#9ca3af' }}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="adm-card-count">{filteredTraders.length} total</span>
+                  </div>
+                </div>
+                <div className="adm-table-wrap">
+                  <table className="adm-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Phone</th>
+                        {traderRoleFilter === 'traders' && <><th>Bot</th><th>Trades</th><th>Volume</th><th>Tier</th></>}
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {filteredTraders.length === 0 ? (
+                        <tr><td colSpan={traderRoleFilter === 'traders' ? 10 : 5} className="adm-empty">No {traderRoleFilter} found</td></tr>
+                      ) : filteredTraders.map((t) => (
+                        <tr key={t.id}>
+                          <td><button style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline', padding: 0 }} onClick={() => openTraderPage(t)}>{t.full_name}</button></td>
+                          <td>{t.email}</td>
+                          <td>{t.phone}</td>
+                          {traderRoleFilter === 'traders' && <>
+                            <td>
+                              {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_web_active); return (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: s.online ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.15)', color: s.online ? '#10b981' : '#9ca3af', border: `1px solid ${s.online ? 'rgba(16,185,129,0.3)' : 'rgba(107,114,128,0.3)'}` }}>
+                                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.online ? '#10b981' : '#6b7280', flexShrink: 0 }} />
+                                  {s.label}
+                                </span>
+                              ); })()}
+                            </td>
+                            <td>{t.total_trades}</td>
+                            <td>KES {t.total_volume.toLocaleString()}</td>
+                            <td>
+                              <select className="adm-select" value={t.tier} onChange={(e) => handleTierChange(t.id, e.target.value)}>
+                                <option value="standard">Free</option>
+                                <option value="starter">Starter</option>
+                                <option value="pro">Pro</option>
+                              </select>
+                            </td>
+                          </>}
+                          <td>
+                            <select className="adm-select" value={t.role || 'trader'} onChange={(e) => handleRoleChange(t.id, e.target.value)}>
+                              <option value="trader">Trader</option>
+                              <option value="employee">Employee</option>
+                              <option value="admin">Admin</option>
+                            </select>
+                          </td>
+                          <td>
+                            <span className={`adm-badge ${t.status === 'active' ? 'green' : t.status === 'suspended' ? 'red' : 'yellow'}`}>
+                              {t.status}
+                            </span>
+                          </td>
+                          <td>
+                            <select className="adm-select" value={t.status} onChange={(e) => handleStatusChange(t.id, e.target.value)}>
+                              <option value="pending">Pending</option>
+                              <option value="active">Active</option>
+                              <option value="paused">Paused</option>
+                              <option value="suspended">Suspended</option>
+                            </select>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ==================== TRADER DETAIL PAGE ==================== */}
           {activeTab === 'traders' && viewingTrader && (() => {
