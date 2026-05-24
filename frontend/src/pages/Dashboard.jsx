@@ -2810,9 +2810,9 @@ export default function Dashboard() {
         {activeTab === 'credits' && (() => {
           const PLANS = [
             { key: 'starter',  label: 'Starter',  icon: '⚡', amount: 5000,  credits: 167,  rate: 30, savings: 25, grad: 'linear-gradient(135deg,#374151,#1f2937)', accent: '#9ca3af', glow: '107,114,128', badge: null },
-            { key: 'pro',      label: 'Pro',       icon: '🔥', amount: 10000, credits: 500,  rate: 20, savings: 50, grad: 'linear-gradient(135deg,#78350f,#451a03)', accent: '#f59e0b', glow: '245,158,11',  badge: 'Most Popular' },
-            { key: 'pro_max',  label: 'Pro Max',   icon: '🚀', amount: 20000, credits: 2000, rate: 10, savings: 75, grad: 'linear-gradient(135deg,#064e3b,#022c22)', accent: '#10b981', glow: '16,185,129',  badge: 'Best Value' },
-            { key: 'advanced', label: 'Advanced',  icon: '💎', amount: 40000, credits: 8000, rate: 5,  savings: 87, grad: 'linear-gradient(135deg,#4c1d95,#2e1065)', accent: '#a78bfa', glow: '139,92,246',  badge: null },
+            { key: 'pro',      label: 'Pro',       icon: '🔥', amount: 10000, credits: 500,  rate: 20, savings: 50, grad: 'linear-gradient(135deg,#78350f,#451a03)', accent: '#f59e0b', glow: '245,158,11',  badge: null },
+            { key: 'pro_max',  label: 'Pro Max',   icon: '🚀', amount: 20000, credits: 2000, rate: 10, savings: 75, grad: 'linear-gradient(135deg,#064e3b,#022c22)', accent: '#10b981', glow: '16,185,129',  badge: 'Most Popular' },
+            { key: 'advanced', label: 'Advanced',  icon: '💎', amount: 40000, credits: 8000, rate: 5,  savings: 87, grad: 'linear-gradient(135deg,#4c1d95,#2e1065)', accent: '#a78bfa', glow: '139,92,246',  badge: 'Best Value' },
           ];
 
           const handleBuyCredits = async () => {
