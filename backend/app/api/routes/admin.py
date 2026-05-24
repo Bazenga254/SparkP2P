@@ -2131,6 +2131,108 @@ async def revenue_breakdown(
     }
 
 
+
+# ── Subscription Revenue ───────────────────────────────────────────────────────
+
+@router.get("/revenue/subscriptions")
+async def revenue_subscriptions(
+    period: str = Query("all"),   # today | week | month | all
+    plan: str = Query("all"),     # starter | pro | all
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, le=200),
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Subscription payment revenue — primary income source."""
+    from app.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
+
+    now = datetime.now(timezone.utc)
+    EAT = timezone(timedelta(hours=3))
+    now_eat = now.astimezone(EAT)
+    today_start_utc = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    period_starts = {
+        "today": today_start_utc,
+        "week":  now - timedelta(days=7),
+        "month": now - timedelta(days=30),
+    }
+    start = period_starts.get(period)
+
+    # Only count paid (active) subscriptions
+    base_where = [Subscription.status == SubscriptionStatus.ACTIVE]
+    if start:
+        base_where.append(Subscription.started_at >= start)
+    if plan != "all":
+        try:
+            base_where.append(Subscription.plan == SubscriptionPlan(plan))
+        except ValueError:
+            pass
+
+    # Summary by plan
+    summary_q = (
+        select(
+            Subscription.plan,
+            func.count(Subscription.id).label("count"),
+            func.sum(Subscription.amount).label("total"),
+        )
+        .where(*base_where)
+        .group_by(Subscription.plan)
+    )
+    summary_rows = (await db.execute(summary_q)).all()
+    summary = {"total": 0.0, "starter": 0.0, "pro": 0.0, "starter_count": 0, "pro_count": 0}
+    for row in summary_rows:
+        pv = row.plan.value if hasattr(row.plan, "value") else str(row.plan)
+        summary[pv] = round(float(row.total or 0), 2)
+        summary[f"{pv}_count"] = int(row.count or 0)
+        summary["total"] = round(summary["total"] + float(row.total or 0), 2)
+
+    # Total count for pagination
+    total_count = (
+        await db.execute(
+            select(func.count()).select_from(Subscription).where(*base_where)
+        )
+    ).scalar_one()
+
+    # Paginated transactions
+    txns_q = (
+        select(
+            Subscription.id,
+            Subscription.plan,
+            Subscription.amount,
+            Subscription.mpesa_transaction_id,
+            Subscription.started_at,
+            Subscription.expires_at,
+            Trader.full_name.label("trader_name"),
+            Trader.phone.label("trader_phone"),
+        )
+        .join(Trader, Trader.id == Subscription.trader_id)
+        .where(*base_where)
+        .order_by(Subscription.started_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+    )
+    txns = (await db.execute(txns_q)).all()
+
+    return {
+        "summary": summary,
+        "total": total_count,
+        "pages": max(1, -(-total_count // limit)),
+        "page": page,
+        "transactions": [
+            {
+                "id": t.id,
+                "plan": t.plan.value if hasattr(t.plan, "value") else str(t.plan),
+                "amount": float(t.amount),
+                "mpesa_transaction_id": t.mpesa_transaction_id,
+                "started_at": t.started_at.isoformat() if t.started_at else None,
+                "expires_at": t.expires_at.isoformat() if t.expires_at else None,
+                "trader_name": t.trader_name,
+                "trader_phone": t.trader_phone,
+            }
+            for t in txns
+        ],
+    }
+
+
 # ── Auto-Sweep History ─────────────────────────────────────────────────────────
 
 @router.get("/sweeps")

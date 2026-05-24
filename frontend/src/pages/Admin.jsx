@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle } from 'lucide-react';
@@ -181,7 +181,7 @@ export default function Admin() {
   // Revenue breakdown
   const [revBreakdown, setRevBreakdown] = useState(null);
   const [revPeriod, setRevPeriod] = useState('all');
-  const [revMethod, setRevMethod] = useState('all');
+  const [revPlan, setRevPlan] = useState('all');
   const [revPage, setRevPage] = useState(1);
   const [revLoading, setRevLoading] = useState(false);
 
@@ -543,10 +543,10 @@ export default function Admin() {
     setWdActionLoading(null);
   };
 
-  const loadRevenueBreakdown = async (period = revPeriod, method = revMethod, page = revPage) => {
+  const loadRevenueBreakdown = async (period = revPeriod, plan = revPlan, page = revPage) => {
     setRevLoading(true);
     try {
-      const res = await getRevenueBreakdown({ period, method, page, limit: 50 });
+      const res = await getSubscriptionRevenue({ period, plan, page, limit: 50 });
       setRevBreakdown(res.data);
     } catch (err) {
       console.error('Revenue breakdown error:', err);
@@ -2932,11 +2932,11 @@ export default function Admin() {
           {/* ==================== REVENUE ==================== */}
           {activeTab === 'revenue' && (
             <>
-              {/* ── Period + Method filters ── */}
+              {/* Period + Plan filters */}
               <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
                 <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
                   {[['all','All Time'], ['month','This Month'], ['week','This Week'], ['today','Today']].map(([val, label]) => (
-                    <button key={val} onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revMethod, 1); }}
+                    <button key={val} onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1); }}
                       style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
                         background: revPeriod === val ? '#f59e0b' : 'transparent', color: revPeriod === val ? '#000' : '#9ca3af' }}>
                       {label}
@@ -2944,44 +2944,47 @@ export default function Admin() {
                   ))}
                 </div>
                 <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                  {[['all','All Methods'], ['mpesa','M-Pesa'], ['bank','I&M Bank']].map(([val, label]) => (
-                    <button key={val} onClick={() => { setRevMethod(val); setRevPage(1); loadRevenueBreakdown(revPeriod, val, 1); }}
+                  {[['all','All Plans'], ['starter','Starter'], ['pro','Pro']].map(([val, label]) => (
+                    <button key={val} onClick={() => { setRevPlan(val); setRevPage(1); loadRevenueBreakdown(revPeriod, val, 1); }}
                       style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                        background: revMethod === val ? '#10b981' : 'transparent', color: revMethod === val ? '#000' : '#9ca3af' }}>
+                        background: revPlan === val ? '#10b981' : 'transparent', color: revPlan === val ? '#000' : '#9ca3af' }}>
                       {label}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* ── Summary cards: Total + M-Pesa + I&M ── */}
+              {/* Summary cards */}
               <div className="adm-stat-grid" style={{ marginBottom: 16 }}>
                 <div className="adm-stat-card" style={{ '--card-accent': '#10b981' }}>
                   <div className="adm-stat-info">
-                    <span className="adm-stat-label">Total Revenue</span>
-                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.total ?? analytics?.platform_profit)}</span>
+                    <span className="adm-stat-label">Total Subscription Revenue</span>
+                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.total ?? 0)}</span>
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}><DollarSign size={22} /></div>
                 </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#e11d48' }}>
+                <div className="adm-stat-card" style={{ '--card-accent': '#f59e0b' }}>
                   <div className="adm-stat-info">
-                    <span className="adm-stat-label">M-Pesa Revenue</span>
-                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.mpesa ?? 0)}</span>
+                    <span className="adm-stat-label">Starter ({(revBreakdown?.summary?.starter_count ?? 0)})</span>
+                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.starter ?? 0)}</span>
                   </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(225,29,72,0.15)', color: '#e11d48' }}><DollarSign size={22} /></div>
+                  <div className="adm-stat-icon" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}><DollarSign size={22} /></div>
                 </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#3b82f6' }}>
+                <div className="adm-stat-card" style={{ '--card-accent': '#8b5cf6' }}>
                   <div className="adm-stat-info">
-                    <span className="adm-stat-label">I&M Bank Revenue</span>
-                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.bank ?? 0)}</span>
+                    <span className="adm-stat-label">Pro ({(revBreakdown?.summary?.pro_count ?? 0)})</span>
+                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.pro ?? 0)}</span>
                   </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}><DollarSign size={22} /></div>
+                  <div className="adm-stat-icon" style={{ background: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }}><DollarSign size={22} /></div>
                 </div>
               </div>
 
-              {/* ── Per-transaction breakdown table ── */}
+              {/* Subscription payments table */}
               <div className="adm-card" style={{ marginBottom: 16 }}>
-                <div className="adm-card-header"><h3>Fee Transactions</h3></div>
+                <div className="adm-card-header">
+                  <h3>Subscription Payments</h3>
+                  <span className="adm-card-count">{revBreakdown?.total ?? 0} total</span>
+                </div>
                 {revLoading ? (
                   <p className="adm-empty">Loading...</p>
                 ) : revBreakdown?.transactions?.length > 0 ? (
@@ -2992,30 +2995,30 @@ export default function Admin() {
                           <tr>
                             <th>Date</th>
                             <th>Trader</th>
-                            <th>Method</th>
-                            <th>Destination</th>
-                            <th style={{ textAlign: 'right' }}>Withdrawal</th>
-                            <th style={{ textAlign: 'right' }}>Fee Earned</th>
+                            <th>Plan</th>
+                            <th>M-Pesa TX</th>
+                            <th>Expires</th>
+                            <th style={{ textAlign: 'right' }}>Amount</th>
                           </tr>
                         </thead>
                         <tbody>
                           {revBreakdown.transactions.map((tx) => (
                             <tr key={tx.id}>
-                              <td style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>{fmtDateEAT(tx.date)}</td>
+                              <td style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>{fmtDateEAT(tx.started_at)}</td>
                               <td>
                                 <div style={{ fontWeight: 500, fontSize: 13 }}>{tx.trader_name}</div>
                                 <div style={{ fontSize: 11, color: '#6b7280' }}>{tx.trader_phone}</div>
                               </td>
                               <td>
-                                <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600,
-                                  background: tx.method === 'M-Pesa' ? 'rgba(225,29,72,0.15)' : 'rgba(59,130,246,0.15)',
-                                  color: tx.method === 'M-Pesa' ? '#e11d48' : '#3b82f6' }}>
-                                  {tx.method}
+                                <span style={{ padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700,
+                                  background: tx.plan === 'pro' ? 'rgba(139,92,246,0.15)' : 'rgba(245,158,11,0.15)',
+                                  color: tx.plan === 'pro' ? '#8b5cf6' : '#f59e0b', textTransform: 'uppercase' }}>
+                                  {tx.plan}
                                 </span>
                               </td>
-                              <td style={{ fontSize: 12, color: '#6b7280' }}>{tx.destination || '—'}</td>
-                              <td style={{ textAlign: 'right', fontSize: 13 }}>{fmtKES(tx.withdrawal_amount)}</td>
-                              <td style={{ textAlign: 'right', fontWeight: 700, color: '#10b981' }}>+{fmtKESFee(tx.fee)}</td>
+                              <td className="mono" style={{ fontSize: 11 }}>{tx.mpesa_transaction_id || '—'}</td>
+                              <td style={{ fontSize: 12, color: '#6b7280' }}>{tx.expires_at ? fmtDateEAT(tx.expires_at) : '—'}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 700, color: '#10b981' }}>+{fmtKESFee(tx.amount)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -3023,20 +3026,20 @@ export default function Admin() {
                     </div>
                     {revBreakdown.pages > 1 && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
-                        <button onClick={() => { setRevPage(p => p - 1); loadRevenueBreakdown(revPeriod, revMethod, revPage - 1); }} disabled={revPage <= 1}
-                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage <= 1 ? '#4b5563' : '#fff', cursor: revPage <= 1 ? 'default' : 'pointer', fontSize: 13 }}>← Prev</button>
-                        <span style={{ fontSize: 13, color: '#6b7280' }}>Page {revPage} of {revBreakdown.pages} · {revBreakdown.total} transactions</span>
-                        <button onClick={() => { setRevPage(p => p + 1); loadRevenueBreakdown(revPeriod, revMethod, revPage + 1); }} disabled={revPage >= revBreakdown.pages}
-                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage >= revBreakdown.pages ? '#4b5563' : '#fff', cursor: revPage >= revBreakdown.pages ? 'default' : 'pointer', fontSize: 13 }}>Next →</button>
+                        <button onClick={() => { setRevPage(p => p - 1); loadRevenueBreakdown(revPeriod, revPlan, revPage - 1); }} disabled={revPage <= 1}
+                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage <= 1 ? '#4b5563' : '#fff', cursor: revPage <= 1 ? 'default' : 'pointer', fontSize: 13 }}>Prev</button>
+                        <span style={{ fontSize: 13, color: '#6b7280' }}>Page {revPage} of {revBreakdown.pages} &middot; {revBreakdown.total} payments</span>
+                        <button onClick={() => { setRevPage(p => p + 1); loadRevenueBreakdown(revPeriod, revPlan, revPage + 1); }} disabled={revPage >= revBreakdown.pages}
+                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage >= revBreakdown.pages ? '#4b5563' : '#fff', cursor: revPage >= revBreakdown.pages ? 'default' : 'pointer', fontSize: 13 }}>Next</button>
                       </div>
                     )}
                   </>
                 ) : (
-                  <p className="adm-empty">No fee transactions for this period</p>
+                  <p className="adm-empty">No subscription payments for this period</p>
                 )}
               </div>
 
-              {/* ── Monthly volume breakdown ── */}
+              {/* Monthly volume breakdown */}
               <div className="adm-card">
                 <div className="adm-card-header"><h3>Monthly Volume</h3></div>
                 {analytics?.monthly_volumes?.length > 0 ? (
@@ -3066,7 +3069,7 @@ export default function Admin() {
             </>
           )}
 
-          {/* ==================== WITHDRAWALS ==================== */}
+                    {/* ==================== WITHDRAWALS ==================== */}
           {activeTab === 'withdrawals' && (
             <div className="adm-card">
               {/* ── Header: title + method toggle + period filter ── */}

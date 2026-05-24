@@ -105,7 +105,8 @@ export const sendTelegramTest = () => api.post('/telegram/test');
 
 // Withdrawals
 export const getAdminWithdrawals = (params = {}) => api.get('/admin/withdrawals', { params });
-export const getRevenueBreakdown = (params = {}) => api.get('/admin/revenue/breakdown', { params });
+export const getRevenueBreakdown = (params = {}) => api.get("/admin/revenue/breakdown", { params });
+export const getSubscriptionRevenue = (params = {}) => api.get("/admin/revenue/subscriptions", { params });
 export const markWithdrawalComplete = (txId) => api.put(`/admin/withdrawals/${txId}/complete`);
 export const markWithdrawalPending = (txId) => api.put(`/admin/withdrawals/${txId}/pending`);
 export const deleteWithdrawal = (txId) => api.delete(`/admin/withdrawals/${txId}`);
