@@ -4,6 +4,7 @@ import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuesti
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
+import '@smile_identity/smart-camera-web';
 
 // Request OTP for settlement change
 const requestSettlementOTP = () => api.post('/traders/settlement/request-otp');
@@ -117,6 +118,23 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const [cbLoading, setCbLoading] = useState(false);
   const [cbMsg, setCbMsg] = useState(null); // { type: 'error'|'success'|'info', text: '' }
   const [cbBalance, setCbBalance] = useState(null);
+  const [cbSmileOpen, setCbSmileOpen] = useState(false);
+  const smileCamRef = useRef(null);
+
+  useEffect(() => {
+    const cam = smileCamRef.current;
+    if (!cam) return;
+    const onCapture = (e) => {
+      const imgs = ((e.detail) || {}).images || [];
+      const img = imgs[0];
+      if (img && img.image) {
+        setCbFiles(f => ({ ...f, selfie: img.image }));
+        setCbSmileOpen(false);
+      }
+    };
+    cam.addEventListener('imagesComputed', onCapture);
+    return () => cam.removeEventListener('imagesComputed', onCapture);
+  }, [cbSmileOpen]);
 
   // Security / Profile
   const [editName, setEditName] = useState(profile?.full_name || '');
@@ -1856,8 +1874,18 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                   <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
                     {fileInp('ID Front', 'front', !!cbFiles.front)}
                     {fileInp('ID Back', 'back', !!cbFiles.back)}
-                    {fileInp('Selfie', 'selfie', !!cbFiles.selfie)}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 180px' }}>
+                      <label style={{ color: '#9ca3af', fontSize: 12 }}>Selfie <span style={{ color: '#ef4444' }}>*</span></label>
+                      {cbFiles.selfie
+                        ? <div onClick={() => { setCbFiles(f => ({ ...f, selfie: '' })); setCbSmileOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 8, border: '1px solid #10b981', background: '#13151f', cursor: 'pointer', fontSize: 13, color: '#10b981' }}>✓ Verified — tap to retake</div>
+                        : <button type="button" onClick={() => setCbSmileOpen(s => !s)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 8, border: `1px solid ${cbSmileOpen ? '#f59e0b' : '#374151'}`, background: '#13151f', cursor: 'pointer', fontSize: 13, color: cbSmileOpen ? '#f59e0b' : '#6b7280' }}>{cbSmileOpen ? '× Close Camera' : 'Open Camera'}</button>}
+                    </div>
                   </div>
+                  {cbSmileOpen && !cbFiles.selfie && (
+                    <div style={{ marginTop: 16, borderRadius: 10, overflow: 'hidden' }}>
+                      <smart-camera-web ref={smileCamRef} />
+                    </div>
+                  )}
                 </div>
 
                 <button onClick={handleSubmit} disabled={cbLoading}
