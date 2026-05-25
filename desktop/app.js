@@ -1121,15 +1121,6 @@ async function onGmailConfirmed() {
   // Re-fetch credentials in case the initial fetch failed (e.g. outage during startup)
   if (!traderImAccount) await fetchAndApplyCredentials().catch(() => {});
 
-  // Always open I&M if configured and not already open — even if bot started without it
-  if (traderImAccount && (!imPage || imPage.isClosed())) {
-    console.log('[SparkP2P] Gmail confirmed — opening I&M Bank (tab 3)...');
-    pauseNavigation = false;
-    mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“setup-complete”))').catch(() => {});
-    connectIm().catch(() => {});
-    return;
-  }
-
   const setup = await checkSetupComplete();
   if (setup.complete && !pollerRunning) {
     pauseNavigation = false;
@@ -1524,24 +1515,19 @@ async function onLoginDetected() {
   // Sync Binance cookies immediately so backend marks binance_connected = true
   await syncCookies();
 
-  // Open Gmail tab (tab 2) — onGmailConfirmed() handles I&M opening and bot start
+  // Open Gmail tab (tab 2) — onGmailConfirmed() starts bot once Gmail is confirmed
   const gmailOk = await openGmailTab().catch(() => false);
   if (gmailOk) {
-    console.log('[SparkP2P] Gmail ready — I&M and bot start handled by onGmailConfirmed');
+    console.log('[SparkP2P] Gmail ready — bot start handled by onGmailConfirmed');
   } else {
     console.log('[SparkP2P] Gmail not confirmed — starting bot in Binance-only mode (Gmail optional for OTP reads)');
     // Bot starts with Binance alone; Gmail login poller runs in background and will sync cookies when user signs in
     const setup = await checkSetupComplete();
     if (setup.complete && !pollerRunning) {
       mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
-      if (traderImAccount && (!imPage || imPage.isClosed())) {
-        console.log('[SparkP2P] Opening I&M Bank tab...');
-        connectIm().catch(() => {});
-      } else {
         console.log('[SparkP2P] All connections established — starting bot');
         await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
         startPoller();
-      }
     } else if (!setup.complete) {
       console.log('[SparkP2P] Setup incomplete:', setup.missing.join(', '));
     }
