@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, purchaseTradeTokens } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, purchaseTradeTokens, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -107,6 +107,16 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
       setVerifySaved(profile.binance_verify_method !== 'none');
     }
   }, [profile?.binance_verify_method]);
+
+  // Choice Bank onboarding
+  const [cbStep, setCbStep] = useState('form'); // 'form' | 'otp' | 'polling' | 'done'
+  const [cbForm, setCbForm] = useState({ firstName: '', lastName: '', middleName: '', mobile: '', idNumber: '', birthday: '', gender: '1', email: '', address: '' });
+  const [cbFiles, setCbFiles] = useState({ front: '', back: '', selfie: '' });
+  const [cbRequestId, setCbRequestId] = useState('');
+  const [cbOtp, setCbOtp] = useState('');
+  const [cbLoading, setCbLoading] = useState(false);
+  const [cbMsg, setCbMsg] = useState(null); // { type: 'error'|'success'|'info', text: '' }
+  const [cbBalance, setCbBalance] = useState(null);
 
   // Security / Profile
   const [editName, setEditName] = useState(profile?.full_name || '');
@@ -606,7 +616,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
       {message && <div className="settings-msg">{message}</div>}
 
       <div className="settings-nav">
-        {[['binance', 'Binance'], ['settlement', 'Settlement'], ['trading', 'Trading'], ['security', 'Profile & Security'], ['notifications', 'Notifications']].map(([key, label]) => (
+        {[['binance', 'Binance'], ['settlement', 'Settlement'], ['trading', 'Trading'], ['security', 'Profile & Security'], ['notifications', 'Notifications'], ['bank', 'Bank Account']].map(([key, label]) => (
           <button
             key={key}
             className={activeSection === key ? 'active' : ''}
@@ -1655,6 +1665,212 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
           </div>
         </div>
       )}
+
+      {activeSection === 'bank' && (() => {
+        const already = profile?.choice_account_id;
+
+        const toB64 = (file) => new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result.split(',')[1]);
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+
+        const handleFile = async (e, key) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const b64 = await toB64(file);
+          setCbFiles(f => ({ ...f, [key]: b64 }));
+        };
+
+        const handleSubmit = async () => {
+          const { firstName, lastName, mobile, idNumber, birthday, gender } = cbForm;
+          if (!firstName || !lastName || !mobile || !idNumber || !birthday) {
+            setCbMsg({ type: 'error', text: 'Please fill in all required fields.' }); return;
+          }
+          if (!cbFiles.front || !cbFiles.back || !cbFiles.selfie) {
+            setCbMsg({ type: 'error', text: 'Please upload ID front, ID back, and selfie.' }); return;
+          }
+          setCbLoading(true); setCbMsg(null);
+          try {
+            const res = await choiceOnboardWallet({
+              trader_id: profile.id,
+              first_name: firstName,
+              last_name: lastName,
+              middle_name: cbForm.middleName,
+              mobile: mobile.replace(/^(254|0)/, ''),
+              id_number: idNumber,
+              birthday,
+              gender: parseInt(gender),
+              email: cbForm.email,
+              address: cbForm.address,
+              front_photo_b64: cbFiles.front,
+              back_photo_b64: cbFiles.back,
+              selfie_b64: cbFiles.selfie,
+            });
+            setCbRequestId(res.data.onboardingRequestId);
+            setCbStep('otp');
+            setCbMsg({ type: 'info', text: 'An OTP has been sent to your phone. Enter it below.' });
+          } catch (err) {
+            setCbMsg({ type: 'error', text: err?.response?.data?.detail || 'Onboarding failed. Try again.' });
+          }
+          setCbLoading(false);
+        };
+
+        const handleOtp = async () => {
+          if (!cbOtp.trim()) { setCbMsg({ type: 'error', text: 'Enter the OTP.' }); return; }
+          setCbLoading(true); setCbMsg(null);
+          try {
+            await choiceConfirmOtp({ trader_id: profile.id, onboarding_request_id: cbRequestId, otp: cbOtp.trim() });
+            setCbStep('polling');
+            setCbMsg({ type: 'info', text: 'OTP confirmed. Waiting for KYC approval (this may take a few minutes)...' });
+            let attempts = 0;
+            const poll = setInterval(async () => {
+              attempts++;
+              try {
+                const s = await choiceOnboardStatus(cbRequestId, profile.id);
+                if ([3, 7, '3', '7'].includes(s.data.status)) {
+                  clearInterval(poll);
+                  if (typeof onUpdate === 'function') { const r = await getProfile(); onUpdate(r.data); }
+                  setCbStep('done');
+                  setCbMsg({ type: 'success', text: 'Your Choice Bank account is now active!' });
+                  try { const b = await choiceGetBalance(profile.id); setCbBalance(b.data); } catch {}
+                }
+              } catch {}
+              if (attempts >= 24) { clearInterval(poll); setCbMsg({ type: 'error', text: 'KYC is taking longer than expected. Check back later.' }); }
+            }, 10000);
+          } catch (err) {
+            setCbMsg({ type: 'error', text: err?.response?.data?.detail || 'OTP confirmation failed.' });
+          }
+          setCbLoading(false);
+        };
+
+        const inp = (label, key, type = 'text', required = true, placeholder = '') => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 200px' }}>
+            <label style={{ color: '#9ca3af', fontSize: 12 }}>{label}{required && <span style={{ color: '#ef4444' }}> *</span>}</label>
+            <input type={type} value={cbForm[key]} onChange={e => setCbForm(f => ({ ...f, [key]: e.target.value }))}
+              placeholder={placeholder}
+              style={{ background: '#13151f', border: '1px solid #374151', borderRadius: 8, color: '#fff', padding: '10px 12px', fontSize: 14, outline: 'none' }} />
+          </div>
+        );
+
+        const fileInp = (label, key, done) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 180px' }}>
+            <label style={{ color: '#9ca3af', fontSize: 12 }}>{label} <span style={{ color: '#ef4444' }}>*</span></label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 8, border: `1px solid ${done ? '#10b981' : '#374151'}`, background: '#13151f', cursor: 'pointer', fontSize: 13, color: done ? '#10b981' : '#6b7280' }}>
+              <span>{done ? '✓ Uploaded' : 'Choose file'}</span>
+              <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleFile(e, key)} />
+            </label>
+          </div>
+        );
+
+        return (
+          <div className="settings-section">
+            <h3 style={{ color: '#fff', marginBottom: 4 }}>Choice Microfinance Bank</h3>
+            <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 24 }}>
+              Link your Choice Bank sub-account to receive M-Pesa payments from buyers and track your balance.
+            </p>
+
+            {cbMsg && (
+              <div style={{ marginBottom: 20, padding: '10px 16px', borderRadius: 9, fontSize: 13,
+                background: cbMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : cbMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.08)',
+                color: cbMsg.type === 'success' ? '#10b981' : cbMsg.type === 'error' ? '#ef4444' : '#60a5fa',
+                border: `1px solid ${cbMsg.type === 'success' ? 'rgba(16,185,129,0.25)' : cbMsg.type === 'error' ? 'rgba(239,68,68,0.25)' : 'rgba(59,130,246,0.15)'}` }}>
+                {cbMsg.text}
+              </div>
+            )}
+
+            {(already || cbStep === 'done') ? (
+              <div style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: 14, padding: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(16,185,129,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>🏦</div>
+                  <div>
+                    <div style={{ color: '#10b981', fontWeight: 700, fontSize: 15 }}>Choice Bank — Active</div>
+                    <div style={{ color: '#6b7280', fontSize: 12 }}>Sub-account linked and receiving payments</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                  <div><div style={{ color: '#6b7280', fontSize: 11, marginBottom: 3 }}>Account Number</div>
+                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'monospace' }}>{profile?.choice_account_number || '—'}</div></div>
+                  <div><div style={{ color: '#6b7280', fontSize: 11, marginBottom: 3 }}>Account ID</div>
+                    <div style={{ color: '#9ca3af', fontSize: 13, fontFamily: 'monospace' }}>{profile?.choice_account_id || '—'}</div></div>
+                  {cbBalance && <div><div style={{ color: '#6b7280', fontSize: 11, marginBottom: 3 }}>Live Balance</div>
+                    <div style={{ color: '#10b981', fontWeight: 800, fontSize: 18 }}>KES {Number(cbBalance.balance || 0).toLocaleString()}</div></div>}
+                </div>
+                {!cbBalance && profile?.choice_account_id && (
+                  <button onClick={async () => { try { const b = await choiceGetBalance(profile.id); setCbBalance(b.data); } catch { setCbMsg({ type: 'error', text: 'Could not fetch balance.' }); } }}
+                    style={{ marginTop: 16, padding: '8px 20px', borderRadius: 8, border: '1px solid rgba(16,185,129,0.4)', background: 'transparent', color: '#10b981', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                    Check Balance
+                  </button>
+                )}
+              </div>
+            ) : cbStep === 'polling' ? (
+              <div style={{ textAlign: 'center', padding: '48px 0' }}>
+                <div style={{ width: 48, height: 48, border: '4px solid rgba(16,185,129,0.2)', borderTop: '4px solid #10b981', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 20px' }} />
+                <div style={{ color: '#d1d5db', fontWeight: 600, marginBottom: 8 }}>KYC Review in Progress</div>
+                <div style={{ color: '#6b7280', fontSize: 13 }}>Choice Bank is reviewing your documents. This usually takes 2–5 minutes.</div>
+              </div>
+            ) : cbStep === 'otp' ? (
+              <div style={{ maxWidth: 400 }}>
+                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 20 }}>Enter the OTP sent to your registered phone number to confirm your identity.</p>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <input type="text" placeholder="6-digit OTP" value={cbOtp} onChange={e => setCbOtp(e.target.value)} maxLength={6}
+                    style={{ flex: 1, background: '#13151f', border: '1px solid #374151', borderRadius: 8, color: '#fff', padding: '12px 14px', fontSize: 18, letterSpacing: 6, textAlign: 'center', outline: 'none' }} />
+                  <button onClick={handleOtp} disabled={cbLoading}
+                    style={{ padding: '12px 24px', borderRadius: 8, border: 'none', background: cbLoading ? '#1f2937' : '#10b981', color: cbLoading ? '#6b7280' : '#000', fontWeight: 700, fontSize: 14, cursor: cbLoading ? 'not-allowed' : 'pointer' }}>
+                    {cbLoading ? 'Verifying...' : 'Confirm'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 12, padding: 24, marginBottom: 20 }}>
+                  <div style={{ color: '#d1d5db', fontWeight: 600, fontSize: 14, marginBottom: 16 }}>Personal Details</div>
+                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                    {inp('First Name', 'firstName', 'text', true, 'e.g. John')}
+                    {inp('Last Name', 'lastName', 'text', true, 'e.g. Doe')}
+                    {inp('Middle Name', 'middleName', 'text', false, 'Optional')}
+                  </div>
+                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 14 }}>
+                    {inp('Phone Number', 'mobile', 'tel', true, '07XX XXX XXX')}
+                    {inp('ID Number', 'idNumber', 'text', true, 'National ID')}
+                    {inp('Date of Birth', 'birthday', 'date', true)}
+                  </div>
+                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 14 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 160px' }}>
+                      <label style={{ color: '#9ca3af', fontSize: 12 }}>Gender <span style={{ color: '#ef4444' }}>*</span></label>
+                      <select value={cbForm.gender} onChange={e => setCbForm(f => ({ ...f, gender: e.target.value }))}
+                        style={{ background: '#13151f', border: '1px solid #374151', borderRadius: 8, color: '#fff', padding: '10px 12px', fontSize: 14, outline: 'none' }}>
+                        <option value="1">Male</option>
+                        <option value="0">Female</option>
+                      </select>
+                    </div>
+                    {inp('Email', 'email', 'email', false, 'Optional')}
+                    {inp('Address', 'address', 'text', false, 'Optional')}
+                  </div>
+                </div>
+
+                <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 12, padding: 24, marginBottom: 24 }}>
+                  <div style={{ color: '#d1d5db', fontWeight: 600, fontSize: 14, marginBottom: 6 }}>KYC Documents</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 16 }}>Upload clear photos of your National ID (both sides) and a selfie.</div>
+                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                    {fileInp('ID Front', 'front', !!cbFiles.front)}
+                    {fileInp('ID Back', 'back', !!cbFiles.back)}
+                    {fileInp('Selfie', 'selfie', !!cbFiles.selfie)}
+                  </div>
+                </div>
+
+                <button onClick={handleSubmit} disabled={cbLoading}
+                  style={{ width: '100%', padding: '13px 0', borderRadius: 10, border: 'none', fontWeight: 800, fontSize: 15, cursor: cbLoading ? 'not-allowed' : 'pointer',
+                    background: cbLoading ? '#1f2937' : 'linear-gradient(135deg,#10b981,#059669)', color: cbLoading ? '#6b7280' : '#fff' }}>
+                  {cbLoading ? 'Submitting...' : 'Submit for KYC Review'}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
     </div>
   );
 }

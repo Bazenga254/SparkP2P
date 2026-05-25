@@ -151,4 +151,9 @@ export const adminRemoveTradeTokens = (traderId, tokens, note = '') => api.delet
 // Admin — Bot Logs
 export const getAdminTraderBotLogs = (traderId) => api.get(`/admin/traders/${traderId}/bot-logs`);
 
+
+export const choiceOnboardWallet = (data) => api.post('/choice/onboard/wallet', data);
+export const choiceConfirmOtp = (data) => api.post('/choice/onboard/otp', data);
+export const choiceOnboardStatus = (requestId, traderId) => api.get(`/choice/onboard/status/${requestId}`, { params: { trader_id: traderId } });
+export const choiceGetBalance = (traderId) => api.get(`/choice/balance/${traderId}`);
 export default api;
