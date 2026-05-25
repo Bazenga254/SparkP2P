@@ -1337,6 +1337,20 @@ export default function Dashboard() {
       <main className="dash-content">
 {activeTab === 'overview' && (
           <>
+            {/* Choice Bank verification banner */}
+            {!profile?.choice_account_id && (
+              <div onClick={() => { setSettingsInitialSection('bank'); setActiveTab('settings'); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 18px', marginBottom: 16, borderRadius: 10,
+                  background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.35)', cursor: 'pointer' }}>
+                <span style={{ fontSize: 18 }}>🏦</span>
+                <div style={{ flex: 1 }}>
+                  <span style={{ color: '#f59e0b', fontWeight: 700, fontSize: 13 }}>Complete Bank Verification</span>
+                  <span style={{ color: '#9ca3af', fontSize: 12, marginLeft: 8 }}>Link your Choice Bank account to receive M-Pesa payments automatically.</span>
+                </div>
+                <span style={{ color: '#f59e0b', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>Set up →</span>
+              </div>
+            )}
+
             {/* Row 1: Greeting + Wallet */}
             <div className="overview-grid-top">
               <div className="card greeting-card">
