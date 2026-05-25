@@ -1637,48 +1637,6 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                {/* Binance Wallet Balance */}
-                <div className="card">
-                  <div className="card-header">
-                    <Wallet size={20} />
-                    <h3>Binance Wallet</h3>
-                    {binanceData.balances?.length === 0 && (
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12, color: '#f59e0b', background: 'rgba(245,158,11,0.1)', borderRadius: 20, padding: '2px 10px' }}>
-                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', display: 'inline-block', animation: 'pulse 1.4s ease-in-out infinite' }} />
-                        Scanning...
-                      </span>
-                    )}
-                    <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>
-                      {binanceData.updated_at ? `Synced: ${fmtTimeEAT(binanceData.updated_at)}` : ''}
-                    </span>
-                  </div>
-                  {binanceData.balances?.length > 0 ? (
-                    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '12px 0' }}>
-                      {binanceData.balances.map((b, i) => (
-                        <div key={i} style={{
-                          background: 'var(--bg)', borderRadius: 10, padding: '14px 20px',
-                          minWidth: 150, flex: '1 1 150px',
-                          border: '1px solid var(--border)',
-                        }}>
-                          <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>
-                            {b.asset} {b.wallet ? <span style={{ fontSize: 10, opacity: 0.6 }}>({b.wallet})</span> : ''}
-                          </div>
-                          <div style={{ fontSize: 22, fontWeight: 700, color: '#f59e0b' }}>{b.total?.toFixed(4)}</div>
-                          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
-                            Available: {b.free?.toFixed(4)} | Locked: {b.locked?.toFixed(4)}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={{ padding: '24px 0', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-                      <div style={{ width: 36, height: 36, border: '3px solid rgba(245,158,11,0.2)', borderTop: '3px solid #f59e0b', borderRadius: '50%', animation: 'spin 0.9s linear infinite' }} />
-                      <span style={{ color: '#9ca3af', fontSize: 13 }}>Bot is scanning your Binance account...</span>
-                      <span style={{ color: '#6b7280', fontSize: 11 }}>Balance will appear once the initial scan completes</span>
-                    </div>
-                  )}
-                </div>
-
                 {/* Active Ads */}
                 {binanceData.active_ads?.length > 0 && (
                   <div className="card">

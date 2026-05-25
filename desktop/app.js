@@ -111,7 +111,7 @@ function saveReportedCompleted(numSet) {
 
 const CDP_PORT = 9222;
 const POLL_INTERVAL_ACTIVE = 60000; // 1 minute â€” cycle through all active orders
-const POLL_INTERVAL_IDLE   = 30000; // 30 seconds â€” no orders, scan faster
+const POLL_INTERVAL_IDLE   = 15000; // 15 seconds â€” no orders, scan faster
 
 let mainWindow = null;
 let tray = null;
@@ -3054,23 +3054,6 @@ async function idleScan(page) {
   }
 
   // â”€â”€ Step 2: No active orders (or ghost paid orders) â€” scan wallets + full history â”€â”€â”€â”€
-  if (!hasActiveOrders || ghostPaidNums.length > 0) {
-    if (!hasActiveOrders) {
-      console.log('[SparkP2P] No active orders -- checking order history...');
-      if (pauseNavigation) return;
-    }
-
-    // Full readOrders scan (includes cancelled + completed history)
-    const fullOrders = await readOrders(false);
-    orders.cancelled = fullOrders.cancelled || [];
-    // Filter out order numbers already reported — prevents duplicate SMS
-    orders.completed_buy = (fullOrders.completed_buy || []).filter(n => !reportedCompletedBuyOrders.has(n));
-    console.log(`[SparkP2P] History: ${orders.cancelled.length} cancelled, ${orders.completed_buy.length} completed buy (new)`);
-    if (pauseNavigation) return;
-
-  } else {
-    console.log(`[SparkP2P] Active orders detected â€” skipping wallet scan, going straight to orders`);
-  }
 
   // Track first-seen times for all active orders, clean up departed ones
   const allActiveNums = [...orders.sell, ...orders.buy].map(o => o.orderNumber);
