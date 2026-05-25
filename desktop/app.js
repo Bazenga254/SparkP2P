@@ -3068,15 +3068,6 @@ async function idleScan(page) {
     console.log(`[SparkP2P] History: ${orders.cancelled.length} cancelled, ${orders.completed_buy.length} completed buy (new)`);
     if (pauseNavigation) return;
 
-    if (!hasActiveOrders) {
-      // Scan My Ads prices (every ~1 min) — only when fully idle
-      const secsSinceLastScan = (Date.now() - lastAdPriceScan) / 1000;
-      if (secsSinceLastScan >= 55) {
-        await scanMyAdPrices();
-      } else {
-        console.log(`[SparkP2P] Ad price scan skipped â€” last scan ${Math.round(secsSinceLastScan)}s ago`);
-      }
-    }
   } else {
     console.log(`[SparkP2P] Active orders detected â€” skipping wallet scan, going straight to orders`);
   }
@@ -4150,6 +4141,9 @@ Method selection rules:
 
   if (allActiveNums.length === 0) {
     console.log('[SparkP2P] No active orders â€” staying idle');
+    // Stay on the orders page — bot polls from here
+    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
+      { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
   }
   }  // end buy orders block
 }
