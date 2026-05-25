@@ -7,6 +7,33 @@ import '@smile_identity/smart-camera-web';
 const API = '/api';
 const PROGRESS_STEPS = ['personal', 'contact', 'id-front', 'id-back', 'selfie'];
 
+// Compress image to max 1280px wide, 80% JPEG quality — reduces 5MB photo to ~300KB
+function compressImage(file, maxW = 1280, quality = 0.8) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxW / img.width);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => {
+        if (!blob) { reject(new Error('Canvas toBlob failed')); return; }
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
 // ─── Styles (module-level so they never change between renders) ───────────────
 const S = {
   wrap:   { minHeight: '100vh', background: '#0d0f1e', padding: '0 0 48px', fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif' },
@@ -174,19 +201,19 @@ export default function KycMobilePage() {
     return () => cam.removeEventListener('imagesComputed', onCapture);
   }, [smileOpen]);
 
-  const toBase64 = (file) => new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = e => res(e.target.result.split(',')[1]);
-    r.onerror = rej;
-    r.readAsDataURL(file);
-  });
-
   const handleFile = async (e, key, next) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    const b64 = await toBase64(file);
-    setFiles(f => ({ ...f, [key]: b64 }));
-    if (next) setTimeout(() => setStep(next), 400);
+    try {
+      const b64 = await compressImage(file);
+      setFiles(f => ({ ...f, [key]: b64 }));
+      if (next) setTimeout(() => setStep(next), 400);
+    } catch {
+      // Fallback: read as-is if compression fails
+      const reader = new FileReader();
+      reader.onload = ev => { setFiles(f => ({ ...f, [key]: ev.target.result.split(',')[1] })); if (next) setTimeout(() => setStep(next), 400); };
+      reader.readAsDataURL(file);
+    }
   };
 
   const submitKyc = async () => {
