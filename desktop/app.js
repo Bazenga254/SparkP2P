@@ -1121,6 +1121,13 @@ async function onGmailConfirmed() {
   // Re-fetch credentials in case the initial fetch failed (e.g. outage during startup)
   if (!traderImAccount) await fetchAndApplyCredentials().catch(() => {});
 
+  // Return focus to Binance tab so the trader sees the trading interface
+  try {
+    const pages = await browser.pages();
+    const binancePage = pages.find(p => p.url().includes('binance.com'));
+    if (binancePage) await binancePage.bringToFront();
+  } catch (e) {}
+
   const setup = await checkSetupComplete();
   if (setup.complete && !pollerRunning) {
     pauseNavigation = false;
@@ -13001,9 +13008,8 @@ ipcMain.handle('set-token', (_, t) => {
     // Token just arrived (admin portal login or page reload) â€” reset stale portal flags
     fetch(`${API_BASE}/traders/disconnect-im`, { method: 'POST', headers: { 'Authorization': `Bearer ${t}` } }).catch(() => {});
     fetch(`${API_BASE}/traders/disconnect-mpesa-portal`, { method: 'POST', headers: { 'Authorization': `Bearer ${t}` } }).catch(() => {});
-    // Auto-connect portals using persisted Chrome cookies
+    // Auto-connect M-Pesa portal using persisted Chrome cookies (I&M tab no longer auto-opened)
     if (browser) {
-      setTimeout(() => connectIm().catch(() => {}), 3000);
       setTimeout(() => connectMpesaPortal().catch(() => {}), 7000);
     }
   }
