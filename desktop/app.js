@@ -1835,38 +1835,12 @@ async function initialScan() {
 
   console.log('[SparkP2P] === INITIAL SCAN START ===');
 
-  // Step 1: Profile — get username from DOM (Binance dashboard)
-  let nickname = '';
-  try {
-    await page.goto('https://www.binance.com/en/my/dashboard', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 2000));
-    const dashText = await page.evaluate(() => document.body.innerText).catch(() => '');
-    const dashLines = dashText.split('\n').map(l => l.trim()).filter(Boolean);
-    const uidIdx = dashLines.findIndex(l => /^UID/i.test(l));
-    if (uidIdx > 0) {
-      for (let i = uidIdx - 1; i >= Math.max(0, uidIdx - 3); i--) {
-        if (dashLines[i] && dashLines[i].length >= 3 && dashLines[i].length <= 40 && !/^\d+$/.test(dashLines[i])) {
-          nickname = dashLines[i];
-          break;
-        }
-      }
-    }
-    console.log(`[SparkP2P] Username: ${nickname || 'unknown'}`);
-  } catch (e) {
-    console.log('[SparkP2P] Profile DOM read failed:', e.message?.substring(0, 40));
-  }
+  // Navigate straight to the P2P orders page and stay there
+  await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
+    { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 2000));
 
-  // Step 2: Scan all wallet balances (Funding + Spot)
-  const balances = await scanWalletBalances(page);
-
-  // Step 3: Upload to VPS
-  await uploadBalances(balances, nickname);
-
-  // Step 4: Verify trader identity
-  console.log('[SparkP2P] Verifying trader identity...');
-  await verifyTraderIdentity(page);
-
-  // Step 5: Resume any in-progress orders from before restart
+  // Resume any in-progress orders from before restart
   await resumeInProgressOrders();
 
   console.log('[SparkP2P] === INITIAL SCAN COMPLETE ===');
@@ -3082,9 +3056,7 @@ async function idleScan(page) {
   // â”€â”€ Step 2: No active orders (or ghost paid orders) â€” scan wallets + full history â”€â”€â”€â”€
   if (!hasActiveOrders || ghostPaidNums.length > 0) {
     if (!hasActiveOrders) {
-      console.log('[SparkP2P] No active orders â€” scanning wallets + history...');
-      const balances = await scanWalletBalances(page);
-      await uploadBalances(balances);
+      console.log('[SparkP2P] No active orders -- checking order history...');
       if (pauseNavigation) return;
     }
 
