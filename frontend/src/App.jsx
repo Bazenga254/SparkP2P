@@ -15,6 +15,8 @@ import Contact from './pages/Contact';
 import Survey from './pages/Survey';
 import './App.css';
 
+import KycVerifyPage from './pages/KycVerifyPage';
+import KycMobilePage from './pages/KycMobilePage';
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="loading">Loading...</div>;
@@ -40,7 +42,9 @@ function App() {
           <Route path="/install" element={<Install />} />
           <Route path="/contact" element={<Contact />} />
           <Route path="/survey" element={<Survey />} />
-          <Route path="*" element={<Navigate to="/dashboard" />} />
+          <Route path="/verify-kyc" element={<KycVerifyPage />} />
+      <Route path="/kyc/:token" element={<KycMobilePage />} />
+      <Route path="*" element={<Navigate to="/dashboard" />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

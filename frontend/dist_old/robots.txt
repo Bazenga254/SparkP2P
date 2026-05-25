@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Allow: /login
+Allow: /register
+Allow: /download
+Disallow: /dashboard
+Disallow: /admin
+Disallow: /api/
+
+Sitemap: https://sparkp2p.com/sitemap.xml

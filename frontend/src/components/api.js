@@ -72,8 +72,8 @@ export const updateTraderStatus = (id, status) => api.put(`/admin/traders/${id}/
 export const updateTraderTier = (id, tier) => api.put(`/admin/traders/${id}/tier?tier=${tier}`);
 export const getDisputedOrders = () => api.get('/admin/orders/disputed');
 export const getUnmatchedPayments = () => api.get('/admin/payments/unmatched');
-export const getAdminTransactions = (period = 'today', limit = 50, search = '', category = 'choice') =>
-  api.get(`/admin/transactions?period=${period}&limit=${limit}&category=${category}${search ? '&search=' + encodeURIComponent(search) : ''}`);
+export const getAdminTransactions = (period = 'today', limit = 50, search = '') =>
+  api.get(`/admin/transactions?period=${period}&limit=${limit}${search ? '&search=' + encodeURIComponent(search) : ''}`);
 export const getAdminOrders = (period = 'today', limit = 50, search = '') =>
   api.get(`/admin/orders?period=${period}&limit=${limit}${search ? '&search=' + encodeURIComponent(search) : ''}`);
 export const getAdminAnalytics = () => api.get('/admin/analytics');
@@ -105,8 +105,7 @@ export const sendTelegramTest = () => api.post('/telegram/test');
 
 // Withdrawals
 export const getAdminWithdrawals = (params = {}) => api.get('/admin/withdrawals', { params });
-export const getRevenueBreakdown = (params = {}) => api.get("/admin/revenue/breakdown", { params });
-export const getSubscriptionRevenue = (params = {}) => api.get("/admin/revenue/subscriptions", { params });
+export const getRevenueBreakdown = (params = {}) => api.get('/admin/revenue/breakdown', { params });
 export const markWithdrawalComplete = (txId) => api.put(`/admin/withdrawals/${txId}/complete`);
 export const markWithdrawalPending = (txId) => api.put(`/admin/withdrawals/${txId}/pending`);
 export const deleteWithdrawal = (txId) => api.delete(`/admin/withdrawals/${txId}`);
@@ -126,7 +125,6 @@ export const sendSurveyInvite = (id) => api.post(`/survey/${id}/send-invite`);
 export const getEmployees = () => api.get('/admin/employees');
 export const updateEmployeePermissions = (id, permissions) => api.put(`/admin/employees/${id}/permissions`, permissions);
 export const deleteEmployee = (id) => api.delete(`/admin/employees/${id}`);
-export const deleteTrader = (id) => api.delete(`/admin/traders/${id}`);
 export const getMyPermissions = () => api.get('/traders/my-permissions');
 
 // Affiliates
@@ -138,9 +136,7 @@ export const validateReferralCode = (code) => api.get(`/affiliates/validate/${co
 
 // Trade Tokens
 export const getTradeTokens = () => api.get('/traders/trade-tokens');
-export const purchaseTradeTokens = (amount_kes) => api.post("/traders/trade-tokens/purchase", { amount_kes });
-export const purchaseCredits = (plan, phone) => api.post("/traders/credits/purchase", { plan, phone });
-export const pollCreditsStatus = (checkoutId) => api.get(`/traders/credits/status/${checkoutId}`);
+export const purchaseTradeTokens = (amount_kes) => api.post('/traders/trade-tokens/purchase', { amount_kes });
 export const consumeTradeToken = () => api.post('/traders/trade-tokens/consume');
 
 // Admin — Trade Tokens
@@ -151,10 +147,4 @@ export const adminRemoveTradeTokens = (traderId, tokens, note = '') => api.delet
 // Admin — Bot Logs
 export const getAdminTraderBotLogs = (traderId) => api.get(`/admin/traders/${traderId}/bot-logs`);
 
-
-export const choiceOnboardWallet = (data) => api.post('/choice/onboard/wallet', data);
-export const choiceConfirmOtp = (data) => api.post('/choice/onboard/otp', data);
-export const choiceOnboardStatus = (requestId, traderId) => api.get(`/choice/onboard/status/${requestId}`, { params: { trader_id: traderId } });
-export const choiceGetBalance = (traderId) => api.get(`/choice/balance/${traderId}`);
-export const kycCreateSession = () => api.post('/kyc/session');
 export default api;

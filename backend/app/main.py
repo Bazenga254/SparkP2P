@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_db, async_session
-from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support, survey, affiliates, telegram, choice_bank
+from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support, survey, affiliates, telegram, choice_bank, kyc_flow
 from app.services.binance.poller import order_poller
 from app.services.message_templates import seed_default_templates
 from app.services import bot_monitor
@@ -513,6 +513,7 @@ app.include_router(survey.router, prefix="/api/survey", tags=["Survey"])
 app.include_router(affiliates.router, prefix="/api/affiliates", tags=["Affiliates"])
 app.include_router(telegram.router, prefix="/api/telegram", tags=["Telegram"])
 app.include_router(choice_bank.router, prefix="/api", tags=["Choice Bank"])
+app.include_router(kyc_flow.router, prefix="/api", tags=["KYC Flow"])
 
 
 @app.get("/health")

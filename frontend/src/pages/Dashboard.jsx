@@ -4,6 +4,7 @@ import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
+import { kycCreateSession } from '../services/api';
 import SupportChat from '../components/SupportChat';
 
 const B2C_FEES = [
@@ -1339,7 +1340,20 @@ export default function Dashboard() {
           <>
             {/* Choice Bank verification banner */}
             {!profile?.choice_account_id && (
-              <div onClick={() => { setSettingsInitialSection('bank'); setActiveTab('settings'); }}
+              <div onClick={async () => {
+                try {
+                  const res = await kycCreateSession();
+                  const url = `${window.location.origin}/verify-kyc?t=${res.data.token}`;
+                  if (window.sparkp2p && window.sparkp2p.openExternal) {
+                    window.sparkp2p.openExternal(url);
+                  } else {
+                    window.open(url, '_blank');
+                  }
+                } catch {
+                  setSettingsInitialSection('bank');
+                  setActiveTab('settings');
+                }
+              }}
                 style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 18px', marginBottom: 16, borderRadius: 10,
                   background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.35)', cursor: 'pointer' }}>
                 <span style={{ fontSize: 18 }}>🏦</span>
