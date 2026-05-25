@@ -1,14 +1,141 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
+import { QRCodeSVG } from 'qrcode.react';
 import axios from 'axios';
 import '@smile_identity/smart-camera-web';
 
 const API = '/api';
-const STEPS = ['personal', 'contact', 'id-front', 'id-back', 'selfie', 'otp', 'polling', 'done'];
 const PROGRESS_STEPS = ['personal', 'contact', 'id-front', 'id-back', 'selfie'];
 
+// ─── Styles (module-level so they never change between renders) ───────────────
+const S = {
+  wrap:   { minHeight: '100vh', background: '#0d0f1e', padding: '0 0 48px', fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif' },
+  header: { background: '#13151f', borderBottom: '1px solid #1f2937', padding: '16px 20px 0' },
+  body:   { padding: '24px 20px 0' },
+  lbl:    { color: '#9ca3af', fontSize: 14, display: 'block', marginBottom: 8, fontWeight: 500 },
+  inp:    { width: '100%', background: '#0d0f1e', border: '1px solid #374151', borderRadius: 12, color: '#fff', padding: '15px 16px', fontSize: 16, outline: 'none', boxSizing: 'border-box', marginBottom: 20 },
+  nextBtn:(disabled) => ({ width: '100%', padding: '16px 0', borderRadius: 12, border: 'none', fontWeight: 800, fontSize: 17, cursor: disabled ? 'not-allowed' : 'pointer', background: disabled ? '#1f2937' : 'linear-gradient(135deg,#10b981,#059669)', color: disabled ? '#6b7280' : '#fff', marginTop: 8 }),
+  center: { minHeight: '100vh', background: '#0d0f1e', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 32, fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif' },
+  back:   { background: 'none', border: 'none', color: '#6b7280', fontSize: 14, cursor: 'pointer', padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 6 },
+};
+
+// ─── Field — defined OUTSIDE the page component so React never remounts it ───
+// If Field is defined inside KycMobilePage, React treats it as a new component
+// type on every render, unmounting the <input> and losing keyboard focus.
+function Field({ value, onChange, label, required, type, placeholder }) {
+  return (
+    <div>
+      <label style={S.lbl}>{label}{required && <span style={{ color: '#ef4444' }}> *</span>}</label>
+      <input
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder || ''}
+        style={S.inp}
+        type={type || 'text'}
+        autoComplete="off"
+      />
+    </div>
+  );
+}
+
+// ─── Device detection ─────────────────────────────────────────────────────────
+function getDeviceType() {
+  const ua = navigator.userAgent;
+  const hasTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+  const w = window.screen.width;
+
+  // iPad — modern iOS reports as "Macintosh" in desktop mode but has touch points
+  if (/iPad/i.test(ua)) return 'tablet';
+  if (/Mac/i.test(ua) && hasTouch && w >= 768) return 'tablet';
+
+  // Android tablet — has Android but no "Mobile" keyword
+  if (/Android/i.test(ua) && !/Mobile/i.test(ua)) return 'tablet';
+
+  // No touch = desktop
+  if (!hasTouch) return 'desktop';
+
+  // Large touch screen = tablet (e.g. some Android tablets do report "Mobile")
+  if (w >= 768) return 'tablet';
+
+  return 'mobile';
+}
+
+// ─── Wrong-device screens ─────────────────────────────────────────────────────
+function DesktopBlock({ url }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => { navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 2500); };
+  return (
+    <div style={S.center}>
+      <div style={{ fontSize: 52, marginBottom: 16 }}>📱</div>
+      <div style={{ color: '#fff', fontSize: 22, fontWeight: 800, marginBottom: 10 }}>Open on Your Phone</div>
+      <div style={{ color: '#9ca3af', fontSize: 14, maxWidth: 340, lineHeight: 1.7, marginBottom: 28 }}>
+        KYC verification must be completed on a <strong style={{ color: '#f59e0b' }}>mobile phone</strong>. Your phone camera is needed for ID photos and the liveness check.
+      </div>
+      <div style={{ background: '#fff', borderRadius: 16, padding: 20, marginBottom: 20 }}>
+        <QRCodeSVG value={url} size={180} />
+      </div>
+      <div style={{ color: '#6b7280', fontSize: 13, marginBottom: 16 }}>— or copy the link —</div>
+      <div style={{ display: 'flex', gap: 10, width: '100%', maxWidth: 400 }}>
+        <div style={{ flex: 1, background: '#13151f', border: '1px solid #1f2937', borderRadius: 10, padding: '10px 14px', color: '#6b7280', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all', textAlign: 'left' }}>{url}</div>
+        <button onClick={copy} style={{ flexShrink: 0, padding: '10px 16px', borderRadius: 10, border: 'none', background: copied ? '#10b981' : '#374151', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+          {copied ? '✓' : 'Copy'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TabletBlock() {
+  return (
+    <div style={S.center}>
+      <div style={{ fontSize: 52, marginBottom: 16 }}>🚫</div>
+      <div style={{ color: '#fff', fontSize: 22, fontWeight: 800, marginBottom: 10 }}>Mobile Phone Required</div>
+      <div style={{ color: '#9ca3af', fontSize: 14, maxWidth: 340, lineHeight: 1.7 }}>
+        KYC verification must be completed on a <strong style={{ color: '#f59e0b' }}>mobile phone</strong>, not a tablet. Please open this link on your phone to continue.
+      </div>
+    </div>
+  );
+}
+
+// ─── Progress bar ─────────────────────────────────────────────────────────────
+function ProgressBar({ step }) {
+  const idx = PROGRESS_STEPS.indexOf(step);
+  if (idx < 0) return null;
+  return (
+    <div style={{ padding: '12px 20px 16px' }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+        {PROGRESS_STEPS.map((s, i) => (
+          <div key={s} style={{ flex: 1, height: 4, borderRadius: 4, background: i <= idx ? '#10b981' : '#1f2937', transition: 'background 0.3s' }} />
+        ))}
+      </div>
+      <div style={{ color: '#6b7280', fontSize: 12 }}>Step {idx + 1} of {PROGRESS_STEPS.length}</div>
+    </div>
+  );
+}
+
+function StepTitle({ icon, title, sub }) {
+  return (
+    <div style={{ marginBottom: 28 }}>
+      {icon && <div style={{ fontSize: 32, marginBottom: 10 }}>{icon}</div>}
+      <div style={{ color: '#fff', fontSize: 22, fontWeight: 800, marginBottom: 6 }}>{title}</div>
+      {sub && <div style={{ color: '#9ca3af', fontSize: 14, lineHeight: 1.6 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function MsgBox({ msg }) {
+  if (!msg) return null;
+  return (
+    <div style={{ padding: '12px 16px', borderRadius: 10, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', fontSize: 14, marginBottom: 20 }}>
+      {msg.text}
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 export default function KycMobilePage() {
   const { token } = useParams();
+  const [device] = useState(() => getDeviceType());
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [step, setStep] = useState('personal');
@@ -22,6 +149,8 @@ export default function KycMobilePage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    // Skip API call if device is wrong — just show block screen
+    if (device !== 'mobile') { setLoading(false); return; }
     axios.get(`${API}/kyc/validate/${token}`)
       .then(r => {
         if (r.data.verified) { setStep('done'); setLoading(false); return; }
@@ -32,17 +161,14 @@ export default function KycMobilePage() {
         setLoading(false);
       })
       .catch(() => { setErr('This link is invalid or has expired. Please request a new one from the SparkP2P app.'); setLoading(false); });
-  }, [token]);
+  }, [token, device]);
 
   useEffect(() => {
     const cam = smileRef.current;
     if (!cam) return;
     const onCapture = (e) => {
       const imgs = ((e.detail) || {}).images || [];
-      if (imgs[0] && imgs[0].image) {
-        setFiles(f => ({ ...f, selfie: imgs[0].image }));
-        setSmileOpen(false);
-      }
+      if (imgs[0] && imgs[0].image) { setFiles(f => ({ ...f, selfie: imgs[0].image })); setSmileOpen(false); }
     };
     cam.addEventListener('imagesComputed', onCapture);
     return () => cam.removeEventListener('imagesComputed', onCapture);
@@ -55,12 +181,12 @@ export default function KycMobilePage() {
     r.readAsDataURL(file);
   });
 
-  const handleFile = async (e, key, autoAdvance) => {
+  const handleFile = async (e, key, next) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     const b64 = await toBase64(file);
     setFiles(f => ({ ...f, [key]: b64 }));
-    if (autoAdvance) setTimeout(() => setStep(autoAdvance), 400);
+    if (next) setTimeout(() => setStep(next), 400);
   };
 
   const submitKyc = async () => {
@@ -102,96 +228,54 @@ export default function KycMobilePage() {
     } finally { setSubmitting(false); }
   };
 
-  // Styles
-  const wrap = { minHeight: '100vh', background: '#0d0f1e', padding: '0 0 48px', fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif' };
-  const header = { background: '#13151f', borderBottom: '1px solid #1f2937', padding: '16px 20px 0' };
-  const body = { padding: '24px 20px 0' };
-  const lbl = { color: '#9ca3af', fontSize: 14, display: 'block', marginBottom: 8, fontWeight: 500 };
-  const inp = { width: '100%', background: '#0d0f1e', border: '1px solid #374151', borderRadius: 12, color: '#fff', padding: '15px 16px', fontSize: 16, outline: 'none', boxSizing: 'border-box', marginBottom: 20 };
-  const nextBtn = (disabled) => ({ width: '100%', padding: '16px 0', borderRadius: 12, border: 'none', fontWeight: 800, fontSize: 17, cursor: disabled ? 'not-allowed' : 'pointer', background: disabled ? '#1f2937' : 'linear-gradient(135deg,#10b981,#059669)', color: disabled ? '#6b7280' : '#fff', marginTop: 8 });
-  const centerWrap = { ...wrap, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 32 };
+  const setField = (key) => (e) => setForm(f => ({ ...f, [key]: e.target.value }));
 
-  // Progress bar (only for steps 1-5)
-  const progressIdx = PROGRESS_STEPS.indexOf(step);
-  const ProgressBar = () => progressIdx >= 0 ? (
-    <div style={{ padding: '12px 20px 16px' }}>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-        {PROGRESS_STEPS.map((s, i) => (
-          <div key={s} style={{ flex: 1, height: 4, borderRadius: 4, background: i <= progressIdx ? '#10b981' : '#1f2937', transition: 'background 0.3s' }} />
-        ))}
-      </div>
-      <div style={{ color: '#6b7280', fontSize: 12 }}>Step {progressIdx + 1} of {PROGRESS_STEPS.length}</div>
-    </div>
-  ) : null;
-
-  const MsgBox = () => msg ? (
-    <div style={{ padding: '12px 16px', borderRadius: 10, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', fontSize: 14, marginBottom: 20 }}>
-      {msg.text}
-    </div>
-  ) : null;
-
-  const StepTitle = ({ icon, title, sub }) => (
-    <div style={{ marginBottom: 28 }}>
-      {icon && <div style={{ fontSize: 32, marginBottom: 10 }}>{icon}</div>}
-      <div style={{ color: '#fff', fontSize: 22, fontWeight: 800, marginBottom: 6 }}>{title}</div>
-      {sub && <div style={{ color: '#9ca3af', fontSize: 14, lineHeight: 1.6 }}>{sub}</div>}
-    </div>
-  );
-
-  const Field = ({ label, fkey, required, type, placeholder }) => (
-    <div>
-      <label style={lbl}>{label}{required && <span style={{ color: '#ef4444' }}> *</span>}</label>
-      <input value={form[fkey]} onChange={e => setForm(f => ({ ...f, [fkey]: e.target.value }))}
-        placeholder={placeholder || ''} style={inp} type={type || 'text'} />
-    </div>
-  );
+  // ── Wrong device blocks ────────────────────────────────────────────────────
+  if (device === 'desktop') return <DesktopBlock url={window.location.href} />;
+  if (device === 'tablet')  return <TabletBlock />;
 
   if (loading) return (
-    <div style={centerWrap}>
+    <div style={S.center}>
       <div style={{ width: 40, height: 40, border: '3px solid rgba(16,185,129,0.3)', borderTop: '3px solid #10b981', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
       <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
     </div>
   );
 
   if (err) return (
-    <div style={centerWrap}>
+    <div style={S.center}>
       <div style={{ fontSize: 44, marginBottom: 16 }}>&#x26A0;</div>
       <div style={{ color: '#ef4444', fontSize: 15, maxWidth: 320, lineHeight: 1.7 }}>{err}</div>
-      <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
     </div>
   );
 
   if (step === 'done') return (
-    <div style={centerWrap}>
+    <div style={S.center}>
       <div style={{ fontSize: 80, marginBottom: 20 }}>&#x2705;</div>
       <div style={{ color: '#10b981', fontSize: 26, fontWeight: 800, marginBottom: 10 }}>Verification Complete!</div>
       <div style={{ color: '#9ca3af', fontSize: 15, maxWidth: 300, lineHeight: 1.7 }}>Your Choice Bank account is now linked. Return to SparkP2P on your computer to start trading.</div>
-      <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
     </div>
   );
 
   if (step === 'polling') return (
-    <div style={centerWrap}>
+    <div style={S.center}>
       <div style={{ width: 60, height: 60, border: '5px solid rgba(16,185,129,0.2)', borderTop: '5px solid #10b981', borderRadius: '50%', animation: 'spin 1s linear infinite', marginBottom: 28 }} />
       <div style={{ color: '#fff', fontWeight: 800, fontSize: 22, marginBottom: 10 }}>Under Review</div>
-      <div style={{ color: '#9ca3af', fontSize: 15, maxWidth: 300, lineHeight: 1.7 }}>Choice Bank is reviewing your documents. This usually takes 2–5 minutes. This page will update automatically.</div>
+      <div style={{ color: '#9ca3af', fontSize: 15, maxWidth: 300, lineHeight: 1.7 }}>Choice Bank is reviewing your documents. This usually takes 2–5 minutes. This page updates automatically.</div>
       {msg && <div style={{ marginTop: 20, color: '#f59e0b', fontSize: 13 }}>{msg.text}</div>}
       <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
     </div>
   );
 
   if (step === 'otp') return (
-    <div style={wrap}>
-      <div style={header}>
-        <div style={{ color: '#fff', fontSize: 18, fontWeight: 800, paddingBottom: 16 }}>Enter OTP</div>
-      </div>
-      <div style={body}>
+    <div style={S.wrap}>
+      <div style={S.header}><div style={{ color: '#fff', fontSize: 18, fontWeight: 800, paddingBottom: 16 }}>Enter OTP</div></div>
+      <div style={S.body}>
         <StepTitle icon="📱" title="Confirm your phone" sub="Enter the 6-digit code sent to your registered phone number." />
-        <MsgBox />
-        <label style={lbl}>OTP Code</label>
+        <MsgBox msg={msg} />
+        <label style={S.lbl}>OTP Code</label>
         <input type="tel" maxLength={6} value={otp} onChange={e => setOtp(e.target.value)}
-          style={{ ...inp, fontSize: 30, letterSpacing: 14, textAlign: 'center', fontWeight: 800 }} placeholder="------" />
-        <button onClick={handleOtp} disabled={submitting} style={nextBtn(submitting)}>
+          style={{ ...S.inp, fontSize: 30, letterSpacing: 14, textAlign: 'center', fontWeight: 800 }} placeholder="------" />
+        <button onClick={handleOtp} disabled={submitting} style={S.nextBtn(submitting)}>
           {submitting ? 'Verifying...' : 'Confirm OTP'}
         </button>
       </div>
@@ -199,69 +283,65 @@ export default function KycMobilePage() {
     </div>
   );
 
-  // ── Step: Personal Info ────────────────────────────────────────────────────
+  // ── Step 1: Personal ───────────────────────────────────────────────────────
   if (step === 'personal') {
     const ok = form.firstName && form.lastName && form.birthday;
     return (
-      <div style={wrap}>
-        <div style={header}>
-          <ProgressBar />
-        </div>
-        <div style={body}>
+      <div style={S.wrap}>
+        <div style={S.header}><ProgressBar step={step} /></div>
+        <div style={S.body}>
           <StepTitle icon="👤" title="Your Name & Birthday" sub="Enter your details exactly as they appear on your National ID." />
-          <Field label="First Name" fkey="firstName" required placeholder="e.g. John" />
-          <Field label="Middle Name" fkey="middleName" placeholder="Optional" />
-          <Field label="Last Name" fkey="lastName" required placeholder="e.g. Doe" />
-          <Field label="Date of Birth" fkey="birthday" required type="date" />
-          <button onClick={() => { if (!ok) { setMsg({ text: 'Please fill First Name, Last Name, and Date of Birth.' }); return; } setMsg(null); setStep('contact'); }} style={nextBtn(!ok)}>
+          <Field label="First Name" value={form.firstName} onChange={setField('firstName')} required placeholder="e.g. John" />
+          <Field label="Middle Name" value={form.middleName} onChange={setField('middleName')} placeholder="Optional" />
+          <Field label="Last Name" value={form.lastName} onChange={setField('lastName')} required placeholder="e.g. Doe" />
+          <Field label="Date of Birth" value={form.birthday} onChange={setField('birthday')} required type="date" />
+          <MsgBox msg={msg} />
+          <button onClick={() => { if (!ok) { setMsg({ text: 'Please fill First Name, Last Name, and Date of Birth.' }); return; } setMsg(null); setStep('contact'); }} style={S.nextBtn(!ok)}>
             Continue →
           </button>
-          <MsgBox />
         </div>
         <style>{'*{box-sizing:border-box} input::placeholder{color:#4b5563}'}</style>
       </div>
     );
   }
 
-  // ── Step: Contact & ID ────────────────────────────────────────────────────
+  // ── Step 2: Contact & ID ───────────────────────────────────────────────────
   if (step === 'contact') {
     const ok = form.mobile && form.idNumber;
     return (
-      <div style={wrap}>
-        <div style={header}><ProgressBar /></div>
-        <div style={body}>
-          <button onClick={() => setStep('personal')} style={{ background: 'none', border: 'none', color: '#6b7280', fontSize: 14, cursor: 'pointer', padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 6 }}>
-            ← Back
-          </button>
+      <div style={S.wrap}>
+        <div style={S.header}><ProgressBar step={step} /></div>
+        <div style={S.body}>
+          <button onClick={() => setStep('personal')} style={S.back}>← Back</button>
           <StepTitle icon="🪪" title="ID & Contact Info" sub="We need this to create your Choice Bank sub-account." />
-          <Field label="Phone Number" fkey="mobile" required type="tel" placeholder="07XX XXX XXX" />
-          <Field label="National ID Number" fkey="idNumber" required />
+          <Field label="Phone Number" value={form.mobile} onChange={setField('mobile')} required type="tel" placeholder="07XX XXX XXX" />
+          <Field label="National ID Number" value={form.idNumber} onChange={setField('idNumber')} required />
           <div>
-            <label style={lbl}>Gender <span style={{ color: '#ef4444' }}>*</span></label>
-            <select value={form.gender} onChange={e => setForm(f => ({ ...f, gender: e.target.value }))} style={{ ...inp }}>
+            <label style={S.lbl}>Gender <span style={{ color: '#ef4444' }}>*</span></label>
+            <select value={form.gender} onChange={setField('gender')} style={{ ...S.inp }}>
               <option value="1">Male</option>
               <option value="0">Female</option>
             </select>
           </div>
-          <Field label="Email" fkey="email" type="email" placeholder="Optional" />
-          <Field label="Address" fkey="address" placeholder="Optional" />
-          <button onClick={() => { if (!ok) { setMsg({ text: 'Please enter your phone number and ID number.' }); return; } setMsg(null); setStep('id-front'); }} style={nextBtn(!ok)}>
+          <Field label="Email" value={form.email} onChange={setField('email')} type="email" placeholder="Optional" />
+          <Field label="Address" value={form.address} onChange={setField('address')} placeholder="Optional" />
+          <MsgBox msg={msg} />
+          <button onClick={() => { if (!ok) { setMsg({ text: 'Please enter your phone number and ID number.' }); return; } setMsg(null); setStep('id-front'); }} style={S.nextBtn(!ok)}>
             Continue →
           </button>
-          <MsgBox />
         </div>
         <style>{'*{box-sizing:border-box} input::placeholder{color:#4b5563} select option{background:#0d0f1e}'}</style>
       </div>
     );
   }
 
-  // ── Step: ID Front ────────────────────────────────────────────────────────
+  // ── Step 3: ID Front ───────────────────────────────────────────────────────
   if (step === 'id-front') return (
-    <div style={wrap}>
-      <div style={header}><ProgressBar /></div>
-      <div style={body}>
-        <button onClick={() => setStep('contact')} style={{ background: 'none', border: 'none', color: '#6b7280', fontSize: 14, cursor: 'pointer', padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 6 }}>← Back</button>
-        <StepTitle icon="📸" title="ID Front Photo" sub="Take a clear photo of the FRONT side of your National ID. Make sure all text is visible and not blurry." />
+    <div style={S.wrap}>
+      <div style={S.header}><ProgressBar step={step} /></div>
+      <div style={S.body}>
+        <button onClick={() => setStep('contact')} style={S.back}>← Back</button>
+        <StepTitle icon="📸" title="ID Front Photo" sub="Take a clear photo of the FRONT side of your National ID. Make sure all text is visible and in focus." />
         {files.front ? (
           <div>
             <div style={{ borderRadius: 12, overflow: 'hidden', marginBottom: 20, border: '2px solid #10b981' }}>
@@ -270,7 +350,7 @@ export default function KycMobilePage() {
             <button onClick={() => setFiles(f => ({ ...f, front: '' }))} style={{ width: '100%', padding: '13px 0', borderRadius: 12, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 15, cursor: 'pointer', marginBottom: 12 }}>
               Retake Photo
             </button>
-            <button onClick={() => setStep('id-back')} style={nextBtn(false)}>Looks Good — Continue →</button>
+            <button onClick={() => setStep('id-back')} style={S.nextBtn(false)}>Looks Good — Continue →</button>
           </div>
         ) : (
           <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '48px 24px', borderRadius: 16, border: '2px dashed #374151', background: '#13151f', cursor: 'pointer', textAlign: 'center' }}>
@@ -285,12 +365,12 @@ export default function KycMobilePage() {
     </div>
   );
 
-  // ── Step: ID Back ─────────────────────────────────────────────────────────
+  // ── Step 4: ID Back ────────────────────────────────────────────────────────
   if (step === 'id-back') return (
-    <div style={wrap}>
-      <div style={header}><ProgressBar /></div>
-      <div style={body}>
-        <button onClick={() => setStep('id-front')} style={{ background: 'none', border: 'none', color: '#6b7280', fontSize: 14, cursor: 'pointer', padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 6 }}>← Back</button>
+    <div style={S.wrap}>
+      <div style={S.header}><ProgressBar step={step} /></div>
+      <div style={S.body}>
+        <button onClick={() => setStep('id-front')} style={S.back}>← Back</button>
         <StepTitle icon="🔄" title="ID Back Photo" sub="Now take a clear photo of the BACK side of your National ID." />
         {files.back ? (
           <div>
@@ -300,7 +380,7 @@ export default function KycMobilePage() {
             <button onClick={() => setFiles(f => ({ ...f, back: '' }))} style={{ width: '100%', padding: '13px 0', borderRadius: 12, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 15, cursor: 'pointer', marginBottom: 12 }}>
               Retake Photo
             </button>
-            <button onClick={() => setStep('selfie')} style={nextBtn(false)}>Looks Good — Continue →</button>
+            <button onClick={() => setStep('selfie')} style={S.nextBtn(false)}>Looks Good — Continue →</button>
           </div>
         ) : (
           <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '48px 24px', borderRadius: 16, border: '2px dashed #374151', background: '#13151f', cursor: 'pointer', textAlign: 'center' }}>
@@ -315,14 +395,14 @@ export default function KycMobilePage() {
     </div>
   );
 
-  // ── Step: Selfie / Liveness ───────────────────────────────────────────────
+  // ── Step 5: Selfie / Liveness ──────────────────────────────────────────────
   if (step === 'selfie') return (
-    <div style={wrap}>
-      <div style={header}><ProgressBar /></div>
-      <div style={body}>
-        <button onClick={() => setStep('id-back')} style={{ background: 'none', border: 'none', color: '#6b7280', fontSize: 14, cursor: 'pointer', padding: '0 0 16px', display: 'flex', alignItems: 'center', gap: 6 }}>← Back</button>
+    <div style={S.wrap}>
+      <div style={S.header}><ProgressBar step={step} /></div>
+      <div style={S.body}>
+        <button onClick={() => setStep('id-back')} style={S.back}>← Back</button>
         <StepTitle icon="🤳" title="Live Selfie" sub="Look directly at the camera. The liveness check confirms you are a real person." />
-        <MsgBox />
+        <MsgBox msg={msg} />
         {files.selfie ? (
           <div>
             <div style={{ borderRadius: 12, overflow: 'hidden', marginBottom: 20, border: '2px solid #10b981' }}>
@@ -331,7 +411,7 @@ export default function KycMobilePage() {
             <button onClick={() => { setFiles(f => ({ ...f, selfie: '' })); setSmileOpen(false); }} style={{ width: '100%', padding: '13px 0', borderRadius: 12, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 15, cursor: 'pointer', marginBottom: 12 }}>
               Retake Selfie
             </button>
-            <button onClick={submitKyc} disabled={submitting} style={nextBtn(submitting)}>
+            <button onClick={submitKyc} disabled={submitting} style={S.nextBtn(submitting)}>
               {submitting ? 'Submitting...' : 'Submit for KYC Review'}
             </button>
           </div>
