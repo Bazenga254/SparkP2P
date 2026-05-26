@@ -515,6 +515,10 @@ app.include_router(telegram.router, prefix="/api/telegram", tags=["Telegram"])
 app.include_router(choice_bank.router, prefix="/api", tags=["Choice Bank"])
 app.include_router(kyc_flow.router, prefix="/api", tags=["KYC Flow"])
 
+@app.get("/api/health")
+async def api_health_check():
+    return {"status": "ok", "service": settings.APP_NAME}
+
 
 @app.get("/health")
 async def health_check():
