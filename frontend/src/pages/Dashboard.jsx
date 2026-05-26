@@ -3128,7 +3128,7 @@ export default function Dashboard() {
                 <div style={{ fontSize: 36, marginBottom: 12 }}>🏦</div>
                 <p style={{ color: '#f59e0b', fontWeight: 700, marginBottom: 8 }}>No withdrawal bank set up</p>
                 <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 20 }}>Go to Settings → Bank Account to add your bank account before withdrawing.</p>
-                <button onClick={() => setShowCbWithdrawModal(false)} style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, cursor: 'pointer' }}>
+                <button onClick={() => { setShowCbWithdrawModal(false); setSettingsInitialSection("bank"); setActiveTab("settings"); }} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: "#f59e0b", color: "#000", fontWeight: 700, cursor: "pointer" }}>
                   Go to Settings
                 </button>
               </div>
