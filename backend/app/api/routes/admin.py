@@ -1109,7 +1109,7 @@ async def admin_transactions(
 
     # Category filter
     if category == "choice":
-        query = query.where(Payment.transaction_type.in_(["CHOICE_INBOUND", "CHOICE_OUTBOUND"]))
+        query = query.where(Payment.transaction_type.in_(["CHOICE_INBOUND", "CHOICE_OUTBOUND", "CHOICE_DEPOSIT"]))
 
     # Search filter
     if search and search.strip():
@@ -1132,7 +1132,7 @@ async def admin_transactions(
     if start:
         count_query = count_query.where(Payment.created_at >= start)
     if category == "choice":
-        count_query = count_query.where(Payment.transaction_type.in_(["CHOICE_INBOUND", "CHOICE_OUTBOUND"]))
+        count_query = count_query.where(Payment.transaction_type.in_(["CHOICE_INBOUND", "CHOICE_OUTBOUND", "CHOICE_DEPOSIT"]))
     if search and search.strip():
         s = f"%{search.strip()}%"
         count_query = count_query.join(Trader, Payment.trader_id == Trader.id, isouter=True).where(

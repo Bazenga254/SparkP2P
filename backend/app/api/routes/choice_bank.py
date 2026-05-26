@@ -159,8 +159,23 @@ async def _handle_transaction_result(params: dict, raw: dict):
                 _tr = await _db.execute(select(Trader).where(Trader.choice_account_id == account_id))
                 _trader = _tr.scalar_one_or_none()
                 if _trader:
-                    from app.api.routes.telegram import notify_trader
+                    # Record the outbound movement so it appears in Transactions tab
                     _recipient = sender_name or sender_phone or "Unknown"
+                    _db.add(Payment(
+                        trader_id=_trader.id,
+                        direction=PaymentDirection.OUTBOUND,
+                        mpesa_transaction_id=tx_id or f"cb_out_{_trader.id}_{amount}",
+                        transaction_type="CHOICE_OUTBOUND",
+                        amount=amount,
+                        phone=sender_phone,
+                        destination=sender_phone or sender_name,
+                        sender_name=sender_name,
+                        remarks=f"Choice Bank outbound · txType {tx_type}",
+                        status=PaymentStatus.COMPLETED,
+                        raw_callback=raw,
+                    ))
+                    await _db.commit()
+                    from app.api.routes.telegram import notify_trader
                     _tg_msg = (
                         "📤 KES " + f"{amount:,.0f}" +
                         " sent from your Choice Bank" + chr(10) +
@@ -169,7 +184,7 @@ async def _handle_transaction_result(params: dict, raw: dict):
                     )
                     await notify_trader(_trader, _tg_msg)
         except Exception as _e:
-            logger.warning(f"[ChoiceBank] Outbound notify failed: {_e}")
+            logger.warning(f"[ChoiceBank] Outbound notify/save failed: {_e}")
         return
 
     if not account_id or amount <= 0:
@@ -218,28 +233,50 @@ async def _handle_transaction_result(params: dict, raw: dict):
         if not order:
             logger.warning(
                 f"[ChoiceBank] No pending SELL order for trader {trader.id} "
-                f"({trader.full_name}) — saving unmatched"
+                f"({trader.full_name}) — checking for pending deposit or saving as unmatched"
             )
-            db.add(Payment(
-                trader_id=trader.id,
-                direction=PaymentDirection.INBOUND,
-                mpesa_transaction_id=tx_id,
-                transaction_type="CHOICE_INBOUND",
-                amount=amount,
-                phone=sender_phone,
-                bill_ref_number=account_id,
-                sender_name=sender_name,
-                status=PaymentStatus.PENDING,
-                raw_callback=raw,
-            ))
-            await db.commit()
+            # Try to match a pending CHOICE_DEPOSIT STK push (same trader, same amount, last 60 min)
+            from datetime import timedelta
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=60)
+            pending_dep = (await db.execute(
+                select(Payment).where(
+                    Payment.trader_id == trader.id,
+                    Payment.transaction_type == "CHOICE_DEPOSIT",
+                    Payment.status == PaymentStatus.PENDING,
+                    Payment.amount == amount,
+                    Payment.created_at >= cutoff,
+                ).order_by(Payment.created_at.desc()).limit(1)
+            )).scalar_one_or_none()
+
+            if pending_dep:
+                # Mark the pending deposit as completed — no duplicate record needed
+                pending_dep.status = PaymentStatus.COMPLETED
+                pending_dep.mpesa_transaction_id = tx_id or pending_dep.mpesa_transaction_id
+                pending_dep.sender_name = sender_name or pending_dep.sender_name
+                await db.commit()
+                logger.info(f"[ChoiceBank] Matched CHOICE_DEPOSIT for trader {trader.id}, amount={amount}")
+            else:
+                # General inbound (e.g. manual transfer from someone else)
+                db.add(Payment(
+                    trader_id=trader.id,
+                    direction=PaymentDirection.INBOUND,
+                    mpesa_transaction_id=tx_id,
+                    transaction_type="CHOICE_INBOUND",
+                    amount=amount,
+                    phone=sender_phone,
+                    bill_ref_number=account_id,
+                    sender_name=sender_name,
+                    status=PaymentStatus.COMPLETED,
+                    raw_callback=raw,
+                ))
+                await db.commit()
             try:
                 from app.api.routes.telegram import notify_trader
                 _tg_msg = (
                     "💰 KES " + f"{amount:,.0f}" +
                     " received in your Choice Bank" + chr(10) +
                     "From: " + (sender_name or sender_phone or "Unknown") + chr(10) +
-                    "⚠️ No active sell order — payment saved for review."
+                    ("✅ Deposit confirmed!" if pending_dep else "⚠️ No active sell order — saved for review.")
                 )
                 await notify_trader(trader, _tg_msg)
             except Exception as _e:

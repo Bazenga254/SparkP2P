@@ -1500,9 +1500,14 @@ async def get_my_transactions(
     """
     from app.models import Payment, PaymentDirection, PaymentStatus
 
+    # Only show real Choice Bank movements — no old M-Pesa paybill C2B records
+    CHOICE_TYPES = ["CHOICE_DEPOSIT", "CHOICE_INBOUND", "CHOICE_OUTBOUND"]
     pay_result = await db.execute(
         select(Payment)
-        .where(Payment.trader_id == trader.id)
+        .where(
+            Payment.trader_id == trader.id,
+            Payment.transaction_type.in_(CHOICE_TYPES),
+        )
         .order_by(Payment.created_at.desc())
         .limit(limit)
     )
