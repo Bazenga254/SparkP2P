@@ -162,6 +162,7 @@ export default function Admin() {
   const [ordersSearch, setOrdersSearch] = useState('');
   const [cryptoPage, setCryptoPage] = useState(1);
   const [fiatPage, setFiatPage] = useState(1);
+  const [fiatDirFilter, setFiatDirFilter] = useState('all');
   const [txLastUpdated, setTxLastUpdated] = useState(null);
   const [fiatLastUpdated, setFiatLastUpdated] = useState(null);
   const PAGE_TX_SIZE = 25;
@@ -1544,12 +1545,42 @@ export default function Admin() {
 
               {/* ---- FIAT (M-Pesa Payments) ---- */}
               {txType === 'fiat' && (() => {
-                const fiatTotal = transactions.transactions.length;
+                const fiatFiltered = fiatDirFilter === 'all'
+                  ? transactions.transactions
+                  : transactions.transactions.filter(t => (fiatDirFilter === 'in' ? t.direction === 'inbound' : t.direction === 'outbound'));
+                const fiatTotal = fiatFiltered.length;
                 const fiatTotalPages = Math.max(1, Math.ceil(fiatTotal / PAGE_TX_SIZE));
-                const fiatSlice = transactions.transactions.slice((fiatPage - 1) * PAGE_TX_SIZE, fiatPage * PAGE_TX_SIZE);
+                const fiatSlice = fiatFiltered.slice((fiatPage - 1) * PAGE_TX_SIZE, fiatPage * PAGE_TX_SIZE);
+                const inTotal  = transactions.transactions.filter(t => t.direction === 'inbound').reduce((s, t) => s + (t.amount || 0), 0);
+                const outTotal = transactions.transactions.filter(t => t.direction === 'outbound').reduce((s, t) => s + (t.amount || 0), 0);
+                const fmtAmt   = v => 'KES ' + v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                 return (
                   <>
-                    <div style={{ padding: '12px 0', display: 'flex', gap: 8 }}>
+                    {/* Summary totals */}
+                    <div style={{ display: 'flex', gap: 10, margin: '12px 0' }}>
+                      <div style={{ flex: 1, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 10, padding: '12px 16px' }}>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>Total Inbound</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: '#10b981' }}>{fmtAmt(inTotal)}</div>
+                      </div>
+                      <div style={{ flex: 1, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10, padding: '12px 16px' }}>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>Total Outbound</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: '#ef4444' }}>{fmtAmt(outTotal)}</div>
+                      </div>
+                      <div style={{ flex: 1, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 10, padding: '12px 16px' }}>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>Net</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: (inTotal - outTotal) >= 0 ? '#10b981' : '#ef4444' }}>{fmtAmt(inTotal - outTotal)}</div>
+                      </div>
+                    </div>
+                    {/* Direction filter pills */}
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                      {[['all', 'All'], ['in', 'Inbound'], ['out', 'Outbound']].map(([v, l]) => (
+                        <button key={v} onClick={() => { setFiatDirFilter(v); setFiatPage(1); }}
+                          style={{ padding: '5px 16px', borderRadius: 20, border: '1px solid', borderColor: fiatDirFilter === v ? '#10b981' : 'var(--border)', background: fiatDirFilter === v ? 'rgba(16,185,129,0.15)' : 'transparent', color: fiatDirFilter === v ? '#10b981' : '#6b7280', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                          {l}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flex: 1 }}>
                       <input type="text" placeholder="Search by TX ID, phone, trader, name..."
                         value={txnSearch} onChange={(e) => setTxnSearch(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && loadTransactions(txPeriod, txnSearch, true)}
