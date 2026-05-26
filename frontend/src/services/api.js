@@ -160,5 +160,6 @@ export const choiceOnboardWallet = (data) => api.post('/choice/onboard/wallet', 
 export const choiceConfirmOtp = (data) => api.post('/choice/onboard/otp', data);
 export const choiceOnboardStatus = (requestId, traderId) => api.get(`/choice/onboard/status/${requestId}`, { params: { trader_id: traderId } });
 export const choiceGetBalance = (traderId) => api.get(`/choice/balance/${traderId}`);
+export const choiceDeposit = (body) => api.post('/choice/deposit', body);
 export const kycCreateSession = () => api.post('/kyc/session');
 export default api;

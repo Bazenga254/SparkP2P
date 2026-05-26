@@ -272,3 +272,12 @@ async def transfer(
     if notify_mobile:
         params["payeeMobileForNotification"] = notify_mobile
     return await _post("/trans/v2/applyForTransfer", params)
+
+
+async def deposit_from_mpesa(account_id: str, mobile: str, amount: int) -> dict:
+    """Trigger an M-Pesa STK push to deposit into a Choice Bank account."""
+    return await _post("/trans/depositFromMpesa", {
+        "accountId": account_id,
+        "mobile": mobile,
+        "amount": amount,
+    })

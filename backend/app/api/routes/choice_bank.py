@@ -552,6 +552,30 @@ async def check_onboarding_status(onboarding_request_id: str, trader_id: int, db
     }
 
 
+class DepositRequest(BaseModel):
+    amount: int  # whole KES amount
+
+
+@router.post("/choice/deposit")
+async def stk_push_deposit(
+    body: DepositRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger M-Pesa STK push to deposit into the trader's Choice Bank account."""
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+    if body.amount < 1:
+        raise HTTPException(status_code=400, detail="Amount must be at least KES 1")
+
+    mobile = (trader.phone or "").lstrip("+").lstrip("254").lstrip("0")
+    if len(mobile) != 9:
+        raise HTTPException(status_code=400, detail="Invalid phone number for STK push")
+
+    result = await client.deposit_from_mpesa(trader.choice_account_id, mobile, body.amount)
+    return {"txId": result.get("data", {}).get("txId") or result.get("txId"), "status": "stk_sent"}
+
+
 @router.get("/choice/balance/{trader_id}")
 async def get_trader_balance(trader_id: int, db: AsyncSession = Depends(get_db)):
     """Get the live Choice Bank balance for a trader's sub-account."""

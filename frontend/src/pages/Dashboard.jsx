@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -445,6 +445,10 @@ export default function Dashboard() {
   const [withdrawalTxns, setWithdrawalTxns] = useState([]);
   const [cbDashBalance, setCbDashBalance] = useState(null);
   const [cbBalanceLoading, setCbBalanceLoading] = useState(false);
+  const [showCbDepositModal, setShowCbDepositModal] = useState(false);
+  const [cbDepositAmount, setCbDepositAmount] = useState('');
+  const [cbDepositLoading, setCbDepositLoading] = useState(false);
+  const [cbDepositMsg, setCbDepositMsg] = useState('');
   const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
   const [depositPage, setDepositPage] = useState(1);
   const [withdrawalPage, setWithdrawalPage] = useState(1);
@@ -690,7 +694,6 @@ export default function Dashboard() {
     const m = [];
     if (!profile.binance_connected) m.push('Binance');
     if (!profile.gmail_connected) m.push('Gmail');
-    if (!profile.im_connected) m.push('I&M Bank');
     return m;
   })();
   const showSetupBanner = (setupMissing.length > 0 || missingConnections.length > 0) && !setupDismissed;
@@ -1438,23 +1441,15 @@ export default function Dashboard() {
                         ? `KES ${Number(cbDashBalance?.balance || 0).toLocaleString()}`
                         : 'KES ••••••'}
                     </div>
-                    <div style={{ fontSize: 11, color: '#4b5563', marginBottom: 14 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#9ca3af', marginBottom: 14, letterSpacing: 0.5 }}>
                       {profile.choice_account_number || profile.choice_account_id}
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <div style={{ flex: 1, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)', borderRadius: 9, padding: '9px 10px' }}>
-                        <div style={{ color: '#6b7280', fontSize: 10, marginBottom: 3 }}>Account Status</div>
-                        <div style={{ color: cbDashBalance?.account_status === 'Normal' ? '#10b981' : '#f59e0b', fontWeight: 700, fontSize: 13 }}>
-                          {cbDashBalance ? cbDashBalance.account_status : '—'}
-                        </div>
-                      </div>
-                      <div style={{ flex: 1, background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 9, padding: '9px 10px' }}>
-                        <div style={{ color: '#6b7280', fontSize: 10, marginBottom: 3 }}>Paybill</div>
-                        <div style={{ color: '#a78bfa', fontWeight: 700, fontSize: 13 }}>
-                          444174
-                        </div>
-                      </div>
-                    </div>
+                    <button
+                      onClick={() => { setCbDepositMsg(''); setCbDepositAmount(''); setShowCbDepositModal(true); }}
+                      style={{ width: '100%', padding: '10px 0', borderRadius: 9, border: 'none', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                    >
+                      ➕ Deposit via M-Pesa
+                    </button>
                   </>
                 ) : (
                   <div style={{ textAlign: 'center', padding: '20px 8px' }}>
@@ -3003,6 +2998,54 @@ export default function Dashboard() {
             <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 12 }}>
               You can change this anytime in Settings → Trading
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Choice Bank STK Push Deposit Modal */}
+      {showCbDepositModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: 'var(--surface)', borderRadius: 16, padding: 28, width: 360, border: '1px solid var(--border)', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <h3 style={{ margin: 0, color: '#fff', fontSize: 18 }}>🏦 Deposit to Choice Bank</h3>
+              <button onClick={() => setShowCbDepositModal(false)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 20 }}>✕</button>
+            </div>
+            <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 16, lineHeight: 1.5 }}>
+              An M-Pesa STK push will be sent to your registered number <strong style={{ color: '#fff' }}>{profile?.phone}</strong>. Enter your M-Pesa PIN to complete the deposit into your Choice Bank account.
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Amount (KES)</div>
+              <input
+                type="number"
+                min="1"
+                placeholder="e.g. 5000"
+                value={cbDepositAmount}
+                onChange={e => setCbDepositAmount(e.target.value)}
+                style={{ width: '100%', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 16, fontWeight: 600, boxSizing: 'border-box' }}
+              />
+            </div>
+            {cbDepositMsg && (
+              <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, background: cbDepositMsg.includes('✅') ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${cbDepositMsg.includes('✅') ? '#10b981' : '#ef4444'}44`, color: cbDepositMsg.includes('✅') ? '#10b981' : '#ef4444', fontSize: 13 }}>
+                {cbDepositMsg}
+              </div>
+            )}
+            <button
+              disabled={cbDepositLoading || !cbDepositAmount || Number(cbDepositAmount) < 1}
+              onClick={async () => {
+                setCbDepositLoading(true); setCbDepositMsg('');
+                try {
+                  await choiceDeposit({ amount: Math.floor(Number(cbDepositAmount)) });
+                  setCbDepositMsg('✅ STK push sent! Check your phone and enter your M-Pesa PIN.');
+                  setCbDepositAmount('');
+                } catch (e) {
+                  setCbDepositMsg(e?.response?.data?.detail || 'Failed to send STK push. Please try again.');
+                }
+                setCbDepositLoading(false);
+              }}
+              style={{ width: '100%', padding: '13px 0', borderRadius: 9, border: 'none', background: cbDepositLoading || !cbDepositAmount ? '#374151' : 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: cbDepositLoading || !cbDepositAmount ? 'not-allowed' : 'pointer' }}
+            >
+              {cbDepositLoading ? 'Sending STK Push…' : 'Send M-Pesa Prompt'}
+            </button>
           </div>
         </div>
       )}
