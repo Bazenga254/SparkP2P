@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     CHOICE_BANK_SENDER_ID: str = ""       # sender ID from Choice Bank account manager
     CHOICE_BANK_SENDER_KEY: str = ""      # private key for signing / verifying
     CHOICE_BANK_BASE_URL: str = "https://api.choicedigitalbank.com"  # update when confirmed
+    CHOICE_BANK_PAYBILL: str = "444174"  # sandbox: 4101847, production: 444174
 
     @property
     def mpesa_base_url(self) -> str:

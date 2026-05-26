@@ -1354,8 +1354,8 @@ export default function Dashboard() {
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Paybill Number</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13 }}>444174</span>
-                  <button onClick={() => { navigator.clipboard.writeText('444174'); setCopied('paybill'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'paybill' ? '#10b981' : '#9ca3af', padding: 2 }}>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13 }}>{profile?.choice_paybill || '444174'}</span>
+                  <button onClick={() => { navigator.clipboard.writeText(profile?.choice_paybill || '444174'); setCopied('paybill'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'paybill' ? '#10b981' : '#9ca3af', padding: 2 }}>
                     <Copy size={14} />
                   </button>
                 </div>
@@ -2439,7 +2439,7 @@ export default function Dashboard() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px', fontSize: 13 }}>
                 <span style={{ color: '#9ca3af' }}>Paybill Number</span>
-                <span style={{ color: '#fff', fontWeight: 600 }}>444174</span>
+                <span style={{ color: '#fff', fontWeight: 600 }}>{profile?.choice_paybill || '444174'}</span>
                 <span style={{ color: '#9ca3af' }}>Account Number</span>
                 <span style={{ color: '#f59e0b', fontWeight: 600 }}>{profile?.choice_account_number || profile?.choice_account_id || 'Pending'}</span>
               </div>

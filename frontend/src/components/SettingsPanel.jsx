@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, purchaseTradeTokens, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, purchaseTradeTokens, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank, verifyBankAccount } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -255,6 +255,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
     return () => clearInterval(id);
   }, [profile?.settlement_cooldown_until]);
 
+
   // Trading
   const [autoRelease, setAutoRelease] = useState(profile?.auto_release_enabled ?? true);
   const [autoPay, setAutoPay] = useState(profile?.auto_pay_enabled ?? true);
@@ -265,6 +266,31 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const [cbBankLoaded, setCbBankLoaded] = useState(false);
   const [cbBankSaving, setCbBankSaving] = useState(false);
   const [cbBankMsg, setCbBankMsg] = useState('');
+  const [cbBankVerifyStep, setCbBankVerifyStep] = useState(false);
+  const [cbBankTotp, setCbBankTotp] = useState('');
+  const [cbBankSecAnswer, setCbBankSecAnswer] = useState('');
+  const [cbBankCooldownUntil, setCbBankCooldownUntil] = useState(null);
+  const [cbBankCooldown, setCbBankCooldown] = useState('');
+  const [cbBankFirstChange, setCbBankFirstChange] = useState(true);
+  const [cbBankVerifying, setCbBankVerifying] = useState(false);
+  const [cbBankVerified, setCbBankVerified]   = useState(false);
+  const [cbBankLookupRef, setCbBankLookupRef] = useState({ timer: null });
+
+  // CB withdrawal bank cooldown countdown — placed AFTER all cbBank states
+  useEffect(() => {
+    if (!cbBankCooldownUntil) { setCbBankCooldown(''); return; }
+    const tick = () => {
+      const diff = new Date(cbBankCooldownUntil) - new Date();
+      if (diff <= 0) { setCbBankCooldown(''); setCbBankCooldownUntil(null); return; }
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setCbBankCooldown(`${String(h).padStart(2,'0')} : ${String(m).padStart(2,'0')} : ${String(s).padStart(2,'0')}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [cbBankCooldownUntil]);
   const [batchThreshold, setBatchThreshold] = useState(profile?.batch_threshold || 50000);
 
   // Trade tokens
@@ -660,7 +686,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
       {message && <div className="settings-msg">{message}</div>}
 
       <div className="settings-nav">
-        {[['binance', 'Binance'], ['settlement', 'Settlement'], ['trading', 'Trading'], ['security', 'Profile & Security'], ['notifications', 'Notifications'], ['bank', 'Bank Account']].map(([key, label]) => (
+        {[['binance', 'Binance'], ['trading', 'Trading'], ['security', 'Profile & Security'], ['notifications', 'Notifications'], ['bank', 'Bank Account']].map(([key, label]) => (
           <button
             key={key}
             className={activeSection === key ? 'active' : ''}
@@ -901,188 +927,6 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
           }}
           onClose={() => { setShowRemoteBrowser(false); setConnecting(false); }}
         />
-      )}
-
-      {activeSection === 'settlement' && (
-        <div className="card">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <h3 style={{ margin: 0 }}>Settlement Method</h3>
-            <div style={{ position: 'relative' }} ref={feeInfoRef}>
-              <button
-                onClick={() => setShowFeeInfo(v => !v)}
-                title="View withdrawal fee breakdown"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-                </svg>
-              </button>
-              {showFeeInfo && (
-                <div style={{
-                  position: 'absolute', top: 26, left: 0, zIndex: 100,
-                  background: '#1e2240', border: '1px solid rgba(255,255,255,0.12)',
-                  borderRadius: 12, padding: 16, width: 300,
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-                }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 12 }}>Withdrawal Fee Breakdown</div>
-
-                  {/* M-Pesa */}
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: '#10b981', marginBottom: 6 }}>📱 M-Pesa (Instant)</div>
-                    <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
-                      <thead>
-                        <tr style={{ color: '#9ca3af' }}>
-                          <th style={{ textAlign: 'left', paddingBottom: 4 }}>Amount</th>
-                          <th style={{ textAlign: 'right', paddingBottom: 4 }}>Fee</th>
-                        </tr>
-                      </thead>
-                      <tbody style={{ color: '#e5e7eb' }}>
-                        {[
-                          ['KES 1 – 500', 'KES 29'],
-                          ['KES 501 – 1,000', 'KES 34'],
-                          ['KES 1,001 – 2,500', 'KES 44'],
-                          ['KES 2,501 – 5,000', 'KES 58'],
-                          ['KES 5,001 – 10,000', 'KES 71'],
-                          ['KES 10,001 – 25,000', 'KES 90'],
-                          ['KES 25,001 – 50,000', 'KES 130'],
-                          ['KES 50,001 – 150,000', 'KES 130'],
-                        ].map(([range, fee]) => (
-                          <tr key={range}>
-                            <td style={{ padding: '2px 0' }}>{range}</td>
-                            <td style={{ textAlign: 'right', color: '#f59e0b' }}>{fee}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginBottom: 12 }} />
-
-                  {/* I&M Bank */}
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: '#60a5fa', marginBottom: 6 }}>🏦 I&M Bank (~15 mins)</div>
-                    <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
-                      <thead>
-                        <tr style={{ color: '#9ca3af' }}>
-                          <th style={{ textAlign: 'left', paddingBottom: 4 }}>Amount</th>
-                          <th style={{ textAlign: 'right', paddingBottom: 4 }}>Fee</th>
-                        </tr>
-                      </thead>
-                      <tbody style={{ color: '#e5e7eb' }}>
-                        {[
-                          ['KES 1,000 – 20,000',   'KES 10'],
-                          ['KES 20,001 – 50,000',  'KES 25'],
-                          ['KES 50,001 – 150,000', 'KES 35'],
-                          ['KES 150,001 – 300,000','KES 45'],
-                          ['KES 300,001 – 500,000','KES 60'],
-                        ].map(([range, fee]) => (
-                          <tr key={range}>
-                            <td style={{ padding: '2px 0' }}>{range}</td>
-                            <td style={{ textAlign: 'right', color: '#f59e0b' }}>{fee}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>Tiered flat fee · funds arrive in ~15 mins</div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-          <p className="help-text">How you want to receive your funds after trades.</p>
-
-          {/* Cooldown warning */}
-          {profile?.settlement_cooldown_until && settleCooldown && (
-            <div style={{
-              marginBottom: 16, padding: 12, borderRadius: 8,
-              background: 'rgba(245,158,11,0.1)', border: '1px solid #f59e0b',
-              fontSize: 12, color: '#f59e0b',
-            }}>
-              <div style={{ marginBottom: 6 }}>Security cooldown — withdrawals unlock in:</div>
-              <div style={{ fontFamily: 'monospace', fontSize: 24, fontWeight: 700, letterSpacing: 2, color: '#f59e0b', textAlign: 'center' }}>{settleCooldown}</div>
-              <div style={{ marginTop: 4, textAlign: 'center', fontSize: 10, color: '#9ca3af' }}>hh : mm : ss</div>
-            </div>
-          )}
-
-          {/* M-Pesa — Fallback */}
-          <div style={{
-            borderRadius: 10, border: profile?.settlement_mpesa_phone ? '1px solid rgba(16,185,129,0.4)' : '1px solid var(--border)',
-            overflow: 'hidden',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 20 }}>📱</span>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#10b981' }}>M-Pesa <span style={{ fontSize: 10, fontWeight: 400, background: 'rgba(16,185,129,0.15)', color: '#10b981', padding: '2px 6px', borderRadius: 4, marginLeft: 4 }}>FALLBACK</span></div>
-                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
-                    {profile?.settlement_mpesa_phone
-                      ? <>Phone ending <strong style={{ color: '#e5e7eb' }}>{profile.settlement_mpesa_phone.slice(-4)}</strong> &nbsp;
-                        {!profile?.settlement_im_account || !profile?.im_connected
-                          ? <span style={{ color: '#10b981' }}>● Active</span>
-                          : <span style={{ color: '#9ca3af' }}>● Standby (I&M is primary)</span>}
-                      </>
-                      : <span style={{ color: '#6b7280' }}>Not configured — add as fallback if I&M goes offline</span>}
-                  </div>
-                </div>
-              </div>
-              {settleEdit !== 'mpesa' && (
-                <button
-                  onClick={() => { setSettleEdit('mpesa'); setSettleMpesaInput(''); setSettleOtpSent(false); setSettleOtp(''); setSettleSecAnswer(''); }}
-                  disabled={!!profile?.settlement_cooldown_until}
-                  style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #10b981', background: 'transparent', color: '#10b981', cursor: 'pointer', fontSize: 12, opacity: profile?.settlement_cooldown_until ? 0.4 : 1 }}
-                >
-                  {profile?.settlement_mpesa_phone ? 'Change' : 'Set Up'}
-                </button>
-              )}
-            </div>
-            {settleEdit === 'mpesa' && (
-              <form onSubmit={handleSaveSettle} style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
-                {profile?.settlement_first_change_free && (
-                  <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', marginBottom: 12, fontSize: 12, color: '#10b981' }}>
-                    First update is free — no OTP required.
-                  </div>
-                )}
-                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 4 }}>M-Pesa Phone Number</label>
-                <input type="tel" placeholder="0712345678" value={settleMpesaInput}
-                  onChange={e => setSettleMpesaInput(e.target.value)} required
-                  style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12 }} />
-
-                {!profile?.settlement_first_change_free && !settleOtpSent && (
-                  <button type="button" onClick={handleSettleRequestOTP} disabled={loading}
-                    style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer', fontSize: 13, marginBottom: 12 }}>
-                    {loading ? 'Sending...' : 'Send Verification Code'}
-                  </button>
-                )}
-                {(!profile?.settlement_first_change_free && settleOtpSent) && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
-                    <div>
-                      <label style={{ display: 'block', fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>OTP Code</label>
-                      <input type="text" placeholder="6-digit code" maxLength={6} value={settleOtp}
-                        onChange={e => setSettleOtp(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }} />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>{settleSQ || profile?.security_question || 'Security Answer'}</label>
-                      <input type="text" placeholder="Your answer" value={settleSecAnswer}
-                        onChange={e => setSettleSecAnswer(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }} />
-                    </div>
-                  </div>
-                )}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {(profile?.settlement_first_change_free || settleOtpSent) && (
-                    <button type="submit" disabled={loading}
-                      style={{ padding: '9px 18px', borderRadius: 6, border: 'none', background: '#10b981', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}>
-                      {loading ? 'Saving...' : 'Save M-Pesa Number'}
-                    </button>
-                  )}
-                  <button type="button" onClick={() => { setSettleEdit(null); setSettleOtpSent(false); }}
-                    style={{ padding: '9px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}>
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
       )}
 
       {activeSection === 'security' && (
@@ -1728,82 +1572,229 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
 
       {/* Choice Bank Withdrawal Account */}
       {activeSection === 'bank' && !cbBankLoaded && (() => {
-        getCbWithdrawalBank().then(r => { if (r.data) setCbBank(r.data); setCbBankLoaded(true); }).catch(() => setCbBankLoaded(true));
+        getCbWithdrawalBank().then(r => {
+          if (r.data) {
+            setCbBank(r.data);
+            setCbBankFirstChange(r.data.first_change !== false);
+            if (r.data.cooldown_until) setCbBankCooldownUntil(r.data.cooldown_until);
+          }
+          setCbBankLoaded(true);
+        }).catch(() => setCbBankLoaded(true));
         return null;
       })()}
 
       {activeSection === 'bank' && (
         <div className="card" style={{ marginBottom: 16 }}>
-          <h3 style={{ marginBottom: 4 }}>🏦 Choice Bank Withdrawal Account</h3>
-          <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <h3 style={{ margin: 0 }}>🏦 Choice Bank Withdrawal Account</h3>
+            {cbBankCooldown && (
+              <span style={{ fontSize: 10, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>LOCKED</span>
+            )}
+          </div>
+          <p style={{ color: '#6b7280', fontSize: 13, marginBottom: cbBankCooldown ? 12 : 18 }}>
             Set the bank account where you want to receive funds withdrawn from your Choice Microfinance sub-account via Pesalink.
           </p>
 
-          {/* Bank selector */}
-          <div style={{ marginBottom: 14 }}>
-            <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Bank</label>
-            <select
-              value={cbBank.bank_code}
-              onChange={e => {
-                const banks = [
-                  ['01', 'Kenya Commercial Bank (KCB)'],['68', 'Equity Bank'],['11', 'Co-operative Bank'],
-                  ['07', 'NCBA Bank'],['02', 'Standard Chartered'],['03', 'Absa Bank Kenya'],
-                  ['31', 'Stanbic Bank'],['57', 'I&M Bank'],['63', 'Diamond Trust Bank (DTB)'],
-                  ['12', 'National Bank of Kenya'],['70', 'Family Bank'],['66', 'Sidian Bank'],
-                  ['35', 'African Banking Corporation (ABC)'],['10', 'Prime Bank'],['53', 'Guaranty Trust Bank'],
-                ];
-                const b = banks.find(([code]) => code === e.target.value);
-                setCbBank(prev => ({ ...prev, bank_code: e.target.value, bank_name: b ? b[1] : '' }));
-              }}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: cbBank.bank_code ? '#fff' : '#6b7280', fontSize: 13 }}
-            >
-              <option value="">Select your bank…</option>
-              {[
-                ['01', 'Kenya Commercial Bank (KCB)'],['68', 'Equity Bank'],['11', 'Co-operative Bank'],
-                ['07', 'NCBA Bank'],['02', 'Standard Chartered'],['03', 'Absa Bank Kenya'],
-                ['31', 'Stanbic Bank'],['57', 'I&M Bank'],['63', 'Diamond Trust Bank (DTB)'],
-                ['12', 'National Bank of Kenya'],['70', 'Family Bank'],['66', 'Sidian Bank'],
-                ['35', 'African Banking Corporation (ABC)'],['10', 'Prime Bank'],['53', 'Guaranty Trust Bank'],
-              ].map(([code, name]) => <option key={code} value={code}>{name}</option>)}
-            </select>
-          </div>
+          {/* 48-hour security cooldown banner */}
+          {cbBankCooldown && (
+            <div style={{ marginBottom: 16, padding: 12, borderRadius: 8, background: 'rgba(245,158,11,0.1)', border: '1px solid #f59e0b', fontSize: 12, color: '#f59e0b' }}>
+              <div style={{ marginBottom: 6, fontWeight: 600 }}>Security lock — next change available in:</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 22, fontWeight: 700, letterSpacing: 2, color: '#f59e0b', textAlign: 'center' }}>{cbBankCooldown}</div>
+              <div style={{ marginTop: 4, textAlign: 'center', fontSize: 10, color: '#9ca3af' }}>hh : mm : ss</div>
+            </div>
+          )}
 
-          {/* Account number */}
-          <div style={{ marginBottom: 14 }}>
-            <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Account Number</label>
-            <input type="text" placeholder="e.g. 1234567890"
-              value={cbBank.account || ''}
-              onChange={e => setCbBank(prev => ({ ...prev, account: e.target.value }))}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
-            />
-          </div>
+          {/* TOTP not configured warning */}
+          {!cbBankCooldown && !profile?.has_totp && (
+            <div style={{ marginBottom: 14, padding: 10, borderRadius: 8, background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', fontSize: 12, color: '#ef4444' }}>
+              Google Authenticator not set up. Please configure it in <strong>Profile &amp; Security</strong> before saving a bank account.
+            </div>
+          )}
 
-          {/* Account holder name */}
-          <div style={{ marginBottom: 20 }}>
-            <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Account Holder Name</label>
-            <input type="text" placeholder="e.g. JOHN DOE"
-              value={cbBank.account_name || ''}
-              onChange={e => setCbBank(prev => ({ ...prev, account_name: e.target.value.toUpperCase() }))}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
-            />
-          </div>
+          {/* Bank details form */}
+          {!cbBankVerifyStep ? (
+            <>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Bank</label>
+                <select
+                  value={cbBank.bank_code}
+                  disabled={!!cbBankCooldown}
+                  onChange={e => {
+                    const banks = [
+                      ['01', 'Kenya Commercial Bank (KCB)'],['68', 'Equity Bank'],['11', 'Co-operative Bank'],
+                      ['07', 'NCBA Bank'],['02', 'Standard Chartered'],['03', 'Absa Bank Kenya'],
+                      ['31', 'Stanbic Bank'],['57', 'I&M Bank'],['63', 'Diamond Trust Bank (DTB)'],
+                      ['12', 'National Bank of Kenya'],['70', 'Family Bank'],['66', 'Sidian Bank'],
+                      ['35', 'African Banking Corporation (ABC)'],['10', 'Prime Bank'],['53', 'Guaranty Trust Bank'],
+                    ];
+                    const b = banks.find(([code]) => code === e.target.value);
+                    const newCode = e.target.value;
+                    setCbBank(prev => ({ ...prev, bank_code: newCode, bank_name: b ? b[1] : '' }));
+                    setCbBankVerified(false);
+                    if (cbBank.account && cbBank.account.length >= 4) {
+                      setCbBankVerifying(true);
+                      if (cbBankLookupRef.timer) clearTimeout(cbBankLookupRef.timer);
+                      const timer = setTimeout(async () => {
+                        try {
+                          const res = await verifyBankAccount(newCode, cbBank.account);
+                          const name = res.data?.account_name || '';
+                          if (name) { setCbBank(prev => ({ ...prev, account_name: name.toUpperCase() })); setCbBankVerified(true); }
+                          else { setCbBankMsg('Name lookup returned no result — type manually'); }
+                        } catch (err) {
+                          const msg = err?.response?.data?.detail || '';
+                          setCbBankMsg(msg.includes('busy') ? 'Bank name lookup unavailable — type name manually' : 'Could not verify account — type name manually');
+                        }
+                        setCbBankVerifying(false);
+                      }, 1000);
+                      setCbBankLookupRef({ timer });
+                    }
+                  }}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: cbBank.bank_code ? '#fff' : '#6b7280', fontSize: 13, opacity: cbBankCooldown ? 0.5 : 1 }}
+                >
+                  <option value="">Select your bank…</option>
+                  {[
+                    ['01', 'Kenya Commercial Bank (KCB)'],['68', 'Equity Bank'],['11', 'Co-operative Bank'],
+                    ['07', 'NCBA Bank'],['02', 'Standard Chartered'],['03', 'Absa Bank Kenya'],
+                    ['31', 'Stanbic Bank'],['57', 'I&M Bank'],['63', 'Diamond Trust Bank (DTB)'],
+                    ['12', 'National Bank of Kenya'],['70', 'Family Bank'],['66', 'Sidian Bank'],
+                    ['35', 'African Banking Corporation (ABC)'],['10', 'Prime Bank'],['53', 'Guaranty Trust Bank'],
+                  ].map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+                </select>
+              </div>
 
-          {cbBankMsg && <p style={{ color: cbBankMsg.includes('saved') || cbBankMsg.includes('✓') ? '#10b981' : '#ef4444', fontSize: 12, marginBottom: 10 }}>{cbBankMsg}</p>}
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Account Number</label>
+                <input type="text" placeholder="e.g. 1234567890"
+                  value={cbBank.account || ''}
+                  disabled={!!cbBankCooldown}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setCbBank(prev => ({ ...prev, account: val }));
+                    setCbBankVerified(false);
+                    setCbBankMsg('');
+                    if (cbBankLookupRef.timer) clearTimeout(cbBankLookupRef.timer);
+                    if (cbBank.bank_code && val.length >= 4) {
+                      setCbBankVerifying(true);
+                      const timer = setTimeout(async () => {
+                        try {
+                          const res = await verifyBankAccount(cbBank.bank_code, val);
+                          const name = res.data?.account_name || '';
+                          if (name) { setCbBank(prev => ({ ...prev, account_name: name.toUpperCase() })); setCbBankVerified(true); }
+                          else { setCbBankMsg('Name lookup returned no result — type manually'); }
+                        } catch (err) {
+                          const msg = err?.response?.data?.detail || '';
+                          setCbBankMsg(msg.includes('busy') ? 'Bank name lookup unavailable — type name manually' : 'Could not verify account — type name manually');
+                        }
+                        setCbBankVerifying(false);
+                      }, 1000);
+                      setCbBankLookupRef({ timer });
+                    }
+                  }}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, boxSizing: 'border-box', opacity: cbBankCooldown ? 0.5 : 1 }}
+                />
+              </div>
 
-          <button
-            disabled={cbBankSaving || !cbBank.bank_code || !cbBank.account || !cbBank.account_name}
-            onClick={async () => {
-              setCbBankSaving(true); setCbBankMsg('');
-              try {
-                await saveCbWithdrawalBank(cbBank);
-                setCbBankMsg('✓ Withdrawal bank account saved');
-              } catch(e) { setCbBankMsg(e.response?.data?.detail || 'Failed to save'); }
-              setCbBankSaving(false);
-            }}
-            style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: (cbBank.bank_code && cbBank.account && cbBank.account_name) ? 'linear-gradient(135deg,#10b981,#059669)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: (cbBank.bank_code && cbBank.account && cbBank.account_name) ? 'pointer' : 'not-allowed' }}
-          >
-            {cbBankSaving ? 'Saving...' : 'Save Withdrawal Account'}
-          </button>
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>
+                  Account Holder Name
+                  {cbBankVerifying && <span style={{ fontSize: 11, color: '#6b7280' }}>Looking up…</span>}
+                  {cbBankVerified && !cbBankVerifying && <span style={{ fontSize: 11, color: '#10b981', fontWeight: 600 }}>✓ Verified by bank</span>}
+                </label>
+                <input type="text" placeholder="Auto-filled after lookup, or type manually…"
+                  value={cbBank.account_name || ''}
+                  readOnly={cbBankVerified}
+                  disabled={!!cbBankCooldown}
+                  onChange={e => { if (!cbBankVerified) setCbBank(prev => ({ ...prev, account_name: e.target.value.toUpperCase() })); }}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: cbBankVerified ? '1px solid rgba(16,185,129,0.5)' : '1px solid #374151', background: cbBankVerified ? 'rgba(16,185,129,0.06)' : '#111827', color: '#fff', fontSize: 13, boxSizing: 'border-box', opacity: cbBankCooldown ? 0.5 : 1 }}
+                />
+                {cbBankVerified && (
+                  <button onClick={() => { setCbBankVerified(false); setCbBank(prev => ({ ...prev, account_name: '' })); }}
+                    style={{ marginTop: 4, background: 'none', border: 'none', color: '#6b7280', fontSize: 11, cursor: 'pointer', padding: 0 }}>
+                    Override manually
+                  </button>
+                )}
+              </div>
+
+              {cbBankMsg && <p style={{ color: cbBankMsg.includes('✓') ? '#10b981' : '#ef4444', fontSize: 12, marginBottom: 10 }}>{cbBankMsg}</p>}
+
+              <button
+                disabled={!!cbBankCooldown || !cbBank.bank_code || !cbBank.account || !cbBank.account_name || !profile?.has_totp}
+                onClick={() => { setCbBankMsg(''); setCbBankTotp(''); setCbBankSecAnswer(''); setCbBankVerifyStep(true); }}
+                style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: (!cbBankCooldown && cbBank.bank_code && cbBank.account && cbBank.account_name && profile?.has_totp) ? 'linear-gradient(135deg,#10b981,#059669)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: (!cbBankCooldown && cbBank.bank_code && cbBank.account && cbBank.account_name && profile?.has_totp) ? 'pointer' : 'not-allowed' }}
+              >
+                Save Withdrawal Account
+              </button>
+            </>
+          ) : (
+            /* ── Identity verification step ── */
+            <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 10, padding: 18 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#a5b4fc', marginBottom: 4 }}>Verify Your Identity</div>
+              <p style={{ fontSize: 12, color: '#9ca3af', marginBottom: 16 }}>
+                Enter your Google Authenticator code and security answer to confirm this change.
+                {!cbBankFirstChange && ' After saving, a 48-hour security lock will prevent further changes.'}
+              </p>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Google Authenticator Code</label>
+                <input
+                  type="text" inputMode="numeric" maxLength={6} placeholder="6-digit code"
+                  value={cbBankTotp}
+                  onChange={e => setCbBankTotp(e.target.value.replace(/\D/g, ''))}
+                  autoFocus
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #6366f1', background: '#111827', color: '#fff', fontSize: 18, letterSpacing: 6, textAlign: 'center', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>
+                  {profile?.security_question || 'Security Question'}
+                </label>
+                <input
+                  type="text" placeholder="Your answer"
+                  value={cbBankSecAnswer}
+                  onChange={e => setCbBankSecAnswer(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
+                />
+              </div>
+
+              {cbBankMsg && <p style={{ color: cbBankMsg.includes('✓') ? '#10b981' : '#ef4444', fontSize: 12, marginBottom: 12 }}>{cbBankMsg}</p>}
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  disabled={cbBankSaving || cbBankTotp.length !== 6 || !cbBankSecAnswer.trim()}
+                  onClick={async () => {
+                    setCbBankSaving(true); setCbBankMsg('');
+                    try {
+                      const res = await saveCbWithdrawalBank({
+                        ...cbBank,
+                        totp_code: cbBankTotp,
+                        security_answer: cbBankSecAnswer,
+                      });
+                      const data = res.data;
+                      if (data.cooldown_until) setCbBankCooldownUntil(data.cooldown_until);
+                      setCbBankFirstChange(false);
+                      setCbBankVerifyStep(false);
+                      setCbBankMsg(data.first_change
+                        ? '✓ Bank withdrawal account saved.'
+                        : '✓ Bank account updated. Next change available in 48 hours.');
+                    } catch(e) {
+                      setCbBankMsg(e.response?.data?.detail || 'Failed to save. Please try again.');
+                    }
+                    setCbBankSaving(false);
+                  }}
+                  style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: 'none', background: (!cbBankSaving && cbBankTotp.length === 6 && cbBankSecAnswer.trim()) ? 'linear-gradient(135deg,#6366f1,#4f46e5)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 13, cursor: (!cbBankSaving && cbBankTotp.length === 6 && cbBankSecAnswer.trim()) ? 'pointer' : 'not-allowed' }}
+                >
+                  {cbBankSaving ? 'Saving...' : 'Confirm & Save'}
+                </button>
+                <button
+                  onClick={() => { setCbBankVerifyStep(false); setCbBankMsg(''); }}
+                  style={{ padding: '11px 18px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

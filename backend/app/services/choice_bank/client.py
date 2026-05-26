@@ -231,6 +231,18 @@ async def get_user_kyc(onboarding_request_id: str) -> dict:
 
 # ── Account Queries ───────────────────────────────────────────────────────────
 
+async def validate_account(account_id: str, bank_code: str) -> dict:
+    """Verify a Pesalink beneficiary and return their registered account name.
+    accountType=4 → Pesalink external bank. bankCode is the CBK 2-digit code.
+    Response data.accountName contains the verified name on success.
+    """
+    return await _post("/account/validateAccount", {
+        "accountId":   account_id,
+        "accountType": "4",
+        "bankCode":    bank_code,
+    })
+
+
 async def get_account_details(account_id: str) -> dict:
     """Get balance, status, short code and details for a sub-account."""
     return await _post("/query/getAccountDetails", {

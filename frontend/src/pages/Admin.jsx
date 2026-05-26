@@ -868,7 +868,7 @@ export default function Admin() {
     setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
     setImAccountInput(trader.settlement_account || ''); setImAccountMsg('');
     try {
-      const [detailRes, walletRes, txRes, ordersRes, pnlRes, tokenRes, logsRes] = await Promise.all([
+      const [detailRes, walletRes, txRes, ordersRes, pnlRes, tokenRes, logsRes] = await Promise.allSettled([
         api.get(`/admin/traders/${trader.id}/detail`),
         api.get(`/admin/traders/${trader.id}/wallet`),
         api.get(`/admin/traders/${trader.id}/transactions?limit=60`),
@@ -877,13 +877,13 @@ export default function Admin() {
         adminGetTradeTokens(trader.id),
         getAdminTraderBotLogs(trader.id),
       ]);
-      setViewingTrader(prev => ({ ...prev, ...(detailRes.data || {}) }));
-      setViewingTraderWallet(walletRes.data);
-      setViewingTraderTx(txRes.data || []);
-      setViewingTraderOrders(ordersRes.data || []);
-      setTraderPnl(pnlRes.data);
-      setTraderTokenData(tokenRes.data);
-      setTraderBotLogs(logsRes.data || []);
+      if (detailRes.status === 'fulfilled') setViewingTrader(prev => ({ ...prev, ...(detailRes.value.data || {}) }));
+      if (walletRes.status === 'fulfilled') setViewingTraderWallet(walletRes.value.data);
+      if (txRes.status === 'fulfilled') setViewingTraderTx(txRes.value.data || []);
+      if (ordersRes.status === 'fulfilled') setViewingTraderOrders(ordersRes.value.data || []);
+      if (pnlRes.status === 'fulfilled') setTraderPnl(pnlRes.value.data);
+      if (tokenRes.status === 'fulfilled') setTraderTokenData(tokenRes.value.data);
+      if (logsRes.status === 'fulfilled') setTraderBotLogs(logsRes.value.data || []);
     } catch (e) { console.error('Trader detail load error:', e); }
     setViewingTraderLoading(false);
   };
@@ -1784,10 +1784,10 @@ export default function Admin() {
                                 </span>
                               ); })()}
                             </td>
-                            <td>{t.total_trades}</td>
-                            <td>KES {t.total_volume.toLocaleString()}</td>
+                            <td>{t.total_trades || 0}</td>
+                            <td>KES {(t.total_volume || 0).toLocaleString()}</td>
                             <td>
-                              <select className="adm-select" value={t.tier} onChange={(e) => handleTierChange(t.id, e.target.value)}>
+                              <select className="adm-select" value={t.tier || "standard"} onChange={(e) => handleTierChange(t.id, e.target.value)}>
                                 <option value="standard">Free</option>
                                 <option value="starter">Starter</option>
                                 <option value="pro">Pro</option>
@@ -1807,7 +1807,7 @@ export default function Admin() {
                             </span>
                           </td>
                           <td style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <select className="adm-select" value={t.status} onChange={(e) => handleStatusChange(t.id, e.target.value)}>
+                            <select className="adm-select" value={t.status || "pending"} onChange={(e) => handleStatusChange(t.id, e.target.value)}>
                               <option value="pending">Pending</option>
                               <option value="active">Active</option>
                               <option value="paused">Paused</option>
@@ -1882,7 +1882,7 @@ export default function Admin() {
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                             <label style={{ fontSize: 11, color: '#6b7280' }}>Status</label>
-                            <select className="adm-select" value={t.status} onChange={async (e) => { await handleStatusChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, status: e.target.value })); }}>
+                            <select className="adm-select" value={t.status || "pending"} onChange={async (e) => { await handleStatusChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, status: e.target.value })); }}>
                               <option value="pending">Pending</option>
                               <option value="active">Active</option>
                               <option value="paused">Paused</option>
@@ -1891,7 +1891,7 @@ export default function Admin() {
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                             <label style={{ fontSize: 11, color: '#6b7280' }}>Tier</label>
-                            <select className="adm-select" value={t.tier} onChange={async (e) => { await handleTierChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, tier: e.target.value })); }}>
+                            <select className="adm-select" value={t.tier || "standard"} onChange={async (e) => { await handleTierChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, tier: e.target.value })); }}>
                               <option value="standard">Free</option>
                               <option value="starter">Starter</option>
                               <option value="pro">Pro</option>
@@ -2219,7 +2219,7 @@ export default function Admin() {
                                         <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 600 }}>{row.revenue > 0 ? `+KES ${row.revenue.toLocaleString()}` : '—'}</td>
                                         <td style={{ textAlign: 'right', color: '#ef4444' }}>{row.fees > 0 ? `-KES ${row.fees.toLocaleString()}` : '—'}</td>
                                         <td style={{ textAlign: 'right', fontWeight: 700, color: row.net >= 0 ? '#3b82f6' : '#ef4444' }}>
-                                          {row.net !== 0 ? `${row.net >= 0 ? '+' : ''}KES ${row.net.toLocaleString()}` : '—'}
+                                          {(row.net != null && row.net !== 0) ? `${row.net >= 0 ? '+' : ''}KES ${(row.net || 0).toLocaleString()}` : '—'}
                                         </td>
                                       </tr>
                                     ))}
@@ -2354,7 +2354,7 @@ export default function Admin() {
                           </div>
                           <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
                             <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Paybill</div>
-                            <div style={{ fontSize: 15, fontWeight: 700, color: '#a78bfa' }}>444174</div>
+                            <div style={{ fontSize: 15, fontWeight: 700, color: '#a78bfa' }}>{connProfile?.choice_paybill || '444174'}</div>
                           </div>
                           <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
                             <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>KYC Status</div>
@@ -2609,7 +2609,7 @@ export default function Admin() {
                               </button>
                             </td>
                             <td><span className={`adm-badge ${d.side === 'BUY' ? 'green' : 'red'}`}>{d.side}</span></td>
-                            <td>KES {d.fiat_amount.toLocaleString()}</td>
+                            <td>KES {(d.fiat_amount || 0).toLocaleString()}</td>
                             <td>{d.risk_score || '-'}</td>
                             <td>{fmtDateEAT(d.created_at)}</td>
                             <td>
@@ -2932,7 +2932,7 @@ export default function Admin() {
                       <tbody>
                         {deposits.map((p) => (
                           <tr key={p.id}>
-                            <td style={{ color: '#10b981', fontWeight: 600 }}>+KES {p.amount.toLocaleString()}</td>
+                            <td style={{ color: '#10b981', fontWeight: 600 }}>+KES {(p.amount || 0).toLocaleString()}</td>
                             <td>{p.phone && p.phone.length > 20 ? '—' : (p.phone || '—')}</td>
                             <td>{p.sender_name || '—'}</td>
                             <td className="mono" style={{ color: p.bill_ref_number ? '#f59e0b' : '#ef4444' }}>{p.bill_ref_number || 'No account'}</td>
@@ -2960,7 +2960,7 @@ export default function Admin() {
                       <tbody>
                         {withdrawals.map((p) => (
                           <tr key={p.id}>
-                            <td style={{ color: '#ef4444', fontWeight: 600 }}>-KES {p.amount.toLocaleString()}</td>
+                            <td style={{ color: '#ef4444', fontWeight: 600 }}>-KES {(p.amount || 0).toLocaleString()}</td>
                             <td><span className="adm-badge dim">{p.transaction_type || '—'}</span></td>
                             <td style={{ color: p.destination ? '#9ca3af' : '#ef4444' }}>{p.destination || 'No destination'}</td>
                             <td>
@@ -3159,7 +3159,7 @@ export default function Admin() {
                 <span style={{ fontSize: 12, color: '#10b981' }}>KES {(withdrawals.summary?.total_amount ?? 0).toLocaleString()} disbursed</span>
                 {(withdrawals.summary?.pending_count ?? 0) > 0 && (
                   <span style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600 }}>
-                    ⚠ {withdrawals.summary.pending_count} I&amp;M pending · KES {withdrawals.summary.pending_amount.toLocaleString()} needs transfer
+                    ⚠ {withdrawals.summary.pending_count} I&amp;M pending · KES {(withdrawals.summary.pending_amount || 0).toLocaleString()} needs transfer
                   </span>
                 )}
               </div>
@@ -4088,10 +4088,10 @@ export default function Admin() {
                             </td>
                             <td style={{ padding: '10px 12px', textAlign: 'center', color: '#f9fafb' }}>{a.referral_count}</td>
                             <td style={{ padding: '10px 12px', color: '#f97316', fontWeight: 700 }}>
-                              {a.pending_balance.toLocaleString()}
+                              {(a.pending_balance || 0).toLocaleString()}
                             </td>
                             <td style={{ padding: '10px 12px', color: '#10b981', fontWeight: 600 }}>
-                              {a.total_earned.toLocaleString()}
+                              {(a.total_earned || 0).toLocaleString()}
                             </td>
                             <td style={{ padding: '10px 12px', color: '#6b7280', fontSize: 12 }}>
                               {a.applied_at ? new Date(a.applied_at).toLocaleDateString('en-KE') : '—'}

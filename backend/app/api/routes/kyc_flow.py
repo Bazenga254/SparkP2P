@@ -1,3 +1,4 @@
+from app.core.config import settings
 import secrets
 import time
 from fastapi import APIRouter, Depends, HTTPException
@@ -187,7 +188,7 @@ async def poll_mobile_kyc(token: str, onboarding_id: str, db: AsyncSession = Dep
             _tg = (
                 "\U0001f389 Your Choice Bank account is approved!" + chr(10) +
                 "Account ID: " + (aid or "—") + chr(10) +
-                "Paybill: 444174 | Account No: " + (aid or "—") + chr(10) +
+                "Paybill: " + settings.CHOICE_BANK_PAYBILL + " | Account No: " + (aid or "—") + chr(10) +
                 "You can now receive payments directly to your Choice Bank account."
             )
             await notify_trader(trader, _tg)
@@ -203,7 +204,7 @@ async def poll_mobile_kyc(token: str, onboarding_id: str, db: AsyncSession = Dep
                 "<tr><td style='padding:6px 12px;color:#6b7280'>Account ID</td>"
                 "<td style='padding:6px 12px;font-weight:700'>" + (aid or "—") + "</td></tr>"
                 "<tr><td style='padding:6px 12px;color:#6b7280'>Paybill</td>"
-                "<td style='padding:6px 12px;font-weight:700'>444174</td></tr>"
+                "<td style='padding:6px 12px;font-weight:700'>" + settings.CHOICE_BANK_PAYBILL + "</td></tr>"
                 "<tr><td style='padding:6px 12px;color:#6b7280'>Account No</td>"
                 "<td style='padding:6px 12px;font-weight:700'>" + (aid or "—") + "</td></tr>"
                 "</table>"
@@ -215,7 +216,7 @@ async def poll_mobile_kyc(token: str, onboarding_id: str, db: AsyncSession = Dep
             logger.warning(f"[KYC] Approval email failed: {_e}")
         try:
             from app.services.sms import send_otp_sms
-            _sms = "SparkP2P: Choice Bank account approved! Acct: " + (aid or "N/A") + ". Paybill 444174."
+            _sms = "SparkP2P: Choice Bank account approved! Acct: " + (aid or "N/A") + ". Paybill " + settings.CHOICE_BANK_PAYBILL + "."
             await send_otp_sms(trader.phone, _sms)
         except Exception as _e:
             logger.warning(f"[KYC] Approval SMS failed: {_e}")

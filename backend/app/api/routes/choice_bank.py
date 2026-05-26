@@ -94,13 +94,16 @@ async def choice_bank_webhook(request: Request):
     notification_type = str(payload.get("notificationType") or "")
     params = payload.get("params") or {}
 
-    if notification_type == "0002":
-        await _handle_transaction_result(params, payload)
-    elif notification_type == "0003":
-        # 0003 is the primary callback for inbound payments (paybill, M-Pesa C2B, etc.)
-        await _handle_transaction_result(params, payload)
-    else:
-        logger.info(f"[ChoiceBank] Unhandled notification type {notification_type!r}")
+    try:
+        if notification_type == "0002":
+            await _handle_transaction_result(params, payload)
+        elif notification_type == "0003":
+            await _handle_transaction_result(params, payload)
+        else:
+            logger.info(f"[ChoiceBank] Unhandled notification type {notification_type!r}")
+    except Exception as exc:
+        # Always return 200 to Choice Bank — a 500 causes retries and eventual URL blacklisting.
+        logger.error(f"[ChoiceBank] Webhook error (type={notification_type}): {exc}", exc_info=True)
 
     return {"code": "00000", "msg": "Processed successfully"}
 
@@ -111,7 +114,8 @@ async def _handle_transaction_result(params: dict, raw: dict):
     Fires for every transaction (inbound and outbound) on any sub-account.
     We only act on successful inbound credits to a trader's account.
     """
-    tx_id       = params.get("txId") or params.get("externalTxId") or ""
+    tx_id        = params.get("txId") or ""
+    external_ref = (params.get("extInfo") or {}).get("externalTxId") or params.get("externalTxId") or ""
     account_id  = params.get("accountId") or ""
     tx_status   = params.get("txStatus") or ""
     tx_type     = params.get("txType") or ""       # distinguishes credit vs debit
@@ -208,6 +212,7 @@ async def _handle_transaction_result(params: dict, raw: dict):
             db.add(Payment(
                 direction=PaymentDirection.INBOUND,
                 mpesa_transaction_id=tx_id,
+                mpesa_receipt_number=external_ref,
                 transaction_type="CHOICE_INBOUND",
                 amount=amount,
                 phone=sender_phone,
@@ -251,15 +256,17 @@ async def _handle_transaction_result(params: dict, raw: dict):
                 # Mark the pending deposit as completed — no duplicate record needed
                 pending_dep.status = PaymentStatus.COMPLETED
                 pending_dep.mpesa_transaction_id = tx_id or pending_dep.mpesa_transaction_id
+                pending_dep.mpesa_receipt_number = external_ref or pending_dep.mpesa_receipt_number
                 pending_dep.sender_name = sender_name or pending_dep.sender_name
                 await db.commit()
                 logger.info(f"[ChoiceBank] Matched CHOICE_DEPOSIT for trader {trader.id}, amount={amount}")
             else:
                 # General inbound (e.g. manual transfer from someone else)
-                db.add(Payment(
+                inbound_pmt = Payment(
                     trader_id=trader.id,
                     direction=PaymentDirection.INBOUND,
                     mpesa_transaction_id=tx_id,
+                    mpesa_receipt_number=external_ref,
                     transaction_type="CHOICE_INBOUND",
                     amount=amount,
                     phone=sender_phone,
@@ -267,6 +274,26 @@ async def _handle_transaction_result(params: dict, raw: dict):
                     sender_name=sender_name,
                     status=PaymentStatus.COMPLETED,
                     raw_callback=raw,
+                )
+                db.add(inbound_pmt)
+                await db.flush()
+                # Auto-credit trader wallet for every unmatched inbound deposit
+                wallet_res = await db.execute(select(Wallet).where(Wallet.trader_id == trader.id))
+                wallet = wallet_res.scalar_one_or_none()
+                if not wallet:
+                    wallet = Wallet(trader_id=trader.id)
+                    db.add(wallet)
+                    await db.flush()
+                wallet.balance      += amount
+                wallet.total_earned += amount
+                wallet.daily_volume += amount
+                db.add(WalletTransaction(
+                    trader_id=trader.id,
+                    wallet_id=wallet.id,
+                    transaction_type=TransactionType.SELL_CREDIT,
+                    amount=amount,
+                    balance_after=wallet.balance,
+                    description=f"Manual deposit via Choice Bank paybill",
                 ))
                 await db.commit()
             try:

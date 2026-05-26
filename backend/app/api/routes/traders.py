@@ -150,6 +150,7 @@ class TraderProfileResponse(BaseModel):
     choice_account_id: Optional[str] = None
     choice_account_number: Optional[str] = None
     choice_kyc_status: Optional[str] = None
+    choice_paybill: str = "444174"
 
 
 # In-memory store for phone verification results
@@ -469,6 +470,7 @@ async def get_profile(
         choice_account_id=trader.choice_account_id or None,
         choice_account_number=trader.choice_account_number or None,
         choice_kyc_status=trader.choice_kyc_status or None,
+        choice_paybill=settings.CHOICE_BANK_PAYBILL,
     )
 
 
@@ -1554,25 +1556,60 @@ async def get_my_transactions(
 # ── Choice Bank → External Bank withdrawal account ────────────────────────────
 
 class CbWithdrawalBankBody(BaseModel):
-    bank_name:    str
-    bank_code:    str
-    account:      str
-    account_name: str
+    bank_name:       str
+    bank_code:       str
+    account:         str
+    account_name:    str
+    totp_code:       str
+    security_answer: str
 
 class CbWithdrawBody(BaseModel):
     otp:    str
     amount: float
 
+@router.get("/verify-bank-account")
+async def verify_bank_account(
+    bank_code: str,
+    account:   str,
+    trader:    Trader = Depends(get_current_trader),
+):
+    """Look up the registered account holder name for a Pesalink beneficiary.
+    Returns { account_name } on success or raises 400/502 on failure.
+    """
+    from app.services.choice_bank import client as choice
+    if not bank_code or not account:
+        raise HTTPException(status_code=400, detail="bank_code and account are required")
+    try:
+        result = await choice.validate_account(account_id=account.strip(), bank_code=bank_code.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Name lookup failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Account not found or bank unreachable"))
+    data = result.get("data") or {}
+    name = data.get("accountName", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="No account name returned — verify the account number and bank")
+    return {"account_name": name}
+
+
 @router.get("/cb-withdrawal-bank")
 async def get_cb_withdrawal_bank(
     trader: Trader = Depends(get_current_trader),
 ):
-    """Return the trader's saved Choice Bank withdrawal destination."""
+    """Return the trader's saved Choice Bank withdrawal destination + cooldown state."""
+    from datetime import datetime, timezone, timedelta
+    cooldown_until = None
+    if trader.cb_withdrawal_changed_at:
+        end = trader.cb_withdrawal_changed_at + timedelta(hours=48)
+        if end > datetime.now(timezone.utc):
+            cooldown_until = end.isoformat()
     return {
-        "bank_name":    trader.cb_withdrawal_bank_name,
-        "bank_code":    trader.cb_withdrawal_bank_code,
-        "account":      trader.cb_withdrawal_account,
-        "account_name": trader.cb_withdrawal_account_name,
+        "bank_name":     trader.cb_withdrawal_bank_name,
+        "bank_code":     trader.cb_withdrawal_bank_code,
+        "account":       trader.cb_withdrawal_account,
+        "account_name":  trader.cb_withdrawal_account_name,
+        "cooldown_until": cooldown_until,
+        "first_change":  trader.cb_withdrawal_changed_at is None,
     }
 
 
@@ -1582,13 +1619,98 @@ async def save_cb_withdrawal_bank(
     trader: Trader = Depends(get_current_trader),
     db:     AsyncSession = Depends(get_db),
 ):
-    """Save / update the merchant's Choice Bank withdrawal bank account."""
+    """Save / update the merchant's Choice Bank withdrawal bank account.
+    Requires Google Authenticator TOTP + security answer every time.
+    First save: no cooldown. Subsequent saves: 48-hour cooldown between changes.
+    Sends email + SMS + Telegram on every successful save.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.core.security import verify_password, decrypt_data
+
+    # ── Cooldown check ────────────────────────────────────────────────────────
+    is_first_change = trader.cb_withdrawal_changed_at is None
+    if not is_first_change:
+        cooldown_end = trader.cb_withdrawal_changed_at + timedelta(hours=48)
+        if datetime.now(timezone.utc) < cooldown_end:
+            remaining = int((cooldown_end - datetime.now(timezone.utc)).total_seconds() / 3600) + 1
+            raise HTTPException(
+                status_code=400,
+                detail=f"Security cooldown active. You can update your bank account again in {remaining} hour(s).",
+            )
+
+    # ── TOTP verification ─────────────────────────────────────────────────────
+    if not trader.totp_secret:
+        raise HTTPException(status_code=400, detail="Google Authenticator not set up. Please configure it in Profile & Security.")
+    totp_secret = decrypt_data(trader.totp_secret)
+    if not _verify_totp(totp_secret, body.totp_code.strip()):
+        raise HTTPException(status_code=400, detail="Invalid Google Authenticator code. Please try again.")
+
+    # ── Security question verification ────────────────────────────────────────
+    if not trader.security_answer_hash or not verify_password(body.security_answer.strip().lower(), trader.security_answer_hash):
+        raise HTTPException(status_code=400, detail="Incorrect security answer.")
+
+    # ── Save bank details ─────────────────────────────────────────────────────
+    prev_bank = trader.cb_withdrawal_bank_name or "None"
     trader.cb_withdrawal_bank_name    = body.bank_name.strip()
     trader.cb_withdrawal_bank_code    = body.bank_code.strip()
     trader.cb_withdrawal_account      = body.account.strip()
     trader.cb_withdrawal_account_name = body.account_name.strip()
+    trader.cb_withdrawal_changed_at   = datetime.now(timezone.utc)
     await db.commit()
-    return {"message": "Withdrawal bank account saved"}
+
+    # ── Notifications ─────────────────────────────────────────────────────────
+    action     = "configured" if is_first_change else "updated"
+    bank_label = f"{body.bank_name.strip()} — A/C {body.account.strip()}"
+    notif_msg  = (
+        f"🏦 Bank Withdrawal Account {action.capitalize()}\n"
+        f"Bank: {bank_label}\n"
+        f"Holder: {body.account_name.strip()}\n"
+        f"If this was not you, contact support immediately."
+    )
+
+    # Email
+    try:
+        from app.services.email import send_email
+        html = (
+            f"<p>Hello {trader.name or trader.email},</p>"
+            f"<p>Your <strong>Choice Bank withdrawal account</strong> has been <strong>{action}</strong>.</p>"
+            f"<table style='border-collapse:collapse;width:100%'>"
+            f"<tr><td style='padding:6px 12px;color:#555'>Bank</td><td style='padding:6px 12px'>{body.bank_name.strip()}</td></tr>"
+            f"<tr><td style='padding:6px 12px;color:#555'>Account Number</td><td style='padding:6px 12px'>{body.account.strip()}</td></tr>"
+            f"<tr><td style='padding:6px 12px;color:#555'>Account Holder</td><td style='padding:6px 12px'>{body.account_name.strip()}</td></tr>"
+            f"</table>"
+            f"<p style='color:#ef4444'>If you did not make this change, please contact SparkP2P support immediately.</p>"
+        )
+        send_email(trader.email, f"SparkP2P: Bank Withdrawal Account {action.capitalize()}", html)
+    except Exception:
+        pass
+
+    # SMS
+    try:
+        from app.services.sms import send_sms
+        sms_text = (
+            f"SparkP2P: Your bank withdrawal account has been {action}. "
+            f"Bank: {body.bank_name.strip()}, A/C: {body.account.strip()}. "
+            f"Not you? Contact support immediately."
+        )
+        if trader.phone:
+            send_sms(trader.phone, sms_text)
+    except Exception:
+        pass
+
+    # Telegram
+    try:
+        from app.api.routes.telegram import notify_trader
+        await notify_trader(trader, notif_msg)
+    except Exception:
+        pass
+
+    cooldown_until = (trader.cb_withdrawal_changed_at + timedelta(hours=48)).isoformat()
+    return {
+        "message":       f"Bank withdrawal account {action} successfully.",
+        "cooldown_until": cooldown_until,
+        "first_change":  is_first_change,
+    }
 
 
 @router.post("/cb-withdraw-to-bank")
