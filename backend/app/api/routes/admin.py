@@ -102,31 +102,30 @@ async def admin_dashboard(
     )
     today_orders = result.scalar()
 
-    # Completed/released orders today + their volume
-    completed_statuses = [OrderStatus.RELEASED, OrderStatus.COMPLETED]
+    # Completed orders today
     result = await db.execute(
-        select(
-            func.count(Order.id),
-            func.coalesce(func.sum(Order.fiat_amount), 0),
-        ).where(
+        select(func.count(Order.id)).where(
             Order.created_at >= today_start,
-            Order.status.in_(completed_statuses),
+            Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
         )
     )
-    completed_today, today_volume = result.one()
+    completed_today = result.scalar() or 0
 
-    # Today's withdrawal fees — only count completed fees (not pending/cancelled/failed)
+    # Today's volume — all non-cancelled orders (buy + sell across all merchants)
     result = await db.execute(
-        select(
-            func.coalesce(func.sum(-WalletTransaction.amount), 0),
-        ).where(
-            WalletTransaction.created_at >= today_start,
-            WalletTransaction.transaction_type.in_([
-                TransactionType.PLATFORM_FEE,
-                TransactionType.DAILY_VOLUME_FEE,
-            ]),
-            WalletTransaction.amount < 0,
-            WalletTransaction.status == "completed",
+        select(func.coalesce(func.sum(Order.fiat_amount), 0)).where(
+            Order.created_at >= today_start,
+            Order.status != OrderStatus.CANCELLED,
+        )
+    )
+    today_volume = float(result.scalar() or 0)
+
+    # Today's subscription revenue
+    from app.models.subscription import Subscription as _Sub, SubscriptionStatus as _SubStatus
+    result = await db.execute(
+        select(func.coalesce(func.sum(_Sub.amount), 0)).where(
+            _Sub.started_at >= today_start,
+            _Sub.status == _SubStatus.ACTIVE,
         )
     )
     today_revenue = float(result.scalar() or 0)
@@ -1250,19 +1249,12 @@ async def admin_analytics(
     year_start = now - timedelta(days=365)
 
     async def _revenue_for_period(start):
-        """Sum withdrawal-based platform revenue (PLATFORM_FEE + DAILY_VOLUME_FEE wallet charges).
-        P2P order trading fees are not tracked and excluded."""
-        where = [
-            WalletTransaction.transaction_type.in_([
-                TransactionType.PLATFORM_FEE,
-                TransactionType.DAILY_VOLUME_FEE,
-            ]),
-            WalletTransaction.amount < 0,
-            WalletTransaction.status == "completed",
-        ]
+        """Sum subscription payments received in the period (primary income source)."""
+        from app.models.subscription import Subscription as _Sub2, SubscriptionStatus as _SubSt
+        where = [_Sub2.status == _SubSt.ACTIVE]
         if start is not None:
-            where.append(WalletTransaction.created_at >= start)
-        q = select(func.coalesce(func.sum(-WalletTransaction.amount), 0)).where(*where)
+            where.append(_Sub2.started_at >= start)
+        q = select(func.coalesce(func.sum(_Sub2.amount), 0)).where(*where)
         return float((await db.execute(q)).scalar() or 0)
 
     today_revenue = await _revenue_for_period(today_start)
@@ -1359,8 +1351,21 @@ async def admin_analytics(
     it_today_count, it_today_vol = await _internal_transfers_for_period(today_start)
     it_month_count, it_month_vol = await _internal_transfers_for_period(month_start)
 
+    # Expenses totals
+    from app.models.expense import Expense as _Exp
+    _exp_total = float((await db.execute(
+        select(func.coalesce(func.sum(_Exp.amount), 0))
+    )).scalar() or 0)
+    _exp_month = float((await db.execute(
+        select(func.coalesce(func.sum(_Exp.amount), 0)).where(
+            _Exp.expense_date >= month_start.date()
+        )
+    )).scalar() or 0)
+
     return {
-        "platform_profit": platform_profit,
+        "platform_profit": round(platform_profit - _exp_total, 2),
+        "sub_revenue_total": platform_profit,
+        "expenses": {"total": _exp_total, "month": _exp_month},
         "revenue": {
             "today": today_revenue,
             "week": week_revenue,
@@ -2761,3 +2766,129 @@ async def admin_get_trader_choice_balance(
         "freeze_status": FREEZE_STATUS.get(data.get("freezeStatus"), str(data.get("freezeStatus"))),
         "short_code": data.get("shortCode"),
     }
+
+
+# ── Choice Bank Platform Float ─────────────────────────────────────────────────
+import asyncio as _asyncio
+import time as _time
+_choice_float_cache: dict = {}
+
+
+@router.get("/choice/platform-float")
+async def admin_choice_platform_float(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Aggregate live Choice Bank sub-account balances for all approved merchants."""
+    from app.services.choice_bank import client as _cb
+
+    now = _time.time()
+    if _choice_float_cache.get("at") and (now - _choice_float_cache["at"]) < 300:
+        return {
+            "total": _choice_float_cache["value"],
+            "trader_count": _choice_float_cache.get("trader_count", 0),
+            "cached": True,
+        }
+
+    result = await db.execute(
+        select(Trader.id, Trader.choice_account_id).where(
+            Trader.choice_account_id.isnot(None)
+        )
+    )
+    traders_with_cb = result.all()
+
+    async def _fetch_one(account_id: str) -> float:
+        try:
+            r = await _cb.get_account_details(account_id)
+            data = r.get("data") or {}
+            return float(data.get("balance") or 0)
+        except Exception:
+            return 0.0
+
+    balances = await _asyncio.gather(*[_fetch_one(t.choice_account_id) for t in traders_with_cb])
+    total = round(sum(balances), 2)
+
+    _choice_float_cache["value"] = total
+    _choice_float_cache["at"] = now
+    _choice_float_cache["trader_count"] = len(traders_with_cb)
+
+    return {"total": total, "trader_count": len(traders_with_cb), "cached": False}
+
+
+# ── Expenses CRUD ──────────────────────────────────────────────────────────────
+class ExpenseCreate(BaseModel):
+    description: str
+    amount: float
+    category: str = "general"
+    expense_date: str  # ISO date e.g. "2026-05-26"
+
+
+@router.get("/expenses")
+async def list_expenses(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.expense import Expense
+    result = await db.execute(
+        select(Expense).order_by(Expense.expense_date.desc(), Expense.created_at.desc()).limit(500)
+    )
+    expenses = result.scalars().all()
+    return {
+        "expenses": [
+            {
+                "id": e.id,
+                "description": e.description,
+                "amount": e.amount,
+                "category": e.category,
+                "expense_date": e.expense_date.isoformat() if e.expense_date else None,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in expenses
+        ],
+        "total": round(sum(e.amount for e in expenses), 2),
+    }
+
+
+@router.post("/expenses")
+async def create_expense(
+    body: ExpenseCreate,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.expense import Expense
+    from datetime import date as _dt_date
+    try:
+        expense_date = _dt_date.fromisoformat(body.expense_date)
+    except (ValueError, AttributeError):
+        expense_date = _dt_date.today()
+    e = Expense(
+        description=body.description,
+        amount=body.amount,
+        category=body.category,
+        expense_date=expense_date,
+    )
+    db.add(e)
+    await db.commit()
+    await db.refresh(e)
+    return {
+        "id": e.id,
+        "description": e.description,
+        "amount": e.amount,
+        "category": e.category,
+        "expense_date": e.expense_date.isoformat(),
+    }
+
+
+@router.delete("/expenses/{expense_id}")
+async def delete_expense(
+    expense_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.expense import Expense
+    e = await db.get(Expense, expense_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    await db.delete(e)
+    await db.commit()
+    return {"deleted": True}

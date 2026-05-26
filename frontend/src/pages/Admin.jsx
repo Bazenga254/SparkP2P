@@ -3,8 +3,8 @@ import api from '../services/api';
 import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle } from 'lucide-react';
-import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, adminGetTradeTokens, adminAddTradeTokens, adminRemoveTradeTokens, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminGetTraderChoiceBalance } from '../services/api';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2 } from 'lucide-react';
+import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, adminGetTradeTokens, adminAddTradeTokens, adminRemoveTradeTokens, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense } from '../services/api';
 
 const sidebarSections = [
   {
@@ -30,6 +30,7 @@ const sidebarSections = [
     label: 'PLATFORM',
     items: [
       { key: 'revenue', icon: TrendingUp, label: 'Revenue' },
+      { key: 'expenses', icon: Receipt, label: 'Expenses' },
       { key: 'security', icon: Shield, label: 'Security' },
       { key: 'settings', icon: Settings, label: 'Settings' },
     ],
@@ -117,6 +118,12 @@ export default function Admin() {
   const [kycTraders, setKycTraders] = useState([]);
   const [kycLiveResult, setKycLiveResult] = useState(null);
   const [kycLiveLoading, setKycLiveLoading] = useState(false);
+  const [choiceFloat, setChoiceFloat] = useState(null);
+  const [choiceFloatLoading, setChoiceFloatLoading] = useState(false);
+  const [expenses, setExpenses] = useState([]);
+  const [expensesTotal, setExpensesTotal] = useState(0);
+  const [expenseForm, setExpenseForm] = useState({ description: '', amount: '', category: 'general', expense_date: new Date().toISOString().slice(0, 10) });
+  const [expenseSubmitting, setExpenseSubmitting] = useState(false);
   const [kycSelectedTrader, setKycSelectedTrader] = useState(null);
   const [cbBalance, setCbBalance] = useState(null);
   const [cbBalanceLoading, setCbBalanceLoading] = useState(false);
@@ -710,6 +717,12 @@ export default function Admin() {
         const balRes = await api.get('/payment/balance');
         if (balRes.data?.updated_at) setPaybillBalance(balRes.data);
       } catch(e) {}
+      // Fetch Choice Bank platform float
+      try {
+        setChoiceFloatLoading(true);
+        const floatRes = await adminGetChoicePlatformFloat();
+        setChoiceFloat(floatRes.data);
+      } catch(e) {} finally { setChoiceFloatLoading(false); }
     } catch (err) {
       console.error('Admin load error:', err);
     }
@@ -746,6 +759,7 @@ export default function Admin() {
     if (activeTab === 'paybill') { loadPaybillTxs('today', 1); }
     if (activeTab === 'survey') { loadSurveyResponses(); }
     if (activeTab === 'kyc') { adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {}); }
+    if (activeTab === 'expenses') { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); }
     if (activeTab === 'settings') { loadEmployees(); }
     if (activeTab === 'affiliates') { loadAffiliates(); }
   }, [activeTab]);
@@ -1252,6 +1266,7 @@ export default function Admin() {
                   <div className="adm-stat-info">
                     <span className="adm-stat-label">Today's Revenue</span>
                     <span className="adm-stat-value">{dashHidden ? '••••••' : fmtKESFee(dashboard.today.revenue)}</span>
+                    {!dashHidden && <span style={{ fontSize: 10, color: '#6b7280' }}>Subscription payments today</span>}
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>
                     <TrendingUp size={22} />
@@ -1279,11 +1294,21 @@ export default function Admin() {
 
               {/* Row 3: 4 more stat cards */}
               <div className="adm-stat-grid" style={{ marginTop: 16 }}>
-                <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4' }}>
+                <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4', cursor: 'pointer' }} onClick={async () => {
+                  if (!dashHidden) {
+                    try { setChoiceFloatLoading(true); const r = await adminGetChoicePlatformFloat(); setChoiceFloat(r.data); } catch(e) {} finally { setChoiceFloatLoading(false); }
+                  }
+                }}>
                   <div className="adm-stat-info">
-                    <span className="adm-stat-label">Platform Float</span>
-                    <span className="adm-stat-value">{dashHidden ? '••••••' : fmtKES(dashboard.platform.total_float)}</span>
-                    <span style={{ fontSize: 10, color: '#6b7280' }}>Total trader wallet balances</span>
+                    <span className="adm-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      Platform Float
+                      {choiceFloat && !choiceFloatLoading && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite', boxShadow: '0 0 6px #10b981' }} />}
+                    </span>
+                    <span className="adm-stat-value">
+                      {dashHidden ? '••••••' : choiceFloatLoading ? '…' : choiceFloat ? fmtKES(choiceFloat.total) : '—'}
+                    </span>
+                    {!dashHidden && choiceFloat && <span style={{ fontSize: 10, color: '#6b7280' }}>Choice Bank · {choiceFloat.trader_count} merchants · click to refresh</span>}
+                    {!dashHidden && !choiceFloat && !choiceFloatLoading && <span style={{ fontSize: 10, color: '#6b7280' }}>Click to load</span>}
                   </div>
                   <div className="adm-stat-icon" style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4' }}>
                     <Banknote size={22} />
@@ -1432,27 +1457,32 @@ export default function Admin() {
                   </div>
                   <div style={{ padding: 20 }}>
                     <div className="adm-profit-total">
-                      {fmtKESFee(analytics?.revenue?.week)}
+                      {dashHidden ? '••••••' : fmtKESFee(analytics?.platform_profit ?? 0)}
                     </div>
-                    <p style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 20 }}>this week's earnings</p>
+                    <p style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 20 }}>subscriptions minus expenses (all time)</p>
 
                     <div className="adm-profit-rows">
                       <div className="adm-profit-row">
-                        <span>Today</span>
-                        <span className="adm-profit-val">{fmtKESFee(analytics?.revenue?.today)}</span>
+                        <span>Today's Subs</span>
+                        <span className="adm-profit-val">{dashHidden ? '••••' : fmtKESFee(analytics?.revenue?.today)}</span>
                       </div>
                       <div className="adm-profit-row">
-                        <span>This Week</span>
-                        <span className="adm-profit-val">{fmtKESFee(analytics?.revenue?.week)}</span>
+                        <span>This Month Subs</span>
+                        <span className="adm-profit-val">{dashHidden ? '••••' : fmtKESFee(analytics?.revenue?.month)}</span>
                       </div>
                       <div className="adm-profit-row">
-                        <span>This Month</span>
-                        <span className="adm-profit-val">{fmtKESFee(analytics?.revenue?.month)}</span>
+                        <span>Total Subs</span>
+                        <span className="adm-profit-val">{dashHidden ? '••••' : fmtKESFee(analytics?.sub_revenue_total ?? 0)}</span>
                       </div>
-                      <div className="adm-profit-row">
-                        <span>This Year</span>
-                        <span className="adm-profit-val">{fmtKESFee(analytics?.revenue?.year)}</span>
+                      <div className="adm-profit-row" style={{ borderTop: '1px solid var(--border)', marginTop: 8, paddingTop: 8 }}>
+                        <span style={{ color: '#ef4444' }}>Total Expenses</span>
+                        <span className="adm-profit-val" style={{ color: '#ef4444' }}>-{dashHidden ? '••••' : fmtKESFee(analytics?.expenses?.total ?? 0)}</span>
                       </div>
+                    </div>
+                    <div style={{ marginTop: 12, textAlign: 'right' }}>
+                      <button onClick={() => setActiveTab('expenses')} style={{ fontSize: 11, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
+                        Manage Expenses →
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -4281,6 +4311,132 @@ export default function Admin() {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === 'expenses' && (
+            <div>
+              <div className="adm-card-header" style={{ marginBottom: 16 }}>
+                <h2 style={{ color: '#fff', margin: 0 }}>Platform Expenses</h2>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <span style={{ fontSize: 13, color: '#6b7280' }}>Total: <strong style={{ color: '#ef4444' }}>{fmtKES(expensesTotal)}</strong></span>
+                  <button className="adm-btn" onClick={() => adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {})} style={{ fontSize: 12 }}>
+                    <RefreshCw size={13} /> Refresh
+                  </button>
+                </div>
+              </div>
+
+              {/* Add expense form */}
+              <div className="adm-card" style={{ marginBottom: 16, padding: 20 }}>
+                <h3 style={{ margin: '0 0 14px', color: '#fff', fontSize: 15 }}>Log New Expense</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 12, alignItems: 'end' }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 5 }}>Description</div>
+                    <input
+                      value={expenseForm.description}
+                      onChange={e => setExpenseForm(f => ({ ...f, description: e.target.value }))}
+                      placeholder="e.g. Server costs"
+                      style={{ width: '100%', padding: '9px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 5 }}>Amount (KES)</div>
+                    <input
+                      type="number" min="1"
+                      value={expenseForm.amount}
+                      onChange={e => setExpenseForm(f => ({ ...f, amount: e.target.value }))}
+                      placeholder="e.g. 5000"
+                      style={{ width: '100%', padding: '9px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 5 }}>Category</div>
+                    <select
+                      value={expenseForm.category}
+                      onChange={e => setExpenseForm(f => ({ ...f, category: e.target.value }))}
+                      style={{ width: '100%', padding: '9px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
+                    >
+                      {['general','hosting','marketing','staff','software','bank fees','other'].map(c => (
+                        <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 5 }}>Date</div>
+                    <input
+                      type="date"
+                      value={expenseForm.expense_date}
+                      onChange={e => setExpenseForm(f => ({ ...f, expense_date: e.target.value }))}
+                      style={{ padding: '9px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
+                    />
+                  </div>
+                </div>
+                <div style={{ marginTop: 14, textAlign: 'right' }}>
+                  <button
+                    disabled={expenseSubmitting || !expenseForm.description || !expenseForm.amount}
+                    onClick={async () => {
+                      if (!expenseForm.description || !expenseForm.amount) return;
+                      setExpenseSubmitting(true);
+                      try {
+                        await adminPostExpense({ ...expenseForm, amount: parseFloat(expenseForm.amount) });
+                        setExpenseForm(f => ({ ...f, description: '', amount: '' }));
+                        const r = await adminGetExpenses();
+                        setExpenses(r.data.expenses || []);
+                        setExpensesTotal(r.data.total || 0);
+                      } catch(e) {} finally { setExpenseSubmitting(false); }
+                    }}
+                    style={{ padding: '9px 20px', borderRadius: 7, border: 'none', background: expenseSubmitting ? '#374151' : 'linear-gradient(135deg, #ef4444, #dc2626)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: expenseSubmitting ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <PlusCircle size={14} /> {expenseSubmitting ? 'Saving…' : 'Add Expense'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Expenses table */}
+              <div className="adm-card" style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #1f2937' }}>
+                      {['Date', 'Description', 'Category', 'Amount', ''].map(h => (
+                        <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: '#6b7280', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {expenses.length === 0 && (
+                      <tr><td colSpan={5} style={{ textAlign: 'center', color: '#6b7280', padding: 40 }}>No expenses logged yet</td></tr>
+                    )}
+                    {expenses.map(e => (
+                      <tr key={e.id} style={{ borderBottom: '1px solid #111827' }}>
+                        <td style={{ padding: '10px 14px', color: '#9ca3af' }}>{e.expense_date}</td>
+                        <td style={{ padding: '10px 14px', color: '#fff' }}>{e.description}</td>
+                        <td style={{ padding: '10px 14px' }}>
+                          <span style={{ padding: '3px 10px', borderRadius: 12, background: 'rgba(239,68,68,0.1)', color: '#f87171', fontSize: 11, fontWeight: 600 }}>
+                            {e.category}
+                          </span>
+                        </td>
+                        <td style={{ padding: '10px 14px', color: '#ef4444', fontWeight: 700 }}>{fmtKES(e.amount)}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right' }}>
+                          <button
+                            onClick={async () => {
+                              if (!window.confirm('Delete this expense?')) return;
+                              try {
+                                await adminDeleteExpense(e.id);
+                                const r = await adminGetExpenses();
+                                setExpenses(r.data.expenses || []);
+                                setExpensesTotal(r.data.total || 0);
+                              } catch(err) {}
+                            }}
+                            style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4 }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 

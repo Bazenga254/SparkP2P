@@ -153,6 +153,10 @@ export const getAdminTraderBotLogs = (traderId) => api.get(`/admin/traders/${tra
 export const adminGetKycTraders = () => api.get('/admin/kyc/traders');
 export const adminGetKycLiveStatus = (traderId) => api.get(`/admin/kyc/status/${traderId}`);
 export const adminGetTraderChoiceBalance = (traderId) => api.get(`/admin/traders/${traderId}/choice-balance`);
+export const adminGetChoicePlatformFloat = () => api.get('/admin/choice/platform-float');
+export const adminGetExpenses = () => api.get('/admin/expenses');
+export const adminPostExpense = (body) => api.post('/admin/expenses', body);
+export const adminDeleteExpense = (id) => api.delete(`/admin/expenses/${id}`);
 
 
 
