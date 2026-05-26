@@ -2016,7 +2016,7 @@ export default function Admin() {
                                 </div>
                                 <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
                                   <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>Account ID</div>
-                                  <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'monospace' }}>{t.choice_account_id}</div>
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{t.choice_account_id}</div>
                                 </div>
                               </div>
                               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -4354,7 +4354,7 @@ export default function Admin() {
                           <td style={{ padding: '10px 12px' }}>
                             <span style={{ background: badge.color, color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 11 }}>{badge.label}</span>
                           </td>
-                          <td style={{ padding: '10px 12px', color: '#9ca3af', fontFamily: 'monospace', fontSize: 12 }}>
+                          <td style={{ padding: '10px 12px', color: '#9ca3af', fontSize: 12 }}>
                             {t.choice_account_id || (t.onboarding_id ? t.onboarding_id.slice(-12) : '—')}
                           </td>
                           <td style={{ padding: '10px 12px' }}>
@@ -4414,7 +4414,7 @@ export default function Admin() {
                           <h3 style={{ margin: 0, color: '#fff' }}>{kycLiveResult.trader_name}</h3>
                           <button onClick={() => setKycLiveResult(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 18 }}>✕</button>
                         </div>
-                        <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#6b7280', marginBottom: 16 }}>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 16 }}>
                           Onboarding ID: {kycLiveResult.onboarding_id}
                         </div>
 

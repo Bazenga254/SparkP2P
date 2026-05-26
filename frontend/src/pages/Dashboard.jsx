@@ -1325,7 +1325,7 @@ export default function Dashboard() {
               <div style={{ marginBottom: 10 }}>
                 <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Account Number</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, fontFamily: 'monospace' }}>{profile?.choice_account_number || profile?.choice_account_id || 'Pending verification'}</span>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13 }}>{profile?.choice_account_number || profile?.choice_account_id || 'Pending verification'}</span>
                   <button onClick={() => { navigator.clipboard.writeText(profile?.choice_account_number || profile?.choice_account_id || ''); setCopied('account'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'account' ? '#10b981' : '#9ca3af', padding: 2 }}>
                     <Copy size={14} />
                   </button>
@@ -1335,7 +1335,7 @@ export default function Dashboard() {
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Paybill Number</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, fontFamily: 'monospace' }}>444174</span>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13 }}>444174</span>
                   <button onClick={() => { navigator.clipboard.writeText('444174'); setCopied('paybill'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'paybill' ? '#10b981' : '#9ca3af', padding: 2 }}>
                     <Copy size={14} />
                   </button>
@@ -1438,7 +1438,7 @@ export default function Dashboard() {
                         ? `KES ${Number(cbDashBalance?.balance || 0).toLocaleString()}`
                         : 'KES ••••••'}
                     </div>
-                    <div style={{ fontSize: 11, color: '#4b5563', marginBottom: 14, fontFamily: 'monospace', letterSpacing: 0.5 }}>
+                    <div style={{ fontSize: 11, color: '#4b5563', marginBottom: 14 }}>
                       {profile.choice_account_number || profile.choice_account_id}
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
@@ -1450,7 +1450,7 @@ export default function Dashboard() {
                       </div>
                       <div style={{ flex: 1, background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 9, padding: '9px 10px' }}>
                         <div style={{ color: '#6b7280', fontSize: 10, marginBottom: 3 }}>Paybill</div>
-                        <div style={{ color: '#a78bfa', fontWeight: 700, fontSize: 13, fontFamily: 'monospace' }}>
+                        <div style={{ color: '#a78bfa', fontWeight: 700, fontSize: 13 }}>
                           444174
                         </div>
                       </div>
