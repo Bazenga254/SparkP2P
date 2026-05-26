@@ -1532,11 +1532,20 @@ async def get_my_transactions(
         "im_sweep":             ("Bank Sweep",             "out", "🏛️"),
     }
 
+    # Collect all M-Pesa refs already covered by wallet_transactions
+    # to deduplicate — same M-Pesa payment appears in both tables
+    wallet_refs = {t.mpesa_receipt for t in wallet_txns if t.mpesa_receipt}
+
     entries = []
 
     for t in wallet_txns:
         ttype = t.transaction_type.value if hasattr(t.transaction_type, "value") else str(t.transaction_type)
         meta = TYPE_META.get(ttype, (ttype.replace("_", " ").title(), "in" if t.amount > 0 else "out", "💱"))
+        # Make description readable: strip internal hashes from trade descriptions
+        desc = t.description or ""
+        # "Paybill deposit from ABEL - <long hash>" → "M-Pesa received from ABEL"
+        if " - " in desc and len(desc.split(" - ", 1)[1]) > 30:
+            desc = desc.split(" - ", 1)[0]
         entries.append({
             "id": f"w{t.id}",
             "source": "wallet",
@@ -1544,7 +1553,7 @@ async def get_my_transactions(
             "icon": meta[2],
             "direction": "in" if t.amount > 0 else "out",
             "amount": abs(t.amount),
-            "description": t.description or meta[0],
+            "description": desc or meta[0],
             "reference": t.mpesa_receipt or "",
             "status": t.status or "completed",
             "created_at": t.created_at.isoformat() if t.created_at else "",
@@ -1552,6 +1561,10 @@ async def get_my_transactions(
 
     for p in payments:
         ttype = (p.transaction_type or "").upper()
+        ref = p.mpesa_transaction_id or p.mpesa_receipt_number or ""
+        # Skip if this payment is already represented by a wallet_transaction with the same ref
+        if ref and ref in wallet_refs and ttype != "CHOICE_DEPOSIT":
+            continue
         direction = "in" if p.direction == PaymentDirection.INBOUND else "out"
         if ttype == "CHOICE_DEPOSIT":
             label, icon = "Choice Bank Deposit", "🏦"
@@ -1562,6 +1575,9 @@ async def get_my_transactions(
         else:
             label, icon = "Payment", "💱"
         status = p.status.value if hasattr(p.status, "value") else str(p.status)
+        # Build a clean description from sender name / remarks
+        desc_parts = [p.sender_name, p.remarks]
+        clean_desc = " · ".join(d for d in desc_parts if d and len(d) < 80) or label
         entries.append({
             "id": f"p{p.id}",
             "source": "payment",
@@ -1569,8 +1585,8 @@ async def get_my_transactions(
             "icon": icon,
             "direction": direction,
             "amount": abs(p.amount),
-            "description": p.remarks or p.sender_name or label,
-            "reference": p.mpesa_transaction_id or p.mpesa_receipt_number or "",
+            "description": clean_desc,
+            "reference": ref,
             "phone": p.phone or "",
             "status": status,
             "created_at": p.created_at.isoformat() if p.created_at else "",
