@@ -56,7 +56,7 @@ function getGreeting() {
 
 // Polls Choice Bank balance every 10s for a given trader (auto-start on mount)
 function CbBalancePoller({ traderId, onData }) {
-  React.useEffect(() => {
+  useEffect(() => {
     if (!traderId) return;
     let active = true;
     const fetchBalance = () => {
