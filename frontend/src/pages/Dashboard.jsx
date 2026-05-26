@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit, getMyTransactions } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -450,6 +450,9 @@ export default function Dashboard() {
   const [cbDepositLoading, setCbDepositLoading] = useState(false);
   const [cbDepositMsg, setCbDepositMsg] = useState('');
   const [cbDepositPhone, setCbDepositPhone] = useState('');
+  const [txFilter, setTxFilter] = useState('all');
+  const [allTxns, setAllTxns] = useState([]);
+  const [allTxnsLoading, setAllTxnsLoading] = useState(false);
   const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
   const [depositPage, setDepositPage] = useState(1);
   const [withdrawalPage, setWithdrawalPage] = useState(1);
@@ -835,6 +838,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (activeTab === 'logs') logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (activeTab === 'transactions') {
+      setAllTxnsLoading(true);
+      getMyTransactions(100).then(r => { if (r.data) setAllTxns(r.data); }).catch(() => {}).finally(() => setAllTxnsLoading(false));
+    }
   }, [botLogs, activeTab]);
 
   const handleWithdraw = async () => {
@@ -1867,124 +1874,86 @@ export default function Dashboard() {
         {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} initialSection={settingsInitialSection} />}
 
         {/* ── Transactions Tab ── */}
-        {activeTab === 'transactions' && (() => {
-          // Combine positive (sell_credit/deposit/etc) + negative (withdrawal/fee/etc) txns
-          const toEntry = (t) => ({
-            id: 'w-' + t.id,
-            amount: t.amount,
-            description: t.description || '',
-            type: t.type,
-            reference: t.mpesa_receipt || '',
-            status: t.status,
-            created_at: t.created_at,
-          });
-          const combined = [
-            ...(transactions || []).map(toEntry),
-            ...(withdrawalTxns || []).map(toEntry),
-          ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-          const typeLabel = {
-            deposit:              { label: 'M-Pesa Deposit',      icon: '💳', color: '#10b981' },
-            sell_credit:          { label: 'Trade Earning',        icon: '📈', color: '#10b981' },
-            buy_debit:            { label: 'Buy Order',            icon: '🛒', color: '#ef4444' },
-            buy_reserve:          { label: 'Funds Reserved',       icon: '🔒', color: '#f59e0b' },
-            buy_release:          { label: 'Reservation Released', icon: '🔓', color: '#10b981' },
-            withdrawal:           { label: 'Withdrawal',           icon: '🏦', color: '#ef4444' },
-            platform_fee:         { label: 'Platform Fee',         icon: '💸', color: '#ef4444' },
-            settlement_fee:       { label: 'Settlement Fee',       icon: '💸', color: '#ef4444' },
-            adjustment:           { label: 'Adjustment',           icon: '⚙️', color: '#6b7280' },
-            internal_transfer_in: { label: 'Transfer Received',    icon: '↙️', color: '#10b981' },
-            internal_transfer_out:{ label: 'Transfer Sent',        icon: '↗️', color: '#ef4444' },
-            daily_volume_fee:     { label: 'Daily Fee',            icon: '📅', color: '#ef4444' },
-            im_sweep:             { label: 'Bank Sweep',           icon: '🏛️', color: '#6b7280' },
-          };
-
-          const [txFilter, setTxFilter] = React.useState('all');
-          const filtered = combined.filter(t => {
-            if (txFilter === 'in') return t.amount > 0;
-            if (txFilter === 'out') return t.amount < 0;
-            return true;
-          });
-
-          const totalIn = combined.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
-          const totalOut = combined.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
-
-          return (
-            <div>
-              {/* Summary row */}
-              <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-                <div style={{ flex: 1, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 12, padding: '14px 18px' }}>
-                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Total In</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: '#10b981' }}>KES {totalIn.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                </div>
-                <div style={{ flex: 1, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 12, padding: '14px 18px' }}>
-                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Total Out</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: '#ef4444' }}>KES {totalOut.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                </div>
-                <div style={{ flex: 1, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 12, padding: '14px 18px' }}>
-                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Net</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: (totalIn - totalOut) >= 0 ? '#10b981' : '#ef4444' }}>KES {(totalIn - totalOut).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                </div>
-              </div>
-
-              {/* Filter pills */}
-              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-                {[['all','All'], ['in','Deposits'], ['out','Withdrawals']].map(([v, l]) => (
-                  <button key={v} onClick={() => setTxFilter(v)} style={{ padding: '6px 16px', borderRadius: 20, border: '1px solid', borderColor: txFilter === v ? '#10b981' : 'var(--border)', background: txFilter === v ? 'rgba(16,185,129,0.15)' : 'transparent', color: txFilter === v ? '#10b981' : '#6b7280', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                    {l}
-                  </button>
-                ))}
-                <button onClick={() => {
-                  Promise.all([
-                    getWalletTransactions(100, 'positive'),
-                    getWalletTransactions(100, 'negative'),
-                  ]).then(([pos, neg]) => {
-                    if (pos.data) setTransactions(pos.data);
-                    if (neg.data) setWithdrawalTxns(neg.data);
-                  }).catch(() => {});
-                }} style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 20, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <RefreshCw size={12} /> Refresh
-                </button>
-              </div>
-
-              {/* Transaction list */}
-              <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                {filtered.length === 0 && (
-                  <div style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>
-                    No transactions yet
+        {activeTab === 'transactions' && (
+          <div>
+            {/* Summary */}
+            {(() => {
+              const inTotal  = allTxns.filter(t => t.direction === 'in').reduce((s, t) => s + t.amount, 0);
+              const outTotal = allTxns.filter(t => t.direction === 'out').reduce((s, t) => s + t.amount, 0);
+              const fmt = v => 'KES ' + v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+              return (
+                <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+                  <div style={{ flex: 1, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 12, padding: '14px 18px' }}>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Total Inbound</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: '#10b981' }}>{fmt(inTotal)}</div>
                   </div>
-                )}
-                {filtered.map((t, i) => {
-                  const meta = typeLabel[t.type] || { label: t.type, icon: '💱', color: '#6b7280' };
-                  const isIn = t.amount > 0;
-                  const dateStr = new Date(t.created_at).toLocaleString('en-KE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
+                  <div style={{ flex: 1, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 12, padding: '14px 18px' }}>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Total Outbound</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: '#ef4444' }}>{fmt(outTotal)}</div>
+                  </div>
+                  <div style={{ flex: 1, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 12, padding: '14px 18px' }}>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Net</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: (inTotal - outTotal) >= 0 ? '#10b981' : '#ef4444' }}>{fmt(inTotal - outTotal)}</div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Filters + Refresh */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+              {[['all', 'All'], ['in', 'Inbound'], ['out', 'Outbound']].map(([v, l]) => (
+                <button key={v} onClick={() => setTxFilter(v)} style={{ padding: '6px 16px', borderRadius: 20, border: '1px solid', borderColor: txFilter === v ? '#10b981' : 'var(--border)', background: txFilter === v ? 'rgba(16,185,129,0.15)' : 'transparent', color: txFilter === v ? '#10b981' : '#6b7280', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  {l}
+                </button>
+              ))}
+              <button
+                onClick={() => { setAllTxnsLoading(true); getMyTransactions(100).then(r => { if (r.data) setAllTxns(r.data); }).catch(() => {}).finally(() => setAllTxnsLoading(false)); }}
+                style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 20, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
+              >
+                <RefreshCw size={12} className={allTxnsLoading ? 'spinning' : ''} /> Refresh
+              </button>
+            </div>
+
+            {/* List */}
+            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              {allTxnsLoading && allTxns.length === 0 && (
+                <div style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>Loading transactions…</div>
+              )}
+              {!allTxnsLoading && allTxns.length === 0 && (
+                <div style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>No transactions yet</div>
+              )}
+              {allTxns
+                .filter(t => txFilter === 'all' || t.direction === txFilter)
+                .map((t, i, arr) => {
+                  const isIn = t.direction === 'in';
+                  const dateStr = new Date(t.created_at).toLocaleString('en-KE', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true });
+                  const fmtAmt = v => 'KES ' + v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                   return (
-                    <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 18px', borderBottom: i < filtered.length - 1 ? '1px solid #111827' : 'none' }}>
+                    <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 18px', borderBottom: i < arr.length - 1 ? '1px solid #111827' : 'none' }}>
                       <div style={{ width: 38, height: 38, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: isIn ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)', fontSize: 17, flexShrink: 0 }}>
-                        {meta.icon}
+                        {t.icon || (isIn ? '↙️' : '↗️')}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginBottom: 2 }}>{meta.label}</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginBottom: 2 }}>{t.label}</div>
                         <div style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {t.description && t.description !== meta.label ? t.description : dateStr}
+                          {t.description !== t.label ? t.description : ''}{t.phone ? ' · ' + t.phone : ''} · {dateStr}
                         </div>
+                        {t.reference && <div style={{ fontSize: 10, color: '#4b5563', marginTop: 1 }}>Ref: {t.reference}</div>}
                       </div>
                       <div style={{ textAlign: 'right', flexShrink: 0 }}>
                         <div style={{ fontSize: 14, fontWeight: 700, color: isIn ? '#10b981' : '#ef4444' }}>
-                          {isIn ? '+' : ''}KES {Math.abs(t.amount).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {isIn ? '+' : '-'}{fmtAmt(t.amount)}
                         </div>
-                        <div style={{ fontSize: 10, color: '#4b5563', marginTop: 2 }}>
-                          {t.description && t.description !== meta.label ? dateStr : ''}
-                          {t.status && t.status !== 'completed' && <span style={{ color: '#f59e0b', marginLeft: 4 }}>· {t.status}</span>}
-                        </div>
+                        {t.status && t.status !== 'completed' && (
+                          <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>{t.status}</div>
+                        )}
                       </div>
                     </div>
                   );
                 })}
-              </div>
             </div>
-          );
-        })()}
+          </div>
+        )}
 
         {/* ── Logs Tab ── */}
         {activeTab === 'logs' && (

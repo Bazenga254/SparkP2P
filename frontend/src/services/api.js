@@ -165,5 +165,6 @@ export const choiceConfirmOtp = (data) => api.post('/choice/onboard/otp', data);
 export const choiceOnboardStatus = (requestId, traderId) => api.get(`/choice/onboard/status/${requestId}`, { params: { trader_id: traderId } });
 export const choiceGetBalance = (traderId) => api.get(`/choice/balance/${traderId}`);
 export const choiceDeposit = (body) => api.post('/choice/deposit', body);
+export const getMyTransactions = (limit = 100) => api.get(`/traders/my-transactions?limit=${limit}`);
 export const kycCreateSession = () => api.post('/kyc/session');
 export default api;

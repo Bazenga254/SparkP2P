@@ -587,7 +587,27 @@ async def stk_push_deposit(
         raise HTTPException(status_code=400, detail="Invalid phone number — enter a valid Kenyan number")
 
     result = await choice.deposit_from_mpesa(trader.choice_account_id, mobile, body.amount)
-    return {"txId": result.get("data", {}).get("txId") or result.get("txId"), "status": "stk_sent"}
+    tx_id = result.get("data", {}).get("txId") or result.get("txId") or ""
+
+    # Log the initiated deposit so it appears in the merchant's transaction history
+    try:
+        p = Payment(
+            trader_id=trader.id,
+            direction=PaymentDirection.INBOUND,
+            mpesa_transaction_id=tx_id or f"cb_stk_{trader.id}_{body.amount}",
+            transaction_type="CHOICE_DEPOSIT",
+            amount=body.amount,
+            phone=mobile,
+            sender_name="Choice Bank STK Push",
+            remarks=f"Deposit via M-Pesa STK to Choice Bank",
+            status=PaymentStatus.PENDING,
+        )
+        db.add(p)
+        await db.commit()
+    except Exception as _log_err:
+        logger.warning(f"Failed to log deposit to payments: {_log_err}")
+
+    return {"txId": tx_id, "status": "stk_sent"}
 
 
 @router.get("/choice/balance/{trader_id}")

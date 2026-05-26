@@ -1486,6 +1486,100 @@ async def simulate_withdrawal(
     }
 
 
+@router.get("/my-transactions")
+async def get_my_transactions(
+    limit: int = 100,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Combined transaction history: wallet movements + M-Pesa/Choice Bank payments."""
+    from app.models import Payment, PaymentDirection, PaymentStatus
+
+    # Wallet transactions
+    wt_result = await db.execute(
+        select(WalletTransaction)
+        .where(
+            WalletTransaction.trader_id == trader.id,
+            ~WalletTransaction.description.contains("[CANCELLED"),
+        )
+        .order_by(WalletTransaction.created_at.desc())
+        .limit(limit)
+    )
+    wallet_txns = wt_result.scalars().all()
+
+    # Payment records for this trader (inbound M-Pesa / Choice Bank deposits / outbound settlements)
+    pay_result = await db.execute(
+        select(Payment)
+        .where(Payment.trader_id == trader.id)
+        .order_by(Payment.created_at.desc())
+        .limit(limit)
+    )
+    payments = pay_result.scalars().all()
+
+    TYPE_META = {
+        "deposit":              ("M-Pesa Deposit",        "in",  "💳"),
+        "sell_credit":          ("Trade Earning",          "in",  "📈"),
+        "buy_debit":            ("Buy Order Payment",      "out", "🛒"),
+        "buy_reserve":          ("Funds Reserved",         "out", "🔒"),
+        "buy_release":          ("Reservation Released",   "in",  "🔓"),
+        "withdrawal":           ("Withdrawal",             "out", "🏦"),
+        "platform_fee":         ("Platform Fee",           "out", "💸"),
+        "settlement_fee":       ("Settlement Fee",         "out", "💸"),
+        "adjustment":           ("Adjustment",             "in",  "⚙️"),
+        "internal_transfer_in": ("Transfer Received",      "in",  "↙️"),
+        "internal_transfer_out":("Transfer Sent",          "out", "↗️"),
+        "daily_volume_fee":     ("Daily Volume Fee",       "out", "📅"),
+        "im_sweep":             ("Bank Sweep",             "out", "🏛️"),
+    }
+
+    entries = []
+
+    for t in wallet_txns:
+        ttype = t.transaction_type.value if hasattr(t.transaction_type, "value") else str(t.transaction_type)
+        meta = TYPE_META.get(ttype, (ttype.replace("_", " ").title(), "in" if t.amount > 0 else "out", "💱"))
+        entries.append({
+            "id": f"w{t.id}",
+            "source": "wallet",
+            "label": meta[0],
+            "icon": meta[2],
+            "direction": "in" if t.amount > 0 else "out",
+            "amount": abs(t.amount),
+            "description": t.description or meta[0],
+            "reference": t.mpesa_receipt or "",
+            "status": t.status or "completed",
+            "created_at": t.created_at.isoformat() if t.created_at else "",
+        })
+
+    for p in payments:
+        ttype = (p.transaction_type or "").upper()
+        direction = "in" if p.direction == PaymentDirection.INBOUND else "out"
+        if ttype == "CHOICE_DEPOSIT":
+            label, icon = "Choice Bank Deposit", "🏦"
+        elif ttype in ("C2B", "CHOICE_INBOUND"):
+            label, icon = "M-Pesa Received", "💳"
+        elif direction == "out":
+            label, icon = "M-Pesa Payout", "📤"
+        else:
+            label, icon = "Payment", "💱"
+        status = p.status.value if hasattr(p.status, "value") else str(p.status)
+        entries.append({
+            "id": f"p{p.id}",
+            "source": "payment",
+            "label": label,
+            "icon": icon,
+            "direction": direction,
+            "amount": abs(p.amount),
+            "description": p.remarks or p.sender_name or label,
+            "reference": p.mpesa_transaction_id or p.mpesa_receipt_number or "",
+            "phone": p.phone or "",
+            "status": status,
+            "created_at": p.created_at.isoformat() if p.created_at else "",
+        })
+
+    entries.sort(key=lambda x: x["created_at"], reverse=True)
+    return entries[:limit]
+
+
 @router.get("/wallet/transactions")
 async def get_wallet_transactions(
     limit: int = 50,
