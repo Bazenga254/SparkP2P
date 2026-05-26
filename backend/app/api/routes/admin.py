@@ -2616,3 +2616,148 @@ async def inspect_order_detail(
         raise HTTPException(status_code=502, detail=f"Binance API error: {e}")
 
     return {"order_number": data.order_number, "trader_id": trader.id, "raw": raw}
+
+# ── KYC Admin Routes — append to admin.py ─────────────────────────────────────
+
+@router.get("/kyc/traders")
+async def admin_list_kyc_traders(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all traders and their Choice Bank KYC status from DB."""
+    result = await db.execute(select(Trader).order_by(Trader.id))
+    traders = result.scalars().all()
+
+    data = []
+    for t in traders:
+        onboarding_id = None
+        ks = t.choice_kyc_status or ""
+        if ks.startswith("pending:"):
+            onboarding_id = ks[len("pending:"):]
+        elif ks.startswith("onboarding:"):
+            onboarding_id = ks[len("onboarding:"):]
+
+        data.append({
+            "id": t.id,
+            "full_name": t.full_name,
+            "email": t.email,
+            "phone": t.phone,
+            "choice_kyc_status": ks,
+            "choice_account_id": t.choice_account_id,
+            "choice_account_number": t.choice_account_number,
+            "onboarding_id": onboarding_id,
+        })
+
+    return {"traders": data}
+
+
+@router.get("/kyc/status/{trader_id}")
+async def admin_get_kyc_live_status(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Query live KYC status from Choice Bank API for a specific trader."""
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    ks = trader.choice_kyc_status or ""
+    onboarding_id = None
+    if ks.startswith("pending:"):
+        onboarding_id = ks[len("pending:"):]
+    elif ks.startswith("onboarding:"):
+        onboarding_id = ks[len("onboarding:"):]
+
+    if not onboarding_id:
+        raise HTTPException(status_code=404, detail="No pending onboarding ID for this trader")
+
+    from app.services.choice_bank import client as choice
+
+    kyc_result = await choice.get_user_kyc(onboarding_id)
+    status_result = await choice.get_onboarding_status(onboarding_id)
+
+    kyc_data = kyc_result.get("data") or {}
+    status_data = status_result.get("data") or {}
+
+    STATUS_LABELS = {
+        1: "Submitted", 2: "Processing", 3: "Passed",
+        4: "Rejected", 5: "Account Closed", 9: "Manual Review",
+    }
+    PROFILE_LABELS = {
+        0: "Not Checked", 1: "Submitted", 2: "Validated",
+        3: "Declined", 4: "Processing",
+    }
+
+    status_int = kyc_data.get("status")
+    profile_int = kyc_data.get("profileCheck")
+
+    try:
+        status_int = int(status_int) if status_int is not None else None
+        profile_int = int(profile_int) if profile_int is not None else None
+    except (ValueError, TypeError):
+        pass
+
+    return {
+        "trader_id": trader_id,
+        "trader_name": trader.full_name,
+        "onboarding_id": onboarding_id,
+        "kyc": {
+            "status": status_int,
+            "status_label": STATUS_LABELS.get(status_int, f"Unknown ({status_int})"),
+            "profile_check": profile_int,
+            "profile_check_label": PROFILE_LABELS.get(profile_int, f"Unknown ({profile_int})"),
+            "profile_check_result_text": kyc_data.get("profileCheckResultText"),
+            "profile_check_result_code": kyc_data.get("profileCheckResultCode"),
+            "full_name": kyc_data.get("fullName"),
+            "id_number": kyc_data.get("idNumber"),
+            "kra_pin": kyc_data.get("kraPin"),
+            "mobile": kyc_data.get("mobile"),
+            "email": kyc_data.get("email"),
+            "employment_status": kyc_data.get("employmentStatus"),
+            "create_time": kyc_data.get("createTime"),
+            "update_time": kyc_data.get("updateTime"),
+        },
+        "onboarding": {
+            "onboarding_status": status_data.get("onboardingStatus"),
+            "account_id": status_data.get("accountId"),
+            "account_type": status_data.get("accountType"),
+            "rejection_reason_ids": status_data.get("rejectionReasonIds"),
+            "rejection_reason_msgs": status_data.get("rejectionReasonMsgs") or [],
+        },
+    }
+
+@router.get("/traders/{trader_id}/choice-balance")
+async def admin_get_trader_choice_balance(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return live Choice Bank balance for a trader (admin only)."""
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=404, detail="Trader has no Choice Bank account")
+
+    from app.services.choice_bank import client as choice
+
+    result = await choice.get_account_details(trader.choice_account_id)
+    data = result.get("data") or {}
+
+    ACCOUNT_STATUS = {0: "Normal", 1: "Locked", 2: "Closed"}
+    DORMANT_STATUS = {0: "Normal", 1: "Dormant"}
+    FREEZE_STATUS = {0: "Normal", 1: "Frozen"}
+
+    return {
+        "trader_id": trader_id,
+        "trader_name": trader.full_name,
+        "account_id": trader.choice_account_id,
+        "balance": data.get("balance"),
+        "currency": data.get("currency", "KES"),
+        "account_name": data.get("accountName"),
+        "account_status": ACCOUNT_STATUS.get(data.get("accountStatus"), str(data.get("accountStatus"))),
+        "dormant_status": DORMANT_STATUS.get(data.get("dormantStatus"), str(data.get("dormantStatus"))),
+        "freeze_status": FREEZE_STATUS.get(data.get("freezeStatus"), str(data.get("freezeStatus"))),
+        "short_code": data.get("shortCode"),
+    }

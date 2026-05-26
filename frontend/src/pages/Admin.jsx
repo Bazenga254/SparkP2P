@@ -4,7 +4,7 @@ import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPaym
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle } from 'lucide-react';
-import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, adminGetTradeTokens, adminAddTradeTokens, adminRemoveTradeTokens, getAdminTraderBotLogs } from '../services/api';
+import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, adminGetTradeTokens, adminAddTradeTokens, adminRemoveTradeTokens, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminGetTraderChoiceBalance } from '../services/api';
 
 const sidebarSections = [
   {
@@ -23,6 +23,7 @@ const sidebarSections = [
       { key: 'disputes', icon: AlertTriangle, label: 'Disputes' },
       { key: 'unmatched', icon: Banknote, label: 'Unmatched Payments' },
       { key: 'affiliates', icon: Share2, label: 'Affiliates' },
+      { key: 'kyc', icon: UserCheck, label: 'KYC Verification' },
     ],
   },
   {
@@ -51,6 +52,24 @@ function getGreeting() {
   if (h < 17) return 'Good afternoon';
   return 'Good evening';
 }
+
+// Polls Choice Bank balance every 10s for a given trader (auto-start on mount)
+function CbBalancePoller({ traderId, onData }) {
+  React.useEffect(() => {
+    if (!traderId) return;
+    let active = true;
+    const fetchBalance = () => {
+      adminGetTraderChoiceBalance(traderId)
+        .then(r => { if (active) onData(r.data); })
+        .catch(() => {});
+    };
+    fetchBalance();
+    const iv = setInterval(fetchBalance, 10000);
+    return () => { active = false; clearInterval(iv); };
+  }, [traderId]);
+  return null;
+}
+
 
 export default function Admin() {
   const { logout } = useAuth();
@@ -94,6 +113,14 @@ export default function Admin() {
   // Full-page trader detail view
   const [viewingTrader, setViewingTrader] = useState(null);
   const [viewingTraderWallet, setViewingTraderWallet] = useState(null);
+  // KYC admin state
+  const [kycTraders, setKycTraders] = useState([]);
+  const [kycLiveResult, setKycLiveResult] = useState(null);
+  const [kycLiveLoading, setKycLiveLoading] = useState(false);
+  const [kycSelectedTrader, setKycSelectedTrader] = useState(null);
+  const [cbBalance, setCbBalance] = useState(null);
+  const [cbBalanceLoading, setCbBalanceLoading] = useState(false);
+
   const [viewingTraderTx, setViewingTraderTx] = useState([]);
   const [viewingTraderOrders, setViewingTraderOrders] = useState([]);
   const [viewingTraderLoading, setViewingTraderLoading] = useState(false);
@@ -718,6 +745,7 @@ export default function Admin() {
     if (activeTab === 'withdrawals') { loadWithdrawals(); }
     if (activeTab === 'paybill') { loadPaybillTxs('today', 1); }
     if (activeTab === 'survey') { loadSurveyResponses(); }
+    if (activeTab === 'kyc') { adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {}); }
     if (activeTab === 'settings') { loadEmployees(); }
     if (activeTab === 'affiliates') { loadAffiliates(); }
   }, [activeTab]);
@@ -1955,6 +1983,57 @@ export default function Admin() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Choice Bank Balance Card */}
+                    {t.choice_account_id && (
+                      <div className="adm-card" style={{ marginBottom: 16 }}>
+                        <div className="adm-card-header">
+                          <h3>🏦 Choice Bank Balance</h3>
+                          <button
+                            className="adm-btn"
+                            style={{ fontSize: 12 }}
+                            disabled={cbBalanceLoading}
+                            onClick={async () => {
+                              setCbBalanceLoading(true);
+                              try {
+                                const r = await adminGetTraderChoiceBalance(t.id);
+                                setCbBalance(r.data);
+                              } catch (_) { setCbBalance(null); }
+                              setCbBalanceLoading(false);
+                            }}
+                          >
+                            <RefreshCw size={13} /> {cbBalanceLoading ? 'Loading...' : 'Refresh'}
+                          </button>
+                        </div>
+                        <CbBalancePoller traderId={t.id} onData={setCbBalance} />
+                        <div style={{ padding: '16px 20px 20px' }}>
+                          {cbBalance ? (
+                            <div>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                                <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
+                                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>Balance</div>
+                                  <div style={{ fontSize: 22, fontWeight: 800, color: '#10b981' }}>KES {(parseFloat(cbBalance.balance) || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                                </div>
+                                <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
+                                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>Account ID</div>
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'monospace' }}>{t.choice_account_id}</div>
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                {[['Status', cbBalance.account_status, cbBalance.account_status === 'Normal' ? '#10b981' : '#ef4444'],
+                                  ['Dormant', cbBalance.dormant_status, cbBalance.dormant_status === 'Normal' ? '#10b981' : '#f59e0b'],
+                                  ['Freeze', cbBalance.freeze_status, cbBalance.freeze_status === 'Normal' ? '#10b981' : '#ef4444'],
+                                ].map(([lbl, val, col]) => (
+                                  <span key={lbl} style={{ background: col + '22', color: col, border: '1px solid ' + col + '44', borderRadius: 4, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>{lbl}: {val}</span>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div style={{ color: '#6b7280', fontSize: 13 }}>Click Refresh to load live balance</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Trade Tokens Card */}
                     <div className="adm-card" style={{ marginBottom: 16 }}>
@@ -4235,6 +4314,165 @@ export default function Admin() {
                       ))}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'kyc' && (
+            <div>
+              <div className="adm-card-header" style={{ marginBottom: 16 }}>
+                <h2 style={{ color: '#fff', margin: 0 }}>KYC Verification Status</h2>
+                <button className="adm-btn" onClick={() => adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {})} style={{ fontSize: 12 }}>
+                  <RefreshCw size={13} /> Refresh
+                </button>
+              </div>
+
+              {/* Trader KYC table */}
+              <div className="adm-card" style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #1f2937' }}>
+                      {['#', 'Name', 'Phone', 'DB Status', 'Account ID', 'Actions'].map(h => (
+                        <th key={h} style={{ padding: '8px 12px', textAlign: 'left', color: '#6b7280', fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {kycTraders.map(t => {
+                      const status = t.choice_kyc_status || '';
+                      let badge = { label: 'None', color: '#374151' };
+                      if (status === 'approved') badge = { label: 'Approved ✅', color: '#065f46' };
+                      else if (status === 'rejected') badge = { label: 'Rejected ❌', color: '#7f1d1d' };
+                      else if (status.startsWith('pending:')) badge = { label: 'Pending Review ⏳', color: '#78350f' };
+                      else if (status.startsWith('onboarding:')) badge = { label: 'Submitted', color: '#1e3a5f' };
+                      return (
+                        <tr key={t.id} style={{ borderBottom: '1px solid #111827' }}>
+                          <td style={{ padding: '10px 12px', color: '#6b7280' }}>{t.id}</td>
+                          <td style={{ padding: '10px 12px', color: '#fff', fontWeight: 600 }}>{t.full_name}</td>
+                          <td style={{ padding: '10px 12px', color: '#9ca3af' }}>{t.phone || '—'}</td>
+                          <td style={{ padding: '10px 12px' }}>
+                            <span style={{ background: badge.color, color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 11 }}>{badge.label}</span>
+                          </td>
+                          <td style={{ padding: '10px 12px', color: '#9ca3af', fontFamily: 'monospace', fontSize: 12 }}>
+                            {t.choice_account_id || (t.onboarding_id ? t.onboarding_id.slice(-12) : '—')}
+                          </td>
+                          <td style={{ padding: '10px 12px' }}>
+                            {t.onboarding_id ? (
+                              <button
+                                className="adm-btn"
+                                style={{ fontSize: 11, padding: '4px 10px' }}
+                                disabled={kycLiveLoading && kycSelectedTrader === t.id}
+                                onClick={async () => {
+                                  setKycSelectedTrader(t.id);
+                                  setKycLiveResult(null);
+                                  setKycLiveLoading(true);
+                                  try {
+                                    const r = await adminGetKycLiveStatus(t.id);
+                                    setKycLiveResult(r.data);
+                                  } catch (e) {
+                                    setKycLiveResult({ error: e?.response?.data?.detail || 'API error' });
+                                  } finally {
+                                    setKycLiveLoading(false);
+                                  }
+                                }}
+                              >
+                                {kycLiveLoading && kycSelectedTrader === t.id ? 'Checking...' : 'Check Live'}
+                              </button>
+                            ) : (
+                              <span style={{ fontSize: 11, color:
+                                t.choice_kyc_status === 'approved' ? '#6b7280' :
+                                t.choice_kyc_status === 'rejected' ? '#ef4444' : '#374151'
+                              }}>
+                                {t.choice_kyc_status === 'approved' ? '✅ Approved' :
+                                 t.choice_kyc_status === 'rejected' ? '❌ Rejected' : 'Not started'}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Live KYC result panel */}
+              {kycLiveResult && (
+                <div className="adm-card" style={{ marginTop: 16 }}>
+                  {kycLiveResult.error ? (
+                    <div style={{ color: '#f87171', padding: 16 }}>Error: {kycLiveResult.error}</div>
+                  ) : (() => {
+                    const k = kycLiveResult.kyc || {};
+                    const o = kycLiveResult.onboarding || {};
+                    const statusColors = { 'Passed': '#065f46', 'Rejected': '#7f1d1d', 'Manual Review': '#78350f', 'Processing': '#1e3a5f', 'Submitted': '#1e3a5f' };
+                    const profileColors = { 'Validated': '#065f46', 'Declined': '#7f1d1d' };
+                    const sColor = statusColors[k.status_label?.split(' ')[0]] || '#374151';
+                    const pColor = profileColors[k.profile_check_label] || '#374151';
+                    return (
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                          <h3 style={{ margin: 0, color: '#fff' }}>{kycLiveResult.trader_name}</h3>
+                          <button onClick={() => setKycLiveResult(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 18 }}>✕</button>
+                        </div>
+                        <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#6b7280', marginBottom: 16 }}>
+                          Onboarding ID: {kycLiveResult.onboarding_id}
+                        </div>
+
+                        {/* Status badges */}
+                        <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+                          <div style={{ background: sColor, color: '#fff', padding: '6px 14px', borderRadius: 6, fontWeight: 700, fontSize: 13 }}>
+                            KYC: {k.status_label}
+                          </div>
+                          <div style={{ background: pColor, color: '#fff', padding: '6px 14px', borderRadius: 6, fontWeight: 700, fontSize: 13 }}>
+                            Profile Check: {k.profile_check_label}
+                          </div>
+                        </div>
+
+                        {/* Profile check result */}
+                        {k.profile_check_result_text && (
+                          <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 8, padding: 12, marginBottom: 16 }}>
+                            <span style={{ color: '#6b7280', fontSize: 12 }}>Profile Check Result: </span>
+                            <span style={{ color: '#d1d5db', fontSize: 13 }}>{k.profile_check_result_text} ({k.profile_check_result_code})</span>
+                          </div>
+                        )}
+
+                        {/* KYC fields */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 24px', marginBottom: 16 }}>
+                          {[
+                            ['Full Name', k.full_name],
+                            ['ID Number', k.id_number],
+                            ['KRA PIN', k.kra_pin],
+                            ['Mobile', k.mobile],
+                            ['Email', k.email],
+                            ['Employment', k.employment_status],
+                          ].map(([label, val]) => val ? (
+                            <div key={label}>
+                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>{label}</div>
+                              <div style={{ color: '#fff', fontSize: 13, fontWeight: 500 }}>{val}</div>
+                            </div>
+                          ) : null)}
+                        </div>
+
+                        {/* Account ID if approved */}
+                        {o.account_id && (
+                          <div style={{ background: '#052e16', border: '1px solid #166534', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                            <div style={{ fontSize: 11, color: '#4ade80', marginBottom: 4 }}>Choice Bank Account ID</div>
+                            <div style={{ color: '#86efac', fontFamily: 'monospace', fontSize: 15, fontWeight: 700 }}>{o.account_id}</div>
+                          </div>
+                        )}
+
+                        {/* Rejection reasons */}
+                        {o.rejection_reason_msgs && o.rejection_reason_msgs.length > 0 && (
+                          <div style={{ background: '#1c0a0a', border: '1px solid #991b1b', borderRadius: 8, padding: 12 }}>
+                            <div style={{ fontSize: 11, color: '#f87171', marginBottom: 8, fontWeight: 600 }}>Rejection Reasons</div>
+                            {o.rejection_reason_msgs.map((msg, i) => (
+                              <div key={i} style={{ color: '#fca5a5', fontSize: 13, marginBottom: 4 }}>• {msg}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>

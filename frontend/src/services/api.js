@@ -150,6 +150,10 @@ export const adminRemoveTradeTokens = (traderId, tokens, note = '') => api.delet
 
 // Admin — Bot Logs
 export const getAdminTraderBotLogs = (traderId) => api.get(`/admin/traders/${traderId}/bot-logs`);
+export const adminGetKycTraders = () => api.get('/admin/kyc/traders');
+export const adminGetKycLiveStatus = (traderId) => api.get(`/admin/kyc/status/${traderId}`);
+export const adminGetTraderChoiceBalance = (traderId) => api.get(`/admin/traders/${traderId}/choice-balance`);
+
 
 
 export const choiceOnboardWallet = (data) => api.post('/choice/onboard/wallet', data);
