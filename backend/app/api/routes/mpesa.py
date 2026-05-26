@@ -561,10 +561,31 @@ async def refresh_paybill_balance():
 
 @router.get("/balance")
 async def get_paybill_balance():
-    """Return cached paybill balance."""
-    if not _paybill_balance_cache:
-        return {"available": None, "updated_at": None, "message": "No balance data yet"}
-    return _paybill_balance_cache
+    """Return cached paybill balance, falling back to last known DB value."""
+    if _paybill_balance_cache:
+        return _paybill_balance_cache
+    # Cache empty (e.g. after restart) — use last scraped balance from paybill_statement
+    try:
+        from app.core.database import async_session as _ses
+        from app.models.paybill_statement import PaybillStatement
+        from sqlalchemy import select as _sel
+        async with _ses() as _db:
+            row = (await _db.execute(
+                _sel(PaybillStatement.balance_after, PaybillStatement.transaction_at)
+                .where(PaybillStatement.balance_after.isnot(None))
+                .order_by(PaybillStatement.transaction_at.desc())
+                .limit(1)
+            )).first()
+        if row and row.balance_after is not None:
+            return {
+                "available": float(row.balance_after),
+                "updated_at": row.transaction_at.isoformat() if row.transaction_at else None,
+                "source": "db_fallback",
+                "message": "Last known balance (click to refresh live)",
+            }
+    except Exception:
+        pass
+    return {"available": None, "updated_at": None, "message": "No balance data yet — click to refresh"}
 
 
 @router.post("/balance/result")

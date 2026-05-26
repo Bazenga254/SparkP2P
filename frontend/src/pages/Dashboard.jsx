@@ -449,6 +449,7 @@ export default function Dashboard() {
   const [cbDepositAmount, setCbDepositAmount] = useState('');
   const [cbDepositLoading, setCbDepositLoading] = useState(false);
   const [cbDepositMsg, setCbDepositMsg] = useState('');
+  const [cbDepositPhone, setCbDepositPhone] = useState('');
   const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
   const [depositPage, setDepositPage] = useState(1);
   const [withdrawalPage, setWithdrawalPage] = useState(1);
@@ -1445,7 +1446,7 @@ export default function Dashboard() {
                       {profile.choice_account_number || profile.choice_account_id}
                     </div>
                     <button
-                      onClick={() => { setCbDepositMsg(''); setCbDepositAmount(''); setShowCbDepositModal(true); }}
+                      onClick={() => { setCbDepositMsg(''); setCbDepositAmount(''); setCbDepositPhone(profile?.phone || ''); setShowCbDepositModal(true); }}
                       style={{ width: '100%', padding: '10px 0', borderRadius: 9, border: 'none', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
                     >
                       ➕ Deposit via M-Pesa
@@ -3011,7 +3012,18 @@ export default function Dashboard() {
               <button onClick={() => setShowCbDepositModal(false)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 20 }}>✕</button>
             </div>
             <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 16, lineHeight: 1.5 }}>
-              An M-Pesa STK push will be sent to your registered number <strong style={{ color: '#fff' }}>{profile?.phone}</strong>. Enter your M-Pesa PIN to complete the deposit into your Choice Bank account.
+              An M-Pesa STK push will be sent to the number below. Enter your M-Pesa PIN to complete the deposit into your Choice Bank account.
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>M-Pesa Number</div>
+              <input
+                type="tel"
+                placeholder="e.g. 0712345678"
+                value={cbDepositPhone}
+                onChange={e => setCbDepositPhone(e.target.value)}
+                style={{ width: '100%', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 15, fontWeight: 600, boxSizing: 'border-box' }}
+              />
+              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>You can use any M-Pesa number to fund your account</div>
             </div>
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Amount (KES)</div>
@@ -3030,11 +3042,11 @@ export default function Dashboard() {
               </div>
             )}
             <button
-              disabled={cbDepositLoading || !cbDepositAmount || Number(cbDepositAmount) < 1}
+              disabled={cbDepositLoading || !cbDepositAmount || Number(cbDepositAmount) < 1 || !cbDepositPhone.trim()}
               onClick={async () => {
                 setCbDepositLoading(true); setCbDepositMsg('');
                 try {
-                  await choiceDeposit({ amount: Math.floor(Number(cbDepositAmount)) });
+                  await choiceDeposit({ amount: Math.floor(Number(cbDepositAmount)), mobile: cbDepositPhone.trim() });
                   setCbDepositMsg('✅ STK push sent! Check your phone and enter your M-Pesa PIN.');
                   setCbDepositAmount('');
                 } catch (e) {
@@ -3042,7 +3054,7 @@ export default function Dashboard() {
                 }
                 setCbDepositLoading(false);
               }}
-              style={{ width: '100%', padding: '13px 0', borderRadius: 9, border: 'none', background: cbDepositLoading || !cbDepositAmount ? '#374151' : 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: cbDepositLoading || !cbDepositAmount ? 'not-allowed' : 'pointer' }}
+              style={{ width: '100%', padding: '13px 0', borderRadius: 9, border: 'none', background: cbDepositLoading || !cbDepositAmount || !cbDepositPhone.trim() ? '#374151' : 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: cbDepositLoading || !cbDepositAmount || !cbDepositPhone.trim() ? 'not-allowed' : 'pointer' }}
             >
               {cbDepositLoading ? 'Sending STK Push…' : 'Send M-Pesa Prompt'}
             </button>

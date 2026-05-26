@@ -554,6 +554,19 @@ async def check_onboarding_status(onboarding_request_id: str, trader_id: int, db
 
 class DepositRequest(BaseModel):
     amount: int  # whole KES amount
+    mobile: str = ""  # optional override phone; if empty, uses trader's registered phone
+
+
+def _normalize_mobile(raw: str) -> str:
+    """Normalize any Kenyan phone format to 9-digit local number (e.g. 712345678)."""
+    raw = raw.strip().replace(" ", "").replace("-", "")
+    if raw.startswith("+254"):
+        raw = raw[4:]
+    elif raw.startswith("254"):
+        raw = raw[3:]
+    elif raw.startswith("0"):
+        raw = raw[1:]
+    return raw
 
 
 @router.post("/choice/deposit")
@@ -568,11 +581,12 @@ async def stk_push_deposit(
     if body.amount < 1:
         raise HTTPException(status_code=400, detail="Amount must be at least KES 1")
 
-    mobile = (trader.phone or "").lstrip("+").lstrip("254").lstrip("0")
-    if len(mobile) != 9:
-        raise HTTPException(status_code=400, detail="Invalid phone number for STK push")
+    raw_phone = body.mobile.strip() if body.mobile and body.mobile.strip() else (trader.phone or "")
+    mobile = _normalize_mobile(raw_phone)
+    if len(mobile) != 9 or not mobile.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid phone number — enter a valid Kenyan number")
 
-    result = await client.deposit_from_mpesa(trader.choice_account_id, mobile, body.amount)
+    result = await choice.deposit_from_mpesa(trader.choice_account_id, mobile, body.amount)
     return {"txId": result.get("data", {}).get("txId") or result.get("txId"), "status": "stk_sent"}
 
 
