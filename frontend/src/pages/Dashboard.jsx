@@ -1443,19 +1443,15 @@ export default function Dashboard() {
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
                       <div style={{ flex: 1, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)', borderRadius: 9, padding: '9px 10px' }}>
-                        <div style={{ color: '#6b7280', fontSize: 10, marginBottom: 3, display: 'flex', alignItems: 'center', gap: 3 }}>
-                          <ArrowDownCircle size={10} style={{ color: '#10b981' }} /> Received Today
-                        </div>
-                        <div style={{ color: '#10b981', fontWeight: 700, fontSize: 14 }}>
-                          {showBalance ? `KES ${(todayStats?.kes_volume || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '••••'}
+                        <div style={{ color: '#6b7280', fontSize: 10, marginBottom: 3 }}>Account Status</div>
+                        <div style={{ color: cbDashBalance?.account_status === 'Normal' ? '#10b981' : '#f59e0b', fontWeight: 700, fontSize: 13 }}>
+                          {cbDashBalance ? cbDashBalance.account_status : '—'}
                         </div>
                       </div>
-                      <div style={{ flex: 1, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)', borderRadius: 9, padding: '9px 10px' }}>
-                        <div style={{ color: '#6b7280', fontSize: 10, marginBottom: 3, display: 'flex', alignItems: 'center', gap: 3 }}>
-                          <ArrowUpCircle size={10} style={{ color: '#ef4444' }} /> Paid Out Today
-                        </div>
-                        <div style={{ color: '#ef4444', fontWeight: 700, fontSize: 14 }}>
-                          {showBalance ? `KES ${(todayStats?.gross_profit != null ? Math.max(0, todayStats.kes_volume - todayStats.gross_profit) : 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '••••'}
+                      <div style={{ flex: 1, background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 9, padding: '9px 10px' }}>
+                        <div style={{ color: '#6b7280', fontSize: 10, marginBottom: 3 }}>Paybill</div>
+                        <div style={{ color: '#a78bfa', fontWeight: 700, fontSize: 13, fontFamily: 'monospace' }}>
+                          444174
                         </div>
                       </div>
                     </div>
