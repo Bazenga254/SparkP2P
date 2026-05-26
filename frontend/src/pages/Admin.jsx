@@ -1046,59 +1046,6 @@ export default function Admin() {
           ))}
         </nav>
 
-        {/* Bot Connections */}
-        <div style={{ padding: '12px 12px 4px', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
-          <div className="adm-nav-label" style={{ marginBottom: 8 }}>CONNECTIONS</div>
-
-          {/* I&M Bank */}
-          <div style={{ marginBottom: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <Building2 size={13} color={connProfile?.im_connected ? '#10b981' : '#6b7280'} />
-              <span style={{ fontSize: 11, color: connProfile?.im_connected ? '#10b981' : '#6b7280', fontWeight: 600 }}>
-                I&amp;M Bank {connProfile?.im_connected ? '● Connected' : '○ Disconnected'}
-              </span>
-            </div>
-            <button
-              onClick={handleAdminConnectIm}
-              disabled={imConnecting}
-              style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: `1px solid ${connProfile?.im_connected ? 'rgba(245,158,11,0.4)' : 'rgba(99,102,241,0.5)'}`, background: 'transparent', color: connProfile?.im_connected ? '#f59e0b' : '#818cf8', cursor: 'pointer', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
-            >
-              {imConnecting ? (
-                <><div style={{ width: 10, height: 10, border: '2px solid rgba(99,102,241,0.3)', borderTop: '2px solid #6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} /> Connecting...</>
-              ) : connProfile?.im_connected ? 'Re-connect I&M' : 'Connect I&M Bank'}
-            </button>
-          </div>
-
-          {/* M-PESA Portal */}
-          <div style={{ marginBottom: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <Smartphone size={13} color={connProfile?.mpesa_portal_connected ? '#10b981' : '#6b7280'} />
-              <span style={{ fontSize: 11, color: connProfile?.mpesa_portal_connected ? '#10b981' : '#6b7280', fontWeight: 600 }}>
-                M-PESA Portal {connProfile?.mpesa_portal_connected ? '● Connected' : '○ Disconnected'}
-              </span>
-            </div>
-            <button
-              onClick={handleAdminConnectMpesa}
-              disabled={mpesaConnecting}
-              style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: `1px solid ${connProfile?.mpesa_portal_connected ? 'rgba(245,158,11,0.4)' : 'rgba(16,185,129,0.5)'}`, background: 'transparent', color: connProfile?.mpesa_portal_connected ? '#f59e0b' : '#10b981', cursor: 'pointer', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
-            >
-              {mpesaConnecting ? (
-                <><div style={{ width: 10, height: 10, border: '2px solid rgba(16,185,129,0.3)', borderTop: '2px solid #10b981', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} /> Connecting...</>
-              ) : connProfile?.mpesa_portal_connected ? 'Re-connect Portal' : 'Connect M-PESA'}
-            </button>
-          </div>
-        </div>
-
-        {/* Pause / Resume Bot */}
-        <div style={{ padding: '8px 12px 12px' }}>
-          <button
-            onClick={() => { setShowPauseModal(true); setPauseStep('warning'); setPauseMsg(''); }}
-            style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: `1px solid ${botPaused ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'}`, background: botPaused ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)', color: botPaused ? '#10b981' : '#ef4444', cursor: 'pointer', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-          >
-            {botPaused ? '▶ Resume Bot' : '⏸ Pause Bot'}
-          </button>
-        </div>
-
         <div className="adm-sidebar-footer">
           <button className="adm-logout-btn" onClick={logout}>
             <LogOut size={18} />
