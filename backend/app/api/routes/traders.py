@@ -1492,22 +1492,14 @@ async def get_my_transactions(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Combined transaction history: wallet movements + M-Pesa/Choice Bank payments."""
+    """
+    Real money transaction history — only payments table.
+    Inbound:  M-Pesa C2B payments received (buyers pay paybill), Choice Bank STK deposits.
+    Outbound: Settlement payouts sent out.
+    Internal SparkP2P wallet accounting is excluded — not relevant here.
+    """
     from app.models import Payment, PaymentDirection, PaymentStatus
 
-    # Wallet transactions
-    wt_result = await db.execute(
-        select(WalletTransaction)
-        .where(
-            WalletTransaction.trader_id == trader.id,
-            ~WalletTransaction.description.contains("[CANCELLED"),
-        )
-        .order_by(WalletTransaction.created_at.desc())
-        .limit(limit)
-    )
-    wallet_txns = wt_result.scalars().all()
-
-    # Payment records for this trader (inbound M-Pesa / Choice Bank deposits / outbound settlements)
     pay_result = await db.execute(
         select(Payment)
         .where(Payment.trader_id == trader.id)
@@ -1516,68 +1508,26 @@ async def get_my_transactions(
     )
     payments = pay_result.scalars().all()
 
-    TYPE_META = {
-        "deposit":              ("M-Pesa Deposit",        "in",  "💳"),
-        "sell_credit":          ("Trade Earning",          "in",  "📈"),
-        "buy_debit":            ("Buy Order Payment",      "out", "🛒"),
-        "buy_reserve":          ("Funds Reserved",         "out", "🔒"),
-        "buy_release":          ("Reservation Released",   "in",  "🔓"),
-        "withdrawal":           ("Withdrawal",             "out", "🏦"),
-        "platform_fee":         ("Platform Fee",           "out", "💸"),
-        "settlement_fee":       ("Settlement Fee",         "out", "💸"),
-        "adjustment":           ("Adjustment",             "in",  "⚙️"),
-        "internal_transfer_in": ("Transfer Received",      "in",  "↙️"),
-        "internal_transfer_out":("Transfer Sent",          "out", "↗️"),
-        "daily_volume_fee":     ("Daily Volume Fee",       "out", "📅"),
-        "im_sweep":             ("Bank Sweep",             "out", "🏛️"),
-    }
-
-    # Collect all M-Pesa refs already covered by wallet_transactions
-    # to deduplicate — same M-Pesa payment appears in both tables
-    wallet_refs = {t.mpesa_receipt for t in wallet_txns if t.mpesa_receipt}
-
     entries = []
-
-    for t in wallet_txns:
-        ttype = t.transaction_type.value if hasattr(t.transaction_type, "value") else str(t.transaction_type)
-        meta = TYPE_META.get(ttype, (ttype.replace("_", " ").title(), "in" if t.amount > 0 else "out", "💱"))
-        # Make description readable: strip internal hashes from trade descriptions
-        desc = t.description or ""
-        # "Paybill deposit from ABEL - <long hash>" → "M-Pesa received from ABEL"
-        if " - " in desc and len(desc.split(" - ", 1)[1]) > 30:
-            desc = desc.split(" - ", 1)[0]
-        entries.append({
-            "id": f"w{t.id}",
-            "source": "wallet",
-            "label": meta[0],
-            "icon": meta[2],
-            "direction": "in" if t.amount > 0 else "out",
-            "amount": abs(t.amount),
-            "description": desc or meta[0],
-            "reference": t.mpesa_receipt or "",
-            "status": t.status or "completed",
-            "created_at": t.created_at.isoformat() if t.created_at else "",
-        })
-
     for p in payments:
         ttype = (p.transaction_type or "").upper()
-        ref = p.mpesa_transaction_id or p.mpesa_receipt_number or ""
-        # Skip if this payment is already represented by a wallet_transaction with the same ref
-        if ref and ref in wallet_refs and ttype != "CHOICE_DEPOSIT":
-            continue
         direction = "in" if p.direction == PaymentDirection.INBOUND else "out"
+        status = p.status.value if hasattr(p.status, "value") else str(p.status)
+        ref = p.mpesa_transaction_id or p.mpesa_receipt_number or ""
+
         if ttype == "CHOICE_DEPOSIT":
             label, icon = "Choice Bank Deposit", "🏦"
-        elif ttype in ("C2B", "CHOICE_INBOUND"):
+            desc = f"M-Pesa STK to Choice Bank · {p.phone or ''}"
+        elif ttype in ("C2B", "CHOICE_INBOUND", "") and direction == "in":
             label, icon = "M-Pesa Received", "💳"
+            desc = p.sender_name or p.remarks or "Payment received"
         elif direction == "out":
             label, icon = "M-Pesa Payout", "📤"
+            desc = p.destination or p.remarks or "Payout sent"
         else:
             label, icon = "Payment", "💱"
-        status = p.status.value if hasattr(p.status, "value") else str(p.status)
-        # Build a clean description from sender name / remarks
-        desc_parts = [p.sender_name, p.remarks]
-        clean_desc = " · ".join(d for d in desc_parts if d and len(d) < 80) or label
+            desc = p.remarks or p.sender_name or label
+
         entries.append({
             "id": f"p{p.id}",
             "source": "payment",
@@ -1585,15 +1535,14 @@ async def get_my_transactions(
             "icon": icon,
             "direction": direction,
             "amount": abs(p.amount),
-            "description": clean_desc,
+            "description": desc.strip(" ·"),
             "reference": ref,
-            "phone": p.phone or "",
+            "phone": p.phone or p.destination or "",
             "status": status,
             "created_at": p.created_at.isoformat() if p.created_at else "",
         })
 
-    entries.sort(key=lambda x: x["created_at"], reverse=True)
-    return entries[:limit]
+    return entries
 
 
 @router.get("/wallet/transactions")
