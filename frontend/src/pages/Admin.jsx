@@ -1944,23 +1944,44 @@ export default function Admin() {
                         </div>
                       </div>
 
-                      {/* Wallet stats */}
+                      {/* Choice Bank live balance */}
                       <div className="adm-card" style={{ flex: '1 1 0' }}>
-                        <div className="adm-card-header"><h3>Wallet</h3></div>
-                        <div style={{ padding: '16px 20px 0' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                          {[
-                            ['Balance', w?.balance, '#10b981'],
-                            ['Reserved', w?.reserved, '#f59e0b'],
-                            ['Total Volume', w?.total_volume, '#3b82f6'],
-                            ['Withdrawn', w?.total_withdrawn, '#8b5cf6'],
-                          ].map(([label, val, color]) => (
-                            <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
-                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{label}</div>
-                              <div style={{ fontSize: 18, fontWeight: 700, color: color || '#fff' }}>{w ? fmtKES(val ?? 0) : '—'}</div>
-                            </div>
-                          ))}
+                        <div className="adm-card-header">
+                          <h3>🏦 Choice Bank</h3>
+                          <button
+                            className="adm-btn"
+                            style={{ fontSize: 12 }}
+                            disabled={cbBalanceLoading}
+                            onClick={() => { setCbBalanceLoading(true); adminGetTraderChoiceBalance(t.id).then(r => { setCbBalance(r.data); setCbBalanceLoading(false); }).catch(() => setCbBalanceLoading(false)); }}
+                          >
+                            <RefreshCw size={13} /> {cbBalanceLoading ? 'Loading…' : 'Refresh'}
+                          </button>
                         </div>
+                        <CbBalancePoller traderId={t.id} onData={setCbBalance} />
+                        <div style={{ padding: '16px 20px 0' }}>
+                          {t.choice_account_id ? (
+                            cbBalance ? (
+                              <div>
+                                <div style={{ marginBottom: 6 }}>
+                                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Live Balance</div>
+                                  <div style={{ fontSize: 26, fontWeight: 800, color: '#10b981' }}>KES {(parseFloat(cbBalance.balance) || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                                </div>
+                                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>{t.choice_account_id}</div>
+                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
+                                  {[['Status', cbBalance.account_status, cbBalance.account_status === 'Normal' ? '#10b981' : '#ef4444'],
+                                    ['Dormant', cbBalance.dormant_status, cbBalance.dormant_status === 'Normal' ? '#10b981' : '#f59e0b'],
+                                    ['Freeze', cbBalance.freeze_status, cbBalance.freeze_status === 'Normal' ? '#10b981' : '#ef4444'],
+                                  ].map(([lbl, val, col]) => (
+                                    <span key={lbl} style={{ background: col + '22', color: col, border: '1px solid ' + col + '44', borderRadius: 4, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>{lbl}: {val}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ color: '#4b5563', fontSize: 13, padding: '12px 0' }}>Click Refresh to load balance</div>
+                            )
+                          ) : (
+                            <div style={{ color: '#4b5563', fontSize: 13, padding: '12px 0' }}>No Choice Bank account</div>
+                          )}
                         </div>
 
                         {/* Reset Password */}
@@ -1983,57 +2004,6 @@ export default function Admin() {
                         </div>
                       </div>
                     </div>
-
-                    {/* Choice Bank Balance Card */}
-                    {t.choice_account_id && (
-                      <div className="adm-card" style={{ marginBottom: 16 }}>
-                        <div className="adm-card-header">
-                          <h3>🏦 Choice Bank Balance</h3>
-                          <button
-                            className="adm-btn"
-                            style={{ fontSize: 12 }}
-                            disabled={cbBalanceLoading}
-                            onClick={async () => {
-                              setCbBalanceLoading(true);
-                              try {
-                                const r = await adminGetTraderChoiceBalance(t.id);
-                                setCbBalance(r.data);
-                              } catch (_) { setCbBalance(null); }
-                              setCbBalanceLoading(false);
-                            }}
-                          >
-                            <RefreshCw size={13} /> {cbBalanceLoading ? 'Loading...' : 'Refresh'}
-                          </button>
-                        </div>
-                        <CbBalancePoller traderId={t.id} onData={setCbBalance} />
-                        <div style={{ padding: '16px 20px 20px' }}>
-                          {cbBalance ? (
-                            <div>
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-                                <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
-                                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>Balance</div>
-                                  <div style={{ fontSize: 22, fontWeight: 800, color: '#10b981' }}>KES {(parseFloat(cbBalance.balance) || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                                </div>
-                                <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
-                                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>Account ID</div>
-                                  <div style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{t.choice_account_id}</div>
-                                </div>
-                              </div>
-                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                {[['Status', cbBalance.account_status, cbBalance.account_status === 'Normal' ? '#10b981' : '#ef4444'],
-                                  ['Dormant', cbBalance.dormant_status, cbBalance.dormant_status === 'Normal' ? '#10b981' : '#f59e0b'],
-                                  ['Freeze', cbBalance.freeze_status, cbBalance.freeze_status === 'Normal' ? '#10b981' : '#ef4444'],
-                                ].map(([lbl, val, col]) => (
-                                  <span key={lbl} style={{ background: col + '22', color: col, border: '1px solid ' + col + '44', borderRadius: 4, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>{lbl}: {val}</span>
-                                ))}
-                              </div>
-                            </div>
-                          ) : (
-                            <div style={{ color: '#6b7280', fontSize: 13 }}>Click Refresh to load live balance</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
 
                     {/* Trade Tokens Card */}
                     <div className="adm-card" style={{ marginBottom: 16 }}>
@@ -2360,42 +2330,37 @@ export default function Admin() {
                       </div>
                     </div>
 
-                    {/* I&M Debit Account */}
+                    {/* Choice Bank Account Details */}
                     <div className="adm-card" style={{ marginBottom: 16 }}>
                       <div className="adm-card-header">
-                        <h3>I&amp;M Bank Debit Account</h3>
-                        <span className="adm-card-count" style={{ color: t.settlement_account ? '#10b981' : '#ef4444' }}>
-                          {t.settlement_account ? `Set: ${t.settlement_account}` : 'Not configured — bot cannot open I&M'}
+                        <h3>🏦 Choice Bank Account</h3>
+                        <span className="adm-card-count" style={{ color: t.choice_account_id ? '#10b981' : '#f59e0b' }}>
+                          {t.choice_account_id ? `Approved` : t.choice_kyc_status ? t.choice_kyc_status : 'Not verified'}
                         </span>
                       </div>
                       <div style={{ padding: '12px 20px 20px' }}>
-                        <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>
-                          The I&M Bank account number the bot uses to make P2P payments on this trader's behalf. Without this the I&M tab will not open.
-                        </p>
-                        <div style={{ display: 'flex', gap: 10 }}>
-                          <input
-                            value={imAccountInput}
-                            onChange={e => setImAccountInput(e.target.value)}
-                            placeholder="e.g. 00108094726050"
-                            style={{ flex: 1, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }}
-                          />
-                          <button
-                            disabled={imAccountSaving}
-                            onClick={async () => {
-                              setImAccountSaving(true); setImAccountMsg('');
-                              try {
-                                await api.put(`/admin/traders/${t.id}/im-account?account=${encodeURIComponent(imAccountInput.trim())}`);
-                                setViewingTrader(prev => ({ ...prev, settlement_account: imAccountInput.trim() }));
-                                setImAccountMsg('Saved!');
-                              } catch (e) { setImAccountMsg('Failed to save.'); }
-                              setImAccountSaving(false);
-                            }}
-                            style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', fontWeight: 700, fontSize: 13, cursor: imAccountSaving ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
-                          >
-                            {imAccountSaving ? 'Saving…' : 'Save'}
-                          </button>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Account Number</div>
+                            <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>{t.choice_account_id || '—'}</div>
+                          </div>
+                          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Paybill</div>
+                            <div style={{ fontSize: 15, fontWeight: 700, color: '#a78bfa' }}>444174</div>
+                          </div>
+                          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>KYC Status</div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: t.choice_account_id ? '#10b981' : '#f59e0b' }}>
+                              {t.choice_account_id ? '✅ Approved' : t.choice_kyc_status || 'Not started'}
+                            </div>
+                          </div>
+                          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Account Status</div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: cbBalance?.account_status === 'Normal' ? '#10b981' : cbBalance ? '#ef4444' : '#4b5563' }}>
+                              {cbBalance?.account_status || '—'}
+                            </div>
+                          </div>
                         </div>
-                        {imAccountMsg && <div style={{ marginTop: 8, fontSize: 12, color: imAccountMsg === 'Saved!' ? '#10b981' : '#ef4444' }}>{imAccountMsg}</div>}
                       </div>
                     </div>
 
