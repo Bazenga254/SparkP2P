@@ -625,7 +625,7 @@ async def reset_trader_password(
     return {"status": "ok", "message": "Password reset and sent via SMS"}
 
 
-# In-memory store for pending payment resolutions: {mpesa_ref: {trader_id, amount, status, message}}
+# In-memory store for async Safaricom-verified resolutions
 _pending_resolutions: dict = {}
 
 
@@ -641,40 +641,115 @@ async def resolve_payment(
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Verify an M-Pesa transaction via Safaricom and credit trader wallet if valid."""
+    """
+    Resolve an unmatched payment and credit the trader wallet.
+
+    Fast path: if the payment is already in our DB (Choice Bank webhook arrived),
+    link it to the trader and credit immediately — no external API call needed.
+
+    Slow path: payment not in DB — trigger Safaricom transaction query (async callback).
+    """
+    from sqlalchemy import or_
     mpesa_ref = req.mpesa_ref.strip().upper()
     amount = req.amount
 
-    # 1. Duplicate check — has this receipt already been credited?
-    existing = await db.execute(
-        select(Payment).where(Payment.mpesa_transaction_id == mpesa_ref)
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="This M-Pesa reference has already been credited.")
-
-    # 2. Trader exists?
+    # 1. Trader exists?
     result = await db.execute(select(Trader).where(Trader.id == trader_id))
     trader = result.scalar_one_or_none()
     if not trader:
         raise HTTPException(status_code=404, detail="Trader not found")
 
-    # 3. Store pending resolution and trigger Safaricom verification
+    # 2. Full duplicate check — covers both internal txId AND real M-Pesa receipt
+    already_r = await db.execute(
+        select(Payment).where(
+            or_(
+                Payment.mpesa_transaction_id == mpesa_ref,
+                Payment.mpesa_receipt_number == mpesa_ref,
+            ),
+            Payment.trader_id.isnot(None),
+            Payment.status == PaymentStatus.COMPLETED,
+        )
+    )
+    if already_r.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="This reference has already been credited to a trader.")
+
+    # 3. Fast path — payment already in our DB from a Choice Bank webhook (unmatched)
+    unmatched_r = await db.execute(
+        select(Payment).where(
+            or_(
+                Payment.mpesa_transaction_id == mpesa_ref,
+                Payment.mpesa_receipt_number == mpesa_ref,
+            )
+        ).order_by(Payment.id.desc()).limit(1)
+    )
+    existing_pmt = unmatched_r.scalar_one_or_none()
+
+    if existing_pmt:
+        # Verify amount matches (±5 KES tolerance for rounding)
+        if abs(float(existing_pmt.amount) - amount) > 5:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Amount mismatch: payment record shows KES {existing_pmt.amount:,.0f} but you entered KES {amount:,.0f}"
+            )
+        # Link payment to trader and mark completed
+        existing_pmt.trader_id = trader_id
+        existing_pmt.status = PaymentStatus.COMPLETED
+
+        # Credit wallet
+        wallet_r = await db.execute(select(Wallet).where(Wallet.trader_id == trader_id))
+        wallet = wallet_r.scalar_one_or_none()
+        if not wallet:
+            wallet = Wallet(trader_id=trader_id, balance=0, reserved=0)
+            db.add(wallet)
+            await db.flush()
+
+        credit_amount = float(existing_pmt.amount)
+        wallet.balance      += credit_amount
+        wallet.total_earned += credit_amount
+
+        db.add(WalletTransaction(
+            trader_id=trader_id,
+            wallet_id=wallet.id,
+            transaction_type=TransactionType.DEPOSIT,
+            amount=credit_amount,
+            balance_after=wallet.balance,
+            description=f"Resolved unmatched deposit — ref {mpesa_ref}",
+            mpesa_receipt=mpesa_ref,
+            status="completed",
+        ))
+        await db.commit()
+
+        try:
+            from app.api.routes.traders import add_notification
+            add_notification(trader_id, f"Deposit Resolved: KES {credit_amount:,.0f}",
+                             f"Your wallet has been credited. Receipt: {mpesa_ref}", "payment")
+        except Exception:
+            pass
+
+        logger.info(f"Resolved existing unmatched payment {mpesa_ref}: KES {credit_amount} credited to trader {trader_id}")
+        return {
+            "status": "credited",
+            "mpesa_ref": mpesa_ref,
+            "amount": credit_amount,
+            "message": f"KES {credit_amount:,.0f} credited to wallet.",
+        }
+
+    # 4. Slow path — not in DB, verify via Safaricom async callback
     _pending_resolutions[mpesa_ref] = {
         "trader_id": trader_id,
         "amount": amount,
         "status": "verifying",
-        "message": "Waiting for Safaricom to confirm transaction...",
+        "message": "Payment not in our records. Querying Safaricom to verify...",
     }
-
     try:
         from app.services.mpesa.client import mpesa_client
         await mpesa_client.query_transaction(mpesa_ref)
-        logger.info(f"Resolve payment: queried Safaricom for {mpesa_ref} (trader {trader_id}, KES {amount})")
+        logger.info(f"Resolve (slow path): queried Safaricom for {mpesa_ref} (trader {trader_id}, KES {amount})")
     except Exception as e:
         _pending_resolutions.pop(mpesa_ref, None)
-        raise HTTPException(status_code=502, detail=f"Safaricom query failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Payment not in our records and Safaricom query failed: {e}")
 
-    return {"status": "verifying", "mpesa_ref": mpesa_ref, "message": "Verification sent to Safaricom. Check status in a few seconds."}
+    return {"status": "verifying", "mpesa_ref": mpesa_ref, "message": "Payment not found in our records. Verification request sent to Safaricom — check status in a few seconds."}
 
 
 @router.get("/traders/{trader_id}/resolve-payment/status")
@@ -683,11 +758,10 @@ async def resolve_payment_status(
     mpesa_ref: str,
     admin: Trader = Depends(get_admin_trader),
 ):
-    """Poll for the result of a pending payment resolution."""
+    """Poll for the result of a pending Safaricom-verified resolution."""
     mpesa_ref = mpesa_ref.strip().upper()
     info = _pending_resolutions.get(mpesa_ref)
     if not info:
-        # Check if already credited
         return {"status": "unknown", "message": "No pending resolution found for this reference."}
     return {
         "status": info["status"],

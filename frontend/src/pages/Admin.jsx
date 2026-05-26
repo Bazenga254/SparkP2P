@@ -2402,34 +2402,45 @@ export default function Admin() {
                             setResolveLoading(true);
                             setResolveMsg({ text: '', type: '' });
                             try {
-                              await api.post(`/admin/traders/${t.id}/resolve-payment`, {
+                              const res = await api.post(`/admin/traders/${t.id}/resolve-payment`, {
                                 mpesa_ref: resolveRef,
                                 amount: parseFloat(resolveAmount),
                               });
-                              setResolveMsg({ text: 'Verifying with Safaricom...', type: 'info' });
+                              const { status, message } = res.data;
+
+                              // Fast path: payment already in our DB — credited immediately
+                              if (status === 'credited') {
+                                setResolveMsg({ text: message, type: 'success' });
+                                setResolveRef(''); setResolveAmount('');
+                                api.get(`/admin/traders/${t.id}/wallet`).then(r => setViewingTraderWallet(r.data)).catch(() => {});
+                                setResolveLoading(false);
+                                return;
+                              }
+
+                              // Slow path: not in DB, waiting for Safaricom async callback
+                              setResolveMsg({ text: message || 'Querying Safaricom...', type: 'info' });
                               let attempts = 0;
                               const poll = setInterval(async () => {
                                 attempts++;
                                 try {
                                   const r = await api.get(`/admin/traders/${t.id}/resolve-payment/status?mpesa_ref=${resolveRef}`);
-                                  const { status, message } = r.data;
-                                  if (status === 'credited') {
-                                    setResolveMsg({ text: message, type: 'success' });
+                                  const { status: st, message: msg } = r.data;
+                                  if (st === 'credited') {
+                                    setResolveMsg({ text: msg, type: 'success' });
                                     setResolveRef(''); setResolveAmount('');
                                     clearInterval(poll);
-                                    // Refresh wallet
                                     api.get(`/admin/traders/${t.id}/wallet`).then(r => setViewingTraderWallet(r.data)).catch(() => {});
-                                  } else if (status === 'failed') {
-                                    setResolveMsg({ text: message, type: 'error' });
+                                  } else if (st === 'failed') {
+                                    setResolveMsg({ text: msg, type: 'error' });
                                     clearInterval(poll);
-                                  } else if (attempts >= 10) {
+                                  } else if (attempts >= 12) {
                                     setResolveMsg({ text: 'Safaricom took too long to respond. Try again.', type: 'error' });
                                     clearInterval(poll);
                                   }
                                 } catch (e) { clearInterval(poll); }
                               }, 3000);
                             } catch (e) {
-                              setResolveMsg({ text: e.response?.data?.detail || 'Failed to start verification.', type: 'error' });
+                              setResolveMsg({ text: e.response?.data?.detail || 'Failed to resolve payment.', type: 'error' });
                             }
                             setResolveLoading(false);
                           }}
