@@ -220,6 +220,9 @@ async def list_traders(
             "created_at": t.created_at.isoformat() if t.created_at else "",
             "last_seen_at": t.last_extension_sync.isoformat() if t.last_extension_sync else None,
             "last_web_active": t.last_login.isoformat() if t.last_login else None,
+            "choice_account_id": t.choice_account_id or None,
+            "choice_account_number": t.choice_account_number or None,
+            "choice_kyc_status": t.choice_kyc_status or None,
         }
         for t in traders
     ]
@@ -456,6 +459,9 @@ async def get_trader_detail(
         "last_seen_at": trader.last_extension_sync.isoformat() if trader.last_extension_sync else None,
         "total_trades": max(trader.total_trades or 0, live_trades),
         "total_volume": max(float(trader.total_volume or 0), live_volume),
+        "choice_account_id": trader.choice_account_id or None,
+        "choice_account_number": trader.choice_account_number or None,
+        "choice_kyc_status": trader.choice_kyc_status or None,
     }
 
 
