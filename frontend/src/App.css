@@ -3556,144 +3556,329 @@ body {
   border-color: rgba(245, 158, 11, 0.3);
 }
 
-/* ============================================
-   Admin Dashboard - Mobile Responsive
-   ============================================ */
+/* ============================================================
+   Admin — Responsive system
+   Breakpoints (min-width for scaling up, max-width for scaling down):
+   < 480px   : small mobile
+   480-767px : mobile
+   768-1023px: tablet
+   1024-1439px: desktop (default)
+   1440-1919px: wide desktop
+   ≥ 1920px  : TV / large display
+   ============================================================ */
 
-@media (max-width: 900px) {
+/* ── Small desktop squeeze (1024-1200px): stat grid 3-col ── */
+@media (max-width: 1200px) and (min-width: 1024px) {
+  .adm-stat-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+  .adm-content {
+    padding: 20px 24px;
+  }
+}
+
+/* ── Tablet / small-laptop: sidebar hidden, 2-col grid ── */
+@media (max-width: 1023px) {
   .adm-two-col {
     flex-direction: column;
+  }
+  .adm-sidebar {
+    transform: translateX(-100%);
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: none;
+    width: 240px;
+    min-width: 240px;
+  }
+  .adm-sidebar.open {
+    transform: translateX(0);
+    box-shadow: 8px 0 32px rgba(0,0,0,0.6);
+  }
+  .adm-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 99;
+  }
+  .adm-hamburger {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    transition: background 0.15s;
+  }
+  .adm-hamburger:hover { background: rgba(255,255,255,0.06); }
+  .adm-hamburger span {
+    display: block;
+    width: 22px;
+    height: 2px;
+    background: var(--text-dim);
+    border-radius: 1px;
+    transition: background 0.15s;
+  }
+  .adm-main {
+    margin-left: 0;
+  }
+  .adm-content {
+    padding: 16px 18px;
+  }
+  .adm-topbar {
+    padding: 0 18px;
   }
   .adm-stat-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: 12px;
   }
-}
-
-@media (max-width: 768px) {
-  .adm-sidebar {
-    transform: translateX(-100%);
-    transition: transform 0.25s ease;
-    box-shadow: none;
-  }
-
-  .adm-sidebar.open {
-    transform: translateX(0);
-    box-shadow: 4px 0 24px rgba(0,0,0,0.5);
-  }
-
-  .adm-overlay {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.5);
-    z-index: 99;
-  }
-
-  .adm-hamburger {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 4px;
-  }
-
-  .adm-hamburger span {
-    display: block;
-    width: 20px;
-    height: 2px;
-    background: var(--text-dim);
-    border-radius: 1px;
-  }
-
-  .adm-main {
-    margin-left: 0;
-  }
-
-  .adm-content {
+  .adm-stat-card {
     padding: 16px;
   }
-
-  .adm-topbar {
-    padding: 0 16px;
+  .adm-stat-value {
+    font-size: 20px;
   }
+  .adm-stat-icon {
+    width: 40px;
+    height: 40px;
+  }
+  .adm-stat-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+  .adm-profit-total {
+    font-size: 24px;
+  }
+  .adm-period-filter {
+    flex-wrap: wrap;
+  }
+  .adm-period-btn {
+    padding: 5px 12px;
+    font-size: 12px;
+  }
+}
 
+/* ── Mobile (< 768px): tighter spacing ── */
+@media (max-width: 767px) {
+  .adm-content {
+    padding: 12px 14px;
+  }
+  .adm-topbar {
+    padding: 0 14px;
+    height: 52px;
+  }
+  .adm-page-title {
+    font-size: 15px;
+  }
   .adm-stat-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: 10px;
   }
-
   .adm-stat-card {
-    padding: 14px;
+    padding: 13px 12px;
   }
-
   .adm-stat-value {
     font-size: 18px;
   }
-
+  .adm-stat-label {
+    font-size: 11.5px;
+  }
   .adm-stat-icon {
     width: 36px;
     height: 36px;
   }
-
   .adm-stat-icon svg {
     width: 18px;
     height: 18px;
   }
-
   .adm-greeting-card {
-    padding: 16px;
+    padding: 14px;
     flex-direction: column;
     text-align: center;
-    gap: 10px;
+    gap: 8px;
   }
-
   .adm-greeting-card > div:last-child {
     text-align: center;
   }
-
   .adm-profit-total {
-    font-size: 22px;
+    font-size: 20px;
   }
-
   .adm-chart-bar {
-    width: 14px;
+    width: 13px;
   }
-
-  .adm-period-filter {
-    flex-wrap: wrap;
-  }
-
   .adm-period-btn {
     padding: 4px 10px;
-    font-size: 11.5px;
+    font-size: 11px;
   }
-
   .adm-card-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .adm-card-header h3 {
+    font-size: 14px;
+  }
+  .adm-table {
+    font-size: 12.5px;
+  }
+  .adm-table thead th,
+  .adm-table tbody td {
+    padding: 9px 12px;
   }
 }
 
-@media (max-width: 480px) {
+/* ── Small mobile (< 480px): single column ── */
+@media (max-width: 479px) {
+  .adm-content {
+    padding: 10px 10px;
+  }
   .adm-stat-grid {
     grid-template-columns: 1fr 1fr;
     gap: 8px;
   }
-
   .adm-stat-card {
-    padding: 12px;
+    padding: 11px 10px;
   }
-
   .adm-stat-value {
     font-size: 16px;
+    letter-spacing: -0.3px;
   }
-
   .adm-stat-label {
+    font-size: 10.5px;
+  }
+  .adm-stat-icon {
+    width: 32px;
+    height: 32px;
+  }
+  .adm-stat-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .adm-topbar {
+    height: 48px;
+  }
+  .adm-page-title {
+    font-size: 14px;
+  }
+  .adm-table thead th,
+  .adm-table tbody td {
+    padding: 8px 10px;
+  }
+}
+
+/* ── Wide desktop (≥ 1440px): more breathing room ── */
+@media (min-width: 1440px) {
+  .adm-sidebar {
+    width: 240px;
+    min-width: 240px;
+  }
+  .adm-main {
+    margin-left: 240px;
+  }
+  .adm-content {
+    padding: 28px 36px;
+  }
+  .adm-topbar {
+    padding: 0 36px;
+  }
+  .adm-stat-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+  }
+  .adm-stat-value {
+    font-size: 24px;
+  }
+  .adm-stat-card {
+    padding: 22px;
+  }
+}
+
+/* ── TV / large display (≥ 1920px): maximise use of space ── */
+@media (min-width: 1920px) {
+  .adm-sidebar {
+    width: 270px;
+    min-width: 270px;
+  }
+  .adm-main {
+    margin-left: 270px;
+  }
+  .adm-content {
+    padding: 36px 48px;
+  }
+  .adm-topbar {
+    padding: 0 48px;
+    height: 64px;
+  }
+  .adm-page-title {
+    font-size: 22px;
+  }
+  .adm-stat-grid {
+    grid-template-columns: repeat(5, 1fr);
+    gap: 20px;
+  }
+  .adm-stat-value {
+    font-size: 28px;
+  }
+  .adm-stat-label {
+    font-size: 14px;
+  }
+  .adm-stat-card {
+    padding: 26px;
+    border-radius: 16px;
+  }
+  .adm-stat-icon {
+    width: 54px;
+    height: 54px;
+    border-radius: 14px;
+  }
+  .adm-stat-icon svg {
+    width: 26px;
+    height: 26px;
+  }
+  .adm-card {
+    border-radius: 16px;
+  }
+  .adm-card-header {
+    padding: 20px 28px;
+  }
+  .adm-card-header h3 {
+    font-size: 17px;
+  }
+  .adm-table {
+    font-size: 15px;
+  }
+  .adm-table thead th {
+    padding: 13px 20px;
+    font-size: 13px;
+  }
+  .adm-table tbody td {
+    padding: 14px 20px;
+  }
+  .adm-nav-item {
+    padding: 11px 24px;
+    font-size: 15px;
+  }
+  .adm-nav-label {
     font-size: 11px;
+    padding: 18px 24px 7px;
+  }
+  .adm-logo-text {
+    font-size: 19px;
+  }
+  .adm-sidebar-header {
+    padding: 24px 20px 18px;
+  }
+  .adm-profit-total {
+    font-size: 34px;
+  }
+  .adm-chart-bar {
+    width: 22px;
+  }
+  .adm-period-btn {
+    padding: 7px 18px;
+    font-size: 14px;
   }
 }
 
