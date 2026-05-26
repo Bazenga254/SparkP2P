@@ -82,14 +82,13 @@ async def choice_bank_webhook(request: Request):
 
     logger.info(f"[ChoiceBank] Webhook: type={payload.get('notificationType')} | {payload}")
 
-    # Verify signature when key is configured
-    private_key = settings.CHOICE_BANK_SENDER_KEY
-    if private_key:
-        if not _verify_signature(payload, private_key):
-            logger.warning("[ChoiceBank] Invalid signature — ignoring")
-            return {"code": "00000", "msg": "OK"}
-    else:
-        logger.warning("[ChoiceBank] CHOICE_BANK_SENDER_KEY not set — skipping verification (sandbox)")
+    # Signature verification disabled: CHOICE_BANK_SENDER_KEY is our outbound signing key,
+    # not Choice Bank's callback signing key. Their callbacks use a different key we don't
+    # have yet. Re-enable once Choice Bank provides their callback verification key.
+    # private_key = settings.CHOICE_BANK_SENDER_KEY
+    # if private_key and not _verify_signature(payload, private_key):
+    #     logger.warning("[ChoiceBank] Invalid signature — ignoring")
+    #     return {"code": "00000", "msg": "OK"}
 
     # notificationType is at the TOP LEVEL of the envelope
     notification_type = str(payload.get("notificationType") or "")
