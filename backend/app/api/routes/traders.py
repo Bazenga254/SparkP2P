@@ -147,6 +147,9 @@ class TraderProfileResponse(BaseModel):
     telegram_approval_enabled: bool = False
     trade_tokens: int = 0
     trade_tokens_expiring: int = 0
+    choice_account_id: Optional[str] = None
+    choice_account_number: Optional[str] = None
+    choice_kyc_status: Optional[str] = None
 
 
 # In-memory store for phone verification results
@@ -463,6 +466,9 @@ async def get_profile(
         telegram_approval_enabled=bool(trader.telegram_approval_enabled),
         trade_tokens=trader.trade_tokens or 0,
         trade_tokens_expiring=trader.trade_tokens_expiring or 0,
+        choice_account_id=trader.choice_account_id or None,
+        choice_account_number=trader.choice_account_number or None,
+        choice_kyc_status=trader.choice_kyc_status or None,
     )
 
 
