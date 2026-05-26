@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit, getMyTransactions } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -451,6 +451,14 @@ export default function Dashboard() {
   const [cbDepositMsg, setCbDepositMsg] = useState('');
   const [cbDepositPhone, setCbDepositPhone] = useState('');
   const [txFilter, setTxFilter] = useState('all');
+  const [showCbWithdrawModal, setShowCbWithdrawModal] = useState(false);
+  const [cbWithdrawAmount, setCbWithdrawAmount] = useState('');
+  const [cbWithdrawOtp, setCbWithdrawOtp] = useState('');
+  const [cbWithdrawOtpSent, setCbWithdrawOtpSent] = useState(false);
+  const [cbWithdrawOtpLoading, setCbWithdrawOtpLoading] = useState(false);
+  const [cbWithdrawLoading, setCbWithdrawLoading] = useState(false);
+  const [cbWithdrawMsg, setCbWithdrawMsg] = useState('');
+  const [cbWithdrawBank, setCbWithdrawBank] = useState(null);
   const [allTxns, setAllTxns] = useState([]);
   const [allTxnsLoading, setAllTxnsLoading] = useState(false);
   const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
@@ -1452,12 +1460,25 @@ export default function Dashboard() {
                     <div style={{ fontSize: 13, fontWeight: 700, color: '#9ca3af', marginBottom: 14, letterSpacing: 0.5 }}>
                       {profile.choice_account_number || profile.choice_account_id}
                     </div>
-                    <button
-                      onClick={() => { setCbDepositMsg(''); setCbDepositAmount(''); setCbDepositPhone(profile?.phone || ''); setShowCbDepositModal(true); }}
-                      style={{ width: '100%', padding: '10px 0', borderRadius: 9, border: 'none', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                    >
-                      ➕ Deposit via M-Pesa
-                    </button>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        onClick={() => { setCbDepositMsg(''); setCbDepositAmount(''); setCbDepositPhone(profile?.phone || ''); setShowCbDepositModal(true); }}
+                        style={{ flex: 1, padding: '10px 0', borderRadius: 9, border: 'none', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
+                      >
+                        ➕ Deposit
+                      </button>
+                      <button
+                        onClick={async () => {
+                          setCbWithdrawMsg(''); setCbWithdrawAmount(''); setCbWithdrawOtp('');
+                          setCbWithdrawOtpSent(false);
+                          try { const r = await getCbWithdrawalBank(); setCbWithdrawBank(r.data); } catch { setCbWithdrawBank(null); }
+                          setShowCbWithdrawModal(true);
+                        }}
+                        style={{ flex: 1, padding: '10px 0', borderRadius: 9, border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
+                      >
+                        ↗️ Withdraw
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <div style={{ textAlign: 'center', padding: '20px 8px' }}>
@@ -3088,6 +3109,133 @@ export default function Dashboard() {
             <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 12 }}>
               You can change this anytime in Settings → Trading
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Choice Bank → Bank Withdrawal Modal */}
+      {showCbWithdrawModal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+          <div style={{ background: '#1f2937', borderRadius: 16, padding: 28, width: '100%', maxWidth: 420, boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <h3 style={{ color: '#fff', fontSize: 18, margin: 0 }}>↗️ Withdraw to Bank</h3>
+              <button onClick={() => setShowCbWithdrawModal(false)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 22 }}>×</button>
+            </div>
+
+            {/* No bank configured */}
+            {!cbWithdrawBank?.bank_code ? (
+              <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>🏦</div>
+                <p style={{ color: '#f59e0b', fontWeight: 700, marginBottom: 8 }}>No withdrawal bank set up</p>
+                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 20 }}>Go to Settings → Bank Account to add your bank account before withdrawing.</p>
+                <button onClick={() => setShowCbWithdrawModal(false)} style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, cursor: 'pointer' }}>
+                  Go to Settings
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Saved bank details */}
+                <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>Withdrawal Destination</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#fff', marginBottom: 2 }}>{cbWithdrawBank.bank_name}</div>
+                  <div style={{ fontSize: 13, color: '#9ca3af' }}>{cbWithdrawBank.account} · {cbWithdrawBank.account_name}</div>
+                </div>
+
+                {/* Amount */}
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', color: '#9ca3af', fontSize: 12, marginBottom: 6 }}>
+                    Amount (KES) · Balance: <span style={{ color: '#10b981', fontWeight: 700 }}>KES {Number(cbDashBalance?.balance || 0).toLocaleString()}</span>
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 13 }}>KES</span>
+                    <input type="number" min={100} step={1}
+                      value={cbWithdrawAmount}
+                      onChange={e => setCbWithdrawAmount(e.target.value)}
+                      style={{ width: '100%', padding: '11px 14px 11px 44px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box' }}
+                    />
+                    <button onClick={() => setCbWithdrawAmount(String(Math.round((cbDashBalance?.balance || 0) * 100) / 100))}
+                      style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#10b981', fontSize: 11, cursor: 'pointer', fontWeight: 700 }}>
+                      MAX
+                    </button>
+                  </div>
+                </div>
+
+                {/* Fee breakdown */}
+                {parseFloat(cbWithdrawAmount) > 0 && (() => {
+                  const amt = parseFloat(cbWithdrawAmount) || 0;
+                  const fee = [[20000,10],[50000,25],[150000,35],[300000,45],[500000,60]].find(([t]) => amt <= t)?.[1] ?? 60;
+                  const receive = Math.max(0, amt - fee);
+                  return (
+                    <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: 16, fontSize: 13 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
+                        <span>Withdrawal Amount</span><span style={{ color: '#fff', fontWeight: 600 }}>KES {amt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
+                        <span>Pesalink Transfer Fee</span><span style={{ color: '#f59e0b', fontWeight: 600 }}>- KES {fee.toFixed(2)}</span>
+                      </div>
+                      <div style={{ borderTop: '1px solid #374151', paddingTop: 8, display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#10b981', fontWeight: 700 }}>You Receive</span>
+                        <span style={{ color: '#10b981', fontWeight: 700, fontSize: 15 }}>KES {receive.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {cbWithdrawMsg && (
+                  <p style={{ color: cbWithdrawMsg.includes('sent') || cbWithdrawMsg.includes('success') ? '#10b981' : '#ef4444', fontSize: 12, marginBottom: 10 }}>{cbWithdrawMsg}</p>
+                )}
+
+                {!cbWithdrawOtpSent ? (
+                  <>
+                    <p style={{ color: '#9ca3af', fontSize: 12, marginBottom: 14 }}>We'll send a one-time code to your registered phone to authorize this withdrawal.</p>
+                    <button
+                      disabled={cbWithdrawOtpLoading || !parseFloat(cbWithdrawAmount)}
+                      onClick={async () => {
+                        if (!parseFloat(cbWithdrawAmount) || parseFloat(cbWithdrawAmount) < 100) { setCbWithdrawMsg('Minimum withdrawal is KES 100'); return; }
+                        setCbWithdrawOtpLoading(true); setCbWithdrawMsg('');
+                        try {
+                          const r = await requestWithdrawalOtp();
+                          setCbWithdrawOtpSent(true);
+                          setCbWithdrawMsg(r.data?.message || 'OTP sent to your phone');
+                        } catch(e) { setCbWithdrawMsg(e.response?.data?.detail || 'Failed to send OTP'); }
+                        setCbWithdrawOtpLoading(false);
+                      }}
+                      style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: parseFloat(cbWithdrawAmount) >= 100 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: parseFloat(cbWithdrawAmount) >= 100 ? 'pointer' : 'not-allowed' }}
+                    >
+                      {cbWithdrawOtpLoading ? 'Sending OTP...' : 'Send OTP to authorize'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <input type="text" maxLength={6} placeholder="Enter 6-digit OTP"
+                      value={cbWithdrawOtp}
+                      onChange={e => setCbWithdrawOtp(e.target.value.replace(/\D/g, ''))}
+                      style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 16, letterSpacing: 6, textAlign: 'center', marginBottom: 12, boxSizing: 'border-box' }}
+                    />
+                    <button
+                      disabled={cbWithdrawLoading || cbWithdrawOtp.length !== 6}
+                      onClick={async () => {
+                        if (cbWithdrawOtp.length !== 6) return;
+                        setCbWithdrawLoading(true); setCbWithdrawMsg('');
+                        try {
+                          const r = await cbWithdrawToBank(cbWithdrawOtp, parseFloat(cbWithdrawAmount));
+                          setCbWithdrawMsg(r.data?.message || 'Withdrawal initiated!');
+                          setTimeout(() => setShowCbWithdrawModal(false), 2500);
+                        } catch(e) { setCbWithdrawMsg(e.response?.data?.detail || 'Withdrawal failed. Please try again.'); }
+                        setCbWithdrawLoading(false);
+                      }}
+                      style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: cbWithdrawOtp.length === 6 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: cbWithdrawOtp.length === 6 ? 'pointer' : 'not-allowed', marginBottom: 8 }}
+                    >
+                      {cbWithdrawLoading ? 'Processing...' : 'Confirm Withdrawal'}
+                    </button>
+                    <button onClick={() => { setCbWithdrawOtpSent(false); setCbWithdrawOtp(''); setCbWithdrawMsg(''); }}
+                      style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: '1px solid #374151', background: 'none', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
+                      Resend OTP
+                    </button>
+                  </>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}

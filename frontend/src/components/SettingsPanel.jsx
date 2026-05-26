@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, purchaseTradeTokens, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, purchaseTradeTokens, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -261,6 +261,10 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const [dailyLimit, setDailyLimit] = useState(profile?.daily_trade_limit || 200);
   const [maxTrade, setMaxTrade] = useState(profile?.max_single_trade || 500000);
   const [batchEnabled, setBatchEnabled] = useState(profile?.batch_settlement_enabled ?? true);
+  const [cbBank, setCbBank] = useState({ bank_name: '', bank_code: '', account: '', account_name: '' });
+  const [cbBankLoaded, setCbBankLoaded] = useState(false);
+  const [cbBankSaving, setCbBankSaving] = useState(false);
+  const [cbBankMsg, setCbBankMsg] = useState('');
   const [batchThreshold, setBatchThreshold] = useState(profile?.batch_threshold || 50000);
 
   // Trade tokens
@@ -1719,6 +1723,87 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
             </>)}
 
           </div>
+        </div>
+      )}
+
+      {/* Choice Bank Withdrawal Account */}
+      {activeSection === 'bank' && !cbBankLoaded && (() => {
+        getCbWithdrawalBank().then(r => { if (r.data) setCbBank(r.data); setCbBankLoaded(true); }).catch(() => setCbBankLoaded(true));
+        return null;
+      })()}
+
+      {activeSection === 'bank' && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h3 style={{ marginBottom: 4 }}>🏦 Choice Bank Withdrawal Account</h3>
+          <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 18 }}>
+            Set the bank account where you want to receive funds withdrawn from your Choice Microfinance sub-account via Pesalink.
+          </p>
+
+          {/* Bank selector */}
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Bank</label>
+            <select
+              value={cbBank.bank_code}
+              onChange={e => {
+                const banks = [
+                  ['01', 'Kenya Commercial Bank (KCB)'],['68', 'Equity Bank'],['11', 'Co-operative Bank'],
+                  ['07', 'NCBA Bank'],['02', 'Standard Chartered'],['03', 'Absa Bank Kenya'],
+                  ['31', 'Stanbic Bank'],['57', 'I&M Bank'],['63', 'Diamond Trust Bank (DTB)'],
+                  ['12', 'National Bank of Kenya'],['70', 'Family Bank'],['66', 'Sidian Bank'],
+                  ['35', 'African Banking Corporation (ABC)'],['10', 'Prime Bank'],['53', 'Guaranty Trust Bank'],
+                ];
+                const b = banks.find(([code]) => code === e.target.value);
+                setCbBank(prev => ({ ...prev, bank_code: e.target.value, bank_name: b ? b[1] : '' }));
+              }}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: cbBank.bank_code ? '#fff' : '#6b7280', fontSize: 13 }}
+            >
+              <option value="">Select your bank…</option>
+              {[
+                ['01', 'Kenya Commercial Bank (KCB)'],['68', 'Equity Bank'],['11', 'Co-operative Bank'],
+                ['07', 'NCBA Bank'],['02', 'Standard Chartered'],['03', 'Absa Bank Kenya'],
+                ['31', 'Stanbic Bank'],['57', 'I&M Bank'],['63', 'Diamond Trust Bank (DTB)'],
+                ['12', 'National Bank of Kenya'],['70', 'Family Bank'],['66', 'Sidian Bank'],
+                ['35', 'African Banking Corporation (ABC)'],['10', 'Prime Bank'],['53', 'Guaranty Trust Bank'],
+              ].map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+            </select>
+          </div>
+
+          {/* Account number */}
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Account Number</label>
+            <input type="text" placeholder="e.g. 1234567890"
+              value={cbBank.account || ''}
+              onChange={e => setCbBank(prev => ({ ...prev, account: e.target.value }))}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
+            />
+          </div>
+
+          {/* Account holder name */}
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Account Holder Name</label>
+            <input type="text" placeholder="e.g. JOHN DOE"
+              value={cbBank.account_name || ''}
+              onChange={e => setCbBank(prev => ({ ...prev, account_name: e.target.value.toUpperCase() }))}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
+            />
+          </div>
+
+          {cbBankMsg && <p style={{ color: cbBankMsg.includes('saved') || cbBankMsg.includes('✓') ? '#10b981' : '#ef4444', fontSize: 12, marginBottom: 10 }}>{cbBankMsg}</p>}
+
+          <button
+            disabled={cbBankSaving || !cbBank.bank_code || !cbBank.account || !cbBank.account_name}
+            onClick={async () => {
+              setCbBankSaving(true); setCbBankMsg('');
+              try {
+                await saveCbWithdrawalBank(cbBank);
+                setCbBankMsg('✓ Withdrawal bank account saved');
+              } catch(e) { setCbBankMsg(e.response?.data?.detail || 'Failed to save'); }
+              setCbBankSaving(false);
+            }}
+            style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: (cbBank.bank_code && cbBank.account && cbBank.account_name) ? 'linear-gradient(135deg,#10b981,#059669)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: (cbBank.bank_code && cbBank.account && cbBank.account_name) ? 'pointer' : 'not-allowed' }}
+          >
+            {cbBankSaving ? 'Saving...' : 'Save Withdrawal Account'}
+          </button>
         </div>
       )}
 

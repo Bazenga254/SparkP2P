@@ -69,6 +69,12 @@ class Trader(Base):
     pending_settlement_bank_name = Column(String(100), nullable=True)
     settlement_changed_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Choice Bank → external bank withdrawal destination
+    cb_withdrawal_bank_name    = Column(String(100), nullable=True)
+    cb_withdrawal_bank_code    = Column(String(20),  nullable=True)   # CBK/Choice bank code
+    cb_withdrawal_account      = Column(String(50),  nullable=True)   # account number
+    cb_withdrawal_account_name = Column(String(100), nullable=True)   # account holder name
+
     # Trading config
     auto_release_enabled = Column(Boolean, default=True)
     auto_pay_enabled = Column(Boolean, default=True)  # Buy side auto-payment

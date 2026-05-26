@@ -166,5 +166,8 @@ export const choiceOnboardStatus = (requestId, traderId) => api.get(`/choice/onb
 export const choiceGetBalance = (traderId) => api.get(`/choice/balance/${traderId}`);
 export const choiceDeposit = (body) => api.post('/choice/deposit', body);
 export const getMyTransactions = (limit = 100) => api.get(`/traders/my-transactions?limit=${limit}`);
+export const getCbWithdrawalBank = () => api.get('/traders/cb-withdrawal-bank');
+export const saveCbWithdrawalBank = (body) => api.post('/traders/cb-withdrawal-bank', body);
+export const cbWithdrawToBank = (otp, amount) => api.post('/traders/cb-withdraw-to-bank', { otp, amount });
 export const kycCreateSession = () => api.post('/kyc/session');
 export default api;

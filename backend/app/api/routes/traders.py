@@ -1550,6 +1550,122 @@ async def get_my_transactions(
     return entries
 
 
+
+# ── Choice Bank → External Bank withdrawal account ────────────────────────────
+
+class CbWithdrawalBankBody(BaseModel):
+    bank_name:    str
+    bank_code:    str
+    account:      str
+    account_name: str
+
+class CbWithdrawBody(BaseModel):
+    otp:    str
+    amount: float
+
+@router.get("/cb-withdrawal-bank")
+async def get_cb_withdrawal_bank(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Return the trader's saved Choice Bank withdrawal destination."""
+    return {
+        "bank_name":    trader.cb_withdrawal_bank_name,
+        "bank_code":    trader.cb_withdrawal_bank_code,
+        "account":      trader.cb_withdrawal_account,
+        "account_name": trader.cb_withdrawal_account_name,
+    }
+
+
+@router.post("/cb-withdrawal-bank")
+async def save_cb_withdrawal_bank(
+    body:   CbWithdrawalBankBody,
+    trader: Trader = Depends(get_current_trader),
+    db:     AsyncSession = Depends(get_db),
+):
+    """Save / update the merchant's Choice Bank withdrawal bank account."""
+    trader.cb_withdrawal_bank_name    = body.bank_name.strip()
+    trader.cb_withdrawal_bank_code    = body.bank_code.strip()
+    trader.cb_withdrawal_account      = body.account.strip()
+    trader.cb_withdrawal_account_name = body.account_name.strip()
+    await db.commit()
+    return {"message": "Withdrawal bank account saved"}
+
+
+@router.post("/cb-withdraw-to-bank")
+async def cb_withdraw_to_bank(
+    body:   CbWithdrawBody,
+    trader: Trader = Depends(get_current_trader),
+    db:     AsyncSession = Depends(get_db),
+):
+    """
+    Withdraw from the merchant's Choice Bank sub-account to their saved external bank.
+    Requires a valid OTP (same code sent via /wallet/withdraw/request-otp).
+    """
+    from app.services.choice_bank import client as choice
+    from app.models import Payment, PaymentDirection, PaymentStatus
+
+    # Validate OTP
+    stored = _withdraw_otp_codes.get(trader.email)
+    if not stored or stored != body.otp.strip():
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+    del _withdraw_otp_codes[trader.email]
+
+    # Validate trader has a Choice Bank account
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+
+    # Validate withdrawal bank is configured
+    if not trader.cb_withdrawal_bank_code or not trader.cb_withdrawal_account:
+        raise HTTPException(status_code=400, detail="No withdrawal bank account configured. Please set it up in Settings → Bank Account.")
+
+    if body.amount < 100:
+        raise HTTPException(status_code=400, detail="Minimum withdrawal is KES 100")
+
+    # Execute transfer via Choice Bank
+    try:
+        result = await choice.transfer(
+            payer_account_id=trader.choice_account_id,
+            payee_account_id=trader.cb_withdrawal_account,
+            amount=body.amount,
+            payee_bank_code=trader.cb_withdrawal_bank_code,
+            payee_name=trader.cb_withdrawal_account_name or "",
+            remark=f"SparkP2P withdrawal to {trader.cb_withdrawal_bank_name}",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Transfer failed: {exc}")
+
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Transfer rejected by Choice Bank"))
+
+    tx_id = (result.get("data") or {}).get("txId", "")
+
+    # Record outbound payment
+    db.add(Payment(
+        trader_id=trader.id,
+        direction=PaymentDirection.OUTBOUND,
+        mpesa_transaction_id=tx_id or f"cb_bank_{trader.id}_{body.amount}",
+        transaction_type="CHOICE_OUTBOUND",
+        amount=body.amount,
+        destination=f"{trader.cb_withdrawal_bank_name} {trader.cb_withdrawal_account}",
+        sender_name=trader.cb_withdrawal_account_name,
+        remarks=f"Bank withdrawal → {trader.cb_withdrawal_bank_name} {trader.cb_withdrawal_account}",
+        status=PaymentStatus.COMPLETED,
+    ))
+    await db.commit()
+
+    try:
+        from app.api.routes.telegram import notify_trader
+        await notify_trader(trader,
+            "📤 KES " + f"{body.amount:,.0f}" + " withdrawn from Choice Bank" + chr(10) +
+            "To: " + (trader.cb_withdrawal_bank_name or "") + " " + (trader.cb_withdrawal_account or "") + chr(10) +
+            "Ref: " + (tx_id or "N/A")
+        )
+    except Exception:
+        pass
+
+    return {"txId": tx_id, "status": "submitted", "message": f"KES {body.amount:,.0f} transfer initiated to {trader.cb_withdrawal_bank_name}"}
+
+
 @router.get("/wallet/transactions")
 async def get_wallet_transactions(
     limit: int = 50,
