@@ -1103,6 +1103,11 @@ async def list_unmatched_payments(
             Payment.order_id.is_(None),
             Payment.direction == PaymentDirection.INBOUND,
             ~Payment.bill_ref_number.like("DEP-%"),
+            # Exclude payments already resolved: credited to a trader and marked completed
+            ~(
+                (Payment.status == PaymentStatus.COMPLETED) &
+                (Payment.trader_id.isnot(None))
+            ),
         )
         .order_by(Payment.created_at.desc())
     )
