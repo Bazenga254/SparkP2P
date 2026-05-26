@@ -66,7 +66,7 @@ async def _post(endpoint: str, params: dict) -> dict:
     url = f"{settings.CHOICE_BANK_BASE_URL}{endpoint}"
     body = _build_request(params)
     logger.info(f"[ChoiceBank] POST {endpoint} | requestId={body['requestId']}")
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, verify=False) as client:
         resp = await client.post(url, json=body)
         resp.raise_for_status()
         data = resp.json()
@@ -87,20 +87,22 @@ async def get_bank_codes() -> dict:
 
 # ── OTP ───────────────────────────────────────────────────────────────────────
 
-async def send_otp(mobile: str, onboarding_request_id: str = "") -> dict:
-    """Send OTP to mobile. Provide onboardingRequestId when resending during onboarding."""
-    params: dict = {"mobile": mobile}
-    if onboarding_request_id:
-        params["onboardingRequestId"] = onboarding_request_id
-    return await _post("/common/sendOtp", params)
+async def send_otp(onboarding_request_id: str) -> dict:
+    """Trigger OTP SMS for the given onboarding request."""
+    return await _post("/common/sendOtp", {
+        "businessId": onboarding_request_id,
+        "otpType": "SMS",
+    })
+
 
 
 async def confirm_otp(onboarding_request_id: str, otp: str) -> dict:
-    """Confirm OTP to proceed. Must be done within 30 minutes."""
+    """Confirm OTP. businessId is the onboardingRequestId."""
     return await _post("/common/confirmOperation", {
-        "onboardingRequestId": onboarding_request_id,
-        "otp": otp,
+        "businessId": onboarding_request_id,
+        "otpCode": otp,
     })
+
 
 
 # ── Wallet Account Onboarding ─────────────────────────────────────────────────
@@ -134,7 +136,7 @@ async def create_wallet_account(
         "lastName":       last_name,
         "birthday":       birthday,
         "gender":         gender,
-        "countryCode":    "KE",
+        "countryCode":    "254",
         "mobile":         mobile,
         "idType":         id_type,
         "idNumber":       id_number,
@@ -179,7 +181,7 @@ async def create_current_account(
         "lastName":         last_name,
         "birthday":         birthday,
         "gender":           gender,
-        "countryCode":      "KE",
+        "countryCode":      "254",
         "mobile":           mobile,
         "idType":           id_type,
         "idNumber":         id_number,
@@ -208,11 +210,21 @@ async def upload_kyc_media(
 
 async def get_onboarding_status(onboarding_request_id: str) -> dict:
     """
-    Poll until status=3 (active) or status=7.
-    Response data includes accountId and accountNumber once approved.
-    Typically 1-2 minutes; worst case 24 hours for KYC-flagged cases.
+    Returns onboardingStatus (string) + accountId on approval.
+    Does NOT contain a numeric status field — use get_user_kyc() for numeric status.
     """
     return await _post("/onboarding/getOnboardingStatus", {
+        "onboardingRequestId": onboarding_request_id,
+    })
+
+
+async def get_user_kyc(onboarding_request_id: str) -> dict:
+    """
+    Returns numeric status: 1-Submitted, 2-Processing, 3-Passed, 4-Rejected,
+    5-Account Closed, 9-Manual Reviewing.
+    Does NOT return accountId — call get_onboarding_status() separately for that.
+    """
+    return await _post("/onboarding/getUserKyc", {
         "onboardingRequestId": onboarding_request_id,
     })
 

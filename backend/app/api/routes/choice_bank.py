@@ -153,7 +153,23 @@ async def _handle_transaction_result(params: dict, raw: dict):
         "TTID0027",  # CNY Transfer
     }
     if tx_type and tx_type.upper() in _OUTBOUND_TX_TYPES:
-        logger.info(f"[ChoiceBank] Skipping outbound transaction: txType={tx_type}")
+        logger.info(f"[ChoiceBank] Outbound transaction: txType={tx_type}, KES {amount}")
+        try:
+            async with async_session() as _db:
+                _tr = await _db.execute(select(Trader).where(Trader.choice_account_id == account_id))
+                _trader = _tr.scalar_one_or_none()
+                if _trader:
+                    from app.api.routes.telegram import notify_trader
+                    _recipient = sender_name or sender_phone or "Unknown"
+                    _tg_msg = (
+                        "📤 KES " + f"{amount:,.0f}" +
+                        " sent from your Choice Bank" + chr(10) +
+                        "To: " + _recipient + chr(10) +
+                        "Ref: " + (tx_id or "N/A")
+                    )
+                    await notify_trader(_trader, _tg_msg)
+        except Exception as _e:
+            logger.warning(f"[ChoiceBank] Outbound notify failed: {_e}")
         return
 
     if not account_id or amount <= 0:
@@ -217,6 +233,17 @@ async def _handle_transaction_result(params: dict, raw: dict):
                 raw_callback=raw,
             ))
             await db.commit()
+            try:
+                from app.api.routes.telegram import notify_trader
+                _tg_msg = (
+                    "💰 KES " + f"{amount:,.0f}" +
+                    " received in your Choice Bank" + chr(10) +
+                    "From: " + (sender_name or sender_phone or "Unknown") + chr(10) +
+                    "⚠️ No active sell order — payment saved for review."
+                )
+                await notify_trader(trader, _tg_msg)
+            except Exception as _e:
+                logger.warning(f"[ChoiceBank] Unmatched inbound notify failed: {_e}")
             return
 
         # Overpayment (more than KES 5 over the order): flag as disputed
@@ -311,6 +338,17 @@ async def _handle_transaction_result(params: dict, raw: dict):
             f"[ChoiceBank] MATCHED: {tx_id} → order {order.binance_order_number} "
             f"(Trader: {trader.full_name}, KES {amount}, total KES {total_received:.2f}) → PAYMENT_RECEIVED"
         )
+        try:
+            from app.api.routes.telegram import notify_trader
+            _tg_msg = (
+                "💰 KES " + f"{amount:,.0f}" +
+                " received — payment confirmed!" + chr(10) +
+                "From: " + (sender_name or sender_phone or "Unknown") + chr(10) +
+                "Order: " + (order.binance_order_number or "")
+            )
+            await notify_trader(trader, _tg_msg)
+        except Exception as _e:
+            logger.warning(f"[ChoiceBank] Matched inbound notify failed: {_e}")
 
 
 async def _handle_balance_change(params: dict):
@@ -561,6 +599,17 @@ async def initiate_transfer(body: TransferRequest, db: AsyncSession = Depends(ge
         f"[ChoiceBank] Transfer initiated: txId={tx_id}, "
         f"KES {body.amount} → {body.payee_mobile}"
     )
+    try:
+        from app.api.routes.telegram import notify_trader
+        _tg_msg = (
+            "📤 KES " + f"{body.amount:,.0f}" +
+            " sent via Choice Bank" + chr(10) +
+            "To: " + (body.payee_name or body.payee_mobile) + chr(10) +
+            "Ref: " + (tx_id or "N/A")
+        )
+        await notify_trader(trader, _tg_msg)
+    except Exception as _e:
+        logger.warning(f"[ChoiceBank] Transfer notify failed: {_e}")
     return {"txId": tx_id, "status": "submitted"}
 
 

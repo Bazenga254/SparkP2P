@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, purchaseTradeTokens, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, purchaseTradeTokens, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -26,6 +26,8 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [showKycGate, setShowKycGate] = useState(false);
+  const [kycLinkLoading, setKycLinkLoading] = useState(false);
   const connectPollRef = useRef(null);
   const wasConnectingRef = useRef(false); // true once any connection was made this session
 
@@ -294,7 +296,27 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
     setTimeout(() => setMessage(''), 3000);
   };
 
+  const handleOpenKycBrowser = async () => {
+    setKycLinkLoading(true);
+    try {
+      const res = await kycCreateSession();
+      const url = `${window.location.origin}/verify-kyc?t=${res.data.token}`;
+      if (window.sparkp2p?.openExternal) {
+        window.sparkp2p.openExternal(url);
+      } else {
+        window.open(url, '_blank');
+      }
+      setShowKycGate(false);
+    } catch {
+      setShowKycGate(false);
+      setActiveSection('bank');
+    } finally {
+      setKycLinkLoading(false);
+    }
+  };
+
   const handleConnectBinance = () => {
+    if (!profile?.choice_account_id) { setShowKycGate(true); return; }
     if (window.sparkp2p?.isDesktop) {
       window.sparkp2p.connectBinance();
     }
@@ -695,38 +717,54 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
               </div>
             </div>
           ) : (
-            <div style={{
-              textAlign: 'center', padding: '30px 20px',
-              background: 'var(--bg)', borderRadius: 12,
-              border: '1px dashed var(--border)',
-            }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>&#128279;</div>
-              <h4 style={{ color: '#fff', marginBottom: 8 }}>Link Your Binance Account</h4>
-              <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20, maxWidth: 400, margin: '0 auto 20px' }}>
-                A secure browser will open where you log into Binance directly.
-                Once logged in, the bot takes over and trades for you 24/7.
-                No passwords are stored — only session cookies.
-              </p>
-              {connecting ? (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                  <div style={{
-                    width: 36, height: 36, border: '3px solid rgba(245,158,11,0.2)',
-                    borderTop: '3px solid #f59e0b', borderRadius: '50%',
-                    animation: 'spin 0.8s linear infinite',
-                  }} />
-                  <span style={{ color: '#f59e0b', fontSize: 13 }}>Waiting for Binance login...</span>
+            <div style={{ position: 'relative' }}>
+              <div style={{
+                textAlign: 'center', padding: '30px 20px',
+                background: 'var(--bg)', borderRadius: 12,
+                border: '1px dashed var(--border)',
+                filter: showKycGate ? 'blur(3px)' : 'none',
+                pointerEvents: showKycGate ? 'none' : 'auto',
+                transition: 'filter 0.2s',
+              }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>&#128279;</div>
+                <h4 style={{ color: '#fff', marginBottom: 8 }}>Link Your Binance Account</h4>
+                <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20, maxWidth: 400, margin: '0 auto 20px' }}>
+                  A secure browser will open where you log into Binance directly.
+                  Once logged in, the bot takes over and trades for you 24/7.
+                  No passwords are stored — only session cookies.
+                </p>
+                {connecting ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                    <div style={{
+                      width: 36, height: 36, border: '3px solid rgba(245,158,11,0.2)',
+                      borderTop: '3px solid #f59e0b', borderRadius: '50%',
+                      animation: 'spin 0.8s linear infinite',
+                    }} />
+                    <span style={{ color: '#f59e0b', fontSize: 13 }}>Waiting for Binance login...</span>
+                  </div>
+                ) : (
+                  <button onClick={handleConnectBinance} style={{ padding: '14px 32px', borderRadius: 10, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 15 }}>
+                    Connect Binance
+                  </button>
+                )}
+              </div>
+
+              {showKycGate && (
+                <div style={{ position: 'absolute', inset: 0, borderRadius: 12, background: 'rgba(13,15,30,0.88)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '24px 20px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 36 }}>&#128274;</div>
+                  <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>Bank Verification Required</div>
+                  <div style={{ color: '#9ca3af', fontSize: 13, maxWidth: 320, lineHeight: 1.6 }}>
+                    Please complete your Choice Bank account verification before connecting Binance.
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+                    <button onClick={handleOpenKycBrowser} disabled={kycLinkLoading} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#10b981', color: '#fff', fontWeight: 700, fontSize: 13, cursor: kycLinkLoading ? 'not-allowed' : 'pointer' }}>
+                      {kycLinkLoading ? 'Opening...' : 'Complete Verification'}
+                    </button>
+                    <button onClick={() => setShowKycGate(false)} style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                      Dismiss
+                    </button>
+                  </div>
                 </div>
-              ) : (
-                <button
-                  onClick={handleConnectBinance}
-                  style={{
-                    padding: '14px 32px', borderRadius: 10, border: 'none',
-                    background: '#f59e0b', color: '#000', fontWeight: 700,
-                    cursor: 'pointer', fontSize: 15,
-                  }}
-                >
-                  Connect Binance
-                </button>
               )}
             </div>
           )}
@@ -749,7 +787,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
               Opens Gmail in the bot's Chrome window. Log in once and the bot will read verification codes automatically.
             </p>
             <button
-              onClick={() => { wasConnectingRef.current = true; window.sparkp2p?.openGmailTab(); }}
+              onClick={() => { if (!profile?.choice_account_id) { setShowKycGate(true); return; } wasConnectingRef.current = true; window.sparkp2p?.openGmailTab(); }}
               style={{ fontSize: 13, padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text)', cursor: 'pointer' }}
             >
               {gmailConfigured ? 'Re-connect Gmail' : 'Connect Gmail'}
@@ -1841,58 +1879,17 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                 </div>
               </div>
             ) : (
-              <div>
-                <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 12, padding: 24, marginBottom: 20 }}>
-                  <div style={{ color: '#d1d5db', fontWeight: 600, fontSize: 14, marginBottom: 16 }}>Personal Details</div>
-                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-                    {inp('First Name', 'firstName', 'text', true, 'e.g. John')}
-                    {inp('Last Name', 'lastName', 'text', true, 'e.g. Doe')}
-                    {inp('Middle Name', 'middleName', 'text', false, 'Optional')}
-                  </div>
-                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 14 }}>
-                    {inp('Phone Number', 'mobile', 'tel', true, '07XX XXX XXX')}
-                    {inp('ID Number', 'idNumber', 'text', true, 'National ID')}
-                    {inp('Date of Birth', 'birthday', 'date', true)}
-                  </div>
-                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 14 }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 160px' }}>
-                      <label style={{ color: '#9ca3af', fontSize: 12 }}>Gender <span style={{ color: '#ef4444' }}>*</span></label>
-                      <select value={cbForm.gender} onChange={e => setCbForm(f => ({ ...f, gender: e.target.value }))}
-                        style={{ background: '#13151f', border: '1px solid #374151', borderRadius: 8, color: '#fff', padding: '10px 12px', fontSize: 14, outline: 'none' }}>
-                        <option value="1">Male</option>
-                        <option value="0">Female</option>
-                      </select>
-                    </div>
-                    {inp('Email', 'email', 'email', false, 'Optional')}
-                    {inp('Address', 'address', 'text', false, 'Optional')}
-                  </div>
+              <div style={{ textAlign: 'center', padding: '48px 24px', background: '#0d1117', border: '1px solid #1f2937', borderRadius: 14 }}>
+                <div style={{ fontSize: 52, marginBottom: 16 }}>&#128241;</div>
+                <div style={{ color: '#fff', fontWeight: 700, fontSize: 18, marginBottom: 10 }}>Verification is done on your phone</div>
+                <div style={{ color: '#9ca3af', fontSize: 14, maxWidth: 380, margin: '0 auto 28px', lineHeight: 1.7 }}>
+                  Click below to open a secure verification link in your browser. Complete the steps on your phone — you'll need your National ID, KRA PIN certificate, and a selfie.
                 </div>
-
-                <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 12, padding: 24, marginBottom: 24 }}>
-                  <div style={{ color: '#d1d5db', fontWeight: 600, fontSize: 14, marginBottom: 6 }}>KYC Documents</div>
-                  <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 16 }}>Upload clear photos of your National ID (both sides) and a selfie.</div>
-                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-                    {fileInp('ID Front', 'front', !!cbFiles.front)}
-                    {fileInp('ID Back', 'back', !!cbFiles.back)}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 180px' }}>
-                      <label style={{ color: '#9ca3af', fontSize: 12 }}>Selfie <span style={{ color: '#ef4444' }}>*</span></label>
-                      {cbFiles.selfie
-                        ? <div onClick={() => { setCbFiles(f => ({ ...f, selfie: '' })); setCbSmileOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 8, border: '1px solid #10b981', background: '#13151f', cursor: 'pointer', fontSize: 13, color: '#10b981' }}>✓ Verified — tap to retake</div>
-                        : <button type="button" onClick={() => setCbSmileOpen(s => !s)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 8, border: `1px solid ${cbSmileOpen ? '#f59e0b' : '#374151'}`, background: '#13151f', cursor: 'pointer', fontSize: 13, color: cbSmileOpen ? '#f59e0b' : '#6b7280' }}>{cbSmileOpen ? '× Close Camera' : 'Open Camera'}</button>}
-                    </div>
-                  </div>
-                  {cbSmileOpen && !cbFiles.selfie && (
-                    <div style={{ marginTop: 16, borderRadius: 10, overflow: 'hidden' }}>
-                      <smart-camera-web ref={smileCamRef} />
-                    </div>
-                  )}
-                </div>
-
-                <button onClick={handleSubmit} disabled={cbLoading}
-                  style={{ width: '100%', padding: '13px 0', borderRadius: 10, border: 'none', fontWeight: 800, fontSize: 15, cursor: cbLoading ? 'not-allowed' : 'pointer',
-                    background: cbLoading ? '#1f2937' : 'linear-gradient(135deg,#10b981,#059669)', color: cbLoading ? '#6b7280' : '#fff' }}>
-                  {cbLoading ? 'Submitting...' : 'Submit for KYC Review'}
+                <button onClick={handleOpenKycBrowser} disabled={kycLinkLoading}
+                  style={{ padding: '14px 36px', borderRadius: 10, border: 'none', background: kycLinkLoading ? '#1f2937' : 'linear-gradient(135deg,#10b981,#059669)', color: kycLinkLoading ? '#6b7280' : '#fff', fontWeight: 800, fontSize: 15, cursor: kycLinkLoading ? 'not-allowed' : 'pointer' }}>
+                  {kycLinkLoading ? 'Opening...' : 'Open Verification Link'}
                 </button>
+                <div style={{ color: '#4b5563', fontSize: 12, marginTop: 16 }}>Link expires in 30 minutes</div>
               </div>
             )}
           </div>

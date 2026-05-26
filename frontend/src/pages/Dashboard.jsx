@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -414,6 +414,23 @@ export default function Dashboard() {
   const scanStepRef = useRef(null);
   const [appVersion, setAppVersion] = useState(null);
   const [profile, setProfile] = useState(null);
+
+  // Fetch Choice Bank balance — poll every 10s when account is verified
+  useEffect(() => {
+    if (!profile?.choice_account_id) return;
+    const fetchCbBalance = async () => {
+      setCbBalanceLoading(true);
+      try {
+        const res = await choiceGetBalance(profile.id);
+        setCbDashBalance(res.data);
+      } catch {}
+      finally { setCbBalanceLoading(false); }
+    };
+    fetchCbBalance();
+    const iv = setInterval(fetchCbBalance, 10000);
+    return () => clearInterval(iv);
+  }, [profile?.choice_account_id, profile?.id]);
+
   const [wallet, setWallet] = useState(null);
   const [stats, setStats] = useState(null);
   const [orders, setOrders] = useState([]);
@@ -426,6 +443,8 @@ export default function Dashboard() {
   const [tierModalSaving, setTierModalSaving] = useState(false);
   const [transactions, setTransactions] = useState([]);
   const [withdrawalTxns, setWithdrawalTxns] = useState([]);
+  const [cbDashBalance, setCbDashBalance] = useState(null);
+  const [cbBalanceLoading, setCbBalanceLoading] = useState(false);
   const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
   const [depositPage, setDepositPage] = useState(1);
   const [withdrawalPage, setWithdrawalPage] = useState(1);
@@ -1288,9 +1307,9 @@ export default function Dashboard() {
           </button>
           {showPaybill && (
             <div style={{ position: 'absolute', top: 40, right: 0, width: 340, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.4)', zIndex: 100, padding: 16 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Add to Binance Payment Method</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>🏦 Choice Bank Payment Details</div>
               <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 12 }}>
-                Copy these details and add them as your M-Pesa Paybill payment method on Binance P2P.
+                Copy these details to receive payments via M-Pesa Paybill into your Choice Bank account.
               </div>
 
               <div style={{ marginBottom: 10 }}>
@@ -1306,8 +1325,8 @@ export default function Dashboard() {
               <div style={{ marginBottom: 10 }}>
                 <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Account Number</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, fontFamily: 'monospace' }}>P2PT{String(profile?.id || 0).padStart(4, '0')}</span>
-                  <button onClick={() => { navigator.clipboard.writeText(`P2PT${String(profile?.id || 0).padStart(4, '0')}`); setCopied('account'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'account' ? '#10b981' : '#9ca3af', padding: 2 }}>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, fontFamily: 'monospace' }}>{profile?.choice_account_number || profile?.choice_account_id || 'Pending verification'}</span>
+                  <button onClick={() => { navigator.clipboard.writeText(profile?.choice_account_number || profile?.choice_account_id || ''); setCopied('account'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'account' ? '#10b981' : '#9ca3af', padding: 2 }}>
                     <Copy size={14} />
                   </button>
                 </div>
@@ -1316,8 +1335,8 @@ export default function Dashboard() {
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Paybill Number</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, fontFamily: 'monospace' }}>4041355</span>
-                  <button onClick={() => { navigator.clipboard.writeText('4041355'); setCopied('paybill'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'paybill' ? '#10b981' : '#9ca3af', padding: 2 }}>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13, fontFamily: 'monospace' }}>444174</span>
+                  <button onClick={() => { navigator.clipboard.writeText('444174'); setCopied('paybill'); setTimeout(() => setCopied(''), 2000); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied === 'paybill' ? '#10b981' : '#9ca3af', padding: 2 }}>
                     <Copy size={14} />
                   </button>
                 </div>
@@ -1328,7 +1347,7 @@ export default function Dashboard() {
               )}
 
               <div style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.5, padding: '8px 0', borderTop: '1px solid var(--border)' }}>
-                On Binance: Go to P2P → Post Ad → Payment Method → M-Pesa Paybill → paste these details. The account name must match your Binance KYC exactly.
+                Share these details with buyers on Binance P2P. Payments go directly to your Choice Bank account.
               </div>
             </div>
           )}
@@ -1392,58 +1411,62 @@ export default function Dashboard() {
 
               <div className="card wallet-mini-card">
                 <div className="wallet-mini-header">
-                  <Wallet size={18} />
-                  <span>Wallet Balance</span>
+                  <span style={{ fontSize: 17 }}>🏦</span>
+                  <span>Choice Bank</span>
+                  {profile?.choice_account_id && (
+                    <button
+                      onClick={async () => { setCbBalanceLoading(true); try { const r = await choiceGetBalance(profile.id); setCbDashBalance(r.data); } catch {} finally { setCbBalanceLoading(false); } }}
+                      style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center' }}
+                      title="Refresh balance"
+                    >
+                      <RefreshCw size={13} style={{ animation: cbBalanceLoading ? 'spin 1s linear infinite' : 'none' }} />
+                    </button>
+                  )}
                   <button
                     onClick={() => setShowBalance(v => !v)}
-                    style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center' }}
+                    style={{ marginLeft: profile?.choice_account_id ? 0 : 'auto', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center' }}
                     title={showBalance ? 'Hide balance' : 'Show balance'}
                   >
                     {showBalance ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
-                <div className="wallet-mini-amount">
-                  {showBalance ? `KES ${wallet?.balance?.toLocaleString() || '0'}` : 'KES ••••••'}
-                </div>
-                {wallet?.reserved > 0 && (
-                  <div className="wallet-reserved" style={{ fontSize: 12, color: '#f59e0b', marginBottom: 4 }}>
-                    Reserved: {showBalance ? `KES ${wallet.reserved.toLocaleString()}` : 'KES ••••'}
+
+                {profile?.choice_account_id ? (
+                  <>
+                    <div className="wallet-mini-amount">
+                      {showBalance
+                        ? `KES ${Number(cbDashBalance?.balance || 0).toLocaleString()}`
+                        : 'KES ••••••'}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#4b5563', marginBottom: 14, fontFamily: 'monospace', letterSpacing: 0.5 }}>
+                      {profile.choice_account_number || profile.choice_account_id}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ flex: 1, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)', borderRadius: 9, padding: '9px 10px' }}>
+                        <div style={{ color: '#6b7280', fontSize: 10, marginBottom: 3, display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <ArrowDownCircle size={10} style={{ color: '#10b981' }} /> Received Today
+                        </div>
+                        <div style={{ color: '#10b981', fontWeight: 700, fontSize: 14 }}>
+                          {showBalance ? `KES ${(todayStats?.kes_volume || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '••••'}
+                        </div>
+                      </div>
+                      <div style={{ flex: 1, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)', borderRadius: 9, padding: '9px 10px' }}>
+                        <div style={{ color: '#6b7280', fontSize: 10, marginBottom: 3, display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <ArrowUpCircle size={10} style={{ color: '#ef4444' }} /> Paid Out Today
+                        </div>
+                        <div style={{ color: '#ef4444', fontWeight: 700, fontSize: 14 }}>
+                          {showBalance ? `KES ${(todayStats?.gross_profit != null ? Math.max(0, todayStats.kes_volume - todayStats.gross_profit) : 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '••••'}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '20px 8px' }}>
+                    <div style={{ fontSize: 28, marginBottom: 8 }}>🔒</div>
+                    <div style={{ color: '#f59e0b', fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Verification Required</div>
+                    <div style={{ color: '#6b7280', fontSize: 11, lineHeight: 1.5 }}>Complete bank verification to see your live Choice Bank balance here.</div>
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                  <button
-                    className="deposit-btn-mini"
-                    onClick={() => setShowDepositModal(true)}
-                    style={{
-                      flex: 1, padding: '8px 0', borderRadius: 8, border: 'none',
-                      background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff',
-                      fontWeight: 600, fontSize: 13, cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-                    }}
-                  >
-                    <Plus size={14} /> Deposit
-                  </button>
-                  <button
-                    onClick={() => setShowSendModal(true)}
-                    style={{
-                      flex: 1, padding: '8px 0', borderRadius: 8, border: 'none',
-                      background: 'linear-gradient(135deg, #3b82f6, #2563eb)', color: '#fff',
-                      fontWeight: 600, fontSize: 13, cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-                    }}
-                  >
-                    <ArrowUpCircle size={14} /> Send
-                  </button>
-                  <button
-                    className="withdraw-btn-mini"
-                    onClick={handleWithdraw}
-                    disabled={withdrawing || !wallet || wallet.balance <= 0 || wallet.pending_withdrawal}
-                    title={wallet?.pending_withdrawal ? `Withdrawal of ${fmtKES(wallet.pending_withdrawal_amount)} is being processed` : ''}
-                    style={wallet?.pending_withdrawal ? { opacity: 0.6, cursor: 'not-allowed' } : {}}
-                  >
-                    {withdrawing ? 'Processing...' : wallet?.pending_withdrawal ? '⏳ Pending...' : 'Withdraw'}
-                  </button>
-                </div>
               </div>
             </div>
 
@@ -2314,9 +2337,9 @@ export default function Dashboard() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px', fontSize: 13 }}>
                 <span style={{ color: '#9ca3af' }}>Paybill Number</span>
-                <span style={{ color: '#fff', fontWeight: 600 }}>4041355</span>
+                <span style={{ color: '#fff', fontWeight: 600 }}>444174</span>
                 <span style={{ color: '#9ca3af' }}>Account Number</span>
-                <span style={{ color: '#f59e0b', fontWeight: 600 }}>P2PT{String(profile?.id || 0).padStart(4, '0')}</span>
+                <span style={{ color: '#f59e0b', fontWeight: 600 }}>{profile?.choice_account_number || profile?.choice_account_id || 'Pending'}</span>
               </div>
               <p style={{ fontSize: 11, color: '#6b7280', marginTop: 8, marginBottom: 0 }}>
                 Send any amount from M-Pesa, bank app, or agent. Your wallet will be credited automatically.
