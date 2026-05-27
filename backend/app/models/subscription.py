@@ -7,6 +7,8 @@ from app.core.database import Base
 class SubscriptionPlan(str, enum.Enum):
     STARTER = "starter"
     PRO = "pro"
+    PRO_MAX = "pro_max"
+    ADVANCED = "advanced"
 
 
 class SubscriptionStatus(str, enum.Enum):

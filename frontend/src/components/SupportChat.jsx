@@ -2,14 +2,13 @@ import { useState, useEffect, useRef } from 'react';
 import { MessageCircle, X, Send, ChevronDown, Loader, AlertCircle, UserCheck, Paperclip } from 'lucide-react';
 import { sendSupportMessage, getActiveSupportTicket, uploadSupportAttachment } from '../services/api';
 
-// ── Initial topic chips shown before the user types anything ─────────────────
 const QUICK_TOPICS = [
-  { icon: '💰', label: 'Wallet & Balance',    msg: 'How do I check my balance and when do I receive my earnings?' },
-  { icon: '🔗', label: 'Connect Binance',     msg: 'How do I connect my Binance account to SparkP2P?' },
-  { icon: '📤', label: 'Withdrawal issue',    msg: 'I have an issue with my withdrawal or M-Pesa payment.' },
-  { icon: '📋', label: 'Order problem',       msg: 'I have a problem with one of my P2P orders.' },
-  { icon: '⚙️', label: 'Account & Settings', msg: 'How do I update my account settings or change my settlement method?' },
-  { icon: '💸', label: 'Fees & Charges',      msg: 'What are the fees for withdrawals, M-Pesa transfers, and platform charges?' },
+  { icon: '💰', color: '#f97316', bg: 'rgba(249,115,22,0.15)', label: 'Wallet & Balance',    msg: 'How do I check my balance and when do I receive my earnings?' },
+  { icon: '🔗', color: '#14b8a6', bg: 'rgba(20,184,166,0.15)', label: 'Connect Binance',     msg: 'How do I connect my Binance account to SparkP2P?' },
+  { icon: '📤', color: '#ef4444', bg: 'rgba(239,68,68,0.15)',  label: 'Withdrawal Issue',    msg: 'I have an issue with my withdrawal or M-Pesa payment.' },
+  { icon: '📋', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)', label: 'Order Problem',       msg: 'I have a problem with one of my P2P orders.' },
+  { icon: '⚙️', color: '#22c55e', bg: 'rgba(34,197,94,0.15)',  label: 'Account & Settings', msg: 'How do I update my account settings or change my settlement method?' },
+  { icon: '💸', color: '#10b981', bg: 'rgba(16,185,129,0.15)', label: 'Fees & Charges',      msg: 'What are the fees for withdrawals, M-Pesa transfers, and platform charges?' },
 ];
 
 export default function SupportChat({ forceOpen, onOpen }) {
@@ -23,13 +22,12 @@ export default function SupportChat({ forceOpen, onOpen }) {
   const [escalated, setEscalated] = useState(false);
   const [unread, setUnread]       = useState(false);
   const [suggestions, setSuggestions] = useState([]);
-  const [attachment, setAttachment]   = useState(null); // { url, name, type }
+  const [attachment, setAttachment]   = useState(null);
   const [uploading, setUploading]     = useState(false);
   const bottomRef  = useRef(null);
   const inputRef   = useRef(null);
   const fileRef    = useRef(null);
 
-  // Load active ticket on mount
   useEffect(() => {
     const loadActiveTicket = async () => {
       try {
@@ -121,14 +119,14 @@ export default function SupportChat({ forceOpen, onOpen }) {
 
   const requestAgent = () => sendMessage('I need to speak with a human agent.');
 
-
   const isBlank = messages.length === 0 && !loading;
 
   return (
     <>
-      {/* ── Floating Button ── */}
+      {/* Floating Button */}
       <button
         onClick={() => setOpen((v) => !v)}
+        className="sc-fab"
         style={{
           position: 'fixed', bottom: 28, right: 28,
           width: 56, height: 56, borderRadius: '50%',
@@ -152,81 +150,106 @@ export default function SupportChat({ forceOpen, onOpen }) {
         )}
       </button>
 
-      {/* ── Chat Window ── */}
+      {/* Chat Window */}
       {open && (
-        <div style={{
+        <div className="sc-window" style={{
           position: 'fixed', bottom: 96, right: 28,
           width: 360, maxHeight: 560,
           background: '#14172b',
-          border: '1px solid rgba(255,255,255,0.1)',
+          border: '1px solid rgba(255,255,255,0.08)',
           borderRadius: 16,
           boxShadow: '0 8px 40px rgba(0,0,0,0.7)',
           display: 'flex', flexDirection: 'column',
           zIndex: 9998, overflow: 'hidden',
         }}>
 
-          {/* Header */}
+          {/* Header — dark, no gradient */}
           <div style={{
             padding: '14px 16px',
-            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+            background: '#1a1d2e',
+            borderBottom: '1px solid rgba(255,255,255,0.07)',
             display: 'flex', alignItems: 'center', gap: 10,
+            flexShrink: 0,
           }}>
             <div style={{
               width: 36, height: 36, borderRadius: '50%',
-              background: 'rgba(255,255,255,0.2)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
             }}>
               <MessageCircle size={18} color="white" />
             </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ color: 'white', fontWeight: 600, fontSize: 14 }}>SparkP2P Support</div>
-              <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: 11 }}>
-                {escalated ? '⚡ Escalated to team' : '● Online · Usually replies instantly'}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: '#f3f4f6', fontWeight: 700, fontSize: 14 }}>SparkP2P Support</div>
+              <div style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, marginTop: 1 }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: escalated ? '#f59e0b' : '#10b981', flexShrink: 0, display: 'inline-block' }} />
+                <span style={{ color: escalated ? '#f59e0b' : '#10b981' }}>{escalated ? 'Escalated to team' : 'Online · Usually replies instantly'}</span>
               </div>
             </div>
             <button onClick={() => setOpen(false)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'white', padding: 4 }}>
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
               <X size={18} />
             </button>
           </div>
 
-          {/* Messages */}
+          {/* Messages area */}
           <div style={{
             flex: 1, overflowY: 'auto',
-            padding: '12px 14px',
+            padding: '14px 14px 8px',
             display: 'flex', flexDirection: 'column', gap: 10,
-            minHeight: 200, maxHeight: 360,
           }}>
 
-            {/* Welcome + topic chips */}
+            {/* Welcome screen */}
             {isBlank && (
               <>
                 <div style={{
                   background: '#1e2240', borderRadius: 12,
-                  padding: '12px 14px', fontSize: 13, color: '#9ca3af', lineHeight: 1.5,
+                  padding: '12px 14px', fontSize: 13, color: '#9ca3af', lineHeight: 1.6,
                 }}>
-                  <strong style={{ color: '#e5e7eb', display: 'block', marginBottom: 4 }}>👋 Hi there!</strong>
+                  <strong style={{ color: '#e5e7eb', display: 'block', marginBottom: 4, fontSize: 14 }}>👋 Hi there!</strong>
                   I'm SparkP2P's AI assistant. Ask me anything or pick a topic below. I'll escalate to our team if needed.
                 </div>
 
-                {/* Topic chips */}
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 2 }}>
+                {/* Popular Topics label */}
+                <div style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '0.8px', textTransform: 'uppercase', marginTop: 4 }}>Popular Topics</div>
+
+                {/* 2-column grid topic buttons */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                   {QUICK_TOPICS.map((t) => (
                     <button key={t.label} onClick={() => sendMessage(t.msg)}
                       style={{
-                        display: 'flex', alignItems: 'center', gap: 5,
-                        padding: '6px 11px', borderRadius: 20, fontSize: 12,
-                        background: '#1e2240', border: '1px solid rgba(99,102,241,0.4)',
-                        color: '#c4b5fd', cursor: 'pointer',
-                        transition: 'background 0.15s, border-color 0.15s',
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '10px 12px', borderRadius: 10, textAlign: 'left',
+                        background: '#1a1d2e', border: '1px solid rgba(255,255,255,0.07)',
+                        color: '#d1d5db', cursor: 'pointer', fontSize: 12, fontWeight: 500,
+                        transition: 'border-color 0.15s, background 0.15s',
                       }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = '#2d2f5e'; e.currentTarget.style.borderColor = '#6366f1'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = '#1e2240'; e.currentTarget.style.borderColor = 'rgba(99,102,241,0.4)'; }}
+                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(99,102,241,0.4)'; e.currentTarget.style.background = '#1e2240'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.07)'; e.currentTarget.style.background = '#1a1d2e'; }}
                     >
-                      <span>{t.icon}</span> {t.label}
+                      <span style={{
+                        width: 28, height: 28, borderRadius: 7, flexShrink: 0,
+                        background: t.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15,
+                      }}>{t.icon}</span>
+                      <span style={{ lineHeight: 1.3 }}>{t.label}</span>
                     </button>
                   ))}
                 </div>
+
+                {/* Separator + Talk to human */}
+                <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '2px 0' }} />
+                <button onClick={requestAgent} disabled={loading}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                    padding: '9px 0', borderRadius: 10, fontSize: 12, fontWeight: 500,
+                    background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
+                    color: '#9ca3af', cursor: loading ? 'not-allowed' : 'pointer',
+                    transition: 'border-color 0.15s, color 0.15s',
+                  }}
+                  onMouseEnter={(e) => { if (!loading) { e.currentTarget.style.borderColor = '#6366f1'; e.currentTarget.style.color = '#c4b5fd'; } }}
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; e.currentTarget.style.color = '#9ca3af'; }}
+                >
+                  <UserCheck size={13} /> Talk to a human agent
+                </button>
               </>
             )}
 
@@ -278,11 +301,11 @@ export default function SupportChat({ forceOpen, onOpen }) {
               </div>
             )}
 
-            {/* AI-generated follow-up suggestion chips */}
+            {/* AI follow-up suggestion chips */}
             {suggestions.length > 0 && !loading && !escalated && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: 2 }}>
-                {suggestions.map((s) => (
-                  <button key={s} onClick={() => sendMessage(s)}
+                {suggestions.map((sg) => (
+                  <button key={sg} onClick={() => sendMessage(sg)}
                     style={{
                       padding: '5px 11px', borderRadius: 20, fontSize: 11,
                       background: 'transparent', border: '1px solid rgba(99,102,241,0.5)',
@@ -292,7 +315,7 @@ export default function SupportChat({ forceOpen, onOpen }) {
                     onMouseEnter={(e) => (e.currentTarget.style.background = '#2d2f5e')}
                     onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                   >
-                    {s}
+                    {sg}
                   </button>
                 ))}
               </div>
@@ -306,9 +329,7 @@ export default function SupportChat({ forceOpen, onOpen }) {
                 borderRadius: 10, fontSize: 12, color: '#d97706', alignItems: 'flex-start',
               }}>
                 <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                <div>
-                  Your case has been escalated to our support team. You can still send messages and they will respond here.
-                </div>
+                <div>Your case has been escalated to our support team. You can still send messages and they will respond here.</div>
               </div>
             )}
 
@@ -316,87 +337,64 @@ export default function SupportChat({ forceOpen, onOpen }) {
           </div>
 
           {/* Input area */}
-          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', background: '#14172b' }}>
-              {/* Talk to agent strip */}
-              <div style={{
-                padding: '7px 12px 0',
-                display: 'flex', justifyContent: 'flex-end',
-              }}>
-                <button onClick={requestAgent} disabled={loading}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 5,
-                    padding: '4px 10px', borderRadius: 12, fontSize: 11,
-                    background: 'transparent', border: '1px solid rgba(255,255,255,0.12)',
-                    color: '#9ca3af', cursor: loading ? 'not-allowed' : 'pointer',
-                    transition: 'border-color 0.15s, color 0.15s',
-                  }}
-                  onMouseEnter={(e) => { if (!loading) { e.currentTarget.style.borderColor = '#6366f1'; e.currentTarget.style.color = '#c4b5fd'; } }}
-                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)'; e.currentTarget.style.color = '#9ca3af'; }}
-                >
-                  <UserCheck size={11} /> Talk to an agent
-                </button>
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', background: '#14172b', flexShrink: 0 }}>
+            {attachment && (
+              <div style={{ padding: '4px 12px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, color: '#a5b4fc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  📎 {attachment.name}
+                </span>
+                <button onClick={() => setAttachment(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, padding: 0 }}>✕</button>
               </div>
-
-              {/* Attachment preview */}
-              {attachment && (
-                <div style={{ padding: '4px 12px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: '#a5b4fc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    📎 {attachment.name}
-                  </span>
-                  <button onClick={() => setAttachment(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, padding: 0 }}>✕</button>
-                </div>
-              )}
-
-              {/* Text input row */}
-              <div style={{ padding: '8px 12px 10px', display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-                <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt" style={{ display: 'none' }} onChange={handleFileSelect} />
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  disabled={uploading}
-                  title="Attach file"
-                  style={{
-                    width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
-                    background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
-                    cursor: uploading ? 'not-allowed' : 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                >
-                  {uploading ? <Loader size={15} color="#6366f1" style={{ animation: 'spin 1s linear infinite' }} /> : <Paperclip size={15} color="#6b7280" />}
-                </button>
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Type a message…"
-                  rows={1}
-                  style={{
-                    flex: 1, resize: 'none',
-                    padding: '8px 12px', borderRadius: 20,
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    background: '#1e2240', color: '#e5e7eb',
-                    fontSize: 13, outline: 'none', fontFamily: 'inherit',
-                    maxHeight: 80, overflowY: 'auto', lineHeight: '1.4',
-                  }}
-                />
-                <button onClick={() => sendMessage()}
-                  disabled={(!input.trim() && !attachment) || loading}
-                  style={{
-                    width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
-                    background: (!input.trim() && !attachment) || loading ? '#1e2240' : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    cursor: (!input.trim() && !attachment) || loading ? 'not-allowed' : 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'background 0.2s',
-                  }}
-                >
-                  {loading
-                    ? <Loader size={16} color="#6366f1" style={{ animation: 'spin 1s linear infinite' }} />
-                    : <Send size={16} color={!input.trim() && !attachment ? '#6b7280' : 'white'} />
-                  }
-                </button>
-              </div>
+            )}
+            <div style={{ padding: '8px 12px 10px', display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+              <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt" style={{ display: 'none' }} onChange={handleFileSelect} />
+              <button
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+                title="Attach file"
+                style={{
+                  width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
+                  background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
+                  cursor: uploading ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >
+                {uploading ? <Loader size={15} color="#6366f1" style={{ animation: 'spin 1s linear infinite' }} /> : <Paperclip size={15} color="#6b7280" />}
+              </button>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Type a message…"
+                rows={1}
+                style={{
+                  flex: 1, resize: 'none',
+                  padding: '8px 12px', borderRadius: 20,
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  background: '#1e2240', color: '#e5e7eb',
+                  fontSize: 13, outline: 'none', fontFamily: 'inherit',
+                  maxHeight: 80, overflowY: 'auto', lineHeight: '1.4',
+                }}
+              />
+              <button onClick={() => sendMessage()}
+                disabled={(!input.trim() && !attachment) || loading}
+                style={{
+                  width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                  background: (!input.trim() && !attachment) || loading ? '#1e2240' : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  cursor: (!input.trim() && !attachment) || loading ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background 0.2s',
+                }}
+              >
+                {loading
+                  ? <Loader size={16} color="#6366f1" style={{ animation: 'spin 1s linear infinite' }} />
+                  : <Send size={16} color={!input.trim() && !attachment ? '#6b7280' : 'white'} />
+                }
+              </button>
             </div>
+          </div>
         </div>
       )}
 
@@ -408,6 +406,18 @@ export default function SupportChat({ forceOpen, onOpen }) {
         @keyframes spin {
           from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
+        }
+        @media (max-width: 480px) {
+          .sc-fab {
+            bottom: 88px !important;
+          }
+          .sc-window {
+            right: 8px !important;
+            left: 8px !important;
+            width: auto !important;
+            bottom: 152px !important;
+            max-height: 70vh !important;
+          }
         }
       `}</style>
     </>

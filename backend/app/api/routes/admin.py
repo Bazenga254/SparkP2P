@@ -829,7 +829,7 @@ async def update_trader_tier(
     from app.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
     from datetime import timedelta
 
-    if tier not in ("standard", "starter", "pro"):
+    if tier not in ("standard", "starter", "pro", "pro_max", "advanced"):
         raise HTTPException(status_code=400, detail="Invalid tier")
 
     result = await db.execute(select(Trader).where(Trader.id == trader_id))
@@ -840,7 +840,12 @@ async def update_trader_tier(
 
     trader.tier = tier
 
-    if tier in ("starter", "pro"):
+    # Credits granted per plan tier
+    PLAN_CREDITS = {"starter": 167, "pro": 500, "pro_max": 2000, "advanced": 8000}
+    # KES amount per plan
+    PLAN_AMOUNT  = {"starter": 5000, "pro": 10000, "pro_max": 20000, "advanced": 40000}
+
+    if tier in ("starter", "pro", "pro_max", "advanced"):
         # Check for existing active subscription
         sub_result = await db.execute(
             select(Subscription).where(
@@ -851,11 +856,12 @@ async def update_trader_tier(
         existing_sub = sub_result.scalar_one_or_none()
 
         now = datetime.now(timezone.utc)
+        plan_amount = PLAN_AMOUNT[tier]
 
         if existing_sub:
             # Update existing subscription
             existing_sub.plan = SubscriptionPlan(tier)
-            existing_sub.amount = 5000 if tier == "starter" else 10000
+            existing_sub.amount = plan_amount
             # Extend expiry if not set or already expired
             if not existing_sub.expires_at or existing_sub.expires_at < now:
                 existing_sub.started_at = now
@@ -866,12 +872,24 @@ async def update_trader_tier(
                 trader_id=trader_id,
                 plan=SubscriptionPlan(tier),
                 status=SubscriptionStatus.ACTIVE,
-                amount=5000 if tier == "starter" else 10000,
+                amount=plan_amount,
                 started_at=now,
                 expires_at=now + timedelta(days=30),
                 mpesa_transaction_id="ADMIN_GRANT",
             )
             db.add(sub)
+
+        # Auto-grant trade credits for the plan
+        credits_to_grant = PLAN_CREDITS[tier]
+        trader.trade_tokens = (trader.trade_tokens or 0) + credits_to_grant
+        purchase = TradeTokenPurchase(
+            trader_id=trader_id,
+            amount_kes=0,
+            tokens_granted=credits_to_grant,
+            rate_per_token=0,
+            source="admin",
+        )
+        db.add(purchase)
 
         # Send notification email
         from app.services.email import send_subscription_activated
@@ -1150,6 +1168,23 @@ async def list_unmatched_payments(
         "deposits": [fmt(p, "deposit") for p in deposits],
         "withdrawals": [fmt(p, "withdrawal") for p in withdrawals],
     }
+
+
+
+@router.delete("/payments/unmatched/{payment_id}")
+async def resolve_unmatched_payment(
+    payment_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve (delete) an unmatched payment record by its ID."""
+    from app.models.payment import Payment
+    pmt = (await db.execute(select(Payment).where(Payment.id == payment_id))).scalar_one_or_none()
+    if not pmt:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    await db.delete(pmt)
+    await db.commit()
+    return {"resolved": payment_id}
 
 
 def _get_period_start(period: str):
@@ -1898,96 +1933,73 @@ async def get_audit_logs(
 
 @router.get("/withdrawals")
 async def get_withdrawals(
-    method: str = Query(None),       # mpesa | bank_paybill | all
-    status: str = Query(None),       # pending | completed | failed | all
+    status: str = Query(None),       # completed | failed | pending | all
     period: str = Query("all"),      # today | week | month | all
-    page: int = Query(1, ge=1),
-    limit: int = Query(30, le=100),
-    admin: Trader = Depends(get_employee_or_admin),
-    db: AsyncSession = Depends(get_db),
+    page:   int = Query(1, ge=1),
+    limit:  int = Query(30, le=100),
+    admin:  Trader = Depends(get_employee_or_admin),
+    db:     AsyncSession = Depends(get_db),
 ):
-    """List all withdrawal transactions with trader details."""
-    from sqlalchemy import desc, and_
+    """List all Choice Bank → External Bank withdrawal transfers by traders."""
+    from app.models.payment import Payment, PaymentStatus as PStatus
 
-    q = (
-        select(WalletTransaction, Trader)
-        .join(Trader, Trader.id == WalletTransaction.trader_id)
-        .where(WalletTransaction.transaction_type == TransactionType.WITHDRAWAL)
-    )
-
-    if method and method != "all":
-        from sqlalchemy import or_
-        if method == "mpesa":
-            # NULLs are legacy rows created before the column existed — all were M-Pesa
-            q = q.where(or_(WalletTransaction.settlement_method == "mpesa",
-                            WalletTransaction.settlement_method.is_(None)))
-        else:
-            q = q.where(WalletTransaction.settlement_method == method)
+    filters = [Payment.transaction_type == "CHOICE_OUTBOUND"]
 
     if status and status != "all":
-        q = q.where(WalletTransaction.status == status)
+        try:
+            filters.append(Payment.status == PStatus(status))
+        except ValueError:
+            pass
 
+    now = datetime.now(timezone.utc)
+    EAT = timezone(timedelta(hours=3))
+    today_start = now.astimezone(EAT).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     if period == "today":
-        EAT = timezone(timedelta(hours=3))
-        now_eat = datetime.now(timezone.utc).astimezone(EAT)
-        today_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-        q = q.where(WalletTransaction.created_at >= today_start)
+        filters.append(Payment.created_at >= today_start)
     elif period == "week":
-        q = q.where(WalletTransaction.created_at >= datetime.now(timezone.utc) - timedelta(days=7))
+        filters.append(Payment.created_at >= now - timedelta(days=7))
     elif period == "month":
-        q = q.where(WalletTransaction.created_at >= datetime.now(timezone.utc) - timedelta(days=30))
+        filters.append(Payment.created_at >= now - timedelta(days=30))
 
-    # Summary counts (before pagination)
-    count_q = select(
-        func.count(WalletTransaction.id).label("total"),
-        func.sum(func.abs(WalletTransaction.amount)).label("total_amount"),
-        func.count(
-            case((WalletTransaction.status == "pending", WalletTransaction.id))
-        ).label("pending_count"),
-        func.sum(
-            case((WalletTransaction.status == "pending", func.abs(WalletTransaction.amount)), else_=0)
-        ).label("pending_amount"),
-    ).select_from(WalletTransaction).where(
-        WalletTransaction.transaction_type == TransactionType.WITHDRAWAL
-    )
-    summary_result = await db.execute(count_q)
-    summary = summary_result.one()
+    # Summary
+    summary_q = select(
+        func.count(Payment.id).label("total"),
+        func.coalesce(func.sum(case((Payment.status == PStatus.COMPLETED, Payment.amount), else_=0)), 0).label("total_amount"),
+        func.count(case((Payment.status == PStatus.COMPLETED, Payment.id))).label("completed_count"),
+        func.count(case((Payment.status == PStatus.FAILED,    Payment.id))).label("failed_count"),
+    ).select_from(Payment).where(*filters)
+    summary = (await db.execute(summary_q)).one()
 
     total = (await db.execute(
-        select(func.count(WalletTransaction.id))
-        .select_from(WalletTransaction)
-        .join(Trader, Trader.id == WalletTransaction.trader_id)
-        .where(WalletTransaction.transaction_type == TransactionType.WITHDRAWAL)
+        select(func.count(Payment.id)).select_from(Payment).where(*filters)
     )).scalar_one()
 
-    q = q.order_by(desc(WalletTransaction.created_at)).offset((page - 1) * limit).limit(limit)
-    result = await db.execute(q)
-    rows = result.all()
+    rows_q = (
+        select(Payment, Trader)
+        .join(Trader, Trader.id == Payment.trader_id)
+        .where(*filters)
+        .order_by(Payment.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+    )
+    rows = (await db.execute(rows_q)).all()
 
     withdrawals = []
-    for tx, trader in rows:
-        # Resolve destination from stored field or trader's current settlement config
-        dest = tx.destination or (
-            trader.settlement_phone if (tx.settlement_method or "mpesa") == "mpesa"
-            else f"{trader.settlement_paybill} / {trader.settlement_account or ''}"
-        )
-        method_label = tx.settlement_method or (
-            trader.settlement_method.value if trader.settlement_method else "mpesa"
-        )
+    for pmt, trader in rows:
         withdrawals.append({
-            "id": tx.id,
-            "trader_id": trader.id,
-            "trader_name": trader.full_name,
-            "trader_phone": trader.phone,
-            "amount": abs(tx.amount),          # net amount sent
-            "status": tx.status,               # pending | completed | failed
-            "settlement_method": method_label,
-            "destination": dest,
-            "bank_name": trader.settlement_bank_name or "",
-            "description": tx.description or "",
-            "processed_by": tx.processed_by or None,
-            "processed_at": tx.processed_at.isoformat() if tx.processed_at else None,
-            "created_at": tx.created_at.isoformat() if tx.created_at else "",
+            "id":            pmt.id,
+            "trader_id":     trader.id,
+            "trader_name":   trader.full_name,
+            "trader_phone":  trader.phone,
+            "from_account":  trader.choice_account_id or "—",
+            "to_bank":       pmt.destination_type or "—",
+            "to_account":    pmt.destination or "—",
+            "beneficiary":   pmt.sender_name or "—",
+            "amount":        float(pmt.amount),
+            "status":        pmt.status.value if hasattr(pmt.status, "value") else str(pmt.status),
+            "reference":     pmt.mpesa_transaction_id or "—",
+            "remarks":       pmt.remarks or "",
+            "created_at":    pmt.created_at.isoformat() if pmt.created_at else "",
         })
 
     return {
@@ -1996,10 +2008,10 @@ async def get_withdrawals(
         "page": page,
         "pages": max(1, -(-total // limit)),
         "summary": {
-            "total_count": summary.total or 0,
-            "total_amount": float(summary.total_amount or 0),
-            "pending_count": summary.pending_count or 0,
-            "pending_amount": float(summary.pending_amount or 0),
+            "total_count":     int(summary.total or 0),
+            "total_amount":    float(summary.total_amount or 0),
+            "completed_count": int(summary.completed_count or 0),
+            "failed_count":    int(summary.failed_count or 0),
         },
     }
 
@@ -2247,8 +2259,12 @@ async def revenue_subscriptions(
     }
     start = period_starts.get(period)
 
-    # Only count paid (active) subscriptions
-    base_where = [Subscription.status == SubscriptionStatus.ACTIVE]
+    # Only count paid (active) subscriptions — exclude admin grants (no real payment)
+    base_where = [
+        Subscription.status == SubscriptionStatus.ACTIVE,
+        Subscription.mpesa_transaction_id != 'ADMIN_GRANT',
+        Subscription.mpesa_transaction_id.isnot(None),
+    ]
     if start:
         base_where.append(Subscription.started_at >= start)
     if plan != "all":
@@ -2268,7 +2284,7 @@ async def revenue_subscriptions(
         .group_by(Subscription.plan)
     )
     summary_rows = (await db.execute(summary_q)).all()
-    summary = {"total": 0.0, "starter": 0.0, "pro": 0.0, "starter_count": 0, "pro_count": 0}
+    summary = {"total": 0.0, "starter": 0.0, "pro": 0.0, "pro_max": 0.0, "advanced": 0.0, "starter_count": 0, "pro_count": 0, "pro_max_count": 0, "advanced_count": 0}
     for row in summary_rows:
         pv = row.plan.value if hasattr(row.plan, "value") else str(row.plan)
         summary[pv] = round(float(row.total or 0), 2)
@@ -2291,7 +2307,9 @@ async def revenue_subscriptions(
             Subscription.mpesa_transaction_id,
             Subscription.started_at,
             Subscription.expires_at,
+            Trader.id.label("trader_id"),
             Trader.full_name.label("trader_name"),
+            Trader.email.label("trader_email"),
             Trader.phone.label("trader_phone"),
         )
         .join(Trader, Trader.id == Subscription.trader_id)
@@ -2310,13 +2328,108 @@ async def revenue_subscriptions(
         "transactions": [
             {
                 "id": t.id,
+                "trader_id": t.trader_id,
                 "plan": t.plan.value if hasattr(t.plan, "value") else str(t.plan),
                 "amount": float(t.amount),
                 "mpesa_transaction_id": t.mpesa_transaction_id,
                 "started_at": t.started_at.isoformat() if t.started_at else None,
                 "expires_at": t.expires_at.isoformat() if t.expires_at else None,
                 "trader_name": t.trader_name,
+                "trader_email": t.trader_email,
                 "trader_phone": t.trader_phone,
+            }
+            for t in txns
+        ],
+    }
+
+
+# ── Credit / Trade Token Purchases ───────────────────────────────────────────
+
+@router.get("/credit-purchases")
+async def admin_credit_purchases(
+    period: str = Query("all"),   # today | week | month | all
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, le=200),
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trade token / credit purchases by all traders."""
+    from app.models.trade_tokens import TradeTokenPurchase
+
+    now = datetime.now(timezone.utc)
+    EAT = timezone(timedelta(hours=3))
+    now_eat = now.astimezone(EAT)
+    today_start_utc = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    period_starts = {
+        "today": today_start_utc,
+        "week":  now - timedelta(days=7),
+        "month": now - timedelta(days=30),
+    }
+    start = period_starts.get(period)
+
+    filters = []
+    if start:
+        filters.append(TradeTokenPurchase.created_at >= start)
+
+    # Summary
+    summary_q = select(
+        func.count(TradeTokenPurchase.id).label("count"),
+        func.coalesce(func.sum(TradeTokenPurchase.amount_kes), 0).label("total_revenue"),
+        func.coalesce(func.sum(TradeTokenPurchase.tokens_granted), 0).label("total_credits"),
+    )
+    if filters:
+        summary_q = summary_q.where(*filters)
+    summary_row = (await db.execute(summary_q)).one()
+    summary = {
+        "count": int(summary_row.count or 0),
+        "total_revenue": float(summary_row.total_revenue or 0),
+        "total_credits": int(summary_row.total_credits or 0),
+    }
+
+    count_q = select(func.count()).select_from(TradeTokenPurchase)
+    if filters:
+        count_q = count_q.where(*filters)
+    total_count = (await db.execute(count_q)).scalar_one()
+
+    txns_q = (
+        select(
+            TradeTokenPurchase.id,
+            TradeTokenPurchase.trader_id,
+            TradeTokenPurchase.amount_kes,
+            TradeTokenPurchase.tokens_granted,
+            TradeTokenPurchase.rate_per_token,
+            TradeTokenPurchase.source,
+            TradeTokenPurchase.created_at,
+            Trader.full_name.label("trader_name"),
+            Trader.email.label("trader_email"),
+            Trader.phone.label("trader_phone"),
+        )
+        .join(Trader, Trader.id == TradeTokenPurchase.trader_id)
+        .order_by(TradeTokenPurchase.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+    )
+    if filters:
+        txns_q = txns_q.where(*filters)
+    txns = (await db.execute(txns_q)).all()
+
+    return {
+        "summary": summary,
+        "total": total_count,
+        "pages": max(1, -(-total_count // limit)),
+        "page": page,
+        "transactions": [
+            {
+                "id": t.id,
+                "trader_id": t.trader_id,
+                "trader_name": t.trader_name,
+                "trader_email": t.trader_email,
+                "trader_phone": t.trader_phone,
+                "amount_kes": float(t.amount_kes),
+                "tokens_granted": int(t.tokens_granted),
+                "rate_per_token": float(t.rate_per_token),
+                "source": t.source,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
             }
             for t in txns
         ],

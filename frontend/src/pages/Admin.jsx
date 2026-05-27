@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getAdminCreditPurchases, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2 } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal } from 'lucide-react';
 import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, adminGetTradeTokens, adminAddTradeTokens, adminRemoveTradeTokens, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense } from '../services/api';
 
 const sidebarSections = [
@@ -13,7 +13,7 @@ const sidebarSections = [
       { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
       { key: 'transactions', icon: ArrowRightLeft, label: 'Transactions' },
       { key: 'withdrawals', icon: Wallet, label: 'Withdrawals' },
-      { key: 'paybill', icon: Banknote, label: 'Paybill Transactions' },
+      { key: 'paybill', icon: DollarSign, label: 'Subscriptions' },
     ],
   },
   {
@@ -29,7 +29,6 @@ const sidebarSections = [
   {
     label: 'PLATFORM',
     items: [
-      { key: 'revenue', icon: TrendingUp, label: 'Revenue' },
       { key: 'expenses', icon: Receipt, label: 'Expenses' },
       { key: 'security', icon: Shield, label: 'Security' },
       { key: 'settings', icon: Settings, label: 'Settings' },
@@ -167,6 +166,7 @@ export default function Admin() {
   const [fiatLastUpdated, setFiatLastUpdated] = useState(null);
   const PAGE_TX_SIZE = 25;
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [mobMoreOpen, setMobMoreOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
@@ -219,6 +219,7 @@ export default function Admin() {
   const [revPlan, setRevPlan] = useState('all');
   const [revPage, setRevPage] = useState(1);
   const [revLoading, setRevLoading] = useState(false);
+  const [expSubView, setExpSubView] = useState('revenue');
 
   // Auto-Sweeps (M-Pesa paybill → I&M Bank)
   const [sweeps, setSweeps] = useState([]);
@@ -227,6 +228,11 @@ export default function Admin() {
   const [sweepSubTab, setSweepSubTab] = useState('all'); // all | pending | completed | failed
 
   const [traderRoleFilter, setTraderRoleFilter] = useState('traders'); // 'traders' | 'employees'
+  const [traderSearch, setTraderSearch] = useState('');
+  const [traderTierFilter, setTraderTierFilter] = useState('all');
+  const [traderBotFilter, setTraderBotFilter] = useState('all');
+  const [traderSort, setTraderSort] = useState('volume');
+  const [traderDrop, setTraderDrop] = useState(null); // { type, id }
 
   // Employees
   const [employees, setEmployees] = useState([]);
@@ -254,6 +260,12 @@ export default function Admin() {
   const [paybillPeriod, setPaybillPeriod] = useState('today');
   const [paybillPage, setPaybillPage] = useState(1);
   const [paybillLoading, setPaybillLoading] = useState(false);
+  // Subscriptions tab state
+  const [subView, setSubView] = useState('plans');
+  const [subPeriod, setSubPeriod] = useState('all');
+  const [subPage, setSubPage] = useState(1);
+  const [subData, setSubData] = useState({ transactions: [], total: 0, pages: 1, summary: {} });
+  const [subLoading, setSubLoading] = useState(false);
 
   // Connection status (desktop app sessions)
   const [connProfile, setConnProfile] = useState(null);
@@ -414,6 +426,20 @@ export default function Admin() {
     }
   };
 
+  const loadSubData = async (view = subView, period = subPeriod, page = subPage) => {
+    setSubLoading(true);
+    try {
+      const res = view === 'plans'
+        ? await getSubscriptionRevenue({ period, page, limit: 50 })
+        : await getAdminCreditPurchases({ period, page, limit: 50 });
+      setSubData(res.data);
+    } catch (e) {
+      console.error('Subscriptions load error:', e);
+    } finally {
+      setSubLoading(false);
+    }
+  };
+
   const loadPaybillTxs = async (period = paybillPeriod, page = paybillPage) => {
     setPaybillLoading(true);
     try {
@@ -533,10 +559,10 @@ export default function Admin() {
     setSupportLoading(false);
   };
 
-  const loadWithdrawals = async (method = wdMethod, status = wdStatus, period = wdPeriod, page = wdPage) => {
+  const loadWithdrawals = async (status = wdStatus, period = wdPeriod, page = wdPage) => {
     setWdLoading(true);
     try {
-      const res = await getAdminWithdrawals({ method, status, period, page, limit: 30 });
+      const res = await getAdminWithdrawals({ status, period, page, limit: 30 });
       setWithdrawals(res.data);
     } catch (err) {
       console.error('Withdrawals load error:', err);
@@ -757,10 +783,10 @@ export default function Admin() {
   useEffect(() => {
     if (activeTab === 'disputes') { setUnreadTicketCount(0); loadSupportTickets(ticketCategory, ticketPage); }
     if (activeTab === 'withdrawals') { loadWithdrawals(); }
-    if (activeTab === 'paybill') { loadPaybillTxs('today', 1); }
+    if (activeTab === 'paybill') { loadSubData('plans', 'all', 1); }
     if (activeTab === 'survey') { loadSurveyResponses(); }
     if (activeTab === 'kyc') { adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {}); }
-    if (activeTab === 'expenses') { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); }
+    if (activeTab === 'expenses') { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); loadRevenueBreakdown('all', 'all', 1); setExpSubView('revenue'); }
     if (activeTab === 'settings') { loadEmployees(); }
     if (activeTab === 'affiliates') { loadAffiliates(); }
   }, [activeTab]);
@@ -1035,7 +1061,7 @@ export default function Admin() {
                   <button
                     key={item.key}
                     className={`adm-nav-item ${activeTab === item.key ? 'active' : ''}`}
-                    onClick={() => { setActiveTab(item.key); setSidebarOpen(false); if (item.key === 'revenue') loadRevenueBreakdown('all', 'all', 1); }}
+                    onClick={() => { setActiveTab(item.key); setSidebarOpen(false); }}
                   >
                     <Icon size={18} />
                     <span>{item.label}</span>
@@ -1048,10 +1074,19 @@ export default function Admin() {
         </nav>
 
         <div className="adm-sidebar-footer">
-          <button className="adm-logout-btn" onClick={logout}>
-            <LogOut size={18} />
-            <span>Logout</span>
-          </button>
+          <div className="adm-sidebar-user">
+            <div className="adm-sidebar-avatar">AD</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: '#E5E7EB', fontSize: 12, fontWeight: 500 }}>Admin</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
+                <span style={{ width: 6, height: 6, background: '#10B981', borderRadius: '50%', display: 'inline-block' }} />
+                <span style={{ color: '#10B981', fontSize: 10 }}>Online</span>
+              </div>
+            </div>
+            <button className="adm-logout-btn-icon" onClick={logout} title="Logout">
+              <LogOut size={15} />
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -1145,366 +1180,206 @@ export default function Admin() {
               )}
 
               {/* Row 1: Greeting + Online Traders */}
-              <div className="adm-two-col" style={{ marginBottom: 16 }}>
-                <div className="adm-greeting-card">
-                  <div>
-                    <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>
-                      {getGreeting()}, Admin!
-                    </h2>
-                    <p style={{ color: 'var(--text-dim)', fontSize: 13.5 }}>
-                      Today's platform earnings
-                    </p>
+
+              {/* ── Header row ── */}
+              <div className="adm-dash-header-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                <div>
+                  <h2 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 4px', color: '#fff' }}>
+                    {getGreeting()}, Admin
+                  </h2>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#6b7280', fontSize: 13 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block', flexShrink: 0 }} />
+                    All systems normal · Today's platform earnings
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--green)' }}>
-                        {dashHidden ? '••••••' : fmtKESFee(analytics?.revenue?.today || dashboard.today.revenue)}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <button className="adm-dash-online-btn" onClick={() => setActiveTab('traders')}
+                    style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 8, border: '1px solid rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.08)', color: '#10b981', fontWeight: 600, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', flexShrink: 0 }} />
+                    {analytics?.online_traders ?? 0} online traders
+                  </button>
+                  <button onClick={() => setActiveTab('disputes')}
+                    style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', padding: 6, color: '#9ca3af' }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                    {unreadTicketCount > 0 && (
+                      <span style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: '50%', background: '#ef4444', color: '#fff', fontSize: 9, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{unreadTicketCount > 9 ? '9+' : unreadTicketCount}</span>
+                    )}
+                  </button>
+                  <button onClick={loadData}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 6, color: '#9ca3af' }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* ── Top 2-col: Earnings + Needs Attention ── */}
+              <div className="adm-dash-top-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.4fr) minmax(0,1fr)', gap: 14, marginBottom: 16 }}>
+
+                {/* Earnings card */}
+                <div className="adm-card" style={{ padding: '16px 20px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                    <div style={{ color: '#f59e0b', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px' }}>Today's Platform Earnings</div>
+                    <button
+                      onClick={() => { if (dashHidden) { setShowDashTotpModal(true); } else { setDashHidden(true); } }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 6, border: `1px solid ${dashHidden ? '#374151' : '#f59e0b'}`, background: dashHidden ? 'transparent' : 'rgba(245,158,11,0.08)', color: dashHidden ? '#9ca3af' : '#f59e0b', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                      {dashHidden ? <Eye size={13} /> : <EyeOff size={13} />}
+                      {dashHidden ? 'Show' : 'Hide'}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: '#f59e0b', marginBottom: 16, letterSpacing: '-1px' }}>
+                    {dashHidden ? 'KES ••••••' : fmtKESFee(analytics?.revenue?.today || dashboard.today.revenue)}
+                  </div>
+                  <div className="adm-earn-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, paddingTop: 12, borderTop: '0.5px solid #1f2937' }}>
+                    {[
+                      { label: 'Paybill balance', value: dashHidden ? '••••••' : (paybillBalance?.available != null ? fmtKES(paybillBalance.available) : '—') },
+                      { label: 'Platform float',  value: dashHidden ? '•••••••' : (choiceFloat ? fmtKES(choiceFloat.total) : '—') },
+                      { label: "Today's volume",  value: dashHidden ? '••••••' : fmtKES(dashboard.today.volume) },
+                    ].map(({ label, value }) => (
+                      <div key={label}>
+                        <div style={{ color: '#9ca3af', fontSize: 11, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
+                        <div style={{ color: '#f9fafb', fontSize: 17, fontWeight: 800, letterSpacing: '-0.3px' }}>{value}</div>
                       </div>
-                      <p style={{ color: 'var(--text-dim)', fontSize: 12 }}>fees collected</p>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                      <button
-                        onClick={() => { if (dashHidden) { setShowDashTotpModal(true); } else { setDashHidden(true); } }}
-                        title={dashHidden ? 'Show dashboard data' : 'Hide dashboard data'}
-                        style={{ background: dashHidden ? 'rgba(255,255,255,0.07)' : 'rgba(16,185,129,0.12)', border: `1px solid ${dashHidden ? 'rgba(255,255,255,0.12)' : '#10b981'}`, borderRadius: 8, padding: '8px 10px', cursor: 'pointer', color: dashHidden ? '#9ca3af' : '#10b981', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' }}
-                      >
-                        {dashHidden ? <Eye size={15} /> : <EyeOff size={15} />}
-                        {dashHidden ? 'Show' : 'Hide'}
-                      </button>
-                      {!dashHidden && (
-                        <span style={{ fontSize: 10, color: '#6b7280' }}>Locks in 5 min</span>
-                      )}
-                    </div>
+                    ))}
                   </div>
                 </div>
-                <div className="adm-greeting-card" style={{ flex: '0 0 auto', minWidth: 200 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span className="adm-online-badge" />
-                    <div>
-                      <div style={{ fontSize: 28, fontWeight: 700 }}>
-                        {analytics?.online_traders ?? 0}
+
+                {/* Needs Attention card */}
+                <div className="adm-card" style={{ padding: '16px 20px', background: 'rgba(239,68,68,0.04)', border: '0.5px solid rgba(239,68,68,0.2)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: '#ef4444', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                      <AlertTriangle size={14} />
+                      Needs Attention
+                    </div>
+                    <button onClick={() => setActiveTab('disputes')}
+                      style={{ background: 'none', border: 'none', color: '#6b7280', fontSize: 12, cursor: 'pointer', padding: 0 }}>
+                      View all →
+                    </button>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, textAlign: 'center' }}>
+                    {[
+                      { label: 'Disputes',  value: unreadTicketCount,                                                        color: '#ef4444', onClick: () => setActiveTab('disputes')  },
+                      { label: 'Unmatched', value: (unmatched.deposits?.length || 0) + (unmatched.withdrawals?.length || 0), color: '#f59e0b', onClick: () => setActiveTab('unmatched') },
+                      { label: 'KYC pending', value: dashboard.traders?.total_unverified ?? 0,                               color: '#3b82f6', onClick: () => setActiveTab('kyc')       },
+                    ].map(({ label, value, color, onClick }) => (
+                      <div key={label} onClick={onClick} style={{ cursor: 'pointer', padding: '8px 4px', borderRadius: 8, background: 'rgba(255,255,255,0.02)' }}>
+                        <div style={{ fontSize: 28, fontWeight: 800, color, lineHeight: 1, marginBottom: 6 }}>{value}</div>
+                        <div style={{ color: '#6b7280', fontSize: 11 }}>{label}</div>
                       </div>
-                      <p style={{ color: 'var(--text-dim)', fontSize: 12.5 }}>Online Traders</p>
-                    </div>
+                    ))}
                   </div>
                 </div>
               </div>
 
-              {/* Row 2: 4 stat cards */}
-              <div className="adm-stat-grid">
-                <div className="adm-stat-card" style={{ '--card-accent': '#10b981' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Total Traders</span>
-                    <span className="adm-stat-value">{dashboard.traders.total}</span>
+              {/* ── 4 key stat cards ── */}
+              <div className="adm-dash-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+                {[
+                  { label: 'Total Traders', value: dashboard.traders.total,   badge: `+${dashboard.traders.new_today ?? 0}%`, badgeColor: '#10b981', icon: <Users size={18} />, iconBg: 'rgba(16,185,129,0.12)', iconColor: '#10b981' },
+                  { label: 'Active Now',    value: dashboard.traders.active,   badge: 'Active',                                 badgeColor: '#10b981', icon: <UserCheck size={18} />, iconBg: 'rgba(16,185,129,0.12)', iconColor: '#10b981' },
+                  { label: 'Orders',        value: dashboard.today.orders,     badge: 'today',                                  badgeColor: '#6b7280', icon: <ShoppingCart size={18} />, iconBg: 'rgba(139,92,246,0.12)', iconColor: '#8b5cf6' },
+                  { label: 'Completed',     value: dashboard.today.completed,  badge: 'today',                                  badgeColor: '#6b7280', icon: <CheckCircle size={18} />, iconBg: 'rgba(16,185,129,0.12)', iconColor: '#10b981' },
+                ].map(({ label, value, badge, badgeColor, icon, iconBg, iconColor }) => (
+                  <div key={label} className="adm-card" style={{ padding: '16px 18px' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10 }}>
+                      <div style={{ width: 34, height: 34, borderRadius: 8, background: iconBg, color: iconColor, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {icon}
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: badgeColor, background: `${badgeColor}1a`, padding: '2px 8px', borderRadius: 20 }}>{badge}</span>
+                    </div>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: '#fff', lineHeight: 1, marginBottom: 4 }}>{value}</div>
+                    <div style={{ color: '#6b7280', fontSize: 12 }}>{label}</div>
                   </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
-                    <Users size={22} />
-                  </div>
-                </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#3b82f6' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Active Traders</span>
-                    <span className="adm-stat-value">{dashboard.traders.active}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
-                    <UserCheck size={22} />
-                  </div>
-                </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#f59e0b' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Today's Revenue</span>
-                    <span className="adm-stat-value">{dashHidden ? '••••••' : fmtKESFee(dashboard.today.revenue)}</span>
-                    {!dashHidden && <span style={{ fontSize: 10, color: '#6b7280' }}>Subscription payments today</span>}
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>
-                    <TrendingUp size={22} />
-                  </div>
-                </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4', cursor: 'pointer' }} onClick={async () => {
-                  if (!dashHidden) { try { await api.post('/payment/balance/refresh'); } catch(e) {} }
-                }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      Paybill Balance
-                      {paybillBalance?.updated_at && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite', boxShadow: '0 0 6px #10b981' }} />}
-                    </span>
-                    <span className="adm-stat-value">
-                      {dashHidden ? '••••••' : (paybillBalance?.available != null ? fmtKES(paybillBalance.available) : '—')}
-                    </span>
-                    {!dashHidden && paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Updated: {fmtTimeEAT(paybillBalance.updated_at)} · {paybillBalance.source === 'realtime' ? 'live' : 'Safaricom'}</span>}
-                    {!dashHidden && !paybillBalance?.updated_at && <span style={{ fontSize: 10, color: '#6b7280' }}>Click to refresh</span>}
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4' }}>
-                    <Banknote size={22} />
-                  </div>
-                </div>
+                ))}
               </div>
 
-              {/* Row 3: 4 more stat cards */}
-              <div className="adm-stat-grid" style={{ marginTop: 16 }}>
-                <div className="adm-stat-card" style={{ '--card-accent': '#06b6d4', cursor: 'pointer' }} onClick={async () => {
-                  if (!dashHidden) {
-                    try { setChoiceFloatLoading(true); const r = await adminGetChoicePlatformFloat(); setChoiceFloat(r.data); } catch(e) {} finally { setChoiceFloatLoading(false); }
-                  }
-                }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      Platform Float
-                      {choiceFloat && !choiceFloatLoading && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite', boxShadow: '0 0 6px #10b981' }} />}
-                    </span>
-                    <span className="adm-stat-value">
-                      {dashHidden ? '••••••' : choiceFloatLoading ? '…' : choiceFloat ? fmtKES(choiceFloat.total) : '—'}
-                    </span>
-                    {!dashHidden && choiceFloat && <span style={{ fontSize: 10, color: '#6b7280' }}>Choice Bank · {choiceFloat.trader_count} merchants · click to refresh</span>}
-                    {!dashHidden && !choiceFloat && !choiceFloatLoading && <span style={{ fontSize: 10, color: '#6b7280' }}>Click to load</span>}
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4' }}>
-                    <Banknote size={22} />
-                  </div>
-                </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#8b5cf6' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Today's Orders</span>
-                    <span className="adm-stat-value">{dashboard.today.orders}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }}>
-                    <ShoppingCart size={22} />
-                  </div>
-                </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#10b981' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Completed Today</span>
-                    <span className="adm-stat-value">{dashboard.today.completed}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
-                    <CheckCircle size={22} />
-                  </div>
-                </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#3b82f6' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Today's Volume</span>
-                    <span className="adm-stat-value">{dashHidden ? '••••••' : fmtKES(dashboard.today.volume)}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
-                    <Activity size={22} />
-                  </div>
-                </div>
-                <div className="adm-stat-card" style={{ '--card-accent': dashboard.alerts.disputed_orders > 0 ? '#ef4444' : '#6b7280' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Disputed Orders</span>
-                    <span className="adm-stat-value" style={{ color: dashboard.alerts.disputed_orders > 0 ? '#ef4444' : undefined }}>
-                      {dashboard.alerts.disputed_orders}
-                    </span>
-                  </div>
-                  <div className="adm-stat-icon" style={{
-                    background: dashboard.alerts.disputed_orders > 0 ? 'rgba(239,68,68,0.15)' : 'rgba(107,114,128,0.15)',
-                    color: dashboard.alerts.disputed_orders > 0 ? '#ef4444' : '#6b7280'
-                  }}>
-                    <AlertCircle size={22} />
-                  </div>
-                </div>
-              </div>
-
-              {/* Row 2b: Internal Transfers */}
-              {dashboard.internal_transfers && (dashboard.internal_transfers.today_count > 0 || (analytics?.internal_transfers?.month_count || 0) > 0) && (
-                <div className="adm-stat-grid" style={{ marginTop: 16 }}>
-                  <div className="adm-stat-card" style={{ '--card-accent': '#8b5cf6' }}>
-                    <div className="adm-stat-info">
-                      <span className="adm-stat-label">Internal Transfers Today</span>
-                      <span className="adm-stat-value">{dashboard.internal_transfers.today_count}</span>
-                    </div>
-                    <div className="adm-stat-icon" style={{ background: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }}>
-                      <Repeat size={22} />
-                    </div>
-                  </div>
-                  <div className="adm-stat-card" style={{ '--card-accent': '#10b981' }}>
-                    <div className="adm-stat-info">
-                      <span className="adm-stat-label">Internal Volume Today</span>
-                      <span className="adm-stat-value">{fmtKES(dashboard.internal_transfers.today_volume)}</span>
-                    </div>
-                    <div className="adm-stat-icon" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>
-                      <DollarSign size={22} />
-                    </div>
-                  </div>
-                  <div className="adm-stat-card" style={{ '--card-accent': '#3b82f6' }}>
-                    <div className="adm-stat-info">
-                      <span className="adm-stat-label">Fees Saved (est.)</span>
-                      <span className="adm-stat-value" style={{ color: '#10b981' }}>
-                        {fmtKES((dashboard.internal_transfers.today_count || 0) * 77)}
-                      </span>
-                    </div>
-                    <div className="adm-stat-icon" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6' }}>
-                      <TrendingUp size={22} />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Row 4: Chart + Profit Breakdown */}
-              <div className="adm-two-col" style={{ marginTop: 16 }}>
-                {/* Monthly Volumes Chart */}
-                <div className="adm-card" style={{ flex: '3 1 0' }}>
+              {/* ── Chart + Top Traders ── */}
+              <div className="adm-dash-chart-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.6fr) minmax(0,1fr)', gap: 14, marginBottom: 16 }}>
+                {/* Monthly Volumes */}
+                <div className="adm-card">
                   <div className="adm-card-header">
-                    <h3>Monthly Volumes</h3>
+                    <h3>Monthly volumes</h3>
                     <span className="adm-card-count">Last 6 months</span>
                   </div>
                   <div style={{ padding: '10px 20px 0' }}>
                     {analytics?.monthly_volumes?.length > 0 ? (
                       <div style={{ display: 'flex', gap: 0 }}>
-                        {/* Y-axis labels */}
-                        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', paddingBottom: 24, marginRight: 8, width: 60, textAlign: 'right' }}>
-                          {[maxVolume, maxVolume * 0.75, maxVolume * 0.5, maxVolume * 0.25, 0].map((v, i) => (
+                        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', paddingBottom: 24, marginRight: 8, width: 52, textAlign: 'right' }}>
+                          {[maxVolume, maxVolume * 0.5, 0].map((v, i) => (
                             <span key={i} style={{ fontSize: 10, color: '#6b7280', lineHeight: 1 }}>
                               {v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : v >= 1000 ? `${(v/1000).toFixed(0)}K` : v.toFixed(0)}
                             </span>
                           ))}
                         </div>
-                        {/* Chart area */}
                         <div style={{ flex: 1, position: 'relative' }}>
-                          {/* Grid lines */}
                           <div style={{ position: 'absolute', inset: 0, bottom: 24, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', pointerEvents: 'none' }}>
-                            {[0,1,2,3,4].map(i => <div key={i} style={{ borderBottom: '1px solid var(--border)', width: '100%' }} />)}
+                            {[0,1,2].map(i => <div key={i} style={{ borderBottom: '1px solid #1f2937', width: '100%' }} />)}
                           </div>
-                          {/* Bars */}
-                          <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-end', height: 160, position: 'relative', paddingBottom: 24 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-end', height: 140, position: 'relative', paddingBottom: 24 }}>
                             {analytics.monthly_volumes.map((m, i) => (
                               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
-                                <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 136 }}>
-                                  <div style={{
-                                    width: 18, background: 'var(--blue)', borderRadius: '3px 3px 0 0',
-                                    height: `${Math.max((m.buy_volume / maxVolume) * 136, 2)}px`,
-                                  }} title={`Buy: ${fmtKES(m.buy_volume)}`} />
-                                  <div style={{
-                                    width: 18, background: 'var(--green)', borderRadius: '3px 3px 0 0',
-                                    height: `${Math.max((m.sell_volume / maxVolume) * 136, 2)}px`,
-                                  }} title={`Sell: ${fmtKES(m.sell_volume)}`} />
+                                <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 116 }}>
+                                  <div style={{ width: 16, background: '#3b82f6', borderRadius: '3px 3px 0 0', height: `${Math.max((m.buy_volume / maxVolume) * 116, 2)}px` }} title={`Buy: ${fmtKES(m.buy_volume)}`} />
+                                  <div style={{ width: 16, background: '#10b981', borderRadius: '3px 3px 0 0', height: `${Math.max((m.sell_volume / maxVolume) * 116, 2)}px` }} title={`Sell: ${fmtKES(m.sell_volume)}`} />
                                 </div>
-                                <span style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>{m.month.split(' ')[0]}</span>
+                                <span style={{ fontSize: 10, color: '#9ca3af', marginTop: 6 }}>{m.month.split(' ')[0]}</span>
                               </div>
                             ))}
                           </div>
                         </div>
                       </div>
-                    ) : (
-                      <p className="adm-empty" style={{ padding: '40px 0' }}>No volume data yet</p>
-                    )}
+                    ) : <p className="adm-empty" style={{ padding: '40px 0' }}>No volume data yet</p>}
                   </div>
                   {analytics?.monthly_volumes?.length > 0 && (
-                    <div style={{ display: 'flex', gap: 16, padding: '0 20px 14px', fontSize: 12, color: 'var(--text-dim)' }}>
-                      <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: 'var(--blue)', marginRight: 5 }} />Buy</span>
-                      <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: 'var(--green)', marginRight: 5 }} />Sell</span>
+                    <div style={{ display: 'flex', gap: 16, padding: '0 20px 14px', fontSize: 12, color: '#6b7280' }}>
+                      <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#3b82f6', marginRight: 5 }} />Buy</span>
+                      <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#10b981', marginRight: 5 }} />Sell</span>
                     </div>
                   )}
                 </div>
 
-                {/* Profit Breakdown */}
-                <div className="adm-profit-card" style={{ flex: '2 1 0' }}>
-                  <div className="adm-card-header">
-                    <h3>Platform Profit</h3>
-                    <DollarSign size={16} style={{ color: 'var(--accent)' }} />
-                  </div>
-                  <div style={{ padding: 20 }}>
-                    <div className="adm-profit-total">
-                      {dashHidden ? '••••••' : fmtKESFee(analytics?.platform_profit ?? 0)}
-                    </div>
-                    <p style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 20 }}>subscriptions minus expenses (all time)</p>
-
-                    <div className="adm-profit-rows">
-                      <div className="adm-profit-row">
-                        <span>Today's Subs</span>
-                        <span className="adm-profit-val">{dashHidden ? '••••' : fmtKESFee(analytics?.revenue?.today)}</span>
-                      </div>
-                      <div className="adm-profit-row">
-                        <span>This Month Subs</span>
-                        <span className="adm-profit-val">{dashHidden ? '••••' : fmtKESFee(analytics?.revenue?.month)}</span>
-                      </div>
-                      <div className="adm-profit-row">
-                        <span>Total Subs</span>
-                        <span className="adm-profit-val">{dashHidden ? '••••' : fmtKESFee(analytics?.sub_revenue_total ?? 0)}</span>
-                      </div>
-                      <div className="adm-profit-row" style={{ borderTop: '1px solid var(--border)', marginTop: 8, paddingTop: 8 }}>
-                        <span style={{ color: '#ef4444' }}>Total Expenses</span>
-                        <span className="adm-profit-val" style={{ color: '#ef4444' }}>-{dashHidden ? '••••' : fmtKESFee(analytics?.expenses?.total ?? 0)}</span>
-                      </div>
-                    </div>
-                    <div style={{ marginTop: 12, textAlign: 'right' }}>
-                      <button onClick={() => setActiveTab('expenses')} style={{ fontSize: 11, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
-                        Manage Expenses →
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Row 5: Recent Transactions + Top Traders */}
-              <div className="adm-two-col" style={{ marginTop: 16 }}>
-                {/* Recent Orders */}
-                <div className="adm-card" style={{ flex: '3 1 0' }}>
-                  <div className="adm-card-header">
-                    <h3>Recent Orders</h3>
-                    <span className="adm-card-count">{orders.total} today</span>
-                  </div>
-                  <div className="adm-table-wrap">
-                    <table className="adm-table">
-                      <thead>
-                        <tr>
-                          <th>Side</th>
-                          <th>Amount</th>
-                          <th>Trader</th>
-                          <th>Status</th>
-                          <th>Time</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {orders.orders.slice(0, 10).map((o) => (
-                          <tr key={o.id}>
-                            <td>
-                              <span className={`adm-badge ${o.side === 'sell' ? 'green' : 'yellow'}`}>
-                                {o.side?.toUpperCase()}
-                              </span>
-                            </td>
-                            <td>{fmtKES(o.fiat_amount)}</td>
-                            <td>{o.trader_name}</td>
-                            <td>
-                              <span className={`adm-badge ${o.status === 'completed' || o.status === 'released' ? 'green' : o.status === 'cancelled' ? 'red' : 'dim'}`}>
-                                {o.status}
-                              </span>
-                            </td>
-                            <td>{o.created_at ? fmtDateEAT(o.created_at) : '-'}</td>
-                          </tr>
-                        ))}
-                        {orders.orders.length === 0 && (
-                          <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 30 }}>No orders today</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
                 {/* Top Traders */}
-                <div className="adm-top-traders" style={{ flex: '2 1 0' }}>
+                <div className="adm-card">
                   <div className="adm-card-header">
-                    <h3>Top Traders</h3>
-                    <span className="adm-card-count">by volume</span>
+                    <h3>Top traders</h3>
+                    <span className="adm-card-count">By volume</span>
                   </div>
-                  <div style={{ padding: '12px 0' }}>
-                    {analytics?.top_traders?.length > 0 ? analytics.top_traders.map((t, i) => (
-                      <div key={i} className="adm-top-trader-row">
-                        <div className="adm-top-trader-rank">#{i + 1}</div>
+                  <div style={{ padding: '8px 0' }}>
+                    {analytics?.top_traders?.length > 0 ? analytics.top_traders.slice(0, 6).map((t, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', borderBottom: i < Math.min(analytics.top_traders.length, 6) - 1 ? '0.5px solid #1f2937' : 'none' }}>
+                        <div style={{ width: 24, fontWeight: 700, fontSize: 13, color: i === 0 ? '#f59e0b' : '#6b7280', flexShrink: 0 }}>#{i + 1}</div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</div>
-                          <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>{t.trades} trades</div>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: '#e5e7eb', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</div>
+                          <div style={{ color: '#6b7280', fontSize: 11 }}>{t.trades} trades</div>
                         </div>
-                        <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--green)', whiteSpace: 'nowrap' }}>
-                          {fmtKES(t.volume)}
-                        </div>
+                        <div style={{ fontWeight: 700, fontSize: 13, color: '#10b981', whiteSpace: 'nowrap' }}>{fmtKES(t.volume)}</div>
                       </div>
-                    )) : (
-                      <p className="adm-empty">No traders yet</p>
-                    )}
+                    )) : <p className="adm-empty" style={{ padding: '24px 20px' }}>No data yet</p>}
                   </div>
                 </div>
               </div>
+
+              {/* ── Recent Orders (full width) ── */}
+              <div className="adm-card">
+                <div className="adm-card-header">
+                  <h3>Recent orders</h3>
+                  <span className="adm-card-count" style={{ cursor: 'pointer' }} onClick={() => setActiveTab('transactions')}>{orders.total} today →</span>
+                </div>
+                <div>
+                  {orders.orders.slice(0, 8).map((o, i) => (
+                    <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0', borderBottom: i < Math.min(orders.orders.length, 8) - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                      <span className={`adm-badge ${o.side === 'sell' ? 'green' : 'yellow'}`} style={{ flexShrink: 0, minWidth: 40, textAlign: 'center' }}>{o.side?.toUpperCase()}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ color: '#e5e7eb', fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.trader_name}</div>
+                        <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>{o.created_at ? fmtDateEAT(o.created_at) : '—'} · {fmtKES(o.fiat_amount)}</div>
+                      </div>
+                      <span className={`adm-badge ${o.status === 'completed' || o.status === 'released' ? 'green' : o.status === 'cancelled' ? 'red' : 'dim'}`} style={{ flexShrink: 0, textTransform: 'capitalize' }}>{o.status}</span>
+                    </div>
+                  ))}
+                  {orders.orders.length === 0 && (
+                    <div style={{ textAlign: 'center', color: '#6b7280', padding: 30 }}>No orders today</div>
+                  )}
+                </div>
+              </div>
+
             </>
           )}
 
@@ -1557,18 +1432,18 @@ export default function Admin() {
                 return (
                   <>
                     {/* Summary totals */}
-                    <div style={{ display: 'flex', gap: 10, margin: '12px 0' }}>
-                      <div style={{ flex: 1, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 10, padding: '12px 16px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, margin: '12px 0' }}>
+                      <div style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 10, padding: '12px 14px' }}>
                         <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>Total Inbound</div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: '#10b981' }}>{fmtAmt(inTotal)}</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: '#10b981' }}>{fmtAmt(inTotal)}</div>
                       </div>
-                      <div style={{ flex: 1, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10, padding: '12px 16px' }}>
+                      <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10, padding: '12px 14px' }}>
                         <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>Total Outbound</div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: '#ef4444' }}>{fmtAmt(outTotal)}</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: '#ef4444' }}>{fmtAmt(outTotal)}</div>
                       </div>
-                      <div style={{ flex: 1, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 10, padding: '12px 16px' }}>
-                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>Net</div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: (inTotal - outTotal) >= 0 ? '#10b981' : '#ef4444' }}>{fmtAmt(inTotal - outTotal)}</div>
+                      <div style={{ gridColumn: '1 / -1', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 10, padding: '11px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ fontSize: 11, color: '#6b7280' }}>Net balance</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: (inTotal - outTotal) >= 0 ? '#10b981' : '#ef4444' }}>{fmtAmt(inTotal - outTotal)}</div>
                       </div>
                     </div>
                     {/* Direction filter pills */}
@@ -1580,20 +1455,20 @@ export default function Admin() {
                         </button>
                       ))}
                     </div>
-                    <div style={{ display: 'flex', gap: 8, flex: 1 }}>
-                      <input type="text" placeholder="Search by TX ID, phone, trader, name..."
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                      <input type="text" placeholder="Search TX ID, phone, trader…"
                         value={txnSearch} onChange={(e) => setTxnSearch(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && loadTransactions(txPeriod, txnSearch, true)}
-                        style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
+                        style={{ flex: 1, minWidth: 0, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
                       />
                       <button onClick={() => loadTransactions(txPeriod, txnSearch, true)}
-                        style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                        style={{ flexShrink: 0, padding: '10px 14px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
                         Search
                       </button>
                       {txnSearch && (
                         <button onClick={() => { setTxnSearch(''); loadTransactions(txPeriod, '', true); }}
-                          style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
-                          Clear
+                          style={{ flexShrink: 0, padding: '10px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 16, cursor: 'pointer', lineHeight: 1 }}>
+                          ×
                         </button>
                       )}
                     </div>
@@ -1605,36 +1480,37 @@ export default function Admin() {
                       </span>
                       {fiatLastUpdated && <span style={{ fontSize: 11, color: '#4b5563' }}>Last: {fmtTimeEAT(fiatLastUpdated)}</span>}
                     </div>
-                    <div className="adm-table-wrap">
-                      <table className="adm-table">
-                        <thead>
-                          <tr>
-                            <th>ID</th><th>Direction</th><th>Type</th><th>Amount</th>
-                            <th>Trader</th><th>Counterparty</th><th>Phone/Account</th>
-                            <th>TX ID</th><th>Status</th><th>Time</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {fiatSlice.length === 0 ? (
-                            <tr><td colSpan={11} className="adm-empty">No fiat transactions found</td></tr>
-                          ) : fiatSlice.map((tx) => (
-                            <tr key={tx.id}>
-                              <td className="mono">{tx.id}</td>
-                              <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
-                              <td style={{ fontSize: 11, color: '#9ca3af' }}>{tx.transaction_type === 'CHOICE_INBOUND' ? 'Inbound' : tx.transaction_type === 'CHOICE_OUTBOUND' ? 'Outbound' : tx.transaction_type}</td>
-                              <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>
-                                {tx.direction === 'inbound' ? '+' : '-'}{fmtKES(tx.amount)}
-                              </td>
-                              <td>{tx.trader_name}</td>
-                              <td>{tx.sender_name !== '-' ? tx.sender_name : tx.destination !== '-' ? tx.destination : '-'}</td>
-                              <td className="mono" style={{ fontSize: 11 }}>{tx.phone !== '-' ? tx.phone : '-'}</td>
-                              <td className="mono" style={{ color: '#f59e0b', fontSize: 11 }}>{tx.mpesa_transaction_id !== '-' ? tx.mpesa_transaction_id : '-'}</td>
-                              <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
-                              <td>{tx.created_at ? fmtDateEAT(tx.created_at) : '-'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div>
+                      {fiatSlice.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '30px 0', color: '#6b7280', fontSize: 13 }}>No fiat transactions found</div>
+                      ) : fiatSlice.map((tx, i) => {
+                        const isIn = tx.direction === 'inbound';
+                        const cpName = tx.sender_name !== '-' ? tx.sender_name : tx.destination !== '-' ? tx.destination : null;
+                        const txPhone = tx.phone !== '-' ? tx.phone : null;
+                        const txId = tx.mpesa_transaction_id !== '-' ? tx.mpesa_transaction_id : null;
+                        return (
+                          <div key={tx.id} style={{ padding: '11px 0', borderBottom: i < fiatSlice.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <span className={`adm-badge ${isIn ? 'green' : 'yellow'}`} style={{ flexShrink: 0, minWidth: 36, textAlign: 'center' }}>{isIn ? 'IN' : 'OUT'}</span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ color: '#e5e7eb', fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.trader_name || '—'}</div>
+                                <div style={{ color: '#6b7280', fontSize: 11, marginTop: 1 }}>{tx.created_at ? fmtDateEAT(tx.created_at) : '—'}</div>
+                              </div>
+                              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                <div style={{ color: isIn ? '#10b981' : '#f59e0b', fontWeight: 700, fontSize: 14 }}>{isIn ? '+' : '-'}{fmtKES(tx.amount)}</div>
+                                <span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`} style={{ marginTop: 3, display: 'inline-block', textTransform: 'capitalize' }}>{tx.status}</span>
+                              </div>
+                            </div>
+                            {(cpName || txPhone || txId) && (
+                              <div style={{ display: 'flex', gap: 8, marginTop: 5, paddingLeft: 46, flexWrap: 'wrap' }}>
+                                {cpName && <span style={{ color: '#9ca3af', fontSize: 10 }}>{cpName}</span>}
+                                {txPhone && <span style={{ color: '#4b5563', fontSize: 10 }}>· {txPhone}</span>}
+                                {txId && <span style={{ color: '#f59e0b', fontSize: 10, fontFamily: 'monospace' }}>{txId}</span>}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                     {fiatTotalPages > 1 && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
@@ -1660,19 +1536,19 @@ export default function Admin() {
                 return (
                   <>
                     <div style={{ padding: '12px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <input type="text" placeholder="Search by order #, trader, counterparty..."
+                      <input type="text" placeholder="Search order #, trader, counterparty…"
                         value={ordersSearch} onChange={(e) => setOrdersSearch(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && loadOrders(cryptoPeriod, ordersSearch, true)}
-                        style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
+                        style={{ flex: 1, minWidth: 0, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
                       />
                       <button onClick={() => loadOrders(cryptoPeriod, ordersSearch, true)}
-                        style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                        style={{ flexShrink: 0, padding: '10px 14px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
                         Search
                       </button>
                       {ordersSearch && (
                         <button onClick={() => { setOrdersSearch(''); loadOrders(cryptoPeriod, '', true); }}
-                          style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
-                          Clear
+                          style={{ flexShrink: 0, padding: '10px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 16, cursor: 'pointer', lineHeight: 1 }}>
+                          ×
                         </button>
                       )}
                     </div>
@@ -1684,34 +1560,29 @@ export default function Admin() {
                       </span>
                       {txLastUpdated && <span style={{ fontSize: 11, color: '#4b5563' }}>Last: {fmtTimeEAT(txLastUpdated)}</span>}
                     </div>
-                    <div className="adm-table-wrap">
-                      <table className="adm-table">
-                        <thead>
-                          <tr>
-                            <th>Order #</th><th>Side</th><th>Trader</th><th>Crypto</th>
-                            <th>Fiat Amount</th><th>Rate</th><th>Counterparty</th>
-                            <th>Fee</th><th>Status</th><th>Time</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {pageSlice.length === 0 ? (
-                            <tr><td colSpan={10} className="adm-empty">No crypto orders found</td></tr>
-                          ) : pageSlice.map((o) => (
-                            <tr key={o.id}>
-                              <td className="mono" style={{ fontSize: 11, color: '#f59e0b' }}>{o.binance_order_number || o.id}</td>
-                              <td><span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`}>{o.side}</span></td>
-                              <td>{o.trader_name}</td>
-                              <td style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset}</td>
-                              <td style={{ fontWeight: 600, color: '#10b981' }}>{fmtKES(o.fiat_amount)}</td>
-                              <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${o.price.toLocaleString()}/${o.asset || 'USDT'}` : '—'}</td>
-                              <td>{o.counterparty}</td>
-                              <td style={{ color: '#ef4444', fontSize: 12 }}>{o.platform_fee ? fmtKES(o.platform_fee) : '—'}</td>
-                              <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
-                              <td>{o.created_at ? fmtDateEAT(o.created_at) : '-'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div>
+                      {pageSlice.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '30px 0', color: '#6b7280', fontSize: 13 }}>No crypto orders found</div>
+                      ) : pageSlice.map((o, i) => (
+                        <div key={o.id} style={{ padding: '11px 0', borderBottom: i < pageSlice.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`} style={{ flexShrink: 0, minWidth: 36, textAlign: 'center' }}>{o.side}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ color: '#e5e7eb', fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.trader_name || '—'}</div>
+                              <div style={{ color: '#6b7280', fontSize: 11, marginTop: 1 }}>{o.created_at ? fmtDateEAT(o.created_at) : '—'}</div>
+                            </div>
+                            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                              <div style={{ color: '#10b981', fontWeight: 700, fontSize: 14 }}>{fmtKES(o.fiat_amount)}</div>
+                              <span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`} style={{ marginTop: 3, display: 'inline-block', textTransform: 'capitalize' }}>{o.status}</span>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 5, paddingLeft: 46, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <span style={{ color: '#9ca3af', fontSize: 10, fontWeight: 600 }}>{o.crypto_amount} {o.asset}</span>
+                            {o.counterparty && <span style={{ color: '#4b5563', fontSize: 10 }}>· {o.counterparty}</span>}
+                            {o.platform_fee > 0 && <span style={{ color: '#ef4444', fontSize: 10 }}>· Fee: {fmtKES(o.platform_fee)}</span>}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                     {totalPages > 1 && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
@@ -1734,96 +1605,243 @@ export default function Admin() {
 
           {/* ==================== TRADERS ==================== */}
           {activeTab === 'traders' && !viewingTrader && (() => {
-            const filteredTraders = traderRoleFilter === 'traders'
+            // Base list by role tab
+            const baseList = traderRoleFilter === 'traders'
               ? traders.filter(t => !t.role || t.role === 'trader' || t.role === 'admin')
               : traders.filter(t => t.role === 'employee');
+            // Apply search
+            const searched = traderSearch.trim()
+              ? baseList.filter(t => [t.full_name, t.email, t.phone].some(f => f?.toLowerCase().includes(traderSearch.toLowerCase())))
+              : baseList;
+            // Apply tier filter
+            const tierFiltered = traderTierFilter === 'all' ? searched
+              : searched.filter(t => (traderTierFilter === 'free' ? (!t.tier || t.tier === 'standard') : t.tier === traderTierFilter));
+            // Apply bot filter
+            const botFiltered = traderBotFilter === 'all' ? tierFiltered
+              : tierFiltered.filter(t => {
+                  const ls = fmtLastSeen(t.last_seen_at, t.last_web_active);
+                  return traderBotFilter === 'online' ? ls.online : !ls.online;
+                });
+            // Sort
+            const sorted = [...botFiltered].sort((a, b) => {
+              if (traderSort === 'volume') return (b.total_volume || 0) - (a.total_volume || 0);
+              if (traderSort === 'trades') return (b.total_trades || 0) - (a.total_trades || 0);
+              return (a.full_name || '').localeCompare(b.full_name || '');
+            });
+            // Avatar bg colour from initials
+            const avatarColor = (name) => {
+              const colors = ['#1E3A8A','#065F46','#5B21B6','#92400E','#7F1D1D','#0F4C5C','#1F4E79','#3B0764'];
+              let h = 0; for (const c of (name||'')) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
+              return colors[Math.abs(h) % colors.length];
+            };
+            const avatarFg = () => '#c7d2fe';
+            const tierLabel = (tier) => tier === 'advanced' ? 'Advanced' : tier === 'pro_max' ? 'Pro Max' : tier === 'pro' ? 'Pro' : tier === 'starter' ? 'Starter' : 'Free';
+            const tierColor = (tier) => tier === 'advanced' ? { bg: 'rgba(239,68,68,0.15)', color: '#ef4444' }
+              : tier === 'pro_max' ? { bg: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }
+              : tier === 'pro' ? { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b' }
+              : tier === 'starter' ? { bg: 'rgba(16,185,129,0.12)', color: '#10b981' }
+              : { bg: 'rgba(156,163,175,0.12)', color: '#9ca3af' };
+            const roleColor = (role) => role === 'admin' ? { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b' }
+              : { bg: 'rgba(156,163,175,0.12)', color: '#9ca3af' };
+            const onlineCount = traders.filter(t => fmtLastSeen(t.last_seen_at, t.last_web_active).online).length;
+            const adminCount  = traders.filter(t => t.role === 'admin').length;
+            // CSV export
+            const exportCSV = () => {
+              const header = 'Name,Email,Phone,Tier,Role,Trades,Volume,Status';
+              const rows = sorted.map(t => [t.full_name, t.email, t.phone, tierLabel(t.tier), t.role||'trader', t.total_trades||0, t.total_volume||0, t.status].map(v=>`"${v}"`).join(','));
+              const blob = new Blob([[header,...rows].join('\n')], { type: 'text/csv' });
+              const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'traders.csv'; a.click();
+            };
             return (
-              <div className="adm-card">
-                <div className="adm-card-header">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                      {[['traders', 'Traders'], ['employees', 'Employees']].map(([key, label]) => (
-                        <button key={key} onClick={() => setTraderRoleFilter(key)}
-                          style={{ padding: '5px 18px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
-                            background: traderRoleFilter === key ? '#f59e0b' : 'transparent',
-                            color: traderRoleFilter === key ? '#000' : '#9ca3af' }}>
-                          {label}
-                        </button>
-                      ))}
+              <div onClick={() => setTraderDrop(null)}>
+                {/* Page header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+                  <div>
+                    <div style={{ color: '#e5e7eb', fontSize: 18, fontWeight: 600 }}>All traders</div>
+                    <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>
+                      {traders.length} total · {adminCount} admin · {onlineCount} online now
                     </div>
-                    <span className="adm-card-count">{filteredTraders.length} total</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={exportCSV} title="Export CSV"
+                      style={{ width: 34, height: 34, background: '#111827', border: '0.5px solid #374151', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#9ca3af', flexShrink: 0 }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    </button>
+                    <button title="Add trader"
+                      style={{ width: 34, height: 34, background: '#f59e0b', border: 'none', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0f1419" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </button>
                   </div>
                 </div>
-                <div className="adm-table-wrap">
-                  <table className="adm-table">
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>Email</th>
-                        <th>Phone</th>
-                        {traderRoleFilter === 'traders' && <><th>Bot</th><th>Trades</th><th>Volume</th><th>Tier</th></>}
-                        <th>Role</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredTraders.length === 0 ? (
-                        <tr><td colSpan={traderRoleFilter === 'traders' ? 10 : 5} className="adm-empty">No {traderRoleFilter} found</td></tr>
-                      ) : filteredTraders.map((t) => (
-                        <tr key={t.id}>
-                          <td><button style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline', padding: 0 }} onClick={() => openTraderPage(t)}>{t.full_name}</button></td>
-                          <td>{t.email}</td>
-                          <td>{t.phone}</td>
-                          {traderRoleFilter === 'traders' && <>
-                            <td>
-                              {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_web_active); return (
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: s.online ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.15)', color: s.online ? '#10b981' : '#9ca3af', border: `1px solid ${s.online ? 'rgba(16,185,129,0.3)' : 'rgba(107,114,128,0.3)'}` }}>
-                                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.online ? '#10b981' : '#6b7280', flexShrink: 0 }} />
-                                  {s.label}
-                                </span>
-                              ); })()}
-                            </td>
-                            <td>{t.total_trades || 0}</td>
-                            <td>KES {(t.total_volume || 0).toLocaleString()}</td>
-                            <td>
-                              <select className="adm-select" value={t.tier || "standard"} onChange={(e) => handleTierChange(t.id, e.target.value)}>
-                                <option value="standard">Free</option>
-                                <option value="starter">Starter</option>
-                                <option value="pro">Pro</option>
-                              </select>
-                            </td>
-                          </>}
-                          <td>
-                            <select className="adm-select" value={t.role || 'trader'} onChange={(e) => handleRoleChange(t.id, e.target.value)}>
-                              <option value="trader">Trader</option>
-                              <option value="employee">Employee</option>
-                              <option value="admin">Admin</option>
-                            </select>
-                          </td>
-                          <td>
-                            <span className={`adm-badge ${t.status === 'active' ? 'green' : t.status === 'suspended' ? 'red' : 'yellow'}`}>
-                              {t.status}
-                            </span>
-                          </td>
-                          <td style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <select className="adm-select" value={t.status || "pending"} onChange={(e) => handleStatusChange(t.id, e.target.value)}>
-                              <option value="pending">Pending</option>
-                              <option value="active">Active</option>
-                              <option value="paused">Paused</option>
-                              <option value="suspended">Suspended</option>
-                            </select>
-                            <button
-                              onClick={() => handleDeleteTrader(t.id, t.full_name)}
-                              title="Delete trader"
-                              style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 13, lineHeight: 1, flexShrink: 0 }}>
-                              🗑
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+
+                {/* Tabs row */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                  {[['traders', 'Traders'], ['employees', 'Employees']].map(([key, label]) => {
+                    const cnt = key === 'traders' ? traders.filter(t => !t.role || t.role === 'trader' || t.role === 'admin').length
+                      : traders.filter(t => t.role === 'employee').length;
+                    const active = traderRoleFilter === key;
+                    return (
+                      <button key={key} onClick={() => setTraderRoleFilter(key)}
+                        style={{ padding: '6px 14px', borderRadius: 16, border: ('0.5px solid ' + (active ? 'rgba(245,158,11,0.4)' : '#374151')), cursor: 'pointer', fontSize: 12, fontWeight: active ? 600 : 400,
+                          background: active ? 'rgba(245,158,11,0.15)' : '#111827',
+                          color: active ? '#f59e0b' : '#9ca3af' }}>
+                        {label} <span style={{ opacity: 0.65, marginLeft: 4, fontSize: 11 }}>{cnt}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Search row */}
+                <div style={{ background: '#111827', border: '0.5px solid #374151', borderRadius: 8, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }} onClick={e => e.stopPropagation()}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                  <input value={traderSearch} onChange={e => setTraderSearch(e.target.value)} onClick={e => e.stopPropagation()}
+                    placeholder="Search name, email, phone…"
+                    style={{ background: 'transparent', border: 'none', outline: 'none', color: '#e5e7eb', fontSize: 13, flex: 1, minWidth: 0 }} />
+                  {traderSearch && <button onClick={() => setTraderSearch('')} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 16, padding: 0, lineHeight: 1 }}>×</button>}
+                </div>
+
+                {/* Filter + Sort row */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                  {/* Filter button with inline panel */}
+                  <div style={{ flex: 1, position: 'relative' }} onClick={e => e.stopPropagation()}>
+                    <button onClick={() => setTraderDrop(d => d?.type === 'filterPanel' ? null : { type: 'filterPanel' })}
+                      style={{ width: '100%', background: '#111827', border: ('0.5px solid ' + ((traderTierFilter !== 'all' || traderBotFilter !== 'all') ? '#f59e0b' : '#374151')), padding: '8px 12px', borderRadius: 6, fontSize: 12, color: (traderTierFilter !== 'all' || traderBotFilter !== 'all') ? '#f59e0b' : '#e5e7eb', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                      Filter
+                      {(traderTierFilter !== 'all' || traderBotFilter !== 'all') && <span style={{ marginLeft: 'auto', background: '#f59e0b', color: '#000', width: 16, height: 16, borderRadius: '50%', fontSize: 9, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>!</span>}
+                    </button>
+                    {traderDrop?.type === 'filterPanel' && (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, background: '#1f2937', border: '1px solid #374151', borderRadius: 10, zIndex: 50, padding: 12, minWidth: 230 }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                          <span style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 500 }}>Filter traders</span>
+                          <button onClick={() => { setTraderTierFilter('all'); setTraderBotFilter('all'); }} style={{ background: 'none', border: 'none', color: '#f59e0b', fontSize: 11, fontWeight: 500, cursor: 'pointer' }}>Clear all</button>
+                        </div>
+                        <div style={{ color: '#9ca3af', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 7 }}>Tier</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 12 }}>
+                          {[['all','All'],['free','Free'],['starter','Starter'],['pro','Pro'],['pro_max','Pro Max'],['advanced','Advanced']].map(([v,l]) => (
+                            <button key={v} onClick={() => setTraderTierFilter(v)}
+                              style={{ padding: '5px 10px', borderRadius: 12, border: ('0.5px solid ' + (traderTierFilter === v ? '#f59e0b' : '#374151')), background: traderTierFilter === v ? 'rgba(245,158,11,0.15)' : '#111827', color: traderTierFilter === v ? '#f59e0b' : '#9ca3af', fontSize: 11, cursor: 'pointer' }}>{l}</button>
+                          ))}
+                        </div>
+                        <div style={{ color: '#9ca3af', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 7 }}>Bot status</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                          {[['all','All'],['online','Online'],['offline','Offline']].map(([v,l]) => (
+                            <button key={v} onClick={() => setTraderBotFilter(v)}
+                              style={{ padding: '5px 10px', borderRadius: 12, border: ('0.5px solid ' + (traderBotFilter === v ? '#f59e0b' : '#374151')), background: traderBotFilter === v ? 'rgba(245,158,11,0.15)' : '#111827', color: traderBotFilter === v ? '#f59e0b' : '#9ca3af', fontSize: 11, cursor: 'pointer' }}>{l}</button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {/* Sort button */}
+                  <div style={{ flex: 1, position: 'relative' }} onClick={e => e.stopPropagation()}>
+                    <button onClick={() => setTraderDrop(d => d?.type === 'sort' ? null : { type: 'sort' })}
+                      style={{ width: '100%', background: '#111827', border: '0.5px solid #374151', padding: '8px 12px', borderRadius: 6, fontSize: 12, color: '#e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+                      <span style={{ color: '#9ca3af' }}>Sort</span>
+                      <span style={{ color: '#f59e0b', display: 'flex', alignItems: 'center', gap: 4 }}>{traderSort === 'volume' ? 'Volume' : traderSort === 'trades' ? 'Trades' : 'Name'} ↓</span>
+                    </button>
+                    {traderDrop?.type === 'sort' && (
+                      <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#1f2937', border: '1px solid #374151', borderRadius: 8, zIndex: 50, minWidth: 100, overflow: 'hidden' }}>
+                        {[['volume','Volume'],['trades','Trades'],['name','Name']].map(([v,l]) => (
+                          <button key={v} onClick={() => { setTraderSort(v); setTraderDrop(null); }}
+                            style={{ width: '100%', textAlign: 'left', padding: '8px 12px', background: v === traderSort ? 'rgba(245,158,11,0.1)' : 'none', border: 'none', color: v === traderSort ? '#f59e0b' : '#d1d5db', fontSize: 12, cursor: 'pointer' }}>{l}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Trader cards */}
+                {sorted.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '40px 0', color: '#6b7280', fontSize: 13 }}>No traders found</div>
+                ) : sorted.map((t) => {
+                  const ls = fmtLastSeen(t.last_seen_at, t.last_web_active);
+                  const initials = (t.full_name || 'U').split(' ').map(w => w[0]).slice(0,2).join('').toUpperCase();
+                  const tc = tierColor(t.tier);
+                  const rc = roleColor(t.role);
+                  const isSystem = t.role === 'owner' || t.email === 'admin@sparkp2p.com';
+                  const vol = t.total_volume || 0;
+                  const volStr = vol >= 1e9 ? (vol/1e9).toFixed(1)+'B' : vol >= 1e6 ? (vol/1e6).toFixed(2)+'M' : vol >= 1e3 ? Math.round(vol/1e3)+'K' : vol ? vol.toLocaleString() : null;
+                  return (
+                    <div key={t.id} style={{ background: '#111827', border: '0.5px solid #374151', borderRadius: 12, padding: 14, marginBottom: 10 }}>
+                      {/* Top row: avatar + name/email/phone + volume/trades */}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer' }} onClick={() => openTraderPage(t)}>
+                        <div style={{ width: 40, height: 40, borderRadius: '50%', background: isSystem ? '#1f2937' : avatarColor(t.full_name), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 500, color: '#c7d2fe', flexShrink: 0 }}>
+                          {isSystem ? '🛡️' : initials}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.full_name}</span>
+                            {t.role === 'admin' && <span style={{ background: 'rgba(245,158,11,0.18)', color: '#f59e0b', fontSize: 9, padding: '1px 5px', borderRadius: 3, fontWeight: 700, flexShrink: 0 }}>YOU</span>}
+                            {isSystem && <span style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontSize: 9, padding: '1px 5px', borderRadius: 3, fontWeight: 700, flexShrink: 0 }}>SYSTEM</span>}
+                          </div>
+                          <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.email}</div>
+                          <div style={{ color: '#9ca3af', fontSize: 11, marginTop: 2 }}>{t.phone || 'No phone'}</div>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', flexShrink: 0 }}>
+                          <div style={{ color: volStr ? '#10b981' : '#4b5563', fontSize: 14, fontWeight: 500 }}>{volStr ? ('KES ' + volStr) : '—'}</div>
+                          <div style={{ color: '#6b7280', fontSize: 10, marginTop: 2 }}>{t.total_trades || 0} trades</div>
+                        </div>
+                      </div>
+                      {/* Bottom row: last-seen + tier▾ + role▾ + ⋮ */}
+                      <div style={{ marginTop: 12, paddingTop: 10, borderTop: '0.5px solid #1f2937', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 500, background: 'rgba(107,114,128,0.15)', color: '#9ca3af', flexShrink: 0 }}>
+                          {ls.online && <span style={{ width: 5, height: 5, background: '#10b981', borderRadius: '50%' }} />}
+                          {ls.label}
+                        </span>
+                        {/* Tier dropdown */}
+                        <div style={{ position: 'relative' }} onClick={e => { e.stopPropagation(); if (!isSystem) setTraderDrop(d => d?.type === 'tier' && d?.id === t.id ? null : { type: 'tier', id: t.id }); }}>
+                          <span style={{ padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600, background: tc.bg, color: tc.color, display: 'inline-flex', alignItems: 'center', gap: 3, cursor: isSystem ? 'default' : 'pointer' }}>
+                            {tierLabel(t.tier)}{!isSystem && <span style={{ fontSize: 8, opacity: 0.7 }}>▾</span>}
+                          </span>
+                          {traderDrop?.type === 'tier' && traderDrop?.id === t.id && (
+                            <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 4, background: '#1f2937', border: '1px solid #374151', borderRadius: 8, zIndex: 100, minWidth: 90, overflow: 'hidden' }}>
+                              {[['standard','Free'],['starter','Starter'],['pro','Pro'],['pro_max','Pro Max'],['advanced','Advanced']].map(([v,l]) => (
+                                <button key={v} onClick={(e) => { e.stopPropagation(); handleTierChange(t.id, v); setTraderDrop(null); }}
+                                  style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: (t.tier||'standard') === v ? 'rgba(245,158,11,0.1)' : 'none', border: 'none', color: (t.tier||'standard') === v ? '#f59e0b' : '#d1d5db', fontSize: 12, cursor: 'pointer' }}>{l}</button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        {/* Role dropdown */}
+                        <div style={{ position: 'relative' }} onClick={e => { e.stopPropagation(); if (!isSystem) setTraderDrop(d => d?.type === 'role' && d?.id === t.id ? null : { type: 'role', id: t.id }); }}>
+                          <span style={{ padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600, background: isSystem ? 'rgba(167,139,250,0.15)' : rc.bg, color: isSystem ? '#a78bfa' : rc.color, display: 'inline-flex', alignItems: 'center', gap: 3, cursor: isSystem ? 'default' : 'pointer' }}>
+                            {isSystem ? 'Owner' : (t.role === 'admin' ? 'Admin' : 'Trader')}{!isSystem && <span style={{ fontSize: 8, opacity: 0.7 }}>▾</span>}
+                          </span>
+                          {traderDrop?.type === 'role' && traderDrop?.id === t.id && (
+                            <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 4, background: '#1f2937', border: '1px solid #374151', borderRadius: 8, zIndex: 100, minWidth: 90, overflow: 'hidden' }}>
+                              {[['trader','Trader'],['admin','Admin'],['employee','Employee']].map(([v,l]) => (
+                                <button key={v} onClick={(e) => { e.stopPropagation(); handleRoleChange(t.id, v); setTraderDrop(null); }}
+                                  style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: (t.role||'trader') === v ? 'rgba(245,158,11,0.1)' : 'none', border: 'none', color: (t.role||'trader') === v ? '#f59e0b' : '#d1d5db', fontSize: 12, cursor: 'pointer' }}>{l}</button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        {/* Action ⋮ */}
+                        <div style={{ marginLeft: 'auto', position: 'relative' }} onClick={e => { e.stopPropagation(); if (!isSystem) setTraderDrop(d => d?.type === 'action' && d?.id === t.id ? null : { type: 'action', id: t.id }); }}>
+                          <div style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4, color: isSystem ? '#374151' : '#6b7280', cursor: isSystem ? 'not-allowed' : 'pointer', fontSize: 16 }}>⋮</div>
+                          {traderDrop?.type === 'action' && traderDrop?.id === t.id && (
+                            <div style={{ position: 'absolute', bottom: '100%', right: 0, marginBottom: 4, background: '#1f2937', border: '1px solid #374151', borderRadius: 8, zIndex: 100, minWidth: 130, overflow: 'hidden' }}>
+                              <button onClick={(e) => { e.stopPropagation(); setTraderDrop(null); openTraderPage(t); }}
+                                style={{ width: '100%', textAlign: 'left', padding: '8px 14px', background: 'none', border: 'none', color: '#d1d5db', fontSize: 12, cursor: 'pointer' }}>View details</button>
+                              {[['active','Set active'],['paused','Pause bot'],['suspended','Suspend']].map(([v,l]) => (
+                                <button key={v} onClick={(e) => { e.stopPropagation(); handleStatusChange(t.id, v); setTraderDrop(null); }}
+                                  style={{ width: '100%', textAlign: 'left', padding: '8px 14px', background: 'none', border: 'none', color: v === 'suspended' ? '#f87171' : '#d1d5db', fontSize: 12, cursor: 'pointer' }}>{l}</button>
+                              ))}
+                              <div style={{ borderTop: '1px solid #374151' }} />
+                              <button onClick={(e) => { e.stopPropagation(); setTraderDrop(null); handleDeleteTrader(t.id, t.full_name); }}
+                                style={{ width: '100%', textAlign: 'left', padding: '8px 14px', background: 'none', border: 'none', color: '#f87171', fontSize: 12, cursor: 'pointer' }}>Delete trader</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Footer */}
+                <div style={{ color: '#6b7280', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>
+                  Showing {sorted.length} of {baseList.length} traders
                 </div>
               </div>
             );
@@ -1835,7 +1853,7 @@ export default function Admin() {
             const w = viewingTraderWallet;
             const initials = (t.full_name || '?').split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase();
             const statusColor = t.status === 'active' ? '#10b981' : t.status === 'suspended' ? '#ef4444' : '#f59e0b';
-            const tierColor = t.tier === 'pro' ? '#8b5cf6' : t.tier === 'starter' ? '#3b82f6' : '#6b7280';
+            const tierColor = t.tier === 'advanced' ? '#ef4444' : t.tier === 'pro_max' ? '#8b5cf6' : t.tier === 'pro' ? '#f59e0b' : t.tier === 'starter' ? '#3b82f6' : '#6b7280';
 
             return (
               <div>
@@ -1867,7 +1885,7 @@ export default function Admin() {
                           <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>{t.full_name}</div>
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${statusColor}22`, color: statusColor, border: `1px solid ${statusColor}44` }}>{t.status}</span>
-                            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${tierColor}22`, color: tierColor, border: `1px solid ${tierColor}44` }}>{t.tier === 'standard' ? 'Free' : t.tier}</span>
+                            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${tierColor}22`, color: tierColor, border: `1px solid ${tierColor}44` }}>{t.tier === 'standard' ? 'Free' : t.tier === 'pro_max' ? 'Pro Max' : t.tier === 'advanced' ? 'Advanced' : t.tier === 'pro' ? 'Pro' : t.tier === 'starter' ? 'Starter' : t.tier}</span>
                             <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(156,163,175,0.15)', color: '#9ca3af', border: '1px solid rgba(156,163,175,0.3)' }}>{t.role || 'trader'}</span>
                             {t.binance_connected && <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' }}>Binance ✓</span>}
                             {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_login); return (
@@ -1892,9 +1910,11 @@ export default function Admin() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                             <label style={{ fontSize: 11, color: '#6b7280' }}>Tier</label>
                             <select className="adm-select" value={t.tier || "standard"} onChange={async (e) => { await handleTierChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, tier: e.target.value })); }}>
-                              <option value="standard">Free</option>
-                              <option value="starter">Starter</option>
-                              <option value="pro">Pro</option>
+                              <option value="standard">Free (0 credits)</option>
+                              <option value="starter">Starter (167 credits)</option>
+                              <option value="pro">Pro (500 credits)</option>
+                              <option value="pro_max">Pro Max (2,000 credits)</option>
+                              <option value="advanced">Advanced (8,000 credits)</option>
                             </select>
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -2966,6 +2986,7 @@ export default function Admin() {
                           <th>Remarks</th>
                           <th>M-Pesa Code</th>
                           <th>Time</th>
+                          <th></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2982,6 +3003,21 @@ export default function Admin() {
                             <td style={{ color: '#6b7280', fontSize: 12 }}>{p.remarks || '—'}</td>
                             <td className="mono" style={{ fontSize: 11 }}>{p.mpesa_transaction_id || '—'}</td>
                             <td style={{ color: '#6b7280', fontSize: 12 }}>{fmtDateEAT(p.created_at)}</td>
+                            <td>
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await resolveUnmatchedPayment(p.id);
+                                    const r = await getUnmatchedPayments();
+                                    setUnmatched(r.data || { deposits: [], withdrawals: [] });
+                                  } catch (e) {
+                                    alert(e?.response?.data?.detail || 'Failed to resolve');
+                                  }
+                                }}
+                                style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid #10b981', background: 'rgba(16,185,129,0.1)', color: '#10b981', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                ✓ Resolve
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -2992,291 +3028,153 @@ export default function Admin() {
             );
           })()}
 
-          {/* ==================== REVENUE ==================== */}
-          {activeTab === 'revenue' && (
-            <>
-              {/* Period + Plan filters */}
-              <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-                <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                  {[['all','All Time'], ['month','This Month'], ['week','This Week'], ['today','Today']].map(([val, label]) => (
-                    <button key={val} onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1); }}
-                      style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                        background: revPeriod === val ? '#f59e0b' : 'transparent', color: revPeriod === val ? '#000' : '#9ca3af' }}>
-                      {label}
-                    </button>
-                  ))}
+
+                              {/* ==================== WITHDRAWALS ==================== */}                    {/* ==================== WITHDRAWALS ==================== */}
+          {activeTab === 'withdrawals' && (
+            <div>
+              {/* Page header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                <div>
+                  <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>Bank Withdrawals</h2>
+                  <p style={{ color: '#6b7280', fontSize: 13, margin: 0 }}>Choice Microfinance → External Bank transfers by traders</p>
                 </div>
-                <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                  {[['all','All Plans'], ['starter','Starter'], ['pro','Pro']].map(([val, label]) => (
-                    <button key={val} onClick={() => { setRevPlan(val); setRevPage(1); loadRevenueBreakdown(revPeriod, val, 1); }}
-                      style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                        background: revPlan === val ? '#10b981' : 'transparent', color: revPlan === val ? '#000' : '#9ca3af' }}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
+                <button onClick={() => loadWithdrawals(wdStatus, wdPeriod, 1)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}>
+                  <RefreshCw size={14} /> Refresh
+                </button>
               </div>
 
               {/* Summary cards */}
-              <div className="adm-stat-grid" style={{ marginBottom: 16 }}>
-                <div className="adm-stat-card" style={{ '--card-accent': '#10b981' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Total Subscription Revenue</span>
-                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.total ?? 0)}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981' }}><DollarSign size={22} /></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
+                <div className="adm-card" style={{ padding: '16px 20px' }}>
+                  <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 6 }}>Total Disbursed</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: '#10b981' }}>{fmtKES(withdrawals.summary?.total_amount || 0)}</div>
+                  <div style={{ fontSize: 11, color: '#4b5563', marginTop: 4 }}>{withdrawals.summary?.total_count || 0} total transfers</div>
                 </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#f59e0b' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Starter ({(revBreakdown?.summary?.starter_count ?? 0)})</span>
-                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.starter ?? 0)}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}><DollarSign size={22} /></div>
+                <div className="adm-card" style={{ padding: '16px 20px' }}>
+                  <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 6 }}>Completed</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: '#3b82f6' }}>{withdrawals.summary?.completed_count || 0}</div>
+                  <div style={{ fontSize: 11, color: '#4b5563', marginTop: 4 }}>Successfully transferred</div>
                 </div>
-                <div className="adm-stat-card" style={{ '--card-accent': '#8b5cf6' }}>
-                  <div className="adm-stat-info">
-                    <span className="adm-stat-label">Pro ({(revBreakdown?.summary?.pro_count ?? 0)})</span>
-                    <span className="adm-stat-value">{fmtKESFee(revBreakdown?.summary?.pro ?? 0)}</span>
-                  </div>
-                  <div className="adm-stat-icon" style={{ background: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }}><DollarSign size={22} /></div>
+                <div className="adm-card" style={{ padding: '16px 20px' }}>
+                  <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 6 }}>Failed</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: '#ef4444' }}>{withdrawals.summary?.failed_count || 0}</div>
+                  <div style={{ fontSize: 11, color: '#4b5563', marginTop: 4 }}>Transfer failures</div>
                 </div>
               </div>
 
-              {/* Subscription payments table */}
-              <div className="adm-card" style={{ marginBottom: 16 }}>
-                <div className="adm-card-header">
-                  <h3>Subscription Payments</h3>
-                  <span className="adm-card-count">{revBreakdown?.total ?? 0} total</span>
+              {/* Filters */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: 0, background: '#111827', borderRadius: 8, padding: 4, border: '1px solid #1f2937' }}>
+                  {[['all','All Status'], ['completed','Completed'], ['failed','Failed']].map(([v,l]) => (
+                    <button key={v} onClick={() => { setWdStatus(v); setWdPage(1); loadWithdrawals(v, wdPeriod, 1); }}
+                      style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                        background: wdStatus === v ? '#f59e0b' : 'transparent', color: wdStatus === v ? '#000' : '#6b7280' }}>
+                      {l}
+                    </button>
+                  ))}
                 </div>
-                {revLoading ? (
-                  <p className="adm-empty">Loading...</p>
-                ) : revBreakdown?.transactions?.length > 0 ? (
-                  <>
-                    <div className="adm-table-wrap">
-                      <table className="adm-table">
-                        <thead>
-                          <tr>
-                            <th>Date</th>
-                            <th>Trader</th>
-                            <th>Plan</th>
-                            <th>M-Pesa TX</th>
-                            <th>Expires</th>
-                            <th style={{ textAlign: 'right' }}>Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {revBreakdown.transactions.map((tx) => (
-                            <tr key={tx.id}>
-                              <td style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>{fmtDateEAT(tx.started_at)}</td>
-                              <td>
-                                <div style={{ fontWeight: 500, fontSize: 13 }}>{tx.trader_name}</div>
-                                <div style={{ fontSize: 11, color: '#6b7280' }}>{tx.trader_phone}</div>
-                              </td>
-                              <td>
-                                <span style={{ padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700,
-                                  background: tx.plan === 'pro' ? 'rgba(139,92,246,0.15)' : 'rgba(245,158,11,0.15)',
-                                  color: tx.plan === 'pro' ? '#8b5cf6' : '#f59e0b', textTransform: 'uppercase' }}>
-                                  {tx.plan}
-                                </span>
-                              </td>
-                              <td className="mono" style={{ fontSize: 11 }}>{tx.mpesa_transaction_id || '—'}</td>
-                              <td style={{ fontSize: 12, color: '#6b7280' }}>{tx.expires_at ? fmtDateEAT(tx.expires_at) : '—'}</td>
-                              <td style={{ textAlign: 'right', fontWeight: 700, color: '#10b981' }}>+{fmtKESFee(tx.amount)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    {revBreakdown.pages > 1 && (
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
-                        <button onClick={() => { setRevPage(p => p - 1); loadRevenueBreakdown(revPeriod, revPlan, revPage - 1); }} disabled={revPage <= 1}
-                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage <= 1 ? '#4b5563' : '#fff', cursor: revPage <= 1 ? 'default' : 'pointer', fontSize: 13 }}>Prev</button>
-                        <span style={{ fontSize: 13, color: '#6b7280' }}>Page {revPage} of {revBreakdown.pages} &middot; {revBreakdown.total} payments</span>
-                        <button onClick={() => { setRevPage(p => p + 1); loadRevenueBreakdown(revPeriod, revPlan, revPage + 1); }} disabled={revPage >= revBreakdown.pages}
-                          style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage >= revBreakdown.pages ? '#4b5563' : '#fff', cursor: revPage >= revBreakdown.pages ? 'default' : 'pointer', fontSize: 13 }}>Next</button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <p className="adm-empty">No subscription payments for this period</p>
-                )}
-              </div>
-
-              {/* Monthly volume breakdown */}
-              <div className="adm-card">
-                <div className="adm-card-header"><h3>Monthly Volume</h3></div>
-                {analytics?.monthly_volumes?.length > 0 ? (
-                  <div className="adm-table-wrap">
-                    <table className="adm-table">
-                      <thead>
-                        <tr><th>Month</th><th>Buy Volume</th><th>Sell Volume</th><th>Total Volume</th><th>Trades</th><th>Profit</th></tr>
-                      </thead>
-                      <tbody>
-                        {[...analytics.monthly_volumes].reverse().map((m, i) => (
-                          <tr key={i}>
-                            <td style={{ fontWeight: 600 }}>{m.month}</td>
-                            <td style={{ color: 'var(--blue)' }}>{fmtKES(m.buy_volume)}</td>
-                            <td style={{ color: 'var(--green)' }}>{fmtKES(m.sell_volume)}</td>
-                            <td>{fmtKES(m.total_volume)}</td>
-                            <td>{m.trades}</td>
-                            <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmtKES(m.profit)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="adm-empty">No revenue data yet</p>
-                )}
-              </div>
-            </>
-          )}
-
-                    {/* ==================== WITHDRAWALS ==================== */}
-          {activeTab === 'withdrawals' && (
-            <div className="adm-card">
-              {/* ── Header: title + method toggle + period filter ── */}
-              <div className="adm-card-header">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <h3>Withdrawals</h3>
-
-                  {/* Status toggle */}
-                  <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                    {[['all','All Status'], ['pending','Pending'], ['completed','Completed']].map(([val, label]) => (
-                      <button key={val} onClick={() => { setWdStatus(val); setWdPage(1); loadWithdrawals(wdMethod, val, wdPeriod, 1); }}
-                        style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                          background: wdStatus === val ? (val === 'pending' ? '#f59e0b' : val === 'completed' ? '#10b981' : '#f59e0b') : 'transparent',
-                          color: wdStatus === val ? '#000' : '#9ca3af',
-                        }}>
-                        {val === 'pending' && (withdrawals.summary?.pending_count > 0) ? `Pending (${withdrawals.summary.pending_count})` : label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                {/* Period filter */}
-                <div className="adm-period-filter">
-                  {[['today','Today'], ['week','Week'], ['month','Month'], ['all','All']].map(([val, label]) => (
-                    <button key={val} className={`adm-period-btn ${wdPeriod === val ? 'active' : ''}`}
-                      onClick={() => { setWdPeriod(val); setWdPage(1); loadWithdrawals(wdMethod, wdStatus, val, 1); }}>
-                      {label}
+                <div style={{ display: 'flex', gap: 0, background: '#111827', borderRadius: 8, padding: 4, border: '1px solid #1f2937' }}>
+                  {[['today','Today'], ['week','This Week'], ['month','This Month'], ['all','All Time']].map(([v,l]) => (
+                    <button key={v} onClick={() => { setWdPeriod(v); setWdPage(1); loadWithdrawals(wdStatus, v, 1); }}
+                      style={{ padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                        background: wdPeriod === v ? '#1f2937' : 'transparent', color: wdPeriod === v ? '#fff' : '#6b7280' }}>
+                      {l}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* ── Stats bar ── */}
-              <div style={{ padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 24, borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 12, color: '#6b7280' }}>{withdrawals.summary?.total_count ?? 0} total withdrawals</span>
-                <span style={{ fontSize: 12, color: '#10b981' }}>KES {(withdrawals.summary?.total_amount ?? 0).toLocaleString()} disbursed</span>
-                {(withdrawals.summary?.pending_count ?? 0) > 0 && (
-                  <span style={{ fontSize: 12, color: '#f59e0b', fontWeight: 600 }}>
-                    ⚠ {withdrawals.summary.pending_count} I&amp;M pending · KES {(withdrawals.summary.pending_amount || 0).toLocaleString()} needs transfer
-                  </span>
+              {/* Table */}
+              <div className="adm-card">
+                {wdLoading ? (
+                  <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>Loading...</div>
+                ) : !withdrawals.withdrawals || withdrawals.withdrawals.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: 40 }}>
+                    <div style={{ fontSize: 32, marginBottom: 12 }}>&#127974;</div>
+                    <div style={{ color: '#fff', fontWeight: 600, marginBottom: 6 }}>No withdrawals yet</div>
+                    <div style={{ color: '#6b7280', fontSize: 13 }}>Trader bank transfers from Choice Microfinance will appear here.</div>
+                  </div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid #1f2937', color: '#6b7280', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                          <th style={{ padding: '10px 16px', textAlign: 'left' }}>Trader</th>
+                          <th style={{ padding: '10px 16px', textAlign: 'left' }}>From (Choice Bank)</th>
+                          <th style={{ padding: '10px 16px', textAlign: 'left' }}>Destination</th>
+                          <th style={{ padding: '10px 16px', textAlign: 'left' }}>Beneficiary</th>
+                          <th style={{ padding: '10px 16px', textAlign: 'left' }}>Amount</th>
+                          <th style={{ padding: '10px 16px', textAlign: 'left' }}>Status</th>
+                          <th style={{ padding: '10px 16px', textAlign: 'left' }}>Reference</th>
+                          <th style={{ padding: '10px 16px', textAlign: 'left' }}>Date</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(withdrawals.withdrawals || []).map(wd => {
+                          const nameHash = (wd.trader_name || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+                          const colors = ['#10b981','#3b82f6','#8b5cf6','#f59e0b','#ef4444','#ec4899'];
+                          const avatarColor = colors[nameHash % colors.length];
+                          const initials = (wd.trader_name || '??').split(' ').map(w => w[0]).slice(0, 2).join('');
+                          return (
+                            <tr key={wd.id} style={{ borderBottom: '1px solid #111827' }}
+                              onMouseEnter={e => e.currentTarget.style.background = '#0d111a'}
+                              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                              <td style={{ padding: '12px 16px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: avatarColor + '22', border: '1px solid ' + avatarColor + '44', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: avatarColor, flexShrink: 0 }}>
+                                    {initials}
+                                  </div>
+                                  <div>
+                                    <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>{wd.trader_name}</div>
+                                    <div style={{ fontSize: 11, color: '#6b7280' }}>{wd.trader_phone}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td style={{ padding: '12px 16px' }}>
+                                <div style={{ fontSize: 12, color: '#a78bfa', fontWeight: 600 }}>Choice Microfinance</div>
+                                <div style={{ fontSize: 11, color: '#6b7280', fontFamily: 'monospace' }}>{wd.from_account}</div>
+                              </td>
+                              <td style={{ padding: '12px 16px' }}>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: '#fff' }}>{wd.to_bank || '—'}</div>
+                                <div style={{ fontSize: 11, color: '#6b7280', fontFamily: 'monospace' }}>{wd.to_account}</div>
+                              </td>
+                              <td style={{ padding: '12px 16px', fontSize: 12, color: '#9ca3af' }}>{wd.beneficiary}</td>
+                              <td style={{ padding: '12px 16px', fontWeight: 700, color: '#10b981', fontSize: 14 }}>{fmtKES(wd.amount)}</td>
+                              <td style={{ padding: '12px 16px' }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
+                                  background: wd.status === 'completed' ? 'rgba(16,185,129,0.15)' : wd.status === 'failed' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                                  color: wd.status === 'completed' ? '#10b981' : wd.status === 'failed' ? '#ef4444' : '#f59e0b' }}>
+                                  {wd.status === 'completed' ? 'Completed' : wd.status === 'failed' ? 'Failed' : wd.status}
+                                </span>
+                              </td>
+                              <td style={{ padding: '12px 16px', fontFamily: 'monospace', fontSize: 11, color: '#6b7280' }}>{wd.reference}</td>
+                              <td style={{ padding: '12px 16px', color: '#9ca3af', fontSize: 12, whiteSpace: 'nowrap' }}>
+                                {wd.created_at ? new Date(wd.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {(withdrawals.pages || 1) > 1 && (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, padding: '16px 0', borderTop: '1px solid #1f2937' }}>
+                    <button onClick={() => { const p = Math.max(1, wdPage - 1); setWdPage(p); loadWithdrawals(wdStatus, wdPeriod, p); }}
+                      disabled={wdPage === 1}
+                      style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #374151', background: 'transparent', color: wdPage === 1 ? '#4b5563' : '#fff', cursor: wdPage === 1 ? 'not-allowed' : 'pointer' }}>
+                      ← Prev
+                    </button>
+                    <span style={{ color: '#6b7280', fontSize: 13 }}>Page {wdPage} of {withdrawals.pages} · {withdrawals.total} transfers</span>
+                    <button onClick={() => { const p = Math.min(withdrawals.pages, wdPage + 1); setWdPage(p); loadWithdrawals(wdStatus, wdPeriod, p); }}
+                      disabled={wdPage === withdrawals.pages}
+                      style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #374151', background: 'transparent', color: wdPage === withdrawals.pages ? '#4b5563' : '#fff', cursor: wdPage === withdrawals.pages ? 'not-allowed' : 'pointer' }}>
+                      Next →
+                    </button>
+                  </div>
                 )}
               </div>
-
-              {/* ── Table ── */}
-              <div className="adm-table-wrap">
-                <table className="adm-table">
-                  <thead>
-                    <tr>
-                      <th>Trader</th>
-                      <th>Method</th>
-                      <th>Destination</th>
-                      <th>Amount (Net)</th>
-                      <th>Status</th>
-                      <th>Requested</th>
-                      <th>Processed By</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {wdLoading ? (
-                      <tr><td colSpan={8} className="adm-empty">Loading...</td></tr>
-                    ) : withdrawals.withdrawals.length === 0 ? (
-                      <tr><td colSpan={8} className="adm-empty">No withdrawals found</td></tr>
-                    ) : withdrawals.withdrawals.map((wd) => (
-                      <tr key={wd.id}>
-                        <td>
-                          <div style={{ fontWeight: 600 }}>{wd.trader_name}</div>
-                          <div style={{ fontSize: 11, color: '#6b7280' }}>{wd.trader_phone}</div>
-                        </td>
-                        <td>
-                          <span className={`adm-badge ${wd.settlement_method === 'mpesa' ? 'green' : 'blue'}`}>
-                            {wd.settlement_method === 'mpesa' ? 'M-Pesa' : 'I&M Bank'}
-                          </span>
-                        </td>
-                        <td>
-                          <div className="mono" style={{ fontSize: 13 }}>{wd.destination}</div>
-                          {wd.bank_name && <div style={{ fontSize: 11, color: '#6b7280' }}>{wd.bank_name}</div>}
-                        </td>
-                        <td style={{ fontWeight: 700, color: '#10b981' }}>
-                          {fmtKES(wd.amount)}
-                        </td>
-                        <td>
-                          <span className={`adm-badge ${wd.status === 'completed' ? 'green' : wd.status === 'failed' || wd.status === 'cancelled' ? 'red' : 'yellow'}`}>
-                            {wd.status === 'completed' ? 'Completed' : wd.status === 'failed' ? 'Failed' : wd.status === 'cancelled' ? 'Cancelled' : 'Pending'}
-                          </span>
-                        </td>
-                        <td style={{ fontSize: 12, color: '#9ca3af' }}>
-                          {wd.created_at ? fmtDateEAT(wd.created_at) : '—'}
-                        </td>
-                        <td style={{ fontSize: 12 }}>
-                          {wd.processed_by ? (
-                            <>
-                              <div style={{ fontWeight: 500 }}>{wd.processed_by}</div>
-                              <div style={{ color: '#6b7280', fontSize: 11 }}>
-                                {wd.processed_at ? fmtDateEAT(wd.processed_at) : ''}
-                              </div>
-                            </>
-                          ) : <span style={{ color: '#4b5563' }}>—</span>}
-                        </td>
-                        <td>
-                          {wd.status === 'pending' ? (
-                            <div style={{ display: 'flex', gap: 6 }}>
-                              <button disabled={wdActionLoading === wd.id} onClick={() => handleMarkComplete(wd.id)}
-                                style={{ padding: '5px 14px', borderRadius: 6, border: 'none', background: '#10b981', color: '#000', fontWeight: 600, fontSize: 12, cursor: 'pointer', opacity: wdActionLoading === wd.id ? 0.6 : 1 }}>
-                                {wdActionLoading === wd.id ? '...' : '✓ Mark Complete'}
-                              </button>
-                              <button disabled={wdActionLoading === wd.id} onClick={() => handleDeleteWithdrawal(wd.id)}
-                                style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', fontSize: 12, cursor: 'pointer', opacity: wdActionLoading === wd.id ? 0.6 : 1 }}>
-                                {wdActionLoading === wd.id ? '...' : '✕ Remove'}
-                              </button>
-                            </div>
-                          ) : wd.status === 'cancelled' ? (
-                            <button disabled={wdActionLoading === wd.id} onClick={() => handleDeleteWithdrawal(wd.id)}
-                              style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', fontSize: 12, cursor: 'pointer', opacity: wdActionLoading === wd.id ? 0.6 : 1 }}>
-                              {wdActionLoading === wd.id ? '...' : '✕ Remove'}
-                            </button>
-                          ) : wd.status === 'completed' && wd.settlement_method !== 'mpesa' ? (
-                            <button disabled={wdActionLoading === wd.id} onClick={() => handleMarkPending(wd.id)}
-                              style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 12, cursor: 'pointer' }}>
-                              {wdActionLoading === wd.id ? '...' : '↩ Revert'}
-                            </button>
-                          ) : (
-                            <span style={{ fontSize: 12, color: '#4b5563' }}>Auto</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* ── Pagination ── */}
-              {withdrawals.pages > 1 && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
-                  <button onClick={() => { setWdPage(p => p - 1); loadWithdrawals(wdMethod, wdStatus, wdPeriod, wdPage - 1); }} disabled={wdPage <= 1}
-                    style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: wdPage <= 1 ? 'transparent' : 'var(--bg)', color: wdPage <= 1 ? '#4b5563' : '#fff', cursor: wdPage <= 1 ? 'default' : 'pointer', fontSize: 13 }}>
-                    ← Prev
-                  </button>
-                  <span style={{ fontSize: 13, color: '#6b7280' }}>Page {wdPage} of {withdrawals.pages} · {withdrawals.total} withdrawals</span>
-                  <button onClick={() => { setWdPage(p => p + 1); loadWithdrawals(wdMethod, wdStatus, wdPeriod, wdPage + 1); }} disabled={wdPage >= withdrawals.pages}
-                    style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: wdPage >= withdrawals.pages ? 'transparent' : 'var(--bg)', color: wdPage >= withdrawals.pages ? '#4b5563' : '#fff', cursor: wdPage >= withdrawals.pages ? 'default' : 'pointer', fontSize: 13 }}>
-                    Next →
-                  </button>
-                </div>
-              )}
             </div>
           )}
 
@@ -3496,105 +3394,204 @@ export default function Admin() {
           {/* ==================== PAYBILL TRANSACTIONS ==================== */}
           {activeTab === 'paybill' && (
             <div>
-              {/* Summary Cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 20 }}>
-                {[
-                  { label: 'Total In (C2B)', value: `KES ${(paybillTxs.summary?.total_in || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, count: paybillTxs.summary?.count_in || 0, color: '#10b981' },
-                  { label: 'Total Out (B2C/B2B)', value: `KES ${(paybillTxs.summary?.total_out || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, count: paybillTxs.summary?.count_out || 0, color: '#ef4444' },
-                  { label: 'Total Transactions', value: paybillTxs.summary?.total || 0, count: null, color: '#f59e0b' },
-                ].map(card => (
-                  <div key={card.label} className="adm-card" style={{ padding: '16px 20px' }}>
-                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{card.label}</div>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: card.color }}>{card.value}</div>
-                    {card.count !== null && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>{card.count} transactions</div>}
-                  </div>
-                ))}
+              {/* Page header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                <div>
+                  <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>Subscriptions</h2>
+                  <p style={{ color: '#6b7280', fontSize: 13, margin: 0 }}>Platform plan subscriptions and trade credit purchases</p>
+                </div>
+                <button onClick={() => loadSubData(subView, subPeriod, subPage)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}>
+                  <RefreshCw size={14} /> Refresh
+                </button>
               </div>
+
+              {/* Sub-tabs + period filter row */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: 0, background: '#111827', borderRadius: 10, padding: 4, border: '1px solid #1f2937' }}>
+                  {[['plans', 'Platform Plans'], ['credits', 'Trade Credits']].map(([v, l]) => (
+                    <button key={v} onClick={() => { setSubView(v); setSubPage(1); loadSubData(v, subPeriod, 1); }}
+                      style={{ padding: '7px 20px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                        background: subView === v ? '#f59e0b' : 'transparent',
+                        color: subView === v ? '#000' : '#6b7280' }}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 4, background: '#111827', borderRadius: 8, padding: 4, border: '1px solid #1f2937' }}>
+                  {[['today','Today'], ['week','This Week'], ['month','This Month'], ['all','All Time']].map(([v, l]) => (
+                    <button key={v} onClick={() => { setSubPeriod(v); setSubPage(1); loadSubData(subView, v, 1); }}
+                      style={{ padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                        background: subPeriod === v ? '#1f2937' : 'transparent',
+                        color: subPeriod === v ? '#fff' : '#6b7280' }}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Summary cards */}
+              {subView === 'plans' ? (
+                <>
+                  {/* Total revenue bar */}
+                  <div className="adm-card" style={{ padding: '14px 20px', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 4 }}>Total Revenue</div>
+                      <div style={{ fontSize: 26, fontWeight: 800, color: '#10b981' }}>{fmtKES(subData.summary?.total || 0)}</div>
+                    </div>
+                    <div style={{ fontSize: 13, color: '#6b7280' }}>
+                      {(subData.summary?.starter_count || 0) + (subData.summary?.pro_count || 0) + (subData.summary?.pro_max_count || 0) + (subData.summary?.advanced_count || 0)} active plan{((subData.summary?.starter_count || 0) + (subData.summary?.pro_count || 0) + (subData.summary?.pro_max_count || 0) + (subData.summary?.advanced_count || 0)) !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+                  {/* 4 plan cards */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+                    {[
+                      { key: 'starter', label: 'Starter', color: '#10b981', bg: 'rgba(16,185,129,0.12)', kes: 5000 },
+                      { key: 'pro',     label: 'Pro',     color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', kes: 10000 },
+                      { key: 'pro_max', label: 'Pro Max', color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)', kes: 20000 },
+                      { key: 'advanced',label: 'Advanced',color: '#ef4444', bg: 'rgba(239,68,68,0.12)',  kes: 40000 },
+                    ].map(p => (
+                      <div key={p.key} className="adm-card" style={{ padding: '14px 16px', borderTop: `2px solid ${p.color}` }}>
+                        <div style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: 700, marginBottom: 8 }}>{p.label}</div>
+                        <div style={{ fontSize: 28, fontWeight: 800, color: p.color, lineHeight: 1 }}>{subData.summary?.[p.key + '_count'] || 0}</div>
+                        <div style={{ fontSize: 10, color: '#6b7280', marginTop: 6 }}>subscriber{(subData.summary?.[p.key + '_count'] || 0) !== 1 ? 's' : ''}</div>
+                        <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1f2937' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#fff' }}>{fmtKES(subData.summary?.[p.key] || 0)}</div>
+                          <div style={{ fontSize: 10, color: '#4b5563', marginTop: 2 }}>{fmtKES(p.kes)}/mo each</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
+                  <>
+                    <div className="adm-card" style={{ padding: '16px 20px' }}>
+                      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Total Revenue</div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: '#10b981' }}>{fmtKES(subData.summary?.total_revenue || 0)}</div>
+                      <div style={{ fontSize: 11, color: '#4b5563', marginTop: 4 }}>All credit purchases</div>
+                    </div>
+                    <div className="adm-card" style={{ padding: '16px 20px' }}>
+                      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Credits Sold</div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: '#f59e0b' }}>{(subData.summary?.total_credits || 0).toLocaleString()}</div>
+                      <div style={{ fontSize: 11, color: '#4b5563', marginTop: 4 }}>Trade tokens</div>
+                    </div>
+                    <div className="adm-card" style={{ padding: '16px 20px' }}>
+                      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Purchases</div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: '#3b82f6' }}>{subData.total || 0}</div>
+                      <div style={{ fontSize: 11, color: '#4b5563', marginTop: 4 }}>Total transactions</div>
+                    </div>
+                  </>
+                </div>
+              )}
 
               {/* Table */}
               <div className="adm-card">
-                <div className="adm-card-header" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Banknote size={18} /> Paybill 4041355 — All Transactions
-                  </h3>
-                  {/* Period filter */}
-                  <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                    {[['today','Today'], ['week','This Week'], ['month','This Month'], ['year','This Year'], ['all','All Time']].map(([val, label]) => (
-                      <button key={val} onClick={() => { setPaybillPeriod(val); setPaybillPage(1); loadPaybillTxs(val, 1); }}
-                        style={{ padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                          background: paybillPeriod === val ? '#f59e0b' : 'transparent',
-                          color: paybillPeriod === val ? '#000' : 'var(--text-muted)' }}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <button onClick={() => loadPaybillTxs(paybillPeriod, paybillPage)}
-                    style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text)', cursor: 'pointer', fontSize: 12, marginLeft: 'auto' }}>
-                    ↺ Refresh
-                  </button>
-                </div>
-
-                {paybillLoading ? (
+                {subLoading ? (
                   <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>Loading...</div>
-                ) : paybillTxs.transactions.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>No transactions found for this period.</div>
+                ) : !subData.transactions?.length ? (
+                  <div style={{ textAlign: 'center', padding: 40 }}>
+                    <div style={{ fontSize: 32, marginBottom: 12 }}>💳</div>
+                    <div style={{ color: '#fff', fontWeight: 600, marginBottom: 6 }}>No records found</div>
+                    <div style={{ color: '#6b7280', fontSize: 13 }}>No {subView === 'plans' ? 'subscription payments' : 'credit purchases'} for this period.</div>
+                  </div>
                 ) : (
                   <div style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                       <thead>
-                        <tr style={{ borderBottom: '1px solid var(--border)', color: '#6b7280', fontSize: 11 }}>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Date & Time</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Direction</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Amount (KES)</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Phone / Destination</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Name</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Trader</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>M-PESA Receipt</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Status</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Remarks</th>
+                        <tr style={{ borderBottom: '1px solid #1f2937', color: '#6b7280', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                          <th style={{ padding: '10px 16px', textAlign: 'left' }}>Trader</th>
+                          {subView === 'plans' ? (
+                            <>
+                              <th style={{ padding: '10px 16px', textAlign: 'left' }}>Plan</th>
+                              <th style={{ padding: '10px 16px', textAlign: 'left' }}>Amount</th>
+                              <th style={{ padding: '10px 16px', textAlign: 'left' }}>Started</th>
+                              <th style={{ padding: '10px 16px', textAlign: 'left' }}>Expires</th>
+                              <th style={{ padding: '10px 16px', textAlign: 'left' }}>Receipt</th>
+                            </>
+                          ) : (
+                            <>
+                              <th style={{ padding: '10px 16px', textAlign: 'left' }}>Credits</th>
+                              <th style={{ padding: '10px 16px', textAlign: 'left' }}>Amount Paid</th>
+                              <th style={{ padding: '10px 16px', textAlign: 'left' }}>Rate / Credit</th>
+                              <th style={{ padding: '10px 16px', textAlign: 'left' }}>Source</th>
+                              <th style={{ padding: '10px 16px', textAlign: 'left' }}>Date</th>
+                            </>
+                          )}
                         </tr>
                       </thead>
                       <tbody>
-                        {paybillTxs.transactions.map(tx => {
-                          const isIn = tx.direction === 'inbound';
+                        {subData.transactions.map(tx => {
+                          const nameHash = (tx.trader_name || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+                          const avatarColors = ['#10b981','#3b82f6','#8b5cf6','#f59e0b','#ef4444','#ec4899'];
+                          const avatarColor = avatarColors[nameHash % avatarColors.length];
+                          const initials = (tx.trader_name || '??').split(' ').map(w => w[0]).slice(0, 2).join('');
                           return (
-                            <tr key={tx.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                              <td style={{ padding: '10px 12px', color: '#9ca3af', fontSize: 11, whiteSpace: 'nowrap' }}>
-                                {tx.created_at ? new Date(tx.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                            <tr key={tx.id} style={{ borderBottom: '1px solid #111827', transition: 'background 0.15s' }}
+                              onMouseEnter={e => e.currentTarget.style.background = '#0d111a'}
+                              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                              <td style={{ padding: '12px 16px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <div style={{ width: 34, height: 34, borderRadius: '50%', background: avatarColor + '22', border: `1px solid ${avatarColor}55`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: avatarColor, flexShrink: 0 }}>
+                                    {initials}
+                                  </div>
+                                  <div>
+                                    <div
+                                      onClick={() => { setActiveTab('traders'); openTraderPage({ id: tx.trader_id, full_name: tx.trader_name, email: tx.trader_email || '', phone: tx.trader_phone || '' }); }}
+                                      style={{ fontWeight: 600, color: '#fff', cursor: 'pointer', fontSize: 13, transition: 'color 0.15s' }}
+                                      onMouseEnter={e => e.currentTarget.style.color = '#f59e0b'}
+                                      onMouseLeave={e => e.currentTarget.style.color = '#fff'}
+                                    >
+                                      {tx.trader_name || '—'}
+                                    </div>
+                                    <div style={{ fontSize: 11, color: '#6b7280' }}>{tx.trader_email || tx.trader_phone || ''}</div>
+                                  </div>
+                                </div>
                               </td>
-                              <td style={{ padding: '10px 12px' }}>
-                                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
-                                  background: isIn ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
-                                  color: isIn ? '#10b981' : '#ef4444' }}>
-                                  {isIn ? '↓ IN' : '↑ OUT'}
-                                </span>
-                              </td>
-                              <td style={{ padding: '10px 12px', fontWeight: 700, color: isIn ? '#10b981' : '#ef4444' }}>
-                                {isIn ? '+' : '-'}KES {(tx.amount || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                              </td>
-                              <td style={{ padding: '10px 12px', color: '#9ca3af', fontSize: 12 }}>
-                                {isIn ? tx.phone : (tx.destination || tx.phone || '—')}
-                                {tx.bill_ref && <div style={{ fontSize: 10, color: '#6b7280' }}>Ref: {tx.bill_ref}</div>}
-                              </td>
-                              <td style={{ padding: '10px 12px', fontSize: 12, color: '#fff' }}>
-                                {tx.sender_name || '—'}
-                              </td>
-                              <td style={{ padding: '10px 12px', fontSize: 11, color: '#9ca3af' }}>
-                                {tx.trader_name || '—'}
-                              </td>
-                              <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: '#6b7280' }}>
-                                {tx.mpesa_receipt || '—'}
-                              </td>
-                              <td style={{ padding: '10px 12px' }}>
-                                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12,
-                                  background: tx.status === 'completed' ? 'rgba(16,185,129,0.15)' : tx.status === 'failed' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
-                                  color: tx.status === 'completed' ? '#10b981' : tx.status === 'failed' ? '#ef4444' : '#f59e0b' }}>
-                                  {tx.status || '—'}
-                                </span>
-                              </td>
-                              <td style={{ padding: '10px 12px', fontSize: 11, color: '#6b7280', maxWidth: 180 }}>
-                                {tx.remarks || '—'}
-                              </td>
+                              {subView === 'plans' ? (
+                                <>
+                                  <td style={{ padding: '12px 16px' }}>
+                                    <span style={{ fontSize: 12, fontWeight: 700, padding: '3px 12px', borderRadius: 20,
+                                      background: (tx.plan || '').toLowerCase() === 'pro' ? 'rgba(139,92,246,0.15)' : 'rgba(245,158,11,0.15)',
+                                      color: (tx.plan || '').toLowerCase() === 'pro' ? '#8b5cf6' : '#f59e0b' }}>
+                                      {(tx.plan || '—').toUpperCase()}
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: '12px 16px', fontWeight: 700, color: '#10b981', fontSize: 14 }}>{fmtKES(tx.amount)}</td>
+                                  <td style={{ padding: '12px 16px', color: '#9ca3af', fontSize: 12, whiteSpace: 'nowrap' }}>
+                                    {tx.started_at ? new Date(tx.started_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                                  </td>
+                                  <td style={{ padding: '12px 16px', color: '#9ca3af', fontSize: 12, whiteSpace: 'nowrap' }}>
+                                    {tx.expires_at ? new Date(tx.expires_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                                  </td>
+                                  <td style={{ padding: '12px 16px', fontFamily: 'monospace', fontSize: 11, color: '#6b7280' }}>
+                                    {tx.mpesa_transaction_id || '—'}
+                                  </td>
+                                </>
+                              ) : (
+                                <>
+                                  <td style={{ padding: '12px 16px' }}>
+                                    <span style={{ fontSize: 15, fontWeight: 800, color: '#f59e0b' }}>{(tx.tokens_granted || 0).toLocaleString()}</span>
+                                    <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 4 }}>credits</span>
+                                  </td>
+                                  <td style={{ padding: '12px 16px', fontWeight: 700, color: (tx.amount_kes || 0) > 0 ? '#10b981' : '#6b7280', fontSize: 14 }}>
+                                    {(tx.amount_kes || 0) > 0 ? fmtKES(tx.amount_kes) : 'Free'}
+                                  </td>
+                                  <td style={{ padding: '12px 16px', color: '#9ca3af', fontSize: 12 }}>
+                                    {(tx.rate_per_token || 0) > 0 ? fmtKES(tx.rate_per_token) : '—'}
+                                  </td>
+                                  <td style={{ padding: '12px 16px' }}>
+                                    <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12,
+                                      background: tx.source === 'admin' ? 'rgba(139,92,246,0.15)' : tx.source === 'balance' ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)',
+                                      color: tx.source === 'admin' ? '#8b5cf6' : tx.source === 'balance' ? '#10b981' : '#f59e0b', fontWeight: 600 }}>
+                                      {tx.source || '—'}
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: '12px 16px', color: '#9ca3af', fontSize: 12, whiteSpace: 'nowrap' }}>
+                                    {tx.created_at ? new Date(tx.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                                  </td>
+                                </>
+                              )}
                             </tr>
                           );
                         })}
@@ -3602,19 +3599,18 @@ export default function Admin() {
                     </table>
                   </div>
                 )}
-
                 {/* Pagination */}
-                {paybillTxs.pages > 1 && (
-                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, padding: '16px 0', borderTop: '1px solid var(--border)' }}>
-                    <button onClick={() => { const p = Math.max(1, paybillPage - 1); setPaybillPage(p); loadPaybillTxs(paybillPeriod, p); }}
-                      disabled={paybillPage === 1}
-                      style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: paybillPage === 1 ? '#4b5563' : 'var(--text)', cursor: paybillPage === 1 ? 'not-allowed' : 'pointer' }}>
+                {(subData.pages || 1) > 1 && (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, padding: '16px 0', borderTop: '1px solid #1f2937' }}>
+                    <button onClick={() => { const p = Math.max(1, subPage - 1); setSubPage(p); loadSubData(subView, subPeriod, p); }}
+                      disabled={subPage === 1}
+                      style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #374151', background: 'transparent', color: subPage === 1 ? '#4b5563' : '#fff', cursor: subPage === 1 ? 'not-allowed' : 'pointer' }}>
                       ← Prev
                     </button>
-                    <span style={{ color: '#6b7280', fontSize: 13 }}>Page {paybillPage} of {paybillTxs.pages}</span>
-                    <button onClick={() => { const p = Math.min(paybillTxs.pages, paybillPage + 1); setPaybillPage(p); loadPaybillTxs(paybillPeriod, p); }}
-                      disabled={paybillPage === paybillTxs.pages}
-                      style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: paybillPage === paybillTxs.pages ? '#4b5563' : 'var(--text)', cursor: paybillPage === paybillTxs.pages ? 'not-allowed' : 'pointer' }}>
+                    <span style={{ color: '#6b7280', fontSize: 13 }}>Page {subPage} of {subData.pages}</span>
+                    <button onClick={() => { const p = Math.min(subData.pages, subPage + 1); setSubPage(p); loadSubData(subView, subPeriod, p); }}
+                      disabled={subPage === subData.pages}
+                      style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #374151', background: 'transparent', color: subPage === subData.pages ? '#4b5563' : '#fff', cursor: subPage === subData.pages ? 'not-allowed' : 'pointer' }}>
                       Next →
                     </button>
                   </div>
@@ -4305,127 +4301,290 @@ export default function Admin() {
 
           {activeTab === 'expenses' && (
             <div>
-              <div className="adm-card-header" style={{ marginBottom: 16 }}>
-                <h2 style={{ color: '#fff', margin: 0 }}>Platform Expenses</h2>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                  <span style={{ fontSize: 13, color: '#6b7280' }}>Total: <strong style={{ color: '#ef4444' }}>{fmtKES(expensesTotal)}</strong></span>
-                  <button className="adm-btn" onClick={() => adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {})} style={{ fontSize: 12 }}>
-                    <RefreshCw size={13} /> Refresh
-                  </button>
+              {/* Page header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                <div>
+                  <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>Financials</h2>
+                  <p style={{ color: '#6b7280', fontSize: 13, margin: 0 }}>Revenue from subscriptions and platform expenses</p>
                 </div>
+                <button onClick={() => { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); loadRevenueBreakdown(revPeriod, revPlan, 1); }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}>
+                  <RefreshCw size={14} /> Refresh
+                </button>
               </div>
 
-              {/* Add expense form */}
-              <div className="adm-card" style={{ marginBottom: 16, padding: 20 }}>
-                <h3 style={{ margin: '0 0 14px', color: '#fff', fontSize: 15 }}>Log New Expense</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 12, alignItems: 'end' }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 5 }}>Description</div>
-                    <input
-                      value={expenseForm.description}
-                      onChange={e => setExpenseForm(f => ({ ...f, description: e.target.value }))}
-                      placeholder="e.g. Server costs"
-                      style={{ width: '100%', padding: '9px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
-                    />
+              {/* Profit Summary — always visible */}
+              {(() => {
+                const totalRevenue = revBreakdown?.summary?.total ?? 0;
+                const totalExpenses = expensesTotal ?? 0;
+                const netProfit = totalRevenue - totalExpenses;
+                const isProfit = netProfit >= 0;
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
+                    <div style={{ padding: '16px 20px', background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 12 }}>
+                      <div style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>Total Revenue</div>
+                      <div style={{ color: '#10b981', fontWeight: 800, fontSize: 24 }}>{fmtKES(totalRevenue)}</div>
+                      <div style={{ color: '#4b5563', fontSize: 11, marginTop: 4 }}>All subscription payments</div>
+                    </div>
+                    <div style={{ padding: '16px 20px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 12 }}>
+                      <div style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>Total Expenses</div>
+                      <div style={{ color: '#ef4444', fontWeight: 800, fontSize: 24 }}>{fmtKES(totalExpenses)}</div>
+                      <div style={{ color: '#4b5563', fontSize: 11, marginTop: 4 }}>All logged expenses</div>
+                    </div>
+                    <div style={{ padding: '16px 20px', background: isProfit ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)', border: `1px solid ${isProfit ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 12 }}>
+                      <div style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>Net Profit</div>
+                      <div style={{ color: isProfit ? '#10b981' : '#ef4444', fontWeight: 800, fontSize: 24 }}>{isProfit ? '+' : '-'}{fmtKES(Math.abs(netProfit))}</div>
+                      <div style={{ color: '#4b5563', fontSize: 11, marginTop: 4 }}>Revenue minus expenses</div>
+                    </div>
                   </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 5 }}>Amount (KES)</div>
-                    <input
-                      type="number" min="1"
-                      value={expenseForm.amount}
-                      onChange={e => setExpenseForm(f => ({ ...f, amount: e.target.value }))}
-                      placeholder="e.g. 5000"
-                      style={{ width: '100%', padding: '9px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
-                    />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 5 }}>Category</div>
-                    <select
-                      value={expenseForm.category}
-                      onChange={e => setExpenseForm(f => ({ ...f, category: e.target.value }))}
-                      style={{ width: '100%', padding: '9px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13, boxSizing: 'border-box' }}
-                    >
-                      {['general','hosting','marketing','staff','software','bank fees','other'].map(c => (
-                        <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 5 }}>Date</div>
-                    <input
-                      type="date"
-                      value={expenseForm.expense_date}
-                      onChange={e => setExpenseForm(f => ({ ...f, expense_date: e.target.value }))}
-                      style={{ padding: '9px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 13 }}
-                    />
-                  </div>
-                </div>
-                <div style={{ marginTop: 14, textAlign: 'right' }}>
-                  <button
-                    disabled={expenseSubmitting || !expenseForm.description || !expenseForm.amount}
-                    onClick={async () => {
-                      if (!expenseForm.description || !expenseForm.amount) return;
-                      setExpenseSubmitting(true);
-                      try {
-                        await adminPostExpense({ ...expenseForm, amount: parseFloat(expenseForm.amount) });
-                        setExpenseForm(f => ({ ...f, description: '', amount: '' }));
-                        const r = await adminGetExpenses();
-                        setExpenses(r.data.expenses || []);
-                        setExpensesTotal(r.data.total || 0);
-                      } catch(e) {} finally { setExpenseSubmitting(false); }
-                    }}
-                    style={{ padding: '9px 20px', borderRadius: 7, border: 'none', background: expenseSubmitting ? '#374151' : 'linear-gradient(135deg, #ef4444, #dc2626)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: expenseSubmitting ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                  >
-                    <PlusCircle size={14} /> {expenseSubmitting ? 'Saving…' : 'Add Expense'}
+                );
+              })()}
+
+              {/* Sub-tab switcher */}
+              <div style={{ display: 'flex', gap: 0, background: '#111827', borderRadius: 10, padding: 4, border: '1px solid #1f2937', marginBottom: 20, width: 'fit-content' }}>
+                {[['revenue','Revenue'], ['expenses','Expenses']].map(([v, l]) => (
+                  <button key={v} onClick={() => setExpSubView(v)}
+                    style={{ padding: '7px 24px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                      background: expSubView === v ? '#f59e0b' : 'transparent',
+                      color: expSubView === v ? '#000' : '#6b7280' }}>
+                    {l}
                   </button>
-                </div>
+                ))}
               </div>
 
-              {/* Expenses table */}
-              <div className="adm-card" style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid #1f2937' }}>
-                      {['Date', 'Description', 'Category', 'Amount', ''].map(h => (
-                        <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: '#6b7280', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {expenses.length === 0 && (
-                      <tr><td colSpan={5} style={{ textAlign: 'center', color: '#6b7280', padding: 40 }}>No expenses logged yet</td></tr>
-                    )}
-                    {expenses.map(e => (
-                      <tr key={e.id} style={{ borderBottom: '1px solid #111827' }}>
-                        <td style={{ padding: '10px 14px', color: '#9ca3af' }}>{e.expense_date}</td>
-                        <td style={{ padding: '10px 14px', color: '#fff' }}>{e.description}</td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <span style={{ padding: '3px 10px', borderRadius: 12, background: 'rgba(239,68,68,0.1)', color: '#f87171', fontSize: 11, fontWeight: 600 }}>
-                            {e.category}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 14px', color: '#ef4444', fontWeight: 700 }}>{fmtKES(e.amount)}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right' }}>
-                          <button
-                            onClick={async () => {
-                              if (!window.confirm('Delete this expense?')) return;
-                              try {
-                                await adminDeleteExpense(e.id);
-                                const r = await adminGetExpenses();
-                                setExpenses(r.data.expenses || []);
-                                setExpensesTotal(r.data.total || 0);
-                              } catch(err) {}
-                            }}
-                            style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4 }}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </td>
-                      </tr>
+              {/* ── Revenue sub-view ── */}
+              {expSubView === 'revenue' && (
+                <>
+              {/* Period + Plan filters */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
+                    {[['all','All Time'], ['month','This Month'], ['week','This Week'], ['today','Today']].map(([val, label]) => (
+                      <button key={val} onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1); }}
+                        style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                          background: revPeriod === val ? '#f59e0b' : 'transparent', color: revPeriod === val ? '#000' : '#9ca3af' }}>
+                        {label}
+                      </button>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
+                    {[['all','All Plans'], ['starter','Starter'], ['pro','Pro'], ['pro_max','Pro Max'], ['advanced','Advanced']].map(([val, label]) => (
+                      <button key={val} onClick={() => { setRevPlan(val); setRevPage(1); loadRevenueBreakdown(revPeriod, val, 1); }}
+                        style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                          background: revPlan === val ? '#10b981' : 'transparent', color: revPlan === val ? '#000' : '#9ca3af' }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Summary: Total Revenue bar + 4 plan cards */}
+                <div className="adm-card" style={{ padding: '14px 20px', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 4 }}>Total Subscription Revenue (Paid Only)</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: '#10b981' }}>{fmtKES(revBreakdown?.summary?.total ?? 0)}</div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#6b7280' }}>Excludes admin-granted plans</div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+                  {[
+                    { key: 'starter',  label: 'Starter',  color: '#10b981', kes: 5000  },
+                    { key: 'pro',      label: 'Pro',      color: '#f59e0b', kes: 10000 },
+                    { key: 'pro_max',  label: 'Pro Max',  color: '#8b5cf6', kes: 20000 },
+                    { key: 'advanced', label: 'Advanced', color: '#ef4444', kes: 40000 },
+                  ].map(p => (
+                    <div key={p.key} className="adm-card" style={{ padding: '14px 16px', borderTop: `2px solid ${p.color}` }}>
+                      <div style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: 700, marginBottom: 8 }}>{p.label}</div>
+                      <div style={{ fontSize: 26, fontWeight: 800, color: p.color, lineHeight: 1 }}>{revBreakdown?.summary?.[p.key + '_count'] ?? 0}</div>
+                      <div style={{ fontSize: 10, color: '#6b7280', marginTop: 5 }}>paid subscriber{(revBreakdown?.summary?.[p.key + '_count'] ?? 0) !== 1 ? 's' : ''}</div>
+                      <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1f2937' }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#fff' }}>{fmtKES(revBreakdown?.summary?.[p.key] ?? 0)}</div>
+                        <div style={{ fontSize: 10, color: '#4b5563', marginTop: 2 }}>{fmtKES(p.kes)}/mo each</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Subscription payments table */}
+                <div className="adm-card" style={{ marginBottom: 16 }}>
+                  <div className="adm-card-header">
+                    <h3>Subscription Payments</h3>
+                    <span className="adm-card-count">{revBreakdown?.total ?? 0} total</span>
+                  </div>
+                  {revLoading ? (
+                    <p className="adm-empty">Loading...</p>
+                  ) : revBreakdown?.transactions?.length > 0 ? (
+                    <>
+                      <div className="adm-table-wrap">
+                        <table className="adm-table">
+                          <thead>
+                            <tr>
+                              <th>Date</th>
+                              <th>Trader</th>
+                              <th>Plan</th>
+                              <th>M-Pesa TX</th>
+                              <th>Expires</th>
+                              <th style={{ textAlign: 'right' }}>Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {revBreakdown.transactions.map((tx) => (
+                              <tr key={tx.id}>
+                                <td style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>{fmtDateEAT(tx.started_at)}</td>
+                                <td>
+                                  <div style={{ fontWeight: 500, fontSize: 13 }}>{tx.trader_name}</div>
+                                  <div style={{ fontSize: 11, color: '#6b7280' }}>{tx.trader_phone}</div>
+                                </td>
+                                <td>
+                                  <span style={{ padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700,
+                                    background: tx.plan === 'pro' ? 'rgba(139,92,246,0.15)' : 'rgba(245,158,11,0.15)',
+                                    color: tx.plan === 'pro' ? '#8b5cf6' : '#f59e0b', textTransform: 'uppercase' }}>
+                                    {tx.plan}
+                                  </span>
+                                </td>
+                                <td className="mono" style={{ fontSize: 11 }}>{tx.mpesa_transaction_id || '—'}</td>
+                                <td style={{ fontSize: 12, color: '#6b7280' }}>{tx.expires_at ? fmtDateEAT(tx.expires_at) : '—'}</td>
+                                <td style={{ textAlign: 'right', fontWeight: 700, color: '#10b981' }}>+{fmtKESFee(tx.amount)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {revBreakdown.pages > 1 && (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
+                          <button onClick={() => { setRevPage(p => p - 1); loadRevenueBreakdown(revPeriod, revPlan, revPage - 1); }} disabled={revPage <= 1}
+                            style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage <= 1 ? '#4b5563' : '#fff', cursor: revPage <= 1 ? 'default' : 'pointer', fontSize: 13 }}>Prev</button>
+                          <span style={{ fontSize: 13, color: '#6b7280' }}>Page {revPage} of {revBreakdown.pages} &middot; {revBreakdown.total} payments</span>
+                          <button onClick={() => { setRevPage(p => p + 1); loadRevenueBreakdown(revPeriod, revPlan, revPage + 1); }} disabled={revPage >= revBreakdown.pages}
+                            style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage >= revBreakdown.pages ? '#4b5563' : '#fff', cursor: revPage >= revBreakdown.pages ? 'default' : 'pointer', fontSize: 13 }}>Next</button>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="adm-empty">No subscription payments for this period</p>
+                  )}
+                </div>
+
+                {/* Monthly volume breakdown */}
+                <div className="adm-card">
+                  <div className="adm-card-header"><h3>Monthly Volume</h3></div>
+                  {analytics?.monthly_volumes?.length > 0 ? (
+                    <div className="adm-table-wrap">
+                      <table className="adm-table">
+                        <thead>
+                          <tr><th>Month</th><th>Buy Volume</th><th>Sell Volume</th><th>Total Volume</th><th>Trades</th><th>Profit</th></tr>
+                        </thead>
+                        <tbody>
+                          {[...analytics.monthly_volumes].reverse().map((m, i) => (
+                            <tr key={i}>
+                              <td style={{ fontWeight: 600 }}>{m.month}</td>
+                              <td style={{ color: 'var(--blue)' }}>{fmtKES(m.buy_volume)}</td>
+                              <td style={{ color: 'var(--green)' }}>{fmtKES(m.sell_volume)}</td>
+                              <td>{fmtKES(m.total_volume)}</td>
+                              <td>{m.trades}</td>
+                              <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmtKES(m.profit)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="adm-empty">No revenue data yet</p>
+                  )}
+                </div>
+                </>
+              )}
+
+              {/* ── Expenses sub-view ── */}
+              {expSubView === 'expenses' && (
+                <>
+                  {/* Add expense form */}
+                  <div className="adm-card" style={{ marginBottom: 16, padding: 20 }}>
+                    <h3 style={{ margin: '0 0 14px', color: '#fff', fontSize: 15 }}>Log New Expense</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: 10, alignItems: 'end' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Description</label>
+                        <input className="adm-input" placeholder="e.g. Server costs" value={expenseForm.description} onChange={e => setExpenseForm(f => ({ ...f, description: e.target.value }))} style={{ width: '100%' }} />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Amount (KES)</label>
+                        <input className="adm-input" type="number" placeholder="e.g. 5000" value={expenseForm.amount} onChange={e => setExpenseForm(f => ({ ...f, amount: e.target.value }))} style={{ width: 140 }} />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Category</label>
+                        <select className="adm-select" value={expenseForm.category} onChange={e => setExpenseForm(f => ({ ...f, category: e.target.value }))} style={{ width: 140 }}>
+                          {[['general','General'],['hosting','Hosting'],['marketing','Marketing'],['salaries','Salaries'],['software','Software'],['bank_fees','Bank Fees'],['other','Other']].map(([v,l]) => (
+                            <option key={v} value={v}>{l}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Date</label>
+                        <input className="adm-input" type="date" value={expenseForm.expense_date} onChange={e => setExpenseForm(f => ({ ...f, expense_date: e.target.value }))} style={{ width: 140 }} />
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 12, textAlign: 'right' }}>
+                      <button className="adm-btn adm-btn-danger" disabled={expenseSubmitting} onClick={async () => {
+                        if (!expenseForm.description || !expenseForm.amount) return;
+                        setExpenseSubmitting(true);
+                        try {
+                          await adminAddExpense({ description: expenseForm.description, amount: parseFloat(expenseForm.amount), category: expenseForm.category, expense_date: expenseForm.expense_date });
+                          setExpenseForm(f => ({ ...f, description: '', amount: '' }));
+                          const r = await adminGetExpenses();
+                          setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0);
+                        } catch(err) {} finally { setExpenseSubmitting(false); }
+                      }} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <PlusCircle size={14} /> {expenseSubmitting ? 'Adding...' : 'Add Expense'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Expenses table */}
+                  <div className="adm-card" style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid #1f2937' }}>
+                          {['Date', 'Description', 'Category', 'Amount', ''].map(h => (
+                            <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: '#6b7280', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {expenses.length === 0 && (
+                          <tr><td colSpan={5} style={{ textAlign: 'center', color: '#6b7280', padding: 40 }}>No expenses logged yet</td></tr>
+                        )}
+                        {expenses.map(e => (
+                          <tr key={e.id} style={{ borderBottom: '1px solid #111827' }}>
+                            <td style={{ padding: '10px 14px', color: '#9ca3af' }}>{e.expense_date}</td>
+                            <td style={{ padding: '10px 14px', color: '#fff' }}>{e.description}</td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <span style={{ padding: '3px 10px', borderRadius: 12, background: 'rgba(239,68,68,0.1)', color: '#f87171', fontSize: 11, fontWeight: 600 }}>
+                                {e.category}
+                              </span>
+                            </td>
+                            <td style={{ padding: '10px 14px', color: '#ef4444', fontWeight: 700 }}>{fmtKES(e.amount)}</td>
+                            <td style={{ padding: '10px 14px', textAlign: 'right' }}>
+                              <button
+                                onClick={async () => {
+                                  if (!window.confirm('Delete this expense?')) return;
+                                  try {
+                                    await adminDeleteExpense(e.id);
+                                    const r = await adminGetExpenses();
+                                    setExpenses(r.data.expenses || []);
+                                    setExpensesTotal(r.data.total || 0);
+                                  } catch(err) {}
+                                }}
+                                style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4 }}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -4590,6 +4749,72 @@ export default function Admin() {
 
         </div>
       </div>
+
+      {/* Mobile bottom navigation bar */}
+      <nav className="mob-bottom-nav">
+        {[
+          { key: 'dashboard',    icon: LayoutDashboard, label: 'Dashboard' },
+          { key: 'traders',      icon: Users,           label: 'Traders'   },
+          { key: 'transactions', icon: ArrowRightLeft,  label: 'Orders'    },
+          { key: 'disputes',     icon: AlertTriangle,   label: 'Alerts',
+            badge: (unreadTicketCount || 0) + (unmatched.deposits?.length || 0) + (unmatched.withdrawals?.length || 0) },
+          { key: 'more',         icon: MoreHorizontal,  label: 'More'      },
+        ].map(({ key, icon: Icon, label, badge }) => {
+          const primaryKeys = ['dashboard','traders','transactions','disputes'];
+          const isActive = activeTab === key || (key === 'more' && !primaryKeys.includes(activeTab));
+          return (
+            <button
+              key={key}
+              className={`mob-nav-btn${isActive ? ' mob-active' : ''}`}
+              onClick={() => key === 'more' ? setMobMoreOpen(true) : setActiveTab(key)}
+            >
+              <Icon size={22} />
+              {badge > 0 && <span className="mob-nav-badge">{badge > 99 ? '99+' : badge}</span>}
+              <span className="mob-nav-label">{label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* Mobile more menu overlay */}
+      {mobMoreOpen && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.72)' }}
+          onClick={() => setMobMoreOpen(false)}
+        >
+          <div
+            style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: '#111827',
+              borderRadius: '16px 16px 0 0', paddingBottom: 32,
+              border: '0.5px solid #374151', boxShadow: '0 -8px 40px rgba(0,0,0,0.6)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ width: 36, height: 4, background: '#374151', borderRadius: 2, margin: '12px auto 8px' }} />
+            {[
+              { key: 'withdrawals', label: 'Withdrawals',       icon: Wallet        },
+              { key: 'paybill',     label: 'Paybill Txns',      icon: Banknote      },
+              { key: 'kyc',         label: 'KYC Verification',  icon: UserCheck     },
+              { key: 'revenue',     label: 'Revenue',           icon: TrendingUp    },
+              { key: 'expenses',    label: 'Expenses',          icon: Receipt       },
+              { key: 'affiliates',  label: 'Affiliates',        icon: Share2        },
+              { key: 'security',    label: 'Security',          icon: Shield        },
+              { key: 'settings',    label: 'Settings',          icon: Settings      },
+              { key: 'survey',      label: 'Survey Responses',  icon: MessageSquare },
+            ].map(({ key, label, icon: Icon }) => (
+              <button key={key}
+                onClick={() => { setActiveTab(key); setMobMoreOpen(false); }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14,
+                  padding: '13px 24px', background: 'none', border: 'none', cursor: 'pointer',
+                  color: activeTab === key ? '#F59E0B' : '#E5E7EB',
+                  fontSize: 14, fontWeight: activeTab === key ? 600 : 400 }}
+              >
+                <Icon size={20} color={activeTab === key ? '#F59E0B' : '#9CA3AF'} />
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

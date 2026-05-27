@@ -683,6 +683,12 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
 
   return (
     <div className="settings-panel">
+      {/* Page header */}
+      <div style={{ marginBottom: 20 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>Settings</h2>
+        <p style={{ color: '#6b7280', fontSize: 13, margin: 0 }}>Connections, security, and trading preferences</p>
+      </div>
+
       {message && <div className="settings-msg">{message}</div>}
 
       <div className="settings-nav">
@@ -698,223 +704,217 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
       </div>
 
       {activeSection === 'binance' && (
-        <div className="card">
-          <h3>Connect Binance</h3>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-          {profile?.binance_connected ? (
-            <div className="name-verify-box match">
-              <h4>Binance Connected</h4>
-              {profile.binance_username && (
-                <div className="name-verify-row">
-                  <span>Binance Name:</span>
-                  <strong>{profile.binance_username}</strong>
+          {/* Disconnect alert banner */}
+          {!profile?.binance_connected && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '14px 20px', borderRadius: 12, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(239,68,68,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#ef4444' }} />
                 </div>
-              )}
-              <p style={{ fontSize: 13, color: '#9ca3af', marginTop: 8 }}>
-                Your Binance session is saved. The bot can trade on your behalf 24/7.
-              </p>
-              <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-                <button
-                  onClick={handleConnectBinance}
-                  style={{
-                    padding: '10px 20px', borderRadius: 8,
-                    border: '1px solid #f59e0b', background: 'transparent',
-                    color: '#f59e0b', cursor: 'pointer', fontSize: 13,
-                  }}
-                >
-                  Re-connect (if session expired)
-                </button>
-                <button
-                  onClick={() => { setShowPauseModal(true); setPauseStep('warning'); setPauseMsg(''); }}
-                  style={{
-                    padding: '10px 20px', borderRadius: 8,
-                    border: '1px solid #6b7280', background: 'transparent',
-                    color: '#9ca3af', cursor: 'pointer', fontSize: 13,
-                  }}
-                >
-                  Pause Bot
-                </button>
-                <button
-                  onClick={() => fetch('http://127.0.0.1:9223/resume').catch(() => {})}
-                  style={{
-                    padding: '10px 20px', borderRadius: 8,
-                    border: '1px solid #6b7280', background: 'transparent',
-                    color: '#9ca3af', cursor: 'pointer', fontSize: 13,
-                  }}
-                >
-                  Resume Bot
-                </button>
+                <div>
+                  <div style={{ color: '#ef4444', fontWeight: 700, fontSize: 14, marginBottom: 2 }}>Binance disconnected — trading is paused</div>
+                  <div style={{ color: '#9ca3af', fontSize: 12 }}>Reconnect to resume automatic trading. No passwords stored — only session cookies.</div>
+                </div>
               </div>
+              <button onClick={handleConnectBinance} disabled={connecting}
+                style={{ flexShrink: 0, padding: '9px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {connecting ? 'Connecting...' : 'Reconnect now'}
+              </button>
             </div>
-          ) : (
-            <div style={{ position: 'relative' }}>
-              <div style={{
-                textAlign: 'center', padding: '30px 20px',
-                background: 'var(--bg)', borderRadius: 12,
-                border: '1px dashed var(--border)',
-                filter: showKycGate ? 'blur(3px)' : 'none',
-                pointerEvents: showKycGate ? 'none' : 'auto',
-                transition: 'filter 0.2s',
-              }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>&#128279;</div>
-                <h4 style={{ color: '#fff', marginBottom: 8 }}>Link Your Binance Account</h4>
-                <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20, maxWidth: 400, margin: '0 auto 20px' }}>
-                  A secure browser will open where you log into Binance directly.
-                  Once logged in, the bot takes over and trades for you 24/7.
-                  No passwords are stored — only session cookies.
-                </p>
-                {connecting ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                    <div style={{
-                      width: 36, height: 36, border: '3px solid rgba(245,158,11,0.2)',
-                      borderTop: '3px solid #f59e0b', borderRadius: '50%',
-                      animation: 'spin 0.8s linear infinite',
-                    }} />
-                    <span style={{ color: '#f59e0b', fontSize: 13 }}>Waiting for Binance login...</span>
-                  </div>
-                ) : (
-                  <button onClick={handleConnectBinance} style={{ padding: '14px 32px', borderRadius: 10, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 15 }}>
-                    Connect Binance
-                  </button>
-                )}
-              </div>
+          )}
 
+          {/* 3-col connection cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+
+            {/* Binance account */}
+            <div className="card">
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(107,114,128,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: 22, height: 22, borderRadius: 4, background: '#4b5563' }} />
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
+                  background: profile?.binance_connected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                  color: profile?.binance_connected ? '#10b981' : '#ef4444' }}>
+                  {profile?.binance_connected ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+              <div style={{ fontWeight: 700, color: '#fff', fontSize: 15, marginBottom: 6 }}>Binance account</div>
+              <div style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.5, marginBottom: 16 }}>
+                Bot logs into Binance directly via secure browser. Only session cookies are stored.
+              </div>
+              {profile?.binance_connected ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <button onClick={handleConnectBinance}
+                    style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #f59e0b', background: 'transparent', color: '#f59e0b', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                    Re-connect
+                  </button>
+                  <button onClick={() => { setShowPauseModal(true); setPauseStep('warning'); setPauseMsg(''); }}
+                    style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                    Pause Bot
+                  </button>
+                </div>
+              ) : (
+                <button onClick={handleConnectBinance} disabled={connecting}
+                  style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, fontSize: 13, cursor: connecting ? 'not-allowed' : 'pointer' }}>
+                  {connecting ? 'Connecting...' : 'Connect'}
+                </button>
+              )}
               {showKycGate && (
-                <div style={{ position: 'absolute', inset: 0, borderRadius: 12, background: 'rgba(13,15,30,0.88)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '24px 20px', textAlign: 'center' }}>
-                  <div style={{ fontSize: 36 }}>&#128274;</div>
-                  <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>Bank Verification Required</div>
-                  <div style={{ color: '#9ca3af', fontSize: 13, maxWidth: 320, lineHeight: 1.6 }}>
-                    Please complete your Choice Bank account verification before connecting Binance.
-                  </div>
-                  <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-                    <button onClick={handleOpenKycBrowser} disabled={kycLinkLoading} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#10b981', color: '#fff', fontWeight: 700, fontSize: 13, cursor: kycLinkLoading ? 'not-allowed' : 'pointer' }}>
-                      {kycLinkLoading ? 'Opening...' : 'Complete Verification'}
+                <div style={{ marginTop: 12, padding: '12px 14px', borderRadius: 8, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)', textAlign: 'center' }}>
+                  <div style={{ color: '#fff', fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Bank Verification Required</div>
+                  <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 10 }}>Complete Choice Bank verification first.</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={handleOpenKycBrowser} disabled={kycLinkLoading}
+                      style={{ flex: 1, padding: '8px 0', borderRadius: 7, border: 'none', background: '#10b981', color: '#fff', fontWeight: 700, fontSize: 12, cursor: kycLinkLoading ? 'not-allowed' : 'pointer' }}>
+                      {kycLinkLoading ? 'Opening...' : 'Verify'}
                     </button>
-                    <button onClick={() => setShowKycGate(false)} style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                    <button onClick={() => setShowKycGate(false)}
+                      style={{ flex: 1, padding: '8px 0', borderRadius: 7, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontSize: 12, cursor: 'pointer' }}>
                       Dismiss
                     </button>
                   </div>
                 </div>
               )}
             </div>
-          )}
-        </div>
-      )}
 
-      {/* Gmail Account */}
-      {activeSection === 'binance' && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3 style={{ marginBottom: 4 }}>Gmail — Email OTP</h3>
-          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
-            The bot reads Binance email verification codes directly from Gmail via a connected browser session.
-          </p>
-          <div style={{ background: 'var(--bg)', borderRadius: 10, padding: 16, border: '1px solid var(--border)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>Browser Session</span>
-              {gmailConfigured && <span style={{ fontSize: 11, background: '#10b98120', color: '#10b981', borderRadius: 6, padding: '2px 8px' }}>Connected</span>}
-            </div>
-            <p style={{ fontSize: 12, color: '#9ca3af', marginBottom: 12 }}>
-              Opens Gmail in the bot's Chrome window. Log in once and the bot will read verification codes automatically.
-            </p>
-            <button
-              onClick={() => { if (!profile?.choice_account_id) { setShowKycGate(true); return; } wasConnectingRef.current = true; window.sparkp2p?.openGmailTab(); }}
-              style={{ fontSize: 13, padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text)', cursor: 'pointer' }}
-            >
-              {gmailConfigured ? 'Re-connect Gmail' : 'Connect Gmail'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {activeSection === 'binance' && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3>Release Verification</h3>
-          <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
-            When releasing crypto, Binance asks for identity verification. Choose your method so the bot can automate it.
-          </p>
-
-
-          {/* Already configured — show status, allow update */}
-          {verifySaved && !verifyInput && (
-            <div style={{ padding: '12px 14px', borderRadius: 8, background: 'rgba(16,185,129,0.08)', border: '1px solid #10b981', fontSize: 13, color: '#10b981', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>✓ Google Authenticator (TOTP) is configured</span>
-              <button
-                onClick={() => setVerifyInput(' ')}
-                style={{ background: 'none', border: '1px solid #10b981', borderRadius: 6, color: '#10b981', fontSize: 12, padding: '4px 10px', cursor: 'pointer' }}
-              >
-                Update
-              </button>
-            </div>
-          )}
-
-          {/* Input — only shown when updating */}
-          {(!verifySaved || verifyInput) && verifyMethod === 'totp' && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 14, marginBottom: 12, fontSize: 12, color: '#9ca3af', lineHeight: 1.8 }}>
-                <strong style={{ color: '#f59e0b', display: 'block', marginBottom: 6 }}>How to get your TOTP Secret Key:</strong>
-                <ol style={{ paddingLeft: 16, margin: 0 }}>
-                  <li>Open Binance → <strong style={{ color: '#e4e4e7' }}>Profile → Security</strong></li>
-                  <li>Tap <strong style={{ color: '#e4e4e7' }}>Google Authenticator → Manage</strong></li>
-                  <li>Select <strong style={{ color: '#e4e4e7' }}>Change Authenticator</strong> or <strong style={{ color: '#e4e4e7' }}>View Key</strong></li>
-                  <li>Copy the <strong style={{ color: '#f59e0b' }}>Secret Key</strong> (looks like: JBSWY3DPEHPK3PXP)</li>
-                </ol>
-                <p style={{ margin: '8px 0 0', color: '#ef4444', fontSize: 11 }}>⚠️ If you reset your GA, you must re-add Binance to your Google Authenticator app.</p>
+            {/* Gmail OTP reader */}
+            <div className="card">
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(16,185,129,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: 22, height: 16, borderRadius: 3, background: 'rgba(16,185,129,0.2)', border: '1.5px solid #10b981' }} />
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
+                  background: gmailConfigured ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.12)',
+                  color: gmailConfigured ? '#10b981' : '#6b7280' }}>
+                  {gmailConfigured ? 'Connected' : 'Not set'}
+                </span>
               </div>
-              <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>TOTP Secret Key</label>
-              <input
-                type="password"
-                placeholder="e.g. JBSWY3DPEHPK3PXP"
-                value={verifyInput.trim()}
-                onChange={e => setVerifyInput(e.target.value)}
-                style={{ width: '100%', boxSizing: 'border-box', letterSpacing: 2 }}
-                autoFocus
-              />
-            </div>
-          )}
-
-
-          {(!verifySaved || verifyInput.trim()) && (
-            <div style={{ display: 'flex', gap: 8 }}>
-              {verifySaved && (
-                <button
-                  onClick={() => setVerifyInput('')}
-                  style={{ padding: '11px 18px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
-                >
-                  Cancel
-                </button>
-              )}
-              <button
-                disabled={!verifyInput.trim() || loading}
-                onClick={async () => {
-                  const val = verifyInput.trim();
-                  setLoading(true);
-                  try {
-                    await updateVerification({
-                      verify_method: 'totp',
-                      totp_secret: val,
-                      fund_password: null,
-                    });
-                    setVerifySaved(true);
-                    setVerifyInput('');
-                    if (window.sparkp2p?.isDesktop) {
-                      window.sparkp2p.setTotpSecret(val);
-                    }
-                  } catch (e) {
-                    showMsg('Failed to save verification method');
-                  }
-                  setLoading(false);
-                }}
-                style={{
-                  flex: 1, padding: '11px 24px', borderRadius: 8, border: 'none',
-                  background: verifyInput.trim() ? '#f59e0b' : '#374151',
-                  color: verifyInput.trim() ? '#000' : '#6b7280',
-                  fontWeight: 700, fontSize: 13, cursor: verifyInput.trim() ? 'pointer' : 'not-allowed',
-                }}
-              >
-                {loading ? 'Saving...' : 'Save Verification Method'}
+              <div style={{ fontWeight: 700, color: '#fff', fontSize: 15, marginBottom: 6 }}>Gmail OTP reader</div>
+              <div style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.5, marginBottom: 16 }}>
+                Reads Binance email verification codes via a connected browser session.
+              </div>
+              <button onClick={() => { if (!profile?.choice_account_id) { setShowKycGate(true); return; } wasConnectingRef.current = true; window.sparkp2p?.openGmailTab(); }}
+                style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#d1d5db', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                {gmailConfigured ? 'Re-connect Gmail' : 'Connect Gmail'}
               </button>
             </div>
-          )}
+
+            {/* Binance TOTP verification */}
+            <div className="card">
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(139,92,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'rgba(139,92,246,0.2)', border: '1.5px solid #8b5cf6' }} />
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
+                  background: verifySaved ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.12)',
+                  color: verifySaved ? '#10b981' : '#6b7280' }}>
+                  {verifySaved ? 'Configured' : 'Not set'}
+                </span>
+              </div>
+              <div style={{ fontWeight: 700, color: '#fff', fontSize: 15, marginBottom: 6 }}>Binance TOTP verification</div>
+              <div style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.5, marginBottom: 16 }}>
+                Method bot uses when Binance asks for identity verification on release.
+              </div>
+              {verifySaved && !verifyInput ? (
+                <button onClick={() => setVerifyInput(' ')}
+                  style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#d1d5db', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                  Update
+                </button>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {verifyMethod === 'totp' && (
+                    <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 8, padding: '10px 12px', fontSize: 11, color: '#9ca3af', lineHeight: 1.7 }}>
+                      <strong style={{ color: '#f59e0b', display: 'block', marginBottom: 4 }}>How to get your TOTP Secret Key:</strong>
+                      <ol style={{ paddingLeft: 14, margin: 0 }}>
+                        <li>Binance → Profile → Security</li>
+                        <li>Google Authenticator → Manage → View Key</li>
+                        <li>Copy the <strong style={{ color: '#f59e0b' }}>Secret Key</strong></li>
+                      </ol>
+                    </div>
+                  )}
+                  <input type="password" placeholder="TOTP Secret Key (e.g. JBSWY3DPEHPK3PXP)"
+                    value={verifyInput.trim()} onChange={e => setVerifyInput(e.target.value)}
+                    style={{ width: '100%', boxSizing: 'border-box', letterSpacing: 2, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, color: '#fff', padding: '8px 12px', fontSize: 13 }} />
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {verifySaved && (
+                      <button onClick={() => setVerifyInput('')}
+                        style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
+                        Cancel
+                      </button>
+                    )}
+                    <button disabled={!verifyInput.trim() || loading}
+                      onClick={async () => {
+                        const val = verifyInput.trim(); setLoading(true);
+                        try {
+                          await updateVerification({ verify_method: 'totp', totp_secret: val, fund_password: null });
+                          setVerifySaved(true); setVerifyInput('');
+                          if (window.sparkp2p?.isDesktop) window.sparkp2p.setTotpSecret(val);
+                        } catch (e) { showMsg('Failed to save verification method'); }
+                        setLoading(false);
+                      }}
+                      style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: 'none',
+                        background: verifyInput.trim() ? '#f59e0b' : '#374151',
+                        color: verifyInput.trim() ? '#000' : '#6b7280', fontWeight: 700, fontSize: 13, cursor: verifyInput.trim() ? 'pointer' : 'not-allowed' }}>
+                      {loading ? 'Saving...' : 'Set up'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Trading limits summary */}
+          <div className="card" style={{ border: '1px solid rgba(245,158,11,0.18)', background: '#09090f' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 9, background: 'rgba(245,158,11,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, flexShrink: 0 }}>🛡️</div>
+                <div>
+                  <div style={{ fontWeight: 700, color: '#fff', fontSize: 15 }}>Trading limits</div>
+                  <div style={{ color: '#f59e0b', fontSize: 11, marginTop: 1 }}>Daily caps to control exposure</div>
+                </div>
+              </div>
+              <button onClick={() => setActiveSection('trading')}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 14px', borderRadius: 20, background: 'transparent', border: '1px solid rgba(245,158,11,0.35)', color: '#f59e0b', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                Edit ✎
+              </button>
+            </div>
+            {/* Rows */}
+            {(() => {
+              const maxOrder = profile?.max_single_trade || 0;
+              const dailyCnt = profile?.daily_trade_limit || 0;
+              const dailyVol = maxOrder * dailyCnt;
+              const short = n => n >= 1e9 ? Math.round(n/1e9)+'B' : n >= 1e6 ? Math.round(n/1e6)+'M' : n >= 1e3 ? Math.round(n/1e3)+'K' : String(n);
+              const rows = [
+                { icon: '🎯', bg: 'rgba(245,158,11,0.12)', label: 'Max per order',  sub: 'Cap on a single trade',     main: `KES ${maxOrder.toLocaleString()}`,    foot: null,                    color: '#f59e0b' },
+                { icon: '📊', bg: 'rgba(59,130,246,0.12)',  label: 'Daily volume',   sub: 'Total daily trading cap',  main: `KES ${short(dailyVol)}`,              foot: dailyVol.toLocaleString(), color: '#3b82f6' },
+                { icon: '📋', bg: 'rgba(139,92,246,0.12)',  label: 'Daily orders',   sub: 'Max number per day',       main: String(dailyCnt),                      foot: 'ORDERS',                color: '#8b5cf6' },
+              ];
+              return rows.map(({ icon, bg, label, sub, main, foot, color }, i) => (
+                <div key={label} style={{ display: 'flex', alignItems: 'center', padding: '12px 0', borderBottom: i < rows.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                  <div style={{ width: 38, height: 38, borderRadius: '50%', background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0, marginRight: 12 }}>
+                    {icon}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ color: '#e5e7eb', fontWeight: 600, fontSize: 13 }}>{label}</div>
+                    <div style={{ color: '#6b7280', fontSize: 11 }}>{sub}</div>
+                  </div>
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ color: color, fontWeight: 800, fontSize: 15 }}>{main}</div>
+                    {foot && <div style={{ color: color, fontSize: 10, fontWeight: 600, opacity: 0.75, letterSpacing: '0.4px' }}>{foot}</div>}
+                  </div>
+                </div>
+              ));
+            })()}
+            {/* Footer note */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 12, color: '#6b7280', fontSize: 11 }}>
+              <span style={{ fontSize: 13, lineHeight: 1 }}>ⓘ</span>
+              <span>Limits reset every 24 hours at 00:00 EAT</span>
+            </div>
+          </div>
+
         </div>
       )}
 
@@ -1641,8 +1641,13 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                           if (name) { setCbBank(prev => ({ ...prev, account_name: name.toUpperCase() })); setCbBankVerified(true); }
                           else { setCbBankMsg('Name lookup returned no result — type manually'); }
                         } catch (err) {
+                          const status = err?.response?.status;
                           const msg = err?.response?.data?.detail || '';
-                          setCbBankMsg(msg.includes('busy') ? 'Bank name lookup unavailable — type name manually' : 'Could not verify account — type name manually');
+                          if (status === 503 || msg.toLowerCase().includes('unavailable') || msg.includes('busy')) {
+                            setCbBankMsg('Auto-lookup unavailable — type the account holder name below');
+                          } else {
+                            setCbBankMsg('Could not verify — double-check the account number, or type the name manually');
+                          }
                         }
                         setCbBankVerifying(false);
                       }, 1000);
@@ -1682,8 +1687,13 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                           if (name) { setCbBank(prev => ({ ...prev, account_name: name.toUpperCase() })); setCbBankVerified(true); }
                           else { setCbBankMsg('Name lookup returned no result — type manually'); }
                         } catch (err) {
+                          const status = err?.response?.status;
                           const msg = err?.response?.data?.detail || '';
-                          setCbBankMsg(msg.includes('busy') ? 'Bank name lookup unavailable — type name manually' : 'Could not verify account — type name manually');
+                          if (status === 503 || msg.toLowerCase().includes('unavailable') || msg.includes('busy')) {
+                            setCbBankMsg('Auto-lookup unavailable — type the account holder name below');
+                          } else {
+                            setCbBankMsg('Could not verify — double-check the account number, or type the name manually');
+                          }
                         }
                         setCbBankVerifying(false);
                       }, 1000);

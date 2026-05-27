@@ -233,14 +233,19 @@ async def get_user_kyc(onboarding_request_id: str) -> dict:
 
 async def validate_account(account_id: str, bank_code: str) -> dict:
     """Verify a Pesalink beneficiary and return their registered account name.
-    accountType=4 → Pesalink external bank. bankCode is the CBK 2-digit code.
+    accountType=4 (int) -> Pesalink external bank. bankCode is the CBK 2-digit code.
     Response data.accountName contains the verified name on success.
+    Retries up to 2 times on transient 10001 busy errors.
     """
-    return await _post("/account/validateAccount", {
-        "accountId":   account_id,
-        "accountType": "4",
-        "bankCode":    bank_code,
-    })
+    import asyncio as _asyncio
+    params = {"accountId": account_id, "accountType": 4, "bankCode": bank_code}
+    for attempt in range(2):
+        result = await _post("/account/validateAccount", params)
+        if result.get("code") != "10001":
+            return result
+        if attempt < 1:
+            await _asyncio.sleep(0.8)
+    return result
 
 
 async def get_account_details(account_id: str) -> dict:
@@ -272,7 +277,7 @@ async def transfer(
         "payerAccountId": payer_account_id,
         "payeeAccountId": payee_account_id,
         "currency":       "KES",
-        "amount":         str(round(amount, 2)),
+        "amount":         f"{float(amount):.2f}",
         "remark":         remark or "SparkP2P payment",
     }
     if payee_bank_code:
@@ -286,6 +291,53 @@ async def transfer(
     return await _post("/trans/v2/applyForTransfer", params)
 
 
+async def large_domestic_interbank_transfer(
+    payer_account_id:    str,
+    beneficiary_bank_code: str,
+    beneficiary_bank_name: str,
+    beneficiary_account_id: str,
+    beneficiary_name:    str,
+    amount:              float,
+    payment_channel:     str = "RTGS",   # "RTGS" (instant) or "EFT" (T+1 batch)
+    payment_purpose_id:  str = "OTHR",
+    payment_purpose:     str = "SparkP2P withdrawal",
+    sender_address:      str = "Nairobi, Kenya",
+    message_to_beneficiary: str = "",
+    beneficiary_email:   str = "",
+) -> dict:
+    """Initiate a domestic interbank transfer via RTGS or EFT.
+    RTGS is real-time and has no upper-limit. EFT is T+1 batch.
+    Returns { applicationId } on success — use get_interbank_transfer_status() to poll.
+    """
+    params: dict = {
+        "accountId":            payer_account_id,
+        "beneficiaryBankCode":  beneficiary_bank_code,
+        "beneficiaryBankName":  beneficiary_bank_name,
+        "beneficiaryAccountId": beneficiary_account_id,
+        "beneficiaryAccountCcy": "KES",
+        "beneficiaryName":      beneficiary_name,
+        "amount":               round(amount, 2),
+        "amountType":           0,
+        "paymentChannel":       payment_channel,
+        "paymentPurposeId":     payment_purpose_id,
+        "senderAddress":        sender_address,
+    }
+    if payment_purpose_id == "OTHR" and payment_purpose:
+        params["paymentPurpose"] = payment_purpose[:35]
+    if message_to_beneficiary:
+        params["messageToBeneficiary"] = message_to_beneficiary[:100]
+    if beneficiary_email:
+        params["beneficiaryEmail"] = beneficiary_email
+    return await _post("/trans/largeDomesticInterBankTransfer", params)
+
+
+async def get_interbank_transfer_status(application_id: str) -> dict:
+    """Poll the status of a large domestic interbank transfer by applicationId."""
+    return await _post("/trans/getInterBankTransferDetails", {
+        "applicationId": application_id,
+    })
+
+
 async def deposit_from_mpesa(account_id: str, mobile: str, amount: int) -> dict:
     """Trigger an M-Pesa STK push to deposit into a Choice Bank account."""
     return await _post("/trans/depositFromMpesa", {
@@ -293,3 +345,47 @@ async def deposit_from_mpesa(account_id: str, mobile: str, amount: int) -> dict:
         "mobile": mobile,
         "amount": amount,
     })
+
+async def batch_disburse(
+    payer_account_id: str,
+    payee_account_id: str,
+    payee_account_name: str,
+    payee_bank_code: str,
+    amount: float,
+    remark: str = "",
+    org_tx_id: str = "",
+    payment_purpose: str = "",
+    notify_mobile: str = "",
+) -> dict:
+    """
+    Merchant Bulk Transfer — no OTP required (payer must be whitelisted merchant account).
+    Sends funds from a Choice Bank merchant account to any external bank via Pesalink.
+    Result delivered via webhook callback 0004.
+    payeeBankCode: from Choice BaaS Bank Code List (CBK codes used for Pesalink).
+    """
+    beneficiary: dict = {
+        "payeeAccountName": payee_account_name,
+        "payeeAccountId":   payee_account_id,
+        "payeeBankCode":    str(payee_bank_code),
+        "currency":         "KES",
+        "amount":           f"{float(amount):.2f}",
+        "remark":           remark or "SparkP2P payment",
+    }
+    if org_tx_id:
+        beneficiary["orgTxId"] = org_tx_id
+    if payment_purpose:
+        beneficiary["paymentPurpose"] = payment_purpose
+    if notify_mobile:
+        beneficiary["payeeMobileForNotification"] = notify_mobile
+
+    params = {
+        "payerAccountId":   payer_account_id,
+        "beneficiaryArray": [beneficiary],
+    }
+    return await _post("/trans/batchTransitionalFundsDisbursement", params)
+
+
+async def query_batch_transfer(order_id: str) -> dict:
+    """Query the result of a merchant bulk transfer by the orderId returned from batch_disburse."""
+    return await _post("/trans/getInternalBatchTransactionResult", {"orderId": order_id})
+

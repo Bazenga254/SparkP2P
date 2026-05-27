@@ -72,6 +72,7 @@ export const updateTraderStatus = (id, status) => api.put(`/admin/traders/${id}/
 export const updateTraderTier = (id, tier) => api.put(`/admin/traders/${id}/tier?tier=${tier}`);
 export const getDisputedOrders = () => api.get('/admin/orders/disputed');
 export const getUnmatchedPayments = () => api.get('/admin/payments/unmatched');
+export const resolveUnmatchedPayment = (id) => api.delete('/admin/payments/unmatched/' + id);
 export const getAdminTransactions = (period = 'today', limit = 50, search = '', category = 'choice') =>
   api.get(`/admin/transactions?period=${period}&limit=${limit}&category=${category}${search ? '&search=' + encodeURIComponent(search) : ''}`);
 export const getAdminOrders = (period = 'today', limit = 50, search = '') =>
@@ -107,6 +108,7 @@ export const sendTelegramTest = () => api.post('/telegram/test');
 export const getAdminWithdrawals = (params = {}) => api.get('/admin/withdrawals', { params });
 export const getRevenueBreakdown = (params = {}) => api.get("/admin/revenue/breakdown", { params });
 export const getSubscriptionRevenue = (params = {}) => api.get("/admin/revenue/subscriptions", { params });
+export const getAdminCreditPurchases = (params = {}) => api.get("/admin/credit-purchases", { params });
 export const markWithdrawalComplete = (txId) => api.put(`/admin/withdrawals/${txId}/complete`);
 export const markWithdrawalPending = (txId) => api.put(`/admin/withdrawals/${txId}/pending`);
 export const deleteWithdrawal = (txId) => api.delete(`/admin/withdrawals/${txId}`);
@@ -139,7 +141,7 @@ export const validateReferralCode = (code) => api.get(`/affiliates/validate/${co
 // Trade Tokens
 export const getTradeTokens = () => api.get('/traders/trade-tokens');
 export const purchaseTradeTokens = (amount_kes) => api.post("/traders/trade-tokens/purchase", { amount_kes });
-export const purchaseCredits = (plan, phone) => api.post("/traders/credits/purchase", { plan, phone });
+export const purchaseCredits = (plan, phone, customAmount) => api.post('/traders/credits/purchase', { plan, phone, ...(customAmount ? { custom_amount: customAmount } : {}) });
 export const pollCreditsStatus = (checkoutId) => api.get(`/traders/credits/status/${checkoutId}`);
 export const consumeTradeToken = () => api.post('/traders/trade-tokens/consume');
 
@@ -170,5 +172,8 @@ export const getCbWithdrawalBank = () => api.get('/traders/cb-withdrawal-bank');
 export const verifyBankAccount = (bank_code, account) => api.get('/traders/verify-bank-account', { params: { bank_code, account } });
 export const saveCbWithdrawalBank = (body) => api.post('/traders/cb-withdrawal-bank', body);
 export const cbWithdrawToBank = (otp, amount) => api.post('/traders/cb-withdraw-to-bank', { otp, amount });
+export const cbWithdrawInitiate = (amount) => api.post('/traders/cb-withdraw-to-bank/initiate', { amount });
+export const cbWithdrawToMpesa = (otp, amount) => api.post("/traders/cb-withdraw-to-bank", { otp, amount });
+export const cbWithdrawToMpesaInitiate = (amount) => api.post("/traders/cb-withdraw-to-mpesa/initiate", { amount });
 export const kycCreateSession = () => api.post('/kyc/session');
 export default api;

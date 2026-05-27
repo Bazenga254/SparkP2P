@@ -99,6 +99,8 @@ async def choice_bank_webhook(request: Request):
             await _handle_transaction_result(params, payload)
         elif notification_type == "0003":
             await _handle_transaction_result(params, payload)
+        elif notification_type == "0004":
+            await _handle_bulk_transfer_result(params, payload)
         else:
             logger.info(f"[ChoiceBank] Unhandled notification type {notification_type!r}")
     except Exception as exc:
@@ -134,60 +136,93 @@ async def _handle_transaction_result(params: dict, raw: dict):
         f"status={tx_status}, type={tx_type}, KES {amount}"
     )
 
-    # txStatus codes per Choice Bank API docs (Type/Status IDs page):
-    #   -1 = Timeout,  1 = Pending,  2 = Processing,  4 = Failed,  8 = SUCCESS
-    # For 0003 (Balance Change): txStatus is absent — a credit posting IS already success.
-    # We process only when txStatus is 8 (success) OR absent (0003 pay-in).
-    if tx_status:  # absent = empty string from `or ""` → skip this block
-        if str(tx_status) not in ("8", "success", "completed", "00000"):
-            logger.info(f"[ChoiceBank] Skipping non-success transaction: status={tx_status}")
-            return
+    # txStatus: -1=Timeout, 1=Pending, 2=Processing, 4=Failed, 8=SUCCESS
+    _tx_success = not tx_status or str(tx_status) in ("8", "success", "completed", "00000")
+    _tx_failed  = bool(tx_status) and str(tx_status) in ("4", "-1", "failed", "timeout")
 
-    # Known outbound TTID codes from Choice Bank API docs.
-    # Skip these to avoid accidentally treating a payout as an inbound payment.
     _OUTBOUND_TX_TYPES = {
-        "TTID0001",  # Withdraw to M-PESA
-        "TTID0002",  # Transfer Out
-        "TTID0005",  # M-PESA Paybill/Till
-        "TTID0006",  # Utility Payment
-        "TTID0009",  # FCY Transfer Out
-        "TTID0024",  # Cash Withdrawal
-        "TTID0025",  # Mpesa IMT
-        "TTID0027",  # CNY Transfer
+        "TTID0001", "TTID0002", "TTID0005", "TTID0006",
+        "TTID0009", "TTID0024", "TTID0025", "TTID0027",
     }
     if tx_type and tx_type.upper() in _OUTBOUND_TX_TYPES:
-        logger.info(f"[ChoiceBank] Outbound transaction: txType={tx_type}, KES {amount}")
+        logger.info(f"[ChoiceBank] Outbound tx: txType={tx_type}, status={tx_status}, KES {amount}")
         try:
             async with async_session() as _db:
                 _tr = await _db.execute(select(Trader).where(Trader.choice_account_id == account_id))
                 _trader = _tr.scalar_one_or_none()
                 if _trader:
-                    # Record the outbound movement so it appears in Transactions tab
                     _recipient = sender_name or sender_phone or "Unknown"
-                    _db.add(Payment(
-                        trader_id=_trader.id,
-                        direction=PaymentDirection.OUTBOUND,
-                        mpesa_transaction_id=tx_id or f"cb_out_{_trader.id}_{amount}",
-                        transaction_type="CHOICE_OUTBOUND",
-                        amount=amount,
-                        phone=sender_phone,
-                        destination=sender_phone or sender_name,
-                        sender_name=sender_name,
-                        remarks=f"Choice Bank outbound · txType {tx_type}",
-                        status=PaymentStatus.COMPLETED,
-                        raw_callback=raw,
-                    ))
-                    await _db.commit()
+                    _existing = (await _db.execute(
+                        select(Payment).where(Payment.mpesa_transaction_id == tx_id)
+                    )).scalar_one_or_none() if tx_id else None
+
+                    # Idempotency: skip if already processed
+                    if _existing and _existing.status in (PaymentStatus.COMPLETED, PaymentStatus.FAILED):
+                        logger.info(f"[ChoiceBank] 0002: duplicate webhook for already-settled Payment {_existing.id} ({_existing.status}) — skipping")
+                        return
+
+                    _credits_refunded = False
+                    if _existing and _existing.status == PaymentStatus.PENDING:
+                        if _tx_success:
+                            _existing.status = PaymentStatus.COMPLETED
+                            if tx_id:
+                                _existing.mpesa_receipt_number = tx_id
+                            await _db.commit()
+                            logger.info(f"[ChoiceBank] 0002: Payment {_existing.id} PENDING->COMPLETED")
+                        elif _tx_failed:
+                            _existing.status = PaymentStatus.FAILED
+                            await _db.commit()
+                            _t = await _db.get(Trader, _existing.trader_id)
+                            if _t:
+                                _t.trade_tokens = (_t.trade_tokens or 0) + 20
+                                await _db.commit()
+                                _credits_refunded = True
+                            logger.info(f"[ChoiceBank] 0002: Payment {_existing.id} PENDING->FAILED, credits refunded={_credits_refunded}")
+                    elif _tx_success:
+                        _db.add(Payment(
+                            trader_id=_trader.id,
+                            direction=PaymentDirection.OUTBOUND,
+                            mpesa_transaction_id=tx_id or f"cb_out_{_trader.id}_{amount}",
+                            transaction_type="CHOICE_OUTBOUND",
+                            amount=amount,
+                            phone=sender_phone,
+                            destination=sender_phone or sender_name,
+                            sender_name=sender_name,
+                            remarks=f"Choice Bank outbound - txType {tx_type}",
+                            status=PaymentStatus.COMPLETED,
+                            raw_callback=raw,
+                        ))
+                        await _db.commit()
+                    elif _tx_failed and tx_id:
+                        # No PENDING record (e.g. test/direct API call) — record as FAILED for idempotency
+                        _db.add(Payment(
+                            trader_id=_trader.id,
+                            direction=PaymentDirection.OUTBOUND,
+                            mpesa_transaction_id=tx_id,
+                            transaction_type="CHOICE_OUTBOUND",
+                            amount=amount,
+                            remarks=f"CB outbound failed - txType {tx_type} (no app record)",
+                            status=PaymentStatus.FAILED,
+                            raw_callback=raw,
+                        ))
+                        await _db.commit()
+
                     from app.api.routes.telegram import notify_trader
-                    _tg_msg = (
-                        "📤 KES " + f"{amount:,.0f}" +
-                        " sent from your Choice Bank" + chr(10) +
-                        "To: " + _recipient + chr(10) +
-                        "Ref: " + (tx_id or "N/A")
-                    )
-                    await notify_trader(_trader, _tg_msg)
+                    if _tx_success:
+                        _tg = "ok KES " + f"{amount:,.0f}" + " withdrawal COMPLETED" + chr(10) + "Ref: " + (tx_id or "N/A")
+                    elif _tx_failed:
+                        _refund_note = " (20 credits refunded)" if _credits_refunded else ""
+                        _tg = "fail KES " + f"{amount:,.0f}" + " withdrawal FAILED" + _refund_note + chr(10) + "Ref: " + (tx_id or "N/A")
+                    else:
+                        _tg = None
+                    if _tg:
+                        await notify_trader(_trader, _tg)
         except Exception as _e:
             logger.warning(f"[ChoiceBank] Outbound notify/save failed: {_e}")
+        return
+
+    if not _tx_success:
+        logger.info(f"[ChoiceBank] Skipping non-success inbound: status={tx_status}")
         return
 
     if not account_id or amount <= 0:
@@ -412,6 +447,64 @@ async def _handle_transaction_result(params: dict, raw: dict):
             await notify_trader(trader, _tg_msg)
         except Exception as _e:
             logger.warning(f"[ChoiceBank] Matched inbound notify failed: {_e}")
+
+
+
+async def _handle_bulk_transfer_result(params: dict, raw: dict):
+    """
+    Callback 0004 — Merchant Bulk Transfer Result.
+    Fires when a batch_disburse() transfer completes or fails.
+    Updates the Payment record from PENDING to COMPLETED/FAILED.
+    """
+    order_id = params.get("orderId") or ""
+    result_array = params.get("resultArray") or []
+
+    logger.info(f"[ChoiceBank] 0004 bulk result: orderId={order_id}, items={len(result_array)}")
+
+    for item in result_array:
+        tx_id     = item.get("txId") or ""
+        tx_status = str(item.get("txStatus") or "")
+        try:
+            amount = float(item.get("amount") or 0)
+        except (ValueError, TypeError):
+            amount = 0.0
+
+        success = tx_status in ("SUCCESS", "8", "success", "00000")
+
+        async with async_session() as _db:
+            from app.models import Payment, PaymentStatus
+            pmt = (await _db.execute(
+                select(Payment).where(Payment.mpesa_transaction_id == order_id)
+            )).scalar_one_or_none()
+
+            if not pmt:
+                logger.warning(f"[ChoiceBank] 0004: no Payment found for orderId={order_id}")
+                continue
+
+            pmt.status = PaymentStatus.COMPLETED if success else PaymentStatus.FAILED
+            if tx_id:
+                pmt.mpesa_receipt_number = tx_id
+            await _db.commit()
+            logger.info(f"[ChoiceBank] 0004: Payment {pmt.id} → {'COMPLETED' if success else 'FAILED'}")
+
+            trader = await _db.get(Trader, pmt.trader_id)
+            if trader:
+                try:
+                    from app.api.routes.telegram import notify_trader
+                    if success:
+                        msg = (
+                            "✅ KES " + f"{amount:,.0f}" + " bank withdrawal COMPLETED" + chr(10) +
+                            "Ref: " + (tx_id or order_id)
+                        )
+                    else:
+                        msg = (
+                            "❌ KES " + f"{amount:,.0f}" + " bank withdrawal FAILED" + chr(10) +
+                            "Ref: " + order_id + chr(10) +
+                            "Status: " + tx_status
+                        )
+                    await notify_trader(trader, msg)
+                except Exception as _e:
+                    logger.warning(f"[ChoiceBank] 0004 notify failed: {_e}")
 
 
 async def _handle_balance_change(params: dict):

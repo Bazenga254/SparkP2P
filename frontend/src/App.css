@@ -423,23 +423,34 @@ body {
 
 .settings-nav {
   display: flex;
-  gap: 8px;
-  margin-bottom: 20px;
+  gap: 0;
+  margin-bottom: 24px;
+  border-bottom: 1px solid #1f2937;
 }
 
 .settings-nav button {
-  padding: 8px 16px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  border-radius: 8px;
+  padding: 10px 18px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #6b7280;
+  border-radius: 0;
   cursor: pointer;
+  font-size: 14px;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.settings-nav button:hover {
+  color: #d1d5db;
 }
 
 .settings-nav button.active {
-  background: var(--accent);
-  color: #000;
-  border-color: var(--accent);
+  color: #f59e0b;
+  border-bottom-color: #f59e0b;
+  font-weight: 600;
+  background: transparent;
 }
 
 .settings-panel form {
@@ -5884,3 +5895,428 @@ body {
   .inst-cta-actions { flex-direction: column; align-items: stretch; }
   .inst-footer-inner { flex-direction: column; align-items: flex-start; padding: 24px 20px; }
 }
+
+
+/* ============================================================
+   Mobile Bottom Navigation Bar
+   Replaces dash-tabs (Dashboard) and adm-hamburger (Admin)
+   on screens ≤ 767px — matches the mobile mockup design
+   ============================================================ */
+.mob-bottom-nav { display: none; }
+
+@media (max-width: 767px) {
+  .mob-bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    z-index: 300;
+    background: #0B0F14;
+    border-top: 0.5px solid #1F2937;
+    padding: 8px 0 max(12px, env(safe-area-inset-bottom, 12px));
+    justify-content: space-around;
+    align-items: stretch;
+  }
+  .mob-nav-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 4px 2px;
+    flex: 1;
+    position: relative;
+    min-width: 0;
+  }
+  .mob-nav-btn svg { color: #6B7280; transition: color 0.15s; }
+  .mob-nav-label {
+    font-size: 10px; color: #6B7280; font-weight: 400;
+    white-space: nowrap; transition: color 0.15s;
+  }
+  .mob-nav-btn.mob-active svg { color: #F59E0B; }
+  .mob-nav-btn.mob-active .mob-nav-label { color: #F59E0B; font-weight: 500; }
+  .mob-nav-badge {
+    position: absolute; top: 0; right: calc(50% - 20px);
+    background: #EF4444; color: #fff; font-size: 9px; font-weight: 700;
+    min-width: 15px; height: 15px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center; padding: 0 3px;
+  }
+
+  /* Hide desktop nav elements; bottom nav takes over */
+  .dash-tabs { display: none !important; }
+  .adm-hamburger { display: none !important; }
+
+  /* Bottom padding so content isn't hidden behind the nav */
+  .dashboard { padding-bottom: 84px !important; }
+  .adm-content { padding-bottom: 84px !important; }
+
+  /* 2-col stats grid on mobile (down from 5-col) */
+  .overview-stats-row { grid-template-columns: repeat(2, 1fr) !important; }
+
+  /* Thinner card borders matching mockup (0.5px) */
+  .card { border-width: 0.5px !important; border-color: #374151 !important; }
+  .adm-card { border-width: 0.5px !important; border-color: #374151 !important; }
+  .mini-stat-card { border-width: 0.5px !important; }
+
+  /* Mini stat card — tighter on mobile */
+  .mini-stat-card { padding: 11px !important; }
+  .mini-stat-card .mini-stat-value { font-size: 17px !important; font-weight: 500 !important; }
+
+  /* Greeting card — font-weight 500 values */
+  .greeting-amount { font-weight: 500 !important; }
+}
+
+
+/* ============================================================
+   Dashboard — Desktop / Tablet Sidebar  (>= 768px)
+   Matches the tablet mockup: 200px fixed sidebar + scrollable main
+   ============================================================ */
+
+/* Flex wrapper that holds sidebar + dash-content */
+.dash-body {
+  display: flex;
+  min-height: calc(100vh - 60px);
+}
+
+/* The sidebar */
+.dash-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  background: #0B0F14;
+  border-right: 0.5px solid #1F2937;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 60px;
+  height: calc(100vh - 60px);
+  overflow-y: auto;
+  padding: 16px 10px 40px;
+  scrollbar-width: none;
+}
+.dash-sidebar::-webkit-scrollbar { display: none; }
+
+/* Brand row inside sidebar */
+.dsb-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 6px 14px;
+  border-bottom: 0.5px solid #1F2937;
+  margin-bottom: 4px;
+}
+
+/* Section label */
+.dsb-section-label {
+  color: #4B5563;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 14px 8px 6px;
+}
+
+/* Nav items */
+.dsb-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  color: #9CA3AF;
+  font-size: 13px;
+  border-radius: 6px;
+  margin-bottom: 1px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background 0.12s, color 0.12s;
+}
+.dsb-nav-item:hover { background: rgba(255,255,255,0.05); color: #E5E7EB; }
+.dsb-nav-item.dsb-active { background: rgba(245,158,11,0.12); color: #F59E0B; font-weight: 500; }
+.dsb-nav-item.dsb-warn  { color: #F59E0B; }
+.dsb-nav-item.dsb-accent { color: #F59E0B; font-weight: 600; }
+.dsb-nav-item.dsb-green { color: #10B981; font-weight: 600; }
+
+/* Paybill inline panel */
+.dsb-paybill-panel {
+  background: #111827;
+  border: 0.5px solid #1F2937;
+  border-radius: 8px;
+  padding: 10px 10px 4px;
+  margin: 2px 0 6px;
+}
+
+/* Footer */
+.dsb-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 0.5px solid #1F2937;
+}
+.dsb-user-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 6px;
+}
+.dsb-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #1F2937;
+  color: #F59E0B;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Main content area now lives inside dash-body */
+.dash-body .dash-content {
+  flex: 1;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+/* On desktop, hide the old horizontal tab bar (sidebar replaces it) */
+@media (min-width: 768px) {
+  .dash-tabs { display: none !important; }
+}
+
+/* Mobile: hide sidebar, full-width content */
+@media (max-width: 767px) {
+  .dash-body { display: block; }
+  .dash-sidebar { display: none !important; }
+  .dash-body .dash-content { padding: 12px 14px; }
+}
+
+
+/* ============================================================
+   Admin Sidebar — visual refinements to match tablet mockup
+   ============================================================ */
+
+/* Narrow the sidebar to 200px and use 0.5px border like mockup */
+.adm-sidebar {
+  width: 200px !important;
+  min-width: 200px !important;
+  border-right: 0.5px solid #1F2937 !important;
+}
+.adm-main { margin-left: 200px !important; }
+
+/* Sidebar header border */
+.adm-sidebar-header { border-bottom: 0.5px solid #1F2937 !important; }
+
+/* Sidebar footer border */
+.adm-sidebar-footer { border-top: 0.5px solid #1F2937 !important; padding: 10px 10px !important; }
+
+/* User profile row in sidebar footer */
+.adm-sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 4px;
+}
+.adm-sidebar-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #1F2937;
+  color: #F59E0B;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.adm-logout-btn-icon {
+  background: none;
+  border: none;
+  color: #6B7280;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.adm-logout-btn-icon:hover { color: #F87171; background: rgba(239,68,68,0.1); }
+
+/* Nav items — tighter padding to fit more links */
+.adm-nav-item { padding: 8px 14px !important; font-size: 13px !important; }
+.adm-nav-label { padding: 14px 14px 5px !important; }
+
+/* Unmatched badge — amber color like mockup */
+.adm-nav-badge.amber { background: #D97706 !important; }
+
+/* Responsive: update sidebar for tablet breakpoints to use 200px */
+@media (min-width: 1440px) {
+  .adm-sidebar { width: 240px !important; min-width: 240px !important; }
+  .adm-main { margin-left: 240px !important; }
+}
+@media (min-width: 1920px) {
+  .adm-sidebar { width: 260px !important; min-width: 260px !important; }
+  .adm-main { margin-left: 260px !important; }
+}
+/* Tablet breakpoint (previously 1023px): keep sidebar visible at 200px */
+@media (max-width: 1023px) and (min-width: 768px) {
+  .adm-sidebar {
+    transform: none !important;
+    box-shadow: none !important;
+    width: 200px !important;
+    min-width: 200px !important;
+    position: fixed !important;
+  }
+  .adm-main { margin-left: 200px !important; }
+  .adm-hamburger { display: none !important; }
+}
+
+/* Affiliates 2-col grid — collapse on mobile */
+@media (max-width: 767px) {
+  .aff-two-col { grid-template-columns: 1fr !important; }
+}
+
+/* Configure / Paybill page headings */
+.page-tab-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+
+/* ============================================================
+   Configure bot — 3-col order type grid
+   ============================================================ */
+.cfg-order-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 0;
+}
+@media (max-width: 900px) {
+  .cfg-order-grid { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+   My Paybill — 2-col layout (details left, balance right)
+   ============================================================ */
+.paybill-two-col {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .paybill-two-col { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+   Affiliates 2-col — mobile collapse (applied via JS inline
+   but override for small screens via a wrapper class)
+   ============================================================ */
+@media (max-width: 900px) {
+  .aff-two-col { grid-template-columns: 1fr !important; }
+}
+
+/* Desktop: give content breathing room away from sidebar */
+@media (min-width: 768px) {
+  .dash-body .dash-content { padding: 28px 32px; }
+}
+
+/* ── Admin dashboard responsive grids (mobile) ── */
+@media (max-width: 767px) {
+  .adm-dash-top-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .adm-dash-stat-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 10px !important;
+  }
+  .adm-dash-chart-grid {
+    grid-template-columns: 1fr !important;
+  }
+  /* Wider header row on mobile */
+  .adm-dash-top-grid .adm-card:first-child {
+    order: 1;
+  }
+  .adm-dash-top-grid .adm-card:last-child {
+    order: 2;
+  }
+}
+
+/* ── Admin dashboard mobile fix ── */
+@media (max-width: 767px) {
+  /* Hide sidebar completely on mobile — global rule forces margin-left:200px so we must undo it */
+  .adm-sidebar {
+    display: none !important;
+    transform: translateX(-100%) !important;
+  }
+  .adm-hamburger {
+    display: none !important;
+  }
+  /* Main content fills full width */
+  .adm-main {
+    margin-left: 0 !important;
+    overflow-x: hidden !important;
+    max-width: 100vw !important;
+    width: 100% !important;
+  }
+  .adm-content {
+    overflow-x: hidden !important;
+    max-width: 100% !important;
+    padding: 12px 14px !important;
+  }
+  /* Header row wraps instead of overflowing */
+  .adm-dash-header-row {
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+  .adm-dash-online-btn {
+    display: none !important;
+  }
+  /* Earnings inner sub-stats: 2-col instead of 3-col */
+  .adm-earn-stats {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 6px !important;
+  }
+}
+
+/* ── Buy Credits: horizontal grid on desktop, vertical on mobile ── */
+@media (min-width: 769px) {
+  .bc-outer {
+    max-width: 1080px !important;
+  }
+  .bc-plans-grid {
+    display: grid !important;
+    grid-template-columns: repeat(4, 1fr) !important;
+    gap: 14px;
+    margin-bottom: 0;
+    align-items: start;
+  }
+  .bc-plans-grid > div {
+    margin-bottom: 0 !important;
+  }
+  /* Hide the inline per-card payment form on desktop (shown in bc-desktop-form instead) */
+  .bc-plan-form {
+    display: none !important;
+  }
+  .bc-desktop-form {
+    display: block;
+    margin-top: 14px;
+  }
+}
+@media (max-width: 768px) {
+  /* Keep inline payment forms on mobile, hide the desktop form */
+  .bc-desktop-form {
+    display: none !important;
+  }
+  .bc-plan-form {
+    display: block;
+  }
+}
+

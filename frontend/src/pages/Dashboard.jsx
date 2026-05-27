@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import { kycCreateSession } from '../services/api';
 import SupportChat from '../components/SupportChat';
@@ -455,6 +455,7 @@ export default function Dashboard() {
   const [cbWithdrawAmount, setCbWithdrawAmount] = useState('');
   const [cbWithdrawOtp, setCbWithdrawOtp] = useState('');
   const [cbWithdrawOtpSent, setCbWithdrawOtpSent] = useState(false);
+  const [cbWithdrawChannel, setCbWithdrawChannel] = useState('mpesa'); // 'mpesa' | 'bank'
   const [cbWithdrawOtpLoading, setCbWithdrawOtpLoading] = useState(false);
   const [cbWithdrawLoading, setCbWithdrawLoading] = useState(false);
   const [cbWithdrawMsg, setCbWithdrawMsg] = useState('');
@@ -466,8 +467,10 @@ export default function Dashboard() {
   const [withdrawalPage, setWithdrawalPage] = useState(1);
   const [sweepSecondsLeft, setSweepSecondsLeft] = useState(0);
   const [activeTab, setActiveTab] = useState('overview');
+  const [mobMoreOpen, setMobMoreOpen] = useState(false);
   const [creditPlan, setCreditPlan] = useState(null);
   const [creditPhone, setCreditPhone] = useState('');
+  const [payGoAmount, setPayGoAmount] = useState('500');
   const [creditBuying, setCreditBuying] = useState(false);
   const [creditPolling, setCreditPolling] = useState(false);
   const [creditCheckoutId, setCreditCheckoutId] = useState(null);
@@ -496,6 +499,7 @@ export default function Dashboard() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [openSupportChat, setOpenSupportChat] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
+  useEffect(() => { if (activeTab !== 'logs') window.scrollTo(0, 0); }, [activeTab]);
   const [botTradeMode, setBotTradeMode] = useState('both');
   const [savingConfig, setSavingConfig] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
@@ -1373,7 +1377,95 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      <main className="dash-content">
+      <div className="dash-body">
+
+        {/* ── Desktop / Tablet Sidebar ── */}
+        <aside className="dash-sidebar">
+          {/* Brand */}
+          <div className="dsb-brand">
+            <img src="/logo.png" alt="SparkP2P" style={{ width: 28, height: 28, borderRadius: 6 }} />
+            <div style={{ lineHeight: 1.1 }}>
+              <div style={{ color: '#F59E0B', fontWeight: 500, fontSize: 14 }}>SparkP2P</div>
+              {appVersion && <div style={{ color: '#6B7280', fontSize: 10 }}>v{appVersion}</div>}
+            </div>
+          </div>
+
+          {/* Main nav */}
+          <div className="dsb-section-label">Main</div>
+          {[
+            { key: 'overview',      icon: LayoutDashboard, label: 'Overview'      },
+            { key: 'orders',        icon: List,            label: 'Orders'        },
+            { key: 'transactions',  icon: ArrowRightLeft,  label: 'Transactions'  },
+            { key: 'logs',          icon: Activity,        label: 'Logs'          },
+          ].map(({ key, icon: Icon, label }) => (
+            <button key={key}
+              className={`dsb-nav-item${activeTab === key ? ' dsb-active' : ''}`}
+              onClick={() => setActiveTab(key)}
+            >
+              <Icon size={16} />
+              <span>{label}</span>
+            </button>
+          ))}
+
+          {/* Account nav */}
+          <div className="dsb-section-label">Account</div>
+          <button
+            className={`dsb-nav-item${activeTab === 'settings' ? ' dsb-active' : ''}`}
+            onClick={() => setActiveTab('settings')}
+          >
+            <Settings size={16} /><span>Settings</span>
+          </button>
+          {affiliateData?.affiliate && (
+            <button
+              className={`dsb-nav-item${activeTab === 'affiliates' ? ' dsb-active' : ''}`}
+              onClick={() => setActiveTab('affiliates')}
+            >
+              <Share2 size={16} /><span>Affiliates</span>
+            </button>
+          )}
+          <button
+            className={`dsb-nav-item${activeTab === 'paybill' ? ' dsb-active' : ''}`}
+            onClick={() => setActiveTab('paybill')}
+          >
+            <CreditCard size={16} /><span>My Paybill</span>
+          </button>
+
+          {/* Setup nav */}
+          <div className="dsb-section-label">Setup</div>
+          {!profile?.binance_connected && (
+            <button className="dsb-nav-item dsb-warn" onClick={() => setActiveTab('settings')}>
+              <Wifi size={16} /><span>Connect Binance</span>
+            </button>
+          )}
+          <button
+            className={`dsb-nav-item dsb-accent${activeTab === 'configure' ? ' dsb-active' : ''}`}
+            onClick={() => setActiveTab('configure')}
+          >
+            <SlidersHorizontal size={16} /><span>Configure</span>
+          </button>
+          <button
+            className={`dsb-nav-item dsb-green${activeTab === 'credits' ? ' dsb-active' : ''}`}
+            onClick={() => setActiveTab('credits')}
+          >
+            <DollarSign size={16} /><span>Buy Credits</span>
+          </button>
+
+          {/* Footer */}
+          <div className="dsb-footer">
+            <div className="dsb-user-row">
+              <div className="dsb-avatar">{(user?.full_name || 'U').charAt(0).toUpperCase()}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: '#E5E7EB', fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.full_name}</div>
+                <div style={{ color: '#F59E0B', fontSize: 10, fontWeight: 500, textTransform: 'uppercase' }}>{profile?.tier || 'standard'}</div>
+              </div>
+              <button className="icon-btn" onClick={logout} title="Logout" style={{ padding: 4 }}>
+                <LogOut size={15} />
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <main className="dash-content">
 {activeTab === 'overview' && (
           <>
             {/* Choice Bank verification banner — only after profile loads */}
@@ -1965,8 +2057,11 @@ export default function Dashboard() {
                         <div style={{ fontSize: 14, fontWeight: 700, color: isIn ? '#10b981' : '#ef4444' }}>
                           {isIn ? '+' : '-'}{fmtAmt(t.amount)}
                         </div>
+                        {t.status === 'completed' && !isIn && (
+                          <div style={{ fontSize: 10, color: '#10b981', marginTop: 2 }}>✓ completed</div>
+                        )}
                         {t.status && t.status !== 'completed' && (
-                          <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>{t.status}</div>
+                          <div style={{ fontSize: 10, color: t.status === 'failed' ? '#ef4444' : '#f59e0b', marginTop: 2 }}>{t.status}</div>
                         )}
                       </div>
                     </div>
@@ -2010,6 +2105,273 @@ export default function Dashboard() {
         )}
 
         {/* ── Affiliates Tab ── */}
+        {activeTab === 'configure' && (
+          <div>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 28 }}>
+              <div>
+                <h2 style={{ color: '#fff', fontSize: 20, fontWeight: 700, margin: '0 0 4px' }}>Configure bot</h2>
+                <p style={{ color: '#6b7280', fontSize: 13, margin: 0 }}>Control what the bot automates and how it screens counterparties</p>
+              </div>
+              <button
+                onClick={async () => {
+                  setSavingConfig(true);
+                  try {
+                    await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll });
+                    configSavedAt.current = Date.now();
+                    setConfigSaved(true);
+                    setTimeout(() => { setConfigSaved(false); }, 1500);
+                  } catch (e) {}
+                  setSavingConfig(false);
+                }}
+                disabled={savingConfig || configSaved}
+                style={{ padding: '9px 22px', borderRadius: 8, border: 'none', background: configSaved ? '#059669' : '#10b981', color: '#fff', fontWeight: 700, fontSize: 13, cursor: savingConfig || configSaved ? 'default' : 'pointer', flexShrink: 0, whiteSpace: 'nowrap', opacity: savingConfig ? 0.7 : 1, transition: 'background 0.2s' }}
+              >
+                {savingConfig ? 'Saving…' : configSaved ? '✓ Saved' : 'Save changes'}
+              </button>
+            </div>
+
+            {/* ORDER TYPES */}
+            <div style={{ color: '#6b7280', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 6 }}>Order Types</div>
+            <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 14 }}>Choose which order types the bot should automate. Orders outside the selected mode stay visible on Binance — you complete them manually.</p>
+            <div className="cfg-order-grid">
+              {[
+                { value: 'both',      label: 'Buy & sell',       badge: 'DEFAULT', desc: 'Bot fully automates both sides — pays sellers for incoming buy orders and releases USDT to buyers for sell orders.',         footNote: 'Recommended for most traders', footColor: '#10b981', warn: null },
+                { value: 'buy_only',  label: 'Buy orders only',  badge: null,      desc: 'Bot pays sellers and acquires USDT automatically when buyers place orders.',                                                   footNote: null, footColor: null, warn: "Sell orders won't be automated. Release USDT manually on Binance." },
+                { value: 'sell_only', label: 'Sell orders only', badge: null,      desc: 'Bot receives M-Pesa payments and releases USDT to buyers automatically.',                                                      footNote: null, footColor: null, warn: "Buy orders won't be automated. Pay sellers manually on Binance." },
+              ].map(opt => {
+                const active = botTradeMode === opt.value;
+                return (
+                  <div key={opt.value} onClick={() => setBotTradeMode(opt.value)}
+                    style={{ padding: 16, borderRadius: 10, border: `1px solid ${active ? '#f59e0b' : '#1f2937'}`, background: active ? 'rgba(245,158,11,0.06)' : '#0d1117', cursor: 'pointer', transition: 'all 0.15s', display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${active ? '#f59e0b' : '#374151'}`, background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {active && <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b' }} />}
+                      </div>
+                      {opt.badge && <span style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', background: '#1f2937', padding: '2px 8px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{opt.badge}</span>}
+                    </div>
+                    <div>
+                      <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 700, marginBottom: 6 }}>{opt.label}</div>
+                      <div style={{ color: '#9ca3af', fontSize: 12, lineHeight: 1.5 }}>{opt.desc}</div>
+                    </div>
+                    {opt.warn && <div style={{ fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 6, padding: '6px 8px', lineHeight: 1.4 }}>{opt.warn}</div>}
+                    {opt.footNote && <div style={{ fontSize: 11, color: opt.footColor, fontWeight: 500 }}>{opt.footNote}</div>}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* COUNTERPARTY SCREENING */}
+            <div style={{ color: '#6b7280', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px', margin: '28px 0 14px' }}>Counterparty Screening</div>
+
+            {/* Telegram screening row */}
+            <div style={{ background: '#0d1117', border: '0.5px solid #1f2937', borderRadius: 10, padding: '14px 16px', marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Screen via Telegram before sharing payment details</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>
+                    {tgConnectedForConfig ? 'Buyer details sent to your Telegram for approval before payment is shared.' : 'Screen buyers automatically before sharing payment details'}
+                  </div>
+                </div>
+                <div onClick={() => setDdEnabled(v => !v)}
+                  style={{ width: 44, height: 24, borderRadius: 12, background: ddEnabled ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0, marginLeft: 20 }}>
+                  <div style={{ position: 'absolute', top: 4, left: ddEnabled ? 22 : 4, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+                </div>
+              </div>
+              {ddEnabled && tgConnectedForConfig && (
+                <div style={{ marginTop: 12, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 8, padding: '10px 14px' }}>
+                  <div style={{ color: '#10b981', fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Telegram screening active</div>
+                  <div style={{ color: '#9ca3af', fontSize: 12, lineHeight: 1.5 }}>Every new sell order pauses — buyer stats are sent to your Telegram before payment details are shared. Reply <span style={{ color: '#10b981' }}>/approve</span> or <span style={{ color: '#ef4444' }}>/reject</span>.</div>
+                </div>
+              )}
+              {ddEnabled && !tgConnectedForConfig && (
+                <div style={{ marginTop: 12, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '12px 14px' }}>
+                  <div style={{ color: '#f59e0b', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>⚠ Telegram not connected</div>
+                  <p style={{ margin: '0 0 10px', color: '#9ca3af', fontSize: 12, lineHeight: 1.5 }}>Connect your Telegram to use this feature.</p>
+                  <button onClick={() => { setSettingsInitialSection('notifications'); setActiveTab('settings'); }}
+                    style={{ padding: '8px 14px', borderRadius: 7, border: '1px solid rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>
+                    Connect Telegram → Settings / Notifications
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Auto-reject row */}
+            <div style={{ background: '#0d1117', border: '0.5px solid #1f2937', borderRadius: 10, padding: '14px 16px', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Auto-reject buyers under 100 trades</div>
+                <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>New accounts have higher dispute rates</div>
+              </div>
+              <div onClick={() => setDdMinAll(v => v >= 100 ? 0 : 100)}
+                style={{ width: 44, height: 24, borderRadius: 12, background: ddMinAll >= 100 ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0, marginLeft: 20 }}>
+                <div style={{ position: 'absolute', top: 4, left: ddMinAll >= 100 ? 22 : 4, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+              </div>
+            </div>
+
+            {/* High-risk regions row */}
+            <div style={{ background: '#0d1117', border: '0.5px solid #1f2937', borderRadius: 10, padding: '14px 16px', marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Pause on high-risk regions</span>
+                  <span style={{ fontSize: 10, color: '#6b7280', background: '#1f2937', padding: '1px 7px', borderRadius: 4, fontWeight: 600 }}>COMING SOON</span>
+                </div>
+                <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>Require manual approval for flagged areas</div>
+              </div>
+              <div style={{ width: 44, height: 24, borderRadius: 12, background: '#374151', cursor: 'not-allowed', position: 'relative', flexShrink: 0, marginLeft: 20, opacity: 0.4 }}>
+                <div style={{ position: 'absolute', top: 4, left: 4, width: 16, height: 16, borderRadius: '50%', background: '#fff' }} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'paybill' && (() => {
+          const recentTxns = [...(transactions || []).map(t => ({ ...t, sign: 1 })), ...(withdrawalTxns || []).map(t => ({ ...t, sign: -1 }))]
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+            .slice(0, 5);
+          const isLocked = profile?.settlement_cooldown_until && new Date(profile.settlement_cooldown_until) > new Date();
+          return (
+            <div>
+              {/* Header */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 }}>
+                <div>
+                  <h2 style={{ color: '#fff', fontSize: 20, fontWeight: 700, margin: '0 0 4px' }}>My paybill</h2>
+                  <p style={{ color: '#6b7280', fontSize: 13, margin: 0 }}>Bank details the bot uses to receive payouts</p>
+                </div>
+                <button onClick={() => { setSettingsInitialSection('bank'); setActiveTab('settings'); }}
+                  style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#e5e7eb', fontWeight: 600, fontSize: 13, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                  Edit details
+                </button>
+              </div>
+
+              <div className="paybill-two-col">
+                {/* Left: bank details + transactions */}
+                <div>
+                  <div className="card" style={{ marginBottom: 14 }}>
+                    {/* Bank header */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ width: 40, height: 40, borderRadius: 8, background: 'linear-gradient(135deg,#0d9488,#065f46)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+                        </div>
+                        <div>
+                          <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 700 }}>Choice Bank · Kenya</div>
+                          <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>Connected · paybill active</div>
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: '#10b981', background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)', padding: '3px 10px', borderRadius: 20 }}>Verified</span>
+                    </div>
+
+                    {/* Fields */}
+                    {[
+                      { label: 'PAYBILL NUMBER',  value: profile?.choice_paybill || '444174',                                                key: 'pb' },
+                      { label: 'ACCOUNT NUMBER',  value: profile?.choice_account_number || profile?.choice_account_id || '—',                key: 'ac' },
+                      { label: 'ACCOUNT NAME',    value: profile?.full_name || '—',                                                          key: 'nm' },
+                    ].map(({ label, value, key: ck }) => (
+                      <div key={ck} style={{ marginBottom: 14 }}>
+                        <div style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 6 }}>{label}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#0a0d14', borderRadius: 8, padding: '10px 14px', border: '0.5px solid #374151' }}>
+                          <span style={{ flex: 1, color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>{value}</span>
+                          <button
+                            onClick={() => { navigator.clipboard.writeText(String(value)); setCopied(ck); setTimeout(() => setCopied(''), 1800); }}
+                            style={{ background: copied === ck ? 'rgba(16,185,129,0.12)' : 'transparent', border: `1px solid ${copied === ck ? 'rgba(16,185,129,0.3)' : '#374151'}`, cursor: 'pointer', color: copied === ck ? '#10b981' : '#6b7280', padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, flexShrink: 0, transition: 'all 0.15s' }}>
+                            {copied === ck ? 'Copied!' : 'Copy'}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Recent transactions */}
+                  <div className="card">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Activity size={16} style={{ color: '#6b7280' }} />
+                        <span style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 700 }}>Recent paybill transactions</span>
+                      </div>
+                      <button onClick={() => setActiveTab('transactions')}
+                        style={{ background: 'none', border: 'none', color: '#6b7280', fontSize: 12, cursor: 'pointer', padding: 0 }}>
+                        View all →
+                      </button>
+                    </div>
+                    {recentTxns.length === 0 ? (
+                      <p style={{ color: '#6b7280', fontSize: 13, padding: '12px 0', textAlign: 'center' }}>No transactions yet</p>
+                    ) : (
+                      recentTxns.map((t, i) => {
+                        const amt = Math.abs(t.amount || 0);
+                        const isPos = (t.amount || 0) > 0;
+                        const desc = t.description || (isPos ? 'Incoming' : 'Payout to bank');
+                        const shortDesc = desc.length > 28 ? desc.slice(0, 28) + '…' : desc;
+                        const date = t.created_at ? new Date(t.created_at) : null;
+                        const dateStr = date ? `${date.toLocaleDateString('en-KE')}, ${date.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' })}` : '';
+                        return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: i < recentTxns.length - 1 ? '0.5px solid #1f2937' : 'none' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <div style={{ width: 8, height: 8, borderRadius: '50%', background: isPos ? '#10b981' : '#6b7280', flexShrink: 0 }} />
+                              <div>
+                                <div style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 500 }}>{shortDesc}</div>
+                                <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>{dateStr}</div>
+                              </div>
+                            </div>
+                            <span style={{ color: isPos ? '#10b981' : '#9ca3af', fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
+                              {isPos ? '+' : '−'} KES {amt.toLocaleString()}
+                            </span>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* Right: balance + auto-payout + locked notice */}
+                <div>
+                  <div style={{ marginBottom: 6 }}>
+                    <div style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: 6 }}>Current Balance</div>
+                    <div style={{ fontSize: 34, fontWeight: 700, color: '#10b981', lineHeight: 1 }}>
+                      KES {cbDashBalance !== null && cbDashBalance !== undefined ? (typeof cbDashBalance === 'object' ? (cbDashBalance.balance || 0) : cbDashBalance).toLocaleString() : '—'}
+                    </div>
+                    <div style={{ color: '#6b7280', fontSize: 12, marginTop: 6, marginBottom: 16 }}>Available for withdrawal</div>
+                    <button
+                      onClick={() => setShowWithdrawModal(true)}
+                      style={{ width: '100%', padding: '12px 0', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', marginBottom: 16 }}>
+                      Withdraw
+                    </button>
+                  </div>
+
+                  <div className="card" style={{ marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <span style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 700 }}>Auto-payout</span>
+                      <div style={{ width: 44, height: 24, borderRadius: 12, background: profile?.batch_settlement_enabled ? '#f59e0b' : '#374151', position: 'relative', opacity: 0.6, cursor: 'default' }}>
+                        <div style={{ position: 'absolute', top: 4, left: profile?.batch_settlement_enabled ? 22 : 4, width: 16, height: 16, borderRadius: '50%', background: '#fff' }} />
+                      </div>
+                    </div>
+                    {[
+                      { label: 'Trigger', value: `Balance ≥ KES ${(profile?.batch_threshold || 10000).toLocaleString()}` },
+                      { label: 'Next payout', value: profile?.batch_settlement_enabled ? 'When triggered' : 'Disabled' },
+                    ].map(({ label, value }) => (
+                      <div key={label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 0', borderTop: '0.5px solid #1f2937' }}>
+                        <span style={{ color: '#6b7280', fontSize: 12 }}>{label}</span>
+                        <span style={{ color: '#e5e7eb', fontSize: 12, fontWeight: 500 }}>{value}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="card">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: isLocked ? '#ef4444' : '#10b981', flexShrink: 0 }} />
+                      <span style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 700 }}>{isLocked ? 'Account is locked' : 'Account security'}</span>
+                    </div>
+                    <p style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.5, margin: 0 }}>
+                      {isLocked
+                        ? `Bank detail changes are locked until ${new Date(profile.settlement_cooldown_until).toLocaleDateString('en-KE')}. A 48-hour cooling-off period applies after changes.`
+                        : 'Changes to bank details require 2FA + a 24-hour cooling-off period for your protection.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {activeTab === 'affiliates' && (
           <div>
             {/* No affiliate record yet — Apply form */}
@@ -2068,120 +2430,391 @@ export default function Dashboard() {
             )}
 
             {/* Approved affiliate dashboard */}
-            {affiliateData?.affiliate?.status === 'approved' && (
-              <>
-                {/* Stats row */}
-                <div className="overview-stats-row" style={{ marginBottom: 16 }}>
-                  <div className="mini-stat-card">
-                    <Users size={18} style={{ color: '#3b82f6', marginBottom: 4 }} />
-                    <span className="mini-stat-value">{affiliateReferrals?.summary?.total_referrals || 0}</span>
-                    <span className="mini-stat-label">Referrals</span>
+            {affiliateData?.affiliate?.status === 'approved' && (() => {
+              const link = affiliateData.affiliate.referral_link || `https://sparkp2p.com/login?ref=${affiliateData.affiliate.referral_code}`;
+              const shareMsg = `Join SparkP2P — automate your Binance P2P trading. Sign up with my link: ${link}`;
+              return (
+                <>
+                  {/* Stats grid — no icons */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+                    {[
+                      { label: 'REFERRALS',      value: affiliateReferrals?.summary?.total_referrals || 0 },
+                      { label: 'PENDING PAYOUT', value: `KES ${(affiliateData.affiliate.pending_balance || 0).toLocaleString()}` },
+                      { label: 'TOTAL EARNED',   value: `KES ${(affiliateData.affiliate.total_earned || 0).toLocaleString()}` },
+                      { label: 'THIS WEEK',      value: `KES ${(affiliateReferrals?.summary?.this_week_earnings || 0).toLocaleString()}` },
+                    ].map(({ label, value }) => (
+                      <div key={label} className="card" style={{ padding: '14px 18px' }}>
+                        <div style={{ color: '#fff', fontWeight: 700, fontSize: 20, marginBottom: 4 }}>{value}</div>
+                        <div style={{ color: '#6b7280', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="mini-stat-card">
-                    <TrendingUp size={18} style={{ color: '#10b981', marginBottom: 4 }} />
-                    <span className="mini-stat-value">KES {(affiliateData.affiliate.pending_balance || 0).toLocaleString()}</span>
-                    <span className="mini-stat-label">Pending Payout</span>
-                  </div>
-                  <div className="mini-stat-card">
-                    <DollarSign size={18} style={{ color: '#f59e0b', marginBottom: 4 }} />
-                    <span className="mini-stat-value">KES {(affiliateData.affiliate.total_earned || 0).toLocaleString()}</span>
-                    <span className="mini-stat-label">Total Earned</span>
-                  </div>
-                  <div className="mini-stat-card">
-                    <BarChart2 size={18} style={{ color: '#8b5cf6', marginBottom: 4 }} />
-                    <span className="mini-stat-value">KES {(affiliateReferrals?.summary?.this_week_earnings || 0).toLocaleString()}</span>
-                    <span className="mini-stat-label">This Week</span>
-                  </div>
-                </div>
 
-                {/* Referral link card */}
-                <div className="card" style={{ marginBottom: 16 }}>
-                  <div className="card-header">
-                    <Share2 size={18} style={{ color: '#f59e0b' }} />
-                    <h3>Your Referral Link</h3>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
-                    <div style={{ flex: 1, background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontFamily: 'monospace', fontSize: 13, color: '#e5e7eb', wordBreak: 'break-all' }}>
-                      {affiliateData.affiliate.referral_link || `https://sparkp2p.com/login?ref=${affiliateData.affiliate.referral_code}`}
+                  {/* 2-col layout */}
+                  <div className="aff-two-col" style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr)", gap: 16, alignItems: "start" }}>
+
+                    {/* Left: referral link + referrals list */}
+                    <div>
+                      <div className="card" style={{ marginBottom: 14 }}>
+                        <div style={{ fontWeight: 700, color: '#fff', fontSize: 15, marginBottom: 12 }}>Your referral link</div>
+                        {/* Inline URL + Copy button */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                          <div style={{ flex: 1, background: 'rgba(255,255,255,0.04)', border: '0.5px solid #374151', borderRadius: 8, padding: '9px 12px', fontFamily: 'monospace', fontSize: 12, color: '#d1d5db', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {link}
+                          </div>
+                          <button
+                            onClick={() => { navigator.clipboard.writeText(link).then(() => { setAffiliateCopied(true); setTimeout(() => setAffiliateCopied(false), 2000); }); }}
+                            style={{ flexShrink: 0, padding: '9px 18px', borderRadius: 8, border: 'none', background: affiliateCopied ? '#10b981' : '#3b82f6', color: '#fff', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>
+                            {affiliateCopied ? 'Copied!' : 'Copy'}
+                          </button>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ color: '#6b7280', fontSize: 12 }}>Your code: <strong style={{ color: '#f59e0b' }}>{affiliateData.affiliate.referral_code}</strong></span>
+                          <span style={{ color: '#6b7280', fontSize: 12 }}>10% of all fees, lifetime</span>
+                        </div>
+                      </div>
+
+                      <div className="card">
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                          <div style={{ fontWeight: 700, color: '#fff', fontSize: 15 }}>Your referrals</div>
+                          <span style={{ fontSize: 12, color: '#6b7280' }}>{(affiliateReferrals?.referrals || []).length} trader{(affiliateReferrals?.referrals || []).length !== 1 ? 's' : ''}</span>
+                        </div>
+                        {(affiliateReferrals?.referrals || []).length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '28px 0' }}>
+                            <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', margin: '0 auto 12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <Users size={22} color="#6b7280" />
+                            </div>
+                            <div style={{ color: '#6b7280', fontSize: 14, fontWeight: 600, marginBottom: 4 }}>No referrals yet</div>
+                            <div style={{ color: '#4b5563', fontSize: 12 }}>Share your link to start earning</div>
+                          </div>
+                        ) : (
+                          <div style={{ marginTop: 8 }}>
+                            {(affiliateReferrals?.referrals || []).map((ref, i) => (
+                              <div key={i} style={{ borderBottom: i < affiliateReferrals.referrals.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                                <div
+                                  style={{ display: 'flex', alignItems: 'center', padding: '12px 4px', cursor: ref.weekly_breakdown?.length > 0 ? 'pointer' : 'default' }}
+                                  onClick={() => ref.weekly_breakdown?.length > 0 && setExpandedReferral(expandedReferral === i ? null : i)}
+                                >
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ fontWeight: 600, color: '#e5e7eb', fontSize: 14 }}>{ref.trader_name}</div>
+                                    <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                                      Joined {ref.joined_at ? new Date(ref.joined_at).toLocaleDateString('en-KE') : '—'}
+                                    </div>
+                                  </div>
+                                  <div style={{ textAlign: 'right', marginRight: ref.weekly_breakdown?.length > 0 ? 8 : 0 }}>
+                                    <div style={{ fontWeight: 700, color: '#10b981', fontSize: 14 }}>KES {(ref.total_earned || 0).toLocaleString()}</div>
+                                    <div style={{ fontSize: 11, color: '#6b7280' }}>earned</div>
+                                  </div>
+                                  {ref.weekly_breakdown?.length > 0 && (
+                                    expandedReferral === i ? <ChevronUp size={16} color="#6b7280" /> : <ChevronDown size={16} color="#6b7280" />
+                                  )}
+                                </div>
+                                {expandedReferral === i && ref.weekly_breakdown?.length > 0 && (
+                                  <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                                      <thead>
+                                        <tr style={{ color: '#6b7280' }}>
+                                          <th style={{ textAlign: 'left', padding: '4px 0', fontWeight: 500 }}>Week</th>
+                                          <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Orders</th>
+                                          <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Commission</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {ref.weekly_breakdown.map((w, wi) => (
+                                          <tr key={wi} style={{ color: '#d1d5db' }}>
+                                            <td style={{ padding: '4px 0' }}>Week of {new Date(w.week_start).toLocaleDateString('en-KE')}</td>
+                                            <td style={{ padding: '4px 0', textAlign: 'right' }}>{w.order_count}</td>
+                                            <td style={{ padding: '4px 0', textAlign: 'right', color: '#10b981', fontWeight: 600 }}>KES {(w.commission || 0).toLocaleString()}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <button
-                      onClick={() => {
-                        const link = affiliateData.affiliate.referral_link || `https://sparkp2p.com/login?ref=${affiliateData.affiliate.referral_code}`;
-                        navigator.clipboard.writeText(link).then(() => { setAffiliateCopied(true); setTimeout(() => setAffiliateCopied(false), 2000); });
-                      }}
-                      style={{ padding: '10px 16px', borderRadius: 8, border: 'none', background: affiliateCopied ? '#10b981' : '#3b82f6', color: '#fff', fontWeight: 600, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}
-                    >
-                      <Copy size={14} /> {affiliateCopied ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-                  <p style={{ color: '#6b7280', fontSize: 12, marginTop: 8 }}>
-                    Code: <strong style={{ color: '#f59e0b' }}>{affiliateData.affiliate.referral_code}</strong> · Share this link and earn 10% of all fees from every trader who signs up through it.
-                  </p>
-                </div>
 
-                {/* Referrals list */}
-                <div className="card">
-                  <div className="card-header">
-                    <Users size={18} />
-                    <h3>Your Referrals</h3>
-                    <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }}>{(affiliateReferrals?.referrals || []).length} trader{(affiliateReferrals?.referrals || []).length !== 1 ? 's' : ''}</span>
-                  </div>
-                  {(affiliateReferrals?.referrals || []).length === 0 ? (
-                    <p className="empty-msg" style={{ padding: '20px 0' }}>No referrals yet. Share your link to start earning.</p>
-                  ) : (
-                    <div style={{ marginTop: 8 }}>
-                      {(affiliateReferrals?.referrals || []).map((ref, i) => (
-                        <div key={i} style={{ borderBottom: i < affiliateReferrals.referrals.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                          <div
-                            style={{ display: 'flex', alignItems: 'center', padding: '12px 4px', cursor: ref.weekly_breakdown?.length > 0 ? 'pointer' : 'default' }}
-                            onClick={() => ref.weekly_breakdown?.length > 0 && setExpandedReferral(expandedReferral === i ? null : i)}
-                          >
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontWeight: 600, color: '#e5e7eb', fontSize: 14 }}>{ref.trader_name}</div>
-                              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-                                Joined {ref.joined_at ? new Date(ref.joined_at).toLocaleDateString('en-KE') : '—'}
+                    {/* Right: Share quickly + How it works */}
+                    <div>
+                      <div className="card" style={{ marginBottom: 14 }}>
+                        <div style={{ fontWeight: 700, color: '#fff', fontSize: 15, marginBottom: 14 }}>Share quickly</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <a href={`https://wa.me/?text=${encodeURIComponent(shareMsg)}`} target="_blank" rel="noopener noreferrer"
+                            style={{ display: 'block', padding: '10px 16px', borderRadius: 8, background: '#25d366', color: '#fff', fontWeight: 700, fontSize: 14, textDecoration: 'none', textAlign: 'center' }}>
+                            WhatsApp
+                          </a>
+                          <a href={`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent('Join SparkP2P — automate your Binance P2P trading!')}`} target="_blank" rel="noopener noreferrer"
+                            style={{ display: 'block', padding: '10px 16px', borderRadius: 8, border: '1px solid rgba(0,136,204,0.4)', background: 'rgba(0,136,204,0.06)', color: '#0088cc', fontWeight: 700, fontSize: 14, textDecoration: 'none', textAlign: 'center' }}>
+                            Telegram
+                          </a>
+                          <a href={`sms:?body=${encodeURIComponent(shareMsg)}`}
+                            style={{ display: 'block', padding: '10px 16px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#d1d5db', fontWeight: 700, fontSize: 14, textDecoration: 'none', textAlign: 'center' }}>
+                            SMS
+                          </a>
+                        </div>
+                      </div>
+
+                      <div className="card">
+                        <div style={{ fontWeight: 700, color: '#fff', fontSize: 15, marginBottom: 16 }}>How it works</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                          {[
+                            { n: '1', color: '#f59e0b', bg: 'rgba(245,158,11,0.15)', title: 'Share your link',       desc: 'WhatsApp, Telegram, social — anywhere fellow traders are.' },
+                            { n: '2', color: '#10b981', bg: 'rgba(16,185,129,0.15)', title: 'They sign up & trade',  desc: 'Your code is locked to their account forever.' },
+                            { n: '3', color: '#10b981', bg: 'rgba(16,185,129,0.15)', title: 'You earn 10%',          desc: 'Paid to your M-Pesa every Monday. No cap.' },
+                          ].map(({ n, color, bg, title, desc }) => (
+                            <div key={n} style={{ display: 'flex', gap: 12 }}>
+                              <div style={{ width: 24, height: 24, borderRadius: '50%', background: bg, color, fontSize: 12, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{n}</div>
+                              <div>
+                                <div style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{title}</div>
+                                <div style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.4 }}>{desc}</div>
                               </div>
                             </div>
-                            <div style={{ textAlign: 'right', marginRight: ref.weekly_breakdown?.length > 0 ? 8 : 0 }}>
-                              <div style={{ fontWeight: 700, color: '#10b981', fontSize: 14 }}>KES {(ref.total_earned || 0).toLocaleString()}</div>
-                              <div style={{ fontSize: 11, color: '#6b7280' }}>Total earned</div>
-                            </div>
-                            {ref.weekly_breakdown?.length > 0 && (
-                              expandedReferral === i ? <ChevronUp size={16} color="#6b7280" /> : <ChevronDown size={16} color="#6b7280" />
-                            )}
-                          </div>
-                          {expandedReferral === i && ref.weekly_breakdown?.length > 0 && (
-                            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 }}>
-                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                                <thead>
-                                  <tr style={{ color: '#6b7280' }}>
-                                    <th style={{ textAlign: 'left', padding: '4px 0', fontWeight: 500 }}>Week</th>
-                                    <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Orders</th>
-                                    <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Commission</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {ref.weekly_breakdown.map((w, wi) => (
-                                    <tr key={wi} style={{ color: '#d1d5db' }}>
-                                      <td style={{ padding: '4px 0' }}>Week of {new Date(w.week_start).toLocaleDateString('en-KE')}</td>
-                                      <td style={{ padding: '4px 0', textAlign: 'right' }}>{w.order_count}</td>
-                                      <td style={{ padding: '4px 0', textAlign: 'right', color: '#10b981', fontWeight: 600 }}>KES {(w.commission || 0).toLocaleString()}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
+                          ))}
                         </div>
-                      ))}
+                      </div>
                     </div>
-                  )}
-                </div>
-              </>
-            )}
+
+                  </div>
+                </>
+              );
+            })()}
           </div>
         )}
+        {/* ==================== BUY CREDITS TAB ==================== */}
+        {activeTab === 'credits' && (() => {
+          const PAY_GO = { key: 'pay_on_the_go', label: 'Pay On The Go', subtitle: 'No commitment', amount: null, credits: null, rate: 40, savings: null, accent: '#fb923c', glow: '251,146,60', features: ['Pay any amount', 'Never expires', 'Instant credit'], topLabel: null, border: '#1f2937', flexible: true };
+          const PLANS = [
+            { key: 'starter',  label: 'Starter',  subtitle: 'Try the bot',    amount: 5000,  credits: 167,  rate: 30, savings: 25, accent: '#9ca3af', glow: '107,114,128', features: ['~167 buy orders', 'Never expires'],                            topLabel: null,          border: '#1f2937' },
+            { key: 'pro',      label: 'Pro',       subtitle: 'Active trader',  amount: 10000, credits: 500,  rate: 20, savings: 50, accent: '#f59e0b', glow: '245,158,11',  features: ['~500 buy orders', 'Never expires'],                            topLabel: null,          border: 'rgba(245,158,11,0.35)' },
+            { key: 'pro_max',  label: 'Pro Max',   subtitle: 'Power user',     amount: 20000, credits: 2000, rate: 10, savings: 75, accent: '#10b981', glow: '16,185,129',  features: ['~2,000 buy orders', 'Priority support', 'Never expires'],    topLabel: 'MOST POPULAR', border: 'rgba(16,185,129,0.35)' },
+            { key: 'advanced', label: 'Advanced',  subtitle: 'High volume',    amount: 40000, credits: 8000, rate: 5,  savings: 87, accent: '#a78bfa', glow: '139,92,246',  features: ['~8,000 buy orders', 'Dedicated support', 'Never expires'],   topLabel: 'BEST VALUE',   border: 'rgba(167,139,250,0.35)' },
+          ];
+
+          const handleBuyCredits = async () => {
+            if (!creditPlan || !creditPhone.trim()) { setCreditMsg({ type: 'error', text: 'Select a plan and enter your M-Pesa number.' }); return; }
+            if (creditPlan === 'pay_on_the_go' && (!parseFloat(payGoAmount) || parseFloat(payGoAmount) < 500)) { setCreditMsg({ type: 'error', text: 'Minimum amount is KES 500 for Pay On The Go.' }); return; }
+            setCreditBuying(true); setCreditMsg(null);
+            try {
+              const customAmt = creditPlan === 'pay_on_the_go' ? parseFloat(payGoAmount) : undefined;
+              const res = await purchaseCredits(creditPlan, creditPhone.trim(), customAmt);
+              const checkoutId = res.data.checkout_id;
+              setCreditCheckoutId(checkoutId);
+              setCreditMsg({ type: 'info', text: res.data.message });
+              setCreditPolling(true);
+              const interval = setInterval(async () => {
+                try {
+                  const ps = await pollCreditsStatus(checkoutId);
+                  if (ps.data.status === 'completed') {
+                    clearInterval(interval);
+                    setCreditPolling(false);
+                    setCreditCheckoutId(null);
+                    setCreditMsg({ type: 'success', text: '✔ Payment confirmed! Credits have been added to your account.' });
+                    setCreditPlan(null);
+                    setCreditPhone('');
+                    if (typeof loadData === 'function') loadData();
+                  }
+                } catch {}
+              }, 5000);
+              setTimeout(() => { clearInterval(interval); if (creditPolling) { setCreditPolling(false); setCreditMsg({ type: 'warning', text: 'Payment not yet confirmed. If you completed payment, your credits will appear shortly.' }); } }, 120000);
+            } catch (err) {
+              setCreditMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to send STK Push. Try again.' });
+            }
+            setCreditBuying(false);
+          };
+
+          const sel = creditPlan === 'pay_on_the_go' ? PAY_GO : PLANS.find(p => p.key === creditPlan);
+          const tc = (profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0);
+          const rm = tc >= 2000 ? 8000 : tc >= 500 ? 2000 : tc >= 167 ? 500 : 167;
+          const pp = Math.min(100, Math.round((tc / rm) * 100));
+          const bc = pp > 50 ? '#10b981' : pp > 20 ? '#f59e0b' : '#ef4444';
+
+          const renderPaymentForm = (p) => (
+            <div style={{ background: `rgba(${p.glow},0.05)`, border: `1px solid rgba(${p.glow},0.25)`, borderTop: 'none', borderRadius: '0 0 14px 14px', padding: '16px 20px' }}>
+              {p.flexible && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 6 }}>
+                    Amount (min KES 500) · You get <strong style={{ color: p.accent }}>{Math.floor(parseFloat(payGoAmount || 0) / 40)}</strong> credits
+                  </div>
+                  <input type="number" min="500" step="100" placeholder="e.g. 1000" value={payGoAmount} onChange={e => setPayGoAmount(e.target.value)} disabled={creditBuying || creditPolling}
+                    style={{ width: '100%', background: '#0d1117', border: `1px solid ${p.accent}55`, borderRadius: 10, color: '#fff', padding: '11px 14px', fontSize: 14, outline: 'none', boxSizing: 'border-box', marginBottom: 4 }} />
+                  {parseFloat(payGoAmount) >= 500 && <div style={{ fontSize: 11, color: '#6b7280' }}>KES {parseFloat(payGoAmount).toLocaleString()} → {Math.floor(parseFloat(payGoAmount) / 40)} credits @ KES 40/credit</div>}
+                </div>
+              )}
+              <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Pay via M-Pesa</div>
+              <input type="tel" placeholder="e.g. 0712 345 678" value={creditPhone} onChange={e => setCreditPhone(e.target.value)} disabled={creditBuying || creditPolling}
+                style={{ width: '100%', background: '#0d1117', border: `1px solid ${p.accent}33`, borderRadius: 10, color: '#fff', padding: '11px 14px', fontSize: 14, outline: 'none', boxSizing: 'border-box', marginBottom: 8 }} />
+              <button onClick={handleBuyCredits} disabled={creditBuying || creditPolling || !creditPhone.trim()}
+                style={{ width: '100%', padding: '12px 0', borderRadius: 10, border: 'none',
+                  background: (creditBuying || creditPolling || !creditPhone.trim()) ? '#1f2937' : p.accent,
+                  color: (creditBuying || creditPolling || !creditPhone.trim()) ? '#4b5563' : (p.accent === '#9ca3af' ? '#111' : '#000'),
+                  fontWeight: 800, fontSize: 14, cursor: (creditBuying || creditPolling || !creditPhone.trim()) ? 'not-allowed' : 'pointer' }}>
+                {creditPolling ? 'Waiting...' : creditBuying ? 'Sending...' : 'Pay Now'}
+              </button>
+              {creditPolling && (
+                <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b' }} />
+                  <span style={{ color: '#9ca3af', fontSize: 12 }}>Check your phone for the M-Pesa PIN prompt...</span>
+                </div>
+              )}
+              {creditMsg && (
+                <div style={{ marginTop: 10, padding: '8px 14px', borderRadius: 9, fontSize: 12,
+                  background: creditMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(59,130,246,0.08)',
+                  color: creditMsg.type === 'success' ? '#10b981' : creditMsg.type === 'error' ? '#ef4444' : creditMsg.type === 'warning' ? '#f59e0b' : '#60a5fa',
+                  border: `1px solid ${creditMsg.type === 'success' ? 'rgba(16,185,129,0.2)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.2)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.15)'}` }}>
+                  {creditMsg.text}
+                </div>
+              )}
+            </div>
+          );
+
+          return (
+            <div className="bc-outer" style={{ maxWidth: 560, margin: '0 auto', padding: '4px 0 40px' }}>
+
+              {/* YOUR BALANCE */}
+              <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 14, padding: '18px 20px', marginBottom: 6 }}>
+                <div style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 8 }}>Your Balance</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
+                  <span style={{ color: bc, fontWeight: 900, fontSize: 36, letterSpacing: '-1px' }}>{tc.toLocaleString()}</span>
+                  <span style={{ color: '#6b7280', fontSize: 14 }}>credits</span>
+                </div>
+                <div style={{ height: 6, background: '#1a1d27', borderRadius: 99, overflow: 'hidden', marginBottom: 6 }}>
+                  <div style={{ height: '100%', width: `${pp}%`, background: bc, borderRadius: 99 }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#6b7280', fontSize: 11 }}>1 credit = 1 bot-completed buy order</span>
+                  <span style={{ color: '#374151', fontSize: 11 }}>{tc.toLocaleString()} / {rm.toLocaleString()}</span>
+                </div>
+              </div>
+
+              {/* Section: Credit Packages */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '22px 0 14px' }}>
+                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
+                <span style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>Credit Packages</span>
+                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
+              </div>
+
+              {/* Plan cards */}
+              <div className="bc-plans-grid">
+              {PLANS.map(p => {
+                const isSelected = creditPlan === p.key;
+                return (
+                  <div key={p.key} style={{ marginBottom: 10 }}>
+                    {p.topLabel && (
+                      <div style={{ background: p.accent === '#10b981' ? 'rgba(16,185,129,0.15)' : 'rgba(167,139,250,0.15)', color: p.accent, textAlign: 'center', padding: '5px 0', fontSize: 10, fontWeight: 800, letterSpacing: '0.8px', textTransform: 'uppercase', borderRadius: '12px 12px 0 0', border: `1px solid ${isSelected ? p.accent : p.border}`, borderBottom: 'none' }}>
+                        ★ {p.topLabel}
+                      </div>
+                    )}
+                    <div onClick={() => { setCreditPlan(p.key); setCreditMsg(null); }}
+                      style={{ background: '#0d1117', border: `1px solid ${isSelected ? p.accent : p.border}`,
+                        borderRadius: p.topLabel ? '0 0 14px 14px' : 14, padding: '18px 20px', cursor: 'pointer', userSelect: 'none',
+                        ...(isSelected ? { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, boxShadow: `0 0 0 1px ${p.accent}` } : {}) }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                        <div>
+                          <div style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>{p.label}</div>
+                          <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>{p.subtitle}</div>
+                        </div>
+                        <span style={{ background: `rgba(${p.glow},0.12)`, color: p.accent, fontSize: 10, fontWeight: 700, padding: '4px 9px', borderRadius: 6, whiteSpace: 'nowrap', flexShrink: 0 }}>Save {p.savings}%</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 14 }}>
+                        <div>
+                          <span style={{ fontSize: 42, fontWeight: 900, color: '#fff', lineHeight: 1, letterSpacing: '-2px' }}>{p.credits.toLocaleString()}</span>
+                          <span style={{ fontSize: 14, color: '#6b7280', marginLeft: 6 }}>credits</span>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ color: p.accent, fontWeight: 800, fontSize: 22 }}>KES {p.amount.toLocaleString()}</div>
+                          <div style={{ color: '#4b5563', fontSize: 11 }}>KES {p.rate}/credit</div>
+                        </div>
+                      </div>
+                      <div style={{ borderTop: '1px dashed #1f2937', marginBottom: 12 }} />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 16 }}>
+                        {p.features.map((feat, i) => (
+                          <div key={i} style={{ color: i === 0 ? p.accent : '#6b7280', fontSize: 13 }}>❆ {feat}</div>
+                        ))}
+                      </div>
+                      <button style={{ width: '100%', padding: '11px 0', borderRadius: 10, cursor: 'pointer', fontWeight: 700, fontSize: 14,
+                        border: isSelected ? 'none' : `1px solid ${p.accent}55`,
+                        background: isSelected ? p.accent : 'transparent',
+                        color: isSelected ? (p.accent === '#9ca3af' ? '#111' : '#000') : p.accent }}>
+                        {isSelected ? '✓ Selected' : `Choose ${p.label} →`}
+                      </button>
+                    </div>
+                    <div className="bc-plan-form">{isSelected && renderPaymentForm(p)}</div>
+                  </div>
+                );
+              })}
+              </div>
+              {/* Desktop: selected plan payment form shown full-width below the grid */}
+              <div className="bc-desktop-form">
+                {creditPlan && creditPlan !== 'pay_on_the_go' && (() => {
+                  const sp = PLANS.find(pp => pp.key === creditPlan);
+                  return sp ? renderPaymentForm(sp) : null;
+                })()}
+              </div>
+
+              {/* Section: Pay As You Go */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '22px 0 14px' }}>
+                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
+                <span style={{ color: '#fb923c', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>Pay As You Go</span>
+                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
+              </div>
+
+              {(() => {
+                const p = PAY_GO;
+                const isSelected = creditPlan === p.key;
+                return (
+                  <div style={{ marginBottom: 10 }}>
+                    <div onClick={() => { setCreditPlan(p.key); setCreditMsg(null); }}
+                      style={{ background: '#0d1117', border: `1px solid ${isSelected ? p.accent : '#1f2937'}`, borderRadius: 14, padding: '18px 20px', cursor: 'pointer', userSelect: 'none',
+                        ...(isSelected ? { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, boxShadow: '0 0 0 1px #fb923c' } : {}) }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                        <div>
+                          <div style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>Pay On The Go</div>
+                          <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>No commitment · buy only what you need</div>
+                        </div>
+                        <span style={{ background: 'rgba(251,146,60,0.12)', color: '#fb923c', fontSize: 10, fontWeight: 700, padding: '4px 9px', borderRadius: 6 }}>FLEXIBLE</span>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+                        <div style={{ background: 'rgba(251,146,60,0.07)', border: '1px solid rgba(251,146,60,0.15)', borderRadius: 10, padding: '12px 14px' }}>
+                          <div style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Rate</div>
+                          <div style={{ color: '#fff', fontWeight: 900, fontSize: 24, lineHeight: 1 }}>KES 40</div>
+                          <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>per credit</div>
+                        </div>
+                        <div style={{ background: 'rgba(251,146,60,0.07)', border: '1px solid rgba(251,146,60,0.15)', borderRadius: 10, padding: '12px 14px' }}>
+                          <div style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Minimum</div>
+                          <div style={{ color: '#fb923c', fontWeight: 900, fontSize: 24, lineHeight: 1 }}>KES 500</div>
+                          <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>any amount above</div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+                        {['Pay any amount', 'Never expires', 'Instant credit'].map(chip => (
+                          <span key={chip} style={{ background: 'rgba(251,146,60,0.1)', color: '#fb923c', fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 20 }}>{chip}</span>
+                        ))}
+                      </div>
+                      <button style={{ width: '100%', padding: '11px 0', borderRadius: 10, cursor: 'pointer', fontWeight: 700, fontSize: 14,
+                        border: isSelected ? 'none' : '1px solid rgba(251,146,60,0.4)',
+                        background: isSelected ? '#fb923c' : 'transparent',
+                        color: isSelected ? '#000' : '#fb923c' }}>
+                        {isSelected ? '✓ Selected' : 'Pay as you go →'}
+                      </button>
+                    </div>
+                    {isSelected && renderPaymentForm(p)}
+                  </div>
+                );
+              })()}
+
+            </div>
+          );
+        })()}
+
+
+      <SupportChat forceOpen={openSupportChat} onOpen={() => setOpenSupportChat(false)} />
+
       </main>
+      </div> {/* dash-body */}
 
       {/* Withdraw OTP Modal */}
       {showWithdrawModal && (
@@ -2344,7 +2977,7 @@ export default function Dashboard() {
                   placeholder="Enter 6-digit OTP"
                   value={withdrawOtp}
                   onChange={e => setWithdrawOtp(e.target.value.replace(/\D/g, ''))}
-                  style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 16, letterSpacing: 6, textAlign: 'center', marginBottom: 12, boxSizing: 'border-box' }}
+                  style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 20, fontWeight: 700, letterSpacing: 3, textAlign: 'center', marginBottom: 12, boxSizing: 'border-box' }}
                 />
                 {withdrawMsg && !withdrawMsg.includes('sent') && (
                   <p style={{ color: '#ef4444', fontSize: 12, marginBottom: 8 }}>{withdrawMsg}</p>
@@ -2697,206 +3330,6 @@ export default function Dashboard() {
         </div>
       )}
 
-        {/* ==================== BUY CREDITS TAB ==================== */}
-        {activeTab === 'credits' && (() => {
-          const PLANS = [
-            { key: 'starter',  label: 'Starter',  icon: '⚡', amount: 5000,  credits: 167,  rate: 30, savings: 25, grad: 'linear-gradient(135deg,#374151,#1f2937)', accent: '#9ca3af', glow: '107,114,128', badge: null },
-            { key: 'pro',      label: 'Pro',       icon: '🔥', amount: 10000, credits: 500,  rate: 20, savings: 50, grad: 'linear-gradient(135deg,#78350f,#451a03)', accent: '#f59e0b', glow: '245,158,11',  badge: null },
-            { key: 'pro_max',  label: 'Pro Max',   icon: '🚀', amount: 20000, credits: 2000, rate: 10, savings: 75, grad: 'linear-gradient(135deg,#064e3b,#022c22)', accent: '#10b981', glow: '16,185,129',  badge: 'Most Popular' },
-            { key: 'advanced', label: 'Advanced',  icon: '💎', amount: 40000, credits: 8000, rate: 5,  savings: 87, grad: 'linear-gradient(135deg,#4c1d95,#2e1065)', accent: '#a78bfa', glow: '139,92,246',  badge: 'Best Value' },
-          ];
-
-          const handleBuyCredits = async () => {
-            if (!creditPlan || !creditPhone.trim()) { setCreditMsg({ type: 'error', text: 'Select a plan and enter your M-Pesa number.' }); return; }
-            setCreditBuying(true); setCreditMsg(null);
-            try {
-              const res = await purchaseCredits(creditPlan, creditPhone.trim());
-              const checkoutId = res.data.checkout_id;
-              setCreditCheckoutId(checkoutId);
-              setCreditMsg({ type: 'info', text: res.data.message });
-              setCreditPolling(true);
-              const interval = setInterval(async () => {
-                try {
-                  const s = await pollCreditsStatus(checkoutId);
-                  if (s.data.status === 'completed') {
-                    clearInterval(interval);
-                    setCreditPolling(false);
-                    setCreditCheckoutId(null);
-                    setCreditMsg({ type: 'success', text: '✔ Payment confirmed! Credits have been added to your account.' });
-                    setCreditPlan(null);
-                    setCreditPhone('');
-                    if (typeof loadData === 'function') loadData();
-                  }
-                } catch {}
-              }, 5000);
-              setTimeout(() => { clearInterval(interval); if (creditPolling) { setCreditPolling(false); setCreditMsg({ type: 'warning', text: 'Payment not yet confirmed. If you completed payment, your credits will appear shortly.' }); } }, 120000);
-            } catch (err) {
-              setCreditMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to send STK Push. Try again.' });
-            }
-            setCreditBuying(false);
-          };
-
-          const sel = PLANS.find(p => p.key === creditPlan);
-
-          return (
-            <div style={{ maxWidth: 900, margin: '0 auto', padding: '4px 0 40px' }}>
-
-              {/* Header */}
-              <div style={{ textAlign: 'center', marginBottom: 36 }}>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: 20, padding: '5px 14px', marginBottom: 16 }}>
-                  <DollarSign size={13} color="#10b981" />
-                  <span style={{ color: '#10b981', fontSize: 12, fontWeight: 600 }}>Trade Credits — Never Expire</span>
-                </div>
-                <h2 style={{ color: '#fff', fontSize: 26, fontWeight: 800, margin: '0 0 8px', letterSpacing: '-0.5px' }}>Choose Your Credit Pack</h2>
-                <p style={{ color: '#6b7280', fontSize: 13, margin: '0 0 12px' }}>1 credit = 1 bot-completed buy order. Buy once, use forever.</p>
-                {(() => {
-                  const tc = (profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0);
-                  const rm = tc >= 2000 ? 8000 : tc >= 500 ? 2000 : tc >= 167 ? 500 : 167;
-                  const pp = Math.min(100, Math.round((tc / rm) * 100));
-                  const bc = pp > 50 ? '#10b981' : pp > 20 ? '#f59e0b' : '#ef4444';
-                  return (
-                    <div style={{ display: 'inline-block', background: '#0d1117', border: '1px solid #1f2937', borderRadius: 12, padding: '10px 20px', minWidth: 220 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <span style={{ color: '#6b7280', fontSize: 12 }}>Your balance</span>
-                        <span style={{ color: bc, fontWeight: 800, fontSize: 16 }}>{tc.toLocaleString()} <span style={{ fontSize: 11, fontWeight: 500, color: '#6b7280' }}>credits</span></span>
-                      </div>
-                      <div style={{ height: 6, background: '#1a1d27', borderRadius: 99, overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pp}%`, background: `linear-gradient(90deg,${bc}88,${bc})`, borderRadius: 99, transition: 'width 0.6s ease' }} />
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-                        <span style={{ color: '#374151', fontSize: 10 }}>0</span>
-                        <span style={{ color: bc, fontSize: 10, fontWeight: 600 }}>{pp}%</span>
-                        <span style={{ color: '#374151', fontSize: 10 }}>{rm.toLocaleString()}</span>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Plan cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 32 }}>
-                {PLANS.map(p => {
-                  const isSelected = creditPlan === p.key;
-                  const isFeatured = p.badge === 'Most Popular';
-                  return (
-                    <div key={p.key} onClick={() => { setCreditPlan(p.key); setCreditMsg(null); }}
-                      style={{ position: 'relative', borderRadius: 18, cursor: 'pointer', userSelect: 'none', transition: 'transform 0.15s, box-shadow 0.15s',
-                        transform: isSelected ? 'translateY(-4px)' : isFeatured ? 'translateY(-2px)' : 'none',
-                        boxShadow: isSelected ? `0 0 0 2px ${p.accent}, 0 12px 40px rgba(${p.glow},0.3)` : isFeatured ? `0 8px 30px rgba(${p.glow},0.2)` : '0 2px 8px rgba(0,0,0,0.3)',
-                        border: `1px solid ${isSelected ? p.accent : isFeatured ? `rgba(${p.glow},0.4)` : '#1f2937'}`,
-                        background: '#0d1117', overflow: 'hidden' }}>
-
-                      {/* Gradient top stripe */}
-                      <div style={{ height: 4, background: p.grad.replace('135deg', '90deg'), backgroundImage: `linear-gradient(90deg, ${p.accent}88, ${p.accent})` }} />
-
-                      {/* Badge */}
-                      {p.badge && (
-                        <div style={{ position: 'absolute', top: 16, right: 14, background: p.accent, color: p.accent === '#f59e0b' ? '#000' : '#000', fontSize: 9, fontWeight: 800, padding: '3px 9px', borderRadius: 20, letterSpacing: '0.5px', textTransform: 'uppercase' }}>{p.badge}</div>
-                      )}
-
-                      <div style={{ padding: '18px 20px 20px' }}>
-                        {/* Icon + name */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                          <div style={{ width: 36, height: 36, borderRadius: 10, background: `rgba(${p.glow},0.15)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{p.icon}</div>
-                          <div>
-                            <div style={{ color: p.accent, fontWeight: 800, fontSize: 13, letterSpacing: '0.3px' }}>{p.label}</div>
-                            <div style={{ color: '#4b5563', fontSize: 10 }}>Save {p.savings}%</div>
-                          </div>
-                        </div>
-
-                        {/* Credits — main focal point */}
-                        <div style={{ marginBottom: 4 }}>
-                          <span style={{ fontSize: 36, fontWeight: 900, color: '#fff', lineHeight: 1, letterSpacing: '-1px' }}>{p.credits.toLocaleString()}</span>
-                          <span style={{ fontSize: 14, color: '#6b7280', marginLeft: 5, fontWeight: 500 }}>credits</span>
-                        </div>
-
-                        {/* Divider */}
-                        <div style={{ height: 1, background: '#1a1d27', margin: '12px 0' }} />
-
-                        {/* Price */}
-                        <div style={{ marginBottom: 3 }}>
-                          <span style={{ color: '#fff', fontSize: 20, fontWeight: 800 }}>KES {p.amount.toLocaleString()}</span>
-                        </div>
-                        <div style={{ color: '#4b5563', fontSize: 11 }}>KES {p.rate} per credit</div>
-
-                        {/* Select button */}
-                        <button style={{ width: '100%', marginTop: 16, padding: '9px 0', borderRadius: 9, border: isSelected ? 'none' : `1px solid ${p.accent}44`, cursor: 'pointer', fontWeight: 700, fontSize: 13, transition: 'background 0.15s',
-                          background: isSelected ? p.accent : 'transparent',
-                          color: isSelected ? (p.accent === '#9ca3af' ? '#111' : '#000') : p.accent }}>
-                          {isSelected ? '✓ Selected' : 'Select Plan'}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Payment panel */}
-              {sel && (
-                <div style={{ background: '#0d1117', border: `1px solid rgba(${sel.glow},0.3)`, borderRadius: 18, padding: 28, boxShadow: `0 0 40px rgba(${sel.glow},0.08)` }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 20 }}>
-
-                    {/* Summary */}
-                    <div style={{ flex: '1 1 220px' }}>
-                      <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Order Summary</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                        <div style={{ width: 40, height: 40, borderRadius: 10, background: `rgba(${sel.glow},0.15)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{sel.icon}</div>
-                        <div>
-                          <div style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{sel.label} Pack</div>
-                          <div style={{ color: '#6b7280', fontSize: 12 }}>{sel.credits.toLocaleString()} permanent credits</div>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 20 }}>
-                        <div><div style={{ color: '#6b7280', fontSize: 11 }}>Total</div><div style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>KES {sel.amount.toLocaleString()}</div></div>
-                        <div><div style={{ color: '#6b7280', fontSize: 11 }}>Rate</div><div style={{ color: sel.accent, fontWeight: 700, fontSize: 14 }}>KES {sel.rate}/credit</div></div>
-                        <div><div style={{ color: '#6b7280', fontSize: 11 }}>Savings</div><div style={{ color: '#10b981', fontWeight: 700, fontSize: 14 }}>{sel.savings}% off</div></div>
-                      </div>
-                    </div>
-
-                    {/* Payment form */}
-                    <div style={{ flex: '1 1 280px' }}>
-                      <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Pay via M-Pesa</div>
-                      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                        <input
-                          type="tel"
-                          placeholder="e.g. 0712 345 678"
-                          value={creditPhone}
-                          onChange={e => setCreditPhone(e.target.value)}
-                          disabled={creditBuying || creditPolling}
-                          style={{ flex: 1, background: '#13151f', border: `1px solid ${sel.accent}33`, borderRadius: 10, color: '#fff', padding: '11px 14px', fontSize: 14, outline: 'none' }}
-                        />
-                        <button
-                          onClick={handleBuyCredits}
-                          disabled={creditBuying || creditPolling || !creditPhone.trim()}
-                          style={{ flexShrink: 0, padding: '11px 22px', borderRadius: 10, border: 'none', background: (creditBuying || creditPolling || !creditPhone.trim()) ? '#1f2937' : sel.accent, color: (creditBuying || creditPolling || !creditPhone.trim()) ? '#4b5563' : (sel.accent === '#9ca3af' ? '#111' : '#000'), fontWeight: 800, fontSize: 14, cursor: (creditBuying || creditPolling || !creditPhone.trim()) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
-                          {creditPolling ? 'Waiting...' : creditBuying ? 'Sending...' : 'Pay Now'}
-                        </button>
-                      </div>
-                      {creditPolling && (
-                        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', animation: 'pulse 1.5s ease-in-out infinite' }} />
-                          <span style={{ color: '#9ca3af', fontSize: 12 }}>Check your phone for the M-Pesa PIN prompt...</span>
-                        </div>
-                      )}
-                      {creditMsg && (
-                        <div style={{ marginTop: 10, padding: '8px 14px', borderRadius: 9, fontSize: 12,
-                          background: creditMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(59,130,246,0.08)',
-                          color: creditMsg.type === 'success' ? '#10b981' : creditMsg.type === 'error' ? '#ef4444' : creditMsg.type === 'warning' ? '#f59e0b' : '#60a5fa',
-                          border: `1px solid ${creditMsg.type === 'success' ? 'rgba(16,185,129,0.2)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.2)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.15)'}` }}>
-                          {creditMsg.text}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-            </div>
-          );
-        })()}
-
-
-      <SupportChat forceOpen={openSupportChat} onOpen={() => setOpenSupportChat(false)} />
 
       {/* ── Configure Bot Modal ── */}
       {showConfigModal && (
@@ -3023,7 +3456,7 @@ export default function Dashboard() {
                   await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll });
                   configSavedAt.current = Date.now();
                   setConfigSaved(true);
-                  setTimeout(() => { setConfigSaved(false); setShowConfigModal(false); }, 1500);
+                  setTimeout(() => { setConfigSaved(false); if (showConfigModal) setShowConfigModal(false); }, 1500);
                 } catch (e) {}
                 setSavingConfig(false);
               }}
@@ -3118,7 +3551,7 @@ export default function Dashboard() {
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
           <div style={{ background: '#1f2937', borderRadius: 16, padding: 28, width: '100%', maxWidth: 420, boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <h3 style={{ color: '#fff', fontSize: 18, margin: 0 }}>↗️ Withdraw to Bank</h3>
+              <h3 style={{ color: '#fff', fontSize: 18, margin: 0 }}>↗️ Withdraw from Choice Bank</h3>
               <button onClick={() => setShowCbWithdrawModal(false)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 22 }}>×</button>
             </div>
 
@@ -3163,19 +3596,26 @@ export default function Dashboard() {
                 {/* Fee breakdown */}
                 {parseFloat(cbWithdrawAmount) > 0 && (() => {
                   const amt = parseFloat(cbWithdrawAmount) || 0;
-                  const fee = [[20000,10],[50000,25],[150000,35],[300000,45],[500000,60]].find(([t]) => amt <= t)?.[1] ?? 60;
-                  const receive = Math.max(0, amt - fee);
+                  const CREDIT_FEE = 20;
+                  const traderCredits = profile?.trade_tokens || 0;
+                  const hasCredits = traderCredits >= CREDIT_FEE;
                   return (
                     <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: 16, fontSize: 13 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
                         <span>Withdrawal Amount</span><span style={{ color: '#fff', fontWeight: 600 }}>KES {amt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
-                        <span>Pesalink Transfer Fee</span><span style={{ color: '#f59e0b', fontWeight: 600 }}>- KES {fee.toFixed(2)}</span>
-                      </div>
-                      <div style={{ borderTop: '1px solid #374151', paddingTop: 8, display: 'flex', justifyContent: 'space-between' }}>
+                      <div style={{ borderTop: '1px solid #374151', paddingTop: 8, marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
                         <span style={{ color: '#10b981', fontWeight: 700 }}>You Receive</span>
-                        <span style={{ color: '#10b981', fontWeight: 700, fontSize: 15 }}>KES {receive.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span style={{ color: '#10b981', fontWeight: 700, fontSize: 15 }}>KES {amt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      </div>
+                      <div style={{ borderTop: '1px solid #1f2937', paddingTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ color: '#a78bfa', fontWeight: 700, fontSize: 12 }}>SparkP2P Service Fee</div>
+                          <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>Your balance: {traderCredits.toLocaleString()} credits</div>
+                        </div>
+                        <span style={{ color: hasCredits ? '#a78bfa' : '#ef4444', fontWeight: 700, fontSize: 13 }}>
+                          {CREDIT_FEE} credits {hasCredits ? '' : '(insufficient)'}
+                        </span>
                       </div>
                     </div>
                   );
@@ -3185,37 +3625,52 @@ export default function Dashboard() {
                   <p style={{ color: cbWithdrawMsg.includes('sent') || cbWithdrawMsg.includes('success') ? '#10b981' : '#ef4444', fontSize: 12, marginBottom: 10 }}>{cbWithdrawMsg}</p>
                 )}
 
+                {/* Channel selector */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                  {['mpesa', 'bank'].map(ch => (
+                    <button key={ch} onClick={() => { setCbWithdrawChannel(ch); setCbWithdrawOtpSent(false); setCbWithdrawOtp(''); setCbWithdrawMsg(''); }}
+                      style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${cbWithdrawChannel === ch ? '#10b981' : '#374151'}`, background: cbWithdrawChannel === ch ? 'rgba(16,185,129,0.15)' : 'none', color: cbWithdrawChannel === ch ? '#10b981' : '#9ca3af', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                      {ch === 'mpesa' ? '📱 M-Pesa' : '🏦 Bank (Pesalink)'}
+                    </button>
+                  ))}
+                </div>
                 {!cbWithdrawOtpSent ? (
                   <>
-                    <p style={{ color: '#9ca3af', fontSize: 12, marginBottom: 14 }}>We'll send a one-time code to your registered phone to authorize this withdrawal.</p>
+                    <p style={{ color: '#9ca3af', fontSize: 12, marginBottom: 14 }}>
+                      {cbWithdrawChannel === 'mpesa'
+                        ? `Funds will be sent to your M-Pesa settlement number${profile?.settlement_mpesa_phone ? ' (' + profile.settlement_mpesa_phone + ')' : ''}.`
+                        : 'Funds will be sent to your configured bank account via Pesalink.'}
+                    </p>
                     <button
-                      disabled={cbWithdrawOtpLoading || !parseFloat(cbWithdrawAmount)}
+                      disabled={cbWithdrawOtpLoading || !parseFloat(cbWithdrawAmount) || (profile?.trade_tokens || 0) < 20}
                       onClick={async () => {
-                        if (!parseFloat(cbWithdrawAmount) || parseFloat(cbWithdrawAmount) < 100) { setCbWithdrawMsg('Minimum withdrawal is KES 100'); return; }
+                        const minAmt = cbWithdrawChannel === 'mpesa' ? 10 : 100; if (!parseFloat(cbWithdrawAmount) || parseFloat(cbWithdrawAmount) < minAmt) { setCbWithdrawMsg(`Minimum withdrawal is KES ${minAmt}`); return; }
+                        if ((profile?.trade_tokens || 0) < 20) { setCbWithdrawMsg('You need at least 20 credits to withdraw'); return; }
                         setCbWithdrawOtpLoading(true); setCbWithdrawMsg('');
                         try {
-                          const r = await requestWithdrawalOtp();
+                          const initFn = cbWithdrawChannel === 'mpesa' ? cbWithdrawToMpesaInitiate : cbWithdrawInitiate;
+                          const r = await initFn(parseFloat(cbWithdrawAmount));
                           setCbWithdrawOtpSent(true);
-                          setCbWithdrawMsg(r.data?.message || 'OTP sent to your phone');
+                          setCbWithdrawMsg(r.data?.message || 'OTP sent to your phone. Enter it to confirm.');
                         } catch(e) { setCbWithdrawMsg(e.response?.data?.detail || 'Failed to send OTP'); }
                         setCbWithdrawOtpLoading(false);
                       }}
-                      style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: parseFloat(cbWithdrawAmount) >= 100 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: parseFloat(cbWithdrawAmount) >= 100 ? 'pointer' : 'not-allowed' }}
+                      style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: (parseFloat(cbWithdrawAmount) >= 100 && (profile?.trade_tokens || 0) >= 20) ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: (parseFloat(cbWithdrawAmount) >= 100 && (profile?.trade_tokens || 0) >= 20) ? 'pointer' : 'not-allowed' }}
                     >
-                      {cbWithdrawOtpLoading ? 'Sending OTP...' : 'Send OTP to authorize'}
+                      {cbWithdrawOtpLoading ? 'Sending OTP...' : (profile?.trade_tokens || 0) < 20 ? 'Insufficient credits (need 20)' : 'Send OTP to authorize'}
                     </button>
                   </>
                 ) : (
                   <>
-                    <input type="text" maxLength={6} placeholder="Enter 6-digit OTP"
+                    <input type="text" maxLength={8} placeholder="Enter OTP from Choice Bank"
                       value={cbWithdrawOtp}
                       onChange={e => setCbWithdrawOtp(e.target.value.replace(/\D/g, ''))}
-                      style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 16, letterSpacing: 6, textAlign: 'center', marginBottom: 12, boxSizing: 'border-box' }}
+                      style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 20, fontWeight: 700, letterSpacing: 3, textAlign: 'center', marginBottom: 12, boxSizing: 'border-box' }}
                     />
                     <button
-                      disabled={cbWithdrawLoading || cbWithdrawOtp.length !== 6}
+                      disabled={cbWithdrawLoading || cbWithdrawOtp.length < 4}
                       onClick={async () => {
-                        if (cbWithdrawOtp.length !== 6) return;
+                        if (cbWithdrawOtp.length < 4) return;
                         setCbWithdrawLoading(true); setCbWithdrawMsg('');
                         try {
                           const r = await cbWithdrawToBank(cbWithdrawOtp, parseFloat(cbWithdrawAmount));
@@ -3224,7 +3679,7 @@ export default function Dashboard() {
                         } catch(e) { setCbWithdrawMsg(e.response?.data?.detail || 'Withdrawal failed. Please try again.'); }
                         setCbWithdrawLoading(false);
                       }}
-                      style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: cbWithdrawOtp.length === 6 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: cbWithdrawOtp.length === 6 ? 'pointer' : 'not-allowed', marginBottom: 8 }}
+                      style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: cbWithdrawOtp.length >= 4 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: cbWithdrawOtp.length >= 4 ? 'pointer' : 'not-allowed', marginBottom: 8 }}
                     >
                       {cbWithdrawLoading ? 'Processing...' : 'Confirm Withdrawal'}
                     </button>
@@ -3298,6 +3753,64 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* ── Mobile bottom navigation bar ── */}
+      <nav className="mob-bottom-nav">
+        {[
+          { key: 'overview',      icon: LayoutDashboard, label: 'Overview'  },
+          { key: 'orders',        icon: List,            label: 'Orders'    },
+          { key: 'transactions',  icon: ArrowRightLeft,  label: 'Trades'    },
+          { key: 'settings',      icon: Settings,        label: 'Settings'  },
+          { key: 'more',          icon: MoreHorizontal,  label: 'More'      },
+        ].map(({ key, icon: Icon, label }) => {
+          const primaryKeys = ['overview','orders','transactions','settings'];
+          const isActive = activeTab === key || (key === 'more' && !primaryKeys.includes(activeTab));
+          return (
+            <button
+              key={key}
+              className={`mob-nav-btn${isActive ? ' mob-active' : ''}`}
+              onClick={() => key === 'more' ? setMobMoreOpen(true) : setActiveTab(key)}
+            >
+              <Icon size={22} />
+              <span className="mob-nav-label">{label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* ── Mobile more menu overlay ── */}
+      {mobMoreOpen && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.72)' }}
+          onClick={() => setMobMoreOpen(false)}
+        >
+          <div
+            style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: '#111827',
+              borderRadius: '16px 16px 0 0', paddingBottom: 32,
+              border: '0.5px solid #374151', boxShadow: '0 -8px 40px rgba(0,0,0,0.6)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ width: 36, height: 4, background: '#374151', borderRadius: 2, margin: '12px auto 8px' }} />
+            {[
+              { key: 'logs',         label: 'Bot Logs',    icon: Activity    },
+              ...(affiliateData?.affiliate ? [{ key: 'affiliates', label: 'Affiliates', icon: Share2 }] : []),
+              { key: 'credits',      label: 'Buy Credits', icon: DollarSign  },
+            ].map(({ key, label, icon: Icon }) => (
+              <button key={key}
+                onClick={() => { setActiveTab(key); setMobMoreOpen(false); }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14,
+                  padding: '13px 24px', background: 'none', border: 'none', cursor: 'pointer',
+                  color: activeTab === key ? '#F59E0B' : '#E5E7EB',
+                  fontSize: 14, fontWeight: activeTab === key ? 600 : 400 }}
+              >
+                <Icon size={20} color={activeTab === key ? '#F59E0B' : '#9CA3AF'} />
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

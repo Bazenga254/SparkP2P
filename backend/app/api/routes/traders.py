@@ -801,6 +801,7 @@ async def update_trading_config(
 
 _change_pw_otp_codes: dict[str, str] = {}  # email -> OTP for in-app password change
 _withdraw_otp_codes: dict[str, str] = {}  # email -> OTP for withdrawal confirmation
+_pending_withdrawal_tx: dict = {}  # email -> {tx_id, amount} for Choice Bank OTP confirm
 
 
 class UpdateProfileRequest(BaseModel):
@@ -1437,7 +1438,7 @@ async def preview_withdrawal(
 async def request_withdrawal_otp(
     trader: Trader = Depends(get_current_trader),
 ):
-    """Send OTP to trader's phone to authorize a withdrawal."""
+    """Send OTP to trader's phone to authorize an M-Pesa batch withdrawal."""
     import random
     otp_code = str(random.randint(100000, 999999))
     _withdraw_otp_codes[trader.email] = otp_code
@@ -1448,6 +1449,183 @@ async def request_withdrawal_otp(
         logger.warning(f"Withdrawal OTP SMS failed for {trader.email}: {e}")
     masked = trader.phone[-4:] if trader.phone else "****"
     return {"status": "sent", "message": f"OTP sent to number ending {masked}"}
+
+
+class CbWithdrawInitiateBody(BaseModel):
+    amount: float
+
+@router.post("/cb-withdraw-to-bank/initiate")
+async def cb_withdraw_initiate(
+    body: CbWithdrawInitiateBody,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Step 1: call applyForTransfer to create a pending Pesalink transfer at Choice Bank,
+    then trigger Choice Bank to SMS a 4-digit OTP to the trader's registered mobile.
+    Stores {tx_id, amount} for the confirm step (/cb-withdraw-to-bank).
+    """
+    from app.services.choice_bank import client as choice
+
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+    if not trader.cb_withdrawal_bank_code or not trader.cb_withdrawal_account:
+        raise HTTPException(status_code=400, detail="No withdrawal bank account configured")
+    if body.amount < 100:
+        raise HTTPException(status_code=400, detail="Minimum withdrawal is KES 100")
+
+    WITHDRAWAL_CREDIT_FEE = 20
+    if (trader.trade_tokens or 0) < WITHDRAWAL_CREDIT_FEE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient credits. Withdrawals cost {WITHDRAWAL_CREDIT_FEE} credits (you have {trader.trade_tokens or 0}).",
+        )
+
+    # Block if there's already a PENDING withdrawal in the last 2 hours
+    from datetime import datetime, timezone, timedelta
+    from app.models import Payment, PaymentStatus
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    existing = (await db.execute(
+        select(Payment).where(
+            Payment.trader_id == trader.id,
+            Payment.transaction_type == "CHOICE_OUTBOUND",
+            Payment.status == PaymentStatus.PENDING,
+            Payment.created_at > cutoff,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You have a withdrawal already processing (Ref: {existing.mpesa_transaction_id}). Please wait for it to complete before initiating another.",
+        )
+
+    remark = "".join(
+        c for c in f"SparkP2P withdrawal to {trader.cb_withdrawal_bank_name or 'Bank'}"
+        if c.isalnum() or c == " "
+    )[:100]
+
+    try:
+        result = await choice.transfer(
+            payer_account_id=trader.choice_account_id,
+            payee_account_id=trader.cb_withdrawal_account,
+            amount=body.amount,
+            payee_bank_code=str(trader.cb_withdrawal_bank_code),
+            payee_name=trader.cb_withdrawal_account_name or "",
+            remark=remark,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Transfer initiation failed: {exc}")
+
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Transfer rejected by Choice Bank"))
+
+    tx_id = (result.get("data") or {}).get("txId") or ""
+    if not tx_id:
+        raise HTTPException(status_code=502, detail="No transaction ID returned — cannot proceed")
+
+    try:
+        otp_result = await choice.send_otp(tx_id)
+        if otp_result.get("code") not in ("00000",):
+            logger.warning(f"[ChoiceBank] sendOtp returned {otp_result.get('code')}: {otp_result.get('msg')}")
+    except Exception as exc:
+        logger.warning(f"[ChoiceBank] sendOtp call failed: {exc}")
+
+    _pending_withdrawal_tx[trader.email] = {"tx_id": tx_id, "amount": body.amount}
+    masked = trader.phone[-4:] if trader.phone else "****"
+    return {
+        "status": "otp_sent",
+        "message": f"OTP sent by Choice Bank to your registered phone ending {masked}. Enter it to confirm the transfer.",
+    }
+
+
+@router.post("/cb-withdraw-to-mpesa/initiate")
+async def cb_withdraw_to_mpesa_initiate(
+    body: CbWithdrawInitiateBody,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Step 1: Withdraw from Choice Bank to M-Pesa.
+    Uses applyForTransfer with payeeBankCode="M-PESA" and the trader's phone in 9-digit format.
+    No Pesalink bank code needed — works in sandbox and production.
+    """
+    from app.services.choice_bank import client as choice
+
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+    if not trader.settlement_phone:
+        raise HTTPException(status_code=400, detail="No M-Pesa settlement number configured. Please set your M-Pesa number in Settings.")
+    if body.amount < 10:
+        raise HTTPException(status_code=400, detail="Minimum M-Pesa withdrawal is KES 10")
+
+    WITHDRAWAL_CREDIT_FEE = 20
+    if (trader.trade_tokens or 0) < WITHDRAWAL_CREDIT_FEE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient credits. Withdrawals cost {WITHDRAWAL_CREDIT_FEE} credits (you have {trader.trade_tokens or 0}).",
+        )
+
+    # Block if there's already a PENDING withdrawal in the last 2 hours
+    from datetime import datetime, timezone, timedelta
+    from app.models import Payment, PaymentStatus
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    existing = (await db.execute(
+        select(Payment).where(
+            Payment.trader_id == trader.id,
+            Payment.transaction_type == "CHOICE_OUTBOUND",
+            Payment.status == PaymentStatus.PENDING,
+            Payment.created_at > cutoff,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You have a withdrawal already processing (Ref: {existing.mpesa_transaction_id}). Please wait for it to complete.",
+        )
+
+    # Convert settlement_phone to 9-digit format (strip 254 or leading 0)
+    phone = (trader.settlement_phone or "").strip()
+    if phone.startswith("254"):
+        phone = phone[3:]
+    elif phone.startswith("+254"):
+        phone = phone[4:]
+    elif phone.startswith("0"):
+        phone = phone[1:]
+
+    if len(phone) != 9 or not phone.isdigit():
+        raise HTTPException(status_code=400, detail=f"Invalid M-Pesa settlement phone format: {trader.settlement_phone}")
+
+    try:
+        result = await choice.transfer(
+            payer_account_id = trader.choice_account_id,
+            payee_account_id = phone,
+            amount           = body.amount,
+            payee_bank_code  = "M-PESA",
+            remark           = "SparkP2P withdrawal",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"M-Pesa transfer initiation failed: {exc}")
+
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "M-Pesa transfer rejected"))
+
+    tx_id = (result.get("data") or {}).get("txId") or ""
+    if not tx_id:
+        raise HTTPException(status_code=502, detail="No transaction ID returned")
+
+    try:
+        otp_result = await choice.send_otp(tx_id)
+        if otp_result.get("code") not in ("00000",):
+            logger.warning(f"[ChoiceBank] M-Pesa sendOtp returned {otp_result.get('code')}: {otp_result.get('msg')}")
+    except Exception as exc:
+        logger.warning(f"[ChoiceBank] M-Pesa sendOtp failed: {exc}")
+
+    _pending_withdrawal_tx[trader.email] = {"tx_id": tx_id, "amount": body.amount, "channel": "MPESA", "phone": phone}
+    masked = trader.settlement_phone[-4:] if trader.settlement_phone else "****"
+    return {
+        "status": "otp_sent",
+        "message": f"OTP sent by Choice Bank to your registered phone. Enter it to confirm the M-Pesa transfer to ...{masked}.",
+    }
 
 
 @router.post("/wallet/withdraw/simulate")
@@ -1525,6 +1703,11 @@ async def get_my_transactions(
         if ttype == "CHOICE_DEPOSIT":
             label, icon = "Choice Bank Deposit", "🏦"
             desc = f"M-Pesa STK to Choice Bank · {p.phone or ''}"
+        elif ttype == "CHOICE_OUTBOUND":
+            label, icon = "Bank Transfer", "🏛"
+            bank = p.destination_type or "Bank"
+            acct = p.destination or ""
+            desc = f"{bank} · {acct}" if acct else bank
         elif ttype in ("C2B", "CHOICE_INBOUND", "") and direction == "in":
             label, icon = "M-Pesa Received", "💳"
             desc = p.sender_name or p.remarks or "Payment received"
@@ -1584,7 +1767,11 @@ async def verify_bank_account(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Name lookup failed: {exc}")
     if result.get("code") != "00000":
-        raise HTTPException(status_code=400, detail=result.get("msg", "Account not found or bank unreachable"))
+        code = result.get("code", "")
+        msg = result.get("msg", "Account not found or bank unreachable")
+        if code == "10001":
+            raise HTTPException(status_code=503, detail="Pesalink lookup unavailable — please enter the account holder name manually")
+        raise HTTPException(status_code=400, detail=msg)
     data = result.get("data") or {}
     name = data.get("accountName", "").strip()
     if not name:
@@ -1720,73 +1907,87 @@ async def cb_withdraw_to_bank(
     db:     AsyncSession = Depends(get_db),
 ):
     """
-    Withdraw from the merchant's Choice Bank sub-account to their saved external bank.
-    Requires a valid OTP (same code sent via /wallet/withdraw/request-otp).
+    Step 2: confirm the Pesalink transfer with the Choice Bank OTP.
+    Calls confirmOperation(txId, otp) — this actually moves the money.
+    Payment recorded as PENDING; webhook 0002 updates it to COMPLETED/FAILED.
     """
     from app.services.choice_bank import client as choice
     from app.models import Payment, PaymentDirection, PaymentStatus
 
-    # Validate OTP
-    stored = _withdraw_otp_codes.get(trader.email)
-    if not stored or stored != body.otp.strip():
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-    del _withdraw_otp_codes[trader.email]
+    pending = _pending_withdrawal_tx.get(trader.email)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending withdrawal. Please request a new OTP.")
 
-    # Validate trader has a Choice Bank account
-    if not trader.choice_account_id:
-        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+    tx_id  = pending.get("tx_id", "")
+    amount = pending["amount"]
 
-    # Validate withdrawal bank is configured
-    if not trader.cb_withdrawal_bank_code or not trader.cb_withdrawal_account:
-        raise HTTPException(status_code=400, detail="No withdrawal bank account configured. Please set it up in Settings → Bank Account.")
+    if not tx_id:
+        raise HTTPException(status_code=400, detail="Invalid pending state. Please start over.")
 
-    if body.amount < 100:
-        raise HTTPException(status_code=400, detail="Minimum withdrawal is KES 100")
-
-    # Execute transfer via Choice Bank
     try:
-        result = await choice.transfer(
-            payer_account_id=trader.choice_account_id,
-            payee_account_id=trader.cb_withdrawal_account,
-            amount=body.amount,
-            payee_bank_code=trader.cb_withdrawal_bank_code,
-            payee_name=trader.cb_withdrawal_account_name or "",
-            remark=f"SparkP2P withdrawal to {trader.cb_withdrawal_bank_name}",
-        )
+        confirm = await choice.confirm_otp(tx_id, body.otp.strip())
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Transfer failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Confirmation request failed: {exc}")
 
-    if result.get("code") != "00000":
-        raise HTTPException(status_code=400, detail=result.get("msg", "Transfer rejected by Choice Bank"))
+    if confirm.get("code") != "00000":
+        raise HTTPException(
+            status_code=400,
+            detail=confirm.get("msg", "OTP incorrect or expired — check the code and try again"),
+        )
 
-    tx_id = (result.get("data") or {}).get("txId", "")
+    del _pending_withdrawal_tx[trader.email]
 
-    # Record outbound payment
+    WITHDRAWAL_CREDIT_FEE = 20
+    trader.trade_tokens = (trader.trade_tokens or 0) - WITHDRAWAL_CREDIT_FEE
+
+    import time as _time
+    _channel  = pending.get("channel", "BANK")
+    _mpesa_ph = pending.get("phone", "")
+    if _channel == "MPESA":
+        _dest      = trader.phone or _mpesa_ph  # full phone stored on trader
+        _dest_type = "M-Pesa"
+        _ben_name  = trader.full_name or ""
+        _remarks   = f"Choice Bank withdrawal to M-Pesa {_dest}"
+        _tg_dest   = f"M-Pesa {_dest}"
+        _done_msg  = f"KES {amount:,.0f} transfer confirmed. Funds will be sent to M-Pesa {_dest} shortly."
+    else:
+        _dest      = trader.cb_withdrawal_account or ""
+        _dest_type = trader.cb_withdrawal_bank_name or ""
+        _ben_name  = trader.cb_withdrawal_account_name or ""
+        _remarks   = f"Choice Bank withdrawal to {trader.cb_withdrawal_bank_name} {trader.cb_withdrawal_account}"
+        _tg_dest   = f"{trader.cb_withdrawal_bank_name or ''} {trader.cb_withdrawal_account or ''}"
+        _done_msg  = f"KES {amount:,.0f} transfer confirmed. Funds will arrive at {trader.cb_withdrawal_bank_name} shortly."
+
     db.add(Payment(
         trader_id=trader.id,
         direction=PaymentDirection.OUTBOUND,
-        mpesa_transaction_id=tx_id or f"cb_bank_{trader.id}_{body.amount}",
+        mpesa_transaction_id=tx_id,
         transaction_type="CHOICE_OUTBOUND",
-        amount=body.amount,
-        destination=f"{trader.cb_withdrawal_bank_name} {trader.cb_withdrawal_account}",
-        sender_name=trader.cb_withdrawal_account_name,
-        remarks=f"Bank withdrawal → {trader.cb_withdrawal_bank_name} {trader.cb_withdrawal_account}",
-        status=PaymentStatus.COMPLETED,
+        amount=amount,
+        destination=_dest,
+        destination_type=_dest_type,
+        sender_name=_ben_name,
+        remarks=_remarks,
+        status=PaymentStatus.PENDING,
     ))
     await db.commit()
 
     try:
         from app.api.routes.telegram import notify_trader
         await notify_trader(trader,
-            "📤 KES " + f"{body.amount:,.0f}" + " withdrawn from Choice Bank" + chr(10) +
-            "To: " + (trader.cb_withdrawal_bank_name or "") + " " + (trader.cb_withdrawal_account or "") + chr(10) +
-            "Ref: " + (tx_id or "N/A")
+            "📤 KES " + f"{amount:,.0f}" + " withdrawal confirmed" + chr(10) +
+            "To: " + _tg_dest + chr(10) +
+            "Ref: " + tx_id + chr(10) +
+            "Status: Processing (you'll be notified when funds arrive)"
         )
     except Exception:
         pass
 
-    return {"txId": tx_id, "status": "submitted", "message": f"KES {body.amount:,.0f} transfer initiated to {trader.cb_withdrawal_bank_name}"}
-
+    return {
+        "txId": tx_id,
+        "status": "processing",
+        "message": _done_msg,
+    }
 
 @router.get("/wallet/transactions")
 async def get_wallet_transactions(
@@ -2536,10 +2737,11 @@ async def consume_trade_token(
 # ── Credit Purchase Plans ─────────────────────────────────────────────────────
 
 CREDIT_PLANS = {
-    "starter":  {"amount": 5_000,  "credits": 167,  "rate": 30},
-    "pro":      {"amount": 10_000, "credits": 500,  "rate": 20},
-    "pro_max":  {"amount": 20_000, "credits": 2_000, "rate": 10},
-    "advanced": {"amount": 40_000, "credits": 8_000, "rate": 5},
+    "pay_on_the_go": {"amount": None,   "credits": None, "rate": 40, "min": 500},
+    "starter":       {"amount": 5_000,  "credits": 167,  "rate": 30},
+    "pro":           {"amount": 10_000, "credits": 500,  "rate": 20},
+    "pro_max":       {"amount": 20_000, "credits": 2_000, "rate": 10},
+    "advanced":      {"amount": 40_000, "credits": 8_000, "rate": 5},
 }
 
 # In-memory store for pending STK push purchases (checkout_id -> metadata)
@@ -2549,8 +2751,9 @@ _pending_credit_stk: dict = {}
 
 
 class CreditPurchaseRequest(BaseModel):
-    plan: str   # starter | pro | pro_max | advanced
+    plan: str   # starter | pro | pro_max | advanced | pay_on_the_go
     phone: str
+    custom_amount: Optional[float] = None  # required for pay_on_the_go
 
 
 @router.post("/credits/purchase")
@@ -2560,9 +2763,20 @@ async def purchase_credits_mpesa(
     db: AsyncSession = Depends(get_db),
 ):
     """Initiate M-Pesa STK push to buy permanent trade credits."""
-    plan = CREDIT_PLANS.get(data.plan)
-    if not plan:
-        raise HTTPException(status_code=400, detail="Invalid plan. Choose: starter, pro, pro_max, advanced.")
+    plan_meta = CREDIT_PLANS.get(data.plan)
+    if not plan_meta:
+        raise HTTPException(status_code=400, detail="Invalid plan.")
+
+    if data.plan == "pay_on_the_go":
+        if not data.custom_amount or data.custom_amount < 500:
+            raise HTTPException(status_code=400, detail="Minimum amount for Pay On The Go is KES 500.")
+        buy_amount  = int(data.custom_amount)
+        buy_credits = buy_amount // 40
+        buy_rate    = 40
+    else:
+        buy_amount  = plan_meta["amount"]
+        buy_credits = plan_meta["credits"]
+        buy_rate    = plan_meta["rate"]
 
     phone = data.phone.strip().replace(" ", "").replace("-", "")
     if not phone:
@@ -2574,7 +2788,7 @@ async def purchase_credits_mpesa(
     try:
         result = await mpesa_client.stk_push(
             phone=phone,
-            amount=plan["amount"],
+            amount=buy_amount,
             account_reference=f"SparkP2P-Credits-{trader.id}",
             description=f"{data.plan.replace('_', ' ').title()} Credits",
             callback_url=callback_url,
@@ -2590,9 +2804,9 @@ async def purchase_credits_mpesa(
     _pending_credit_stk[checkout_id] = {
         "trader_id": trader.id,
         "plan": data.plan,
-        "amount": plan["amount"],
-        "credits": plan["credits"],
-        "rate": plan["rate"],
+        "amount": buy_amount,
+        "credits": buy_credits,
+        "rate": buy_rate,
         "status": "pending",
     }
 
