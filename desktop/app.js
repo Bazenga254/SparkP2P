@@ -2901,6 +2901,11 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
         const p = profile?.data;
         if (!p) return null;
 
+        // DEBUG: expose the raw profile field names so we can confirm which fields
+        // Binance actually returns (counterparty trade count, completion rate, etc.)
+        const _debugProfileKeys = Object.keys(p);
+        const _debugStatKeys = p.userTradeStatistic ? Object.keys(p.userTradeStatistic) : [];
+
         // Field names vary slightly across Binance API versions — try all known variants
         const trades_30d =
           p.monthOrderCount ??
@@ -2938,16 +2943,21 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
         const first_trade_days = first_trade_time ? Math.floor((now - first_trade_time) / 86400000) : null;
 
         // Step 3: Check if this buyer has ever traded with the current merchant on Binance.
-        // Query the merchant's own completed C2C order history filtered by this counterparty's userNo.
-        // Binance's internal API isn't publicly documented, so try known endpoint/field variants.
-        let traded_before = null; // null = couldn't determine (let caller fall back)
+        // EP-19 in the docs is queryCounterPartyOrderStatistic — purpose-built for this.
+        // Binance's internal (bapi) API isn't publicly documented, so try known variants:
+        //   1. dedicated counterparty-statistic endpoint (returns a trade count with this user)
+        //   2. merchant's completed order history filtered by counterparty userNo
+        let traded_before = null;          // null = couldn't determine (caller falls back)
+        let _debugHist = null;             // raw response for the first endpoint that answered
         const _histAttempts = [
-          { url: 'https://p2p.binance.com/bapi/c2c/v2/private/c2c/order-match/order-list',
-            body: { page: 1, rows: 1, orderStatusList: [4], tradeType: '', counterPartUserNo: userNo } },
-          { url: 'https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/order-match/order-list',
+          { kind: 'stat', url: 'https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/order-match/queryCounterPartyOrderStatistic',
+            body: { counterPartyUserNo: userNo } },
+          { kind: 'stat', url: 'https://p2p.binance.com/bapi/c2c/v2/private/c2c/order-match/queryCounterPartyOrderStatistic',
+            body: { counterPartyUserNo: userNo } },
+          { kind: 'list', url: 'https://p2p.binance.com/bapi/c2c/v2/private/c2c/order-match/order-list',
+            body: { page: 1, rows: 1, orderStatusList: [4], counterPartUserNo: userNo } },
+          { kind: 'list', url: 'https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/order-match/order-list',
             body: { page: 1, rows: 1, orderStatusList: [4], counterPartyUserNo: userNo } },
-          { url: 'https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/trade/list',
-            body: { page: 1, rows: 1, orderStatusList: [1], counterPartyUserNo: userNo } },
         ];
         for (const attempt of _histAttempts) {
           try {
@@ -2959,10 +2969,18 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
             });
             if (!hRes.ok) continue;
             const hData = await hRes.json();
-            const total = hData?.data?.total ?? hData?.total ?? hData?.data?.totalNum ?? null;
-            const rows = hData?.data?.length ?? (Array.isArray(hData?.data) ? hData.data.length : null);
-            if (total !== null) { traded_before = total > 0; break; }
-            if (rows !== null) { traded_before = rows > 0; break; }
+            const dd = hData?.data;
+            if (dd === undefined || dd === null) continue;
+            _debugHist = { url: attempt.url, keys: (dd && typeof dd === 'object' && !Array.isArray(dd)) ? Object.keys(dd) : 'array/scalar' };
+            if (attempt.kind === 'stat') {
+              // Look for any count-of-trades-with-this-user field
+              const cnt = dd.orderCount ?? dd.totalOrderCount ?? dd.finishOrderCount ??
+                          dd.tradeCount ?? dd.count ?? null;
+              if (cnt !== null) { traded_before = cnt > 0; break; }
+            } else {
+              const total = dd.total ?? dd.totalNum ?? (Array.isArray(dd) ? dd.length : null);
+              if (total !== null) { traded_before = total > 0; break; }
+            }
           } catch (_) {}
         }
 
@@ -2979,6 +2997,9 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
           registeredDays: registered_days,
           firstTradeDays: first_trade_days,
           tradedBefore: traded_before,
+          _debugProfileKeys,
+          _debugStatKeys,
+          _debugHist,
         };
       } catch (_) {
         return null;
@@ -2986,7 +3007,13 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
     }, orderNumber, side);
 
     if (stats) {
-      console.log(`[SparkP2P] DD stats via API — 30d: ${stats.trades_30d ?? 'n/a'}, all: ${stats.trades_all ?? 'n/a'}`);
+      console.log(`[SparkP2P] DD stats via API — 30d: ${stats.trades_30d ?? 'n/a'}, all: ${stats.trades_all ?? 'n/a'}, tradedBefore: ${stats.tradedBefore ?? 'n/a'}`);
+      // DEBUG: log the actual Binance field names so we can confirm the correct ones to read
+      if (stats._debugProfileKeys) {
+        console.log(`[SparkP2P] DEBUG profile fields: ${JSON.stringify(stats._debugProfileKeys)}`);
+        console.log(`[SparkP2P] DEBUG userTradeStatistic fields: ${JSON.stringify(stats._debugStatKeys)}`);
+        console.log(`[SparkP2P] DEBUG counterparty-history response: ${JSON.stringify(stats._debugHist)}`);
+      }
       return stats;
     }
   } catch (_) {}
