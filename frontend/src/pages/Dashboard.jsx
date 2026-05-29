@@ -2704,15 +2704,51 @@ export default function Dashboard() {
               <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 14, padding: '18px 20px', marginBottom: 6 }}>
                 <div style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 8 }}>Your Balance</div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
-                  <span style={{ color: bc, fontWeight: 900, fontSize: 36, letterSpacing: '-1px' }}>{tc.toLocaleString()}</span>
+                  <span style={{ color: bc, fontWeight: 900, fontSize: 36, letterSpacing: '-1px' }}>{tc.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
                   <span style={{ color: '#6b7280', fontSize: 14 }}>credits</span>
                 </div>
                 <div style={{ height: 6, background: '#1a1d27', borderRadius: 99, overflow: 'hidden', marginBottom: 6 }}>
                   <div style={{ height: '100%', width: `${pp}%`, background: bc, borderRadius: 99 }} />
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#6b7280', fontSize: 11 }}>1 credit = 1 bot-completed buy order</span>
-                  <span style={{ color: '#374151', fontSize: 11 }}>{tc.toLocaleString()} / {rm.toLocaleString()}</span>
+                  <span style={{ color: tc < 100 ? '#ef4444' : '#6b7280', fontSize: 11 }}>{tc < 100 ? '⚠ Low balance — top up to avoid interruptions' : 'Credits power your bot, withdrawals & alerts'}</span>
+                  <span style={{ color: '#374151', fontSize: 11 }}>{tc.toLocaleString(undefined, { maximumFractionDigits: 1 })} / {rm.toLocaleString()}</span>
+                </div>
+              </div>
+
+              {/* HOW CREDITS ARE USED */}
+              <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 14, padding: '16px 20px', marginBottom: 6 }}>
+                <div style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 12 }}>How Credits Are Used</div>
+                {[
+                  { label: 'Telegram notification', detail: 'per alert / approval message', cost: '0.1' },
+                  { label: 'Bot-completed buy order', detail: 'per automated order', cost: '1' },
+                  { label: 'Withdraw to bank (PesaLink)', detail: 'flat, any amount', cost: '20' },
+                ].map((r, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #161b24' }}>
+                    <div>
+                      <div style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600 }}>{r.label}</div>
+                      <div style={{ color: '#4b5563', fontSize: 11 }}>{r.detail}</div>
+                    </div>
+                    <span style={{ color: '#f59e0b', fontWeight: 800, fontSize: 14, whiteSpace: 'nowrap' }}>{r.cost} cr</span>
+                  </div>
+                ))}
+                {/* M-Pesa tiered */}
+                <div style={{ padding: '9px 0 2px' }}>
+                  <div style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Withdraw to M-Pesa <span style={{ color: '#4b5563', fontWeight: 400, fontSize: 11 }}>· by amount</span></div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {[
+                      { range: 'Up to KES 1,500', cost: '6' },
+                      { range: 'KES 1,501 – 7,500', cost: '12' },
+                      { range: 'KES 7,501 – 15,000', cost: '18' },
+                      { range: 'KES 15,001 – 40,000', cost: '22' },
+                      { range: 'KES 40,001 – 250,000', cost: '24' },
+                    ].map((t, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                        <span style={{ color: '#6b7280' }}>{t.range}</span>
+                        <span style={{ color: '#f59e0b', fontWeight: 700 }}>{t.cost} cr</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
 
