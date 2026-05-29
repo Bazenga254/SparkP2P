@@ -1,11 +1,16 @@
 """
 Binance SAPI client — signed requests for P2P merchant operations.
 Requires a Binance API key + secret from a verified Merchant account.
-Used for: counterparty filter updates (EP-7), ad status (EP-8).
+Used for: counterparty filter updates (EP-7), ad listing (EP-4).
+
+Geo-block workaround: if BINANCE_RELAY_URL is set, all Binance calls are
+forwarded to a local relay service running on a residential IP (your computer),
+which is not geo-blocked by Binance.
 """
 
 import hmac
 import hashlib
+import os
 import time
 import logging
 
@@ -14,6 +19,16 @@ import httpx
 logger = logging.getLogger(__name__)
 
 SAPI_BASE = "https://api.binance.com"
+
+# Load relay config — prefer app settings (avoids pydantic extra-field errors),
+# fall back to raw env vars for standalone scripts.
+try:
+    from app.core.config import settings as _cfg
+    _RELAY_URL    = (_cfg.BINANCE_RELAY_URL or "").rstrip("/")
+    _RELAY_SECRET = _cfg.BINANCE_RELAY_SECRET or ""
+except Exception:
+    _RELAY_URL    = os.environ.get("BINANCE_RELAY_URL", "").rstrip("/")
+    _RELAY_SECRET = os.environ.get("BINANCE_RELAY_SECRET", "")
 
 
 def _sign(secret: str, params: dict) -> str:
@@ -25,89 +40,113 @@ def _base_params() -> dict:
     return {"timestamp": int(time.time() * 1000), "recvWindow": 60000}
 
 
+def _build_headers(api_key: str) -> dict:
+    headers = {
+        "X-MBX-APIKEY": api_key,
+        "clientType":   "web",
+        "Content-Type": "application/json",
+    }
+    if _RELAY_URL and _RELAY_SECRET:
+        headers["X-Relay-Secret"] = _RELAY_SECRET
+    return headers
+
+
+async def _post(path: str, api_key: str, params: dict, body: dict) -> dict:
+    """POST to Binance directly, or via the residential relay if configured."""
+    headers = _build_headers(api_key)
+    base    = _RELAY_URL if _RELAY_URL else SAPI_BASE
+    url     = f"{base}{path}"
+
+    if _RELAY_URL:
+        logger.debug("Routing via relay: %s", url)
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(url, params=params, json=body, headers=headers)
+
+    return r.json()
+
+
 async def push_counterparty_filters(
     api_key: str,
     api_secret: str,
     adv_no: str,
-    completion_rate_min: float,      # ratio 0.0–1.0
-    completion_rate_window: int,     # 1=Last 30D, 2=All-time
+    completion_rate_min: float,
+    completion_rate_window: int,
     all_trades_min: int,
-    trade_count_window: int,         # 1=Last 30D, 2=All-time
+    trade_count_window: int,
     completed_trades_min: int,
     buy_trades_min: int = 0,
     sell_trades_min: int = 0,
     volume_min: float = 0.0,
     volume_asset: str = "USDT",
     volume_window: int = 2,
+    reg_days_min: int = 0,
 ) -> dict:
-    """
-    Push counterparty filter settings to a Binance P2P ad via EP-7.
-    Returns {"success": True} or raises on failure.
-    """
-    headers = {
-        "X-MBX-APIKEY": api_key,
-        "clientType": "web",
-        "Content-Type": "application/json",
-    }
-
+    """Push counterparty filter settings to a Binance P2P ad via EP-7."""
     params = _base_params()
     params["signature"] = _sign(api_secret, params)
 
     body = {
-        "advNo": adv_no,
-        "userTradeCompleteRateMin":    completion_rate_min,
+        "advNo":                           adv_no,
+        "userTradeCompleteRateMin":        completion_rate_min,
         "userTradeCompleteRateFilterTime": completion_rate_window,
-        "userAllTradeCountMin":        all_trades_min,
-        "userTradeCountFilterTime":    trade_count_window,
-        "userTradeCompleteCountMin":   completed_trades_min,
-        "userBuyTradeCountMin":        buy_trades_min,
-        "userSellTradeCountMin":       sell_trades_min,
-        "userTradeVolumeMin":          volume_min,
-        "userTradeVolumeAsset":        volume_asset,
-        "userTradeVolumeFilterTime":   volume_window,
+        "userAllTradeCountMin":            all_trades_min,
+        "userTradeCountFilterTime":        trade_count_window,
+        "userTradeCompleteCountMin":       completed_trades_min,
+        "userBuyTradeCountMin":            buy_trades_min,
+        "userSellTradeCountMin":           sell_trades_min,
+        "userTradeVolumeMin":              volume_min,
+        "userTradeVolumeAsset":            volume_asset,
+        "userTradeVolumeFilterTime":       volume_window,
+        "buyerRegDaysLimit":               reg_days_min,
     }
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(
-            f"{SAPI_BASE}/sapi/v1/c2c/ads/update",
-            params=params,
-            json=body,
-            headers=headers,
-        )
-
-    data = r.json()
+    data = await _post("/sapi/v1/c2c/ads/update", api_key, params, body)
     success = data.get("success") or data.get("code") == "000000"
 
     if not success:
-        code = data.get("code", r.status_code)
+        code = data.get("code", "?")
         msg  = data.get("msg", "unknown error")
-        logger.error("EP-7 filter push failed: code=%s msg=%s adv_no=%s", code, msg, adv_no)
+        logger.error("EP-7 failed: code=%s msg=%s adv_no=%s via=%s", code, msg, adv_no, "relay" if _RELAY_URL else "direct")
         raise ValueError(f"Binance EP-7 error {code}: {msg}")
 
-    logger.info("EP-7 filters pushed successfully: adv_no=%s", adv_no)
+    logger.info("EP-7 filters pushed: adv_no=%s via=%s", adv_no, "relay" if _RELAY_URL else "direct")
     return {"success": True}
 
 
 async def get_merchant_ads(api_key: str, api_secret: str) -> list:
-    """Fetch the merchant's active ads (EP-4) to get advNo values."""
-    headers = {
-        "X-MBX-APIKEY": api_key,
-        "clientType": "web",
-        "Content-Type": "application/json",
-    }
-
+    """Fetch the merchant's active ads via EP-4."""
     params = _base_params()
     params["signature"] = _sign(api_secret, params)
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(
-            f"{SAPI_BASE}/sapi/v1/c2c/ads/listWithPagination",
-            params=params,
-            json={"page": 1, "rows": 50},
-            headers=headers,
-        )
+    data = await _post(
+        "/sapi/v1/c2c/ads/listWithPagination",
+        api_key, params, {"page": 1, "rows": 50}
+    )
 
-    data = r.json()
     raw = data.get("data", [])
     ads = raw.get("content", []) if isinstance(raw, dict) else raw
     return ads
+
+
+async def get_counterparty_statistic(api_key: str, api_secret: str, order_number: str) -> dict:
+    """EP-19: query counterparty trade statistics for a given order.
+
+    Returns the buyer's trade history and our relationship with them, e.g.:
+      completedOrderNumOfLatest30day            -> buyer 30D completed trades
+      completedOrderNum                         -> buyer all-time completed trades
+      finishRateLatest30Day / finishRate        -> completion rate (ratio 0-1)
+      registerDays                              -> account age in days
+      avgPayTime / avgPayTimeOfLatest30day      -> avg pay time (seconds)
+      avgReleaseTime / avgReleaseTimeOfLatest30day
+      numberOfTradesWithCounterpartyCompleted30day -> trades with us in last 30d
+    """
+    params = _base_params()
+    params["signature"] = _sign(api_secret, params)
+    data = await _post(
+        "/sapi/v1/c2c/orderMatch/queryCounterPartyOrderStatistic",
+        api_key, params, {"orderNumber": order_number},
+    )
+    if not (data.get("success") or data.get("code") == "000000"):
+        raise ValueError(f"EP-19 error {data.get('code','?')}: {data.get('msg') or data.get('message','unknown')}")
+    return data.get("data") or {}

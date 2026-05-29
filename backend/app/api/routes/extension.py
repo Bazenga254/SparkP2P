@@ -1350,6 +1350,47 @@ async def check_returning_buyer(
     return {"is_returning": existing is not None}
 
 
+@router.get("/counterparty-stats")
+async def counterparty_stats(
+    order_number: str,
+    trader: Trader = Depends(get_current_trader),
+):
+    """EP-19 via relay: full buyer profile + prior-trade count for a given order.
+    Returns normalized stats for Telegram screening — confirmed Binance fields."""
+    if not trader.binance_api_key or not trader.binance_api_secret:
+        return {"ok": False, "error": "no_api_key"}
+    try:
+        from app.core.security import decrypt_data
+        from app.services.binance.sapi_client import get_counterparty_statistic
+        api_key = decrypt_data(trader.binance_api_key)
+        api_secret = decrypt_data(trader.binance_api_secret)
+        d = await get_counterparty_statistic(api_key, api_secret, order_number)
+    except Exception as e:
+        logger.warning("counterparty-stats failed for order %s: %s", order_number, e)
+        return {"ok": False, "error": str(e)}
+
+    trades_30d = d.get("completedOrderNumOfLatest30day")
+    trades_all = d.get("completedOrderNum")
+    rate_30d   = d.get("finishRateLatest30Day")
+    avg_pay    = d.get("avgPayTime")
+    reg_days   = d.get("registerDays")
+    with_us    = d.get("numberOfTradesWithCounterpartyCompleted30day") or 0
+
+    return {
+        "ok": True,
+        "trades_30d": trades_30d,
+        "trades_all": trades_all,
+        "last30dTrades": trades_30d,
+        "allTimeTrades": trades_all,
+        "completionRate": (f"{rate_30d*100:.2f}%" if rate_30d is not None else "N/A"),
+        "avgPayMins": (f"{avg_pay/60:.2f}" if avg_pay is not None else "N/A"),
+        "registeredDays": reg_days,
+        "tradedBefore": with_us > 0,
+        "tradesWithUs30d": with_us,
+        "raw": d,
+    }
+
+
 # ─── I&M Bank withdrawal job queue ───────────────────────────────────────────
 
 def _current_sweep_window_start() -> datetime:

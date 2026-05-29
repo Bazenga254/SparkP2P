@@ -33,6 +33,9 @@ ALLOWED_PATHS = {
     "/sapi/v1/c2c/ads/update",
     "/sapi/v1/c2c/ads/updateStatus",
     "/sapi/v1/c2c/ads/getDetailByNo",
+    "/sapi/v1/c2c/orderMatch/listUserOrderHistory",
+    "/sapi/v1/c2c/orderMatch/queryCounterPartyOrderStatistic",
+    "/sapi/v1/c2c/orderMatch/getUserOrderDetail",
 }
 
 app = FastAPI(docs_url=None, redoc_url=None)

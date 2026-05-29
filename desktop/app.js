@@ -3586,7 +3586,14 @@ async function idleScan(page) {
       } else if (!sellApprovalRequestedOrders.has(order.orderNumber)) {
         // ── STEP 1: First time seeing this order — request Telegram approval ──
         console.log(`[SparkP2P] Order ${order.orderNumber} — new sell order, requesting Telegram approval`);
-        const _buyerStats = await fetchCounterpartyStats(page, order.orderNumber, 'buyer').catch(() => ({}));
+        // Primary: confirmed Binance stats via backend EP-19; fallback to browser scraping
+        let _buyerStats = null;
+        try {
+          const _csRes = await fetch(`${API_BASE}/ext/counterparty-stats?order_number=${encodeURIComponent(order.orderNumber)}`,
+            { headers: { 'Authorization': `Bearer ${token}` } });
+          if (_csRes.ok) { const _cs = await _csRes.json(); if (_cs.ok) _buyerStats = _cs; }
+        } catch (_) {}
+        if (!_buyerStats) _buyerStats = await fetchCounterpartyStats(page, order.orderNumber, 'buyer').catch(() => ({}));
         const _buyerNick = order.buyerNickname || order.counterparty || '';
         const _approvalBody = {
           order: {
@@ -8055,7 +8062,24 @@ Method selection rules:
         // -- Counterparty screening: CF filters + DD — both enforced before payment instructions --
         const needsScreening = (cfEnabled && (cfMin30d > 0 || cfMinAll > 0)) || ddEnabled;
         if (needsScreening && action.buyer_nickname) {
-          const stats = await fetchCounterpartyStats(page, order_number, 'buyer');
+          // Primary: confirmed Binance stats via backend EP-19 (signed, server-side).
+          // Fallback: browser scraping if the API call fails.
+          let stats = null;
+          try {
+            const _csRes = await fetch(`${API_BASE}/ext/counterparty-stats?order_number=${encodeURIComponent(order_number)}`,
+              { headers: { 'Authorization': `Bearer ${token}` } });
+            if (_csRes.ok) {
+              const _cs = await _csRes.json();
+              if (_cs.ok) {
+                stats = _cs;
+                console.log(`[SparkP2P] EP-19 stats — 30d: ${_cs.trades_30d}, all: ${_cs.trades_all}, withUs30d: ${_cs.tradesWithUs30d}`);
+              }
+            }
+          } catch (_) {}
+          if (!stats) {
+            console.log('[SparkP2P] EP-19 unavailable — falling back to browser scraping');
+            stats = await fetchCounterpartyStats(page, order_number, 'buyer');
+          }
           // Prefer Binance's own record of prior trades; fall back to SparkP2P history if inconclusive
           const isReturning = stats.tradedBefore !== null && stats.tradedBefore !== undefined
             ? stats.tradedBefore
