@@ -2937,6 +2937,35 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
         const first_trade_time = p.firstOrderTime ?? p.firstTradeTime ?? null;
         const first_trade_days = first_trade_time ? Math.floor((now - first_trade_time) / 86400000) : null;
 
+        // Step 3: Check if this buyer has ever traded with the current merchant on Binance.
+        // Query the merchant's own completed C2C order history filtered by this counterparty's userNo.
+        // Binance's internal API isn't publicly documented, so try known endpoint/field variants.
+        let traded_before = null; // null = couldn't determine (let caller fall back)
+        const _histAttempts = [
+          { url: 'https://p2p.binance.com/bapi/c2c/v2/private/c2c/order-match/order-list',
+            body: { page: 1, rows: 1, orderStatusList: [4], tradeType: '', counterPartUserNo: userNo } },
+          { url: 'https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/order-match/order-list',
+            body: { page: 1, rows: 1, orderStatusList: [4], counterPartyUserNo: userNo } },
+          { url: 'https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/trade/list',
+            body: { page: 1, rows: 1, orderStatusList: [1], counterPartyUserNo: userNo } },
+        ];
+        for (const attempt of _histAttempts) {
+          try {
+            const hRes = await fetch(attempt.url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(attempt.body),
+              credentials: 'include',
+            });
+            if (!hRes.ok) continue;
+            const hData = await hRes.json();
+            const total = hData?.data?.total ?? hData?.total ?? hData?.data?.totalNum ?? null;
+            const rows = hData?.data?.length ?? (Array.isArray(hData?.data) ? hData.data.length : null);
+            if (total !== null) { traded_before = total > 0; break; }
+            if (rows !== null) { traded_before = rows > 0; break; }
+          } catch (_) {}
+        }
+
         return {
           trades_30d, trades_all,
           // Full profile fields for Telegram approval message
@@ -2949,6 +2978,7 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
           counterparties: counterparties,
           registeredDays: registered_days,
           firstTradeDays: first_trade_days,
+          tradedBefore: traded_before,
         };
       } catch (_) {
         return null;
@@ -3531,7 +3561,6 @@ async function idleScan(page) {
         console.log(`[SparkP2P] Order ${order.orderNumber} — new sell order, requesting Telegram approval`);
         const _buyerStats = await fetchCounterpartyStats(page, order.orderNumber, 'buyer').catch(() => ({}));
         const _buyerNick = order.buyerNickname || order.counterparty || '';
-        const _tradedBefore = _buyerNick ? await checkReturningBuyer(_buyerNick).catch(() => false) : false;
         const _approvalBody = {
           order: {
             orderNumber: order.orderNumber,
@@ -3539,7 +3568,7 @@ async function idleScan(page) {
             buyerNickname: _buyerNick,
             counterparty: _buyerNick,
           },
-          buyer_stats: { ...(_buyerStats || {}), tradedBefore: _tradedBefore },
+          buyer_stats: _buyerStats || {},
         };
         const _approvalRes = await fetch(`${API_BASE}/telegram/request-approval`, {
           method: 'POST',
@@ -8000,7 +8029,10 @@ Method selection rules:
         const needsScreening = (cfEnabled && (cfMin30d > 0 || cfMinAll > 0)) || ddEnabled;
         if (needsScreening && action.buyer_nickname) {
           const stats = await fetchCounterpartyStats(page, order_number, 'buyer');
-          const isReturning = await checkReturningBuyer(action.buyer_nickname);
+          // Prefer Binance's own record of prior trades; fall back to SparkP2P history if inconclusive
+          const isReturning = stats.tradedBefore !== null && stats.tradedBefore !== undefined
+            ? stats.tradedBefore
+            : await checkReturningBuyer(action.buyer_nickname);
 
           if (isReturning) {
             console.log(`[SparkP2P] Screening: ${action.buyer_nickname} is returning client -- bypassing`);
