@@ -912,8 +912,9 @@ async def update_trading_config(
                         trade_count_window=2,
                         completed_trades_min=0,
                         buy_trades_min=0, sell_trades_min=0,
-                        volume_min=0.0, volume_asset=USDT, volume_window=2, reg_days_min=0,
+                        volume_min=0.0, volume_asset="USDT", volume_window=2, reg_days_min=0,
                     )
+                    pushed += 1
                 except Exception as ad_err:
                     logger.warning("Skipping ad %s: %s", adv_no, ad_err)
                     push_warnings.append(f"ad {adv_no}: {ad_err}")
