@@ -727,8 +727,15 @@ export default function Dashboard() {
   const bannerMissing = setupMissing.length > 0 ? setupMissing : missingConnections;
 
   useEffect(() => {
-    // Fetch desktop app version from local bot server; fall back to build-time version for web browser
+    // Show the REAL installed desktop version via the preload bridge (works over https,
+    // unlike the http://127.0.0.1 fetch which browsers block as mixed content).
+    // Fall back to the build-time constant for plain web browsers.
     setAppVersion(__APP_VERSION__);
+    try {
+      if (window.sparkp2p?.getBotStatus) {
+        window.sparkp2p.getBotStatus().then(s => { if (s?.version) setAppVersion(s.version); }).catch(() => {});
+      }
+    } catch (_) {}
     fetch('http://127.0.0.1:9223/status').then(r => r.json()).then(d => { if (d.version) setAppVersion(d.version); }).catch(() => {});
     // Wait a tick to ensure token is stored after login redirect
     const timer = setTimeout(() => {
