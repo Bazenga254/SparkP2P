@@ -673,6 +673,14 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, []);
 
+  // Web presence heartbeat — marks this trader online while the dashboard is open
+  useEffect(() => {
+    const ping = () => { api.post('/traders/web-heartbeat').catch(() => {}); };
+    ping();
+    const id = setInterval(ping, 60000);
+    return () => clearInterval(id);
+  }, []);
+
   // Refresh orders every 20s so new Binance orders appear automatically
   useEffect(() => {
     const id = setInterval(async () => {

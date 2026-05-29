@@ -175,6 +175,7 @@ class Trader(Base):
     failed_login_attempts = Column(Integer, default=0)
     locked_until = Column(DateTime(timezone=True), nullable=True)
     last_login = Column(DateTime(timezone=True), nullable=True)
+    last_web_active = Column(DateTime(timezone=True), nullable=True)  # last dashboard heartbeat — live web presence
     password_changed_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

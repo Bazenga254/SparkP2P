@@ -823,6 +823,10 @@ export default function Admin() {
     loadTemplates();
     const interval = setInterval(loadData, 30000);
 
+    // Web presence heartbeat — admin (also a trader) counts as online while panel is open
+    api.post('/traders/web-heartbeat').catch(() => {});
+    const heartbeat = setInterval(() => api.post('/traders/web-heartbeat').catch(() => {}), 60000);
+
     // Paybill balance: SSE for instant updates + trigger initial refresh
     api.post('/payment/balance/refresh').catch(() => {});
     const balanceES = new EventSource('/api/payment/balance/stream');
@@ -833,7 +837,7 @@ export default function Admin() {
       } catch {}
     };
 
-    return () => { clearInterval(interval); balanceES.close(); };
+    return () => { clearInterval(interval); clearInterval(heartbeat); balanceES.close(); };
   }, []);
 
   useEffect(() => { loadTransactions(txPeriod, '', true); }, [txPeriod]);
@@ -1888,7 +1892,7 @@ export default function Admin() {
                             <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${tierColor}22`, color: tierColor, border: `1px solid ${tierColor}44` }}>{t.tier === 'standard' ? 'Free' : t.tier === 'pro_max' ? 'Pro Max' : t.tier === 'advanced' ? 'Advanced' : t.tier === 'pro' ? 'Pro' : t.tier === 'starter' ? 'Starter' : t.tier}</span>
                             <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(156,163,175,0.15)', color: '#9ca3af', border: '1px solid rgba(156,163,175,0.3)' }}>{t.role || 'trader'}</span>
                             {t.binance_connected && <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' }}>Binance ✓</span>}
-                            {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_login); return (
+                            {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_web_active || t.last_login); return (
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: s.online ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.12)', color: s.online ? '#10b981' : '#9ca3af', border: `1px solid ${s.online ? 'rgba(16,185,129,0.3)' : 'rgba(107,114,128,0.25)'}` }}>
                                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.online ? '#10b981' : '#6b7280', flexShrink: 0 }} />
                                 {s.online ? s.label : `Last seen ${s.label}`}

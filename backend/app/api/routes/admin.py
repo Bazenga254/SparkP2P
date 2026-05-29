@@ -219,7 +219,7 @@ async def list_traders(
             "total_volume": float(t.total_volume or 0),
             "created_at": t.created_at.isoformat() if t.created_at else "",
             "last_seen_at": t.last_extension_sync.isoformat() if t.last_extension_sync else None,
-            "last_web_active": t.last_login.isoformat() if t.last_login else None,
+            "last_web_active": (t.last_web_active or t.last_login).isoformat() if (t.last_web_active or t.last_login) else None,
             "choice_account_id": t.choice_account_id or None,
             "choice_account_number": t.choice_account_number or None,
             "choice_kyc_status": t.choice_kyc_status or None,
@@ -457,6 +457,7 @@ async def get_trader_detail(
         "created_at": str(trader.created_at) if trader.created_at else "",
         "last_login": trader.last_login.isoformat() if trader.last_login else "",
         "last_seen_at": trader.last_extension_sync.isoformat() if trader.last_extension_sync else None,
+        "last_web_active": (trader.last_web_active or trader.last_login).isoformat() if (trader.last_web_active or trader.last_login) else None,
         "total_trades": max(trader.total_trades or 0, live_trades),
         "total_volume": max(float(trader.total_volume or 0), live_volume),
         "choice_account_id": trader.choice_account_id or None,
@@ -1430,6 +1431,7 @@ async def admin_analytics(
         select(func.count(Trader.id)).where(
             or_(
                 and_(Trader.last_extension_sync.isnot(None), Trader.last_extension_sync >= _bot_cutoff),
+                and_(Trader.last_web_active.isnot(None), Trader.last_web_active >= _web_cutoff),
                 and_(Trader.last_login.isnot(None), Trader.last_login >= _web_cutoff),
             )
         )

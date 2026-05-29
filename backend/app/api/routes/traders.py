@@ -406,6 +406,19 @@ async def mark_notifications_read(trader: Trader = Depends(get_current_trader)):
     return {"status": "ok"}
 
 
+@router.post("/web-heartbeat")
+async def web_heartbeat(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lightweight presence ping from an open dashboard (web or desktop app).
+    Updates last_web_active so admin 'online' reflects an open dashboard in real time."""
+    from datetime import datetime, timezone
+    trader.last_web_active = datetime.now(timezone.utc)
+    await db.commit()
+    return {"ok": True}
+
+
 @router.get("/me", response_model=TraderProfileResponse)
 async def get_profile(
     trader: Trader = Depends(get_current_trader),
