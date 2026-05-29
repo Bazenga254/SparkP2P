@@ -785,7 +785,9 @@ async def heartbeat(
     Only updates the last-seen timestamp — does NOT touch bot_intentionally_stopped
     to avoid a race where an in-flight heartbeat clears the flag set by /bot-stopped.
     """
-    trader.updated_at = datetime.now(timezone.utc)
+    _now = datetime.now(timezone.utc)
+    trader.updated_at = _now
+    trader.last_extension_sync = _now  # presence signal — drives Online status on dashboard + admin
     await db.commit()
     return {"status": "ok", "trader_id": trader.id}
 

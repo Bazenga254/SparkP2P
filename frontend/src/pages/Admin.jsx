@@ -932,7 +932,7 @@ export default function Admin() {
     const now = Date.now();
     const botDiff = botTs ? (now - new Date(botTs).getTime()) / 1000 : null;
     const webDiff = webTs ? (now - new Date(webTs).getTime()) / 1000 : null;
-    const botOnline = botDiff !== null && botDiff < 60;
+    const botOnline = botDiff !== null && botDiff < 180; // 3-min window — bot polls periodically
     const webOnline = webDiff !== null && webDiff < 300; // 5-min window (stats poll every 2 min)
     if (botOnline) return { label: 'Bot Online', online: true };
     if (webOnline) return { label: 'Online', online: true };

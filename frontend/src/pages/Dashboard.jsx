@@ -1506,8 +1506,10 @@ export default function Dashboard() {
                   {(() => {
                     const ts = profile?.last_extension_sync || user?.last_extension_sync;
                     const diff = ts ? (Date.now() - new Date(ts).getTime()) / 1000 : null;
-                    const online = diff !== null && diff < 60;
-                    const label = !ts ? 'Bot Never Connected' : online ? 'Bot Online' : diff < 3600 ? `Last seen ${Math.floor(diff/60)}m ago` : diff < 86400 ? `Last seen ${Math.floor(diff/3600)}h ago` : `Last seen ${Math.floor(diff/86400)}d ago`;
+                    // Online if the desktop bot app is open (window.sparkp2p) or synced recently (<3 min)
+                    const appOpen = typeof window !== 'undefined' && !!window.sparkp2p;
+                    const online = appOpen || (diff !== null && diff < 180);
+                    const label = online ? 'Online' : !ts ? 'Bot Never Connected' : diff < 3600 ? `Last seen ${Math.floor(diff/60)}m ago` : diff < 86400 ? `Last seen ${Math.floor(diff/3600)}h ago` : `Last seen ${Math.floor(diff/86400)}d ago`;
                     return (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: online ? '#10b981' : '#9ca3af', marginBottom: 2 }}>
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: online ? '#10b981' : '#6b7280', flexShrink: 0 }} />

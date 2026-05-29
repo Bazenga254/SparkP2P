@@ -447,7 +447,7 @@ async def get_profile(
         email=trader.email,
         phone=trader.phone,
         full_name=trader.full_name,
-        binance_connected=trader.binance_connected,
+        binance_connected=bool(trader.binance_connected or trader.binance_api_key),
         binance_username=trader.binance_username,
         settlement_method=trader.settlement_method.value if trader.settlement_method else None,
         settlement_destination=destination,
