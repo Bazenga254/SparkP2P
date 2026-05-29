@@ -2723,7 +2723,8 @@ export default function Dashboard() {
                 <div style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 12 }}>How Credits Are Used</div>
                 {[
                   { label: 'Telegram notification', detail: 'per alert / approval message', cost: '0.1' },
-                  { label: 'Bot-completed buy order', detail: 'per automated order', cost: '1' },
+                  { label: 'Bot-completed sell order', detail: 'inbound — buyer pays you', cost: '0.5' },
+                  { label: 'Bot-completed buy order (to bank)', detail: 'outbound via PesaLink', cost: '20' },
                   { label: 'Withdraw to bank (PesaLink)', detail: 'flat, any amount', cost: '20' },
                 ].map((r, i) => (
                   <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #161b24' }}>
@@ -2734,9 +2735,9 @@ export default function Dashboard() {
                     <span style={{ color: '#f59e0b', fontWeight: 800, fontSize: 14, whiteSpace: 'nowrap' }}>{r.cost} cr</span>
                   </div>
                 ))}
-                {/* M-Pesa tiered */}
+                {/* M-Pesa tiered — applies to both M-Pesa withdrawals and buy orders paid to M-Pesa */}
                 <div style={{ padding: '9px 0 2px' }}>
-                  <div style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Withdraw to M-Pesa <span style={{ color: '#4b5563', fontWeight: 400, fontSize: 11 }}>· by amount</span></div>
+                  <div style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Withdraw / buy order to M-Pesa <span style={{ color: '#4b5563', fontWeight: 400, fontSize: 11 }}>· by amount</span></div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                     {[
                       { range: 'Up to KES 1,500', cost: '6' },

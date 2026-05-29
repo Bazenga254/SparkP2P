@@ -4220,7 +4220,7 @@ Method selection rules:
       await fetch(`${API_BASE}/ext/report-payment-sent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ order_number: order.orderNumber, success: true }),
+        body: JSON.stringify({ order_number: order.orderNumber, success: true, channel: method === 'mpesa' ? 'MPESA' : 'BANK' }),
       }).catch(() => {});
       stats.actions++;
       console.log(`[SparkP2P] âœ… Buy order ${order.orderNumber} â€” paid and notified seller`);
@@ -8040,7 +8040,7 @@ Method selection rules:
       await fetch(`${API_BASE}/ext/report-payment-sent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ order_number, success: true }),
+        body: JSON.stringify({ order_number, success: true, channel: (paymentDetails.method === 'mpesa') ? 'MPESA' : 'BANK' }),
       }).catch(() => {});
 
       stats.actions++;

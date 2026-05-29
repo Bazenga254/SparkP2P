@@ -88,6 +88,7 @@ class ReportPaymentSentRequest(BaseModel):
     order_number: str
     success: bool
     error: Optional[str] = None
+    channel: Optional[str] = None  # 'MPESA' or 'BANK' — rail used to pay the seller (for credit fee)
 
 
 class ReportMessageSentRequest(BaseModel):
@@ -261,8 +262,16 @@ async def report_release(
         raise HTTPException(status_code=404, detail="Order not found")
 
     if data.success:
+        _was_released = order.status in (OrderStatus.RELEASED, OrderStatus.COMPLETED)
         order.status = OrderStatus.RELEASED
         order.released_at = datetime.now(timezone.utc)
+        # Sell order = inbound: flat 0.5 credits, charged once on first release
+        if not _was_released:
+            try:
+                from app.services import credits as _credits
+                _credits.charge(db, trader, 0.5, reason=f"sell order {data.order_number}")
+            except Exception as _e:
+                logger.warning(f"sell-order credit charge failed for {data.order_number}: {_e}")
         await db.commit()
 
         logger.info(f"Order {data.order_number} released via extension for trader {trader.full_name}")
@@ -329,8 +338,19 @@ async def report_payment_sent(
         raise HTTPException(status_code=404, detail="Order not found")
 
     if data.success:
+        _already_sent = order.status == OrderStatus.PAYMENT_SENT
         order.status = OrderStatus.PAYMENT_SENT
         order.payment_sent_at = datetime.now(timezone.utc)
+        # Charge the outbound credit fee once, on the first payment-sent transition.
+        # Buy order = outbound to seller: M-Pesa tiered, or bank/PesaLink flat 20.
+        if not _already_sent:
+            try:
+                from app.services import credits as _credits
+                _ch = (data.channel or "BANK").upper()
+                _fee = _credits.withdrawal_credit_fee(_ch, order.fiat_amount or 0)
+                _credits.charge(db, trader, _fee, reason=f"buy order {_ch} {order.fiat_amount}")
+            except Exception as _e:
+                logger.warning(f"buy-order credit charge failed for {data.order_number}: {_e}")
         await db.commit()
         logger.info(f"Buy order {data.order_number} marked as paid via extension")
     else:
@@ -1126,6 +1146,13 @@ async def _complete_sell_order(order: Order, trader: Trader, db: AsyncSession) -
 
     trader.total_trades += 1
     trader.total_volume += order.fiat_amount
+
+    # Sell order = inbound (buyer pays us, bot releases crypto): flat 0.5 credits
+    try:
+        from app.services import credits as _credits
+        _credits.charge(db, trader, 0.5, reason=f"sell order {order.binance_order_number}")
+    except Exception as _e:
+        logger.warning(f"sell-order credit charge failed for {order.binance_order_number}: {_e}")
 
     logger.info(
         f"Sell order {order.binance_order_number} RELEASED (reconcile) — "
