@@ -510,6 +510,9 @@ export default function Dashboard() {
   const [ddAutoCancelNew, setDdAutoCancelNew] = useState(false);
   const [tgApprovalEnabled, setTgApprovalEnabled] = useState(false);
   const [tgConnectedForConfig, setTgConnectedForConfig] = useState(false);
+  const [cfEnabled, setCfEnabled] = useState(false);
+  const [cfAllTradesMin, setCfAllTradesMin] = useState('0');
+  const [cfAllTradesMinAll, setCfAllTradesMinAll] = useState('0');
   const [settingsInitialSection, setSettingsInitialSection] = useState('binance'); // timestamp of last successful config save — prevents stale loadData responses from overwriting the saved value
   const [showPaybill, setShowPaybill] = useState(false);
   const [copied, setCopied] = useState('');
@@ -603,7 +606,7 @@ export default function Dashboard() {
         getBinanceAccountData(),
         getWalletTransactions(100, 'negative'),
       ]);
-      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); } }
+      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); setCfEnabled(p.cf_filters_enabled || false); setCfAllTradesMin(String(p.cf_all_trades_min ?? 0)); setCfAllTradesMinAll(String(p.cf_all_trades_min_all ?? 0)); } }
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
       if (results[3].status === 'fulfilled') { const od = results[3].value.data; setOrders(od); setOrdersPage(1); setOrdersHasMore(od.length === 20); }
@@ -2117,7 +2120,7 @@ export default function Dashboard() {
                 onClick={async () => {
                   setSavingConfig(true);
                   try {
-                    await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll });
+                    await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0 });
                     configSavedAt.current = Date.now();
                     setConfigSaved(true);
                     setTimeout(() => { setConfigSaved(false); }, 1500);
@@ -2196,17 +2199,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Auto-reject row */}
-            <div style={{ background: '#0d1117', border: '0.5px solid #1f2937', borderRadius: 10, padding: '14px 16px', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Auto-reject buyers under 100 trades</div>
-                <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>New accounts have higher dispute rates</div>
-              </div>
-              <div onClick={() => setDdMinAll(v => v >= 100 ? 0 : 100)}
-                style={{ width: 44, height: 24, borderRadius: 12, background: ddMinAll >= 100 ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0, marginLeft: 20 }}>
-                <div style={{ position: 'absolute', top: 4, left: ddMinAll >= 100 ? 22 : 4, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
-              </div>
-            </div>
 
             {/* High-risk regions row */}
             <div style={{ background: '#0d1117', border: '0.5px solid #1f2937', borderRadius: 10, padding: '14px 16px', marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -2220,6 +2212,36 @@ export default function Dashboard() {
               <div style={{ width: 44, height: 24, borderRadius: 12, background: '#374151', cursor: 'not-allowed', position: 'relative', flexShrink: 0, marginLeft: 20, opacity: 0.4 }}>
                 <div style={{ position: 'absolute', top: 4, left: 4, width: 16, height: 16, borderRadius: '50%', background: '#fff' }} />
               </div>
+            </div>
+
+            {/* Binance Ad Counterparty Filters */}
+            <div style={{ background: '#0d1117', border: `0.5px solid ${cfEnabled ? 'rgba(245,158,11,0.4)' : '#1f2937'}`, borderRadius: 10, padding: '14px 16px', marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: cfEnabled ? 14 : 0 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Binance Ad Counterparty Filters</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>Filters pushed to all your Binance ads on save</div>
+                </div>
+                <div onClick={() => setCfEnabled(v => !v)}
+                  style={{ width: 44, height: 24, borderRadius: 12, background: cfEnabled ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0, marginLeft: 20 }}>
+                  <div style={{ position: 'absolute', top: 4, left: cfEnabled ? 22 : 4, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+                </div>
+              </div>
+              {cfEnabled && (
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 5 }}>Min Total Trades (30D)</div>
+                    <input type="number" min="0" value={cfAllTradesMin} onChange={e => setCfAllTradesMin(e.target.value)}
+                      style={{ width: '100%', background: '#111827', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off</div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 5 }}>Min Total Trades (All Time)</div>
+                    <input type="number" min="0" value={cfAllTradesMinAll} onChange={e => setCfAllTradesMinAll(e.target.value)}
+                      style={{ width: '100%', background: '#111827', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off</div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -3443,6 +3465,36 @@ export default function Dashboard() {
               )}
             </div>
 
+            {/* Binance Ad Counterparty Filters (modal) */}
+            <div style={{ background: '#111827', border: `1px solid ${cfEnabled ? 'rgba(245,158,11,0.4)' : '#374151'}`, borderRadius: 10, padding: '14px 16px', marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: cfEnabled ? 14 : 0 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Binance Ad Counterparty Filters</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>Filters pushed to all your Binance ads on save</div>
+                </div>
+                <div onClick={() => setCfEnabled(v => !v)}
+                  style={{ width: 40, height: 22, borderRadius: 11, background: cfEnabled ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0 }}>
+                  <div style={{ position: 'absolute', top: 3, left: cfEnabled ? 20 : 3, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+                </div>
+              </div>
+              {cfEnabled && (
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Min Total Trades (30D)</div>
+                    <input type="number" min="0" value={cfAllTradesMin} onChange={e => setCfAllTradesMin(e.target.value)}
+                      style={{ width: '100%', background: '#0d1117', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off</div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Min Total Trades (All Time)</div>
+                    <input type="number" min="0" value={cfAllTradesMinAll} onChange={e => setCfAllTradesMinAll(e.target.value)}
+                      style={{ width: '100%', background: '#0d1117', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off</div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {configSaved && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 0', borderRadius: 8, background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)', marginBottom: 8 }}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -3453,7 +3505,7 @@ export default function Dashboard() {
               onClick={async () => {
                 setSavingConfig(true);
                 try {
-                  await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll });
+                  await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0 });
                   configSavedAt.current = Date.now();
                   setConfigSaved(true);
                   setTimeout(() => { setConfigSaved(false); if (showConfigModal) setShowConfigModal(false); }, 1500);

@@ -163,6 +163,9 @@ let ddEnabled = false;          // Counterparty screening on/off
 let ddMin30d = 20;              // Tier 1: minimum 30-day trade count
 let ddMinAll = 0;               // Tier 2: minimum all-time trade count (0 = off)
 let ddAutoCancelNew = false;    // Auto-cancel accounts with <5 all-time trades
+let cfEnabled = false;          // Binance ad counterparty filters on/off
+let cfMin30d = 0;               // Min trades in last 30D (app-level enforcement)
+let cfMinAll = 0;               // Min trades all-time (app-level enforcement)
 let connectingBinance = false; // Prevents concurrent connectBinance() calls
 let scanningInProgress = false; // Prevents concurrent initialScan() calls
 let sessionStartTime = null;   // When Binance login was last confirmed
@@ -3022,6 +3025,9 @@ async function idleScan(page) {
         ddMin30d        = modeData.dd_min_30d_trades  || 20;
         ddMinAll        = modeData.dd_min_all_trades  || 0;
         ddAutoCancelNew = modeData.dd_auto_cancel_new || false;
+        cfEnabled       = modeData.cf_filters_enabled || false;
+        cfMin30d        = modeData.cf_all_trades_min  || 0;
+        cfMinAll        = modeData.cf_all_trades_min_all || 0;
       }
     } catch (_) {}
   }
@@ -7954,35 +7960,46 @@ Method selection rules:
       if (alreadyPaid) {
         console.log(`[SparkP2P] â­ Skipping send_message â€” buyer already paid (verify_payment state)`);
             } else {
-        // -- Counterparty DD screening - runs before payment instructions are sent --
-        if (ddEnabled && action.buyer_nickname) {
+        // -- Counterparty screening: CF filters + DD — both enforced before payment instructions --
+        const needsScreening = (cfEnabled && (cfMin30d > 0 || cfMinAll > 0)) || ddEnabled;
+        if (needsScreening && action.buyer_nickname) {
           const stats = await fetchCounterpartyStats(page, order_number, 'buyer');
           const isReturning = await checkReturningBuyer(action.buyer_nickname);
 
           if (isReturning) {
-            console.log(`[SparkP2P] DD: ${action.buyer_nickname} is returning client -- bypassing screening`);
+            console.log(`[SparkP2P] Screening: ${action.buyer_nickname} is returning client -- bypassing`);
           } else {
             let failReason = null;
 
-            // Auto-cancel brand-new accounts (< 5 all-time trades)
-            if (ddAutoCancelNew && stats.trades_all !== null && stats.trades_all < 5) {
-              failReason = `brand-new account (${stats.trades_all} all-time trades, minimum 5)`;
+            // CF filter checks — both 30D AND All-time must be satisfied when set
+            if (cfEnabled) {
+              if (cfMin30d > 0 && stats.trades_30d !== null && stats.trades_30d < cfMin30d) {
+                failReason = `insufficient 30-day trades (${stats.trades_30d}/${cfMin30d} required)`;
+              }
+              if (!failReason && cfMinAll > 0 && stats.trades_all !== null && stats.trades_all < cfMinAll) {
+                failReason = `insufficient all-time trades (${stats.trades_all}/${cfMinAll} required)`;
+              }
             }
-            // Tier 1 -- 30-day minimum (hard requirement)
-            if (!failReason && stats.trades_30d !== null && stats.trades_30d < ddMin30d) {
-              failReason = `low recent activity (${stats.trades_30d} trades in 30 days, minimum ${ddMin30d})`;
-            }
-            // Tier 2 -- all-time minimum (only enforced if Tier 1 passed or no 30d data)
-            if (!failReason && ddMinAll > 0 && stats.trades_all !== null && stats.trades_all < ddMinAll) {
-              failReason = `low total trades (${stats.trades_all} all-time, minimum ${ddMinAll})`;
+
+            // DD checks (independent of CF)
+            if (!failReason && ddEnabled) {
+              if (ddAutoCancelNew && stats.trades_all !== null && stats.trades_all < 5) {
+                failReason = `brand-new account (${stats.trades_all} all-time trades, minimum 5)`;
+              }
+              if (!failReason && stats.trades_30d !== null && stats.trades_30d < ddMin30d) {
+                failReason = `low recent activity (${stats.trades_30d} trades in 30 days, minimum ${ddMin30d})`;
+              }
+              if (!failReason && ddMinAll > 0 && stats.trades_all !== null && stats.trades_all < ddMinAll) {
+                failReason = `low total trades (${stats.trades_all} all-time, minimum ${ddMinAll})`;
+              }
             }
 
             if (failReason) {
-              console.log(`[SparkP2P] DD: ${action.buyer_nickname} FAILED -- ${failReason}`);
+              console.log(`[SparkP2P] Screening FAILED: ${action.buyer_nickname} -- ${failReason}`);
               await cancelOrderOnBinance(page, order_number, failReason);
               return;
             }
-            console.log(`[SparkP2P] DD: ${action.buyer_nickname} passed (30d: ${stats.trades_30d ?? 'n/a'}, all: ${stats.trades_all ?? 'n/a'})`);
+            console.log(`[SparkP2P] Screening passed: ${action.buyer_nickname} (30d: ${stats.trades_30d ?? 'n/a'}, all: ${stats.trades_all ?? 'n/a'})`);
           }
         }
 
