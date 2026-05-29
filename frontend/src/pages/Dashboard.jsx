@@ -2219,7 +2219,11 @@ export default function Dashboard() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: cfEnabled ? 14 : 0 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Binance Ad Counterparty Filters</div>
-                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>Filters pushed to all your Binance ads on save</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>
+                    {profile?.cf_last_pushed_at
+                      ? `Last pushed to Binance: ${new Date(profile.cf_last_pushed_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' })}`
+                      : 'Filters pushed to all your sell ads on save'}
+                  </div>
                 </div>
                 <div onClick={() => setCfEnabled(v => !v)}
                   style={{ width: 44, height: 24, borderRadius: 12, background: cfEnabled ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0, marginLeft: 20 }}>
@@ -3470,7 +3474,11 @@ export default function Dashboard() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: cfEnabled ? 14 : 0 }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Binance Ad Counterparty Filters</div>
-                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>Filters pushed to all your Binance ads on save</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>
+                    {profile?.cf_last_pushed_at
+                      ? `Last pushed to Binance: ${new Date(profile.cf_last_pushed_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' })}`
+                      : 'Filters pushed to all your sell ads on save'}
+                  </div>
                 </div>
                 <div onClick={() => setCfEnabled(v => !v)}
                   style={{ width: 40, height: 22, borderRadius: 11, background: cfEnabled ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0 }}>

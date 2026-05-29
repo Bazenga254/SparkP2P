@@ -885,9 +885,10 @@ async def update_trading_config(
 
     await db.commit()
 
-    # Push filters to Binance if enabled and API credentials are set
+    # Push filters to Binance whenever CF settings changed and API credentials are set.
+    # When disabled, push all-zero values to CLEAR any existing filters from the Binance ad.
     push_warnings = []
-    if cf_changed and trader.cf_filters_enabled and trader.binance_api_key and trader.binance_api_secret:
+    if cf_changed and trader.binance_api_key and trader.binance_api_secret:
         try:
             from app.core.security import decrypt_data
             from app.services.binance.sapi_client import get_merchant_ads, push_counterparty_filters
@@ -901,26 +902,36 @@ async def update_trading_config(
                 if not adv_no:
                     continue
                 try:
-                    # Push 30D total trades filter if set
-                    if (trader.cf_all_trades_min or 0) > 0:
+                    if not trader.cf_filters_enabled:
+                        # Filters disabled — clear all filters on Binance with a single zero call
                         await push_counterparty_filters(
                             api_key=api_key, api_secret=api_secret, adv_no=adv_no,
                             completion_rate_min=0.0, completion_rate_window=2,
-                            all_trades_min=trader.cf_all_trades_min,
-                            trade_count_window=1,
+                            all_trades_min=0, trade_count_window=2,
                             completed_trades_min=0, buy_trades_min=0, sell_trades_min=0,
-                            volume_min=0.0, volume_asset=USDT, volume_window=2, reg_days_min=0,
+                            volume_min=0.0, volume_asset="USDT", volume_window=2, reg_days_min=0,
                         )
-                    # Push All-time total trades filter if set
-                    if (trader.cf_all_trades_min_all or 0) > 0:
-                        await push_counterparty_filters(
-                            api_key=api_key, api_secret=api_secret, adv_no=adv_no,
-                            completion_rate_min=0.0, completion_rate_window=2,
-                            all_trades_min=trader.cf_all_trades_min_all,
-                            trade_count_window=2,
-                            completed_trades_min=0, buy_trades_min=0, sell_trades_min=0,
-                            volume_min=0.0, volume_asset=USDT, volume_window=2, reg_days_min=0,
-                        )
+                    else:
+                        # Push 30D total trades filter if set
+                        if (trader.cf_all_trades_min or 0) > 0:
+                            await push_counterparty_filters(
+                                api_key=api_key, api_secret=api_secret, adv_no=adv_no,
+                                completion_rate_min=0.0, completion_rate_window=2,
+                                all_trades_min=trader.cf_all_trades_min,
+                                trade_count_window=1,
+                                completed_trades_min=0, buy_trades_min=0, sell_trades_min=0,
+                                volume_min=0.0, volume_asset="USDT", volume_window=2, reg_days_min=0,
+                            )
+                        # Push All-time total trades filter if set
+                        if (trader.cf_all_trades_min_all or 0) > 0:
+                            await push_counterparty_filters(
+                                api_key=api_key, api_secret=api_secret, adv_no=adv_no,
+                                completion_rate_min=0.0, completion_rate_window=2,
+                                all_trades_min=trader.cf_all_trades_min_all,
+                                trade_count_window=2,
+                                completed_trades_min=0, buy_trades_min=0, sell_trades_min=0,
+                                volume_min=0.0, volume_asset="USDT", volume_window=2, reg_days_min=0,
+                            )
                     pushed += 1
                 except Exception as ad_err:
                     logger.warning("Skipping ad %s: %s", adv_no, ad_err)
