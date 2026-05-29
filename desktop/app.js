@@ -2915,7 +2915,41 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
           p.userTradeStatistic?.allTrade ??
           null;
 
-        return { trades_30d, trades_all };
+        const buy_trades =
+          p.buyOrderCount ?? p.userTradeStatistic?.buyFinishCount ?? null;
+
+        const sell_trades =
+          p.sellOrderCount ?? p.userTradeStatistic?.sellFinishCount ?? null;
+
+        const completion_rate =
+          p.finishRate ?? p.completionRate ?? p.tradeCompleteRate ?? null;
+
+        const avg_pay_mins =
+          p.avgPayTime ?? p.averagePayTime ?? p.userTradeStatistic?.avgPayTime ?? null;
+
+        const counterparties =
+          p.userTradePartnerCount ?? p.tradePartnerCount ?? p.userTradeStatistic?.partnerCount ?? null;
+
+        const now = Date.now();
+        const reg_time = p.registerTime ?? p.createTime ?? p.userCreateTime ?? null;
+        const registered_days = reg_time ? Math.floor((now - reg_time) / 86400000) : null;
+
+        const first_trade_time = p.firstOrderTime ?? p.firstTradeTime ?? null;
+        const first_trade_days = first_trade_time ? Math.floor((now - first_trade_time) / 86400000) : null;
+
+        return {
+          trades_30d, trades_all,
+          // Full profile fields for Telegram approval message
+          allTimeTrades: trades_all,
+          buyTrades: buy_trades,
+          sellTrades: sell_trades,
+          last30dTrades: trades_30d,
+          completionRate: completion_rate !== null ? (completion_rate * 100).toFixed(2) + '%' : 'N/A',
+          avgPayMins: avg_pay_mins !== null ? parseFloat(avg_pay_mins).toFixed(2) : 'N/A',
+          counterparties: counterparties,
+          registeredDays: registered_days,
+          firstTradeDays: first_trade_days,
+        };
       } catch (_) {
         return null;
       }
@@ -3496,14 +3530,16 @@ async function idleScan(page) {
         // ── STEP 1: First time seeing this order — request Telegram approval ──
         console.log(`[SparkP2P] Order ${order.orderNumber} — new sell order, requesting Telegram approval`);
         const _buyerStats = await fetchCounterpartyStats(page, order.orderNumber, 'buyer').catch(() => ({}));
+        const _buyerNick = order.buyerNickname || order.counterparty || '';
+        const _tradedBefore = _buyerNick ? await checkReturningBuyer(_buyerNick).catch(() => false) : false;
         const _approvalBody = {
           order: {
             orderNumber: order.orderNumber,
             totalPrice: order.totalPrice,
-            buyerNickname: order.buyerNickname || order.counterparty || '',
-            counterparty: order.counterparty || '',
+            buyerNickname: _buyerNick,
+            counterparty: _buyerNick,
           },
-          buyer_stats: _buyerStats || {},
+          buyer_stats: { ...(_buyerStats || {}), tradedBefore: _tradedBefore },
         };
         const _approvalRes = await fetch(`${API_BASE}/telegram/request-approval`, {
           method: 'POST',
@@ -8005,7 +8041,7 @@ Method selection rules:
                     buyerNickname: action.buyer_nickname || '',
                     counterparty: action.buyer_nickname || '',
                   },
-                  buyer_stats: stats,
+                  buyer_stats: { ...stats, tradedBefore: isReturning },
                   advisory: `⚠️ Counterparty Filter Alert\nThis buyer FAILED your screening requirements:\n${failReason}\n\nYou may still approve or reject this order.`,
                 };
                 await fetch(`${API_BASE}/telegram/request-approval`, {
