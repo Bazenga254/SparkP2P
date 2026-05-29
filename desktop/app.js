@@ -7996,8 +7996,27 @@ Method selection rules:
 
             if (failReason) {
               console.log(`[SparkP2P] Screening FAILED: ${action.buyer_nickname} -- ${failReason}`);
-              await cancelOrderOnBinance(page, order_number, failReason);
-              return;
+              // Route through full Telegram approval flow with advisory — merchant decides YES/NO
+              if (!sellApprovalRequestedOrders.has(order_number)) {
+                const cfApprovalBody = {
+                  order: {
+                    orderNumber: order_number,
+                    totalPrice: action.fiat_amount || 0,
+                    buyerNickname: action.buyer_nickname || '',
+                    counterparty: action.buyer_nickname || '',
+                  },
+                  buyer_stats: stats,
+                  advisory: `⚠️ Counterparty Filter Alert\nThis buyer FAILED your screening requirements:\n${failReason}\n\nYou may still approve or reject this order.`,
+                };
+                await fetch(`${API_BASE}/telegram/request-approval`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                  body: JSON.stringify(cfApprovalBody),
+                }).catch(() => {});
+                sellApprovalRequestedOrders.add(order_number);
+                console.log(`[SparkP2P] CF filter alert sent to Telegram for ${action.buyer_nickname} — awaiting merchant decision`);
+              }
+              return; // Do NOT send payment details yet — idleScan handles approval/rejection
             }
             console.log(`[SparkP2P] Screening passed: ${action.buyer_nickname} (30d: ${stats.trades_30d ?? 'n/a'}, all: ${stats.trades_all ?? 'n/a'})`);
           }

@@ -2236,13 +2236,13 @@ export default function Dashboard() {
                     <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 5 }}>Min Total Trades (30D)</div>
                     <input type="number" min="0" value={cfAllTradesMin} onChange={e => setCfAllTradesMin(e.target.value)}
                       style={{ width: '100%', background: '#111827', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
-                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off</div>
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off · bot enforced</div>
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 5 }}>Min Total Trades (All Time)</div>
                     <input type="number" min="0" value={cfAllTradesMinAll} onChange={e => setCfAllTradesMinAll(e.target.value)}
                       style={{ width: '100%', background: '#111827', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
-                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off</div>
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off · Binance enforced 24/7</div>
                   </div>
                 </div>
               )}
@@ -3491,13 +3491,13 @@ export default function Dashboard() {
                     <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Min Total Trades (30D)</div>
                     <input type="number" min="0" value={cfAllTradesMin} onChange={e => setCfAllTradesMin(e.target.value)}
                       style={{ width: '100%', background: '#0d1117', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
-                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off</div>
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off · bot enforced</div>
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Min Total Trades (All Time)</div>
                     <input type="number" min="0" value={cfAllTradesMinAll} onChange={e => setCfAllTradesMinAll(e.target.value)}
                       style={{ width: '100%', background: '#0d1117', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
-                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off</div>
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off · Binance enforced 24/7</div>
                   </div>
                 </div>
               )}

@@ -902,37 +902,18 @@ async def update_trading_config(
                 if not adv_no:
                     continue
                 try:
-                    if not trader.cf_filters_enabled:
-                        # Filters disabled — clear all filters on Binance with a single zero call
-                        await push_counterparty_filters(
-                            api_key=api_key, api_secret=api_secret, adv_no=adv_no,
-                            completion_rate_min=0.0, completion_rate_window=2,
-                            all_trades_min=0, trade_count_window=2,
-                            completed_trades_min=0, buy_trades_min=0, sell_trades_min=0,
-                            volume_min=0.0, volume_asset="USDT", volume_window=2, reg_days_min=0,
-                        )
-                    else:
-                        # Push 30D total trades filter if set
-                        if (trader.cf_all_trades_min or 0) > 0:
-                            await push_counterparty_filters(
-                                api_key=api_key, api_secret=api_secret, adv_no=adv_no,
-                                completion_rate_min=0.0, completion_rate_window=2,
-                                all_trades_min=trader.cf_all_trades_min,
-                                trade_count_window=1,
-                                completed_trades_min=0, buy_trades_min=0, sell_trades_min=0,
-                                volume_min=0.0, volume_asset="USDT", volume_window=2, reg_days_min=0,
-                            )
-                        # Push All-time total trades filter if set
-                        if (trader.cf_all_trades_min_all or 0) > 0:
-                            await push_counterparty_filters(
-                                api_key=api_key, api_secret=api_secret, adv_no=adv_no,
-                                completion_rate_min=0.0, completion_rate_window=2,
-                                all_trades_min=trader.cf_all_trades_min_all,
-                                trade_count_window=2,
-                                completed_trades_min=0, buy_trades_min=0, sell_trades_min=0,
-                                volume_min=0.0, volume_asset="USDT", volume_window=2, reg_days_min=0,
-                            )
-                    pushed += 1
+                    # Binance EP-7: push All-time filter (userAllTradeCountMin window=2)
+                    # 30D filter is enforced at bot level — bot sends cancel message if buyer fails
+                    min_all = (trader.cf_all_trades_min_all or 0) if trader.cf_filters_enabled else 0
+                    await push_counterparty_filters(
+                        api_key=api_key, api_secret=api_secret, adv_no=adv_no,
+                        completion_rate_min=0.0, completion_rate_window=2,
+                        all_trades_min=min_all,
+                        trade_count_window=2,
+                        completed_trades_min=0,
+                        buy_trades_min=0, sell_trades_min=0,
+                        volume_min=0.0, volume_asset=USDT, volume_window=2, reg_days_min=0,
+                    )
                 except Exception as ad_err:
                     logger.warning("Skipping ad %s: %s", adv_no, ad_err)
                     push_warnings.append(f"ad {adv_no}: {ad_err}")

@@ -238,8 +238,9 @@ async def request_approval(
     except Exception:
         amount_str = f"KES {order.get('totalPrice', '?')}"
 
+    advisory = payload.get("advisory") or ""
     text = (
-        "🔔 New Sell Order — Approval Required\n\n"
+        (advisory + chr(10) + chr(10) if advisory else "") + "🔔 New Sell Order — Approval Required\n\n"
         f"Amount: {amount_str}\n"
         f"Buyer: {order.get('buyerNickname') or order.get('counterparty') or 'Unknown'}\n"
         f"Order: {order_number}\n\n"
