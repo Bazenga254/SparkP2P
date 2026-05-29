@@ -71,6 +71,26 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   // Binance
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
 
+  // Binance API key (for counterparty filters / EP-19 — requires Gold Merchant)
+  const [bnApiKey, setBnApiKey] = useState('');
+  const [bnApiSecret, setBnApiSecret] = useState('');
+  const [bnSaving, setBnSaving] = useState(false);
+  const [bnMsg, setBnMsg] = useState(null); // { type: 'success'|'error', text }
+  const handleSaveBinanceApiKey = async () => {
+    if (!bnApiKey.trim() || !bnApiSecret.trim()) { setBnMsg({ type: 'error', text: 'Enter both API key and secret.' }); return; }
+    setBnSaving(true); setBnMsg(null);
+    try {
+      const res = await api.put('/traders/binance-api-key', { api_key: bnApiKey.trim(), api_secret: bnApiSecret.trim() });
+      const tier = res?.data?.merchant_capable ? 'Gold Merchant' : 'Standard';
+      setBnMsg({ type: 'success', text: `✓ Verified & saved — ${tier} account detected.` });
+      setBnApiKey(''); setBnApiSecret('');
+      if (typeof onUpdate === 'function') onUpdate();
+    } catch (e) {
+      setBnMsg({ type: 'error', text: e?.response?.data?.detail || 'Could not verify these credentials. Check the key, secret, and that C2C/Read permissions are enabled.' });
+    }
+    setBnSaving(false);
+  };
+
   // Fee breakdown popup
   const [showFeeInfo, setShowFeeInfo] = useState(false);
   const feeInfoRef = useRef(null);
@@ -912,6 +932,82 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 12, color: '#6b7280', fontSize: 11 }}>
               <span style={{ fontSize: 13, lineHeight: 1 }}>ⓘ</span>
               <span>Limits reset every 24 hours at 00:00 EAT</span>
+            </div>
+          </div>
+
+          {/* Binance API Key — for counterparty filters / EP-19 (Gold Merchant) */}
+          <div className="card">
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 14 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(245,158,11,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="4"/><path d="M15 8l-1.5 1.5M20 3l-5 5M18.5 4.5l1 1M17 6l1 1"/><path d="M12 12l-4 3"/></svg>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ color: '#f3f4f6', fontWeight: 700, fontSize: 15 }}>Binance API Key</span>
+                  {profile?.binance_api_key_saved && (
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(16,185,129,0.15)', color: '#10b981', letterSpacing: '0.4px' }}>✓ SAVED</span>
+                  )}
+                  {profile?.binance_api_key_saved && profile?.binance_merchant_tier === 'gold' && (
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(245,158,11,0.18)', color: '#f59e0b', letterSpacing: '0.4px', border: '1px solid rgba(245,158,11,0.35)' }}>⭐ GOLD MERCHANT</span>
+                  )}
+                  {profile?.binance_api_key_saved && profile?.binance_merchant_tier !== 'gold' && (
+                    <span title="Counterparty filters require a Binance Gold Merchant account" style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(107,114,128,0.15)', color: '#9ca3af', letterSpacing: '0.4px', border: '1px solid rgba(107,114,128,0.25)', cursor: 'help' }}>STANDARD ACCOUNT</span>
+                  )}
+                </div>
+                <div style={{ color: '#9ca3af', fontSize: 12, marginTop: 2 }}>
+                  {profile?.binance_api_key_saved && profile?.binance_merchant_tier !== 'gold'
+                    ? 'Counterparty filters require a Binance Gold Merchant account'
+                    : 'Enables counterparty filters on your live ads'}
+                </div>
+              </div>
+            </div>
+
+            {/* Required permissions */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+              {[{ label: 'Read', ok: true }, { label: 'Enable Spot & Margin Trading', ok: true }, { label: 'Withdrawals — keep OFF', ok: false }].map(({ label, ok }) => (
+                <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 20, background: ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${ok ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}`, color: ok ? '#10b981' : '#ef4444' }}>
+                  {ok ? '✓' : '✕'} {label}
+                </span>
+              ))}
+            </div>
+
+            {/* Inputs */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 14 }}>
+              <div>
+                <label style={{ display: 'block', color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 6, letterSpacing: '0.4px' }}>API KEY</label>
+                <div style={{ position: 'relative' }}>
+                  <input type="text" value={bnApiKey} onChange={e => setBnApiKey(e.target.value)}
+                    placeholder={profile?.binance_api_key_saved ? '••••••••••••••••  (saved — paste to replace)' : 'Paste your Binance API key'}
+                    style={{ width: '100%', boxSizing: 'border-box', paddingLeft: 12, paddingRight: 72, paddingTop: 10, paddingBottom: 10, borderRadius: 10, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#e5e7eb', fontSize: 13, fontFamily: 'monospace', outline: 'none' }} />
+                  <button onClick={() => navigator.clipboard.readText().then(t => setBnApiKey(t)).catch(() => {})}
+                    style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', padding: '4px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.25)', color: '#f59e0b', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Paste</button>
+                </div>
+              </div>
+              <div>
+                <label style={{ display: 'block', color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 6, letterSpacing: '0.4px' }}>SECRET KEY</label>
+                <div style={{ position: 'relative' }}>
+                  <input type="password" value={bnApiSecret} onChange={e => setBnApiSecret(e.target.value)}
+                    placeholder={profile?.binance_api_key_saved ? '••••••••••••••••  (saved — paste to replace)' : 'Paste your Binance API secret'}
+                    style={{ width: '100%', boxSizing: 'border-box', paddingLeft: 12, paddingRight: 72, paddingTop: 10, paddingBottom: 10, borderRadius: 10, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#e5e7eb', fontSize: 13, fontFamily: 'monospace', outline: 'none' }} />
+                  <button onClick={() => navigator.clipboard.readText().then(t => setBnApiSecret(t)).catch(() => {})}
+                    style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', padding: '4px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.25)', color: '#f59e0b', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Paste</button>
+                </div>
+              </div>
+            </div>
+
+            {bnMsg && (
+              <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12, background: bnMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${bnMsg.type === 'success' ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}`, color: bnMsg.type === 'success' ? '#10b981' : '#ef4444' }}>
+                {bnMsg.text}
+              </div>
+            )}
+
+            <button onClick={handleSaveBinanceApiKey} disabled={bnSaving}
+              style={{ padding: '10px 22px', borderRadius: 9, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, fontSize: 13, cursor: bnSaving ? 'default' : 'pointer', opacity: bnSaving ? 0.7 : 1 }}>
+              {bnSaving ? 'Verifying…' : 'Verify & Save'}
+            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 12, color: '#6b7280', fontSize: 11 }}>
+              <span style={{ fontSize: 13, lineHeight: 1 }}>ⓘ</span>
+              <span>Create the key at Binance → API Management. Keys are verified, then stored encrypted. Never enable Withdrawals.</span>
             </div>
           </div>
 
