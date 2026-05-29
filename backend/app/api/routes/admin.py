@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Optional
-from sqlalchemy import select, func, case, extract
+from sqlalchemy import select, func, case, extract, or_, and_
 from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1423,11 +1423,15 @@ async def admin_analytics(
         for row in monthly_rows
     ]
 
-    # Online traders (binance_connected + active)
+    # Online traders = bot active (<3 min) OR web-active (<5 min) — matches the All Traders view
+    _bot_cutoff = datetime.now(timezone.utc) - timedelta(seconds=180)
+    _web_cutoff = datetime.now(timezone.utc) - timedelta(seconds=300)
     r = await db.execute(
         select(func.count(Trader.id)).where(
-            Trader.binance_connected == True,
-            Trader.status == TraderStatus.ACTIVE,
+            or_(
+                and_(Trader.last_extension_sync.isnot(None), Trader.last_extension_sync >= _bot_cutoff),
+                and_(Trader.last_login.isnot(None), Trader.last_login >= _web_cutoff),
+            )
         )
     )
     online_traders = r.scalar()
