@@ -80,6 +80,25 @@ class TradingConfigRequest(BaseModel):
     dd_min_all_trades: Optional[int] = None
     dd_auto_cancel_new: Optional[bool] = None
     telegram_approval_enabled: Optional[bool] = None
+    # Counterparty filters (pushed to Binance via EP-7)
+    cf_filters_enabled:        Optional[bool]  = None
+    cf_completion_rate_min:    Optional[float] = None  # ratio 0.0–1.0
+    cf_completion_rate_window: Optional[int]   = None  # 1=Last 30D, 2=All-time
+    cf_all_trades_min:         Optional[int]   = None
+    cf_trade_count_window:     Optional[int]   = None  # 1=Last 30D, 2=All-time
+    cf_completed_trades_min:   Optional[int]   = None
+    cf_buy_trades_min:         Optional[int]   = None
+    cf_sell_trades_min:        Optional[int]   = None
+    cf_volume_min:             Optional[float] = None
+    cf_volume_asset:           Optional[str]   = None
+    cf_volume_window:          Optional[int]   = None  # 1=Last 30D, 2=All-time
+    cf_reg_days_min:           Optional[int]   = None
+    cf_all_trades_min_all:     Optional[int]   = None
+
+
+class BinanceApiKeyRequest(BaseModel):
+    api_key: str
+    api_secret: str
 
 
 class DepositRequest(BaseModel):
@@ -143,6 +162,21 @@ class TraderProfileResponse(BaseModel):
     dd_min_all_trades: int = 0
     dd_auto_cancel_new: bool = False
     binance_merchant_tier: Optional[str] = None  # 'gold', 'silver', 'bronze'
+    binance_api_key_saved: bool = False  # True if API key is stored (never expose the key itself)
+    cf_filters_enabled:        bool  = False
+    cf_completion_rate_min:    float = 0.0
+    cf_completion_rate_window: int   = 2
+    cf_all_trades_min:         int   = 0
+    cf_trade_count_window:     int   = 2
+    cf_completed_trades_min:   int   = 0
+    cf_buy_trades_min:         int   = 0
+    cf_sell_trades_min:        int   = 0
+    cf_volume_min:             float = 0.0
+    cf_volume_asset:           str   = 'USDT'
+    cf_volume_window:          int   = 2
+    cf_reg_days_min:           int   = 0
+    cf_all_trades_min_all:     int   = 0
+    cf_last_pushed_at:         Optional[str] = None
     telegram_connected: bool = False
     telegram_approval_enabled: bool = False
     trade_tokens: int = 0
@@ -463,6 +497,21 @@ async def get_profile(
         dd_min_all_trades=trader.dd_min_all_trades or 0,
         dd_auto_cancel_new=bool(trader.dd_auto_cancel_new),
         binance_merchant_tier=trader.binance_merchant_tier or 'bronze',
+        binance_api_key_saved=bool(trader.binance_api_key),
+        cf_filters_enabled=bool(trader.cf_filters_enabled),
+        cf_completion_rate_min=trader.cf_completion_rate_min or 0.0,
+        cf_completion_rate_window=trader.cf_completion_rate_window or 2,
+        cf_all_trades_min=trader.cf_all_trades_min or 0,
+        cf_trade_count_window=trader.cf_trade_count_window or 2,
+        cf_completed_trades_min=trader.cf_completed_trades_min or 0,
+        cf_buy_trades_min=trader.cf_buy_trades_min or 0,
+        cf_sell_trades_min=trader.cf_sell_trades_min or 0,
+        cf_volume_min=trader.cf_volume_min or 0.0,
+        cf_volume_asset=trader.cf_volume_asset or 'USDT',
+        cf_volume_window=trader.cf_volume_window or 2,
+        cf_reg_days_min=trader.cf_reg_days_min or 0,
+        cf_all_trades_min_all=trader.cf_all_trades_min_all or 0,
+        cf_last_pushed_at=trader.cf_last_pushed_at.isoformat() if trader.cf_last_pushed_at else None,
         telegram_connected=bool(trader.telegram_chat_id),
         telegram_approval_enabled=bool(trader.telegram_approval_enabled),
         trade_tokens=trader.trade_tokens or 0,
@@ -792,9 +841,151 @@ async def update_trading_config(
     if data.telegram_approval_enabled is not None:
         trader.telegram_approval_enabled = data.telegram_approval_enabled
 
+    # Counterparty filters
+    cf_changed = False
+    if data.cf_filters_enabled is not None:
+        trader.cf_filters_enabled = data.cf_filters_enabled
+        cf_changed = True
+    if data.cf_completion_rate_min is not None:
+        trader.cf_completion_rate_min = data.cf_completion_rate_min
+        cf_changed = True
+    if data.cf_completion_rate_window is not None:
+        trader.cf_completion_rate_window = data.cf_completion_rate_window
+        cf_changed = True
+    if data.cf_all_trades_min is not None:
+        trader.cf_all_trades_min = data.cf_all_trades_min
+        cf_changed = True
+    if data.cf_trade_count_window is not None:
+        trader.cf_trade_count_window = data.cf_trade_count_window
+        cf_changed = True
+    if data.cf_completed_trades_min is not None:
+        trader.cf_completed_trades_min = data.cf_completed_trades_min
+        cf_changed = True
+    if data.cf_buy_trades_min is not None:
+        trader.cf_buy_trades_min = data.cf_buy_trades_min
+        cf_changed = True
+    if data.cf_sell_trades_min is not None:
+        trader.cf_sell_trades_min = data.cf_sell_trades_min
+        cf_changed = True
+    if data.cf_volume_min is not None:
+        trader.cf_volume_min = data.cf_volume_min
+        cf_changed = True
+    if data.cf_volume_asset is not None:
+        trader.cf_volume_asset = data.cf_volume_asset
+        cf_changed = True
+    if data.cf_volume_window is not None:
+        trader.cf_volume_window = data.cf_volume_window
+        cf_changed = True
+    if data.cf_reg_days_min is not None:
+        trader.cf_reg_days_min = data.cf_reg_days_min
+        cf_changed = True
+    if data.cf_all_trades_min_all is not None:
+        trader.cf_all_trades_min_all = data.cf_all_trades_min_all
+        cf_changed = True
+
     await db.commit()
 
-    return {"status": "updated"}
+    # Push filters to Binance if enabled and API credentials are set
+    push_warnings = []
+    if cf_changed and trader.cf_filters_enabled and trader.binance_api_key and trader.binance_api_secret:
+        try:
+            from app.core.security import decrypt_data
+            from app.services.binance.sapi_client import get_merchant_ads, push_counterparty_filters
+            api_key    = decrypt_data(trader.binance_api_key)
+            api_secret = decrypt_data(trader.binance_api_secret)
+            ads = await get_merchant_ads(api_key, api_secret)
+            pushed = 0
+            skipped = 0
+            for ad in ads:
+                adv_no = ad.get("advNo") or ad.get("adsNo")
+                if not adv_no:
+                    continue
+                try:
+                    # Push 30D total trades filter if set
+                    if (trader.cf_all_trades_min or 0) > 0:
+                        await push_counterparty_filters(
+                            api_key=api_key, api_secret=api_secret, adv_no=adv_no,
+                            completion_rate_min=0.0, completion_rate_window=2,
+                            all_trades_min=trader.cf_all_trades_min,
+                            trade_count_window=1,
+                            completed_trades_min=0, buy_trades_min=0, sell_trades_min=0,
+                            volume_min=0.0, volume_asset=USDT, volume_window=2, reg_days_min=0,
+                        )
+                    # Push All-time total trades filter if set
+                    if (trader.cf_all_trades_min_all or 0) > 0:
+                        await push_counterparty_filters(
+                            api_key=api_key, api_secret=api_secret, adv_no=adv_no,
+                            completion_rate_min=0.0, completion_rate_window=2,
+                            all_trades_min=trader.cf_all_trades_min_all,
+                            trade_count_window=2,
+                            completed_trades_min=0, buy_trades_min=0, sell_trades_min=0,
+                            volume_min=0.0, volume_asset=USDT, volume_window=2, reg_days_min=0,
+                        )
+                    pushed += 1
+                except Exception as ad_err:
+                    logger.warning("Skipping ad %s: %s", adv_no, ad_err)
+                    push_warnings.append(f"ad {adv_no}: {ad_err}")
+            if pushed > 0:
+                trader.cf_last_pushed_at = datetime.now(timezone.utc)
+                await db.commit()
+            return {"status": "updated", "filters_pushed": pushed, "filters_skipped": skipped}
+        except Exception as e:
+            logger.warning("Failed to push counterparty filters to Binance: %s", e)
+            push_warnings.append(str(e))
+
+    result = {"status": "updated"}
+    if push_warnings:
+        result["warning"] = f"Settings saved but Binance push failed: {push_warnings[0]}"
+    return result
+
+
+@router.put("/binance-api-key")
+async def save_binance_api_key(
+    data: BinanceApiKeyRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save Binance API key + secret (encrypted). Verifies via EP-4, probes EP-7 for Gold Merchant tier."""
+    from app.core.security import encrypt_data
+    from app.services.binance.sapi_client import get_merchant_ads, push_counterparty_filters
+
+    if not data.api_key.strip() or not data.api_secret.strip():
+        raise HTTPException(status_code=400, detail="API key and secret are required.")
+
+    # Verify credentials work before saving (EP-4)
+    try:
+        ads = await get_merchant_ads(data.api_key.strip(), data.api_secret.strip())
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not verify API credentials: {e}")
+
+    if ads is None:
+        raise HTTPException(status_code=400, detail="Invalid API credentials — could not fetch ads.")
+
+    # Probe EP-7 to detect Gold Merchant tier (all-zero values = no-op, safe)
+    merchant_capable = False
+    if ads:
+        try:
+            await push_counterparty_filters(
+                data.api_key.strip(),
+                data.api_secret.strip(),
+                ads[0]["advNo"],
+                completion_rate_min=0.0,
+                completion_rate_window=2,
+                all_trades_min=0,
+                trade_count_window=2,
+                completed_trades_min=0,
+            )
+            merchant_capable = True
+            trader.binance_merchant_tier = "gold"
+        except Exception:
+            # -1002 or any error means not Gold Merchant — leave existing tier unchanged
+            pass
+
+    trader.binance_api_key    = encrypt_data(data.api_key.strip())
+    trader.binance_api_secret = encrypt_data(data.api_secret.strip())
+    await db.commit()
+
+    return {"status": "saved", "ads_found": len(ads), "merchant_capable": merchant_capable}
 
 
 # ── Profile, Security Question, Change Password ───────────────────

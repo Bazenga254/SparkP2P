@@ -133,6 +133,26 @@ class Trader(Base):
     # Binance merchant tier (gold/silver/bronze — determines per-trade fee on Binance)
     binance_merchant_tier = Column(String(10), nullable=True)  # 'gold', 'silver', 'bronze'
 
+    # Binance SAPI credentials (encrypted) — required for counterparty filter pushes via EP-7
+    binance_api_key    = Column(String(512), nullable=True)   # Encrypted
+    binance_api_secret = Column(String(512), nullable=True)   # Encrypted
+
+    # Counterparty filters — pushed to Binance ad via EP-7 when cf_filters_enabled=True
+    cf_filters_enabled        = Column(Boolean, default=False)
+    cf_completion_rate_min    = Column(Float,   default=0.0)   # ratio 0.0–1.0 (e.g. 0.80 = 80%)
+    cf_completion_rate_window = Column(Integer, default=2)     # 1=Last 30D, 2=All-time
+    cf_all_trades_min         = Column(Integer, default=0)
+    cf_trade_count_window     = Column(Integer, default=2)     # 1=Last 30D, 2=All-time
+    cf_completed_trades_min   = Column(Integer, default=0)
+    cf_buy_trades_min         = Column(Integer, default=0)
+    cf_sell_trades_min        = Column(Integer, default=0)
+    cf_volume_min             = Column(Float,   default=0.0)
+    cf_volume_asset           = Column(String(10), default='USDT')
+    cf_volume_window          = Column(Integer, default=2)     # 1=Last 30D, 2=All-time
+    cf_all_trades_min_all     = Column(Integer, default=0)
+    cf_reg_days_min           = Column(Integer, default=0)
+    cf_last_pushed_at         = Column(DateTime(timezone=True), nullable=True)
+
     # Affiliate referral tracking
     referred_by_code = Column(String(20), nullable=True)  # referral code used at sign-up
 
