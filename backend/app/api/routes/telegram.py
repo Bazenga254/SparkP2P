@@ -48,7 +48,16 @@ async def notify_trader(trader, message: str) -> bool:
     if not chat_id:
         return False
     result = await _tg_send("sendMessage", {"chat_id": chat_id, "text": message})
-    return bool(result and result.get("ok"))
+    ok = bool(result and result.get("ok"))
+    if ok:
+        try:
+            from app.services import credits as _credits
+            tid = getattr(trader, "id", None)
+            if tid is not None:
+                await _credits.charge_standalone(tid, _credits.TELEGRAM_NOTIFY_CREDIT, reason="telegram notify")
+        except Exception:
+            pass
+    return ok
 
 
 # ── Public webhook — Telegram pushes all updates here ───────────────────────
@@ -269,6 +278,11 @@ async def request_approval(
     msg_id = None
     if resp and resp.get("ok"):
         msg_id = resp.get("result", {}).get("message_id")
+        try:
+            from app.services import credits as _credits
+            await _credits.charge_standalone(trader.id, _credits.TELEGRAM_NOTIFY_CREDIT, reason="telegram approval")
+        except Exception:
+            pass
 
     _pending_approvals[order_number] = {
         "chat_id": trader.telegram_chat_id,

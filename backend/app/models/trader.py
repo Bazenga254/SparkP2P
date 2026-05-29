@@ -2,7 +2,7 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, Integer, String, Boolean, Float, Enum, DateTime, Text, JSON
+    Column, Integer, String, Boolean, Float, Enum, DateTime, Text, JSON, Numeric
 )
 from app.core.database import Base
 
@@ -166,7 +166,8 @@ class Trader(Base):
     telegram_approval_enabled = Column(Boolean, default=False)  # Require Telegram YES/NO for every sell order
 
     # Trade tokens (buy-side token gate)
-    trade_tokens = Column(Integer, default=0)           # Purchased — never expire
+    trade_tokens = Column(Numeric(12, 2), default=0)    # Purchased — never expire (numeric for fractional charges)
+    credits_low_alerted = Column(Boolean, default=False)  # True once a low-balance SMS sent; reset on top-up
     trade_tokens_expiring = Column(Integer, default=0)  # Reimbursed — expire at midnight daily
     trade_tokens_expiring_granted_at = Column(DateTime(timezone=True), nullable=True)
 

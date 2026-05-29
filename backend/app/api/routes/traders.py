@@ -179,7 +179,7 @@ class TraderProfileResponse(BaseModel):
     cf_last_pushed_at:         Optional[str] = None
     telegram_connected: bool = False
     telegram_approval_enabled: bool = False
-    trade_tokens: int = 0
+    trade_tokens: float = 0
     trade_tokens_expiring: int = 0
     choice_account_id: Optional[str] = None
     choice_account_number: Optional[str] = None
@@ -514,7 +514,7 @@ async def get_profile(
         cf_last_pushed_at=trader.cf_last_pushed_at.isoformat() if trader.cf_last_pushed_at else None,
         telegram_connected=bool(trader.telegram_chat_id),
         telegram_approval_enabled=bool(trader.telegram_approval_enabled),
-        trade_tokens=trader.trade_tokens or 0,
+        trade_tokens=float(trader.trade_tokens or 0),
         trade_tokens_expiring=trader.trade_tokens_expiring or 0,
         choice_account_id=trader.choice_account_id or None,
         choice_account_number=trader.choice_account_number or None,
@@ -1658,11 +1658,12 @@ async def cb_withdraw_initiate(
     if body.amount < 100:
         raise HTTPException(status_code=400, detail="Minimum withdrawal is KES 100")
 
-    WITHDRAWAL_CREDIT_FEE = 20
-    if (trader.trade_tokens or 0) < WITHDRAWAL_CREDIT_FEE:
+    from app.services import credits as _credits
+    WITHDRAWAL_CREDIT_FEE = _credits.withdrawal_credit_fee("BANK", body.amount)
+    if float(trader.trade_tokens or 0) < WITHDRAWAL_CREDIT_FEE:
         raise HTTPException(
             status_code=400,
-            detail=f"Insufficient credits. Withdrawals cost {WITHDRAWAL_CREDIT_FEE} credits (you have {trader.trade_tokens or 0}).",
+            detail=f"Insufficient credits. This withdrawal costs {WITHDRAWAL_CREDIT_FEE} credits (you have {float(trader.trade_tokens or 0):.1f}).",
         )
 
     # Block if there's already a PENDING withdrawal in the last 2 hours
@@ -1742,11 +1743,12 @@ async def cb_withdraw_to_mpesa_initiate(
     if body.amount < 10:
         raise HTTPException(status_code=400, detail="Minimum M-Pesa withdrawal is KES 10")
 
-    WITHDRAWAL_CREDIT_FEE = 20
-    if (trader.trade_tokens or 0) < WITHDRAWAL_CREDIT_FEE:
+    from app.services import credits as _credits
+    WITHDRAWAL_CREDIT_FEE = _credits.withdrawal_credit_fee("MPESA", body.amount)
+    if float(trader.trade_tokens or 0) < WITHDRAWAL_CREDIT_FEE:
         raise HTTPException(
             status_code=400,
-            detail=f"Insufficient credits. Withdrawals cost {WITHDRAWAL_CREDIT_FEE} credits (you have {trader.trade_tokens or 0}).",
+            detail=f"Insufficient credits. This withdrawal costs {WITHDRAWAL_CREDIT_FEE} credits (you have {float(trader.trade_tokens or 0):.1f}).",
         )
 
     # Block if there's already a PENDING withdrawal in the last 2 hours
@@ -2121,12 +2123,14 @@ async def cb_withdraw_to_bank(
 
     del _pending_withdrawal_tx[trader.email]
 
-    WITHDRAWAL_CREDIT_FEE = 20
-    trader.trade_tokens = (trader.trade_tokens or 0) - WITHDRAWAL_CREDIT_FEE
-
     import time as _time
     _channel  = pending.get("channel", "BANK")
     _mpesa_ph = pending.get("phone", "")
+
+    # Tiered credit fee: M-Pesa scales by amount, PesaLink/bank flat 20
+    from app.services import credits as _credits
+    WITHDRAWAL_CREDIT_FEE = _credits.withdrawal_credit_fee(_channel, amount)
+    _credits.charge(db, trader, WITHDRAWAL_CREDIT_FEE, reason=f"withdrawal {_channel} {amount}")
     if _channel == "MPESA":
         _dest      = trader.phone or _mpesa_ph  # full phone stored on trader
         _dest_type = "M-Pesa"
@@ -2804,9 +2808,9 @@ async def get_trade_tokens(
     )
     history = result.scalars().all()
     return {
-        "trade_tokens": trader.trade_tokens or 0,
+        "trade_tokens": float(trader.trade_tokens or 0),
         "trade_tokens_expiring": trader.trade_tokens_expiring or 0,
-        "total": (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0),
+        "total": float(trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0),
         "history": [
             {
                 "id": p.id,
@@ -2859,6 +2863,8 @@ async def purchase_trade_tokens(
 
     # Grant tokens (permanent)
     trader.trade_tokens = (trader.trade_tokens or 0) + tokens
+    if float(trader.trade_tokens or 0) >= 100:
+        trader.credits_low_alerted = False  # reset low-balance alert on top-up
 
     # Record purchase
     purchase = TradeTokenPurchase(
@@ -3045,6 +3051,8 @@ async def credits_mpesa_callback(request: Request, db: AsyncSession = Depends(ge
         return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
     trader.trade_tokens = (trader.trade_tokens or 0) + credits
+    if float(trader.trade_tokens or 0) >= 100:
+        trader.credits_low_alerted = False  # reset low-balance alert on top-up
 
     purchase = TradeTokenPurchase(
         trader_id=trader_id,
