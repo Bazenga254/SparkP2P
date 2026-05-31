@@ -1553,7 +1553,7 @@ export default function Dashboard() {
                     );
                   })()}
                   <span className="greeting-sub">Today's Earnings</span>
-                  <span className="greeting-amount">KES {(stats?.today?.net_profit || 0).toLocaleString()}</span>
+                  <span className="greeting-amount">KES {(profitData?.net_profit ?? stats?.today?.net_profit ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                 </div>
                 <div className="greeting-icon">
                   {(stats?.today?.net_profit || 0) >= 0 ? '📈' : '📉'}
@@ -1626,22 +1626,22 @@ export default function Dashboard() {
             <div className="overview-stats-row">
               <div className="mini-stat-card">
                 <Activity size={18} style={{ color: '#f59e0b', marginBottom: 4 }} />
-                <span className="mini-stat-value">{stats?.today?.total_trades || 0}</span>
+                <span className="mini-stat-value">{profitData ? ((profitData.buy?.orders || 0) + (profitData.sell?.orders || 0)) : (stats?.today?.total_trades || 0)}</span>
                 <span className="mini-stat-label">Total Trades</span>
               </div>
               <div className="mini-stat-card sell-card">
                 <ArrowDown size={18} style={{ color: '#10b981', marginBottom: 4 }} />
-                <span className="mini-stat-value">{stats?.today?.sell_trades || 0}</span>
+                <span className="mini-stat-value">{profitData?.sell?.orders ?? stats?.today?.sell_trades ?? 0}</span>
                 <span className="mini-stat-label">Sell Orders</span>
               </div>
               <div className="mini-stat-card buy-card">
                 <ArrowUp size={18} style={{ color: '#3b82f6', marginBottom: 4 }} />
-                <span className="mini-stat-value">{stats?.today?.buy_trades || 0}</span>
+                <span className="mini-stat-value">{profitData?.buy?.orders ?? stats?.today?.buy_trades ?? 0}</span>
                 <span className="mini-stat-label">Buy Orders</span>
               </div>
               <div className="mini-stat-card">
                 <DollarSign size={18} style={{ color: '#f59e0b', marginBottom: 4 }} />
-                <span className="mini-stat-value">KES {(stats?.today?.volume || 0).toLocaleString()}</span>
+                <span className="mini-stat-value">KES {(profitData ? ((profitData.buy?.kes || 0) + (profitData.sell?.kes || 0)) : (stats?.today?.volume || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                 <span className="mini-stat-label">Total Volume</span>
               </div>
               <div className="mini-stat-card">
