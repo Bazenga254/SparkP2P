@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 ONLINE_WINDOW_SECS = 120   # trader considered online if heartbeat within this
 GAP_SECS = 120             # a poll gap larger than this = bot was offline -> reset floor
 POLL_INTERVAL_SECS = 30
+BOOT_GRACE_SECS = 120   # after backend (re)start, dont reset floors (a restart != trader offline)
 TERMINAL = {"COMPLETED", "CANCELLED", "CANCELLED_BY_SYSTEM"}
+_poller_boot = None
 
 
 async def track_trader(db, trader) -> int:
@@ -39,8 +41,16 @@ async def track_trader(db, trader) -> int:
     if trader.tracking_started_at is None:
         trader.tracking_started_at = now
 
-    # First activation or returned from offline -> start a fresh session floor at now.
-    if gap > GAP_SECS or trader.tracking_high_water is None:
+    # Within boot grace (just after a backend restart) we never reset floors, because a
+    # restart is not the trader going offline.
+    in_boot_grace = (_poller_boot is not None and (now - _poller_boot).total_seconds() < BOOT_GRACE_SECS)
+    if trader.tracking_high_water is None:
+        trader.tracking_high_water = now_ms       # genuine first activation
+        trader.tracking_last_poll_at = now
+        await db.commit()
+        return 0
+    if gap > GAP_SECS and not in_boot_grace:
+        # Trader returned from offline -> fresh session floor, skip the offline gap.
         trader.tracking_high_water = now_ms
         trader.tracking_last_poll_at = now
         await db.commit()
@@ -101,6 +111,8 @@ async def track_trader(db, trader) -> int:
 
 async def tracking_poller():
     """Every 30s: track all online traders' while-online Binance orders."""
+    global _poller_boot
+    _poller_boot = datetime.now(timezone.utc)
     await asyncio.sleep(10)
     logger.info("[Tracking] poller started (every %ds)", POLL_INTERVAL_SECS)
     while True:
