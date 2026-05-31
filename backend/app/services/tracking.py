@@ -62,10 +62,17 @@ async def track_trader(db, trader) -> int:
         api_secret = decrypt_data(trader.binance_api_secret)
         rows = await get_user_order_history(api_key, api_secret, page=1, rows=50)
     except Exception as e:
-        # relay/Binance unreachable — update poll time, skip
         trader.tracking_last_poll_at = now
+        # Flag a dead/invalid key (residual ad filters can still block buyers, so a
+        # dead key is otherwise invisible to the admin and trader).
+        if str(e).startswith("INVALID_API_KEY") and not trader.binance_api_key_invalid:
+            trader.binance_api_key_invalid = True
+            logger.warning("[Tracking] trader %s API key invalid (%s)", trader.id, e)
         await db.commit()
         raise
+
+    if trader.binance_api_key_invalid:
+        trader.binance_api_key_invalid = False  # healthy read -> clear stale flag
 
     inserted = 0
     for o in rows:

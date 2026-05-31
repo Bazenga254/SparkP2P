@@ -138,6 +138,7 @@ class Trader(Base):
 
     # Binance SAPI credentials (encrypted) — required for counterparty filter pushes via EP-7
     binance_api_key    = Column(String(512), nullable=True)   # Encrypted
+    binance_api_key_invalid = Column(Boolean, default=False)  # True if Binance rejects the key (-2008)
     binance_api_secret = Column(String(512), nullable=True)   # Encrypted
 
     # Counterparty filters — pushed to Binance ad via EP-7 when cf_filters_enabled=True

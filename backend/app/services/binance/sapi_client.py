@@ -165,4 +165,8 @@ async def get_user_order_history(api_key: str, api_secret: str, page: int = 1, r
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(url, params=params, headers=headers)
     data = r.json()
+    # Surface Binance auth errors so callers can flag a dead/invalid key
+    code = str(data.get("code")) if isinstance(data, dict) else None
+    if code in ("-2008", "-2014", "-2015"):
+        raise ValueError("INVALID_API_KEY:" + str(data.get("msg") or code))
     return data.get("data") or []

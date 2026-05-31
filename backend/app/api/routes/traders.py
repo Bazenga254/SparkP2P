@@ -163,6 +163,7 @@ class TraderProfileResponse(BaseModel):
     dd_auto_cancel_new: bool = False
     binance_merchant_tier: Optional[str] = None  # 'gold', 'silver', 'bronze'
     binance_api_key_saved: bool = False  # True if API key is stored (never expose the key itself)
+    binance_api_key_invalid: bool = False  # True if Binance rejects the stored key
     cf_filters_enabled:        bool  = False
     cf_completion_rate_min:    float = 0.0
     cf_completion_rate_window: int   = 2
@@ -605,6 +606,7 @@ async def get_profile(
         dd_auto_cancel_new=bool(trader.dd_auto_cancel_new),
         binance_merchant_tier=trader.binance_merchant_tier or 'bronze',
         binance_api_key_saved=bool(trader.binance_api_key),
+        binance_api_key_invalid=bool(trader.binance_api_key_invalid),
         cf_filters_enabled=bool(trader.cf_filters_enabled),
         cf_completion_rate_min=trader.cf_completion_rate_min or 0.0,
         cf_completion_rate_window=trader.cf_completion_rate_window or 2,
@@ -1117,6 +1119,7 @@ async def save_binance_api_key(
 
     trader.binance_api_key    = encrypt_data(data.api_key.strip())
     trader.binance_api_secret = encrypt_data(data.api_secret.strip())
+    trader.binance_api_key_invalid = False  # freshly verified key is valid
     await db.commit()
 
     return {"status": "saved", "ads_found": len(ads), "merchant_capable": merchant_capable}

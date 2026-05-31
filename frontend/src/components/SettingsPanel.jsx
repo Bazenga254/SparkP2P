@@ -944,7 +944,10 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ color: '#f3f4f6', fontWeight: 700, fontSize: 15 }}>Binance API Key</span>
-                  {profile?.binance_api_key_saved && (
+                  {profile?.binance_api_key_saved && profile?.binance_api_key_invalid && (
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(239,68,68,0.15)', color: '#ef4444', letterSpacing: '0.4px', border: '1px solid rgba(239,68,68,0.4)' }}>⚠ INVALID — RECONNECT</span>
+                  )}
+                  {profile?.binance_api_key_saved && !profile?.binance_api_key_invalid && (
                     <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(16,185,129,0.15)', color: '#10b981', letterSpacing: '0.4px' }}>✓ SAVED</span>
                   )}
                   {profile?.binance_api_key_saved && profile?.binance_merchant_tier === 'gold' && (
@@ -954,10 +957,12 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                     <span title="Counterparty filters require a Binance Gold Merchant account" style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(107,114,128,0.15)', color: '#9ca3af', letterSpacing: '0.4px', border: '1px solid rgba(107,114,128,0.25)', cursor: 'help' }}>STANDARD ACCOUNT</span>
                   )}
                 </div>
-                <div style={{ color: '#9ca3af', fontSize: 12, marginTop: 2 }}>
-                  {profile?.binance_api_key_saved && profile?.binance_merchant_tier !== 'gold'
-                    ? 'Counterparty filters require a Binance Gold Merchant account'
-                    : 'Enables counterparty filters on your live ads'}
+                <div style={{ color: profile?.binance_api_key_invalid ? '#ef4444' : '#9ca3af', fontSize: 12, marginTop: 2 }}>
+                  {profile?.binance_api_key_invalid
+                    ? 'Binance rejected this key — it was likely regenerated/removed. Paste a fresh key below and Verify & Save.'
+                    : (profile?.binance_api_key_saved && profile?.binance_merchant_tier !== 'gold'
+                      ? 'Counterparty filters require a Binance Gold Merchant account'
+                      : 'Enables counterparty filters on your live ads')}
                 </div>
               </div>
             </div>
