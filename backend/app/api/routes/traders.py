@@ -2837,23 +2837,10 @@ async def get_today_stats(
     currency_counts = Counter(o.crypto_currency for o in orders_today if o.crypto_currency)
     dominant_currency = currency_counts.most_common(1)[0][0] if currency_counts else 'USDT'
 
-    # Gross profit = KES received (sell credits) - KES paid (buy debits) since midnight EAT
-    txn_q = await db.execute(
-        select(WalletTransaction).where(
-            WalletTransaction.trader_id == trader.id,
-            WalletTransaction.transaction_type.in_([
-                TransactionType.SELL_CREDIT,
-                TransactionType.BUY_DEBIT,
-            ]),
-            WalletTransaction.created_at >= midnight_utc,
-        )
-    )
-    txns_today = txn_q.scalars().all()
-
-    sell_credits = sum(t.amount for t in txns_today if t.transaction_type == TransactionType.SELL_CREDIT)
-    buy_debits = sum(t.amount for t in txns_today if t.transaction_type == TransactionType.BUY_DEBIT)
-    # buy_debit amounts are negative; gross profit = net KES flow from trading
-    gross_profit = sell_credits + buy_debits
+    # Gross profit + avg rates from the central Orders table (same calc as the Profit Breakdown)
+    from app.services.tracking import compute_pnl
+    _pnl = compute_pnl(orders_today)
+    gross_profit = _pnl["gross_profit"]
 
     # Treat every stats poll as a web-presence heartbeat so admin can see the trader is online
     trader.last_login = datetime.now(timezone.utc)
@@ -2864,6 +2851,10 @@ async def get_today_stats(
         "usdt_traded": round(usdt_traded, 4),
         "kes_volume": round(kes_volume, 2),
         "gross_profit": round(gross_profit, 2),
+        "avg_buy_rate": _pnl["buy"]["avg_rate"],
+        "avg_sell_rate": _pnl["sell"]["avg_rate"],
+        "fees_kes": _pnl["fees_kes"],
+        "net_profit": _pnl["net_profit"],
         "reset_at": midnight_utc.isoformat(),
         "dominant_currency": dominant_currency,
     }
