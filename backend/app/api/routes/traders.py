@@ -479,8 +479,8 @@ async def profit_breakdown(
 
     todays = []
     try:
-        for page in range(1, 6):  # up to 500 recent orders
-            rows = await get_user_order_history(api_key, api_secret, page=page, rows=100)
+        for page in range(1, 21):  # page size is 50; stop at first pre-today order
+            rows = await get_user_order_history(api_key, api_secret, page=page, rows=50)
             if not rows:
                 break
             stop = False
@@ -490,7 +490,7 @@ async def profit_breakdown(
                     stop = True
                     continue
                 todays.append(o)
-            if stop or len(rows) < 100:
+            if stop:
                 break
     except Exception as e:
         logger.warning("profit-breakdown fetch failed: %s", e)
@@ -529,13 +529,11 @@ async def profit_breakdown(
                   (datetime.now(timezone.utc) - trader.live_alltime_at).total_seconds() > 1800)
         if _stale:
             all_orders = []
-            for _pg in range(1, 16):  # cap ~1500 most recent orders
-                _rows = await get_user_order_history(api_key, api_secret, page=_pg, rows=100)
+            for _pg in range(1, 31):  # page size 50; cap ~1500 orders
+                _rows = await get_user_order_history(api_key, api_secret, page=_pg, rows=50)
                 if not _rows:
                     break
                 all_orders.extend(_rows)
-                if len(_rows) < 100:
-                    break
             at_done = [o for o in all_orders if (o.get("orderStatus") or "") == "COMPLETED"]
             trader.live_alltime_volume = round(sum(num(o.get("totalPrice")) for o in at_done), 2)
             trader.live_alltime_trades = len(at_done)
@@ -579,13 +577,11 @@ async def binance_orders(
 
     raw = []
     try:
-        for page in range(1, 4):  # up to ~300 most recent orders
-            rows = await get_user_order_history(api_key, api_secret, page=page, rows=100)
+        for page in range(1, 13):  # page size 50; up to ~600 recent orders
+            rows = await get_user_order_history(api_key, api_secret, page=page, rows=50)
             if not rows:
                 break
             raw.extend(rows)
-            if len(rows) < 100:
-                break
     except Exception as e:
         logger.warning("binance-orders fetch failed: %s", e)
         return []
