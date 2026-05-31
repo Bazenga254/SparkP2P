@@ -914,6 +914,10 @@ async def update_trading_config(
                 adv_no = ad.get("advNo") or ad.get("adsNo")
                 if not adv_no:
                     continue
+                # Counterparty filters apply ONLY to SELL ads (screening incoming buyers).
+                # Never restrict BUY ads — that would block sellers from trading with us.
+                if (ad.get("tradeType") or "").upper() != "SELL":
+                    continue
                 try:
                     # Binance EP-7: push All-time filter (userAllTradeCountMin window=2)
                     # 30D filter is enforced at bot level — bot sends cancel message if buyer fails
