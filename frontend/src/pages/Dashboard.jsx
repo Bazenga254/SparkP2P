@@ -608,7 +608,7 @@ export default function Dashboard() {
         getProfile(),
         getWallet(),
         getOrderStats(),
-        getOrders({ limit: 20, offset: 0 }),
+        api.get('/traders/binance-orders', { params: { limit: 20, offset: 0 } }),
         getWalletTransactions(50, 'positive'),
         getSessionHealth(),
         getBinanceAccountData(),
@@ -876,9 +876,9 @@ export default function Dashboard() {
         const next = [...prev, entry];
         return next.length > 400 ? next.slice(-400) : next;
       });
-      // Immediately refresh orders when bot detects a new Binance order
+      // Immediately refresh orders when bot detects a new Binance order (real Binance data)
       if ((entry?.message || '').includes('New order detected')) {
-        getOrders({ limit: 20, offset: (ordersPage - 1) * 20 }).then(r => { setOrders(r.data); setOrdersHasMore(r.data.length === 20); }).catch(() => {});
+        api.get('/traders/binance-orders', { params: { limit: 20, offset: (ordersPage - 1) * 20 } }).then(r => { setOrders(r.data); setOrdersHasMore(r.data.length === 20); }).catch(() => {});
       }
     });
   }, []);
