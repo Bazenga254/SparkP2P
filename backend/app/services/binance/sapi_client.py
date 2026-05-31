@@ -150,3 +150,19 @@ async def get_counterparty_statistic(api_key: str, api_secret: str, order_number
     if not (data.get("success") or data.get("code") == "000000"):
         raise ValueError(f"EP-19 error {data.get('code','?')}: {data.get('msg') or data.get('message','unknown')}")
     return data.get("data") or {}
+
+
+async def get_user_order_history(api_key: str, api_secret: str, page: int = 1, rows: int = 100) -> list:
+    """EP-16: GET /sapi/v1/c2c/orderMatch/listUserOrderHistory.
+    Returns completed/cancelled C2C orders (newest first) with rate, amount, fees."""
+    params = _base_params()
+    params["page"] = page
+    params["rows"] = rows
+    params["signature"] = _sign(api_secret, params)
+    base = _RELAY_URL if _RELAY_URL else SAPI_BASE
+    headers = _build_headers(api_key)
+    url = f"{base}/sapi/v1/c2c/orderMatch/listUserOrderHistory"
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(url, params=params, headers=headers)
+    data = r.json()
+    return data.get("data") or []

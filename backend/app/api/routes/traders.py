@@ -449,6 +449,84 @@ async def cf_sync_status(
     }
 
 
+@router.get("/profit-breakdown")
+async def profit_breakdown(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Live daily profit from real Binance order history (EP-16).
+    Gross = USDT sold x (avg sell - avg buy). Fees = actual commission (both sides).
+    Net = Gross - Fees. All KES. Today = EAT (UTC+3)."""
+    if not trader.binance_api_key or not trader.binance_api_secret:
+        return {"available": False, "reason": "no_api_key"}
+    try:
+        from app.core.security import decrypt_data
+        from app.services.binance.sapi_client import get_user_order_history
+        api_key = decrypt_data(trader.binance_api_key)
+        api_secret = decrypt_data(trader.binance_api_secret)
+    except Exception:
+        return {"available": False, "reason": "no_api_key"}
+
+    # Start of today in EAT (UTC+3), as ms epoch
+    now = datetime.now(timezone.utc)
+    eat = now + timedelta(hours=3)
+    eat_midnight = eat.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_ms = int((eat_midnight - timedelta(hours=3)).timestamp() * 1000)
+
+    def num(x):
+        try: return float(x)
+        except: return 0.0
+
+    todays = []
+    try:
+        for page in range(1, 6):  # up to 500 recent orders
+            rows = await get_user_order_history(api_key, api_secret, page=page, rows=100)
+            if not rows:
+                break
+            stop = False
+            for o in rows:
+                ct = int(o.get("createTime") or 0)
+                if ct and ct < today_start_ms:
+                    stop = True
+                    continue
+                todays.append(o)
+            if stop or len(rows) < 100:
+                break
+    except Exception as e:
+        logger.warning("profit-breakdown fetch failed: %s", e)
+        return {"available": False, "reason": "unreachable", "detail": str(e)}
+
+    completed = [o for o in todays if (o.get("orderStatus") or "") == "COMPLETED"]
+    buys = [o for o in completed if (o.get("tradeType") or "").upper() == "BUY"]
+    sells = [o for o in completed if (o.get("tradeType") or "").upper() == "SELL"]
+
+    def side(orders):
+        usdt = sum(num(o.get("amount")) for o in orders)
+        kes = sum(num(o.get("totalPrice")) for o in orders)
+        return {"orders": len(orders), "usdt": round(usdt, 2), "kes": round(kes, 2),
+                "avg_rate": round(kes / usdt, 2) if usdt else 0.0}
+
+    b = side(buys)
+    s = side(sells)
+    spread = round(s["avg_rate"] - b["avg_rate"], 4) if (b["avg_rate"] and s["avg_rate"]) else 0.0
+    gross = round(s["usdt"] * spread, 2) if (b["avg_rate"] and s["usdt"]) else 0.0
+    # Actual Binance fees: commission is in USDT; convert each to KES at that order's rate
+    fees_kes = round(sum(num(o.get("commission")) * num(o.get("unitPrice")) for o in completed), 2)
+    net = round(gross - fees_kes, 2)
+    return {
+        "available": True,
+        "date": eat_midnight.strftime("%Y-%m-%d"),
+        "buy": b,
+        "sell": s,
+        "spread": spread,
+        "spread_pct": round(spread / b["avg_rate"] * 100, 2) if b["avg_rate"] else 0.0,
+        "gross_profit": gross,
+        "fees_kes": fees_kes,
+        "net_profit": net,
+        "tier": trader.binance_merchant_tier or "bronze",
+    }
+
+
 @router.get("/me", response_model=TraderProfileResponse)
 async def get_profile(
     trader: Trader = Depends(get_current_trader),

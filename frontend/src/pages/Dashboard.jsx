@@ -517,6 +517,10 @@ export default function Dashboard() {
   const checkCfSync = async () => {
     try { const r = await api.get('/traders/cf-sync-status'); setCfSync(r.data); } catch { setCfSync(null); }
   };
+  const [profitData, setProfitData] = useState(null); // live daily profit from Binance order history (EP-16)
+  const fetchProfit = async () => {
+    try { const r = await api.get('/traders/profit-breakdown'); if (r.data?.available) setProfitData(r.data); } catch {}
+  };
   const [settingsInitialSection, setSettingsInitialSection] = useState('binance'); // timestamp of last successful config save — prevents stale loadData responses from overwriting the saved value
   const [showPaybill, setShowPaybill] = useState(false);
   const [copied, setCopied] = useState('');
@@ -682,6 +686,13 @@ export default function Dashboard() {
     const ping = () => { api.post('/traders/web-heartbeat').catch(() => {}); };
     ping();
     const id = setInterval(ping, 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Live daily profit from real Binance order history — refresh every 60s on Overview
+  useEffect(() => {
+    fetchProfit();
+    const id = setInterval(fetchProfit, 60000);
     return () => clearInterval(id);
   }, []);
 
@@ -1692,12 +1703,12 @@ export default function Dashboard() {
                   <h3>Buying</h3>
                 </div>
                 <div className="buysell-amount">
-                  <span className="buysell-crypto">{(stats?.today?.buy_crypto || 0).toFixed(2)} {stats?.today?.dominant_currency || 'USDT'}</span>
-                  <span className="buysell-fiat">KES {(stats?.today?.buy_volume || 0).toLocaleString()}</span>
+                  <span className="buysell-crypto">{(profitData?.buy?.usdt ?? stats?.today?.buy_crypto ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDT</span>
+                  <span className="buysell-fiat">KES {(profitData?.buy?.kes ?? stats?.today?.buy_volume ?? 0).toLocaleString()}</span>
                 </div>
                 <div className="buysell-detail">
-                  <div><span>Orders</span><span>{stats?.today?.buy_trades || 0}</span></div>
-                  <div><span>Avg Rate</span><span>KES {stats?.today?.avg_buy_rate || '0.00'}</span></div>
+                  <div><span>Orders</span><span>{profitData?.buy?.orders ?? stats?.today?.buy_trades ?? 0}</span></div>
+                  <div><span>Avg Rate</span><span>KES {(profitData?.buy?.avg_rate ?? stats?.today?.avg_buy_rate ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
                 </div>
                 <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 8, fontSize: 12, color: '#9ca3af' }}>
                   Minimum: <strong style={{ color: '#f59e0b' }}>KES 100,000</strong>
@@ -1711,12 +1722,12 @@ export default function Dashboard() {
                   <h3>Selling</h3>
                 </div>
                 <div className="buysell-amount">
-                  <span className="buysell-crypto">{(stats?.today?.sell_crypto || 0).toFixed(2)} {stats?.today?.dominant_currency || 'USDT'}</span>
-                  <span className="buysell-fiat">KES {(stats?.today?.sell_volume || 0).toLocaleString()}</span>
+                  <span className="buysell-crypto">{(profitData?.sell?.usdt ?? stats?.today?.sell_crypto ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDT</span>
+                  <span className="buysell-fiat">KES {(profitData?.sell?.kes ?? stats?.today?.sell_volume ?? 0).toLocaleString()}</span>
                 </div>
                 <div className="buysell-detail">
-                  <div><span>Orders</span><span>{stats?.today?.sell_trades || 0}</span></div>
-                  <div><span>Avg Rate</span><span>KES {stats?.today?.avg_sell_rate || '0.00'}</span></div>
+                  <div><span>Orders</span><span>{profitData?.sell?.orders ?? stats?.today?.sell_trades ?? 0}</span></div>
+                  <div><span>Avg Rate</span><span>KES {(profitData?.sell?.avg_rate ?? stats?.today?.avg_sell_rate ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
                 </div>
                 <div style={{ borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 8, fontSize: 12, color: '#9ca3af' }}>
                   Minimum: <strong style={{ color: '#10b981' }}>KES 1,000</strong>
@@ -1730,27 +1741,23 @@ export default function Dashboard() {
                   <h3>Profit Breakdown</h3>
                 </div>
                 <div className="profit-amount">
-                  <span className={`big-profit ${(stats?.today?.net_profit || 0) >= 0 ? 'positive' : 'negative'}`}>
-                    KES {(stats?.today?.net_profit || 0).toLocaleString()}
+                  <span className={`big-profit ${(profitData?.net_profit ?? stats?.today?.net_profit ?? 0) >= 0 ? 'positive' : 'negative'}`}>
+                    KES {(profitData?.net_profit ?? stats?.today?.net_profit ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </span>
-                  <span className="profit-label">Net Profit</span>
+                  <span className="profit-label">Net Profit{profitData ? ' · today' : ''}</span>
                 </div>
                 <div className="profit-breakdown">
                   <div className="profit-row spread-row">
                     <span>Spread</span>
-                    <span>KES {stats?.today?.spread || '0.00'} ({stats?.today?.spread_pct || '0.00'}%)</span>
+                    <span>KES {(profitData?.spread ?? stats?.today?.spread ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({(profitData?.spread_pct ?? stats?.today?.spread_pct ?? 0)}%)</span>
                   </div>
                   <div className="profit-row">
                     <span>Gross Profit</span>
-                    <span className="positive">KES {(stats?.today?.gross_profit || 0).toLocaleString()}</span>
+                    <span className="positive">KES {(profitData?.gross_profit ?? stats?.today?.gross_profit ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                   </div>
                   <div className="profit-row fee-row">
-                    <span>SparkP2P Fees</span>
-                    <span>-KES {(stats?.today?.total_fees || 0).toLocaleString()}</span>
-                  </div>
-                  <div className="profit-row fee-row">
-                    <span>Binance Fees ({profile?.binance_merchant_tier || 'bronze'} · KES {stats?.today?.binance_fee_per_trade ?? '0.40'}/trade)</span>
-                    <span>-KES {(stats?.today?.binance_fees || 0).toLocaleString()}</span>
+                    <span>Binance Fees (actual commission)</span>
+                    <span>-KES {(profitData?.fees_kes ?? stats?.today?.binance_fees ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                   </div>
                 </div>
               </div>
