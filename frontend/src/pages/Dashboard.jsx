@@ -513,6 +513,10 @@ export default function Dashboard() {
   const [cfEnabled, setCfEnabled] = useState(false);
   const [cfAllTradesMin, setCfAllTradesMin] = useState('0');
   const [cfAllTradesMinAll, setCfAllTradesMinAll] = useState('0');
+  const [cfSync, setCfSync] = useState(null); // live Binance sync status: { available, synced, expected, binance_values }
+  const checkCfSync = async () => {
+    try { const r = await api.get('/traders/cf-sync-status'); setCfSync(r.data); } catch { setCfSync(null); }
+  };
   const [settingsInitialSection, setSettingsInitialSection] = useState('binance'); // timestamp of last successful config save — prevents stale loadData responses from overwriting the saved value
   const [showPaybill, setShowPaybill] = useState(false);
   const [copied, setCopied] = useState('');
@@ -680,6 +684,11 @@ export default function Dashboard() {
     const id = setInterval(ping, 60000);
     return () => clearInterval(id);
   }, []);
+
+  // Live counterparty-filter sync check when the Configure tab opens
+  useEffect(() => {
+    if (activeTab === 'configure' || showConfigModal) checkCfSync();
+  }, [activeTab, showConfigModal]);
 
   // Refresh orders every 20s so new Binance orders appear automatically
   useEffect(() => {
@@ -2137,10 +2146,12 @@ export default function Dashboard() {
                 onClick={async () => {
                   setSavingConfig(true);
                   try {
-                    await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0 });
+                    const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0 });
                     configSavedAt.current = Date.now();
                     setConfigSaved(true);
                     setTimeout(() => { setConfigSaved(false); }, 1500);
+                    checkCfSync(); // refresh live Binance sync badge
+                    if (res?.data?.warning) alert(res.data.warning);
                   } catch (e) {}
                   setSavingConfig(false);
                 }}
@@ -2241,6 +2252,15 @@ export default function Dashboard() {
                       ? `Last pushed to Binance: ${new Date(profile.cf_last_pushed_at).toLocaleString('en-KE', { dateStyle: 'short', timeStyle: 'short' })}`
                       : 'Filters pushed to all your sell ads on save'}
                   </div>
+                  {cfSync && (cfSync.available ? !cfSync.synced || cfEnabled : cfSync.reason !== 'no_api_key') && (
+                    <div style={{ fontSize: 11, fontWeight: 600, marginTop: 4, color: !cfSync.available ? '#9ca3af' : cfSync.synced ? '#10b981' : '#ef4444' }}>
+                      {!cfSync.available
+                        ? (cfSync.reason === 'no_api_key' ? '' : "⚠ Can't verify with Binance — keep your bot/relay online")
+                        : cfSync.synced
+                          ? '✓ In sync with Binance'
+                          : `⚠ Out of sync — Binance shows ${(cfSync.binance_values || []).join(', ') || '?'} (expected ${cfSync.expected}). Click Save to fix.`}
+                    </div>
+                  )}
                 </div>
                 <div onClick={() => setCfEnabled(v => !v)}
                   style={{ width: 44, height: 24, borderRadius: 12, background: cfEnabled ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0, marginLeft: 20 }}>
@@ -3567,10 +3587,12 @@ export default function Dashboard() {
               onClick={async () => {
                 setSavingConfig(true);
                 try {
-                  await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0 });
+                  const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0 });
                   configSavedAt.current = Date.now();
                   setConfigSaved(true);
                   setTimeout(() => { setConfigSaved(false); if (showConfigModal) setShowConfigModal(false); }, 1500);
+                  checkCfSync(); // refresh live Binance sync badge
+                  if (res?.data?.warning) alert(res.data.warning);
                 } catch (e) {}
                 setSavingConfig(false);
               }}

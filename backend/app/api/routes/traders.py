@@ -419,6 +419,36 @@ async def web_heartbeat(
     return {"ok": True}
 
 
+@router.get("/cf-sync-status")
+async def cf_sync_status(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Live check: read the merchant's SELL ad filters from Binance and compare to the
+    saved DB value, so the UI can show whether filters are actually in sync with Binance."""
+    if not trader.binance_api_key or not trader.binance_api_secret:
+        return {"available": False, "reason": "no_api_key"}
+    expected = int((trader.cf_all_trades_min_all or 0) if trader.cf_filters_enabled else 0)
+    try:
+        from app.core.security import decrypt_data
+        from app.services.binance.sapi_client import get_merchant_ads
+        api_key = decrypt_data(trader.binance_api_key)
+        api_secret = decrypt_data(trader.binance_api_secret)
+        ads = await get_merchant_ads(api_key, api_secret)
+    except Exception as e:
+        # Relay/bot offline or Binance unreachable — can't confirm
+        return {"available": False, "reason": "unreachable", "expected": expected, "detail": str(e)}
+    sell_vals = [int(a.get("userAllTradeCountMin") or 0) for a in ads if (a.get("tradeType") or "").upper() == "SELL"]
+    synced = len(sell_vals) > 0 and all(v == expected for v in sell_vals)
+    return {
+        "available": True,
+        "synced": synced,
+        "expected": expected,
+        "binance_values": sell_vals,
+        "sell_ad_count": len(sell_vals),
+    }
+
+
 @router.get("/me", response_model=TraderProfileResponse)
 async def get_profile(
     trader: Trader = Depends(get_current_trader),
@@ -935,10 +965,33 @@ async def update_trading_config(
                 except Exception as ad_err:
                     logger.warning("Skipping ad %s: %s", adv_no, ad_err)
                     push_warnings.append(f"ad {adv_no}: {ad_err}")
+            # Verify-after-push: read the ads back and confirm Binance actually has our value
+            synced = True
+            mismatch = None
+            try:
+                expected = int((trader.cf_all_trades_min_all or 0) if trader.cf_filters_enabled else 0)
+                verify_ads = await get_merchant_ads(api_key, api_secret)
+                for vad in verify_ads:
+                    if (vad.get("tradeType") or "").upper() != "SELL":
+                        continue
+                    actual = int(vad.get("userAllTradeCountMin") or 0)
+                    if actual != expected:
+                        synced = False
+                        mismatch = (actual, expected)
+                        break
+            except Exception as ve:
+                synced = False
+                logger.warning("CF verify-after-push failed: %s", ve)
             if pushed > 0:
                 trader.cf_last_pushed_at = datetime.now(timezone.utc)
                 await db.commit()
-            return {"status": "updated", "filters_pushed": pushed, "filters_skipped": skipped}
+            if synced and not push_warnings:
+                return {"status": "updated", "filters_pushed": pushed, "synced": True}
+            if mismatch:
+                return {"status": "updated", "filters_pushed": pushed, "synced": False,
+                        "warning": f"Saved, but Binance still shows {mismatch[0]} (expected {mismatch[1]}). Your bot/relay may be offline — keep it running and click Save again."}
+            return {"status": "updated", "filters_pushed": pushed, "synced": False,
+                    "warning": "Saved, but could not confirm the change reached Binance. Keep your bot running and click Save again."}
         except Exception as e:
             logger.warning("Failed to push counterparty filters to Binance: %s", e)
             push_warnings.append(str(e))
