@@ -2826,14 +2826,14 @@ export default function Dashboard() {
                         </div>
                         <span style={{ background: `rgba(${p.glow},0.12)`, color: p.accent, fontSize: 10, fontWeight: 700, padding: '4px 9px', borderRadius: 6, whiteSpace: 'nowrap', flexShrink: 0 }}>Save {p.savings}%</span>
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 14 }}>
-                        <div>
-                          <span style={{ fontSize: 42, fontWeight: 900, color: '#fff', lineHeight: 1, letterSpacing: '-2px' }}>{p.credits.toLocaleString()}</span>
-                          <span style={{ fontSize: 14, color: '#6b7280', marginLeft: 6 }}>credits</span>
+                      <div style={{ marginBottom: 14 }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 40, fontWeight: 900, color: '#fff', lineHeight: 1.1, letterSpacing: '-1px' }}>{p.credits.toLocaleString()}</span>
+                          <span style={{ fontSize: 14, color: '#6b7280' }}>credits</span>
                         </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ color: p.accent, fontWeight: 800, fontSize: 22 }}>KES {p.amount.toLocaleString()}</div>
-                          <div style={{ color: '#4b5563', fontSize: 11 }}>KES {p.rate}/credit</div>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                          <span style={{ color: p.accent, fontWeight: 800, fontSize: 20 }}>KES {p.amount.toLocaleString()}</span>
+                          <span style={{ color: '#4b5563', fontSize: 11 }}>KES {p.rate}/credit</span>
                         </div>
                       </div>
                       <div style={{ borderTop: '1px dashed #1f2937', marginBottom: 12 }} />
