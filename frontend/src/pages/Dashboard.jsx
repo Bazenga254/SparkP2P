@@ -150,11 +150,13 @@ function SpreadCalculator({ orderStats }) {
 
   // Cash-out analysis — use real 24h gross profit as base, fall back to simulated spread profit
   const realProfit = todayStats?.gross_profit ?? null;
-  const baseProfit = realProfit !== null ? realProfit : grossProfit;
-  const wdAmt = parseFloat(withdrawAmount) || (baseProfit > 0 ? baseProfit : vol);
+  const baseProfit = realProfit !== null ? realProfit : grossProfit;     // gross (before any fees)
+  const binanceFees = todayStats?.fees_kes ?? 0;                          // actual Binance commission (KES)
+  const afterBinance = baseProfit - binanceFees;                         // net after Binance fees
+  const wdAmt = parseFloat(withdrawAmount) || (afterBinance > 0 ? afterBinance : vol);
   const wdFee = getWithdrawalFee(withdrawMethod, wdAmt);
   const wdReceived = wdAmt - wdFee;
-  const netProfit = baseProfit - wdFee;
+  const netProfit = afterBinance - wdFee;                                 // net after Binance + withdrawal fees
   const netProfitable = netProfit > 0;
   const netPct = baseProfit > 0 ? (netProfit / baseProfit) * 100 : 0;
   const feePct = wdAmt > 0 ? (wdFee / wdAmt) * 100 : 0;
@@ -354,6 +356,15 @@ function SpreadCalculator({ orderStats }) {
               <div style={{ fontSize: 16, fontWeight: 700, color: '#10b981' }}>+ {fmtKESFee(baseProfit)}</div>
               <div style={{ fontSize: 11, color: '#6b7280' }}>{realProfit !== null ? 'from completed trades' : 'from spread × volume'}</div>
             </div>
+
+            {/* Card 1b — Binance Fees (actual commission) */}
+            {realProfit !== null && (
+              <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 11, color: '#9ca3af' }}>Binance Fees</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>− {fmtKESFee(binanceFees)}</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>actual commission</div>
+              </div>
+            )}
 
             {/* Card 2 — Withdrawal Fee */}
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
