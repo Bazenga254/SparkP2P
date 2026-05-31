@@ -322,7 +322,7 @@ function SpreadCalculator({ orderStats }) {
           </div>
           <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 12 }}>
             {realProfit !== null
-              ? `Today's gross profit from ${todayStats.trades_count} trade${todayStats.trades_count !== 1 ? 's' : ''} (${fmtKES(todayStats.kes_volume)} volume) — minus your withdrawal fee.`
+              ? `Today's gross profit from ${todayStats.trades_count} trade${todayStats.trades_count !== 1 ? 's' : ''} (${fmtKES(todayStats.kes_volume)} volume) — minus Binance commission and your withdrawal fee.`
               : 'Set your buy/sell prices above to see a profit estimate.'}
           </div>
 
