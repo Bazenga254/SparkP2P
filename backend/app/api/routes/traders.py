@@ -523,6 +523,26 @@ async def profit_breakdown(
         await db.commit()
     except Exception as _se:
         logger.warning("profit snapshot cache failed: %s", _se)
+    # All-time live volume/trades for admin Top Traders — recompute at most every 30 min
+    try:
+        _stale = (trader.live_alltime_at is None or
+                  (datetime.now(timezone.utc) - trader.live_alltime_at).total_seconds() > 1800)
+        if _stale:
+            all_orders = []
+            for _pg in range(1, 16):  # cap ~1500 most recent orders
+                _rows = await get_user_order_history(api_key, api_secret, page=_pg, rows=100)
+                if not _rows:
+                    break
+                all_orders.extend(_rows)
+                if len(_rows) < 100:
+                    break
+            at_done = [o for o in all_orders if (o.get("orderStatus") or "") == "COMPLETED"]
+            trader.live_alltime_volume = round(sum(num(o.get("totalPrice")) for o in at_done), 2)
+            trader.live_alltime_trades = len(at_done)
+            trader.live_alltime_at = datetime.now(timezone.utc)
+            await db.commit()
+    except Exception as _ae:
+        logger.warning("all-time live stats failed: %s", _ae)
     return {
         "available": True,
         "date": eat_midnight.strftime("%Y-%m-%d"),

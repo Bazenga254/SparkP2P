@@ -181,6 +181,9 @@ class Trader(Base):
     live_today_trades     = Column(Integer, default=0)
     live_stats_date       = Column(DateTime(timezone=True), nullable=True)
     live_stats_at         = Column(DateTime(timezone=True), nullable=True)
+    live_alltime_volume   = Column(Numeric(18, 2), default=0)
+    live_alltime_trades   = Column(Integer, default=0)
+    live_alltime_at       = Column(DateTime(timezone=True), nullable=True)
     password_changed_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

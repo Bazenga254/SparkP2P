@@ -1456,15 +1456,20 @@ async def admin_analytics(
 
     # Top 5 traders by volume — computed from actual completed orders
     from sqlalchemy import and_ as sql_and
+    # Prefer cached real Binance all-time figures (live_alltime_*) when computed; else DB orders.
+    _vol_expr = case((Trader.live_alltime_at.isnot(None), Trader.live_alltime_volume),
+                     else_=func.coalesce(func.sum(Order.fiat_amount), 0))
+    _trd_expr = case((Trader.live_alltime_at.isnot(None), Trader.live_alltime_trades),
+                     else_=func.count(Order.id))
     top_q = (
         select(
             Trader.full_name,
-            func.count(Order.id).label("trades"),
-            func.coalesce(func.sum(Order.fiat_amount), 0).label("volume"),
+            _trd_expr.label("trades"),
+            _vol_expr.label("volume"),
         )
         .join(Order, sql_and(Order.trader_id == Trader.id, Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED])), isouter=True)
-        .group_by(Trader.id, Trader.full_name)
-        .order_by(func.coalesce(func.sum(Order.fiat_amount), 0).desc())
+        .group_by(Trader.id, Trader.full_name, Trader.live_alltime_at, Trader.live_alltime_volume, Trader.live_alltime_trades)
+        .order_by(_vol_expr.desc())
         .limit(5)
     )
     r = await db.execute(top_q)
