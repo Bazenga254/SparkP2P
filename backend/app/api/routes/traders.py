@@ -987,11 +987,18 @@ async def update_trading_config(
                 await db.commit()
             if synced and not push_warnings:
                 return {"status": "updated", "filters_pushed": pushed, "synced": True}
+            warns = " ".join(push_warnings)
+            # 187040 = Binance rejects editing an ad with no tradable USDT inventory
+            if "187040" in warns:
+                return {"status": "updated", "filters_pushed": pushed, "synced": False, "reason": "no_usdt",
+                        "warning": "Couldn't apply the filter — your sell ad has no USDT available to trade. "
+                                   "Top up your sell ad's USDT on Binance, then click Save again."}
             if mismatch:
                 return {"status": "updated", "filters_pushed": pushed, "synced": False,
-                        "warning": f"Saved, but Binance still shows {mismatch[0]} (expected {mismatch[1]}). Your bot/relay may be offline — keep it running and click Save again."}
+                        "warning": f"Saved, but Binance still shows {mismatch[0]} (expected {mismatch[1]}). "
+                                   + (f"Binance rejected the change: {warns}" if warns else "Your bot/relay may be offline — keep it running and click Save again.")}
             return {"status": "updated", "filters_pushed": pushed, "synced": False,
-                    "warning": "Saved, but could not confirm the change reached Binance. Keep your bot running and click Save again."}
+                    "warning": (f"Saved, but Binance rejected the change: {warns}" if warns else "Saved, but could not confirm the change reached Binance. Keep your bot running and click Save again.")}
         except Exception as e:
             logger.warning("Failed to push counterparty filters to Binance: %s", e)
             push_warnings.append(str(e))
