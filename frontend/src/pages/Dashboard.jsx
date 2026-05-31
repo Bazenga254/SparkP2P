@@ -701,24 +701,21 @@ export default function Dashboard() {
     if (activeTab === 'configure' || showConfigModal) checkCfSync();
   }, [activeTab, showConfigModal]);
 
-  // Refresh orders every 20s so new Binance orders appear automatically
+  // Orders tab — load REAL Binance order history (EP-16), with filter + pagination, refresh 20s
   useEffect(() => {
-    const id = setInterval(async () => {
+    if (activeTab !== 'orders') return;
+    const side = ordersFilter === 'all' ? '' : ordersFilter;
+    const load = async () => {
       try {
-        const res = await getOrders({ limit: 20, offset: (ordersPage - 1) * 20 });
+        const res = await api.get('/traders/binance-orders', { params: { limit: 20, offset: (ordersPage - 1) * 20, side } });
         setOrders(res.data);
         setOrdersHasMore(res.data.length === 20);
       } catch (_) {}
-    }, 20000);
+    };
+    load();
+    const id = setInterval(load, 20000);
     return () => clearInterval(id);
-  }, [ordersPage]);
-
-  useEffect(() => {
-    if (ordersPage === 1) return; // page 1 already loaded by loadData
-    getOrders({ limit: 20, offset: (ordersPage - 1) * 20 })
-      .then(res => { setOrders(res.data); setOrdersHasMore(res.data.length === 20); })
-      .catch(() => {});
-  }, [ordersPage]);
+  }, [activeTab, ordersFilter, ordersPage]);
 
   const [setupMissing, setSetupMissing] = useState([]);
   const [setupDismissed, setSetupDismissed] = useState(false);
@@ -1912,22 +1909,15 @@ export default function Dashboard() {
         )}
 
         {activeTab === 'orders' && (() => {
-          const loadFiltered = async (filter, page) => {
-            const side = filter === 'incoming' ? 'sell' : filter === 'outgoing' ? 'buy' : undefined;
-            const res = await getOrders({ limit: 20, offset: (page - 1) * 20, ...(side ? { side } : {}) });
-            setOrders(res.data);
-            setOrdersHasMore(res.data.length === 20);
-          };
-
+          // Fetching is handled by the binance-orders effect (keyed on filter/page);
+          // these handlers just update state and the effect reloads.
           const handleFilterChange = (f) => {
             setOrdersFilter(f);
             setOrdersPage(1);
-            loadFiltered(f, 1);
           };
 
           const handlePageChange = (p) => {
             setOrdersPage(p);
-            loadFiltered(ordersFilter, p);
           };
 
           const incomingCount = orders.filter(o => o.side === 'sell').length;
@@ -1986,18 +1976,20 @@ export default function Dashboard() {
                             {isIncoming ? '↓ Incoming' : '↑ Outgoing'}
                           </span>
                         </td>
-                        <td style={{ fontWeight: 600 }}>KES {order.fiat_amount.toLocaleString()}</td>
+                        <td style={{ fontWeight: 600 }}>KES {(order.fiat_amount || 0).toLocaleString()}</td>
                         <td>{order.crypto_amount} {order.crypto_currency}</td>
                         <td style={{ color: '#9ca3af' }}>{order.exchange_rate}</td>
                         <td style={{ color: getStatusColor(order.status) }}>
-                          {order.status.replace(/_/g, ' ')}
+                          {(order.status || '').replace(/_/g, ' ')}
                         </td>
                         <td className="mono" style={{ fontSize: 12 }}>{order.account_reference || '—'}</td>
                         <td style={{ fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap' }}>{fmtDateEAT(order.created_at)}</td>
                         <td style={{ fontVariantNumeric: 'tabular-nums', color: overdue ? '#f97316' : live ? '#facc15' : '#9ca3af', fontWeight: live ? 600 : 400, whiteSpace: 'nowrap' }}>
-                          {overdue && <span title="Binance timer expired" style={{ marginRight: 4 }}>⚠️</span>}
-                          {formatDuration(secs)}
-                          {live && <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.6 }}>●</span>}
+                          {order._binance ? '—' : (<>
+                            {overdue && <span title="Binance timer expired" style={{ marginRight: 4 }}>⚠️</span>}
+                            {formatDuration(secs)}
+                            {live && <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.6 }}>●</span>}
+                          </>)}
                         </td>
                       </tr>
                     );

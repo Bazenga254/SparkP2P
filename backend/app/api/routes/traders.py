@@ -537,6 +537,78 @@ async def profit_breakdown(
     }
 
 
+@router.get("/binance-orders")
+async def binance_orders(
+    limit: int = 20,
+    offset: int = 0,
+    side: str = "",
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Real Binance C2C order history (EP-16), mapped to the Orders-page shape.
+    side: '' all | 'incoming' (sell) | 'outgoing' (buy). Newest first."""
+    if not trader.binance_api_key or not trader.binance_api_secret:
+        return []
+    try:
+        from app.core.security import decrypt_data
+        from app.services.binance.sapi_client import get_user_order_history
+        api_key = decrypt_data(trader.binance_api_key)
+        api_secret = decrypt_data(trader.binance_api_secret)
+    except Exception:
+        return []
+
+    raw = []
+    try:
+        for page in range(1, 4):  # up to ~300 most recent orders
+            rows = await get_user_order_history(api_key, api_secret, page=page, rows=100)
+            if not rows:
+                break
+            raw.extend(rows)
+            if len(rows) < 100:
+                break
+    except Exception as e:
+        logger.warning("binance-orders fetch failed: %s", e)
+        return []
+
+    STATUS_MAP = {
+        "COMPLETED": "completed",
+        "CANCELLED": "cancelled",
+        "CANCELLED_BY_SYSTEM": "cancelled",
+        "TRADING": "pending",
+        "BUYER_PAYED": "payment_received",
+        "DISTRIBUTING": "releasing",
+        "IN_APPEAL": "disputed",
+    }
+    mapped = []
+    for o in raw:
+        tt = (o.get("tradeType") or "").upper()
+        is_sell = tt == "SELL"
+        ct = int(o.get("createTime") or 0)
+        created_iso = (
+            datetime.fromtimestamp(ct / 1000, tz=timezone.utc).isoformat() if ct else None
+        )
+        mapped.append({
+            "id": o.get("orderNumber"),
+            "side": "sell" if is_sell else "buy",
+            "fiat_amount": float(o.get("totalPrice") or 0),
+            "crypto_amount": float(o.get("amount") or 0),
+            "crypto_currency": o.get("asset") or "USDT",
+            "exchange_rate": float(o.get("unitPrice") or 0),
+            "status": STATUS_MAP.get(o.get("orderStatus") or "", (o.get("orderStatus") or "").lower()),
+            "account_reference": o.get("orderNumber"),
+            "counterparty": o.get("counterPartNickName"),
+            "created_at": created_iso,
+            "_binance": True,
+        })
+
+    if side == "incoming":
+        mapped = [m for m in mapped if m["side"] == "sell"]
+    elif side == "outgoing":
+        mapped = [m for m in mapped if m["side"] == "buy"]
+
+    return mapped[offset:offset + limit]
+
+
 @router.get("/me", response_model=TraderProfileResponse)
 async def get_profile(
     trader: Trader = Depends(get_current_trader),
