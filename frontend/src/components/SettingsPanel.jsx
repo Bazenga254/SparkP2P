@@ -745,8 +745,8 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
             </div>
           )}
 
-          {/* 3-col connection cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+          {/* 3-col connection cards — wrap to 1-2 cols on mobile */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
 
             {/* Binance account */}
             <div className="card">
