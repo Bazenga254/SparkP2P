@@ -120,6 +120,22 @@ async def admin_dashboard(
     )
     today_volume = float(result.scalar() or 0)
 
+    # Real Binance "today" figures from the per-trader live cache (updated when each
+    # trader dashboard loads). Prefer these so admin reflects actual Binance trading.
+    res_live = await db.execute(
+        select(
+            func.coalesce(func.sum(Trader.live_today_trades), 0),
+            func.coalesce(func.sum(Trader.live_today_volume), 0),
+            func.coalesce(func.sum(Trader.live_today_net_profit), 0),
+        ).where(Trader.live_stats_at >= today_start)
+    )
+    _lt, _lv, _ln = res_live.one()
+    live_trades = int(_lt or 0)
+    if live_trades > 0:
+        today_orders = live_trades
+        completed_today = live_trades
+        today_volume = float(_lv or 0)
+
     # Today's subscription revenue
     from app.models.subscription import Subscription as _Sub, SubscriptionStatus as _SubStatus
     result = await db.execute(
