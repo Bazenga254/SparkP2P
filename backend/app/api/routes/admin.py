@@ -120,22 +120,6 @@ async def admin_dashboard(
     )
     today_volume = float(result.scalar() or 0)
 
-    # Real Binance "today" figures from the per-trader live cache (updated when each
-    # trader dashboard loads). Prefer these so admin reflects actual Binance trading.
-    res_live = await db.execute(
-        select(
-            func.coalesce(func.sum(Trader.live_today_trades), 0),
-            func.coalesce(func.sum(Trader.live_today_volume), 0),
-            func.coalesce(func.sum(Trader.live_today_net_profit), 0),
-        ).where(Trader.live_stats_at >= today_start)
-    )
-    _lt, _lv, _ln = res_live.one()
-    live_trades = int(_lt or 0)
-    if live_trades > 0:
-        today_orders = live_trades
-        completed_today = live_trades
-        today_volume = float(_lv or 0)
-
     # Today's subscription revenue
     from app.models.subscription import Subscription as _Sub, SubscriptionStatus as _SubStatus
     result = await db.execute(
@@ -1456,20 +1440,15 @@ async def admin_analytics(
 
     # Top 5 traders by volume — computed from actual completed orders
     from sqlalchemy import and_ as sql_and
-    # Prefer cached real Binance all-time figures (live_alltime_*) when computed; else DB orders.
-    _vol_expr = case((Trader.live_alltime_at.isnot(None), Trader.live_alltime_volume),
-                     else_=func.coalesce(func.sum(Order.fiat_amount), 0))
-    _trd_expr = case((Trader.live_alltime_at.isnot(None), Trader.live_alltime_trades),
-                     else_=func.count(Order.id))
     top_q = (
         select(
             Trader.full_name,
-            _trd_expr.label("trades"),
-            _vol_expr.label("volume"),
+            func.count(Order.id).label("trades"),
+            func.coalesce(func.sum(Order.fiat_amount), 0).label("volume"),
         )
         .join(Order, sql_and(Order.trader_id == Trader.id, Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED])), isouter=True)
-        .group_by(Trader.id, Trader.full_name, Trader.live_alltime_at, Trader.live_alltime_volume, Trader.live_alltime_trades)
-        .order_by(_vol_expr.desc())
+        .group_by(Trader.id, Trader.full_name)
+        .order_by(func.coalesce(func.sum(Order.fiat_amount), 0).desc())
         .limit(5)
     )
     r = await db.execute(top_q)

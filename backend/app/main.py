@@ -472,6 +472,9 @@ async def lifespan(app: FastAPI):
     batch_monitor_task = asyncio.create_task(batch_monitor())
     # Start midnight trade token reimbursement scheduler
     token_reimburse_task = asyncio.create_task(token_reimbursement_scheduler())
+    # Start while-online order tracking poller (every 30s, all online traders)
+    from app.services.tracking import tracking_poller
+    tracking_task = asyncio.create_task(tracking_poller())
     yield
     # Shutdown
     order_poller.stop()

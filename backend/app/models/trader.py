@@ -2,7 +2,7 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, Integer, String, Boolean, Float, Enum, DateTime, Text, JSON, Numeric
+    Column, Integer, String, Boolean, Float, Enum, DateTime, Text, JSON, Numeric, BigInteger
 )
 from app.core.database import Base
 
@@ -41,6 +41,9 @@ class Trader(Base):
     google_id = Column(String(100), nullable=True, default="")
     binance_connected = Column(Boolean, default=False)
     last_extension_sync = Column(DateTime(timezone=True), nullable=True)
+    tracking_started_at = Column(DateTime(timezone=True), nullable=True)  # bot first activated
+    tracking_high_water = Column(BigInteger, nullable=True)  # ms createTime of last counted order
+    tracking_last_poll_at = Column(DateTime(timezone=True), nullable=True)
     binance_fund_password = Column(String(512), nullable=True)  # Encrypted
     binance_verify_method = Column(String(20), default="none")  # none, totp, fund_password, manual
     gmail_email = Column(String(255), nullable=True)           # Gmail for OTP scanning

@@ -454,103 +454,25 @@ async def profit_breakdown(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Live daily profit from real Binance order history (EP-16).
-    Gross = USDT sold x (avg sell - avg buy). Fees = actual commission (both sides).
-    Net = Gross - Fees. All KES. Today = EAT (UTC+3)."""
-    if not trader.binance_api_key or not trader.binance_api_secret:
-        return {"available": False, "reason": "no_api_key"}
-    try:
-        from app.core.security import decrypt_data
-        from app.services.binance.sapi_client import get_user_order_history
-        api_key = decrypt_data(trader.binance_api_key)
-        api_secret = decrypt_data(trader.binance_api_secret)
-    except Exception:
-        return {"available": False, "reason": "no_api_key"}
-
-    # Start of today in EAT (UTC+3), as ms epoch
+    # P and L for today from the central Orders table (orders tracked while bot online).
+    # Centralized: admin reads the same Orders so figures always match.
+    from app.models.order import Order, OrderStatus
+    from app.services.tracking import compute_pnl
     now = datetime.now(timezone.utc)
-    eat = now + timedelta(hours=3)
-    eat_midnight = eat.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_start_ms = int((eat_midnight - timedelta(hours=3)).timestamp() * 1000)
-
-    def num(x):
-        try: return float(x)
-        except: return 0.0
-
-    todays = []
-    try:
-        for page in range(1, 21):  # page size is 50; stop at first pre-today order
-            rows = await get_user_order_history(api_key, api_secret, page=page, rows=50)
-            if not rows:
-                break
-            stop = False
-            for o in rows:
-                ct = int(o.get("createTime") or 0)
-                if ct and ct < today_start_ms:
-                    stop = True
-                    continue
-                todays.append(o)
-            if stop:
-                break
-    except Exception as e:
-        logger.warning("profit-breakdown fetch failed: %s", e)
-        return {"available": False, "reason": "unreachable", "detail": str(e)}
-
-    completed = [o for o in todays if (o.get("orderStatus") or "") == "COMPLETED"]
-    buys = [o for o in completed if (o.get("tradeType") or "").upper() == "BUY"]
-    sells = [o for o in completed if (o.get("tradeType") or "").upper() == "SELL"]
-
-    def side(orders):
-        usdt = sum(num(o.get("amount")) for o in orders)
-        kes = sum(num(o.get("totalPrice")) for o in orders)
-        return {"orders": len(orders), "usdt": round(usdt, 2), "kes": round(kes, 2),
-                "avg_rate": round(kes / usdt, 2) if usdt else 0.0}
-
-    b = side(buys)
-    s = side(sells)
-    spread = round(s["avg_rate"] - b["avg_rate"], 4) if (b["avg_rate"] and s["avg_rate"]) else 0.0
-    gross = round(s["usdt"] * spread, 2) if (b["avg_rate"] and s["usdt"]) else 0.0
-    # Actual Binance fees: commission is in USDT; convert each to KES at that order's rate
-    fees_kes = round(sum(num(o.get("commission")) * num(o.get("unitPrice")) for o in completed), 2)
-    net = round(gross - fees_kes, 2)
-    # Cache today's live stats on the trader so the admin can track real Binance figures
-    try:
-        trader.live_today_net_profit = net
-        trader.live_today_volume = round(b["kes"] + s["kes"], 2)
-        trader.live_today_trades = b["orders"] + s["orders"]
-        trader.live_stats_date = eat_midnight
-        trader.live_stats_at = datetime.now(timezone.utc)
-        await db.commit()
-    except Exception as _se:
-        logger.warning("profit snapshot cache failed: %s", _se)
-    # All-time live volume/trades for admin Top Traders — recompute at most every 30 min
-    try:
-        _stale = (trader.live_alltime_at is None or
-                  (datetime.now(timezone.utc) - trader.live_alltime_at).total_seconds() > 1800)
-        if _stale:
-            all_orders = []
-            for _pg in range(1, 31):  # page size 50; cap ~1500 orders
-                _rows = await get_user_order_history(api_key, api_secret, page=_pg, rows=50)
-                if not _rows:
-                    break
-                all_orders.extend(_rows)
-            at_done = [o for o in all_orders if (o.get("orderStatus") or "") == "COMPLETED"]
-            trader.live_alltime_volume = round(sum(num(o.get("totalPrice")) for o in at_done), 2)
-            trader.live_alltime_trades = len(at_done)
-            trader.live_alltime_at = datetime.now(timezone.utc)
-            await db.commit()
-    except Exception as _ae:
-        logger.warning("all-time live stats failed: %s", _ae)
+    eat_midnight = (now + timedelta(hours=3)).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = eat_midnight - timedelta(hours=3)
+    rows = (await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+            Order.created_at >= today_start,
+        )
+    )).scalars().all()
+    pnl = compute_pnl(rows)
     return {
         "available": True,
         "date": eat_midnight.strftime("%Y-%m-%d"),
-        "buy": b,
-        "sell": s,
-        "spread": spread,
-        "spread_pct": round(spread / b["avg_rate"] * 100, 2) if b["avg_rate"] else 0.0,
-        "gross_profit": gross,
-        "fees_kes": fees_kes,
-        "net_profit": net,
+        **pnl,
         "tier": trader.binance_merchant_tier or "bronze",
     }
 
@@ -563,66 +485,32 @@ async def binance_orders(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Real Binance C2C order history (EP-16), mapped to the Orders-page shape.
-    side: '' all | 'incoming' (sell) | 'outgoing' (buy). Newest first."""
-    if not trader.binance_api_key or not trader.binance_api_secret:
-        return []
-    try:
-        from app.core.security import decrypt_data
-        from app.services.binance.sapi_client import get_user_order_history
-        api_key = decrypt_data(trader.binance_api_key)
-        api_secret = decrypt_data(trader.binance_api_secret)
-    except Exception:
-        return []
-
-    raw = []
-    try:
-        for page in range(1, 13):  # page size 50; up to ~600 recent orders
-            rows = await get_user_order_history(api_key, api_secret, page=page, rows=50)
-            if not rows:
-                break
-            raw.extend(rows)
-    except Exception as e:
-        logger.warning("binance-orders fetch failed: %s", e)
-        return []
-
-    STATUS_MAP = {
-        "COMPLETED": "completed",
-        "CANCELLED": "cancelled",
-        "CANCELLED_BY_SYSTEM": "cancelled",
-        "TRADING": "pending",
-        "BUYER_PAYED": "payment_received",
-        "DISTRIBUTING": "releasing",
-        "IN_APPEAL": "disputed",
-    }
-    mapped = []
-    for o in raw:
-        tt = (o.get("tradeType") or "").upper()
-        is_sell = tt == "SELL"
-        ct = int(o.get("createTime") or 0)
-        created_iso = (
-            datetime.fromtimestamp(ct / 1000, tz=timezone.utc).isoformat() if ct else None
-        )
-        mapped.append({
-            "id": o.get("orderNumber"),
-            "side": "sell" if is_sell else "buy",
-            "fiat_amount": float(o.get("totalPrice") or 0),
-            "crypto_amount": float(o.get("amount") or 0),
-            "crypto_currency": o.get("asset") or "USDT",
-            "exchange_rate": float(o.get("unitPrice") or 0),
-            "status": STATUS_MAP.get(o.get("orderStatus") or "", (o.get("orderStatus") or "").lower()),
-            "account_reference": o.get("orderNumber"),
-            "counterparty": o.get("counterPartNickName"),
-            "created_at": created_iso,
+    # Orders tracked while the bot was online, from the central Orders table.
+    # side: empty=all, incoming=sell, outgoing=buy. Newest first.
+    from app.models.order import Order, OrderSide
+    q = select(Order).where(Order.trader_id == trader.id)
+    if side == "incoming":
+        q = q.where(Order.side == OrderSide.SELL)
+    elif side == "outgoing":
+        q = q.where(Order.side == OrderSide.BUY)
+    q = q.order_by(Order.created_at.desc()).limit(limit).offset(offset)
+    rows = (await db.execute(q)).scalars().all()
+    out = []
+    for o in rows:
+        out.append({
+            "id": o.binance_order_number or o.id,
+            "side": o.side.value if o.side else "sell",
+            "fiat_amount": float(o.fiat_amount or 0),
+            "crypto_amount": float(o.crypto_amount or 0),
+            "crypto_currency": o.crypto_currency or "USDT",
+            "exchange_rate": float(o.exchange_rate or 0),
+            "status": o.status.value if o.status else "",
+            "account_reference": o.binance_order_number or o.account_reference,
+            "counterparty": o.counterparty_name,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
             "_binance": True,
         })
-
-    if side == "incoming":
-        mapped = [m for m in mapped if m["side"] == "sell"]
-    elif side == "outgoing":
-        mapped = [m for m in mapped if m["side"] == "buy"]
-
-    return mapped[offset:offset + limit]
+    return out
 
 
 @router.get("/me", response_model=TraderProfileResponse)

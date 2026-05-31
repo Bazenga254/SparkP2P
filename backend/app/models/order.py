@@ -34,6 +34,7 @@ class Order(Base):
     # Binance P2P details
     binance_order_number = Column(String(100), unique=True, index=True, nullable=False)
     binance_ad_number = Column(String(100), nullable=True)
+    binance_commission = Column(Float, default=0.0)  # USDT commission Binance charged on this order
     side = Column(Enum(OrderSide), nullable=False)
 
     # Trade details
