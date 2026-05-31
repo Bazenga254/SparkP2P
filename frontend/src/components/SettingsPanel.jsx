@@ -1051,12 +1051,12 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
             <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
               Full Name <span style={{ fontSize: 11, color: '#6b7280' }}>(as on Binance KYC)</span>
             </label>
-            <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <input
                 type="text"
                 value={editName}
                 onChange={(e) => setEditName(e.target.value.toUpperCase())}
-                style={{ flex: 1, textTransform: 'uppercase' }}
+                style={{ flex: '1 1 180px', minWidth: 0, textTransform: 'uppercase' }}
                 placeholder="JOHN DOE MWANGI"
               />
               <button
@@ -1073,7 +1073,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                   setSavingName(false);
                 }}
                 disabled={savingName}
-                style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}
               >
                 {savingName ? 'Saving...' : 'Save Name'}
               </button>
