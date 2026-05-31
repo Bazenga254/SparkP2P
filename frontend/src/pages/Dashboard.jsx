@@ -184,7 +184,7 @@ function SpreadCalculator({ orderStats }) {
       </div>
 
       {/* Inputs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr 1fr', gap: 12, padding: '12px 0 0', alignItems: 'end' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 12, padding: '12px 0 0', alignItems: 'end' }}>
         <div>
           <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Coin</label>
           <select value={coin} onChange={(e) => setCoin(e.target.value)}
@@ -239,7 +239,7 @@ function SpreadCalculator({ orderStats }) {
 
       {/* Stats row — left card is simulation, right 3 are real 24h data */}
       {buy > 0 && sell > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 12, marginTop: 10 }}>
 
           {/* Spread per coin — calculated from inputs */}
           <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
@@ -346,7 +346,7 @@ function SpreadCalculator({ orderStats }) {
           </div>
 
           {/* Result cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 12 }}>
 
             {/* Card 1 — Gross Profit */}
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
