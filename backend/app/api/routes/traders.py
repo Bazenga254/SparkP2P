@@ -513,6 +513,16 @@ async def profit_breakdown(
     # Actual Binance fees: commission is in USDT; convert each to KES at that order's rate
     fees_kes = round(sum(num(o.get("commission")) * num(o.get("unitPrice")) for o in completed), 2)
     net = round(gross - fees_kes, 2)
+    # Cache today's live stats on the trader so the admin can track real Binance figures
+    try:
+        trader.live_today_net_profit = net
+        trader.live_today_volume = round(b["kes"] + s["kes"], 2)
+        trader.live_today_trades = b["orders"] + s["orders"]
+        trader.live_stats_date = eat_midnight
+        trader.live_stats_at = datetime.now(timezone.utc)
+        await db.commit()
+    except Exception as _se:
+        logger.warning("profit snapshot cache failed: %s", _se)
     return {
         "available": True,
         "date": eat_midnight.strftime("%Y-%m-%d"),

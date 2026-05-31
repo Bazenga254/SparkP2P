@@ -176,6 +176,11 @@ class Trader(Base):
     locked_until = Column(DateTime(timezone=True), nullable=True)
     last_login = Column(DateTime(timezone=True), nullable=True)
     last_web_active = Column(DateTime(timezone=True), nullable=True)  # last dashboard heartbeat — live web presence
+    live_today_net_profit = Column(Numeric(14, 2), default=0)  # cached daily live Binance stats (for admin)
+    live_today_volume     = Column(Numeric(16, 2), default=0)
+    live_today_trades     = Column(Integer, default=0)
+    live_stats_date       = Column(DateTime(timezone=True), nullable=True)
+    live_stats_at         = Column(DateTime(timezone=True), nullable=True)
     password_changed_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
