@@ -33,7 +33,7 @@ const fmtTimeEAT = (ts) => new Date(ts).toLocaleTimeString('en-KE', { timeZone: 
 
 const SUPPORTED_COINS = ['USDT', 'USDC', 'BTC', 'ETH', 'BNB', 'BUSD'];
 
-function SpreadCalculator({ orderStats }) {
+function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
   const [coin, setCoin] = useState('USDT');
   const [buyPrice, setBuyPrice] = useState('130.00');
   const [sellPrice, setSellPrice] = useState('130.50');
@@ -154,14 +154,19 @@ function SpreadCalculator({ orderStats }) {
   const binanceFees = todayStats?.fees_kes ?? 0;                          // actual Binance commission (KES)
   const afterBinance = baseProfit - binanceFees;                         // net after Binance fees
   const wdAmt = parseFloat(withdrawAmount) || (afterBinance > 0 ? afterBinance : vol);
-  const wdFee = getWithdrawalFee(withdrawMethod, wdAmt);
-  const wdReceived = wdAmt - wdFee;
-  const netProfit = afterBinance - wdFee;                                 // net after Binance + withdrawal fees
+  // Withdrawals are paid via CREDITS (deducted from credit balance), not a cash fee —
+  // so the trader receives their full balance. No withdrawal fee in the cash-out math.
+  const wdFee = 0;
+  const wdReceived = wdAmt;
+  const netProfit = afterBinance;                                         // net after Binance fees only
   const netProfitable = netProfit > 0;
   const netPct = baseProfit > 0 ? (netProfit / baseProfit) * 100 : 0;
-  const feePct = wdAmt > 0 ? (wdFee / wdAmt) * 100 : 0;
-  // Break-even sell price needed to cover withdrawal fee
-  const breakEvenSpreadKES = usdtAmount > 0 ? wdFee / usdtAmount : 0;
+  // Where the withdrawal lands — the trader's configured account
+  const wdBankName = cbWithdrawBank?.bank_name || (cbWithdrawBank?.bank_code ? 'Bank (PesaLink)' : null);
+  const wdAccount = cbWithdrawBank?.account_number || null;
+  const wdDestLabel = wdBankName ? `${wdBankName}${wdAccount ? ' · ' + wdAccount : ''}` : (profile?.settlement_phone ? `M-Pesa · ${profile.settlement_phone}` : 'Not set');
+  // Break-even sell price (kept for the Min. Sell Price card; no fee now -> just buy price)
+  const breakEvenSpreadKES = 0;
   const breakEvenSell = buy + breakEvenSpreadKES;
   const breakEvenPct = buy > 0 ? (breakEvenSpreadKES / buy) * 100 : 0;
 
@@ -322,19 +327,17 @@ function SpreadCalculator({ orderStats }) {
           </div>
           <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 12 }}>
             {realProfit !== null
-              ? `Today's gross profit from ${todayStats.trades_count} trade${todayStats.trades_count !== 1 ? 's' : ''} (${fmtKES(todayStats.kes_volume)} volume) — minus Binance commission and your withdrawal fee.`
+              ? `Today's gross profit from ${todayStats.trades_count} trade${todayStats.trades_count !== 1 ? 's' : ''} (${fmtKES(todayStats.kes_volume)} volume) — minus Binance commission. Withdrawals are paid using your credits, so you receive the full amount.`
               : 'Set your buy/sell prices above to see a profit estimate.'}
           </div>
 
-          {/* Withdrawal method selector */}
+          {/* Withdrawal destination (read-only) + amount */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
             <div>
-              <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Withdrawal Method</label>
-              <select value={withdrawMethod} onChange={(e) => setWithdrawMethod(e.target.value)}
-                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}>
-                <option value="mpesa">M-Pesa</option>
-                <option value="bank">I&M Bank</option>
-              </select>
+              <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Withdrawal Account</label>
+              <div style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {wdDestLabel}
+              </div>
             </div>
             <div>
               <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>
@@ -366,18 +369,9 @@ function SpreadCalculator({ orderStats }) {
               </div>
             )}
 
-            {/* Card 2 — Withdrawal Fee */}
-            <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-              <div style={{ fontSize: 11, color: '#9ca3af' }}>Withdrawal Fee</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>− {fmtKESFee(wdFee)}</div>
-              <div style={{ fontSize: 11, color: '#6b7280' }}>
-                {withdrawMethod === 'mpesa' ? 'tiered rate' : 'flat fee'}
-              </div>
-            </div>
-
-            {/* Card 3 — Net Profit after fees */}
+            {/* Card 3 — Net Profit (after Binance fees; withdrawal is credit-based, no cash fee) */}
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: `1px solid ${netProfitable ? '#10b981' : '#ef4444'}` }}>
-              <div style={{ fontSize: 11, color: '#9ca3af' }}>Net Profit (after fees)</div>
+              <div style={{ fontSize: 11, color: '#9ca3af' }}>Net Profit</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: netProfitable ? '#10b981' : '#ef4444' }}>
                 {netProfitable ? '+' : '−'} {fmtKESFee(Math.abs(netProfit))}
               </div>
@@ -386,11 +380,11 @@ function SpreadCalculator({ orderStats }) {
               </div>
             </div>
 
-            {/* Card 4 — Break-even Sell */}
+            {/* Card 4 — Withdrawal destination */}
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-              <div style={{ fontSize: 11, color: '#9ca3af' }}>Min. Sell Price</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#f59e0b' }}>KSh {breakEvenSell.toFixed(2)}</div>
-              <div style={{ fontSize: 11, color: '#6b7280' }}>to cover fees ({breakEvenPct.toFixed(3)}% margin)</div>
+              <div style={{ fontSize: 11, color: '#9ca3af' }}>Withdraw To</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#f59e0b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{wdBankName || (profile?.settlement_phone ? 'M-Pesa' : 'Not set')}</div>
+              <div style={{ fontSize: 11, color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{wdAccount || profile?.settlement_phone || 'Set in Settings → Bank Account'}</div>
             </div>
 
           </div>
@@ -404,8 +398,8 @@ function SpreadCalculator({ orderStats }) {
               color: netProfitable ? '#10b981' : '#ef4444',
             }}>
               {netProfitable
-                ? `✓ You keep ${fmtKES(netProfit)} after ${withdrawMethod === 'mpesa' ? 'M-Pesa' : 'I&M Bank'} fees`
-                : `✗ Fees exceed profit by ${fmtKES(Math.abs(netProfit))} — increase your spread`}
+                ? `✓ You receive the full ${fmtKES(wdReceived)} to ${wdDestLabel} — withdrawal is paid using your credits, no cash fee`
+                : `✗ Binance fees exceed gross by ${fmtKES(Math.abs(netProfit))} — increase your spread`}
             </div>
           )}
         </div>
@@ -698,6 +692,11 @@ export default function Dashboard() {
     ping();
     const id = setInterval(ping, 60000);
     return () => clearInterval(id);
+  }, []);
+
+  // Load the configured Choice Bank withdrawal account (for the Spread Calculator cash-out)
+  useEffect(() => {
+    getCbWithdrawalBank().then(r => setCbWithdrawBank(r.data)).catch(() => {});
   }, []);
 
   // Live daily profit from real Binance order history — refresh every 60s on Overview
@@ -1775,7 +1774,7 @@ export default function Dashboard() {
             </div>
 
             {/* Spread Calculator */}
-            <SpreadCalculator orderStats={stats?.today} />
+            <SpreadCalculator orderStats={stats?.today} profile={profile} cbWithdrawBank={cbWithdrawBank} />
 
             {/* Affiliate Quick-Action Card */}
             {affiliateData !== null && (
