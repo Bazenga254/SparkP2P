@@ -4795,6 +4795,16 @@ export default function Admin() {
             onClick={e => e.stopPropagation()}
           >
             <div style={{ width: 36, height: 4, background: '#374151', borderRadius: 2, margin: '12px auto 8px' }} />
+            {/* Switch back to the trader dashboard */}
+            <button
+              onClick={() => { setMobMoreOpen(false); navigate('/dashboard'); }}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14,
+                padding: '14px 24px', background: 'rgba(245,158,11,0.10)', border: 'none',
+                borderBottom: '1px solid #374151', cursor: 'pointer', color: '#F59E0B', fontSize: 14, fontWeight: 600 }}
+            >
+              <LayoutDashboard size={20} color="#F59E0B" />
+              Switch to Trader Dashboard
+            </button>
             {[
               { key: 'withdrawals', label: 'Withdrawals',       icon: Wallet        },
               { key: 'paybill',     label: 'Paybill Txns',      icon: Banknote      },
