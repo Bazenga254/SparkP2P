@@ -146,6 +146,7 @@ class TraderProfileResponse(BaseModel):
     onboarding_complete: bool = False
     security_question: Optional[str] = None
     last_extension_sync: Optional[str] = None
+    last_web_active: Optional[str] = None
     settlement_cooldown_until: Optional[str] = None  # ISO datetime when cooldown ends
     settlement_first_change_free: bool = False  # True if user has a method but never changed it (first post-onboarding change is free)
     password_change_cooldown_until: Optional[str] = None  # ISO datetime, 48hr after last pw change
@@ -577,6 +578,7 @@ async def get_profile(
         onboarding_complete=bool(onboarding_complete),
         security_question=trader.security_question,
         last_extension_sync=trader.last_extension_sync.isoformat() if trader.last_extension_sync else None,
+        last_web_active=trader.last_web_active.isoformat() if trader.last_web_active else None,
         settlement_cooldown_until=(
             (trader.settlement_changed_at + timedelta(hours=48)).isoformat()
             if trader.settlement_changed_at and

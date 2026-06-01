@@ -1547,9 +1547,12 @@ export default function Dashboard() {
                 <div className="greeting-text">
                   <span className="greeting-hello">Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 18 ? 'Afternoon' : 'Evening'}, {user?.full_name}!</span>
                   {(() => {
-                    const ts = profile?.last_extension_sync || user?.last_extension_sync;
-                    const diff = ts ? (Date.now() - new Date(ts).getTime()) / 1000 : null;
-                    // Online if the desktop bot app is open (window.sparkp2p) or synced recently (<3 min)
+                    // Use the most recent of: bot heartbeat, web heartbeat (dashboard open), or login.
+                    const tsCandidates = [profile?.last_extension_sync || user?.last_extension_sync, profile?.last_web_active, profile?.last_login]
+                      .filter(Boolean).map(x => new Date(x).getTime());
+                    const ts = tsCandidates.length ? Math.max(...tsCandidates) : null;
+                    const diff = ts ? (Date.now() - ts) / 1000 : null;
+                    // Online if the desktop app is open (window.sparkp2p) or any heartbeat within 3 min.
                     const appOpen = typeof window !== 'undefined' && !!window.sparkp2p;
                     const online = appOpen || (diff !== null && diff < 180);
                     const label = online ? 'Online' : !ts ? 'Bot Never Connected' : diff < 3600 ? `Last seen ${Math.floor(diff/60)}m ago` : diff < 86400 ? `Last seen ${Math.floor(diff/3600)}h ago` : `Last seen ${Math.floor(diff/86400)}d ago`;
