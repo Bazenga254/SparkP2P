@@ -2592,62 +2592,35 @@ async def get_trader_pnl(
 
     since = since_eat.astimezone(timezone.utc)
 
-    # Fetch all wallet transactions for trader in period (for revenue and fees)
-    result = await db.execute(
-        select(WalletTransaction)
-        .where(
-            WalletTransaction.trader_id == trader_id,
-            WalletTransaction.created_at >= since,
-            WalletTransaction.status == "completed",
-        )
-        .order_by(WalletTransaction.created_at)
-    )
-    txns = result.scalars().all()
-
-    # Fetch completed sell orders in period — used for trade counts so they are
-    # always accurate even when wallet SELL_CREDIT transactions are missing.
+    # Pull completed orders from the central Orders table and compute per-day P&L
+    # with the SAME compute_pnl used on the merchant side, so admin matches exactly.
+    from app.services.tracking import compute_pnl
     orders_result = await db.execute(
         select(Order).where(
             Order.trader_id == trader_id,
-            Order.status == OrderStatus.RELEASED,
+            Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
             Order.created_at >= since,
-        )
+        ).order_by(Order.created_at)
     )
-    sell_orders = orders_result.scalars().all()
+    period_orders = orders_result.scalars().all()
 
     from collections import defaultdict
-
-    # Per-day sell order counts keyed by Kenya date
-    order_buckets: dict = defaultdict(int)
-    for o in sell_orders:
+    by_day = defaultdict(list)
+    for o in period_orders:
         day_key = o.created_at.astimezone(EAT).strftime("%Y-%m-%d")
-        order_buckets[day_key] += 1
+        by_day[day_key].append(o)
 
-    # Build per-day revenue/fee buckets (keyed by Kenya date)
-    buckets: dict = defaultdict(lambda: {"revenue": 0.0, "fees": 0.0})
-
-    REVENUE_TYPES = {TransactionType.SELL_CREDIT}
-    FEE_TYPES = {TransactionType.PLATFORM_FEE, TransactionType.SETTLEMENT_FEE, TransactionType.DAILY_VOLUME_FEE}
-
-    for t in txns:
-        day_key = t.created_at.astimezone(EAT).strftime("%Y-%m-%d")
-        if t.transaction_type in REVENUE_TYPES:
-            buckets[day_key]["revenue"] += t.amount
-        elif t.transaction_type in FEE_TYPES and not (t.description or "").startswith("[CANCELLED"):
-            buckets[day_key]["fees"] += abs(t.amount)
-
-    # Generate ordered day list (Kenya dates)
     daily = []
     for i in range(days):
         d = (since_eat + timedelta(days=i)).strftime("%Y-%m-%d")
-        b = buckets.get(d, {"revenue": 0.0, "fees": 0.0})
-        net = round(b["revenue"] - b["fees"], 2)
+        day_orders = by_day.get(d, [])
+        pnl = compute_pnl(day_orders)
         daily.append({
             "date": d,
-            "revenue": round(b["revenue"], 2),
-            "fees": round(b["fees"], 2),
-            "net": net,
-            "trades": order_buckets.get(d, 0),
+            "revenue": pnl["gross_profit"],
+            "fees": pnl["fees_kes"],
+            "net": pnl["net_profit"],
+            "trades": pnl["trades"],
         })
 
     total_revenue = round(sum(d["revenue"] for d in daily), 2)
