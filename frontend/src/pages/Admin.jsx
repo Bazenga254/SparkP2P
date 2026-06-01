@@ -1306,25 +1306,25 @@ export default function Admin() {
                   <div style={{ padding: '10px 20px 0' }}>
                     {analytics?.monthly_volumes?.length > 0 ? (
                       <div style={{ display: 'flex', gap: 0 }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', paddingBottom: 24, marginRight: 8, width: 52, textAlign: 'right' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', paddingBottom: 28, marginRight: 10, width: 60, textAlign: 'right' }}>
                           {[maxVolume, maxVolume * 0.5, 0].map((v, i) => (
-                            <span key={i} style={{ fontSize: 10, color: '#6b7280', lineHeight: 1 }}>
+                            <span key={i} style={{ fontSize: 13, fontWeight: 600, color: '#9ca3af', lineHeight: 1 }}>
                               {v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : v >= 1000 ? `${(v/1000).toFixed(0)}K` : v.toFixed(0)}
                             </span>
                           ))}
                         </div>
                         <div style={{ flex: 1, position: 'relative' }}>
-                          <div style={{ position: 'absolute', inset: 0, bottom: 24, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', pointerEvents: 'none' }}>
+                          <div style={{ position: 'absolute', inset: 0, bottom: 28, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', pointerEvents: 'none' }}>
                             {[0,1,2].map(i => <div key={i} style={{ borderBottom: '1px solid #1f2937', width: '100%' }} />)}
                           </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-end', height: 300, position: 'relative', paddingBottom: 24 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-end', height: 300, position: 'relative', paddingBottom: 28 }}>
                             {analytics.monthly_volumes.map((m, i) => (
                               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
-                                <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', height: 276 }}>
-                                  <div style={{ width: 22, background: '#3b82f6', borderRadius: '3px 3px 0 0', height: `${Math.max((m.buy_volume / maxVolume) * 276, 2)}px` }} title={`Buy: ${fmtKES(m.buy_volume)}`} />
-                                  <div style={{ width: 22, background: '#10b981', borderRadius: '3px 3px 0 0', height: `${Math.max((m.sell_volume / maxVolume) * 276, 2)}px` }} title={`Sell: ${fmtKES(m.sell_volume)}`} />
+                                <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', height: 272 }}>
+                                  <div style={{ width: 22, background: '#3b82f6', borderRadius: '3px 3px 0 0', height: `${Math.max((m.buy_volume / maxVolume) * 272, 2)}px` }} title={`Buy: ${fmtKES(m.buy_volume)}`} />
+                                  <div style={{ width: 22, background: '#10b981', borderRadius: '3px 3px 0 0', height: `${Math.max((m.sell_volume / maxVolume) * 272, 2)}px` }} title={`Sell: ${fmtKES(m.sell_volume)}`} />
                                 </div>
-                                <span style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>{m.month.split(' ')[0]}</span>
+                                <span style={{ fontSize: 13, fontWeight: 600, color: '#cbd5e1', marginTop: 8 }}>{m.month.split(' ')[0]}</span>
                               </div>
                             ))}
                           </div>
@@ -1333,9 +1333,9 @@ export default function Admin() {
                     ) : <p className="adm-empty" style={{ padding: '40px 0' }}>No volume data yet</p>}
                   </div>
                   {analytics?.monthly_volumes?.length > 0 && (
-                    <div style={{ display: 'flex', gap: 16, padding: '0 20px 14px', fontSize: 12, color: '#6b7280' }}>
-                      <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#3b82f6', marginRight: 5 }} />Buy</span>
-                      <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#10b981', marginRight: 5 }} />Sell</span>
+                    <div style={{ display: 'flex', gap: 24, padding: '4px 20px 16px', fontSize: 14, fontWeight: 700, color: '#e5e7eb' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center' }}><span style={{ display: 'inline-block', width: 14, height: 14, borderRadius: 3, background: '#3b82f6', marginRight: 7 }} />Buy</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center' }}><span style={{ display: 'inline-block', width: 14, height: 14, borderRadius: 3, background: '#10b981', marginRight: 7 }} />Sell</span>
                     </div>
                   )}
                 </div>
