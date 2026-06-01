@@ -474,6 +474,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('overview');
   const [mobMoreOpen, setMobMoreOpen] = useState(false);
   const [creditPlan, setCreditPlan] = useState(null);
+  const [creditCategory, setCreditCategory] = useState('starter'); // 'starter' | 'enterprise'
   const [creditPhone, setCreditPhone] = useState('');
   const [payGoAmount, setPayGoAmount] = useState('500');
   const [creditBuying, setCreditBuying] = useState(false);
@@ -2689,12 +2690,17 @@ export default function Dashboard() {
         {/* ==================== BUY CREDITS TAB ==================== */}
         {activeTab === 'credits' && (() => {
           const PAY_GO = { key: 'pay_on_the_go', label: 'Pay On The Go', subtitle: 'No commitment', amount: null, credits: null, rate: 40, savings: null, accent: '#fb923c', glow: '251,146,60', features: ['Pay any amount', 'Never expires', 'Instant credit'], topLabel: null, border: '#1f2937', flexible: true };
-          const PLANS = [
-            { key: 'starter',  label: 'Starter',  subtitle: 'Try the bot',    amount: 5000,  credits: 167,  rate: 30, savings: 25, accent: '#9ca3af', glow: '107,114,128', features: ['~167 buy orders', 'Never expires'],                            topLabel: null,          border: '#1f2937' },
-            { key: 'pro',      label: 'Pro',       subtitle: 'Active trader',  amount: 10000, credits: 500,  rate: 20, savings: 50, accent: '#f59e0b', glow: '245,158,11',  features: ['~500 buy orders', 'Never expires'],                            topLabel: null,          border: 'rgba(245,158,11,0.35)' },
-            { key: 'pro_max',  label: 'Pro Max',   subtitle: 'Power user',     amount: 20000, credits: 2000, rate: 10, savings: 75, accent: '#10b981', glow: '16,185,129',  features: ['~2,000 buy orders', 'Priority support', 'Never expires'],    topLabel: 'MOST POPULAR', border: 'rgba(16,185,129,0.35)' },
-            { key: 'advanced', label: 'Advanced',  subtitle: 'High volume',    amount: 40000, credits: 8000, rate: 5,  savings: 87, accent: '#a78bfa', glow: '139,92,246',  features: ['~8,000 buy orders', 'Dedicated support', 'Never expires'],   topLabel: 'BEST VALUE',   border: 'rgba(167,139,250,0.35)' },
+          const STARTER_PLANS = [
+            { key: 'starter',         label: 'Starter',        subtitle: 'Try the bot',   amount: 3000,  credits: 100,  rate: 30, savings: 25, accent: '#9ca3af', glow: '107,114,128', features: ['~100 buy orders', 'Never expires'],                          topLabel: null,           border: '#1f2937' },
+            { key: 'starter_pro',     label: 'Starter Pro',    subtitle: 'Active trader', amount: 5000,  credits: 250,  rate: 20, savings: 50, accent: '#f59e0b', glow: '245,158,11',  features: ['~250 buy orders', 'Never expires'],                          topLabel: 'MOST POPULAR', border: 'rgba(245,158,11,0.35)' },
+            { key: 'starter_pro_max', label: 'Starter Pro Max',subtitle: 'Power user',    amount: 10000, credits: 1000, rate: 10, savings: 75, accent: '#10b981', glow: '16,185,129',  features: ['~1,000 buy orders', 'Priority support', 'Never expires'],    topLabel: 'BEST VALUE',   border: 'rgba(16,185,129,0.35)' },
           ];
+          const ENTERPRISE_PLANS = [
+            { key: 'enterprise',         label: 'Enterprise',        subtitle: 'High volume',  amount: 15000, credits: 1875,  rate: 8, savings: 80, accent: '#9ca3af', glow: '107,114,128', features: ['~1,875 buy orders', 'Priority support', 'Never expires'],     topLabel: null,           border: '#1f2937' },
+            { key: 'enterprise_pro',     label: 'Enterprise Pro',    subtitle: 'Scaling up',   amount: 20000, credits: 4000,  rate: 5, savings: 87, accent: '#f59e0b', glow: '245,158,11',  features: ['~4,000 buy orders', 'Priority support', 'Never expires'],     topLabel: 'MOST POPULAR', border: 'rgba(245,158,11,0.35)' },
+            { key: 'enterprise_pro_max', label: 'Enterprise Pro Max',subtitle: 'Max scale',    amount: 40000, credits: 10000, rate: 4, savings: 90, accent: '#a78bfa', glow: '139,92,246',  features: ['~10,000 buy orders', 'Dedicated support', 'Never expires'],   topLabel: 'BEST VALUE',   border: 'rgba(167,139,250,0.35)' },
+          ];
+          const PLANS = creditCategory === 'enterprise' ? ENTERPRISE_PLANS : STARTER_PLANS;
 
           const handleBuyCredits = async () => {
             if (!creditPlan || !creditPhone.trim()) { setCreditMsg({ type: 'error', text: 'Select a plan and enter your M-Pesa number.' }); return; }
@@ -2728,7 +2734,7 @@ export default function Dashboard() {
             setCreditBuying(false);
           };
 
-          const sel = creditPlan === 'pay_on_the_go' ? PAY_GO : PLANS.find(p => p.key === creditPlan);
+          const sel = creditPlan === 'pay_on_the_go' ? PAY_GO : [...STARTER_PLANS, ...ENTERPRISE_PLANS].find(p => p.key === creditPlan);
           const tc = (profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0);
           const rm = tc >= 2000 ? 8000 : tc >= 500 ? 2000 : tc >= 167 ? 500 : 167;
           const pp = Math.min(100, Math.round((tc / rm) * 100));
@@ -2834,6 +2840,18 @@ export default function Dashboard() {
                 <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
                 <span style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>Credit Packages</span>
                 <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
+              </div>
+
+              {/* Category toggle: Starter / Enterprise */}
+              <div style={{ display: 'flex', gap: 6, background: '#0d1117', border: '1px solid #1f2937', borderRadius: 10, padding: 4, marginBottom: 16, maxWidth: 360, marginLeft: 'auto', marginRight: 'auto' }}>
+                {[{ k: 'starter', label: 'Starter' }, { k: 'enterprise', label: 'Enterprise' }].map(({ k, label }) => (
+                  <button key={k} onClick={() => setCreditCategory(k)}
+                    style={{ flex: 1, padding: '9px 0', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700,
+                      background: creditCategory === k ? '#f59e0b' : 'transparent',
+                      color: creditCategory === k ? '#000' : '#9ca3af' }}>
+                    {label}
+                  </button>
+                ))}
               </div>
 
               {/* Plan cards */}

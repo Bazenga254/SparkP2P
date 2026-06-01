@@ -3064,11 +3064,15 @@ async def consume_trade_token(
 # ── Credit Purchase Plans ─────────────────────────────────────────────────────
 
 CREDIT_PLANS = {
-    "pay_on_the_go": {"amount": None,   "credits": None, "rate": 40, "min": 500},
-    "starter":       {"amount": 5_000,  "credits": 167,  "rate": 30},
-    "pro":           {"amount": 10_000, "credits": 500,  "rate": 20},
-    "pro_max":       {"amount": 20_000, "credits": 2_000, "rate": 10},
-    "advanced":      {"amount": 40_000, "credits": 8_000, "rate": 5},
+    "pay_on_the_go":     {"amount": None,   "credits": None,   "rate": 40, "min": 500},
+    # Starter category
+    "starter":           {"amount": 3_000,  "credits": 100,    "rate": 30},
+    "starter_pro":       {"amount": 5_000,  "credits": 250,    "rate": 20},
+    "starter_pro_max":   {"amount": 10_000, "credits": 1_000,  "rate": 10},
+    # Enterprise category
+    "enterprise":        {"amount": 15_000, "credits": 1_875,  "rate": 8},
+    "enterprise_pro":    {"amount": 20_000, "credits": 4_000,  "rate": 5},
+    "enterprise_pro_max":{"amount": 40_000, "credits": 10_000, "rate": 4},
 }
 
 # In-memory store for pending STK push purchases (checkout_id -> metadata)
