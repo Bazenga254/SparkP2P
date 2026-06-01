@@ -200,7 +200,7 @@ async def get_order_stats(
             func.coalesce(func.sum(func.abs(WalletTransaction.amount)), 0),
         ).where(
             WalletTransaction.trader_id == trader.id,
-            func.date(WalletTransaction.created_at) == today,
+            WalletTransaction.created_at >= today_start,
             WalletTransaction.transaction_type.in_([
                 TransactionType.SETTLEMENT_FEE,
                 TransactionType.PLATFORM_FEE,
