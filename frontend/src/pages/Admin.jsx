@@ -1436,7 +1436,7 @@ export default function Admin() {
                 return (
                   <>
                     {/* Summary totals */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, margin: '12px 0' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, margin: '12px 0', padding: '0 20px' }}>
                       <div style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 10, padding: '12px 14px' }}>
                         <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3 }}>Total Inbound</div>
                         <div style={{ fontSize: 15, fontWeight: 700, color: '#10b981' }}>{fmtAmt(inTotal)}</div>
@@ -1451,7 +1451,7 @@ export default function Admin() {
                       </div>
                     </div>
                     {/* Direction filter pills */}
-                    <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 10, padding: '0 20px' }}>
                       {[['all', 'All'], ['in', 'Inbound'], ['out', 'Outbound']].map(([v, l]) => (
                         <button key={v} onClick={() => { setFiatDirFilter(v); setFiatPage(1); }}
                           style={{ padding: '5px 16px', borderRadius: 20, border: '1px solid', borderColor: fiatDirFilter === v ? '#10b981' : 'var(--border)', background: fiatDirFilter === v ? 'rgba(16,185,129,0.15)' : 'transparent', color: fiatDirFilter === v ? '#10b981' : '#6b7280', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
@@ -1459,7 +1459,7 @@ export default function Admin() {
                         </button>
                       ))}
                     </div>
-                    <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 8, padding: '0 20px' }}>
                       <input type="text" placeholder="Search TX ID, phone, trader…"
                         value={txnSearch} onChange={(e) => setTxnSearch(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && loadTransactions(txPeriod, txnSearch, true)}
@@ -1476,7 +1476,7 @@ export default function Admin() {
                         </button>
                       )}
                     </div>
-                    <div style={{ padding: '0 0 10px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ padding: '0 20px 10px', display: 'flex', alignItems: 'center', gap: 12 }}>
                       <span style={{ fontSize: 12, color: '#6b7280' }}>{transactions.total} payment records</span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#10b981' }}>
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite' }} />
@@ -1493,7 +1493,7 @@ export default function Admin() {
                         const txPhone = tx.phone !== '-' ? tx.phone : null;
                         const txId = tx.mpesa_transaction_id !== '-' ? tx.mpesa_transaction_id : null;
                         return (
-                          <div key={tx.id} style={{ padding: '11px 0', borderBottom: i < fiatSlice.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                          <div key={tx.id} style={{ padding: '11px 20px', borderBottom: i < fiatSlice.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                               <span className={`adm-badge ${isIn ? 'green' : 'yellow'}`} style={{ flexShrink: 0, minWidth: 36, textAlign: 'center' }}>{isIn ? 'IN' : 'OUT'}</span>
                               <div style={{ flex: 1, minWidth: 0 }}>
@@ -1539,7 +1539,7 @@ export default function Admin() {
                 const pageSlice = orders.orders.slice((cryptoPage - 1) * PAGE_TX_SIZE, cryptoPage * PAGE_TX_SIZE);
                 return (
                   <>
-                    <div style={{ padding: '12px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div style={{ padding: '12px 20px', display: 'flex', gap: 8, alignItems: 'center' }}>
                       <input type="text" placeholder="Search order #, trader, counterparty…"
                         value={ordersSearch} onChange={(e) => setOrdersSearch(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && loadOrders(cryptoPeriod, ordersSearch, true)}
@@ -1556,7 +1556,7 @@ export default function Admin() {
                         </button>
                       )}
                     </div>
-                    <div style={{ padding: '0 0 10px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ padding: '0 20px 10px', display: 'flex', alignItems: 'center', gap: 12 }}>
                       <span style={{ fontSize: 12, color: '#6b7280' }}>{orders.total} orders total</span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#10b981' }}>
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#10b981', display: 'inline-block', animation: 'pulse-green 1.5s ease-in-out infinite' }} />
@@ -1568,7 +1568,7 @@ export default function Admin() {
                       {pageSlice.length === 0 ? (
                         <div style={{ textAlign: 'center', padding: '30px 0', color: '#6b7280', fontSize: 13 }}>No crypto orders found</div>
                       ) : pageSlice.map((o, i) => (
-                        <div key={o.id} style={{ padding: '11px 0', borderBottom: i < pageSlice.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                        <div key={o.id} style={{ padding: '11px 20px', borderBottom: i < pageSlice.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                             <span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`} style={{ flexShrink: 0, minWidth: 36, textAlign: 'center' }}>{o.side}</span>
                             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1581,7 +1581,7 @@ export default function Admin() {
                             </div>
                           </div>
                           <div style={{ display: 'flex', gap: 8, marginTop: 5, paddingLeft: 46, flexWrap: 'wrap', alignItems: 'center' }}>
-                            <span style={{ color: '#9ca3af', fontSize: 10, fontWeight: 600 }}>{o.crypto_amount} {o.asset}</span>
+                            <span style={{ color: '#9ca3af', fontSize: 10, fontWeight: 600 }}>{o.crypto_amount} {o.asset}{/* aligned under name */}</span>
                             {o.counterparty && <span style={{ color: '#4b5563', fontSize: 10 }}>· {o.counterparty}</span>}
                             {o.platform_fee > 0 && <span style={{ color: '#ef4444', fontSize: 10 }}>· Fee: {fmtKES(o.platform_fee)}</span>}
                           </div>
