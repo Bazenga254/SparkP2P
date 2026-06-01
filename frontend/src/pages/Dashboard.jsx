@@ -1431,15 +1431,19 @@ export default function Dashboard() {
             const tierConnected = profile?.binance_api_key_saved && !profile?.binance_api_key_invalid;
             const tier = (profile?.binance_merchant_tier || '').toLowerCase();
             const TIERS = {
-              gold:   { label: 'Gold Merchant',   color: '#f59e0b', glow: 'rgba(245,158,11,0.18)', medal: '🥇' },
-              silver: { label: 'Silver Merchant', color: '#cbd5e1', glow: 'rgba(203,213,225,0.16)', medal: '🥈' },
-              bronze: { label: 'Bronze Merchant', color: '#d97757', glow: 'rgba(217,119,87,0.16)',  medal: '🥉' },
+              gold:   { label: 'Gold Merchant',   color: '#f59e0b', glow: 'rgba(245,158,11,0.18)' },
+              silver: { label: 'Silver Merchant', color: '#cbd5e1', glow: 'rgba(203,213,225,0.16)' },
+              bronze: { label: 'Bronze Merchant', color: '#d97757', glow: 'rgba(217,119,87,0.16)' },
             };
             const t = TIERS[tier];
             if (tierConnected && t) {
               return (
                 <div className="dsb-brand">
-                  <div style={{ width: 28, height: 28, borderRadius: 6, background: t.glow, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>{t.medal}</div>
+                  <div style={{ width: 28, height: 28, borderRadius: 6, background: t.glow, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill={t.color} stroke={t.color} strokeWidth="1" strokeLinejoin="round">
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                    </svg>
+                  </div>
                   <div style={{ lineHeight: 1.15 }}>
                     <div style={{ color: t.color, fontWeight: 700, fontSize: 13 }}>{t.label}</div>
                     <div style={{ color: '#6B7280', fontSize: 10 }}>Binance P2P</div>
