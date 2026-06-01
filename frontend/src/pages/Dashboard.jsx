@@ -614,20 +614,21 @@ export default function Dashboard() {
         getProfile(),
         getWallet(),
         getOrderStats(),
-        api.get('/traders/binance-orders', { params: { limit: 20, offset: 0 } }),
         getWalletTransactions(50, 'positive'),
         getSessionHealth(),
         getBinanceAccountData(),
         getWalletTransactions(100, 'negative'),
       ]);
+      // NOTE: Orders are NOT fetched here — the dedicated binance-orders effect (keyed on
+      // activeTab/ordersFilter/ordersPage) owns the Orders list so the filter never gets
+      // overwritten by a background loadData refresh.
       if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); setCfEnabled(p.cf_filters_enabled || false); setCfAllTradesMin(String(p.cf_all_trades_min ?? 0)); setCfAllTradesMinAll(String(p.cf_all_trades_min_all ?? 0)); } }
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
-      if (results[3].status === 'fulfilled') { const od = results[3].value.data; setOrders(od); setOrdersPage(1); setOrdersHasMore(od.length === 20); }
-      if (results[4].status === 'fulfilled') setTransactions(results[4].value.data);
-      if (results[5].status === 'fulfilled') setSessionHealth(results[5].value.data);
-      if (results[6].status === 'fulfilled') setBinanceData(results[6].value.data);
-      if (results[7].status === 'fulfilled') setWithdrawalTxns(results[7].value.data);
+      if (results[3].status === 'fulfilled') setTransactions(results[3].value.data);
+      if (results[4].status === 'fulfilled') setSessionHealth(results[4].value.data);
+      if (results[5].status === 'fulfilled') setBinanceData(results[5].value.data);
+      if (results[6].status === 'fulfilled') setWithdrawalTxns(results[6].value.data);
 
       // Fetch notifications
       try {
@@ -887,10 +888,8 @@ export default function Dashboard() {
         const next = [...prev, entry];
         return next.length > 400 ? next.slice(-400) : next;
       });
-      // Immediately refresh orders when bot detects a new Binance order (real Binance data)
-      if ((entry?.message || '').includes('New order detected')) {
-        api.get('/traders/binance-orders', { params: { limit: 20, offset: (ordersPage - 1) * 20 } }).then(r => { setOrders(r.data); setOrdersHasMore(r.data.length === 20); }).catch(() => {});
-      }
+      // New-order refresh is handled by the binance-orders effect (auto-refreshes every 20s
+      // with the active filter). Refetching here would overwrite the filter with stale state.
     });
   }, []);
 
