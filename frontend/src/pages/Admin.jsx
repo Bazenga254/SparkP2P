@@ -1317,14 +1317,14 @@ export default function Admin() {
                           <div style={{ position: 'absolute', inset: 0, bottom: 24, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', pointerEvents: 'none' }}>
                             {[0,1,2].map(i => <div key={i} style={{ borderBottom: '1px solid #1f2937', width: '100%' }} />)}
                           </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-end', height: 140, position: 'relative', paddingBottom: 24 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-end', height: 300, position: 'relative', paddingBottom: 24 }}>
                             {analytics.monthly_volumes.map((m, i) => (
                               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
-                                <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 116 }}>
-                                  <div style={{ width: 16, background: '#3b82f6', borderRadius: '3px 3px 0 0', height: `${Math.max((m.buy_volume / maxVolume) * 116, 2)}px` }} title={`Buy: ${fmtKES(m.buy_volume)}`} />
-                                  <div style={{ width: 16, background: '#10b981', borderRadius: '3px 3px 0 0', height: `${Math.max((m.sell_volume / maxVolume) * 116, 2)}px` }} title={`Sell: ${fmtKES(m.sell_volume)}`} />
+                                <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', height: 276 }}>
+                                  <div style={{ width: 22, background: '#3b82f6', borderRadius: '3px 3px 0 0', height: `${Math.max((m.buy_volume / maxVolume) * 276, 2)}px` }} title={`Buy: ${fmtKES(m.buy_volume)}`} />
+                                  <div style={{ width: 22, background: '#10b981', borderRadius: '3px 3px 0 0', height: `${Math.max((m.sell_volume / maxVolume) * 276, 2)}px` }} title={`Sell: ${fmtKES(m.sell_volume)}`} />
                                 </div>
-                                <span style={{ fontSize: 10, color: '#9ca3af', marginTop: 6 }}>{m.month.split(' ')[0]}</span>
+                                <span style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>{m.month.split(' ')[0]}</span>
                               </div>
                             ))}
                           </div>
