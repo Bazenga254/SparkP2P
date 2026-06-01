@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from datetime import datetime, timezone, timedelta
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,11 +56,12 @@ async def create_order(
 ):
     """Create a new P2P order for tracking."""
     # Check daily limits
-    today = func.current_date()
+    _eat_now = datetime.now(timezone.utc) + timedelta(hours=3)
+    today_start = _eat_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=3)
     result = await db.execute(
         select(func.count(Order.id)).where(
             Order.trader_id == trader.id,
-            func.date(Order.created_at) == today,
+            Order.created_at >= today_start,
         )
     )
     daily_count = result.scalar() or 0
@@ -128,7 +130,8 @@ async def get_order_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """Get trading statistics."""
-    today = func.current_date()
+    _eat_now = datetime.now(timezone.utc) + timedelta(hours=3)
+    today_start = _eat_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=3)
     # Only count orders that actually completed — not pending/cancelled/expired
     completed_statuses = [OrderStatus.RELEASED, OrderStatus.COMPLETED]
 
@@ -140,7 +143,7 @@ async def get_order_stats(
             func.coalesce(func.sum(Order.platform_fee), 0),
         ).where(
             Order.trader_id == trader.id,
-            func.date(Order.created_at) == today,
+            Order.created_at >= today_start,
             Order.status.in_(completed_statuses),
         )
     )
@@ -154,7 +157,7 @@ async def get_order_stats(
             func.coalesce(func.sum(Order.crypto_amount), 0),
         ).where(
             Order.trader_id == trader.id,
-            func.date(Order.created_at) == today,
+            Order.created_at >= today_start,
             Order.side == OrderSide.SELL,
             Order.status.in_(completed_statuses),
         )
@@ -169,7 +172,7 @@ async def get_order_stats(
             func.coalesce(func.sum(Order.crypto_amount), 0),
         ).where(
             Order.trader_id == trader.id,
-            func.date(Order.created_at) == today,
+            Order.created_at >= today_start,
             Order.side == OrderSide.BUY,
             Order.status.in_(completed_statuses),
         )
@@ -218,7 +221,7 @@ async def get_order_stats(
     dom_result = await db.execute(
         select(Order.crypto_currency, func.count(Order.id).label("cnt")).where(
             Order.trader_id == trader.id,
-            func.date(Order.created_at) == today,
+            Order.created_at >= today_start,
             Order.status.in_(completed_statuses),
         ).group_by(Order.crypto_currency).order_by(func.count(Order.id).desc()).limit(1)
     )
