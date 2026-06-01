@@ -1426,14 +1426,37 @@ export default function Dashboard() {
 
         {/* ── Desktop / Tablet Sidebar ── */}
         <aside className="dash-sidebar">
-          {/* Brand */}
-          <div className="dsb-brand">
-            <img src="/logo.png" alt="SparkP2P" style={{ width: 28, height: 28, borderRadius: 6 }} />
-            <div style={{ lineHeight: 1.1 }}>
-              <div style={{ color: '#F59E0B', fontWeight: 500, fontSize: 14 }}>SparkP2P</div>
-              {appVersion && <div style={{ color: '#6B7280', fontSize: 10 }}>v{appVersion}</div>}
-            </div>
-          </div>
+          {/* Brand — shows Binance merchant tier once an API key is connected */}
+          {(() => {
+            const tierConnected = profile?.binance_api_key_saved && !profile?.binance_api_key_invalid;
+            const tier = (profile?.binance_merchant_tier || '').toLowerCase();
+            const TIERS = {
+              gold:   { label: 'Gold Merchant',   color: '#f59e0b', glow: 'rgba(245,158,11,0.18)', medal: '🥇' },
+              silver: { label: 'Silver Merchant', color: '#cbd5e1', glow: 'rgba(203,213,225,0.16)', medal: '🥈' },
+              bronze: { label: 'Bronze Merchant', color: '#d97757', glow: 'rgba(217,119,87,0.16)',  medal: '🥉' },
+            };
+            const t = TIERS[tier];
+            if (tierConnected && t) {
+              return (
+                <div className="dsb-brand">
+                  <div style={{ width: 28, height: 28, borderRadius: 6, background: t.glow, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>{t.medal}</div>
+                  <div style={{ lineHeight: 1.15 }}>
+                    <div style={{ color: t.color, fontWeight: 700, fontSize: 13 }}>{t.label}</div>
+                    <div style={{ color: '#6B7280', fontSize: 10 }}>Binance P2P</div>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div className="dsb-brand">
+                <img src="/logo.png" alt="SparkP2P" style={{ width: 28, height: 28, borderRadius: 6 }} />
+                <div style={{ lineHeight: 1.1 }}>
+                  <div style={{ color: '#F59E0B', fontWeight: 500, fontSize: 14 }}>SparkP2P</div>
+                  {appVersion && <div style={{ color: '#6B7280', fontSize: 10 }}>v{appVersion}</div>}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Main nav */}
           <div className="dsb-section-label">Main</div>
