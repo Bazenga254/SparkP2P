@@ -160,10 +160,34 @@ def compute_pnl(orders):
         return {"orders": len(os), "usdt": round(usdt, 2), "kes": round(kes, 2),
                 "avg_rate": round(kes / usdt, 2) if usdt else 0.0}
 
+    # Cumulative cost-basis: replay chronologically; each sell books realized profit
+    # against the running weighted-average buy cost. Booked profit never changes, so the
+    # daily figure only grows as you trade (no retroactive re-averaging / fluctuation).
+    _chron = sorted(orders, key=lambda o: (o.created_at, o.id))
+    _inv_usdt = 0.0
+    _inv_cost = 0.0
+    _realized = 0.0
+    for _o in _chron:
+        _u = float(_o.crypto_amount or 0)
+        _k = float(_o.fiat_amount or 0)
+        if _o.side == OrderSide.BUY:
+            _inv_usdt += _u
+            _inv_cost += _k
+        else:
+            _avg = (_inv_cost / _inv_usdt) if _inv_usdt > 0 else ((_k / _u) if _u else 0)
+            _rate = (_k / _u) if _u else 0
+            _realized += _u * (_rate - _avg)
+            _draw = min(_u, _inv_usdt)
+            if _inv_usdt > 0:
+                _inv_cost -= _avg * _draw
+                _inv_usdt -= _draw
+                if _inv_usdt < 0.0001:
+                    _inv_usdt = 0.0
+                    _inv_cost = 0.0
     b = _side(buys)
     s = _side(sells)
     spread = round(s["avg_rate"] - b["avg_rate"], 4) if (b["avg_rate"] and s["avg_rate"]) else 0.0
-    gross = round(s["usdt"] * spread, 2) if (b["avg_rate"] and s["usdt"]) else 0.0
+    gross = round(_realized, 2)
     fees_kes = round(sum((o.binance_commission or 0) * (o.exchange_rate or 0) for o in orders), 2)
     net = round(gross - fees_kes, 2)
     return {
