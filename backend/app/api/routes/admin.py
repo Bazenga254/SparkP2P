@@ -197,6 +197,24 @@ async def list_traders(
     result = await db.execute(query)
     traders = result.scalars().all()
 
+    # Current-month (EAT) volume + trades per trader from the central Orders table,
+    # so the list matches the Top Traders panel and resets at month start.
+    from datetime import timezone as _tz, timedelta as _td
+    _now = datetime.now(_tz.utc)
+    _eat = _now + _td(hours=3)
+    _month_start = (_eat.replace(day=1, hour=0, minute=0, second=0, microsecond=0)) - _td(hours=3)
+    _agg = (await db.execute(
+        select(
+            Order.trader_id,
+            func.count(Order.id).label("trades"),
+            func.coalesce(func.sum(Order.fiat_amount), 0).label("volume"),
+        ).where(
+            Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+            Order.created_at >= _month_start,
+        ).group_by(Order.trader_id)
+    )).all()
+    _month = {row.trader_id: (int(row.trades), float(row.volume)) for row in _agg}
+
     is_full_admin = admin.is_admin and admin.role == "admin"
 
     await write_audit_log(
@@ -217,8 +235,8 @@ async def list_traders(
             "binance_api_key_saved": bool(t.binance_api_key),
             "tier": t.tier or "standard",
             "role": t.role or "trader",
-            "total_trades": t.total_trades or 0,
-            "total_volume": float(t.total_volume or 0),
+            "total_trades": _month.get(t.id, (0, 0.0))[0],
+            "total_volume": _month.get(t.id, (0, 0.0))[1],
             "created_at": t.created_at.isoformat() if t.created_at else "",
             "last_seen_at": t.last_extension_sync.isoformat() if t.last_extension_sync else None,
             "last_web_active": (t.last_web_active or t.last_login).isoformat() if (t.last_web_active or t.last_login) else None,
@@ -1442,16 +1460,24 @@ async def admin_analytics(
     )
     online_traders = r.scalar()
 
-    # Top 5 traders by volume — computed from actual completed orders
+    # Top 5 traders by CURRENT-MONTH volume (EAT) — same source as the All Traders list,
+    # resets at the start of each month.
     from sqlalchemy import and_ as sql_and
+    _eat_now = now + timedelta(hours=3)
+    _top_month_start = (_eat_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)) - timedelta(hours=3)
     top_q = (
         select(
             Trader.full_name,
             func.count(Order.id).label("trades"),
             func.coalesce(func.sum(Order.fiat_amount), 0).label("volume"),
         )
-        .join(Order, sql_and(Order.trader_id == Trader.id, Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED])), isouter=True)
+        .join(Order, sql_and(
+            Order.trader_id == Trader.id,
+            Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
+            Order.created_at >= _top_month_start,
+        ), isouter=True)
         .group_by(Trader.id, Trader.full_name)
+        .having(func.count(Order.id) > 0)
         .order_by(func.coalesce(func.sum(Order.fiat_amount), 0).desc())
         .limit(5)
     )
