@@ -188,7 +188,11 @@ def compute_pnl(orders):
     s = _side(sells)
     spread = round(s["avg_rate"] - b["avg_rate"], 4) if (b["avg_rate"] and s["avg_rate"]) else 0.0
     gross = round(_realized, 2)
-    fees_kes = round(sum((o.binance_commission or 0) * (o.exchange_rate or 0) for o in orders), 2)
+    # Only SELL-side commission is a true deduction from realized profit. Buy-side
+    # commission is part of the USDT acquisition cost (already in the cost basis),
+    # so counting it here too would double-charge it.
+    fees_kes = round(sum((o.binance_commission or 0) * (o.exchange_rate or 0)
+                         for o in orders if o.side == OrderSide.SELL), 2)
     net = round(gross - fees_kes, 2)
     return {
         "buy": b, "sell": s, "spread": spread,
