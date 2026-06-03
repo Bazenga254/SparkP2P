@@ -40,7 +40,7 @@ _rel_window_covered = {}     # (trader_id, taker_no) -> True if a bg scan reache
 _rel_sem            = None   # lazily-created semaphore that serialises heavy background scans
 _backfill_done      = set()  # trader_ids whose full-history counterparty backfill has run
 _BACKFILL_MAX_CALLS = 3000   # safety cap on getUserOrderDetail calls per backfill run
-_BACKFILL_SLEEP     = 0.4    # seconds between detail calls — gentle on the relay / Binance
+_BACKFILL_CONCURRENCY = 6    # parallel detail lookups per batch (relay round-trips are ~1s each)
 
 
 def _rel_window_label():
@@ -74,9 +74,9 @@ async def _backfill_counterparties(trader_id, api_key, api_secret):
                 if not rows:
                     break
                 page_min_ct = min(int(h.get("createTime") or 0) for h in rows)
+                # Collect uncached COMPLETED candidates on this page
+                cand = []
                 for h in rows:
-                    if calls >= _BACKFILL_MAX_CALLS:
-                        break
                     hono = str(h.get("orderNumber") or "")
                     if not hono:
                         continue
@@ -86,23 +86,31 @@ async def _backfill_counterparties(trader_id, api_key, api_secret):
                         continue
                     if (await db.execute(T("SELECT 1 FROM counterparty_trades WHERE order_number=:o"), {"o": hono})).first():
                         continue  # already cached (idempotent)
-                    calls += 1
-                    try:
-                        idd = await get_order_identity(api_key, api_secret, hono)
-                    except Exception:
-                        await asyncio.sleep(_BACKFILL_SLEEP)
-                        continue
-                    tk = idd.get("taker_user_no")
-                    if tk:
+                    cand.append(h)
+                # Resolve identities in parallel batches (relay round-trips are slow individually)
+                for i in range(0, len(cand), _BACKFILL_CONCURRENCY):
+                    if calls >= _BACKFILL_MAX_CALLS:
+                        break
+                    chunk = cand[i:i + _BACKFILL_CONCURRENCY]
+                    calls += len(chunk)
+                    results = await asyncio.gather(
+                        *[get_order_identity(api_key, api_secret, str(h.get("orderNumber"))) for h in chunk],
+                        return_exceptions=True,
+                    )
+                    for h, idd in zip(chunk, results):
+                        if isinstance(idd, Exception) or not idd:
+                            continue
+                        tk = idd.get("taker_user_no")
+                        if not tk:
+                            continue
                         await db.execute(T(
                             "INSERT INTO counterparty_trades (order_number,trader_id,taker_user_no,full_nick,trade_type,total_price,status,created_ms) "
                             "VALUES (:o,:t,:u,:n,:tt,:p,'COMPLETED',:c) ON CONFLICT (order_number) DO NOTHING"
-                        ), {"o": hono, "t": trader_id, "u": tk, "n": idd.get("counterparty_nickname"),
-                            "tt": idd.get("trade_type"), "p": idd.get("total_price"),
+                        ), {"o": str(h.get("orderNumber")), "t": trader_id, "u": tk, "n": idd.get("counterparty_nickname"),
+                            "tt": idd.get("trade_type"), "p": float(h.get("totalPrice") or 0),
                             "c": int(h.get("createTime") or 0)})
                         cached += 1
-                    await asyncio.sleep(_BACKFILL_SLEEP)
-                await db.commit()
+                    await db.commit()
                 if page_min_ct < cutoff:
                     break
         logger.info("[Tracking] counterparty backfill done for trader %s: %d detail calls, %d cached", trader_id, calls, cached)
