@@ -29,8 +29,8 @@ _poller_boot = None
 
 # Relationship-analysis tuning
 _REL_WINDOW_DAYS   = 30      # look-back window for "trades with you"
-_REL_DETAIL_BUDGET = 25      # max getUserOrderDetail calls per cold counterparty backfill
-_REL_SCAN_PAGES    = (2, 3, 4)  # extra history pages scanned during backfill (page 1 reused)
+_REL_DETAIL_BUDGET = 40      # max getUserOrderDetail calls per cold counterparty backfill
+_REL_SCAN_PAGES    = (2, 3, 4, 5, 6, 7, 8)  # extra history pages scanned during backfill (page 1 reused)
 _REL_AMT_RATIO     = 2.0     # current amount >= ratio * usual -> flag
 _REL_AMT_MIN_DELTA = 25000   # ...and at least this many KES above usual, to avoid noise
 
@@ -140,17 +140,26 @@ async def _analyze_counterparty(db, api_key, api_secret, trader_id, rows,
     n_buy, n_sell = len(buys_from_us), len(sells_to_us)
 
     lines = []  # (kind, text) ; kind in {note, flag}
-    if n_buy == 0 and n_sell == 0:
+    total_obs = n_buy + n_sell
+    if total_obs == 0:
         return lines  # nothing reliable to add beyond the standard "traded before" line
 
-    # Direction pattern
-    if n_sell and n_buy == 0:
-        lines.append(("flag", f"First time BUYING from you — they've only ever sold to you ({n_sell} time(s) in {_REL_WINDOW_DAYS}d)"))
-    elif n_buy and n_sell == 0:
-        lines.append(("note", f"Consistent buyer — has bought from you {n_buy} time(s) and never sold to you"))
+    # Did we manage to identify ALL of EP-19's reported trades? Only then can we make
+    # absolute claims like "never sold to you". Otherwise report the matched sample
+    # honestly — the unmatched ones could be in either direction.
+    full = (not ep19_withus) or (total_obs >= ep19_withus)
+
+    if full:
+        if n_sell and n_buy == 0:
+            lines.append(("flag", f"First time buying from you — every prior trade ({n_sell}) was them selling to you"))
+        elif n_buy and n_sell == 0:
+            lines.append(("note", f"Consistent buyer — all {n_buy} prior trades were buys from you, never a sell"))
+        else:
+            dom = "buys from you" if n_buy >= n_sell else "sells to you"
+            lines.append(("note", f"Trade pattern: {n_buy} buys from you, {n_sell} sells to you — mostly {dom}"))
     else:
-        dom = "buys from you" if n_buy >= n_sell else "sells to you"
-        lines.append(("note", f"Trade pattern: bought from you {n_buy}×, sold to you {n_sell}× — mostly {dom}"))
+        unmatched = ep19_withus - total_obs
+        lines.append(("note", f"Direction (sampled {total_obs} of {ep19_withus}): {n_buy} buys from you, {n_sell} sells to you — {unmatched} older trade(s) not yet analysed"))
 
     # Amount anomaly — compare this buy to their usual buy size (same direction)
     ref = buys_from_us if buys_from_us else (buys_from_us + sells_to_us)
@@ -159,14 +168,10 @@ async def _analyze_counterparty(db, api_key, api_secret, trader_id, rows,
         if avg > 0 and cur_amt >= _REL_AMT_RATIO * avg and (cur_amt - avg) >= _REL_AMT_MIN_DELTA:
             mult = cur_amt / avg
             basis = "usual buy" if buys_from_us else "usual trade"
-            lines.append(("flag", f"Large order — KES {int(cur_amt):,} is {mult:.1f}× their {basis} of ~KES {int(avg):,}"))
+            sample = "" if full else f" (from {len(ref)} matched orders)"
+            lines.append(("flag", f"Large order — KES {int(cur_amt):,} is {mult:.1f}× their {basis} of ~KES {int(avg):,}{sample}"))
         else:
             lines.append(("note", f"Order size in line with their usual (~KES {int(avg):,})"))
-
-    # Coverage transparency when we couldn't reconcile all of EP-19's count
-    total_obs = n_buy + n_sell
-    if ep19_withus and total_obs < ep19_withus:
-        lines.append(("note", f"(pattern based on {total_obs} of {ep19_withus} trades I could match)"))
     return lines
 
 
