@@ -738,7 +738,7 @@ async def track_trader(db, trader) -> int:
     try:
         if getattr(trader, "telegram_chat_id", None):
             from sqlalchemy import text as _sql_text2
-            from app.services.binance.sapi_client import get_order_payment_details
+            from app.services.binance.sapi_client import get_order_payment_details, get_counterparty_statistic
             from app.api.routes.telegram import send_trader_message as _send2
             for o in rows:
                 if (o.get("tradeType") or "").upper() != "BUY":
@@ -778,6 +778,25 @@ async def track_trader(db, trader) -> int:
                     amt = f"KES {int(float(o.get('totalPrice') or 0)):,}"
                 except Exception:
                     amt = f"KES {o.get('totalPrice','?')}"
+                # Seller profile (EP-19) — on a BUY order we pay first then wait for THEM to
+                # release, so their avg RELEASE time is the key speed metric to advise on.
+                sprof = {}
+                try:
+                    sprof = await get_counterparty_statistic(api_key, api_secret, ono)
+                except Exception:
+                    sprof = {}
+                def _sf(v, suffix=""):
+                    return (f"{v}{suffix}" if v not in (None, "") else "N/A")
+                s_t30 = sprof.get("completedOrderNumOfLatest30day")
+                s_tall = sprof.get("completedOrderNum")
+                s_rate = sprof.get("finishRateLatest30Day")
+                s_regd = sprof.get("registerDays")
+                s_arel = sprof.get("avgReleaseTimeOfLatest30day") or sprof.get("avgReleaseTime") or 0
+                s_apay = sprof.get("avgPayTimeOfLatest30day") or sprof.get("avgPayTime") or 0
+                s_rel_min = (s_arel / 60.0) if s_arel else None
+                s_pay_min = (s_apay / 60.0) if s_apay else None
+                s_rate_txt = (f"{s_rate*100:.2f}%" if s_rate is not None else "N/A")
+
                 _bl = [
                     "<b>New Buy Order — Pay Seller</b>",
                     "",
@@ -787,9 +806,31 @@ async def track_trader(db, trader) -> int:
                     f"Seller: <b>{pay.get('counterparty_nickname') or o.get('counterPartNickName') or 'Unknown'}</b>",
                     f"Order: {ono}",
                     "",
-                    "Pay To:",
-                    f"- Method: {pay.get('method') or 'N/A'}",
+                    "Seller Profile:",
+                    f"- 30d trades: {_sf(s_t30)}",
+                    f"- All-time trades: {_sf(s_tall)}",
+                    f"- 30d completion: {s_rate_txt}",
+                    f"- Account age: {_sf(s_regd, ' days')}",
+                    f"- Avg release time: {('%.1f min' % s_rel_min) if s_rel_min else 'N/A'}",
+                    f"- Avg pay time: {('%.1f min' % s_pay_min) if s_pay_min else 'N/A'}",
                 ]
+                # Advisory — flag a slow releaser (you'll be waiting on this person)
+                _bnotes, _bflags = [], []
+                _bmaxrel = int(trader.cf_max_release_mins or 0)
+                if _bmaxrel > 0 and s_rel_min and s_rel_min > _bmaxrel:
+                    _bflags.append(f"Slow to release — averages {s_rel_min:.1f} min (your max is {_bmaxrel} min); you may wait a while for USDT")
+                elif s_rel_min is not None:
+                    _bnotes.append(f"Releases in ~{s_rel_min:.1f} min on average")
+                if s_rate is not None and s_rate < 0.90:
+                    _bflags.append(f"30-day completion rate is {s_rate_txt} — below 90%")
+                _bverdict = ("⚠️ <b>Review carefully</b> — some checks need attention" if _bflags
+                             else ("✅ <b>Looks good</b>" if _bnotes else "ℹ️ <b>Limited history</b>"))
+                _bl += ["", "Advisory:", _bverdict]
+                for _n in _bnotes:
+                    _bl.append(f"  • {_n}")
+                for _fl in _bflags:
+                    _bl.append(f"  ⚠ {_fl}")
+                _bl += ["", "Pay To:", f"- Method: {pay.get('method') or 'N/A'}"]
                 for fld in pay["fields"]:
                     _bl.append(f"- {fld['label']}: {fld['value']}")
                 _res2 = await _send2(trader, chr(10).join(_bl))
