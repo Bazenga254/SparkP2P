@@ -116,7 +116,7 @@ async def track_trader(db, trader) -> int:
     try:
         if getattr(trader, "telegram_chat_id", None):
             from sqlalchemy import text as _sql_text
-            from app.services.binance.sapi_client import get_counterparty_statistic
+            from app.services.binance.sapi_client import get_counterparty_statistic, get_order_payment_details
             from app.api.routes.telegram import notify_trader
             for o in rows:
                 if (o.get("tradeType") or "").upper() != "SELL":
@@ -143,6 +143,13 @@ async def track_trader(db, trader) -> int:
                     prof = await get_counterparty_statistic(api_key, api_secret, ono)
                 except Exception:
                     prof = {}
+                # Full (unmasked) buyer nickname from order detail (history nick is masked)
+                _full_nick = None
+                try:
+                    _det = await get_order_payment_details(api_key, api_secret, ono)
+                    _full_nick = _det.get("counterparty_nickname")
+                except Exception:
+                    _full_nick = None
                 def _f(v, suffix=""):
                     return (f"{v}{suffix}" if v not in (None, "") else "N/A")
                 t30 = prof.get("completedOrderNumOfLatest30day")
@@ -206,7 +213,7 @@ async def track_trader(db, trader) -> int:
                     f"Amount: {amt}",
                     f"Crypto: {o.get('amount','?')} {o.get('asset','USDT')}",
                     f"Rate: {o.get('unitPrice','?')}",
-                    f"Buyer: <b>{o.get('counterPartNickName') or 'Unknown'}</b>",
+                    f"Buyer: <b>{_full_nick or o.get('counterPartNickName') or 'Unknown'}</b>",
                     f"Order: {ono}",
                     "",
                     "Buyer Profile:",
