@@ -28,40 +28,47 @@ TERMINAL = {"COMPLETED", "CANCELLED", "CANCELLED_BY_SYSTEM"}
 _poller_boot = None
 
 # Relationship-analysis tuning
-_REL_WINDOW_DAYS   = 30      # look-back window for "trades with you"
-_REL_DETAIL_BUDGET = 30      # max getUserOrderDetail calls per background enrichment
-_REL_MAX_PAGES     = 12      # max history pages (50/page) scanned in background enrichment
+_REL_WINDOW_DAYS   = 30      # look-back window — Binance's order history only spans ~30 days
+_REL_DETAIL_BUDGET = 60      # max getUserOrderDetail calls per background enrichment
+_REL_MAX_PAGES     = 60      # scan to the end of available history (~58 pages / ~2900 orders)
 _REL_AMT_RATIO     = 2.0     # current amount >= ratio * usual -> flag
 _REL_AMT_MIN_DELTA = 25000   # ...and at least this many KES above usual, to avoid noise
-_rel_inflight      = set()   # (trader_id, taker_no) already enriched this process — scan once
+_rel_inflight       = set()  # (trader_id, taker_no) already enriched this process — scan once
+_rel_window_covered = {}     # (trader_id, taker_no) -> True if a bg scan reached the full window
+_rel_sem            = None   # lazily-created semaphore that serialises heavy background scans
 
 
-def _build_relationship_lines(prior, cur_amt, ep19_withus):
-    """Build advisory lines from a list of prior (trade_type, total_price) rows.
-    Direction is MERCHANT-view: our SELL = they BOUGHT from us; our BUY = they SOLD to us.
-    The current alert is a SELL (they are buying from us). Returns [(kind, text), ...]."""
+def _rel_window_label():
+    m = _REL_WINDOW_DAYS // 30
+    return f"last {m} months" if m >= 2 else f"last {_REL_WINDOW_DAYS} days"
+
+
+def _build_relationship_lines(prior, cur_amt, covered):
+    """Build advisory lines from a list of prior (trade_type, total_price) rows found in our
+    own order history. Direction is MERCHANT-view: our SELL = they BOUGHT from us; our BUY =
+    they SOLD to us. The current alert is a SELL (they are buying from us).
+
+    `covered` = did our scan reach back the full window? Only then do we make absolute,
+    time-bounded claims ("in the last 2 months they never sold to you"); otherwise we report
+    what we found from recent history without claiming completeness. Returns [(kind, text)]."""
     buys_from_us = [float(r[1] or 0) for r in prior if (r[0] or "").upper() == "SELL"]
     sells_to_us  = [float(r[1] or 0) for r in prior if (r[0] or "").upper() == "BUY"]
     n_buy, n_sell = len(buys_from_us), len(sells_to_us)
-    total_obs = n_buy + n_sell
     lines = []
-    if total_obs == 0:
+    if n_buy + n_sell == 0:
         return lines
 
-    # Only make absolute claims ("never sold to you") when we've matched ALL of EP-19's
-    # reported count; otherwise report the matched sample honestly.
-    full = (not ep19_withus) or (total_obs >= ep19_withus)
-    if full:
+    lab = _rel_window_label()
+    if covered:
         if n_sell and n_buy == 0:
-            lines.append(("flag", f"First time buying from you — every prior trade ({n_sell}) was them selling to you"))
+            lines.append(("flag", f"First time buying from you — in the {lab} they have only ever SOLD to you ({n_sell}×)"))
         elif n_buy and n_sell == 0:
-            lines.append(("note", f"Consistent buyer — all {n_buy} prior trades were buys from you, never a sell"))
+            lines.append(("note", f"In the {lab}: bought from you {n_buy}×, never sold to you"))
         else:
             dom = "buys from you" if n_buy >= n_sell else "sells to you"
-            lines.append(("note", f"Trade pattern: {n_buy} buys from you, {n_sell} sells to you — mostly {dom}"))
+            lines.append(("note", f"In the {lab}: bought from you {n_buy}×, sold to you {n_sell}× — mostly {dom}"))
     else:
-        unmatched = ep19_withus - total_obs
-        lines.append(("note", f"Direction (sampled {total_obs} of {ep19_withus}): {n_buy} buys from you, {n_sell} sells to you — {unmatched} other trade(s) still being analysed"))
+        lines.append(("note", f"From your recent order history: bought from you {n_buy}×, sold to you {n_sell}× (scanning further back)"))
 
     ref = buys_from_us if buys_from_us else (buys_from_us + sells_to_us)
     if ref and cur_amt > 0:
@@ -69,17 +76,16 @@ def _build_relationship_lines(prior, cur_amt, ep19_withus):
         if avg > 0 and cur_amt >= _REL_AMT_RATIO * avg and (cur_amt - avg) >= _REL_AMT_MIN_DELTA:
             mult = cur_amt / avg
             basis = "usual buy" if buys_from_us else "usual trade"
-            sample = "" if full else f" (from {len(ref)} matched orders)"
-            lines.append(("flag", f"Large order — KES {int(cur_amt):,} is {mult:.1f}× their {basis} of ~KES {int(avg):,}{sample}"))
+            lines.append(("flag", f"Large order — KES {int(cur_amt):,} is {mult:.1f}× their {basis} of ~KES {int(avg):,}"))
         else:
             lines.append(("note", f"Order size in line with their usual (~KES {int(avg):,})"))
     return lines
 
 
-async def _relationship_cached(db, trader_id, taker_no, current_order, full_nick, ep19_withus):
+async def _relationship_cached(db, trader_id, taker_no, current_order, full_nick):
     """FAST, no-API: cache the current order, then build relationship lines from whatever
-    we've already cached for this counterparty. Returns (lines, observed_count). Heavy
-    history reconstruction is deferred to _enrich_counterparty_bg (background)."""
+    we've already cached for this counterparty over the window. Returns (lines, observed).
+    Heavy history reconstruction is deferred to _enrich_counterparty_bg (background)."""
     from sqlalchemy import text as T
     import time as _t
     if not taker_no:
@@ -106,20 +112,25 @@ async def _relationship_cached(db, trader_id, taker_no, current_order, full_nick
         "SELECT trade_type, total_price FROM counterparty_trades "
         "WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c AND order_number<>:o"
     ), {"t": trader_id, "u": taker_no, "c": cutoff, "o": cur_ono})).fetchall()
-    return _build_relationship_lines(prior, cur_amt, ep19_withus), len(prior)
+    covered = _rel_window_covered.get((trader_id, taker_no), False)
+    return _build_relationship_lines(prior, cur_amt, covered), len(prior)
 
 
 async def _enrich_counterparty_bg(trader_id, api_key, api_secret, taker_no, full_nick,
-                                  cur_ono, cur_amt, ep19_withus, reply_to_mid):
-    """BACKGROUND (non-blocking): page through order history to identify this counterparty's
-    past trades and cache them, then — if that surfaced new trades — post a follow-up reply
-    under the alert summarising the relationship. Bounded & best-effort; at very high volume
-    it may not reconcile every trade in one pass, but incremental caching closes the gap and
-    we only ever scan a given counterparty once per process."""
+                                  cur_ono, cur_amt, ep19_target, reply_to_mid):
+    """BACKGROUND (non-blocking): page through the full available order history (~30 days)
+    to identify this counterparty's past trades and cache them, then post a follow-up reply
+    under the alert summarising the relationship. Stops early once we've matched EP-19's
+    reported count (we found them all). Records whether the window was fully covered so the
+    wording can be absolute ("in the last 30 days...") or cautious. Heavy scans are serialised
+    (one at a time) and each counterparty is scanned at most once per process."""
+    global _rel_sem
     key = (trader_id, taker_no)
-    if not taker_no or not ep19_withus or key in _rel_inflight:
+    if not taker_no or key in _rel_inflight:
         return
     _rel_inflight.add(key)
+    if _rel_sem is None:
+        _rel_sem = asyncio.Semaphore(1)
     try:
         from sqlalchemy import text as T
         from sqlalchemy import select as _sel
@@ -129,19 +140,25 @@ async def _enrich_counterparty_bg(trader_id, api_key, api_secret, taker_no, full
         cutoff = int(_t.time() * 1000) - _REL_WINDOW_DAYS * 86400 * 1000
         prefix = (full_nick or "").lower()
         budget = _REL_DETAIL_BUDGET
-        async with async_session() as db:
+        covered = False
+        target = int(ep19_target or 0)
+        async with _rel_sem, async_session() as db:
             start_obs = (await db.execute(T(
                 "SELECT COUNT(*) FROM counterparty_trades WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c"
             ), {"t": trader_id, "u": taker_no, "c": cutoff})).scalar() or 0
             matched = start_obs
             page = 1
-            while page <= _REL_MAX_PAGES and matched < ep19_withus and budget > 0:
+            while page <= _REL_MAX_PAGES and budget > 0:
+                if target and matched >= target:
+                    covered = True   # found all of EP-19's reported trades -> done
+                    break
                 try:
                     more = await get_user_order_history(api_key, api_secret, page=page, rows=50)
                 except Exception:
                     break
                 page += 1
                 if not more:
+                    covered = True   # ran out of history before the window -> fully covered
                     break
                 page_min_ct = min(int(h.get("createTime") or 0) for h in more)
                 for h in more:
@@ -175,24 +192,26 @@ async def _enrich_counterparty_bg(trader_id, api_key, api_secret, taker_no, full
                     matched += 1
                 await db.commit()
                 if page_min_ct < cutoff:
+                    covered = True   # paged past the window cutoff -> full window covered
                     break
-            # Nothing new discovered beyond what the inline alert already showed -> stay quiet
-            if matched <= start_obs:
-                return
+            _rel_window_covered[key] = covered
             prior = (await db.execute(T(
                 "SELECT trade_type, total_price FROM counterparty_trades "
                 "WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c AND order_number<>:o"
             ), {"t": trader_id, "u": taker_no, "c": cutoff, "o": cur_ono})).fetchall()
             from app.models.trader import Trader as _Tr
             trader = (await db.execute(_sel(_Tr).where(_Tr.id == trader_id))).scalar_one_or_none()
-        lines = _build_relationship_lines(prior, cur_amt, ep19_withus)
-        if not lines or trader is None:
+        # Only post a follow-up if the deeper scan added something the inline alert lacked
+        if matched <= start_obs or trader is None:
+            return
+        lines = _build_relationship_lines(prior, cur_amt, covered)
+        if not lines:
             return
         body = [f"📊 <b>Buyer history</b> — {full_nick or 'this buyer'}"]
         for kind, txt in lines:
             body.append(("⚠ " if kind == "flag" else "• ") + txt)
         await send_trader_message(trader, chr(10).join(body), reply_to=reply_to_mid)
-        logger.info("[Tracking] relationship enrichment posted for taker %s (%d trades)", taker_no, len(prior))
+        logger.info("[Tracking] relationship enrichment posted for taker %s (%d trades, covered=%s)", taker_no, len(prior), covered)
     except Exception as e:
         logger.warning("[Tracking] relationship enrichment failed: %s", e)
 
@@ -358,19 +377,18 @@ async def track_trader(db, trader) -> int:
                         _flags.append(f"Below your all-time minimum of {thrall} ({_tall} lifetime trades)")
                 # Repeat-client check
                 _need_enrich = False
-                _obs = 0
                 if _withus > 0:
                     _notes.append(f"Returning client — has completed {_withus} trade(s) with you in the last 30 days")
-                    # FAST relationship from cache (no API) — heavy history scan deferred to background
+                    # FAST relationship from cache (no API) — heavy 2-month history scan deferred to background
                     try:
-                        _rel, _obs = await _relationship_cached(db, trader.id, _taker_no, o, _full_nick, _withus)
+                        _rel, _obs = await _relationship_cached(db, trader.id, _taker_no, o, _full_nick)
                     except Exception as _re:
                         logger.warning("[Tracking] counterparty analysis failed: %s", _re)
                         _rel = []
                     for _kind, _txt in _rel:
                         (_flags if _kind == "flag" else _notes).append(_txt)
-                    # If cache doesn't yet cover all of EP-19's count, enrich in background
-                    _need_enrich = (_taker_no is not None and _obs < _withus
+                    # Enrich in background until we've scanned the full window for this buyer
+                    _need_enrich = (_taker_no is not None
                                     and (trader.id, _taker_no) not in _rel_inflight)
                 # Account-age check
                 if _regd is not None:
