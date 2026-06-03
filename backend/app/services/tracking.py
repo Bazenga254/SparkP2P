@@ -27,6 +27,148 @@ BOOT_GRACE_SECS = 120   # after backend (re)start, dont reset floors (a restart 
 TERMINAL = {"COMPLETED", "CANCELLED", "CANCELLED_BY_SYSTEM"}
 _poller_boot = None
 
+# Relationship-analysis tuning
+_REL_WINDOW_DAYS   = 30      # look-back window for "trades with you"
+_REL_DETAIL_BUDGET = 25      # max getUserOrderDetail calls per cold counterparty backfill
+_REL_SCAN_PAGES    = (2, 3, 4)  # extra history pages scanned during backfill (page 1 reused)
+_REL_AMT_RATIO     = 2.0     # current amount >= ratio * usual -> flag
+_REL_AMT_MIN_DELTA = 25000   # ...and at least this many KES above usual, to avoid noise
+
+
+async def _analyze_counterparty(db, api_key, api_secret, trader_id, rows,
+                                current_order, taker_no, full_nick, ep19_withus):
+    """Profile the counterparty's trading relationship WITH THIS MERCHANT and return a
+    list of advisory note strings (each tagged 'note' or 'flag').
+
+    History nicknames are masked, so we identify past trades by the stable takerUserNo:
+    cheaply prefix-filter candidates by masked nickname, then confirm via getUserOrderDetail
+    (results cached in counterparty_trades so it's near-free after warm-up).
+
+    Direction is from the MERCHANT's view: our SELL = they BOUGHT from us; our BUY = they
+    SOLD to us. The current alert is always a SELL (they are buying from us)."""
+    from sqlalchemy import text as T
+    from app.services.binance.sapi_client import get_user_order_history, get_order_identity
+    import time as _t
+    if not taker_no:
+        return []
+    now_ms = int(_t.time() * 1000)
+    cutoff = now_ms - _REL_WINDOW_DAYS * 86400 * 1000
+    cur_ono = str(current_order.get("orderNumber") or "")
+    try:
+        cur_amt = float(current_order.get("totalPrice") or 0)
+    except Exception:
+        cur_amt = 0.0
+
+    # Cache the current order too (so future alerts see it)
+    try:
+        await db.execute(T(
+            "INSERT INTO counterparty_trades (order_number,trader_id,taker_user_no,full_nick,trade_type,total_price,status,created_ms) "
+            "VALUES (:o,:t,:u,:n,:tt,:p,:s,:c) ON CONFLICT (order_number) DO UPDATE SET taker_user_no=EXCLUDED.taker_user_no"
+        ), {"o": cur_ono, "t": trader_id, "u": taker_no, "n": full_nick,
+            "tt": (current_order.get("tradeType") or "").upper(),
+            "p": cur_amt, "s": (current_order.get("orderStatus") or "").upper(),
+            "c": int(current_order.get("createTime") or now_ms)})
+        await db.commit()
+    except Exception:
+        pass
+
+    # How many of this counterparty's trades have we already cached?
+    observed = (await db.execute(T(
+        "SELECT COUNT(*) FROM counterparty_trades WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c"
+    ), {"t": trader_id, "u": taker_no, "c": cutoff})).scalar() or 0
+
+    # One-time cold backfill: the first time we ever see this counterparty (only the
+    # current order cached), scan recent history to seed their past trades. After that we
+    # rely on incremental caching (every new order caches itself), so steady-state cost is
+    # just the SELECT below — no repeated history scans even if we can't reach all of EP-19.
+    if ep19_withus and observed <= 1:
+        prefix = (full_nick or "").lower()
+        budget = _REL_DETAIL_BUDGET
+        hist = list(rows)
+        try:
+            for pg in _REL_SCAN_PAGES:
+                more = await get_user_order_history(api_key, api_secret, page=pg, rows=50)
+                if not more:
+                    break
+                hist += more
+        except Exception:
+            pass
+        for h in hist:
+            if budget <= 0:
+                break
+            hono = str(h.get("orderNumber") or "")
+            if not hono or hono == cur_ono:
+                continue
+            if (h.get("orderStatus") or "").upper() != "COMPLETED":
+                continue
+            if int(h.get("createTime") or 0) < cutoff:
+                continue
+            mp = (h.get("counterPartNickName") or "").split("*")[0]   # masked prefix
+            if not mp or prefix[:len(mp)] != mp.lower():
+                continue
+            cached = (await db.execute(T(
+                "SELECT 1 FROM counterparty_trades WHERE order_number=:o"
+            ), {"o": hono})).first()
+            if cached:
+                continue
+            budget -= 1
+            try:
+                idd = await get_order_identity(api_key, api_secret, hono)
+            except Exception:
+                continue
+            # Confirm identity: stable takerUserNo (when they took our ad) OR exact
+            # unmasked nickname (covers orders where we took their ad). Same prefix but
+            # neither matches => a different person who happens to share the prefix.
+            if idd.get("taker_user_no") != taker_no and idd.get("counterparty_nickname") != full_nick:
+                continue
+            await db.execute(T(
+                "INSERT INTO counterparty_trades (order_number,trader_id,taker_user_no,full_nick,trade_type,total_price,status,created_ms) "
+                "VALUES (:o,:t,:u,:n,:tt,:p,:s,:c) ON CONFLICT (order_number) DO NOTHING"
+            ), {"o": hono, "t": trader_id, "u": taker_no, "n": idd.get("counterparty_nickname"),
+                "tt": idd.get("trade_type"), "p": idd.get("total_price"),
+                "s": idd.get("status"), "c": int(h.get("createTime") or 0)})
+        await db.commit()
+
+    # Confirmed prior trades with this counterparty (exclude the current order)
+    prior = (await db.execute(T(
+        "SELECT trade_type, total_price FROM counterparty_trades "
+        "WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c AND order_number<>:o"
+    ), {"t": trader_id, "u": taker_no, "c": cutoff, "o": cur_ono})).fetchall()
+
+    buys_from_us = [float(r[1] or 0) for r in prior if (r[0] or "").upper() == "SELL"]  # they bought from us
+    sells_to_us  = [float(r[1] or 0) for r in prior if (r[0] or "").upper() == "BUY"]   # they sold to us
+    n_buy, n_sell = len(buys_from_us), len(sells_to_us)
+
+    lines = []  # (kind, text) ; kind in {note, flag}
+    if n_buy == 0 and n_sell == 0:
+        return lines  # nothing reliable to add beyond the standard "traded before" line
+
+    # Direction pattern
+    if n_sell and n_buy == 0:
+        lines.append(("flag", f"First time BUYING from you — they've only ever sold to you ({n_sell} time(s) in {_REL_WINDOW_DAYS}d)"))
+    elif n_buy and n_sell == 0:
+        lines.append(("note", f"Consistent buyer — has bought from you {n_buy} time(s) and never sold to you"))
+    else:
+        dom = "buys from you" if n_buy >= n_sell else "sells to you"
+        lines.append(("note", f"Trade pattern: bought from you {n_buy}×, sold to you {n_sell}× — mostly {dom}"))
+
+    # Amount anomaly — compare this buy to their usual buy size (same direction)
+    ref = buys_from_us if buys_from_us else (buys_from_us + sells_to_us)
+    if ref and cur_amt > 0:
+        avg = sum(ref) / len(ref)
+        if avg > 0 and cur_amt >= _REL_AMT_RATIO * avg and (cur_amt - avg) >= _REL_AMT_MIN_DELTA:
+            mult = cur_amt / avg
+            basis = "usual buy" if buys_from_us else "usual trade"
+            lines.append(("flag", f"Large order — KES {int(cur_amt):,} is {mult:.1f}× their {basis} of ~KES {int(avg):,}"))
+        else:
+            lines.append(("note", f"Order size in line with their usual (~KES {int(avg):,})"))
+
+    # Coverage transparency when we couldn't reconcile all of EP-19's count
+    total_obs = n_buy + n_sell
+    if ep19_withus and total_obs < ep19_withus:
+        lines.append(("note", f"(pattern based on {total_obs} of {ep19_withus} trades I could match)"))
+    return lines
+
 
 async def track_trader(db, trader) -> int:
     """Record this trader's newly-completed Binance orders into the Orders table,
@@ -143,11 +285,13 @@ async def track_trader(db, trader) -> int:
                     prof = await get_counterparty_statistic(api_key, api_secret, ono)
                 except Exception:
                     prof = {}
-                # Full (unmasked) buyer nickname from order detail (history nick is masked)
+                # Full (unmasked) buyer nickname + stable counterparty id from order detail
                 _full_nick = None
+                _taker_no = None
                 try:
                     _det = await get_order_payment_details(api_key, api_secret, ono)
                     _full_nick = _det.get("counterparty_nickname")
+                    _taker_no = _det.get("taker_user_no")
                 except Exception:
                     _full_nick = None
                 def _f(v, suffix=""):
@@ -188,6 +332,16 @@ async def track_trader(db, trader) -> int:
                 # Repeat-client check
                 if _withus > 0:
                     _notes.append(f"Returning client — has completed {_withus} trade(s) with you in the last 30 days")
+                    # Deep relationship analysis: buy/sell direction pattern + amount anomaly
+                    try:
+                        _rel = await _analyze_counterparty(
+                            db, api_key, api_secret, trader.id, rows, o, _taker_no, _full_nick, _withus
+                        )
+                    except Exception as _re:
+                        logger.warning("[Tracking] counterparty analysis failed: %s", _re)
+                        _rel = []
+                    for _kind, _txt in _rel:
+                        (_flags if _kind == "flag" else _notes).append(_txt)
                 # Account-age check
                 if _regd is not None:
                     if _regd >= 365:

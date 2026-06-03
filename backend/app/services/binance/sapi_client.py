@@ -227,4 +227,32 @@ async def get_order_payment_details(api_key: str, api_secret: str, order_number:
         "fields": fields,
         "raw_pay_type": pay_type,
         "counterparty_nickname": cp_nick,
+        "taker_user_no": d.get("takerUserNo"),
+    }
+
+
+async def get_order_identity(api_key: str, api_secret: str, order_number: str) -> dict:
+    """EP-13 (lean): just the counterparty identity + headline order facts, used to
+    match a counterparty across past orders (history nicknames are masked, so we key
+    on the stable takerUserNo). Returns {taker_user_no, counterparty_nickname,
+    trade_type, total_price, status}."""
+    params = _base_params()
+    params["signature"] = _sign(api_secret, params)
+    data = await _post(
+        "/sapi/v1/c2c/orderMatch/getUserOrderDetail",
+        api_key, params, {"adOrderNo": order_number},
+    )
+    d = data.get("data") or {}
+    trade_type = (d.get("tradeType") or "").upper()
+    cp_nick = d.get("sellerNickname") if trade_type == "BUY" else d.get("buyerNickname")
+    try:
+        total_price = float(d.get("totalPrice") or 0)
+    except Exception:
+        total_price = 0.0
+    return {
+        "taker_user_no": d.get("takerUserNo"),
+        "counterparty_nickname": cp_nick,
+        "trade_type": trade_type,
+        "total_price": total_price,
+        "status": str(d.get("orderStatus") or "").upper(),
     }
