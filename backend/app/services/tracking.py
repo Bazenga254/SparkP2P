@@ -178,6 +178,62 @@ async def track_trader(db, trader) -> int:
     except Exception as _ne:
         logger.warning("[Tracking] sell-order notify failed: %s", _ne)
 
+    # ── Telegram alert for NEW buy orders (SELLER payment details via EP-13) ──
+    # On a buy order WE pay the seller, so show their account/phone/paybill + amount.
+    try:
+        if getattr(trader, "telegram_chat_id", None):
+            from sqlalchemy import text as _sql_text2
+            from app.services.binance.sapi_client import get_order_payment_details
+            from app.api.routes.telegram import notify_trader as _notify2
+            for o in rows:
+                if (o.get("tradeType") or "").upper() != "BUY":
+                    continue
+                ct = int(o.get("createTime") or 0)
+                if ct < floor:
+                    continue
+                ono = o.get("orderNumber")
+                if not ono:
+                    continue
+                seen = (await db.execute(_sql_text2(
+                    "SELECT 1 FROM sell_order_notifications WHERE order_number = :o"
+                ), {"o": str(ono)})).first()
+                if seen:
+                    continue
+                await db.execute(_sql_text2(
+                    "INSERT INTO sell_order_notifications (order_number, trader_id) VALUES (:o, :t) ON CONFLICT DO NOTHING"
+                ), {"o": str(ono), "t": trader.id})
+                await db.commit()
+                pay = {}
+                try:
+                    pay = await get_order_payment_details(api_key, api_secret, ono)
+                except Exception:
+                    pay = {}
+                try:
+                    amt = f"KES {int(float(o.get('totalPrice') or 0)):,}"
+                except Exception:
+                    amt = f"KES {o.get('totalPrice','?')}"
+                _bl = [
+                    "💸 New Buy Order — Pay Seller",
+                    "",
+                    f"Amount to send: {amt}",
+                    f"Crypto: {o.get('amount','?')} {o.get('asset','USDT')}",
+                    f"Rate: {o.get('unitPrice','?')}",
+                    f"Seller: {o.get('counterPartNickName') or 'Unknown'}",
+                    f"Order: {ono}",
+                    "",
+                    "Pay To:",
+                    f"- Method: {pay.get('method') or 'N/A'}",
+                ]
+                if pay.get("fields"):
+                    for fld in pay["fields"]:
+                        _bl.append(f"- {fld['label']}: {fld['value']}")
+                else:
+                    _bl.append("- (details not available yet — check the order page)")
+                await _notify2(trader, chr(10).join(_bl))
+                logger.info("[Tracking] buy-order Telegram alert sent: %s", ono)
+    except Exception as _be:
+        logger.warning("[Tracking] buy-order notify failed: %s", _be)
+
     trader.tracking_last_poll_at = now
     await db.commit()
     if inserted:
