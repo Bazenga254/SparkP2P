@@ -155,6 +155,8 @@ class Trader(Base):
     cf_volume_window          = Column(Integer, default=2)     # 1=Last 30D, 2=All-time
     cf_all_trades_min_all     = Column(Integer, default=0)
     cf_reg_days_min           = Column(Integer, default=0)
+    cf_max_pay_mins           = Column(Integer, default=0)   # flag buyers slower than this avg pay time (0=off)
+    cf_max_release_mins       = Column(Integer, default=0)   # flag sellers slower than this avg release time (0=off)
     cf_last_pushed_at         = Column(DateTime(timezone=True), nullable=True)
 
     # Affiliate referral tracking

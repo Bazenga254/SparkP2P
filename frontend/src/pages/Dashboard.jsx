@@ -519,6 +519,8 @@ export default function Dashboard() {
   const [cfEnabled, setCfEnabled] = useState(false);
   const [cfAllTradesMin, setCfAllTradesMin] = useState('0');
   const [cfAllTradesMinAll, setCfAllTradesMinAll] = useState('0');
+  const [cfMaxPayMins, setCfMaxPayMins] = useState('0');
+  const [cfMaxReleaseMins, setCfMaxReleaseMins] = useState('0');
   const [cfSync, setCfSync] = useState(null); // live Binance sync status: { available, synced, expected, binance_values }
   const checkCfSync = async () => {
     try { const r = await api.get('/traders/cf-sync-status'); setCfSync(r.data); } catch { setCfSync(null); }
@@ -622,7 +624,7 @@ export default function Dashboard() {
       // NOTE: Orders are NOT fetched here — the dedicated binance-orders effect (keyed on
       // activeTab/ordersFilter/ordersPage) owns the Orders list so the filter never gets
       // overwritten by a background loadData refresh.
-      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); setCfEnabled(p.cf_filters_enabled || false); setCfAllTradesMin(String(p.cf_all_trades_min ?? 0)); setCfAllTradesMinAll(String(p.cf_all_trades_min_all ?? 0)); } }
+      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); setCfEnabled(p.cf_filters_enabled || false); setCfAllTradesMin(String(p.cf_all_trades_min ?? 0)); setCfAllTradesMinAll(String(p.cf_all_trades_min_all ?? 0)); setCfMaxPayMins(String(p.cf_max_pay_mins ?? 0)); setCfMaxReleaseMins(String(p.cf_max_release_mins ?? 0)); } }
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
       if (results[3].status === 'fulfilled') setTransactions(results[3].value.data);
@@ -2185,7 +2187,7 @@ export default function Dashboard() {
                 onClick={async () => {
                   setSavingConfig(true);
                   try {
-                    const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0 });
+                    const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0 });
                     configSavedAt.current = Date.now();
                     setConfigSaved(true);
                     setTimeout(() => { setConfigSaved(false); }, 1500);
@@ -2306,7 +2308,7 @@ export default function Dashboard() {
                   <div style={{ position: 'absolute', top: 4, left: cfEnabled ? 22 : 4, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
                 </div>
               </div>
-              {cfEnabled && (
+              {cfEnabled && (<>
                 <div style={{ display: 'flex', gap: 12 }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 5 }}>Min Total Trades (30D)</div>
@@ -2321,7 +2323,21 @@ export default function Dashboard() {
                     <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off · Binance enforced 24/7</div>
                   </div>
                 </div>
-              )}
+                <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 5 }}>Max Avg Pay Time (min)</div>
+                    <input type="number" min="0" value={cfMaxPayMins} onChange={e => setCfMaxPayMins(e.target.value)}
+                      style={{ width: '100%', background: '#111827', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off · flags slow payers (sell orders)</div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 5 }}>Max Avg Release Time (min)</div>
+                    <input type="number" min="0" value={cfMaxReleaseMins} onChange={e => setCfMaxReleaseMins(e.target.value)}
+                      style={{ width: '100%', background: '#111827', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off · flags slow releasers</div>
+                  </div>
+                </div>
+              </>)}
             </div>
           </div>
         )}
@@ -3615,7 +3631,7 @@ export default function Dashboard() {
                   <div style={{ position: 'absolute', top: 3, left: cfEnabled ? 20 : 3, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
                 </div>
               </div>
-              {cfEnabled && (
+              {cfEnabled && (<>
                 <div style={{ display: 'flex', gap: 10 }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Min Total Trades (30D)</div>
@@ -3630,7 +3646,21 @@ export default function Dashboard() {
                     <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off · Binance enforced 24/7</div>
                   </div>
                 </div>
-              )}
+                <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Max Avg Pay Time (min)</div>
+                    <input type="number" min="0" value={cfMaxPayMins} onChange={e => setCfMaxPayMins(e.target.value)}
+                      style={{ width: '100%', background: '#0d1117', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off · flags slow payers</div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Max Avg Release Time (min)</div>
+                    <input type="number" min="0" value={cfMaxReleaseMins} onChange={e => setCfMaxReleaseMins(e.target.value)}
+                      style={{ width: '100%', background: '#0d1117', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
+                    <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>0 = off · flags slow releasers</div>
+                  </div>
+                </div>
+              </>)}
             </div>
 
             {configSaved && (
@@ -3643,7 +3673,7 @@ export default function Dashboard() {
               onClick={async () => {
                 setSavingConfig(true);
                 try {
-                  const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0 });
+                  const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0 });
                   configSavedAt.current = Date.now();
                   setConfigSaved(true);
                   setTimeout(() => { setConfigSaved(false); if (showConfigModal) setShowConfigModal(false); }, 1500);

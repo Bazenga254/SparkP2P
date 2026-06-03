@@ -589,6 +589,13 @@ async def track_trader(db, trader) -> int:
                 rate30 = prof.get("finishRateLatest30Day")
                 regd = prof.get("registerDays")
                 withus = prof.get("numberOfTradesWithCounterpartyCompleted30day") or 0
+                # Avg pay / release time (EP-19, in seconds) -> minutes. Prefer 30-day, fall
+                # back to all-time. Pay time = how fast they pay us (matters on our sell orders);
+                # release time = how fast they release crypto (matters when we buy from them).
+                _apay = prof.get("avgPayTimeOfLatest30day") or prof.get("avgPayTime") or 0
+                _arel = prof.get("avgReleaseTimeOfLatest30day") or prof.get("avgReleaseTime") or 0
+                _pay_min = (_apay / 60.0) if _apay else None
+                _rel_min = (_arel / 60.0) if _arel else None
                 try:
                     amt = f"KES {int(float(o.get('totalPrice') or 0)):,}"
                 except Exception:
@@ -659,6 +666,13 @@ async def track_trader(db, trader) -> int:
                 # Completion-rate flag
                 if rate30 is not None and rate30 < 0.90:
                     _base_flags.append(f"30-day completion rate is {_rate_txt} — below 90%")
+                # Speed flags — slow counterparties waste the merchant's time
+                _maxpay = int(trader.cf_max_pay_mins or 0)        # this is a SELL order -> they pay us
+                _maxrel = int(trader.cf_max_release_mins or 0)    # how fast they release when they sell
+                if _maxpay > 0 and _pay_min and _pay_min > _maxpay:
+                    _base_flags.append(f"Slow to pay — averages {_pay_min:.1f} min to pay (your max is {_maxpay} min)")
+                if _maxrel > 0 and _rel_min and _rel_min > _maxrel:
+                    _base_flags.append(f"Slow to release — averages {_rel_min:.1f} min to release (your max is {_maxrel} min)")
 
                 # Context for rendering — shared by the initial send AND the background edit
                 _ctx = {
@@ -674,6 +688,8 @@ async def track_trader(db, trader) -> int:
                         f"- 30d trades: {_f(t30)}",
                         f"- All-time trades: {_f(tall)}",
                         f"- 30d completion: {_rate_txt}",
+                        f"- Avg pay time: {('%.1f min' % _pay_min) if _pay_min else 'N/A'}",
+                        f"- Avg release time: {('%.1f min' % _rel_min) if _rel_min else 'N/A'}",
                         f"- Account age: {_f(regd, ' days')}",
                         f"- Traded with you before: {_before}",
                     ],

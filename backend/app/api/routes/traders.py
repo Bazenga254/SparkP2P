@@ -94,6 +94,8 @@ class TradingConfigRequest(BaseModel):
     cf_volume_window:          Optional[int]   = None  # 1=Last 30D, 2=All-time
     cf_reg_days_min:           Optional[int]   = None
     cf_all_trades_min_all:     Optional[int]   = None
+    cf_max_pay_mins:           Optional[int]   = None
+    cf_max_release_mins:       Optional[int]   = None
 
 
 class BinanceApiKeyRequest(BaseModel):
@@ -178,6 +180,8 @@ class TraderProfileResponse(BaseModel):
     cf_volume_window:          int   = 2
     cf_reg_days_min:           int   = 0
     cf_all_trades_min_all:     int   = 0
+    cf_max_pay_mins:           int   = 0
+    cf_max_release_mins:       int   = 0
     cf_last_pushed_at:         Optional[str] = None
     telegram_connected: bool = False
     telegram_approval_enabled: bool = False
@@ -622,6 +626,8 @@ async def get_profile(
         cf_volume_window=trader.cf_volume_window or 2,
         cf_reg_days_min=trader.cf_reg_days_min or 0,
         cf_all_trades_min_all=trader.cf_all_trades_min_all or 0,
+        cf_max_pay_mins=trader.cf_max_pay_mins or 0,
+        cf_max_release_mins=trader.cf_max_release_mins or 0,
         cf_last_pushed_at=trader.cf_last_pushed_at.isoformat() if trader.cf_last_pushed_at else None,
         telegram_connected=bool(trader.telegram_chat_id),
         telegram_approval_enabled=bool(trader.telegram_approval_enabled),
@@ -993,6 +999,10 @@ async def update_trading_config(
     if data.cf_all_trades_min_all is not None:
         trader.cf_all_trades_min_all = data.cf_all_trades_min_all
         cf_changed = True
+    if data.cf_max_pay_mins is not None:
+        trader.cf_max_pay_mins = data.cf_max_pay_mins
+    if data.cf_max_release_mins is not None:
+        trader.cf_max_release_mins = data.cf_max_release_mins
 
     await db.commit()
 
