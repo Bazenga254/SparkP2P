@@ -229,7 +229,7 @@ async def track_trader(db, trader) -> int:
                     f"Amount to send: {amt}",
                     f"Crypto: {o.get('amount','?')} {o.get('asset','USDT')}",
                     f"Rate: {o.get('unitPrice','?')}",
-                    f"Seller: <b>{o.get('counterPartNickName') or 'Unknown'}</b>",
+                    f"Seller: <b>{pay.get('counterparty_nickname') or o.get('counterPartNickName') or 'Unknown'}</b>",
                     f"Order: {ono}",
                     "",
                     "Pay To:",

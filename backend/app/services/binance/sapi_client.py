@@ -214,10 +214,17 @@ async def get_order_payment_details(api_key: str, api_secret: str, order_number:
                 name = name or val
             if ctype == "pay_account" or any(w in label.lower() for w in ["account number", "phone", "card"]):
                 pay_account = pay_account or val
+    # Full (unmasked) counterparty nickname — depends on our side of the trade.
+    trade_type = (d.get("tradeType") or "").upper()
+    if trade_type == "BUY":
+        cp_nick = d.get("sellerNickname")   # we buy -> counterparty is the seller
+    else:
+        cp_nick = d.get("buyerNickname")    # we sell -> counterparty is the buyer
     return {
         "method": (chosen or {}).get("tradeMethodName") or pay_type,
         "name": name,
         "pay_account": pay_account,
         "fields": fields,
         "raw_pay_type": pay_type,
+        "counterparty_nickname": cp_nick,
     }
