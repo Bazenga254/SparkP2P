@@ -46,16 +46,21 @@ def _generate_code() -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
 
-async def notify_trader(trader, message: str) -> bool:
-    """Send a Telegram notification to a trader if they have a chat_id linked.
-    Returns True if sent successfully, False otherwise.
-    Callers should fall back to SMS for security-critical notifications when False."""
+async def send_trader_message(trader, message: str, reply_markup=None, reply_to=None):
+    """Send a Telegram message to a trader and return the raw API result (or None).
+    Supports inline-keyboard buttons (reply_markup) and threaded replies (reply_to).
+    Charges the Telegram-notify credit once on success."""
     chat_id = getattr(trader, "telegram_chat_id", None)
     if not chat_id:
-        return False
+        return None
     payload = {"chat_id": chat_id, "text": message}
     if "<b>" in message or "</b>" in message:
         payload["parse_mode"] = "HTML"
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    if reply_to is not None:
+        payload["reply_to_message_id"] = reply_to
+        payload["allow_sending_without_reply"] = True
     result = await _tg_send("sendMessage", payload)
     ok = bool(result and result.get("ok"))
     if ok:
@@ -66,7 +71,15 @@ async def notify_trader(trader, message: str) -> bool:
                 await _credits.charge_standalone(tid, _credits.TELEGRAM_NOTIFY_CREDIT, reason="telegram notify")
         except Exception:
             pass
-    return ok
+    return result if ok else None
+
+
+async def notify_trader(trader, message: str, reply_markup=None, reply_to=None) -> bool:
+    """Send a Telegram notification to a trader if they have a chat_id linked.
+    Returns True if sent successfully, False otherwise.
+    Callers should fall back to SMS for security-critical notifications when False."""
+    result = await send_trader_message(trader, message, reply_markup=reply_markup, reply_to=reply_to)
+    return result is not None
 
 
 # ── Public webhook — Telegram pushes all updates here ───────────────────────
@@ -232,6 +245,7 @@ async def send_test_message(trader: Trader = Depends(get_current_trader)):
 async def request_approval(
     payload: dict,
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ):
     if not trader.telegram_chat_id:
         raise HTTPException(status_code=400, detail="Telegram not connected")
@@ -242,6 +256,25 @@ async def request_approval(
 
     if not order_number:
         raise HTTPException(status_code=400, detail="Missing orderNumber")
+
+    # Dedupe with the server-side tracking poller: if it already sent an approval
+    # alert for this order, don't send a second button message — just return the
+    # existing message_id so the desktop can keep polling approval-status.
+    from sqlalchemy import text as _sql_text
+    _existing = (await db.execute(_sql_text(
+        "SELECT tg_message_id FROM sell_order_notifications WHERE order_number = :o"
+    ), {"o": str(order_number)})).first()
+    if _existing is not None:
+        _ex_mid = _existing[0]
+        if order_number not in _pending_approvals:
+            _pending_approvals[order_number] = {
+                "chat_id": trader.telegram_chat_id,
+                "message_id": _ex_mid,
+                "status": "pending",
+                "trader_id": trader.id,
+                "created_at": time.time(),
+            }
+        return {"ok": True, "message_id": _ex_mid, "deduped": True}
 
     b = stats
     all_time_raw = b.get("allTimeTrades", "N/A")
@@ -300,6 +333,19 @@ async def request_approval(
         "trader_id": trader.id,
         "created_at": time.time(),
     }
+
+    # Record so the server-side tracking poller skips this order (no duplicate alert)
+    # and so the status follow-up ("Order completed / cancelled") can reply under it.
+    try:
+        await db.execute(_sql_text(
+            "INSERT INTO sell_order_notifications (order_number, trader_id, tg_message_id, last_status, trade_type) "
+            "VALUES (:o, :t, :m, :s, 'SELL') "
+            "ON CONFLICT (order_number) DO UPDATE SET tg_message_id = EXCLUDED.tg_message_id"
+        ), {"o": str(order_number), "t": trader.id, "m": msg_id,
+            "s": (order.get("orderStatus") or "").upper()})
+        await db.commit()
+    except Exception:
+        pass
 
     return {"ok": True, "message_id": msg_id}
 

@@ -117,7 +117,7 @@ async def track_trader(db, trader) -> int:
         if getattr(trader, "telegram_chat_id", None):
             from sqlalchemy import text as _sql_text
             from app.services.binance.sapi_client import get_counterparty_statistic, get_order_payment_details
-            from app.api.routes.telegram import notify_trader
+            from app.api.routes.telegram import notify_trader, send_trader_message, _pending_approvals
             for o in rows:
                 if (o.get("tradeType") or "").upper() != "SELL":
                     continue
@@ -208,7 +208,7 @@ async def track_trader(db, trader) -> int:
                     _verdict = "ℹ️ <b>Limited history available</b> — use your judgement"
 
                 _lines = [
-                    "<b>New Sell Order</b>",
+                    "🔔 <b>New Sell Order — Approval Required</b>",
                     "",
                     f"Amount: {amt}",
                     f"Crypto: {o.get('amount','?')} {o.get('asset','USDT')}",
@@ -230,9 +230,30 @@ async def track_trader(db, trader) -> int:
                     _lines.append(f"  • {_n}")
                 for _fl in _flags:
                     _lines.append(f"  ⚠ {_fl}")
-                _lines += ["", "Reply /approve to share payment details, or /reject to decline."]
+                _lines += ["", "Tap a button below to proceed."]
                 msg = chr(10).join(_lines)
-                await notify_trader(trader, msg)
+                _kb = {"inline_keyboard": [[
+                    {"text": "✅ YES - Proceed", "callback_data": f"approve:{ono}"},
+                    {"text": "❌ NO - Reject",   "callback_data": f"reject:{ono}"},
+                ]]}
+                _res = await send_trader_message(trader, msg, reply_markup=_kb)
+                _mid = (_res or {}).get("result", {}).get("message_id")
+                # Persist message_id + status; register for the YES/NO callback + desktop polling
+                await db.execute(_sql_text(
+                    "UPDATE sell_order_notifications SET tg_message_id = :m, last_status = :s, trade_type = 'SELL' WHERE order_number = :o"
+                ), {"m": _mid, "s": (o.get("orderStatus") or "").upper(), "o": str(ono)})
+                await db.commit()
+                try:
+                    import time as _time
+                    _pending_approvals[str(ono)] = {
+                        "chat_id": trader.telegram_chat_id,
+                        "message_id": _mid,
+                        "status": "pending",
+                        "trader_id": trader.id,
+                        "created_at": _time.time(),
+                    }
+                except Exception:
+                    pass
                 logger.info("[Tracking] sell-order Telegram alert sent: %s", ono)
     except Exception as _ne:
         logger.warning("[Tracking] sell-order notify failed: %s", _ne)
@@ -243,7 +264,7 @@ async def track_trader(db, trader) -> int:
         if getattr(trader, "telegram_chat_id", None):
             from sqlalchemy import text as _sql_text2
             from app.services.binance.sapi_client import get_order_payment_details
-            from app.api.routes.telegram import notify_trader as _notify2
+            from app.api.routes.telegram import send_trader_message as _send2
             for o in rows:
                 if (o.get("tradeType") or "").upper() != "BUY":
                     continue
@@ -296,10 +317,57 @@ async def track_trader(db, trader) -> int:
                 ]
                 for fld in pay["fields"]:
                     _bl.append(f"- {fld['label']}: {fld['value']}")
-                await _notify2(trader, chr(10).join(_bl))
+                _res2 = await _send2(trader, chr(10).join(_bl))
+                _mid2 = (_res2 or {}).get("result", {}).get("message_id")
+                await db.execute(_sql_text2(
+                    "UPDATE sell_order_notifications SET tg_message_id = :m, last_status = :s, trade_type = 'BUY' WHERE order_number = :o"
+                ), {"m": _mid2, "s": (o.get("orderStatus") or "").upper(), "o": str(ono)})
+                await db.commit()
                 logger.info("[Tracking] buy-order Telegram alert sent: %s", ono)
     except Exception as _be:
         logger.warning("[Tracking] buy-order notify failed: %s", _be)
+
+    # ── Status follow-up: when a notified order becomes COMPLETED / CANCELLED, post a
+    # short reply right under the original alert so the merchant sees the outcome. ──
+    try:
+        if getattr(trader, "telegram_chat_id", None):
+            from sqlalchemy import text as _sql_text3
+            from app.services.binance.sapi_client import get_order_payment_details  # noqa: F401
+            from app.api.routes.telegram import send_trader_message as _send3, _pending_approvals as _pa3
+            _TERMINAL = {
+                "COMPLETED":           ("✅", "Order completed"),
+                "CANCELLED":           ("❌", "Order cancelled — not completed"),
+                "CANCELLED_BY_SYSTEM": ("❌", "Order auto-cancelled — not completed"),
+            }
+            for o in rows:
+                ono = o.get("orderNumber")
+                if not ono:
+                    continue
+                _cur = (o.get("orderStatus") or "").upper()
+                if _cur not in _TERMINAL:
+                    continue
+                row = (await db.execute(_sql_text3(
+                    "SELECT tg_message_id, last_status, status_notified FROM sell_order_notifications WHERE order_number = :o"
+                ), {"o": str(ono)})).first()
+                if not row:
+                    continue  # we never alerted on this order — don't announce its outcome
+                _mid_orig, _last, _done = row[0], row[1], row[2]
+                if _done:
+                    continue
+                _icon, _label = _TERMINAL[_cur]
+                await _send3(trader, f"{_icon} <b>{_label}</b>\nOrder: {ono}", reply_to=_mid_orig)
+                await db.execute(_sql_text3(
+                    "UPDATE sell_order_notifications SET status_notified = TRUE, last_status = :s WHERE order_number = :o"
+                ), {"s": _cur, "o": str(ono)})
+                await db.commit()
+                # Clear any pending-approval entry (order is resolved)
+                try:
+                    _pa3.pop(str(ono), None)
+                except Exception:
+                    pass
+                logger.info("[Tracking] order %s status follow-up sent: %s", ono, _cur)
+    except Exception as _se:
+        logger.warning("[Tracking] status follow-up failed: %s", _se)
 
     trader.tracking_last_poll_at = now
     await db.commit()
