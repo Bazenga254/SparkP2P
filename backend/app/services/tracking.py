@@ -62,38 +62,37 @@ def _build_relationship_lines(prior, cur_amt, ep19_count=0, covered=False):
     n_buy, n_sell = len(buys), len(sells)
     total = n_buy + n_sell
     lines = []
-    if total == 0:
-        return lines
+    all_ms    = [m for _, m in (buys + sells) if m]
+    last_days = int((now_ms - max(all_ms)) / 86400000) if all_ms else None
+    matched_all = covered or (ep19_count and total >= ep19_count)
 
-    # Recency / span of the relationship from the matched rows
-    all_ms   = [m for _, m in (buys + sells) if m]
-    last_days = int((now_ms - max(all_ms)) / 86400000) if all_ms else None   # most recent trade
-    span_days = int((now_ms - min(all_ms)) / 86400000) if all_ms else 0      # oldest trade
-    lab = "last 30 days" if span_days <= 30 else ("last 60 days" if span_days <= 60 else "last 90 days")
+    def _bs(label):  # buy/sell phrasing helper
+        return f"bought from you {n_buy}×, sold to you {n_sell}×" if (n_buy and n_sell) else (
+               f"bought from you {n_buy}×" if n_buy else f"sold to you {n_sell}×")
 
-    complete = covered or (ep19_count and total >= ep19_count)
-    if complete:
-        if n_sell and n_buy == 0:
-            lines.append(("flag", f"First time buying from you — in the {lab} they have only ever SOLD to you ({n_sell}×)"))
-        elif n_buy and n_sell == 0:
-            lines.append(("note", f"In the {lab}: bought from you {n_buy}×, never sold to you"))
+    # ── Returning / known-client statement WITH buy/sell direction ──
+    if ep19_count > 0:                       # active in the last 30 days (per Binance EP-19)
+        if total == 0:
+            lines.append(("note", f"Returning client — {ep19_count} trade(s) with you in the last 30 days (analysing buy/sell…)"))
+        elif matched_all:
+            if n_sell and n_buy == 0:
+                lines.append(("flag", f"Returning client — in the last 30 days they have ONLY sold to you ({n_sell}×); this would be their first buy from you"))
+            elif n_buy and n_sell == 0:
+                lines.append(("note", f"Returning client — has bought from you {n_buy}× in the last 30 days, never sold to you"))
+            else:
+                lines.append(("note", f"Returning client — {ep19_count} trades in the last 30 days: {_bs('')}"))
         else:
-            dom = "buys from you" if n_buy >= n_sell else "sells to you"
-            lines.append(("note", f"In the {lab}: bought from you {n_buy}×, sold to you {n_sell}× — mostly {dom}"))
+            lines.append(("note", f"Returning client — {ep19_count} trade(s) in the last 30 days (so far {_bs('')} — still analysing)"))
+    elif total > 0:                          # older relationship — none in last 30d but in our cache
+        age = f"~{last_days} days ago" if last_days is not None else "earlier"
+        if n_sell and n_buy == 0:
+            lines.append(("flag", f"Known client — last traded {age}; previously ONLY sold to you ({n_sell}×) — this would be their first buy"))
+        else:
+            lines.append(("note", f"Known client — last traded {age}: {_bs('')} (none in the last 30 days)"))
     else:
-        # Partial but still informative — present as a running tally (one consolidated line)
-        tail = f" (matched {total} of {ep19_count} so far)" if ep19_count else ""
-        if n_sell and n_buy == 0:
-            lines.append(("note", f"So far they have only SOLD to you ({n_sell}×), never bought{tail}"))
-        elif n_buy and n_sell == 0:
-            lines.append(("note", f"So far: bought from you {n_buy}×, no sells to you{tail}"))
-        else:
-            lines.append(("note", f"So far: bought from you {n_buy}×, sold to you {n_sell}×{tail}"))
+        return lines                         # genuinely new buyer — nothing to add
 
-    # Recency note when the relationship isn't recent (no trade in the last 30 days)
-    if last_days is not None and last_days > 30:
-        lines.append(("note", f"Not traded in the last 30 days — most recent was ~{last_days} days ago"))
-
+    # ── Volume caution: this order vs their usual buy size ──
     buy_amts  = [a for a, _ in buys]
     sell_amts = [a for a, _ in sells]
     ref = buy_amts if buy_amts else (buy_amts + sell_amts)
@@ -102,7 +101,7 @@ def _build_relationship_lines(prior, cur_amt, ep19_count=0, covered=False):
         if avg > 0 and cur_amt >= _REL_AMT_RATIO * avg and (cur_amt - avg) >= _REL_AMT_MIN_DELTA:
             mult = cur_amt / avg
             basis = "usual buy" if buy_amts else "usual trade"
-            lines.append(("flag", f"Large order — KES {int(cur_amt):,} is {mult:.1f}× their {basis} of ~KES {int(avg):,}"))
+            lines.append(("flag", f"Unusually large order — KES {int(cur_amt):,} is {mult:.1f}× their {basis} of ~KES {int(avg):,}"))
         else:
             lines.append(("note", f"Order size in line with their usual (~KES {int(avg):,})"))
     return lines
@@ -528,14 +527,12 @@ async def track_trader(db, trader) -> int:
                     except Exception as _re:
                         logger.warning("[Tracking] counterparty analysis failed: %s", _re)
                         _rel, _obs, _last_days = [], 0, None
-                    # Returning buyer whose history we haven't fully reconstructed yet: show a
-                    # "loading" placeholder now and run a deep background scan that edits the
-                    # full buy/sell breakdown into THIS message when ready (finding sparse trades
-                    # at high volume can take a couple of minutes).
+                    # Returning buyer whose history we haven't fully reconstructed yet: the
+                    # relationship line already shows "(analysing buy/sell…)"; run a deep
+                    # background scan that edits the full breakdown into THIS message when ready
+                    # (finding sparse trades at high volume can take a couple of minutes).
                     if withus > 0 and _obs < withus and (trader.id, _taker_no) not in _rel_inflight:
                         _need_enrich = True
-                        if not _rel:
-                            _rel = [("note", "Analysing your trade history with this buyer — buy/sell breakdown loading…")]
                 # "Traded with you before" reflects 30-day OR any older cached relationship
                 if withus:
                     _before = f"Yes ({withus} in 30d)"
@@ -566,13 +563,12 @@ async def track_trader(db, trader) -> int:
                         _threshold_notes.append(f"Strong track record — {_tall} lifetime trades (your minimum is {thrall})")
                     else:
                         _base_flags.append(f"Below your all-time minimum of {thrall} ({_tall} lifetime trades)")
-                # Repeat-client check — recognise 30-day returns AND older relationships
+                # Repeat-client line is now carried by the relationship section (it states the
+                # buy/sell direction). Only fall back to a plain note if we have no counterparty
+                # id to analyse with but Binance still reports prior trades.
                 _returning_note = None
-                if _withus > 0:
+                if not _taker_no and _withus > 0:
                     _returning_note = f"Returning client — has completed {_withus} trade(s) with you in the last 30 days"
-                elif _obs > 0:
-                    _age = f"~{_last_days} days ago" if _last_days is not None else "earlier"
-                    _returning_note = f"Known client — last traded with you {_age} ({_obs} trade(s) on record), none in the last 30 days"
                 # Account-age check
                 if _regd is not None:
                     if _regd >= 365:
