@@ -157,12 +157,12 @@ async def track_trader(db, trader) -> int:
                 _rate_txt = (f"{rate30*100:.2f}%" if rate30 is not None else "N/A")
                 _before = ("Yes (" + str(withus) + ")") if withus else "No"
                 _lines = [
-                    "🔔 New Sell Order",
+                    "<b>New Sell Order</b>",
                     "",
                     f"Amount: {amt}",
                     f"Crypto: {o.get('amount','?')} {o.get('asset','USDT')}",
                     f"Rate: {o.get('unitPrice','?')}",
-                    f"Buyer: {o.get('counterPartNickName') or 'Unknown'}",
+                    f"Buyer: <b>{o.get('counterPartNickName') or 'Unknown'}</b>",
                     f"Order: {ono}",
                     "",
                     "Buyer Profile:",
@@ -194,41 +194,49 @@ async def track_trader(db, trader) -> int:
                 ono = o.get("orderNumber")
                 if not ono:
                     continue
+                # Skip cancelled/terminal-without-payment: Binance wipes the seller's
+                # payment fields once an order is cancelled, so there's nothing to pay.
+                _st = (o.get("orderStatus") or "").upper()
+                if _st in ("CANCELLED", "CANCELLED_BY_SYSTEM"):
+                    continue
                 seen = (await db.execute(_sql_text2(
                     "SELECT 1 FROM sell_order_notifications WHERE order_number = :o"
                 ), {"o": str(ono)})).first()
                 if seen:
                     continue
-                await db.execute(_sql_text2(
-                    "INSERT INTO sell_order_notifications (order_number, trader_id) VALUES (:o, :t) ON CONFLICT DO NOTHING"
-                ), {"o": str(ono), "t": trader.id})
-                await db.commit()
+                # Fetch payment details FIRST — only alert if we actually have them, so we
+                # never send a useless "details not available" message.
                 pay = {}
                 try:
                     pay = await get_order_payment_details(api_key, api_secret, ono)
                 except Exception:
                     pay = {}
+                if not pay.get("fields"):
+                    # No payment fields yet (order too fresh / cancelled in-flight). Do NOT
+                    # mark as seen — retry on the next poll once details populate.
+                    continue
+                await db.execute(_sql_text2(
+                    "INSERT INTO sell_order_notifications (order_number, trader_id) VALUES (:o, :t) ON CONFLICT DO NOTHING"
+                ), {"o": str(ono), "t": trader.id})
+                await db.commit()
                 try:
                     amt = f"KES {int(float(o.get('totalPrice') or 0)):,}"
                 except Exception:
                     amt = f"KES {o.get('totalPrice','?')}"
                 _bl = [
-                    "💸 New Buy Order — Pay Seller",
+                    "<b>New Buy Order — Pay Seller</b>",
                     "",
                     f"Amount to send: {amt}",
                     f"Crypto: {o.get('amount','?')} {o.get('asset','USDT')}",
                     f"Rate: {o.get('unitPrice','?')}",
-                    f"Seller: {o.get('counterPartNickName') or 'Unknown'}",
+                    f"Seller: <b>{o.get('counterPartNickName') or 'Unknown'}</b>",
                     f"Order: {ono}",
                     "",
                     "Pay To:",
                     f"- Method: {pay.get('method') or 'N/A'}",
                 ]
-                if pay.get("fields"):
-                    for fld in pay["fields"]:
-                        _bl.append(f"- {fld['label']}: {fld['value']}")
-                else:
-                    _bl.append("- (details not available yet — check the order page)")
+                for fld in pay["fields"]:
+                    _bl.append(f"- {fld['label']}: {fld['value']}")
                 await _notify2(trader, chr(10).join(_bl))
                 logger.info("[Tracking] buy-order Telegram alert sent: %s", ono)
     except Exception as _be:

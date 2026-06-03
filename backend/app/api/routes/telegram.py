@@ -53,7 +53,10 @@ async def notify_trader(trader, message: str) -> bool:
     chat_id = getattr(trader, "telegram_chat_id", None)
     if not chat_id:
         return False
-    result = await _tg_send("sendMessage", {"chat_id": chat_id, "text": message})
+    payload = {"chat_id": chat_id, "text": message}
+    if "<b>" in message or "</b>" in message:
+        payload["parse_mode"] = "HTML"
+    result = await _tg_send("sendMessage", payload)
     ok = bool(result and result.get("ok"))
     if ok:
         try:
