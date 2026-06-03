@@ -30,8 +30,10 @@ _poller_boot = None
 # Relationship-analysis tuning
 _REL_WINDOW_DAYS   = 30      # Binance's order history / EP-19 only span ~30 days (seed scan)
 _REL_QUERY_DAYS    = 90      # how far back we read OUR OWN cache — surfaces older relationships
-_REL_DETAIL_BUDGET = 30      # max getUserOrderDetail calls per background seed scan
-_REL_MAX_PAGES     = 25      # seed scan depth (~1250 orders); incremental caching fills the rest
+_REL_DETAIL_BUDGET = 30      # max getUserOrderDetail calls per seed scan
+_REL_MAX_PAGES     = 25      # background top-up scan depth (~1250 orders)
+_REL_SEED_PAGES    = 5       # synchronous seed depth for a cold buyer (~250 orders, kept fast);
+                             # incremental caching does the heavy lifting for completeness
 _POLL_CACHE_BUDGET = 12      # max getUserOrderDetail calls per poll for incremental caching
 _REL_AMT_RATIO     = 2.0     # current amount >= ratio * usual -> flag
 _REL_AMT_MIN_DELTA = 25000   # ...and at least this many KES above usual, to avoid noise
@@ -106,6 +108,72 @@ def _build_relationship_lines(prior, cur_amt, ep19_count=0, covered=False):
         else:
             lines.append(("note", f"Order size in line with their usual (~KES {int(avg):,})"))
     return lines
+
+
+async def _scan_counterparty_history(db, api_key, api_secret, trader_id, taker_no, full_nick,
+                                     cur_ono, max_pages, target=0):
+    """Page through order history and cache this counterparty's COMPLETED trades (matched by
+    stable takerUserNo, unmasked-nickname fallback). Bounded by max_pages + detail budget.
+    Returns covered(bool) = whether we reached the end of the window. Used synchronously to
+    seed a cold buyer before the alert so the buy/sell breakdown is present immediately."""
+    from sqlalchemy import text as T
+    from app.services.binance.sapi_client import get_user_order_history, get_order_identity
+    import time as _t
+    cutoff = int(_t.time() * 1000) - _REL_WINDOW_DAYS * 86400 * 1000
+    prefix = (full_nick or "").lower()
+    budget = _REL_DETAIL_BUDGET
+    covered = False
+    matched = (await db.execute(T(
+        "SELECT COUNT(*) FROM counterparty_trades WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c"
+    ), {"t": trader_id, "u": taker_no, "c": cutoff})).scalar() or 0
+    page = 1
+    while page <= max_pages and budget > 0:
+        if target and matched >= target:
+            covered = True
+            break
+        try:
+            more = await get_user_order_history(api_key, api_secret, page=page, rows=50)
+        except Exception:
+            break
+        page += 1
+        if not more:
+            covered = True
+            break
+        page_min_ct = min(int(h.get("createTime") or 0) for h in more)
+        for h in more:
+            if budget <= 0:
+                break
+            hono = str(h.get("orderNumber") or "")
+            if not hono or hono == cur_ono:
+                continue
+            if (h.get("orderStatus") or "").upper() != "COMPLETED":
+                continue
+            if int(h.get("createTime") or 0) < cutoff:
+                continue
+            mp = (h.get("counterPartNickName") or "").split("*")[0]
+            if not mp or prefix[:len(mp)] != mp.lower():
+                continue
+            if (await db.execute(T("SELECT 1 FROM counterparty_trades WHERE order_number=:o"), {"o": hono})).first():
+                continue
+            budget -= 1
+            try:
+                idd = await get_order_identity(api_key, api_secret, hono)
+            except Exception:
+                continue
+            if idd.get("taker_user_no") != taker_no and idd.get("counterparty_nickname") != full_nick:
+                continue
+            await db.execute(T(
+                "INSERT INTO counterparty_trades (order_number,trader_id,taker_user_no,full_nick,trade_type,total_price,status,created_ms) "
+                "VALUES (:o,:t,:u,:n,:tt,:p,'COMPLETED',:c) ON CONFLICT (order_number) DO NOTHING"
+            ), {"o": hono, "t": trader_id, "u": taker_no, "n": idd.get("counterparty_nickname"),
+                "tt": idd.get("trade_type"), "p": idd.get("total_price"),
+                "c": int(h.get("createTime") or 0)})
+            matched += 1
+        await db.commit()
+        if page_min_ct < cutoff:
+            covered = True
+            break
+    return covered
 
 
 async def _relationship_cached(db, trader_id, taker_no, current_order, full_nick, ep19_count=0):
@@ -458,6 +526,16 @@ async def track_trader(db, trader) -> int:
                 if _taker_no:
                     try:
                         _rel, _obs, _last_days = await _relationship_cached(db, trader.id, _taker_no, o, _full_nick, withus)
+                        # Cold returning buyer: seed synchronously (bounded) so the buy/sell
+                        # breakdown is present in THIS alert — once per buyer per process.
+                        if (withus > 0 and _obs < withus
+                                and (trader.id, _taker_no) not in _rel_inflight):
+                            _rel_inflight.add((trader.id, _taker_no))
+                            _cov = await _scan_counterparty_history(
+                                db, api_key, api_secret, trader.id, _taker_no, _full_nick,
+                                str(ono), _REL_SEED_PAGES, withus)
+                            _rel_window_covered[(trader.id, _taker_no)] = _cov
+                            _rel, _obs, _last_days = await _relationship_cached(db, trader.id, _taker_no, o, _full_nick, withus)
                     except Exception as _re:
                         logger.warning("[Tracking] counterparty analysis failed: %s", _re)
                         _rel, _obs, _last_days = [], 0, None
@@ -492,12 +570,9 @@ async def track_trader(db, trader) -> int:
                     else:
                         _base_flags.append(f"Below your all-time minimum of {thrall} ({_tall} lifetime trades)")
                 # Repeat-client check — recognise 30-day returns AND older relationships
-                _need_enrich = False
                 _returning_note = None
                 if _withus > 0:
                     _returning_note = f"Returning client — has completed {_withus} trade(s) with you in the last 30 days"
-                    _need_enrich = (_taker_no is not None
-                                    and (trader.id, _taker_no) not in _rel_inflight)
                 elif _obs > 0:
                     _age = f"~{_last_days} days ago" if _last_days is not None else "earlier"
                     _returning_note = f"Known client — last traded with you {_age} ({_obs} trade(s) on record), none in the last 30 days"
@@ -555,18 +630,6 @@ async def track_trader(db, trader) -> int:
                 except Exception:
                     pass
                 logger.info("[Tracking] sell-order Telegram alert sent: %s", ono)
-                # Kick off background relationship enrichment (non-blocking) — finds more of
-                # this buyer's past trades and posts a follow-up under the alert if any surface.
-                if _need_enrich:
-                    try:
-                        _cur_amt_bg = float(o.get("totalPrice") or 0)
-                    except Exception:
-                        _cur_amt_bg = 0.0
-                    asyncio.create_task(_enrich_counterparty_bg(
-                        trader.id, api_key, api_secret, _taker_no, _full_nick,
-                        str(ono), _cur_amt_bg, _withus, _mid,
-                        trader.telegram_chat_id, _ctx,
-                    ))
     except Exception as _ne:
         logger.warning("[Tracking] sell-order notify failed: %s", _ne)
 
