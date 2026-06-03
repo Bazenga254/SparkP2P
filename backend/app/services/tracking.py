@@ -155,7 +155,51 @@ async def track_trader(db, trader) -> int:
                 except Exception:
                     amt = f"KES {o.get('totalPrice','?')}"
                 _rate_txt = (f"{rate30*100:.2f}%" if rate30 is not None else "N/A")
-                _before = ("Yes (" + str(withus) + ")") if withus else "No"
+                _before = ("Yes (" + str(withus) + " in 30d)") if withus else "No"
+
+                # ── Advisory: assess the buyer against the merchant's own thresholds ──
+                def _i(v):
+                    try: return int(float(v))
+                    except Exception: return None
+                thr30  = int(trader.cf_all_trades_min or 0)        # Min Total Trades (30D)
+                thrall = int(trader.cf_all_trades_min_all or 0)    # Min Total Trades (All-time)
+                _t30, _tall, _regd, _withus = _i(t30), _i(tall), _i(regd), _i(withus) or 0
+                _notes = []
+                _flags = []   # cautionary
+                # 30-day threshold check
+                if thr30 > 0 and _t30 is not None:
+                    if _t30 >= thr30:
+                        _notes.append(f"Has surpassed your 30-day minimum of {thr30} ({_t30} trades in the last 30 days)")
+                    else:
+                        _flags.append(f"Below your 30-day minimum of {thr30} (only {_t30} trades)")
+                # All-time threshold check
+                if thrall > 0 and _tall is not None:
+                    if _tall >= thrall:
+                        _notes.append(f"Strong track record — {_tall} lifetime trades (your minimum is {thrall})")
+                    else:
+                        _flags.append(f"Below your all-time minimum of {thrall} ({_tall} lifetime trades)")
+                # Repeat-client check
+                if _withus > 0:
+                    _notes.append(f"Returning client — has completed {_withus} trade(s) with you in the last 30 days")
+                # Account-age check
+                if _regd is not None:
+                    if _regd >= 365:
+                        _notes.append(f"Well-aged account ({_regd} days / ~{_regd//365}y) — established trader")
+                    elif _regd >= 90:
+                        _notes.append(f"Established account ({_regd} days old)")
+                    elif _regd < 30:
+                        _flags.append(f"New account — only {_regd} days old")
+                # Completion-rate flag
+                if rate30 is not None and rate30 < 0.90:
+                    _flags.append(f"30-day completion rate is {_rate_txt} — below 90%")
+
+                if _flags:
+                    _verdict = "⚠️ <b>Review carefully</b> — some checks need attention"
+                elif _notes:
+                    _verdict = "✅ <b>Looks good</b> — meets your screening criteria"
+                else:
+                    _verdict = "ℹ️ <b>Limited history available</b> — use your judgement"
+
                 _lines = [
                     "<b>New Sell Order</b>",
                     "",
@@ -171,7 +215,15 @@ async def track_trader(db, trader) -> int:
                     f"- 30d completion: {_rate_txt}",
                     f"- Account age: {_f(regd, ' days')}",
                     f"- Traded with you before: {_before}",
+                    "",
+                    "Advisory:",
+                    _verdict,
                 ]
+                for _n in _notes:
+                    _lines.append(f"  • {_n}")
+                for _fl in _flags:
+                    _lines.append(f"  ⚠ {_fl}")
+                _lines += ["", "Reply /approve to share payment details, or /reject to decline."]
                 msg = chr(10).join(_lines)
                 await notify_trader(trader, msg)
                 logger.info("[Tracking] sell-order Telegram alert sent: %s", ono)
