@@ -2192,8 +2192,6 @@ function startPoller() {
     fetch(`${API_BASE}/ext/bot-started`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
   }
   scheduleNextPoll(0); // run immediately
-  // One-time PROBE 20s after start: discover order-detail payment fields (headless).
-  setTimeout(() => { probeOrderDetailDirect().catch(() => {}); }, 20000);
 }
 
 function stopPoller() {
@@ -2886,10 +2884,16 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
         const d = detail?.data;
         if (!d) return null;
 
+        // DEBUG (one-time): expose c2c/trade/get structure to find where payment account
+        // fields live (account number / phone / paybill) so we can extract them headlessly.
+        const __dbgKeys = Object.keys(d);
+        const __payMethods = d.payMethods || d.payMethodList || d.tradeMethods || null;
+        const __dbgPay = __payMethods ? JSON.stringify(__payMethods).slice(0, 1200) : 'NONE';
+
         const userNo = counterpartySide === 'buyer'
           ? (d.buyerUserNo || d.buyerNo || d.buyer?.userNo)
           : (d.sellerUserNo || d.sellerNo || d.seller?.userNo || d.advertiserUserNo);
-        if (!userNo) return null;
+        if (!userNo) return { __dbgKeys, __dbgPay };
 
         // Step 2: Fetch the counterparty's public profile stats
         const profileRes = await fetch('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/user/profile', {
@@ -3002,11 +3006,18 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
           _debugProfileKeys,
           _debugStatKeys,
           _debugHist,
+          _dbgOrderKeys: __dbgKeys,
+          _dbgPay: __dbgPay,
         };
       } catch (_) {
         return null;
       }
     }, orderNumber, side);
+
+    if (stats?._dbgOrderKeys) {
+      sendBotLog('info', `[PROBE] order keys: ${JSON.stringify(stats._dbgOrderKeys)}`);
+      sendBotLog('info', `[PROBE] payMethods: ${stats._dbgPay}`);
+    }
 
     if (stats) {
       console.log(`[SparkP2P] DD stats via API — 30d: ${stats.trades_30d ?? 'n/a'}, all: ${stats.trades_all ?? 'n/a'}, tradedBefore: ${stats.tradedBefore ?? 'n/a'}`);
@@ -13167,55 +13178,6 @@ ipcMain.handle('get-bot-status', () => ({ running: pollerRunning, stats, hasPin:
 ipcMain.handle('get-bot-logs', () => botLogBuffer);
 ipcMain.handle('take-screenshot', async () => { const ss = await takeScreenshot('Manual request'); return { screenshot: ss }; });
 ipcMain.handle('run-ai-scan', async () => { await aiScan(); return { ok: true }; });
-// PROBE: fetch a recent order's full detail via the in-browser session and log payment fields.
-async function probeOrderDetailDirect() {
-  try {
-    const page = await getPage();
-    if (!page) { sendBotLog('error', '[PROBE] no page'); return { ok: false }; }
-    const out = await page.evaluate(async () => {
-      const r = await fetch('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/order/list', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ page: 1, rows: 5 }), credentials: 'include',
-      }).catch(() => null);
-      let orderNo = null;
-      try { const j = await r.json(); orderNo = (j?.data?.[0]?.orderNumber) || (j?.data?.list?.[0]?.orderNumber); } catch (_) {}
-      // Fallback: try trade/get with a few endpoint variants once we have an order
-      const tryDetail = async (no) => {
-        for (const url of [
-          'https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/trade/get',
-          'https://p2p.binance.com/bapi/c2c/v2/private/c2c/order-match/order-detail',
-        ]) {
-          try {
-            const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderNo: no, orderNumber: no }), credentials: 'include' });
-            const j = await res.json();
-            if (j?.data) return { url, keys: Object.keys(j.data), data: j.data };
-          } catch (_) {}
-        }
-        return null;
-      };
-      const det = orderNo ? await tryDetail(orderNo) : null;
-      return { orderNo, listStatus: r?.status, det };
-    });
-    sendBotLog('info', `[PROBE] orderNo=${out.orderNo} listStatus=${out.listStatus}`);
-    if (out.det) {
-      sendBotLog('info', `[PROBE] detail from ${out.det.url}`);
-      sendBotLog('info', `[PROBE] detail keys: ${JSON.stringify(out.det.keys)}`);
-      const d = out.det.data;
-      const payish = {};
-      for (const k of Object.keys(d)) {
-        if (/pay|account|method|field|seller|phone|bank|paybill|till/i.test(k)) payish[k] = d[k];
-      }
-      sendBotLog('info', `[PROBE] payment fields: ${JSON.stringify(payish).slice(0, 1500)}`);
-    } else {
-      sendBotLog('warning', '[PROBE] no order detail returned');
-    }
-    return { ok: true };
-  } catch (e) {
-    sendBotLog('error', `[PROBE] error: ${e.message}`);
-    return { ok: false };
-  }
-}
-ipcMain.handle('probe-order-detail', async () => probeOrderDetailDirect());
 ipcMain.handle('restart-app', () => { autoUpdater.quitAndInstall(); });
 ipcMain.handle('check-for-updates', () => { autoUpdater?.checkForUpdatesAndNotify().catch(() => {}); return { ok: true }; });
 ipcMain.handle('open-external', (_, url) => { shell.openExternal(url); return { ok: true }; });
