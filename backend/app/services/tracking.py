@@ -28,7 +28,8 @@ TERMINAL = {"COMPLETED", "CANCELLED", "CANCELLED_BY_SYSTEM"}
 _poller_boot = None
 
 # Relationship-analysis tuning
-_REL_WINDOW_DAYS   = 30      # look-back window — Binance's order history only spans ~30 days
+_REL_WINDOW_DAYS   = 30      # Binance's order history / EP-19 only span ~30 days (seed scan)
+_REL_QUERY_DAYS    = 90      # how far back we read OUR OWN cache — surfaces older relationships
 _REL_DETAIL_BUDGET = 30      # max getUserOrderDetail calls per background seed scan
 _REL_MAX_PAGES     = 25      # seed scan depth (~1250 orders); incremental caching fills the rest
 _POLL_CACHE_BUDGET = 12      # max getUserOrderDetail calls per poll for incremental caching
@@ -53,15 +54,23 @@ def _build_relationship_lines(prior, cur_amt, ep19_count=0, covered=False):
     matched everything (full window covered, or matched >= EP-19's reported count) we make an
     absolute claim ("never sold to you"); otherwise we present it as the running tally so far.
     Returns [(kind, text)]."""
-    buys_from_us = [float(r[1] or 0) for r in prior if (r[0] or "").upper() == "SELL"]
-    sells_to_us  = [float(r[1] or 0) for r in prior if (r[0] or "").upper() == "BUY"]
-    n_buy, n_sell = len(buys_from_us), len(sells_to_us)
+    import time as _t
+    now_ms = int(_t.time() * 1000)
+    # Each prior row is (trade_type, total_price, created_ms)
+    buys  = [(float(r[1] or 0), int(r[2] or 0)) for r in prior if (r[0] or "").upper() == "SELL"]
+    sells = [(float(r[1] or 0), int(r[2] or 0)) for r in prior if (r[0] or "").upper() == "BUY"]
+    n_buy, n_sell = len(buys), len(sells)
     total = n_buy + n_sell
     lines = []
     if total == 0:
         return lines
 
-    lab = _rel_window_label()
+    # Recency / span of the relationship from the matched rows
+    all_ms   = [m for _, m in (buys + sells) if m]
+    last_days = int((now_ms - max(all_ms)) / 86400000) if all_ms else None   # most recent trade
+    span_days = int((now_ms - min(all_ms)) / 86400000) if all_ms else 0      # oldest trade
+    lab = "last 30 days" if span_days <= 30 else ("last 60 days" if span_days <= 60 else "last 90 days")
+
     complete = covered or (ep19_count and total >= ep19_count)
     if complete:
         if n_sell and n_buy == 0:
@@ -81,12 +90,18 @@ def _build_relationship_lines(prior, cur_amt, ep19_count=0, covered=False):
         else:
             lines.append(("note", f"So far: bought from you {n_buy}×, sold to you {n_sell}×{tail}"))
 
-    ref = buys_from_us if buys_from_us else (buys_from_us + sells_to_us)
+    # Recency note when the relationship isn't recent (no trade in the last 30 days)
+    if last_days is not None and last_days > 30:
+        lines.append(("note", f"Not traded in the last 30 days — most recent was ~{last_days} days ago"))
+
+    buy_amts  = [a for a, _ in buys]
+    sell_amts = [a for a, _ in sells]
+    ref = buy_amts if buy_amts else (buy_amts + sell_amts)
     if ref and cur_amt > 0:
         avg = sum(ref) / len(ref)
         if avg > 0 and cur_amt >= _REL_AMT_RATIO * avg and (cur_amt - avg) >= _REL_AMT_MIN_DELTA:
             mult = cur_amt / avg
-            basis = "usual buy" if buys_from_us else "usual trade"
+            basis = "usual buy" if buy_amts else "usual trade"
             lines.append(("flag", f"Large order — KES {int(cur_amt):,} is {mult:.1f}× their {basis} of ~KES {int(avg):,}"))
         else:
             lines.append(("note", f"Order size in line with their usual (~KES {int(avg):,})"))
@@ -100,9 +115,9 @@ async def _relationship_cached(db, trader_id, taker_no, current_order, full_nick
     from sqlalchemy import text as T
     import time as _t
     if not taker_no:
-        return [], 0
+        return [], 0, None
     now_ms = int(_t.time() * 1000)
-    cutoff = now_ms - _REL_WINDOW_DAYS * 86400 * 1000
+    cutoff = now_ms - _REL_QUERY_DAYS * 86400 * 1000
     cur_ono = str(current_order.get("orderNumber") or "")
     try:
         cur_amt = float(current_order.get("totalPrice") or 0)
@@ -120,12 +135,16 @@ async def _relationship_cached(db, trader_id, taker_no, current_order, full_nick
     except Exception:
         pass
     prior = (await db.execute(T(
-        "SELECT trade_type, total_price FROM counterparty_trades "
+        "SELECT trade_type, total_price, created_ms FROM counterparty_trades "
         "WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c AND order_number<>:o "
         "AND status='COMPLETED'"
     ), {"t": trader_id, "u": taker_no, "c": cutoff, "o": cur_ono})).fetchall()
     covered = _rel_window_covered.get((trader_id, taker_no), False)
-    return _build_relationship_lines(prior, cur_amt, ep19_count, covered), len(prior)
+    last_days = None
+    _ms = [int(r[2] or 0) for r in prior if r[2]]
+    if _ms:
+        last_days = int((now_ms - max(_ms)) / 86400000)
+    return _build_relationship_lines(prior, cur_amt, ep19_count, covered), len(prior), last_days
 
 
 def _render_sell_alert(ctx, rel_lines):
@@ -182,7 +201,8 @@ async def _enrich_counterparty_bg(trader_id, api_key, api_secret, taker_no, full
         from app.services.binance.sapi_client import get_user_order_history, get_order_identity
         from app.api.routes.telegram import send_trader_message, edit_trader_message
         import time as _t
-        cutoff = int(_t.time() * 1000) - _REL_WINDOW_DAYS * 86400 * 1000
+        cutoff = int(_t.time() * 1000) - _REL_WINDOW_DAYS * 86400 * 1000   # scan window (Binance ~30d)
+        query_cutoff = int(_t.time() * 1000) - _REL_QUERY_DAYS * 86400 * 1000  # display window (our cache, 90d)
         prefix = (full_nick or "").lower()
         budget = _REL_DETAIL_BUDGET
         covered = False
@@ -244,10 +264,10 @@ async def _enrich_counterparty_bg(trader_id, api_key, api_secret, taker_no, full
                     break
             _rel_window_covered[key] = covered
             prior = (await db.execute(T(
-                "SELECT trade_type, total_price FROM counterparty_trades "
+                "SELECT trade_type, total_price, created_ms FROM counterparty_trades "
                 "WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c AND order_number<>:o "
                 "AND status='COMPLETED'"
-            ), {"t": trader_id, "u": taker_no, "c": cutoff, "o": cur_ono})).fetchall()
+            ), {"t": trader_id, "u": taker_no, "c": query_cutoff, "o": cur_ono})).fetchall()
         lines = _build_relationship_lines(prior, cur_amt, ep19_target, covered)
         # Edit the original alert in place to fold in the complete buyer history (one report).
         if ctx is not None and chat_id and reply_to_mid:
@@ -430,7 +450,24 @@ async def track_trader(db, trader) -> int:
                 except Exception:
                     amt = f"KES {o.get('totalPrice','?')}"
                 _rate_txt = (f"{rate30*100:.2f}%" if rate30 is not None else "N/A")
-                _before = ("Yes (" + str(withus) + " in 30d)") if withus else "No"
+
+                # Relationship from our cache (90-day window) — fetched up front so an OLDER
+                # relationship (no trade in the last 30 days) is still recognised. Instant; the
+                # background seed scan tops it up and edits this same message if needed.
+                _rel, _obs, _last_days = [], 0, None
+                if _taker_no:
+                    try:
+                        _rel, _obs, _last_days = await _relationship_cached(db, trader.id, _taker_no, o, _full_nick, withus)
+                    except Exception as _re:
+                        logger.warning("[Tracking] counterparty analysis failed: %s", _re)
+                        _rel, _obs, _last_days = [], 0, None
+                # "Traded with you before" reflects 30-day OR any older cached relationship
+                if withus:
+                    _before = f"Yes ({withus} in 30d)"
+                elif _obs > 0:
+                    _before = f"Yes (last ~{_last_days}d ago)" if _last_days is not None else "Yes (earlier)"
+                else:
+                    _before = "No"
 
                 # ── Advisory: assess the buyer against the merchant's own thresholds ──
                 def _i(v):
@@ -454,13 +491,16 @@ async def track_trader(db, trader) -> int:
                         _threshold_notes.append(f"Strong track record — {_tall} lifetime trades (your minimum is {thrall})")
                     else:
                         _base_flags.append(f"Below your all-time minimum of {thrall} ({_tall} lifetime trades)")
-                # Repeat-client check
+                # Repeat-client check — recognise 30-day returns AND older relationships
                 _need_enrich = False
                 _returning_note = None
                 if _withus > 0:
                     _returning_note = f"Returning client — has completed {_withus} trade(s) with you in the last 30 days"
                     _need_enrich = (_taker_no is not None
                                     and (trader.id, _taker_no) not in _rel_inflight)
+                elif _obs > 0:
+                    _age = f"~{_last_days} days ago" if _last_days is not None else "earlier"
+                    _returning_note = f"Known client — last traded with you {_age} ({_obs} trade(s) on record), none in the last 30 days"
                 # Account-age check
                 if _regd is not None:
                     if _regd >= 365:
@@ -495,15 +535,6 @@ async def track_trader(db, trader) -> int:
                     "account_notes": _account_notes,
                     "base_flags": _base_flags,
                 }
-                # Relationship: instant from cache (only shows once full history is scanned);
-                # otherwise the background scan edits it into this same message shortly.
-                _rel = []
-                if _withus > 0:
-                    try:
-                        _rel, _obs = await _relationship_cached(db, trader.id, _taker_no, o, _full_nick, _withus)
-                    except Exception as _re:
-                        logger.warning("[Tracking] counterparty analysis failed: %s", _re)
-                        _rel = []
                 msg, _kb = _render_sell_alert(_ctx, _rel)
                 _res = await send_trader_message(trader, msg, reply_markup=_kb)
                 _mid = (_res or {}).get("result", {}).get("message_id")
