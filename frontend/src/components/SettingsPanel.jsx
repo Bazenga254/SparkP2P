@@ -6,6 +6,8 @@ import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
 import '@smile_identity/smart-camera-web';
 
+const saveBinanceApiKey = (data) => api.put('/traders/binance-api-key', data);
+
 // Request OTP for settlement change
 const requestSettlementOTP = () => api.post('/traders/settlement/request-otp');
 
@@ -70,26 +72,6 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
 
   // Binance
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
-
-  // Binance API key (for counterparty filters / EP-19 — requires Gold Merchant)
-  const [bnApiKey, setBnApiKey] = useState('');
-  const [bnApiSecret, setBnApiSecret] = useState('');
-  const [bnSaving, setBnSaving] = useState(false);
-  const [bnMsg, setBnMsg] = useState(null); // { type: 'success'|'error', text }
-  const handleSaveBinanceApiKey = async () => {
-    if (!bnApiKey.trim() || !bnApiSecret.trim()) { setBnMsg({ type: 'error', text: 'Enter both API key and secret.' }); return; }
-    setBnSaving(true); setBnMsg(null);
-    try {
-      const res = await api.put('/traders/binance-api-key', { api_key: bnApiKey.trim(), api_secret: bnApiSecret.trim() });
-      const tier = res?.data?.merchant_capable ? 'Gold Merchant' : 'Standard';
-      setBnMsg({ type: 'success', text: `✓ Verified & saved — ${tier} account detected.` });
-      setBnApiKey(''); setBnApiSecret('');
-      if (typeof onUpdate === 'function') onUpdate();
-    } catch (e) {
-      setBnMsg({ type: 'error', text: e?.response?.data?.detail || 'Could not verify these credentials. Check the key, secret, and that C2C/Read permissions are enabled.' });
-    }
-    setBnSaving(false);
-  };
 
   // Fee breakdown popup
   const [showFeeInfo, setShowFeeInfo] = useState(false);
@@ -275,6 +257,25 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
     return () => clearInterval(id);
   }, [profile?.settlement_cooldown_until]);
 
+
+  // Binance API key
+  const [apiKey, setApiKey] = useState('');
+  const [apiSecret, setApiSecret] = useState('');
+  const [showSecret, setShowSecret] = useState(false);
+  const [apiKeySaving, setApiKeySaving] = useState(false);
+  const [apiKeyMsg, setApiKeyMsg] = useState('');
+
+  // Counterparty filters
+  const [cfEnabled, setCfEnabled] = useState(profile?.cf_filters_enabled ?? false);
+  const [cfRateMin, setCfRateMin] = useState(Math.round((profile?.cf_completion_rate_min || 0) * 100));
+  const [cfRateWindow, setCfRateWindow] = useState(profile?.cf_completion_rate_window ?? 2);
+  const [cfAllTradesMin, setCfAllTradesMin] = useState(profile?.cf_all_trades_min ?? 0);
+  const [cfTradeCountWindow, setCfTradeCountWindow] = useState(profile?.cf_trade_count_window ?? 2);
+  const [cfCompletedMin, setCfCompletedMin] = useState(profile?.cf_completed_trades_min ?? 0);
+  const [cfBuyMin, setCfBuyMin] = useState(profile?.cf_buy_trades_min ?? 0);
+  const [cfSellMin, setCfSellMin] = useState(profile?.cf_sell_trades_min ?? 0);
+  const [cfVolumeMin, setCfVolumeMin] = useState(profile?.cf_volume_min ?? 0);
+  const [cfVolumeWindow, setCfVolumeWindow] = useState(profile?.cf_volume_window ?? 2);
 
   // Trading
   const [autoRelease, setAutoRelease] = useState(profile?.auto_release_enabled ?? true);
@@ -696,7 +697,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
       showMsg('Trading settings saved!');
       onUpdate();
     } catch (err) {
-      showMsg('Failed to save trading settings');
+      showMsg(err.response?.data?.detail || 'Failed to save trading settings');
     }
     setLoading(false);
   };
@@ -745,8 +746,8 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
             </div>
           )}
 
-          {/* 3-col connection cards — wrap to 1-2 cols on mobile */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+          {/* 3-col connection cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
 
             {/* Binance account */}
             <div className="card">
@@ -935,19 +936,30 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
             </div>
           </div>
 
-          {/* Binance API Key — for counterparty filters / EP-19 (Gold Merchant) */}
-          <div className="card">
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 14 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(245,158,11,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="4"/><path d="M15 8l-1.5 1.5M20 3l-5 5M18.5 4.5l1 1M17 6l1 1"/><path d="M12 12l-4 3"/></svg>
+          {/* ── Binance API Key Card ──────────────────────────────────────────── */}
+          <div style={{
+            borderRadius: 16,
+            background: 'linear-gradient(135deg, rgba(245,158,11,0.06) 0%, rgba(30,32,40,0.95) 60%)',
+            border: '1px solid rgba(245,158,11,0.25)',
+            borderTop: '2px solid #f59e0b',
+            padding: '22px 24px 20px',
+            position: 'relative',
+            overflow: 'hidden',
+          }}>
+            {/* Decorative glow */}
+            <div style={{ position: 'absolute', top: -40, right: -40, width: 120, height: 120, borderRadius: '50%', background: 'rgba(245,158,11,0.06)', pointerEvents: 'none' }} />
+
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="8" cy="15" r="4"/><path d="M15 8l-1.5 1.5M20 3l-5 5M18.5 4.5l1 1M17 6l1 1"/><path d="M12 12l-4 3"/>
+                </svg>
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ color: '#f3f4f6', fontWeight: 700, fontSize: 15 }}>Binance API Key</span>
-                  {profile?.binance_api_key_saved && profile?.binance_api_key_invalid && (
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(239,68,68,0.15)', color: '#ef4444', letterSpacing: '0.4px', border: '1px solid rgba(239,68,68,0.4)' }}>⚠ INVALID — RECONNECT</span>
-                  )}
-                  {profile?.binance_api_key_saved && !profile?.binance_api_key_invalid && (
+                  {profile?.binance_api_key_saved && (
                     <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(16,185,129,0.15)', color: '#10b981', letterSpacing: '0.4px' }}>✓ SAVED</span>
                   )}
                   {profile?.binance_api_key_saved && profile?.binance_merchant_tier === 'gold' && (
@@ -957,62 +969,175 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                     <span title="Counterparty filters require a Binance Gold Merchant account" style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(107,114,128,0.15)', color: '#9ca3af', letterSpacing: '0.4px', border: '1px solid rgba(107,114,128,0.25)', cursor: 'help' }}>STANDARD ACCOUNT</span>
                   )}
                 </div>
-                <div style={{ color: profile?.binance_api_key_invalid ? '#ef4444' : '#9ca3af', fontSize: 12, marginTop: 2 }}>
-                  {profile?.binance_api_key_invalid
-                    ? 'Binance rejected this key — it was likely regenerated/removed. Paste a fresh key below and Verify & Save.'
-                    : (profile?.binance_api_key_saved && profile?.binance_merchant_tier !== 'gold'
-                      ? 'Counterparty filters require a Binance Gold Merchant account'
-                      : 'Enables counterparty filters on your live ads')}
+                <div style={{ color: '#9ca3af', fontSize: 12, marginTop: 2 }}>
+                  {profile?.binance_api_key_saved && profile?.binance_merchant_tier !== 'gold'
+                    ? 'Counterparty filters require a Binance Gold Merchant account'
+                    : 'Enables counterparty filters on your live ads'}
                 </div>
               </div>
             </div>
 
-            {/* Required permissions */}
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-              {[{ label: 'Read', ok: true }, { label: 'Enable Spot & Margin Trading', ok: true }, { label: 'Withdrawals — keep OFF', ok: false }].map(({ label, ok }) => (
-                <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 20, background: ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${ok ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}`, color: ok ? '#10b981' : '#ef4444' }}>
+            {/* Permission chips */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+              {[
+                { label: 'Read', ok: true },
+                { label: 'Enable Spot & Margin Trading', ok: true },
+                { label: 'Withdrawals — keep OFF', ok: false },
+              ].map(({ label, ok }) => (
+                <span key={label} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 20,
+                  background: ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                  border: `1px solid ${ok ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}`,
+                  color: ok ? '#10b981' : '#ef4444',
+                }}>
                   {ok ? '✓' : '✕'} {label}
                 </span>
               ))}
             </div>
 
             {/* Inputs */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 14 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 18 }}>
+              {/* API Key */}
               <div>
                 <label style={{ display: 'block', color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 6, letterSpacing: '0.4px' }}>API KEY</label>
                 <div style={{ position: 'relative' }}>
-                  <input type="text" value={bnApiKey} onChange={e => setBnApiKey(e.target.value)}
-                    placeholder={profile?.binance_api_key_saved ? '••••••••••••••••  (saved — paste to replace)' : 'Paste your Binance API key'}
-                    style={{ width: '100%', boxSizing: 'border-box', paddingLeft: 12, paddingRight: 72, paddingTop: 10, paddingBottom: 10, borderRadius: 10, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#e5e7eb', fontSize: 13, fontFamily: 'monospace', outline: 'none' }} />
-                  <button onClick={() => navigator.clipboard.readText().then(t => setBnApiKey(t)).catch(() => {})}
-                    style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', padding: '4px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.25)', color: '#f59e0b', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Paste</button>
+                  <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#6b7280' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="8" cy="15" r="4"/><path d="M15 8l-1.5 1.5M20 3l-5 5"/>
+                    </svg>
+                  </span>
+                  <input
+                    type="text"
+                    placeholder={profile?.binance_api_key_saved ? '••••••••••••••••••••••••  (saved)' : 'Paste your Binance API key'}
+                    value={apiKey}
+                    onChange={e => setApiKey(e.target.value)}
+                    style={{
+                      width: '100%', boxSizing: 'border-box',
+                      paddingLeft: 36, paddingRight: 80, paddingTop: 10, paddingBottom: 10,
+                      borderRadius: 10, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                      color: '#e5e7eb', fontSize: 13, fontFamily: 'monospace', outline: 'none',
+                    }}
+                  />
+                  <button
+                    onClick={() => navigator.clipboard.readText().then(t => setApiKey(t)).catch(() => {})}
+                    style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', padding: '4px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.25)', color: '#f59e0b', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                    Paste
+                  </button>
                 </div>
               </div>
+
+              {/* Secret Key */}
               <div>
                 <label style={{ display: 'block', color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 6, letterSpacing: '0.4px' }}>SECRET KEY</label>
                 <div style={{ position: 'relative' }}>
-                  <input type="password" value={bnApiSecret} onChange={e => setBnApiSecret(e.target.value)}
-                    placeholder={profile?.binance_api_key_saved ? '••••••••••••••••  (saved — paste to replace)' : 'Paste your Binance API secret'}
-                    style={{ width: '100%', boxSizing: 'border-box', paddingLeft: 12, paddingRight: 72, paddingTop: 10, paddingBottom: 10, borderRadius: 10, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#e5e7eb', fontSize: 13, fontFamily: 'monospace', outline: 'none' }} />
-                  <button onClick={() => navigator.clipboard.readText().then(t => setBnApiSecret(t)).catch(() => {})}
-                    style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', padding: '4px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.25)', color: '#f59e0b', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Paste</button>
+                  <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#6b7280' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                  </span>
+                  <input
+                    type={showSecret ? 'text' : 'password'}
+                    placeholder={profile?.binance_api_key_saved ? '••••••••••••••••••••••••  (saved)' : 'Paste your API secret'}
+                    value={apiSecret}
+                    onChange={e => setApiSecret(e.target.value)}
+                    style={{
+                      width: '100%', boxSizing: 'border-box',
+                      paddingLeft: 36, paddingRight: 120, paddingTop: 10, paddingBottom: 10,
+                      borderRadius: 10, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                      color: '#e5e7eb', fontSize: 13, fontFamily: 'monospace', outline: 'none',
+                    }}
+                  />
+                  <div style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', display: 'flex', gap: 6 }}>
+                    <button
+                      onClick={() => setShowSecret(v => !v)}
+                      style={{ padding: '4px 8px', borderRadius: 6, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#9ca3af', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                      {showSecret ? 'Hide' : 'Show'}
+                    </button>
+                    <button
+                      onClick={() => navigator.clipboard.readText().then(t => setApiSecret(t)).catch(() => {})}
+                      style={{ padding: '4px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.25)', color: '#f59e0b', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                      Paste
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {bnMsg && (
-              <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12, background: bnMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${bnMsg.type === 'success' ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}`, color: bnMsg.type === 'success' ? '#10b981' : '#ef4444' }}>
-                {bnMsg.text}
+            {/* Message */}
+            {apiKeyMsg && (
+              <div style={{ marginBottom: 12, padding: '8px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                background: apiKeyMsg.startsWith('✓') ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
+                color: apiKeyMsg.startsWith('✓') ? '#10b981' : '#ef4444',
+                border: `1px solid ${apiKeyMsg.startsWith('✓') ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}`,
+              }}>
+                {apiKeyMsg}
               </div>
             )}
 
-            <button onClick={handleSaveBinanceApiKey} disabled={bnSaving}
-              style={{ padding: '10px 22px', borderRadius: 9, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, fontSize: 13, cursor: bnSaving ? 'default' : 'pointer', opacity: bnSaving ? 0.7 : 1 }}>
-              {bnSaving ? 'Verifying…' : 'Verify & Save'}
-            </button>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 12, color: '#6b7280', fontSize: 11 }}>
-              <span style={{ fontSize: 13, lineHeight: 1 }}>ⓘ</span>
-              <span>Create the key at Binance → API Management. Keys are verified, then stored encrypted. Never enable Withdrawals.</span>
+            {/* Footer */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#6b7280', fontSize: 11 }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+                <span>Keys are encrypted and stored securely.</span>
+                <a href="https://www.binance.com/en/support/faq/360002502072" target="_blank" rel="noreferrer"
+                  style={{ color: '#f59e0b', textDecoration: 'none', fontWeight: 600 }}>
+                  Where do I find these?
+                </a>
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button
+                  disabled={!apiKey.trim() || apiKeySaving}
+                  onClick={async () => {
+                    setApiKeySaving(true);
+                    setApiKeyMsg('');
+                    try {
+                      await saveBinanceApiKey({ api_key: apiKey.trim(), api_secret: '', test_only: true });
+                      setApiKeyMsg('✓ Connection verified');
+                    } catch (err) {
+                      setApiKeyMsg(err.response?.data?.detail || 'Connection test failed');
+                    } finally {
+                      setApiKeySaving(false);
+                    }
+                  }}
+                  style={{
+                    padding: '9px 18px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                    background: 'transparent', border: '1px solid rgba(245,158,11,0.35)', color: '#f59e0b',
+                    opacity: !apiKey.trim() || apiKeySaving ? 0.4 : 1,
+                  }}>
+                  Test connection
+                </button>
+                <button
+                  disabled={!apiKey.trim() || !apiSecret.trim() || apiKeySaving}
+                  onClick={async () => {
+                    setApiKeySaving(true);
+                    setApiKeyMsg('');
+                    try {
+                      const res = await saveBinanceApiKey({ api_key: apiKey.trim(), api_secret: apiSecret.trim() });
+                      const capable = res.data?.merchant_capable;
+                      setApiKeyMsg(capable
+                        ? '✓ API key saved — Gold Merchant account detected'
+                        : '✓ API key saved — Standard account (counterparty filters require Gold Merchant)');
+                      setApiKey('');
+                      setApiSecret('');
+                      onUpdate();
+                    } catch (err) {
+                      setApiKeyMsg(err.response?.data?.detail || 'Failed to save API key');
+                    } finally {
+                      setApiKeySaving(false);
+                    }
+                  }}
+                  style={{
+                    padding: '9px 22px', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                    background: !apiKey.trim() || !apiSecret.trim() || apiKeySaving ? 'rgba(245,158,11,0.3)' : '#f59e0b',
+                    border: 'none', color: '#000',
+                    opacity: !apiKey.trim() || !apiSecret.trim() || apiKeySaving ? 0.5 : 1,
+                  }}>
+                  {apiKeySaving ? 'Saving…' : 'Save API Key'}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1031,39 +1156,78 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
       )}
 
       {activeSection === 'security' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
           {/* ── Profile Details ─────────────────────────────── */}
-          <div className="card">
-            <h3 style={{ marginBottom: 4 }}>Profile Details</h3>
-            <p className="help-text" style={{ marginBottom: 16 }}>Update your display name as it appears on trades.</p>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-              <div>
-                <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Email</label>
-                <div style={{ fontSize: 14, color: '#e5e7eb', padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                  {profile?.email || '—'}
-                </div>
+          <div className="card" style={{ marginBottom: 0 }}>
+            {/* Card header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 20 }}>
+              <div style={{ width: 42, height: 42, borderRadius: 11, background: 'rgba(245,176,20,0.14)', color: '#f5b014', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                </svg>
               </div>
               <div>
-                <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Phone</label>
-                <div style={{ fontSize: 14, color: '#e5e7eb', padding: '10px 14px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                  {profile?.phone ? `***${profile.phone.slice(-4)}` : '—'}
+                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Profile Details</div>
+                <div style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.5 }}>Your display name as it appears on trades. Must match your Binance KYC.</div>
+              </div>
+            </div>
+
+            {/* 2-col form grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 16 }}>
+              {/* Email */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  Email <span style={{ fontWeight: 400, color: 'var(--text-dim)', fontSize: 11.5 }}>verified</span>
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11 }}>
+                  <input type="email" value={profile?.email || ''} readOnly
+                    style={{ flex: 1, background: 'none', border: 0, outline: 0, color: 'var(--text)', fontFamily: 'monospace', fontSize: 13, padding: '12px 14px', minWidth: 0 }} />
+                  <span style={{ padding: '0 12px', color: '#27c281', display: 'flex', alignItems: 'center' }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </span>
+                </div>
+              </div>
+
+              {/* Phone */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  Phone <span style={{ fontWeight: 400, color: 'var(--text-dim)', fontSize: 11.5 }}>verified</span>
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11 }}>
+                  <span style={{ padding: '0 0 0 13px', color: 'var(--text-dim)', fontFamily: 'monospace', fontSize: 12.5, whiteSpace: 'nowrap' }}>🇰🇪 +254</span>
+                  <input type="text" value={profile?.phone ? `••• ••• ${profile.phone.slice(-4)}` : ''} readOnly
+                    style={{ flex: 1, background: 'none', border: 0, outline: 0, color: 'var(--text)', fontFamily: 'monospace', fontSize: 13, padding: '12px 14px', minWidth: 0 }} />
+                  <span style={{ padding: '0 12px', color: '#27c281', display: 'flex', alignItems: 'center' }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </span>
+                </div>
+              </div>
+
+              {/* Full name — spans full width */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, gridColumn: '1 / -1' }}>
+                <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  Full Name <span style={{ fontWeight: 400, color: 'var(--text-dim)', fontSize: 11.5 }}>as on Binance KYC</span>
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11 }}>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value.toUpperCase())}
+                    placeholder="JOHN DOE MWANGI"
+                    style={{ flex: 1, background: 'none', border: 0, outline: 0, color: 'var(--text)', fontSize: 13.5, padding: '12px 14px', minWidth: 0, textTransform: 'uppercase' }}
+                  />
                 </div>
               </div>
             </div>
 
-            <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
-              Full Name <span style={{ fontSize: 11, color: '#6b7280' }}>(as on Binance KYC)</span>
-            </label>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value.toUpperCase())}
-                style={{ flex: '1 1 180px', minWidth: 0, textTransform: 'uppercase' }}
-                placeholder="JOHN DOE MWANGI"
-              />
+            {/* Form actions */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingTop: 6, borderTop: '1px dashed rgba(255,255,255,0.07)', marginTop: 4 }}>
+              <button
+                onClick={() => setEditName(profile?.full_name || '')}
+                style={{ padding: '10px 18px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(255,255,255,0.04)', color: 'var(--text)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                Cancel
+              </button>
               <button
                 onClick={async () => {
                   if (!editName.trim() || editName.trim().length < 3) { showMsg('Name must be at least 3 characters'); return; }
@@ -1078,30 +1242,50 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                   setSavingName(false);
                 }}
                 disabled={savingName}
-                style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}
-              >
+                style={{ padding: '10px 20px', borderRadius: 10, border: 'none', background: 'linear-gradient(180deg,#ffc234,#f5b014)', color: '#1a1300', fontWeight: 700, fontSize: 13, cursor: 'pointer', boxShadow: '0 6px 18px -10px rgba(245,176,20,0.7)' }}>
                 {savingName ? 'Saving...' : 'Save Name'}
               </button>
             </div>
           </div>
 
           {/* ── Security Question ───────────────────────────── */}
-          <div className="card">
-            <h3 style={{ marginBottom: 4 }}>Security Question</h3>
-            <p className="help-text" style={{ marginBottom: 16 }}>
-              Used to verify your identity when changing payment methods. <strong style={{ color: '#ef4444' }}>Cannot be changed once set.</strong>
-            </p>
+          <div className="card" style={{ marginBottom: 0 }}>
+            {/* Card header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 20 }}>
+              <div style={{ width: 42, height: 42, borderRadius: 11, background: 'rgba(142,123,243,0.16)', color: '#8e7bf3', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+                  <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--text)' }}>Security Question</span>
+                  {(profile?.security_question || sqJustSaved)
+                    ? <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 9px', borderRadius: 99, background: 'rgba(245,176,20,0.14)', color: '#f5b014', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Set</span>
+                    : <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 9px', borderRadius: 99, background: 'rgba(255,93,93,0.13)', color: '#ff5d5d', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Not Set</span>
+                  }
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+                  Used to verify your identity when changing payment methods.{' '}
+                  <strong style={{ color: '#ff5d5d', fontWeight: 700 }}>Cannot be changed once set.</strong>
+                </div>
+              </div>
+            </div>
 
             {(profile?.security_question || sqJustSaved) ? (
-              <div style={{ padding: 16, background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                  <span style={{ fontSize: 18 }}>🔒</span>
-                  <span style={{ fontSize: 13, color: '#10b981', fontWeight: 600 }}>Security question is set</span>
+              /* ── Set state: sq-box ── */
+              <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 13, padding: 16, display: 'flex', gap: 13 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0, background: 'rgba(39,194,129,0.14)', color: '#27c281', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                 </div>
-                <p style={{ fontSize: 13, color: '#9ca3af', margin: 0 }}>{profile?.security_question || sqJustSaved}</p>
-                <p style={{ fontSize: 11, color: '#6b7280', margin: '8px 0 0' }}>Your answer is securely hashed and cannot be viewed.</p>
+                <div>
+                  <div style={{ color: '#27c281', fontWeight: 700, fontSize: 13, marginBottom: 6, letterSpacing: '0.02em' }}>Security question is set</div>
+                  <div style={{ color: 'var(--text)', fontSize: 13.5, fontWeight: 500, marginBottom: 6 }}>{profile?.security_question || sqJustSaved}</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>Your answer is securely hashed and cannot be viewed. To reset, contact support with your KYC documents.</div>
+                </div>
               </div>
             ) : (
+              /* ── Not set: setup form ── */
               <form onSubmit={async (e) => {
                 e.preventDefault();
                 if (!sqQuestion || !sqAnswer.trim()) { showMsg('Select a question and provide an answer'); return; }
@@ -1116,48 +1300,68 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                 }
                 setSavingSq(false);
               }}>
-                <div style={{ padding: 12, borderRadius: 8, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', fontSize: 13, color: '#f59e0b', marginBottom: 16 }}>
+                <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', fontSize: 13, color: '#f5b014', marginBottom: 16 }}>
                   Choose carefully — this question cannot be changed after saving.
                 </div>
-                <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>Security Question</label>
-                <select value={sqQuestion} onChange={(e) => setSqQuestion(e.target.value)} required style={{ width: '100%', marginBottom: 14 }}>
-                  <option value="">Select a question</option>
-                  <option value="What is your mother's maiden name?">What is your mother's maiden name?</option>
-                  <option value="What was the name of your first pet?">What was the name of your first pet?</option>
-                  <option value="What city were you born in?">What city were you born in?</option>
-                  <option value="What is the name of your primary school?">What is the name of your primary school?</option>
-                  <option value="What was your childhood nickname?">What was your childhood nickname?</option>
-                </select>
-                <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>Your Answer</label>
-                <input
-                  type="text"
-                  placeholder="Answer (case-insensitive)"
-                  value={sqAnswer}
-                  onChange={(e) => setSqAnswer(e.target.value)}
-                  required
-                  style={{ marginBottom: 14 }}
-                />
-                <button type="submit" disabled={savingSq} style={{ padding: '12px 24px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer' }}>
-                  {savingSq ? 'Saving...' : 'Save Security Question'}
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Security Question</label>
+                    <select value={sqQuestion} onChange={(e) => setSqQuestion(e.target.value)} required style={{ width: '100%', padding: '11px 14px', borderRadius: 11, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontSize: 13.5, outline: 'none' }}>
+                      <option value="">Select a question</option>
+                      <option>What is your mother's maiden name?</option>
+                      <option>What was the name of your first pet?</option>
+                      <option>What city were you born in?</option>
+                      <option>What is the name of your primary school?</option>
+                      <option>What was your childhood nickname?</option>
+                    </select>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Your Answer</label>
+                    <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11 }}>
+                      <input type="text" placeholder="Answer (case-insensitive)" value={sqAnswer} onChange={(e) => setSqAnswer(e.target.value)} required
+                        style={{ flex: 1, background: 'none', border: 0, outline: 0, color: 'var(--text)', fontSize: 13.5, padding: '12px 14px' }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 4, borderTop: '1px dashed rgba(255,255,255,0.07)' }}>
+                    <button type="submit" disabled={savingSq}
+                      style={{ padding: '11px 22px', borderRadius: 10, border: 'none', background: 'linear-gradient(180deg,#ffc234,#f5b014)', color: '#1a1300', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                      {savingSq ? 'Saving...' : 'Save Security Question'}
+                    </button>
+                  </div>
+                </div>
               </form>
             )}
           </div>
 
           {/* ── Google Authenticator (TOTP) ─────────────────── */}
-          <div className="card">
-            <h3 style={{ marginBottom: 4 }}>Google Authenticator</h3>
-            <p className="help-text" style={{ marginBottom: 16 }}>
-              Adds a 6-digit code from Google Authenticator as a third factor when pausing or resuming the bot.
-            </p>
+          <div className="card" style={{ marginBottom: 0 }}>
+            {/* Card header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 20 }}>
+              <div style={{ width: 42, height: 42, borderRadius: 11, background: 'rgba(39,194,129,0.14)', color: '#27c281', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+                  <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--text)' }}>Google Authenticator</span>
+                  {totpEnabled
+                    ? <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 9px', borderRadius: 99, background: 'rgba(39,194,129,0.14)', color: '#27c281', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Enabled</span>
+                    : <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 9px', borderRadius: 99, background: 'rgba(255,93,93,0.13)', color: '#ff5d5d', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Not set</span>
+                  }
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.5 }}>Adds a 6-digit code from Google Authenticator as a second factor when releasing crypto.</div>
+              </div>
+            </div>
 
             {totpEnabled ? (
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: 'rgba(16,185,129,0.08)', borderRadius: 10, border: '1px solid rgba(16,185,129,0.25)', marginBottom: 16 }}>
-                  <span style={{ fontSize: 20 }}>✅</span>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#10b981' }}>Google Authenticator is linked</div>
-                    <div style={{ fontSize: 12, color: '#6b7280' }}>Your account is protected with TOTP 2FA.</div>
+              /* ── Enabled state ── */
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 18, alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Two-factor authentication</div>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 600, background: 'rgba(39,194,129,0.14)', color: '#27c281', padding: '6px 11px', borderRadius: 99, marginTop: 6 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'currentColor', display: 'inline-block' }} />
+                    Authenticator linked
                   </div>
                 </div>
                 <button
@@ -1168,135 +1372,158 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                     setTotpSetup(null);
                     if (onUpdate) { const r = await getProfile(); onUpdate(r.data); }
                   }}
-                  style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.4)', background: 'transparent', color: '#ef4444', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-                  Remove Authenticator
+                  style={{ padding: '10px 18px', borderRadius: 10, border: '1px solid rgba(255,93,93,0.3)', background: 'transparent', color: '#ff5d5d', cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  Remove
+                </button>
+              </div>
+            ) : !totpSetup ? (
+              /* ── Not configured, no setup in progress ── */
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 18, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Two-factor authentication</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>Strongly recommended. Without 2FA, releases above KES 100,000 require email OTP each time.</div>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 600, background: 'rgba(255,93,93,0.13)', color: '#ff5d5d', padding: '6px 11px', borderRadius: 99, marginTop: 10 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'currentColor', display: 'inline-block' }} />
+                    Not configured
+                  </div>
+                </div>
+                <button
+                  disabled={totpLoading}
+                  onClick={async () => {
+                    setTotpLoading(true); setTotpMsg('');
+                    try {
+                      const res = await getTotpSetup();
+                      setTotpSetup(res.data);
+                    } catch { setTotpMsg('Failed to generate QR code.'); }
+                    setTotpLoading(false);
+                  }}
+                  style={{ padding: '11px 18px', borderRadius: 10, border: 'none', background: 'linear-gradient(180deg,#ffc234,#f5b014)', color: '#1a1300', fontWeight: 700, fontSize: 13, cursor: 'pointer', boxShadow: '0 6px 18px -10px rgba(245,176,20,0.7)', whiteSpace: 'nowrap' }}>
+                  {totpLoading ? 'Generating...' : 'Set up 2FA'}
                 </button>
               </div>
             ) : (
+              /* ── Setup in progress: QR + verify ── */
               <div>
-                {!totpSetup ? (
-                  <button
-                    disabled={totpLoading}
-                    onClick={async () => {
-                      setTotpLoading(true); setTotpMsg('');
-                      try {
-                        const res = await getTotpSetup();
-                        setTotpSetup(res.data);
-                      } catch { setTotpMsg('Failed to generate QR code.'); }
-                      setTotpLoading(false);
-                    }}
-                    style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>
-                    {totpLoading ? 'Generating...' : 'Set Up Google Authenticator'}
-                  </button>
-                ) : (
-                  <div>
-                    <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
-                      Scan the QR code below with the <strong style={{ color: '#fff' }}>Google Authenticator</strong> app, then enter the 6-digit code to confirm.
-                    </p>
-
-                    {/* QR Code */}
-                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
-                      <div style={{ background: '#fff', padding: 16, borderRadius: 12 }}>
-                        <QRCodeSVG value={totpSetup.uri} size={180} />
-                      </div>
-                    </div>
-
-                    {/* Manual entry fallback */}
-                    <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 20 }}>
-                      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Can't scan? Enter this key manually in Google Authenticator:</div>
-                      <div style={{ fontFamily: 'monospace', fontSize: 14, color: '#f59e0b', letterSpacing: 2, wordBreak: 'break-all' }}>{totpSetup.secret}</div>
-                    </div>
-
-                    {/* Verify */}
-                    <div style={{ marginBottom: 12 }}>
-                      <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>Enter 6-digit code from Google Authenticator</label>
-                      <input
-                        type="text" inputMode="numeric" maxLength={6} placeholder="000000"
-                        value={totpCode} onChange={e => setTotpCode(e.target.value.replace(/\D/g, ''))}
-                        style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', fontSize: 18, letterSpacing: 6, textAlign: 'center', boxSizing: 'border-box' }}
-                      />
-                    </div>
-
-                    {totpMsg && <p style={{ fontSize: 12, color: totpMsg.includes('success') || totpMsg.includes('linked') ? '#10b981' : '#ef4444', marginBottom: 10 }}>{totpMsg}</p>}
-
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <button onClick={() => { setTotpSetup(null); setTotpCode(''); setTotpMsg(''); }}
-                        style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
-                        Cancel
-                      </button>
-                      <button
-                        disabled={totpSaving || totpCode.length !== 6}
-                        onClick={async () => {
-                          setTotpSaving(true); setTotpMsg('');
-                          try {
-                            await verifyAndSaveTotp({ secret: totpSetup.secret, code: totpCode });
-                            setTotpEnabled(true);
-                            setTotpSetup(null);
-                            setTotpCode('');
-                            setTotpMsg('Google Authenticator linked successfully!');
-                            if (onUpdate) { const r = await getProfile(); onUpdate(r.data); }
-                          } catch (err) {
-                            setTotpMsg(err.response?.data?.detail || 'Invalid code. Try again.');
-                          }
-                          setTotpSaving(false);
-                        }}
-                        style={{ flex: 1, padding: '10px 20px', borderRadius: 8, border: 'none', background: totpCode.length === 6 ? '#10b981' : '#374151', color: '#fff', fontWeight: 700, cursor: totpCode.length === 6 ? 'pointer' : 'not-allowed', fontSize: 13 }}>
-                        {totpSaving ? 'Verifying...' : 'Confirm & Link'}
-                      </button>
-                    </div>
+                <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
+                  Scan the QR code with <strong style={{ color: 'var(--text)' }}>Google Authenticator</strong>, then enter the 6-digit code to confirm.
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
+                  <div style={{ background: '#fff', padding: 16, borderRadius: 12 }}>
+                    <QRCodeSVG value={totpSetup.uri} size={180} />
                   </div>
-                )}
+                </div>
+                <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Can't scan? Enter this key manually:</div>
+                  <div style={{ fontFamily: 'monospace', fontSize: 14, color: '#f5b014', letterSpacing: 2, wordBreak: 'break-all' }}>{totpSetup.secret}</div>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>6-digit code from Google Authenticator</label>
+                  <input type="text" inputMode="numeric" maxLength={6} placeholder="000000"
+                    value={totpCode} onChange={e => setTotpCode(e.target.value.replace(/\D/g, ''))}
+                    style={{ width: '100%', padding: '12px 14px', borderRadius: 11, border: '1px solid rgba(255,255,255,0.15)', background: 'var(--bg)', color: '#fff', fontSize: 20, letterSpacing: 8, textAlign: 'center', boxSizing: 'border-box', outline: 'none' }} />
+                </div>
+                {totpMsg && <p style={{ fontSize: 12, color: totpMsg.includes('success') || totpMsg.includes('linked') ? '#27c281' : '#ff5d5d', marginBottom: 12 }}>{totpMsg}</p>}
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button onClick={() => { setTotpSetup(null); setTotpCode(''); setTotpMsg(''); }}
+                    style={{ padding: '10px 20px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(255,255,255,0.04)', color: '#9ca3af', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+                    Cancel
+                  </button>
+                  <button disabled={totpSaving || totpCode.length !== 6}
+                    onClick={async () => {
+                      setTotpSaving(true); setTotpMsg('');
+                      try {
+                        await verifyAndSaveTotp({ secret: totpSetup.secret, code: totpCode });
+                        setTotpEnabled(true); setTotpSetup(null); setTotpCode('');
+                        setTotpMsg('Google Authenticator linked successfully!');
+                        if (onUpdate) { const r = await getProfile(); onUpdate(r.data); }
+                      } catch (err) {
+                        setTotpMsg(err.response?.data?.detail || 'Invalid code. Try again.');
+                      }
+                      setTotpSaving(false);
+                    }}
+                    style={{ flex: 1, padding: '10px 20px', borderRadius: 10, border: 'none', background: totpCode.length === 6 ? '#27c281' : '#374151', color: '#fff', fontWeight: 700, cursor: totpCode.length === 6 ? 'pointer' : 'not-allowed', fontSize: 13 }}>
+                    {totpSaving ? 'Verifying...' : 'Confirm & Link'}
+                  </button>
+                </div>
               </div>
             )}
           </div>
 
-          {/* ── Change Password ──────────────────────────────── */}
-          <div className="card">
-            <h3 style={{ marginBottom: 4 }}>Change Password</h3>
-            <p className="help-text" style={{ marginBottom: 16 }}>
-              An OTP will be sent to your registered phone number to authorize the change.
-            </p>
+          {/* ── Password & Sessions ──────────────────────────── */}
+          <div className="card" style={{ marginBottom: 0 }}>
+            {/* Card header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 20 }}>
+              <div style={{ width: 42, height: 42, borderRadius: 11, background: 'rgba(79,142,247,0.14)', color: '#4f8ef7', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+              </div>
+              <div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Password &amp; Sessions</div>
+                <div style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.5 }}>Change password, sign out other devices, view recent login activity.</div>
+              </div>
+            </div>
 
-            {cpCooldownUntil ? (
+            {/* Step 0: idle — last login + action buttons */}
+            {cpStep === 0 && !cpCooldownUntil && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Last login</div>
+                  <div style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-dim)' }}>
+                    {profile?.last_login ? new Date(profile.last_login).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'medium', timeStyle: 'short' }) + ' EAT' : 'Unknown'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    onClick={async () => {
+                      setCpLoading(true);
+                      try {
+                        const res = await requestChangePasswordOtp();
+                        setCpPhoneHint(res.data.phone_hint || '');
+                        setCpStep(1);
+                        showMsg(res.data.message || 'OTP sent to your phone');
+                      } catch (err) {
+                        const detail = err.response?.data?.detail;
+                        if (detail?.code === 'password_change_cooldown') {
+                          setCpCooldownUntil(new Date(detail.cooldown_until));
+                        } else {
+                          showMsg(typeof detail === 'string' ? detail : 'Failed to send OTP');
+                        }
+                      }
+                      setCpLoading(false);
+                    }}
+                    disabled={cpLoading}
+                    style={{ padding: '10px 18px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(255,255,255,0.04)', color: 'var(--text)', fontWeight: 600, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    {cpLoading ? 'Sending OTP...' : 'Change password'}
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await api.post('/auth/logout-all');
+                        showMsg('Signed out of all other sessions');
+                      } catch { showMsg('Failed — please try again'); }
+                    }}
+                    style={{ padding: '10px 18px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(255,255,255,0.04)', color: 'var(--text)', fontWeight: 600, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    Sign out other devices
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Cooldown state */}
+            {cpCooldownUntil && (
               <div style={{ padding: 16, background: 'rgba(245,158,11,0.06)', borderRadius: 10, border: '1px solid rgba(245,158,11,0.25)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                   <span style={{ fontSize: 20 }}>⏳</span>
-                  <span style={{ fontSize: 13, color: '#f59e0b', fontWeight: 600 }}>Password change locked</span>
+                  <span style={{ fontSize: 13, color: '#f5b014', fontWeight: 600 }}>Password change locked</span>
                 </div>
-                <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 10px' }}>
-                  For your security, you can only change your password once every 48 hours.
-                </p>
-                <div style={{ fontSize: 30, fontWeight: 800, color: '#f59e0b', fontVariantNumeric: 'tabular-nums', letterSpacing: 2 }}>
-                  {cpCooldown}
-                </div>
+                <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 10px' }}>For your security, you can only change your password once every 48 hours.</p>
+                <div style={{ fontSize: 30, fontWeight: 800, color: '#f5b014', fontVariantNumeric: 'tabular-nums', letterSpacing: 2 }}>{cpCooldown}</div>
                 <p style={{ fontSize: 11, color: '#6b7280', marginTop: 6 }}>Time remaining until you can change your password again.</p>
               </div>
-            ) : cpStep === 0 ? (
-              <button
-                onClick={async () => {
-                  setCpLoading(true);
-                  try {
-                    const res = await requestChangePasswordOtp();
-                    setCpPhoneHint(res.data.phone_hint || '');
-                    setCpStep(1);
-                    showMsg(res.data.message || 'OTP sent to your phone');
-                  } catch (err) {
-                    const detail = err.response?.data?.detail;
-                    if (detail?.code === 'password_change_cooldown') {
-                      setCpCooldownUntil(new Date(detail.cooldown_until));
-                    } else {
-                      showMsg(typeof detail === 'string' ? detail : 'Failed to send OTP');
-                    }
-                  }
-                  setCpLoading(false);
-                }}
-                disabled={cpLoading}
-                style={{ padding: '12px 24px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#f59e0b', fontWeight: 600, cursor: 'pointer' }}
-              >
-                {cpLoading ? 'Sending OTP...' : 'Change Password'}
-              </button>
-            ) : null}
+            )}
 
+            {/* Step 1: OTP + new password form */}
             {cpStep === 1 && (
               <form onSubmit={async (e) => {
                 e.preventDefault();
@@ -1306,9 +1533,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                 setCpLoading(true);
                 try {
                   const res = await changePassword(cpOtp, cpNewPw);
-                  if (res.data.cooldown_until) {
-                    setCpCooldownUntil(new Date(res.data.cooldown_until));
-                  }
+                  if (res.data.cooldown_until) setCpCooldownUntil(new Date(res.data.cooldown_until));
                   setCpStep(2);
                   showMsg('Password changed successfully!');
                   setCpOtp(''); setCpNewPw(''); setCpConfirm('');
@@ -1317,62 +1542,98 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                 }
                 setCpLoading(false);
               }}>
-                <div style={{ marginBottom: 14 }}>
-                  <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>
-                    OTP Code <span style={{ color: '#6b7280' }}>(sent to {cpPhoneHint})</span>
-                  </label>
-                  <input type="text" placeholder="6-digit code" value={cpOtp} onChange={(e) => setCpOtp(e.target.value)} maxLength={6} autoFocus required />
-                </div>
-
-                <div style={{ marginBottom: 8 }}>
-                  <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>New Password</label>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input type={cpShowPw ? 'text' : 'password'} placeholder="Create a strong password" value={cpNewPw} onChange={(e) => setCpNewPw(e.target.value)} required style={{ flex: 1 }} />
-                    <button type="button" onClick={() => setCpShowPw(!cpShowPw)} style={{ padding: '0 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                      {cpShowPw ? 'Hide' : 'Show'}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>
+                      OTP Code <span style={{ fontWeight: 400, color: 'var(--text-dim)', fontSize: 11.5 }}>(sent to {cpPhoneHint})</span>
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11 }}>
+                      <input type="text" placeholder="6-digit code" value={cpOtp} onChange={(e) => setCpOtp(e.target.value)} maxLength={6} autoFocus required
+                        style={{ flex: 1, background: 'none', border: 0, outline: 0, color: 'var(--text)', fontSize: 13.5, padding: '12px 14px' }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>New Password</label>
+                    <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11 }}>
+                      <input type={cpShowPw ? 'text' : 'password'} placeholder="Create a strong password" value={cpNewPw} onChange={(e) => setCpNewPw(e.target.value)} required
+                        style={{ flex: 1, background: 'none', border: 0, outline: 0, color: 'var(--text)', fontSize: 13.5, padding: '12px 14px' }} />
+                      <button type="button" onClick={() => setCpShowPw(!cpShowPw)}
+                        style={{ padding: '0 14px', background: 'none', border: 0, color: '#9ca3af', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                        {cpShowPw ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                  </div>
+                  {cpNewPw && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', padding: '10px 12px', background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)' }}>
+                      {PW_RULES.map((rule, i) => (
+                        <span key={i} style={{ fontSize: 11, color: rule.test(cpNewPw) ? '#27c281' : '#6b7280' }}>
+                          {rule.test(cpNewPw) ? '✓' : '✗'} {rule.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Confirm New Password</label>
+                    <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11 }}>
+                      <input type="password" placeholder="Re-enter new password" value={cpConfirm} onChange={(e) => setCpConfirm(e.target.value)} required
+                        style={{ flex: 1, background: 'none', border: 0, outline: 0, color: 'var(--text)', fontSize: 13.5, padding: '12px 14px' }} />
+                    </div>
+                    {cpConfirm && cpNewPw !== cpConfirm && (
+                      <span style={{ fontSize: 12, color: '#ff5d5d', display: 'block' }}>Passwords do not match</span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4, borderTop: '1px dashed rgba(255,255,255,0.07)' }}>
+                    <button type="button" onClick={() => { setCpStep(0); setCpOtp(''); setCpNewPw(''); setCpConfirm(''); }}
+                      style={{ padding: '10px 18px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(255,255,255,0.04)', color: '#9ca3af', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+                      Cancel
+                    </button>
+                    <button type="submit" disabled={cpLoading || !cpOtp || !cpNewPw || cpNewPw !== cpConfirm}
+                      style={{ padding: '10px 22px', borderRadius: 10, border: 'none', background: 'linear-gradient(180deg,#ffc234,#f5b014)', color: '#1a1300', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                      {cpLoading ? 'Saving...' : 'Set New Password'}
                     </button>
                   </div>
-                </div>
-
-                {cpNewPw && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginBottom: 12, padding: '10px 12px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                    {PW_RULES.map((rule, i) => (
-                      <span key={i} style={{ fontSize: 11, color: rule.test(cpNewPw) ? '#10b981' : '#6b7280' }}>
-                        {rule.test(cpNewPw) ? '✓' : '✗'} {rule.label}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div style={{ marginBottom: 16 }}>
-                  <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 6 }}>Confirm New Password</label>
-                  <input type="password" placeholder="Re-enter new password" value={cpConfirm} onChange={(e) => setCpConfirm(e.target.value)} required />
-                  {cpConfirm && cpNewPw !== cpConfirm && (
-                    <span style={{ fontSize: 12, color: '#ef4444', marginTop: 4, display: 'block' }}>Passwords do not match</span>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', gap: 10 }}>
-                  <button type="submit" disabled={cpLoading || !cpOtp || !cpNewPw || cpNewPw !== cpConfirm} style={{ padding: '12px 24px', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 600, cursor: 'pointer' }}>
-                    {cpLoading ? 'Saving...' : 'Set New Password'}
-                  </button>
-                  <button type="button" onClick={() => { setCpStep(0); setCpOtp(''); setCpNewPw(''); setCpConfirm(''); }}
-                    style={{ padding: '12px 24px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', cursor: 'pointer' }}>
-                    Cancel
-                  </button>
                 </div>
               </form>
             )}
 
+            {/* Step 2: success */}
             {cpStep === 2 && !cpCooldownUntil && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 16, background: 'rgba(16,185,129,0.08)', borderRadius: 10, border: '1px solid #10b981' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 16, background: 'rgba(39,194,129,0.08)', borderRadius: 10, border: '1px solid rgba(39,194,129,0.3)' }}>
                 <span style={{ fontSize: 24 }}>✅</span>
                 <div>
-                  <div style={{ fontWeight: 600, color: '#10b981', fontSize: 14 }}>Password changed successfully</div>
+                  <div style={{ fontWeight: 600, color: '#27c281', fontSize: 14 }}>Password changed successfully</div>
                   <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>Your new password is active.</div>
                 </div>
               </div>
             )}
+          </div>
+
+          {/* ── Danger Zone ──────────────────────────────────── */}
+          <div className="card" style={{ marginBottom: 0, borderColor: 'rgba(255,93,93,0.25)' }}>
+            {/* Card header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 20 }}>
+              <div style={{ width: 42, height: 42, borderRadius: 11, background: 'rgba(255,93,93,0.13)', color: '#ff5d5d', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+              </div>
+              <div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Danger zone</div>
+                <div style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.5 }}>Pause trading or close your account. These actions are irreversible.</div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Close SparkP2P account</div>
+                <div style={{ fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>All open orders cancelled. Trade history retained for 7 years for compliance.</div>
+              </div>
+              <button
+                onClick={() => showMsg('Account closure must be requested via support. Email support@sparkp2p.com')}
+                style={{ padding: '10px 18px', borderRadius: 10, background: 'transparent', border: '1px solid rgba(255,93,93,0.3)', color: '#ff5d5d', fontWeight: 600, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                Request closure
+              </button>
+            </div>
           </div>
 
         </div>

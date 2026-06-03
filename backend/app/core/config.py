@@ -48,6 +48,8 @@ class Settings(BaseSettings):
 
     # Binance
     BINANCE_DEFAULT_USER_AGENT: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    BINANCE_RELAY_URL: str = ""
+    BINANCE_RELAY_SECRET: str = ""
 
     # Claude AI
     ANTHROPIC_API_KEY: str = ""

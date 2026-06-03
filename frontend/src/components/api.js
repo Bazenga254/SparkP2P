@@ -34,6 +34,7 @@ export const connectBinance = (data) => api.post('/traders/connect-binance', dat
 export const updateSettlement = (data) => api.put('/traders/settlement', data);
 export const updateVerification = (data) => api.put('/traders/verification', data);
 export const updateTradingConfig = (data) => api.put('/traders/trading-config', data);
+export const saveBinanceApiKey = (data) => api.put('/traders/binance-api-key', data);
 export const getWallet = () => api.get('/traders/wallet');
 export const requestWithdrawalOtp = () => api.post('/traders/wallet/withdraw/request-otp');
 export const requestWithdrawal = (otp_code, amount) => api.post('/traders/wallet/withdraw', { otp_code, ...(amount != null ? { amount } : {}) });
