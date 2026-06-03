@@ -228,12 +228,15 @@ async def _enrich_counterparty_bg(trader_id, api_key, api_secret, taker_no, full
                         continue
                     if idd.get("taker_user_no") != taker_no and idd.get("counterparty_nickname") != full_nick:
                         continue
+                    # We only reach here for orders whose EP-16 history status is COMPLETED,
+                    # so store 'COMPLETED' explicitly (getUserOrderDetail's orderStatus is a
+                    # numeric code, not the string — relying on it broke the status filter).
                     await db.execute(T(
                         "INSERT INTO counterparty_trades (order_number,trader_id,taker_user_no,full_nick,trade_type,total_price,status,created_ms) "
-                        "VALUES (:o,:t,:u,:n,:tt,:p,:s,:c) ON CONFLICT (order_number) DO NOTHING"
+                        "VALUES (:o,:t,:u,:n,:tt,:p,'COMPLETED',:c) ON CONFLICT (order_number) DO NOTHING"
                     ), {"o": hono, "t": trader_id, "u": taker_no, "n": idd.get("counterparty_nickname"),
                         "tt": idd.get("trade_type"), "p": idd.get("total_price"),
-                        "s": idd.get("status"), "c": int(h.get("createTime") or 0)})
+                        "c": int(h.get("createTime") or 0)})
                     matched += 1
                 await db.commit()
                 if page_min_ct < cutoff:
