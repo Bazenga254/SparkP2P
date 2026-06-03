@@ -74,6 +74,21 @@ async def send_trader_message(trader, message: str, reply_markup=None, reply_to=
     return result if ok else None
 
 
+async def edit_trader_message(chat_id, message_id, text: str, reply_markup=None) -> bool:
+    """Edit a previously-sent Telegram message in place (keeps the same message + buttons).
+    Used to fill a sell-order alert with the full buyer history once the background scan
+    completes, so the merchant sees ONE complete report instead of a stub follow-up."""
+    if not chat_id or not message_id:
+        return False
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    if "<b>" in text or "</b>" in text:
+        payload["parse_mode"] = "HTML"
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    result = await _tg_send("editMessageText", payload)
+    return bool(result and result.get("ok"))
+
+
 async def notify_trader(trader, message: str, reply_markup=None, reply_to=None) -> bool:
     """Send a Telegram notification to a trader if they have a chat_id linked.
     Returns True if sent successfully, False otherwise.

@@ -29,8 +29,9 @@ _poller_boot = None
 
 # Relationship-analysis tuning
 _REL_WINDOW_DAYS   = 30      # look-back window — Binance's order history only spans ~30 days
-_REL_DETAIL_BUDGET = 60      # max getUserOrderDetail calls per background enrichment
-_REL_MAX_PAGES     = 60      # scan to the end of available history (~58 pages / ~2900 orders)
+_REL_DETAIL_BUDGET = 30      # max getUserOrderDetail calls per background seed scan
+_REL_MAX_PAGES     = 25      # seed scan depth (~1250 orders); incremental caching fills the rest
+_POLL_CACHE_BUDGET = 12      # max getUserOrderDetail calls per poll for incremental caching
 _REL_AMT_RATIO     = 2.0     # current amount >= ratio * usual -> flag
 _REL_AMT_MIN_DELTA = 25000   # ...and at least this many KES above usual, to avoid noise
 _rel_inflight       = set()  # (trader_id, taker_no) already enriched this process — scan once
@@ -43,23 +44,26 @@ def _rel_window_label():
     return f"last {m} months" if m >= 2 else f"last {_REL_WINDOW_DAYS} days"
 
 
-def _build_relationship_lines(prior, cur_amt, covered):
-    """Build advisory lines from a list of prior (trade_type, total_price) rows found in our
-    own order history. Direction is MERCHANT-view: our SELL = they BOUGHT from us; our BUY =
-    they SOLD to us. The current alert is a SELL (they are buying from us).
+def _build_relationship_lines(prior, cur_amt, ep19_count=0, covered=False):
+    """Build advisory lines from a list of prior (trade_type, total_price) COMPLETED rows
+    found in our own order history. Direction is MERCHANT-view: our SELL = they BOUGHT from
+    us; our BUY = they SOLD to us. The current alert is a SELL (they are buying from us).
 
-    `covered` = did our scan reach back the full window? Only then do we make absolute,
-    time-bounded claims ("in the last 2 months they never sold to you"); otherwise we report
-    what we found from recent history without claiming completeness. Returns [(kind, text)]."""
+    We ALWAYS surface the buy/sell breakdown when we have at least one matched trade. If we've
+    matched everything (full window covered, or matched >= EP-19's reported count) we make an
+    absolute claim ("never sold to you"); otherwise we present it as the running tally so far.
+    Returns [(kind, text)]."""
     buys_from_us = [float(r[1] or 0) for r in prior if (r[0] or "").upper() == "SELL"]
     sells_to_us  = [float(r[1] or 0) for r in prior if (r[0] or "").upper() == "BUY"]
     n_buy, n_sell = len(buys_from_us), len(sells_to_us)
+    total = n_buy + n_sell
     lines = []
-    if n_buy + n_sell == 0:
+    if total == 0:
         return lines
 
     lab = _rel_window_label()
-    if covered:
+    complete = covered or (ep19_count and total >= ep19_count)
+    if complete:
         if n_sell and n_buy == 0:
             lines.append(("flag", f"First time buying from you — in the {lab} they have only ever SOLD to you ({n_sell}×)"))
         elif n_buy and n_sell == 0:
@@ -68,7 +72,14 @@ def _build_relationship_lines(prior, cur_amt, covered):
             dom = "buys from you" if n_buy >= n_sell else "sells to you"
             lines.append(("note", f"In the {lab}: bought from you {n_buy}×, sold to you {n_sell}× — mostly {dom}"))
     else:
-        lines.append(("note", f"From your recent order history: bought from you {n_buy}×, sold to you {n_sell}× (scanning further back)"))
+        # Partial but still informative — present as a running tally (one consolidated line)
+        tail = f" (matched {total} of {ep19_count} so far)" if ep19_count else ""
+        if n_sell and n_buy == 0:
+            lines.append(("note", f"So far they have only SOLD to you ({n_sell}×), never bought{tail}"))
+        elif n_buy and n_sell == 0:
+            lines.append(("note", f"So far: bought from you {n_buy}×, no sells to you{tail}"))
+        else:
+            lines.append(("note", f"So far: bought from you {n_buy}×, sold to you {n_sell}×{tail}"))
 
     ref = buys_from_us if buys_from_us else (buys_from_us + sells_to_us)
     if ref and cur_amt > 0:
@@ -82,10 +93,10 @@ def _build_relationship_lines(prior, cur_amt, covered):
     return lines
 
 
-async def _relationship_cached(db, trader_id, taker_no, current_order, full_nick):
+async def _relationship_cached(db, trader_id, taker_no, current_order, full_nick, ep19_count=0):
     """FAST, no-API: cache the current order, then build relationship lines from whatever
-    we've already cached for this counterparty over the window. Returns (lines, observed).
-    Heavy history reconstruction is deferred to _enrich_counterparty_bg (background)."""
+    COMPLETED trades we've already cached for this counterparty over the window. Returns
+    (lines, observed). Deeper history reconstruction is deferred to _enrich_counterparty_bg."""
     from sqlalchemy import text as T
     import time as _t
     if not taker_no:
@@ -110,20 +121,55 @@ async def _relationship_cached(db, trader_id, taker_no, current_order, full_nick
         pass
     prior = (await db.execute(T(
         "SELECT trade_type, total_price FROM counterparty_trades "
-        "WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c AND order_number<>:o"
+        "WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c AND order_number<>:o "
+        "AND status='COMPLETED'"
     ), {"t": trader_id, "u": taker_no, "c": cutoff, "o": cur_ono})).fetchall()
     covered = _rel_window_covered.get((trader_id, taker_no), False)
-    return _build_relationship_lines(prior, cur_amt, covered), len(prior)
+    return _build_relationship_lines(prior, cur_amt, ep19_count, covered), len(prior)
+
+
+def _render_sell_alert(ctx, rel_lines):
+    """Render the full sell-order approval message + keyboard from its component parts.
+    Used both when first sending the alert and when the background scan edits it in place,
+    so the layout and verdict stay identical. rel_lines = [(kind, text), ...] for the
+    buyer-relationship section (empty until the full history scan completes)."""
+    rel_notes = [t for k, t in rel_lines if k == "note"]
+    rel_flags = [t for k, t in rel_lines if k == "flag"]
+    notes = list(ctx["threshold_notes"])
+    if ctx.get("returning_note"):
+        notes.append(ctx["returning_note"])
+    notes += rel_notes + list(ctx["account_notes"])
+    flags = list(ctx["base_flags"]) + rel_flags
+    if flags:
+        verdict = "⚠️ <b>Review carefully</b> — some checks need attention"
+    elif notes:
+        verdict = "✅ <b>Looks good</b> — meets your screening criteria"
+    else:
+        verdict = "ℹ️ <b>Limited history available</b> — use your judgement"
+    L = ["🔔 <b>New Sell Order — Approval Required</b>", ""] + list(ctx["header_lines"]) + \
+        ["", "Buyer Profile:"] + list(ctx["prof_lines"]) + ["", "Advisory:", verdict]
+    for n in notes:
+        L.append(f"  • {n}")
+    for f in flags:
+        L.append(f"  ⚠ {f}")
+    L += ["", "Tap a button below to proceed."]
+    ono = ctx["ono"]
+    kb = {"inline_keyboard": [[
+        {"text": "✅ YES - Proceed", "callback_data": f"approve:{ono}"},
+        {"text": "❌ NO - Reject",   "callback_data": f"reject:{ono}"},
+    ]]}
+    return chr(10).join(L), kb
 
 
 async def _enrich_counterparty_bg(trader_id, api_key, api_secret, taker_no, full_nick,
-                                  cur_ono, cur_amt, ep19_target, reply_to_mid):
+                                  cur_ono, cur_amt, ep19_target, reply_to_mid,
+                                  chat_id=None, ctx=None):
     """BACKGROUND (non-blocking): page through the full available order history (~30 days)
-    to identify this counterparty's past trades and cache them, then post a follow-up reply
-    under the alert summarising the relationship. Stops early once we've matched EP-19's
-    reported count (we found them all). Records whether the window was fully covered so the
-    wording can be absolute ("in the last 30 days...") or cautious. Heavy scans are serialised
-    (one at a time) and each counterparty is scanned at most once per process."""
+    to identify this counterparty's past trades and cache them, then EDIT the original alert
+    in place to add the complete buyer-history section (so the merchant sees ONE full report,
+    not a stub follow-up). Stops early once we've matched EP-19's reported count. Records
+    whether the window was fully covered so wording is absolute ("in the last 30 days...").
+    Heavy scans are serialised and each counterparty is scanned at most once per process."""
     global _rel_sem
     key = (trader_id, taker_no)
     if not taker_no or key in _rel_inflight:
@@ -133,9 +179,8 @@ async def _enrich_counterparty_bg(trader_id, api_key, api_secret, taker_no, full
         _rel_sem = asyncio.Semaphore(1)
     try:
         from sqlalchemy import text as T
-        from sqlalchemy import select as _sel
         from app.services.binance.sapi_client import get_user_order_history, get_order_identity
-        from app.api.routes.telegram import send_trader_message
+        from app.api.routes.telegram import send_trader_message, edit_trader_message
         import time as _t
         cutoff = int(_t.time() * 1000) - _REL_WINDOW_DAYS * 86400 * 1000
         prefix = (full_nick or "").lower()
@@ -197,21 +242,31 @@ async def _enrich_counterparty_bg(trader_id, api_key, api_secret, taker_no, full
             _rel_window_covered[key] = covered
             prior = (await db.execute(T(
                 "SELECT trade_type, total_price FROM counterparty_trades "
-                "WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c AND order_number<>:o"
+                "WHERE trader_id=:t AND taker_user_no=:u AND created_ms>=:c AND order_number<>:o "
+                "AND status='COMPLETED'"
             ), {"t": trader_id, "u": taker_no, "c": cutoff, "o": cur_ono})).fetchall()
+        lines = _build_relationship_lines(prior, cur_amt, ep19_target, covered)
+        # Edit the original alert in place to fold in the complete buyer history (one report).
+        if ctx is not None and chat_id and reply_to_mid:
+            try:
+                text, kb = _render_sell_alert(ctx, lines)
+                ok = await edit_trader_message(chat_id, reply_to_mid, text, reply_markup=kb)
+                logger.info("[Tracking] alert edited with full buyer history: taker=%s trades=%d covered=%s ok=%s",
+                            taker_no, len(prior), covered, ok)
+                return
+            except Exception as _ee:
+                logger.warning("[Tracking] in-place edit failed, falling back to follow-up: %s", _ee)
+        # Fallback: post a follow-up reply if we couldn't edit (and we found something)
+        if lines and matched > start_obs:
+            from sqlalchemy import select as _sel
             from app.models.trader import Trader as _Tr
-            trader = (await db.execute(_sel(_Tr).where(_Tr.id == trader_id))).scalar_one_or_none()
-        # Only post a follow-up if the deeper scan added something the inline alert lacked
-        if matched <= start_obs or trader is None:
-            return
-        lines = _build_relationship_lines(prior, cur_amt, covered)
-        if not lines:
-            return
-        body = [f"📊 <b>Buyer history</b> — {full_nick or 'this buyer'}"]
-        for kind, txt in lines:
-            body.append(("⚠ " if kind == "flag" else "• ") + txt)
-        await send_trader_message(trader, chr(10).join(body), reply_to=reply_to_mid)
-        logger.info("[Tracking] relationship enrichment posted for taker %s (%d trades, covered=%s)", taker_no, len(prior), covered)
+            async with async_session() as db2:
+                trader = (await db2.execute(_sel(_Tr).where(_Tr.id == trader_id))).scalar_one_or_none()
+            if trader is not None:
+                body = [f"📊 <b>Buyer history</b> — {full_nick or 'this buyer'}"]
+                for kind, txt in lines:
+                    body.append(("⚠ " if kind == "flag" else "• ") + txt)
+                await send_trader_message(trader, chr(10).join(body), reply_to=reply_to_mid)
     except Exception as e:
         logger.warning("[Tracking] relationship enrichment failed: %s", e)
 
@@ -220,7 +275,8 @@ async def track_trader(db, trader) -> int:
     """Record this trader's newly-completed Binance orders into the Orders table,
     counting only those created during the current continuous online session."""
     from app.core.security import decrypt_data
-    from app.services.binance.sapi_client import get_user_order_history
+    from app.services.binance.sapi_client import get_user_order_history, get_order_identity
+    from sqlalchemy import text as _cpt_text
 
     now = datetime.now(timezone.utc)
     now_ms = int(now.timestamp() * 1000)
@@ -263,6 +319,7 @@ async def track_trader(db, trader) -> int:
         trader.binance_api_key_invalid = False  # healthy read -> clear stale flag
 
     inserted = 0
+    _cache_budget = _POLL_CACHE_BUDGET
     for o in rows:
         ct = int(o.get("createTime") or 0)
         if ct < floor:                       # before this online session -> ignore
@@ -296,6 +353,24 @@ async def track_trader(db, trader) -> int:
             settled_at=(datetime.fromtimestamp(ct / 1000, tz=timezone.utc) if (ct and status == OrderStatus.COMPLETED) else None),
         ))
         inserted += 1
+
+        # Incrementally cache this COMPLETED order's counterparty (stable takerUserNo) so the
+        # buy/sell relationship history converges to completeness over time — no slow backfill
+        # needed at high volume. Bounded per poll to keep the poll fast.
+        if status == OrderStatus.COMPLETED and _cache_budget > 0:
+            _cache_budget -= 1
+            try:
+                _idd = await get_order_identity(api_key, api_secret, order_no)
+                if _idd.get("taker_user_no"):
+                    await db.execute(_cpt_text(
+                        "INSERT INTO counterparty_trades (order_number,trader_id,taker_user_no,full_nick,trade_type,total_price,status,created_ms) "
+                        "VALUES (:o,:t,:u,:n,:tt,:p,'COMPLETED',:c) ON CONFLICT (order_number) DO NOTHING"
+                    ), {"o": str(order_no), "t": trader.id, "u": _idd.get("taker_user_no"),
+                        "n": _idd.get("counterparty_nickname"),
+                        "tt": (o.get("tradeType") or "").upper(),
+                        "p": float(o.get("totalPrice") or 0), "c": ct})
+            except Exception:
+                pass
 
     # ── Telegram alert for NEW sell orders (buyer profile via EP-19) ──
     # Fires for sell orders created during this online session that we have not yet
@@ -361,83 +436,72 @@ async def track_trader(db, trader) -> int:
                 thr30  = int(trader.cf_all_trades_min or 0)        # Min Total Trades (30D)
                 thrall = int(trader.cf_all_trades_min_all or 0)    # Min Total Trades (All-time)
                 _t30, _tall, _regd, _withus = _i(t30), _i(tall), _i(regd), _i(withus) or 0
-                _notes = []
-                _flags = []   # cautionary
+                _threshold_notes = []
+                _account_notes = []
+                _base_flags = []   # cautionary (everything except relationship flags)
                 # 30-day threshold check
                 if thr30 > 0 and _t30 is not None:
                     if _t30 >= thr30:
-                        _notes.append(f"Has surpassed your 30-day minimum of {thr30} ({_t30} trades in the last 30 days)")
+                        _threshold_notes.append(f"Has surpassed your 30-day minimum of {thr30} ({_t30} trades in the last 30 days)")
                     else:
-                        _flags.append(f"Below your 30-day minimum of {thr30} (only {_t30} trades)")
+                        _base_flags.append(f"Below your 30-day minimum of {thr30} (only {_t30} trades)")
                 # All-time threshold check
                 if thrall > 0 and _tall is not None:
                     if _tall >= thrall:
-                        _notes.append(f"Strong track record — {_tall} lifetime trades (your minimum is {thrall})")
+                        _threshold_notes.append(f"Strong track record — {_tall} lifetime trades (your minimum is {thrall})")
                     else:
-                        _flags.append(f"Below your all-time minimum of {thrall} ({_tall} lifetime trades)")
+                        _base_flags.append(f"Below your all-time minimum of {thrall} ({_tall} lifetime trades)")
                 # Repeat-client check
                 _need_enrich = False
+                _returning_note = None
                 if _withus > 0:
-                    _notes.append(f"Returning client — has completed {_withus} trade(s) with you in the last 30 days")
-                    # FAST relationship from cache (no API) — heavy 2-month history scan deferred to background
-                    try:
-                        _rel, _obs = await _relationship_cached(db, trader.id, _taker_no, o, _full_nick)
-                    except Exception as _re:
-                        logger.warning("[Tracking] counterparty analysis failed: %s", _re)
-                        _rel = []
-                    for _kind, _txt in _rel:
-                        (_flags if _kind == "flag" else _notes).append(_txt)
-                    # Enrich in background until we've scanned the full window for this buyer
+                    _returning_note = f"Returning client — has completed {_withus} trade(s) with you in the last 30 days"
                     _need_enrich = (_taker_no is not None
                                     and (trader.id, _taker_no) not in _rel_inflight)
                 # Account-age check
                 if _regd is not None:
                     if _regd >= 365:
-                        _notes.append(f"Well-aged account ({_regd} days / ~{_regd//365}y) — established trader")
+                        _account_notes.append(f"Well-aged account ({_regd} days / ~{_regd//365}y) — established trader")
                     elif _regd >= 90:
-                        _notes.append(f"Established account ({_regd} days old)")
+                        _account_notes.append(f"Established account ({_regd} days old)")
                     elif _regd < 30:
-                        _flags.append(f"New account — only {_regd} days old")
+                        _base_flags.append(f"New account — only {_regd} days old")
                 # Completion-rate flag
                 if rate30 is not None and rate30 < 0.90:
-                    _flags.append(f"30-day completion rate is {_rate_txt} — below 90%")
+                    _base_flags.append(f"30-day completion rate is {_rate_txt} — below 90%")
 
-                if _flags:
-                    _verdict = "⚠️ <b>Review carefully</b> — some checks need attention"
-                elif _notes:
-                    _verdict = "✅ <b>Looks good</b> — meets your screening criteria"
-                else:
-                    _verdict = "ℹ️ <b>Limited history available</b> — use your judgement"
-
-                _lines = [
-                    "🔔 <b>New Sell Order — Approval Required</b>",
-                    "",
-                    f"Amount: {amt}",
-                    f"Crypto: {o.get('amount','?')} {o.get('asset','USDT')}",
-                    f"Rate: {o.get('unitPrice','?')}",
-                    f"Buyer: <b>{_full_nick or o.get('counterPartNickName') or 'Unknown'}</b>",
-                    f"Order: {ono}",
-                    "",
-                    "Buyer Profile:",
-                    f"- 30d trades: {_f(t30)}",
-                    f"- All-time trades: {_f(tall)}",
-                    f"- 30d completion: {_rate_txt}",
-                    f"- Account age: {_f(regd, ' days')}",
-                    f"- Traded with you before: {_before}",
-                    "",
-                    "Advisory:",
-                    _verdict,
-                ]
-                for _n in _notes:
-                    _lines.append(f"  • {_n}")
-                for _fl in _flags:
-                    _lines.append(f"  ⚠ {_fl}")
-                _lines += ["", "Tap a button below to proceed."]
-                msg = chr(10).join(_lines)
-                _kb = {"inline_keyboard": [[
-                    {"text": "✅ YES - Proceed", "callback_data": f"approve:{ono}"},
-                    {"text": "❌ NO - Reject",   "callback_data": f"reject:{ono}"},
-                ]]}
+                # Context for rendering — shared by the initial send AND the background edit
+                _ctx = {
+                    "ono": ono,
+                    "header_lines": [
+                        f"Amount: {amt}",
+                        f"Crypto: {o.get('amount','?')} {o.get('asset','USDT')}",
+                        f"Rate: {o.get('unitPrice','?')}",
+                        f"Buyer: <b>{_full_nick or o.get('counterPartNickName') or 'Unknown'}</b>",
+                        f"Order: {ono}",
+                    ],
+                    "prof_lines": [
+                        f"- 30d trades: {_f(t30)}",
+                        f"- All-time trades: {_f(tall)}",
+                        f"- 30d completion: {_rate_txt}",
+                        f"- Account age: {_f(regd, ' days')}",
+                        f"- Traded with you before: {_before}",
+                    ],
+                    "threshold_notes": _threshold_notes,
+                    "returning_note": _returning_note,
+                    "account_notes": _account_notes,
+                    "base_flags": _base_flags,
+                }
+                # Relationship: instant from cache (only shows once full history is scanned);
+                # otherwise the background scan edits it into this same message shortly.
+                _rel = []
+                if _withus > 0:
+                    try:
+                        _rel, _obs = await _relationship_cached(db, trader.id, _taker_no, o, _full_nick, _withus)
+                    except Exception as _re:
+                        logger.warning("[Tracking] counterparty analysis failed: %s", _re)
+                        _rel = []
+                msg, _kb = _render_sell_alert(_ctx, _rel)
                 _res = await send_trader_message(trader, msg, reply_markup=_kb)
                 _mid = (_res or {}).get("result", {}).get("message_id")
                 # Persist message_id + status; register for the YES/NO callback + desktop polling
@@ -467,6 +531,7 @@ async def track_trader(db, trader) -> int:
                     asyncio.create_task(_enrich_counterparty_bg(
                         trader.id, api_key, api_secret, _taker_no, _full_nick,
                         str(ono), _cur_amt_bg, _withus, _mid,
+                        trader.telegram_chat_id, _ctx,
                     ))
     except Exception as _ne:
         logger.warning("[Tracking] sell-order notify failed: %s", _ne)
@@ -571,6 +636,11 @@ async def track_trader(db, trader) -> int:
                 await _send3(trader, f"{_icon} <b>{_label}</b>\nOrder: {ono}", reply_to=_mid_orig)
                 await db.execute(_sql_text3(
                     "UPDATE sell_order_notifications SET status_notified = TRUE, last_status = :s WHERE order_number = :o"
+                ), {"s": _cur, "o": str(ono)})
+                # Keep the relationship cache accurate: a freshly COMPLETED order now counts
+                # toward this counterparty's trade history; a cancelled one must not.
+                await db.execute(_sql_text3(
+                    "UPDATE counterparty_trades SET status = :s WHERE order_number = :o"
                 ), {"s": _cur, "o": str(ono)})
                 await db.commit()
                 # Clear any pending-approval entry (order is resolved)
