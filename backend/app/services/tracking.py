@@ -109,6 +109,75 @@ async def track_trader(db, trader) -> int:
         ))
         inserted += 1
 
+    # ── Telegram alert for NEW sell orders (buyer profile via EP-19) ──
+    # Fires for sell orders created during this online session that we have not yet
+    # alerted on — regardless of order status — so the merchant sees buyer details even
+    # before Choice Bank is configured.
+    try:
+        if getattr(trader, "telegram_chat_id", None):
+            from sqlalchemy import text as _sql_text
+            from app.services.binance.sapi_client import get_counterparty_statistic
+            from app.api.routes.telegram import notify_trader
+            for o in rows:
+                if (o.get("tradeType") or "").upper() != "SELL":
+                    continue
+                ct = int(o.get("createTime") or 0)
+                if ct < floor:
+                    continue
+                ono = o.get("orderNumber")
+                if not ono:
+                    continue
+                seen = (await db.execute(_sql_text(
+                    "SELECT 1 FROM sell_order_notifications WHERE order_number = :o"
+                ), {"o": str(ono)})).first()
+                if seen:
+                    continue
+                # Mark first (avoid duplicate alerts across overlapping polls)
+                await db.execute(_sql_text(
+                    "INSERT INTO sell_order_notifications (order_number, trader_id) VALUES (:o, :t) ON CONFLICT DO NOTHING"
+                ), {"o": str(ono), "t": trader.id})
+                await db.commit()
+                # Buyer profile via EP-19 (server-side; no browser)
+                prof = {}
+                try:
+                    prof = await get_counterparty_statistic(api_key, api_secret, ono)
+                except Exception:
+                    prof = {}
+                def _f(v, suffix=""):
+                    return (f"{v}{suffix}" if v not in (None, "") else "N/A")
+                t30 = prof.get("completedOrderNumOfLatest30day")
+                tall = prof.get("completedOrderNum")
+                rate30 = prof.get("finishRateLatest30Day")
+                regd = prof.get("registerDays")
+                withus = prof.get("numberOfTradesWithCounterpartyCompleted30day") or 0
+                try:
+                    amt = f"KES {int(float(o.get('totalPrice') or 0)):,}"
+                except Exception:
+                    amt = f"KES {o.get('totalPrice','?')}"
+                _rate_txt = (f"{rate30*100:.2f}%" if rate30 is not None else "N/A")
+                _before = ("Yes (" + str(withus) + ")") if withus else "No"
+                _lines = [
+                    "🔔 New Sell Order",
+                    "",
+                    f"Amount: {amt}",
+                    f"Crypto: {o.get('amount','?')} {o.get('asset','USDT')}",
+                    f"Rate: {o.get('unitPrice','?')}",
+                    f"Buyer: {o.get('counterPartNickName') or 'Unknown'}",
+                    f"Order: {ono}",
+                    "",
+                    "Buyer Profile:",
+                    f"- 30d trades: {_f(t30)}",
+                    f"- All-time trades: {_f(tall)}",
+                    f"- 30d completion: {_rate_txt}",
+                    f"- Account age: {_f(regd, ' days')}",
+                    f"- Traded with you before: {_before}",
+                ]
+                msg = chr(10).join(_lines)
+                await notify_trader(trader, msg)
+                logger.info("[Tracking] sell-order Telegram alert sent: %s", ono)
+    except Exception as _ne:
+        logger.warning("[Tracking] sell-order notify failed: %s", _ne)
+
     trader.tracking_last_poll_at = now
     await db.commit()
     if inserted:

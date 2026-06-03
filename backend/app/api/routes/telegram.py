@@ -22,6 +22,12 @@ _pending_approvals: dict = {}  # order_number -> {chat_id, message_id, status, t
 
 def _tg_api_url():
     tok = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not tok:
+        try:
+            from app.core.config import settings
+            tok = settings.TELEGRAM_BOT_TOKEN or ""
+        except Exception:
+            tok = ""
     return f"https://api.telegram.org/bot{tok}"
 
 
