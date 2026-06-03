@@ -30,10 +30,8 @@ _poller_boot = None
 # Relationship-analysis tuning
 _REL_WINDOW_DAYS   = 30      # Binance's order history / EP-19 only span ~30 days (seed scan)
 _REL_QUERY_DAYS    = 90      # how far back we read OUR OWN cache — surfaces older relationships
-_REL_DETAIL_BUDGET = 30      # max getUserOrderDetail calls per seed scan
-_REL_MAX_PAGES     = 25      # background top-up scan depth (~1250 orders)
-_REL_SEED_PAGES    = 5       # synchronous seed depth for a cold buyer (~250 orders, kept fast);
-                             # incremental caching does the heavy lifting for completeness
+_REL_DETAIL_BUDGET = 60      # max getUserOrderDetail calls per background scan
+_REL_MAX_PAGES     = 60      # background scan depth — full ~30-day history (~58 pages)
 _POLL_CACHE_BUDGET = 12      # max getUserOrderDetail calls per poll for incremental caching
 _REL_AMT_RATIO     = 2.0     # current amount >= ratio * usual -> flag
 _REL_AMT_MIN_DELTA = 25000   # ...and at least this many KES above usual, to avoid noise
@@ -523,22 +521,21 @@ async def track_trader(db, trader) -> int:
                 # relationship (no trade in the last 30 days) is still recognised. Instant; the
                 # background seed scan tops it up and edits this same message if needed.
                 _rel, _obs, _last_days = [], 0, None
+                _need_enrich = False
                 if _taker_no:
                     try:
                         _rel, _obs, _last_days = await _relationship_cached(db, trader.id, _taker_no, o, _full_nick, withus)
-                        # Cold returning buyer: seed synchronously (bounded) so the buy/sell
-                        # breakdown is present in THIS alert — once per buyer per process.
-                        if (withus > 0 and _obs < withus
-                                and (trader.id, _taker_no) not in _rel_inflight):
-                            _rel_inflight.add((trader.id, _taker_no))
-                            _cov = await _scan_counterparty_history(
-                                db, api_key, api_secret, trader.id, _taker_no, _full_nick,
-                                str(ono), _REL_SEED_PAGES, withus)
-                            _rel_window_covered[(trader.id, _taker_no)] = _cov
-                            _rel, _obs, _last_days = await _relationship_cached(db, trader.id, _taker_no, o, _full_nick, withus)
                     except Exception as _re:
                         logger.warning("[Tracking] counterparty analysis failed: %s", _re)
                         _rel, _obs, _last_days = [], 0, None
+                    # Returning buyer whose history we haven't fully reconstructed yet: show a
+                    # "loading" placeholder now and run a deep background scan that edits the
+                    # full buy/sell breakdown into THIS message when ready (finding sparse trades
+                    # at high volume can take a couple of minutes).
+                    if withus > 0 and _obs < withus and (trader.id, _taker_no) not in _rel_inflight:
+                        _need_enrich = True
+                        if not _rel:
+                            _rel = [("note", "Analysing your trade history with this buyer — buy/sell breakdown loading…")]
                 # "Traded with you before" reflects 30-day OR any older cached relationship
                 if withus:
                     _before = f"Yes ({withus} in 30d)"
@@ -630,6 +627,18 @@ async def track_trader(db, trader) -> int:
                 except Exception:
                     pass
                 logger.info("[Tracking] sell-order Telegram alert sent: %s", ono)
+                # Deep background scan (non-blocking): reconstruct the buyer's full buy/sell
+                # history and EDIT this message to replace the "loading…" placeholder.
+                if _need_enrich:
+                    try:
+                        _cur_amt_bg = float(o.get("totalPrice") or 0)
+                    except Exception:
+                        _cur_amt_bg = 0.0
+                    asyncio.create_task(_enrich_counterparty_bg(
+                        trader.id, api_key, api_secret, _taker_no, _full_nick,
+                        str(ono), _cur_amt_bg, withus, _mid,
+                        trader.telegram_chat_id, _ctx,
+                    ))
     except Exception as _ne:
         logger.warning("[Tracking] sell-order notify failed: %s", _ne)
 
