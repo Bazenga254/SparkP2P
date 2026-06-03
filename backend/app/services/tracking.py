@@ -38,11 +38,77 @@ _REL_AMT_MIN_DELTA = 25000   # ...and at least this many KES above usual, to avo
 _rel_inflight       = set()  # (trader_id, taker_no) already enriched this process — scan once
 _rel_window_covered = {}     # (trader_id, taker_no) -> True if a bg scan reached the full window
 _rel_sem            = None   # lazily-created semaphore that serialises heavy background scans
+_backfill_done      = set()  # trader_ids whose full-history counterparty backfill has run
+_BACKFILL_MAX_CALLS = 3000   # safety cap on getUserOrderDetail calls per backfill run
+_BACKFILL_SLEEP     = 0.4    # seconds between detail calls — gentle on the relay / Binance
 
 
 def _rel_window_label():
     m = _REL_WINDOW_DAYS // 30
     return f"last {m} months" if m >= 2 else f"last {_REL_WINDOW_DAYS} days"
+
+
+async def _backfill_counterparties(trader_id, api_key, api_secret):
+    """ONE-TIME (per process) gentle background sweep of the full ~30-day order history that
+    caches EVERY counterparty's COMPLETED trades into counterparty_trades. After this, every
+    buyer's buy/sell breakdown is available instantly from cache — no per-buyer scan needed.
+    Idempotent (skips already-cached orders) and rate-limited so it doesn't disrupt trading."""
+    if trader_id in _backfill_done:
+        return
+    _backfill_done.add(trader_id)
+    try:
+        from sqlalchemy import text as T
+        from app.services.binance.sapi_client import get_user_order_history, get_order_identity
+        import time as _t
+        cutoff = int(_t.time() * 1000) - _REL_WINDOW_DAYS * 86400 * 1000
+        calls = 0
+        cached = 0
+        async with async_session() as db:
+            page = 1
+            while page <= _REL_MAX_PAGES and calls < _BACKFILL_MAX_CALLS:
+                try:
+                    rows = await get_user_order_history(api_key, api_secret, page=page, rows=50)
+                except Exception:
+                    break
+                page += 1
+                if not rows:
+                    break
+                page_min_ct = min(int(h.get("createTime") or 0) for h in rows)
+                for h in rows:
+                    if calls >= _BACKFILL_MAX_CALLS:
+                        break
+                    hono = str(h.get("orderNumber") or "")
+                    if not hono:
+                        continue
+                    if (h.get("orderStatus") or "").upper() != "COMPLETED":
+                        continue
+                    if int(h.get("createTime") or 0) < cutoff:
+                        continue
+                    if (await db.execute(T("SELECT 1 FROM counterparty_trades WHERE order_number=:o"), {"o": hono})).first():
+                        continue  # already cached (idempotent)
+                    calls += 1
+                    try:
+                        idd = await get_order_identity(api_key, api_secret, hono)
+                    except Exception:
+                        await asyncio.sleep(_BACKFILL_SLEEP)
+                        continue
+                    tk = idd.get("taker_user_no")
+                    if tk:
+                        await db.execute(T(
+                            "INSERT INTO counterparty_trades (order_number,trader_id,taker_user_no,full_nick,trade_type,total_price,status,created_ms) "
+                            "VALUES (:o,:t,:u,:n,:tt,:p,'COMPLETED',:c) ON CONFLICT (order_number) DO NOTHING"
+                        ), {"o": hono, "t": trader_id, "u": tk, "n": idd.get("counterparty_nickname"),
+                            "tt": idd.get("trade_type"), "p": idd.get("total_price"),
+                            "c": int(h.get("createTime") or 0)})
+                        cached += 1
+                    await asyncio.sleep(_BACKFILL_SLEEP)
+                await db.commit()
+                if page_min_ct < cutoff:
+                    break
+        logger.info("[Tracking] counterparty backfill done for trader %s: %d detail calls, %d cached", trader_id, calls, cached)
+    except Exception as e:
+        logger.warning("[Tracking] counterparty backfill failed for trader %s: %s", trader_id, e)
+        _backfill_done.discard(trader_id)   # allow a retry on the next poll
 
 
 def _build_relationship_lines(prior, cur_amt, ep19_count=0, covered=False):
@@ -405,6 +471,11 @@ async def track_trader(db, trader) -> int:
 
     if trader.binance_api_key_invalid:
         trader.binance_api_key_invalid = False  # healthy read -> clear stale flag
+
+    # One-time gentle backfill of the full counterparty history so every buyer's buy/sell
+    # breakdown is available instantly from cache (runs in the background, once per process).
+    if trader.id not in _backfill_done and getattr(trader, "telegram_chat_id", None):
+        asyncio.create_task(_backfill_counterparties(trader.id, api_key, api_secret))
 
     inserted = 0
     _cache_budget = _POLL_CACHE_BUDGET
