@@ -969,9 +969,10 @@ def compute_pnl(orders):
     s = _side(sells)
     spread = round(s["avg_rate"] - b["avg_rate"], 4) if (b["avg_rate"] and s["avg_rate"]) else 0.0
     gross = round(_realized, 2)
-    # Only SELL-side commission is a true deduction from realized profit. Buy-side
-    # commission is part of the USDT acquisition cost (already in the cost basis),
-    # so counting it here too would double-charge it.
+    return _finalize_pnl(b, s, spread, gross, orders)
+
+
+def _finalize_pnl(b, s, spread, gross, orders):
     fees_kes = round(sum((o.binance_commission or 0) * (o.exchange_rate or 0)
                          for o in orders if o.side == OrderSide.SELL), 2)
     net = round(gross - fees_kes, 2)
@@ -981,3 +982,46 @@ def compute_pnl(orders):
         "gross_profit": gross, "fees_kes": fees_kes, "net_profit": net,
         "volume": round(b["kes"] + s["kes"], 2), "trades": b["orders"] + s["orders"],
     }
+
+
+def compute_pnl_daily(orders, tz_offset_hours=3):
+    """Attribute realized profit (same cumulative cost-basis method as compute_pnl) to each
+    EAT calendar day. Replays ALL orders chronologically so the running cost basis is correct,
+    then buckets each sell's booked profit by the day it was created. Returns
+    {'YYYY-MM-DD': {gross, fees, net, volume, trades}} in EAT. Pass the trader's full completed
+    order history so earlier buys correctly inform the cost basis of later sells."""
+    from collections import defaultdict
+    off = timedelta(hours=tz_offset_hours)
+    day = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0})
+    chron = sorted(orders, key=lambda o: (o.created_at, o.id))
+    inv_usdt = 0.0
+    inv_cost = 0.0
+    for o in chron:
+        u = float(o.crypto_amount or 0)
+        k = float(o.fiat_amount or 0)
+        ts = o.created_at
+        dkey = (ts + off).strftime("%Y-%m-%d")
+        d = day[dkey]
+        d["volume"] += k
+        d["trades"] += 1
+        if o.side == OrderSide.BUY:
+            inv_usdt += u
+            inv_cost += k
+        else:
+            avg = (inv_cost / inv_usdt) if inv_usdt > 0 else ((k / u) if u else 0)
+            rate = (k / u) if u else 0
+            d["gross"] += u * (rate - avg)
+            d["fees"] += float(o.binance_commission or 0) * float(o.exchange_rate or 0)
+            draw = min(u, inv_usdt)
+            if inv_usdt > 0:
+                inv_cost -= avg * draw
+                inv_usdt -= draw
+                if inv_usdt < 0.0001:
+                    inv_usdt = 0.0
+                    inv_cost = 0.0
+    for dk in day:
+        day[dk]["net"] = round(day[dk]["gross"] - day[dk]["fees"], 2)
+        day[dk]["gross"] = round(day[dk]["gross"], 2)
+        day[dk]["fees"] = round(day[dk]["fees"], 2)
+        day[dk]["volume"] = round(day[dk]["volume"], 2)
+    return dict(day)

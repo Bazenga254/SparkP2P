@@ -483,6 +483,82 @@ async def profit_breakdown(
     }
 
 
+@router.get("/profit-history")
+async def profit_history(
+    granularity: str = "day",   # day | week | month
+    year: int = 0,
+    month: int = 0,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Profit accumulation over time (same cost-basis method as the rest of the app).
+    - granularity=day   -> each active day of the given month
+    - granularity=week  -> Monday-anchored weeks of the given month
+    - granularity=month -> each month of the given year
+    Returns rows + a period total + the available data range (for prev/next navigation).
+    Nothing is ever deleted — past months stay viewable; the 'monthly reset' is just the view."""
+    from app.models.order import Order, OrderStatus
+    from app.services.tracking import compute_pnl_daily
+    from datetime import date as _date
+    import calendar as _cal
+
+    rows = (await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+        )
+    )).scalars().all()
+    daily = compute_pnl_daily(rows)   # {'YYYY-MM-DD': {gross,fees,net,volume,trades}}
+
+    now_eat = datetime.now(timezone.utc) + timedelta(hours=3)
+    year = year or now_eat.year
+    month = month or now_eat.month
+    keys = sorted(daily.keys())
+    rng = {"min": keys[0] if keys else None, "max": keys[-1] if keys else None}
+
+    def _agg(items):
+        g = round(sum(i["gross"] for i in items), 2)
+        f = round(sum(i["fees"] for i in items), 2)
+        return {"gross": g, "fees": f, "net": round(g - f, 2),
+                "volume": round(sum(i["volume"] for i in items), 2),
+                "trades": sum(i["trades"] for i in items)}
+
+    out_rows = []
+    if granularity == "month":
+        for m in range(1, 13):
+            items = [v for k, v in daily.items() if k[:7] == f"{year}-{m:02d}"]
+            if not items:
+                continue
+            out_rows.append({"key": f"{year}-{m:02d}", "label": _cal.month_name[m], **_agg(items)})
+        total = _agg([v for k, v in daily.items() if k[:4] == str(year)]) if any(k[:4] == str(year) for k in daily) else _agg([])
+        scope = {"year": year, "month": None}
+    elif granularity == "week":
+        buckets = {}
+        for k, v in daily.items():
+            if k[:7] != f"{year}-{month:02d}":
+                continue
+            dt = _date.fromisoformat(k)
+            wk = (dt - timedelta(days=dt.weekday())).isoformat()   # Monday of that week
+            buckets.setdefault(wk, []).append(v)
+        for wk in sorted(buckets):
+            ws = _date.fromisoformat(wk)
+            we = ws + timedelta(days=6)
+            label = f"{ws.strftime('%b')} {ws.day} – {we.strftime('%b')} {we.day}"
+            out_rows.append({"key": wk, "label": label, **_agg(buckets[wk])})
+        total = _agg([v for k, v in daily.items() if k[:7] == f"{year}-{month:02d}"]) if any(k[:7] == f"{year}-{month:02d}" for k in daily) else _agg([])
+        scope = {"year": year, "month": month}
+    else:  # day
+        mkeys = sorted(k for k in daily if k[:7] == f"{year}-{month:02d}")
+        for k in mkeys:
+            v = daily[k]
+            dt = _date.fromisoformat(k)
+            out_rows.append({"key": k, "label": f"{dt.strftime('%a, %b')} {dt.day}", **v})
+        total = _agg([daily[k] for k in mkeys]) if mkeys else _agg([])
+        scope = {"year": year, "month": month}
+
+    return {"granularity": granularity, "rows": out_rows, "total": total, "range": rng, **scope}
+
+
 @router.get("/binance-orders")
 async def binance_orders(
     limit: int = 20,
