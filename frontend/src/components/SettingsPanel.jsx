@@ -7,6 +7,7 @@ import RemoteBrowser from './RemoteBrowser';
 import '@smile_identity/smart-camera-web';
 
 const saveBinanceApiKey = (data) => api.put('/traders/binance-api-key', data);
+const deleteBinanceApiKey = () => api.delete('/traders/binance-api-key');
 
 // Request OTP for settlement change
 const requestSettlementOTP = () => api.post('/traders/settlement/request-otp');
@@ -1137,6 +1138,33 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                   }}>
                   {apiKeySaving ? 'Saving…' : 'Save API Key'}
                 </button>
+                {profile?.binance_api_key_saved && (
+                  <button
+                    disabled={apiKeySaving}
+                    onClick={async () => {
+                      if (!window.confirm('Remove this Binance API key from this account?\n\nThe key is deleted from the server completely, so you can connect it to a different SparkP2P account. This account will have no key until you connect one again.')) return;
+                      setApiKeySaving(true);
+                      setApiKeyMsg('');
+                      try {
+                        await deleteBinanceApiKey();
+                        setApiKeyMsg('✓ API key removed — this account is now neutral');
+                        setApiKey('');
+                        setApiSecret('');
+                        onUpdate();
+                      } catch (err) {
+                        setApiKeyMsg(err.response?.data?.detail || 'Failed to remove API key');
+                      } finally {
+                        setApiKeySaving(false);
+                      }
+                    }}
+                    style={{
+                      padding: '9px 18px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                      background: 'transparent', border: '1px solid rgba(239,68,68,0.5)', color: '#ef4444',
+                      opacity: apiKeySaving ? 0.5 : 1, marginLeft: 'auto',
+                    }}>
+                    Delete Key
+                  </button>
+                )}
               </div>
             </div>
           </div>

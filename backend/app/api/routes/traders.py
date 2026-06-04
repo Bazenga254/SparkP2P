@@ -1350,6 +1350,23 @@ async def save_binance_api_key(
     return {"status": "saved", "ads_found": len(ads), "merchant_capable": merchant_capable}
 
 
+@router.delete("/binance-api-key")
+async def delete_binance_api_key(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Completely remove the stored Binance API key + secret from this account, leaving it
+    'neutral' (no key). The actual key/secret are deleted from the database, so the same key
+    can be connected to a different SparkP2P account. Counterparty-filter pushes and
+    background SAPI calls simply stop for this account until a key is connected again."""
+    trader.binance_api_key = None
+    trader.binance_api_secret = None
+    trader.binance_api_key_invalid = False
+    trader.binance_merchant_tier = None   # tier was derived from the key
+    await db.commit()
+    return {"status": "deleted"}
+
+
 # ── Profile, Security Question, Change Password ───────────────────
 
 _change_pw_otp_codes: dict[str, str] = {}  # email -> OTP for in-app password change
