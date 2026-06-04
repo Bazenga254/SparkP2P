@@ -700,7 +700,7 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
               <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
                 <div style={{ fontSize: 11, color: '#9ca3af' }}>Binance Fees</div>
                 <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>− {fmtKESFee(binanceFees)}</div>
-                <div style={{ fontSize: 11, color: '#6b7280' }}>KES {binanceFeePerUsdt}/USDT · buy + sell</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>KES {profile?.binance_fee_per_usdt ?? 0.25}/USDT · buy + sell</div>
               </div>
             )}
 
