@@ -35,6 +35,187 @@ const SUPPORTED_COINS = ['USDT', 'USDC', 'BTC', 'ETH', 'BNB', 'BUSD'];
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
+const fmtCompact = (n) => {
+  const x = Math.abs(n || 0);
+  if (x >= 1e6) return (n < 0 ? '-' : '') + (x / 1e6).toFixed(2) + 'M';
+  if (x >= 1e3) return (n < 0 ? '-' : '') + (x / 1e3).toFixed(1) + 'K';
+  return Math.round(n || 0).toString();
+};
+const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const PROFIT_METRICS = {
+  net:    { label: 'Profit', color: '#10b981', neg: '#ef4444', fmt: (v) => fmtKES(v),                          axis: (v) => fmtCompact(v) },
+  volume: { label: 'Volume', color: '#3b82f6', neg: '#3b82f6', fmt: (v) => 'KES ' + fmtCompact(v),             axis: (v) => fmtCompact(v) },
+  spread: { label: 'Spread', color: '#f59e0b', neg: '#ef4444', fmt: (v) => 'KES ' + (v || 0).toFixed(2),       axis: (v) => (v || 0).toFixed(2) },
+  price:  { label: 'Price',  color: '#a78bfa', neg: '#a78bfa', fmt: (v) => 'KES ' + (v || 0).toFixed(2),       axis: (v) => (v || 0).toFixed(2) },
+};
+
+function ProfitPage() {
+  const [view, setView] = useState('week');     // week | month | year (range preset)
+  const [offset, setOffset] = useState(0);       // 0 = current, -1 = previous period…
+  const [metric, setMetric] = useState('net');   // net | volume | spread | price
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  // Resolve bucket + range from the view preset + offset
+  const now = new Date();
+  let bucket, startD, endD, rangeLabel;
+  if (view === 'week') {
+    const d = new Date(now); const dow = (d.getDay() + 6) % 7; // Mon=0
+    d.setDate(d.getDate() - dow + offset * 7);
+    const e = new Date(d); e.setDate(e.getDate() + 6);
+    bucket = 'day'; startD = d; endD = e;
+    rangeLabel = `${MONTH_NAMES[d.getMonth()].slice(0,3)} ${d.getDate()} – ${MONTH_NAMES[e.getMonth()].slice(0,3)} ${e.getDate()}`;
+  } else if (view === 'month') {
+    const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    const e = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+    bucket = 'day'; startD = d; endD = e;
+    rangeLabel = `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+  } else {
+    const y = now.getFullYear() + offset;
+    bucket = 'month'; startD = new Date(y, 0, 1); endD = new Date(y, 11, 31);
+    rangeLabel = `${y}`;
+  }
+  const start = isoLocal(startD), end = isoLocal(endD);
+  const isCurrent = offset === 0;
+
+  useEffect(() => {
+    let cancel = false; setLoading(true);
+    api.get('/traders/profit-series', { params: { bucket, start, end } })
+      .then(r => { if (!cancel) setData(r.data); })
+      .catch(() => { if (!cancel) setData(null); })
+      .finally(() => { if (!cancel) setLoading(false); });
+    return () => { cancel = true; };
+  }, [bucket, start, end]);
+
+  const rows = data?.rows || [];
+  const total = data?.total || {};
+  const M = PROFIT_METRICS[metric];
+  const vals = rows.map(r => r[metric] || 0);
+  const maxPos = Math.max(0, ...vals, 0);
+  const maxNeg = Math.max(0, ...vals.map(v => -v), 0);
+  const span = (maxPos + maxNeg) || 1;
+  const H = 210;
+  const zeroTop = (maxPos / span) * H;
+  const tabBtn = (active) => ({ padding: '5px 14px', borderRadius: 16, border: '1px solid',
+    borderColor: active ? '#10b981' : 'var(--border)', background: active ? 'rgba(16,185,129,0.15)' : 'transparent',
+    color: active ? '#10b981' : '#9ca3af', fontSize: 12, fontWeight: 600, cursor: 'pointer' });
+  const navBtn = (dis) => ({ width: 32, height: 32, borderRadius: 8, border: '1px solid var(--border)', background: 'transparent',
+    color: dis ? '#374151' : '#cbd5e1', fontSize: 18, cursor: dis ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' });
+
+  return (
+    <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+      {/* Header: range preset + metric */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <BarChart2 size={20} style={{ color: '#10b981' }} />
+          <h3>Profit Tracker</h3>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+            {[['week','This Week'],['month','This Month'],['year','This Year']].map(([v, l]) => (
+              <button key={v} onClick={() => { setView(v); setOffset(0); }} style={tabBtn(view === v)}>{l}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Period nav + metric selector */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, padding: '6px 0 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button onClick={() => setOffset(o => o - 1)} style={navBtn(false)}>‹</button>
+            <span style={{ fontWeight: 700, fontSize: 15, color: '#e5e7eb', minWidth: 150, textAlign: 'center' }}>{rangeLabel}{isCurrent ? ' · now' : ''}</span>
+            <button onClick={() => !isCurrent && setOffset(o => o + 1)} disabled={isCurrent} style={navBtn(isCurrent)}>›</button>
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {Object.entries(PROFIT_METRICS).map(([k, m]) => (
+              <button key={k} onClick={() => setMetric(k)}
+                style={{ ...tabBtn(metric === k), borderColor: metric === k ? m.color : 'var(--border)',
+                  background: metric === k ? `${m.color}22` : 'transparent', color: metric === k ? m.color : '#9ca3af' }}>
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Summary strip */}
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', paddingBottom: 6 }}>
+          {[['Net Profit', fmtKES(total.net), (total.net || 0) >= 0 ? '#10b981' : '#ef4444'],
+            ['Volume', 'KES ' + fmtCompact(total.volume), '#3b82f6'],
+            ['Avg Spread', 'KES ' + (total.spread || 0).toFixed(2), '#f59e0b'],
+            ['Trades', (total.trades || 0).toLocaleString(), '#e5e7eb']].map(([l, v, c]) => (
+            <div key={l} style={{ flex: 1, minWidth: 130, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px' }}>
+              <div style={{ fontSize: 11, color: '#6b7280' }}>{l}</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: c }}>{v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Chart */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header"><BarChart2 size={18} style={{ color: M.color }} /><h3>{M.label} — {rangeLabel}</h3></div>
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '60px 0', color: '#6b7280' }}>Loading…</div>
+        ) : rows.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '60px 0', color: '#6b7280' }}>No data for this period.</div>
+        ) : (
+          <div style={{ display: 'flex', gap: 8, paddingTop: 8 }}>
+            {/* Y axis */}
+            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: H, width: 52, textAlign: 'right', paddingBottom: 22 }}>
+              <span style={{ fontSize: 10, color: '#6b7280' }}>{M.axis(maxPos)}</span>
+              <span style={{ fontSize: 10, color: '#6b7280' }}>0</span>
+              {maxNeg > 0 && <span style={{ fontSize: 10, color: '#6b7280' }}>-{M.axis(maxNeg)}</span>}
+            </div>
+            {/* Bars */}
+            <div style={{ flex: 1, position: 'relative' }}>
+              <div style={{ position: 'absolute', top: zeroTop, left: 0, right: 0, borderTop: '1px solid #374151' }} />
+              <div style={{ display: 'flex', alignItems: 'stretch', gap: rows.length > 16 ? 1 : 4, height: H }}>
+                {rows.map((r) => {
+                  const v = r[metric] || 0;
+                  const barH = Math.max(v !== 0 ? 2 : 0, Math.abs(v) / span * H);
+                  const top = v >= 0 ? zeroTop - barH : zeroTop;
+                  return (
+                    <div key={r.key} style={{ flex: 1, position: 'relative', minWidth: 0 }} title={`${r.label}: ${M.fmt(v)} · ${r.trades || 0} trades`}>
+                      <div style={{ position: 'absolute', left: '12%', right: '12%', top, height: barH,
+                        background: v >= 0 ? M.color : M.neg, borderRadius: '3px 3px 0 0', opacity: 0.92 }} />
+                    </div>
+                  );
+                })}
+              </div>
+              {/* X labels */}
+              <div style={{ display: 'flex', gap: rows.length > 16 ? 1 : 4, marginTop: 4 }}>
+                {rows.map((r, i) => (
+                  <div key={r.key} style={{ flex: 1, textAlign: 'center', fontSize: 9, color: '#6b7280', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+                    {rows.length > 16 ? (i % 3 === 0 ? r.label.split(' ').pop() : '') : r.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Detailed breakdown */}
+      <div className="card">
+        <div className="card-header"><List size={18} /><h3>Breakdown</h3></div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1fr 0.7fr', gap: 6, fontSize: 11, color: '#6b7280', padding: '6px 0', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>
+          <span>Period</span><span style={{ textAlign: 'right' }}>Profit</span><span style={{ textAlign: 'right' }}>Volume</span><span style={{ textAlign: 'right' }}>Spread</span><span style={{ textAlign: 'right' }}>Trades</span>
+        </div>
+        {rows.filter(r => r.trades > 0).length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '24px 0', color: '#6b7280', fontSize: 13 }}>No trades in this period.</div>
+        ) : rows.filter(r => r.trades > 0).map(r => (
+          <div key={r.key} style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1fr 0.7fr', gap: 6, fontSize: 13, padding: '9px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+            <span style={{ color: '#cbd5e1' }}>{r.label}</span>
+            <span style={{ textAlign: 'right', fontWeight: 700, color: (r.net || 0) >= 0 ? '#10b981' : '#ef4444' }}>{fmtKES(r.net)}</span>
+            <span style={{ textAlign: 'right', color: '#9ca3af' }}>KES {fmtCompact(r.volume)}</span>
+            <span style={{ textAlign: 'right', color: '#f59e0b' }}>{(r.spread || 0).toFixed(2)}</span>
+            <span style={{ textAlign: 'right', color: '#6b7280' }}>{r.trades}</span>
+          </div>
+        ))}
+        <div style={{ marginTop: 10, fontSize: 10, color: '#6b7280' }}>Realized profit (cost-basis) · includes all completed trades, online or off · use ‹ › to view any past period</div>
+      </div>
+    </div>
+  );
+}
+
 function ProfitTracker() {
   const [gran, setGran] = useState('day');          // day | week | month
   const [anchor, setAnchor] = useState('');          // '' = today; otherwise YYYY-MM-DD
@@ -1561,6 +1742,7 @@ export default function Dashboard() {
             { key: 'overview',      icon: LayoutDashboard, label: 'Overview'      },
             { key: 'orders',        icon: List,            label: 'Orders'        },
             { key: 'transactions',  icon: ArrowRightLeft,  label: 'Transactions'  },
+            { key: 'profit',        icon: BarChart2,       label: 'Profit'        },
             { key: 'logs',          icon: Activity,        label: 'Logs'          },
           ].map(({ key, icon: Icon, label }) => (
             <button key={key}
@@ -2149,6 +2331,9 @@ export default function Dashboard() {
 
 
         {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} initialSection={settingsInitialSection} />}
+
+        {/* ── Profit Tab ── */}
+        {activeTab === 'profit' && <ProfitPage />}
 
         {/* ── Transactions Tab ── */}
         {activeTab === 'transactions' && (
@@ -4108,6 +4293,7 @@ export default function Dashboard() {
           >
             <div style={{ width: 36, height: 4, background: '#374151', borderRadius: 2, margin: '12px auto 8px' }} />
             {[
+              { key: 'profit',       label: 'Profit',      icon: BarChart2   },
               { key: 'logs',         label: 'Bot Logs',    icon: Activity    },
               ...(affiliateData?.affiliate ? [{ key: 'affiliates', label: 'Affiliates', icon: Share2 }] : []),
               { key: 'credits',      label: 'Buy Credits', icon: DollarSign  },

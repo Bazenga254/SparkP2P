@@ -1065,7 +1065,8 @@ def compute_pnl_daily(orders, tz_offset_hours=3):
     order history so earlier buys correctly inform the cost basis of later sells."""
     from collections import defaultdict
     off = timedelta(hours=tz_offset_hours)
-    day = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0})
+    day = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0,
+                               "buy_usdt": 0.0, "buy_kes": 0.0, "sell_usdt": 0.0, "sell_kes": 0.0})
     chron = sorted(orders, key=lambda o: (o.created_at, o.id))
     inv_usdt = 0.0
     inv_cost = 0.0
@@ -1080,11 +1081,15 @@ def compute_pnl_daily(orders, tz_offset_hours=3):
         if o.side == OrderSide.BUY:
             inv_usdt += u
             inv_cost += k
+            d["buy_usdt"] += u
+            d["buy_kes"] += k
         else:
             avg = (inv_cost / inv_usdt) if inv_usdt > 0 else ((k / u) if u else 0)
             rate = (k / u) if u else 0
             d["gross"] += u * (rate - avg)
             d["fees"] += float(o.binance_commission or 0) * float(o.exchange_rate or 0)
+            d["sell_usdt"] += u
+            d["sell_kes"] += k
             draw = min(u, inv_usdt)
             if inv_usdt > 0:
                 inv_cost -= avg * draw

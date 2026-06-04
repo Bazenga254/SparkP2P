@@ -563,6 +563,96 @@ async def profit_history(
     }
 
 
+@router.get("/profit-series")
+async def profit_series(
+    bucket: str = "day",     # day | week | month  — the size of each bar
+    start: str = "",         # range start (YYYY-MM-DD); default depends on bucket
+    end: str = "",           # range end (YYYY-MM-DD); default today
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Time-series for the Profit page charts. Returns a list of buckets across [start, end]
+    at the chosen granularity, each carrying every metric so the frontend can chart Profit,
+    Volume, Spread or Price: {key,label,net,gross,fees,volume,trades,spread,price,buy_rate,
+    sell_rate}. Same cost-basis method as everywhere else."""
+    from app.models.order import Order, OrderStatus
+    from app.services.tracking import compute_pnl_daily
+    from datetime import date as _date
+
+    rows = (await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+        )
+    )).scalars().all()
+    daily = compute_pnl_daily(rows)
+
+    today = (datetime.now(timezone.utc) + timedelta(hours=3)).date()
+    try:
+        e = _date.fromisoformat(end) if end else today
+    except Exception:
+        e = today
+    try:
+        if start:
+            s = _date.fromisoformat(start)
+        elif bucket == "month":
+            s = e.replace(month=1, day=1)                 # whole year
+        elif bucket == "week":
+            s = (e.replace(day=1)) - timedelta(days=(e.replace(day=1)).weekday())  # ~ this month's weeks
+        else:
+            s = e.replace(day=1)                          # this month, by day
+    except Exception:
+        s = e.replace(day=1)
+
+    def metrics(items):
+        g = round(sum(i["gross"] for i in items), 2)
+        f = round(sum(i["fees"] for i in items), 2)
+        bu = sum(i["buy_usdt"] for i in items); bk = sum(i["buy_kes"] for i in items)
+        su = sum(i["sell_usdt"] for i in items); sk = sum(i["sell_kes"] for i in items)
+        buy_rate = round(bk / bu, 2) if bu else 0.0
+        sell_rate = round(sk / su, 2) if su else 0.0
+        return {
+            "net": round(g - f, 2), "gross": g, "fees": f,
+            "volume": round(sum(i["volume"] for i in items), 2),
+            "trades": sum(i["trades"] for i in items),
+            "buy_rate": buy_rate, "sell_rate": sell_rate,
+            "spread": round(sell_rate - buy_rate, 2) if (buy_rate and sell_rate) else 0.0,
+            "price": sell_rate or buy_rate,
+        }
+
+    out = []
+    if bucket == "month":
+        cur = s.replace(day=1)
+        while cur <= e:
+            mkey = cur.strftime("%Y-%m")
+            items = [v for k, v in daily.items() if k[:7] == mkey]
+            out.append({"key": mkey, "label": cur.strftime("%b"), **metrics(items)})
+            cur = (cur + timedelta(days=32)).replace(day=1)
+    elif bucket == "week":
+        cur = s - timedelta(days=s.weekday())             # Monday on/before start
+        while cur <= e:
+            we = cur + timedelta(days=6)
+            items = [v for k, v in daily.items() if cur.isoformat() <= k <= we.isoformat()]
+            out.append({"key": cur.isoformat(), "label": f"{cur.strftime('%b')} {cur.day}", **metrics(items)})
+            cur = cur + timedelta(days=7)
+    else:  # day
+        cur = s
+        while cur <= e:
+            k = cur.isoformat()
+            items = [daily[k]] if k in daily else []
+            out.append({"key": k, "label": f"{cur.strftime('%a')} {cur.day}", **metrics(items)})
+            cur = cur + timedelta(days=1)
+
+    keys = sorted(daily.keys())
+    return {
+        "bucket": bucket,
+        "start": s.isoformat(), "end": e.isoformat(),
+        "rows": out,
+        "total": metrics([v for k, v in daily.items() if s.isoformat() <= k <= e.isoformat()]),
+        "range": {"min": keys[0] if keys else None, "max": keys[-1] if keys else None},
+    }
+
+
 @router.get("/binance-orders")
 async def binance_orders(
     limit: int = 20,
