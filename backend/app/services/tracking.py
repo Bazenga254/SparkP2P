@@ -48,6 +48,74 @@ def _rel_window_label():
     return f"last {m} months" if m >= 2 else f"last {_REL_WINDOW_DAYS} days"
 
 
+_orders_backfill_at = {}        # trader_id -> last completed-order backfill time (UTC)
+_ORDERS_BACKFILL_INTERVAL = 1800  # re-scan full history every 30 min to catch offline trades
+
+
+async def _backfill_orders(trader_id, api_key, api_secret):
+    """Import EVERY COMPLETED Binance order into the Orders table — not just the ones tracked
+    while the bot was online — so profit/volume figures reflect ALL trading and the cost-basis
+    replay has the full set of buys. EP-16 returns every field we need (amount, price,
+    commission), so no per-order detail calls. Idempotent (dedup on binance_order_number), and
+    self-gated to re-run at most every 30 min so trades made while the bot was OFF get picked
+    up without needing a restart."""
+    last = _orders_backfill_at.get(trader_id)
+    nowt = datetime.now(timezone.utc)
+    if last is not None and (nowt - last).total_seconds() < _ORDERS_BACKFILL_INTERVAL:
+        return
+    _orders_backfill_at[trader_id] = nowt
+    try:
+        from sqlalchemy import select as _sel
+        from app.services.binance.sapi_client import get_user_order_history
+        from app.models.order import Order, OrderSide, OrderStatus
+        inserted = 0
+        scanned = 0
+        async with async_session() as db:
+            page = 1
+            while page <= _REL_MAX_PAGES:        # full available history (~30 days)
+                try:
+                    rows = await get_user_order_history(api_key, api_secret, page=page, rows=50)
+                except Exception:
+                    break
+                page += 1
+                if not rows:
+                    break
+                for o in rows:
+                    scanned += 1
+                    if (o.get("orderStatus") or "").upper() != "COMPLETED":
+                        continue
+                    ono = o.get("orderNumber")
+                    if not ono:
+                        continue
+                    if (await db.execute(_sel(Order.id).where(Order.binance_order_number == ono))).scalar_one_or_none():
+                        continue   # already recorded (by the live poller or a prior backfill)
+                    ct = int(o.get("createTime") or 0)
+                    side = OrderSide.SELL if (o.get("tradeType") or "").upper() == "SELL" else OrderSide.BUY
+                    ts = datetime.fromtimestamp(ct / 1000, tz=timezone.utc) if ct else datetime.now(timezone.utc)
+                    db.add(Order(
+                        trader_id=trader_id,
+                        binance_order_number=ono,
+                        account_reference="BIN-" + str(ono),
+                        side=side,
+                        crypto_amount=float(o.get("amount") or 0),
+                        crypto_currency=o.get("asset") or "USDT",
+                        fiat_amount=float(o.get("totalPrice") or 0),
+                        exchange_rate=float(o.get("unitPrice") or 0),
+                        binance_commission=float(o.get("commission") or 0),
+                        status=OrderStatus.COMPLETED,
+                        counterparty_name=o.get("counterPartNickName"),
+                        created_at=ts,
+                        settled_at=ts,
+                    ))
+                    inserted += 1
+                await db.commit()
+        if inserted:
+            logger.info("[Tracking] order backfill for trader %s: scanned %d, inserted %d completed orders", trader_id, scanned, inserted)
+    except Exception as e:
+        logger.warning("[Tracking] order backfill failed for trader %s: %s", trader_id, e)
+        _orders_backfill_at.pop(trader_id, None)   # allow retry next poll
+
+
 async def _backfill_counterparties(trader_id, api_key, api_secret):
     """ONE-TIME (per process) gentle background sweep of the full ~30-day order history that
     caches EVERY counterparty's COMPLETED trades into counterparty_trades. After this, every
@@ -479,6 +547,11 @@ async def track_trader(db, trader) -> int:
 
     if trader.binance_api_key_invalid:
         trader.binance_api_key_invalid = False  # healthy read -> clear stale flag
+
+    # Backfill ALL completed Binance orders into the Orders table (not just while-online ones)
+    # so profit/volume + cost basis are complete. Self-gated to re-run every ~30 min, so trades
+    # made while the bot was off are captured without a restart.
+    asyncio.create_task(_backfill_orders(trader.id, api_key, api_secret))
 
     # One-time gentle backfill of the full counterparty history so every buyer's buy/sell
     # breakdown is available instantly from cache (runs in the background, once per process).
