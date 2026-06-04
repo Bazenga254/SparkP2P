@@ -1025,3 +1025,14 @@ def compute_pnl_daily(orders, tz_offset_hours=3):
         day[dk]["fees"] = round(day[dk]["fees"], 2)
         day[dk]["volume"] = round(day[dk]["volume"], 2)
     return dict(day)
+
+
+def today_realized_pnl(all_orders, tz_offset_hours=3):
+    """Cost-basis-correct realized profit for the CURRENT EAT day, computed over the trader's
+    FULL order history (so a sell today is matched against USDT bought on earlier days). This
+    is the figure the Profit Tracker shows; the dashboard 'Today' figures should use this too,
+    otherwise a sell of previously-bought USDT looks like 0 gross. Returns {gross,fees,net,
+    volume,trades} (zeros if no activity today)."""
+    daily = compute_pnl_daily(all_orders, tz_offset_hours)
+    today_key = (datetime.now(timezone.utc) + timedelta(hours=tz_offset_hours)).strftime("%Y-%m-%d")
+    return daily.get(today_key, {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0})

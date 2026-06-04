@@ -463,18 +463,24 @@ async def profit_breakdown(
     # P and L for today from the central Orders table (orders tracked while bot online).
     # Centralized: admin reads the same Orders so figures always match.
     from app.models.order import Order, OrderStatus
-    from app.services.tracking import compute_pnl
+    from app.services.tracking import compute_pnl, today_realized_pnl
     now = datetime.now(timezone.utc)
     eat_midnight = (now + timedelta(hours=3)).replace(hour=0, minute=0, second=0, microsecond=0)
     today_start = eat_midnight - timedelta(hours=3)
-    rows = (await db.execute(
+    # Pull the FULL completed history so today's realized profit is matched against the cost
+    # basis of USDT bought on earlier days (else selling old USDT shows 0 gross).
+    all_rows = (await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,
             Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
-            Order.created_at >= today_start,
         )
     )).scalars().all()
-    pnl = compute_pnl(rows)
+    today_rows = [o for o in all_rows if o.created_at and o.created_at >= today_start]
+    pnl = compute_pnl(today_rows)                 # today's buy/sell cards (volume, avg rates, counts)
+    tp = today_realized_pnl(all_rows)             # cost-basis-correct profit for today
+    pnl["gross_profit"] = tp["gross"]
+    pnl["fees_kes"] = tp["fees"]
+    pnl["net_profit"] = tp["net"]
     return {
         "available": True,
         "date": eat_midnight.strftime("%Y-%m-%d"),
@@ -2906,15 +2912,16 @@ async def get_today_stats(
     midnight_eat = now_eat.replace(hour=0, minute=0, second=0, microsecond=0)
     midnight_utc = midnight_eat - eat_offset  # convert back to UTC for DB query
 
-    # Completed orders since midnight EAT (RELEASED = sell done, COMPLETED = buy done)
+    # Full completed history (RELEASED = sell done, COMPLETED = buy done) so today's realized
+    # profit is matched against the cost basis of USDT bought on earlier days.
     orders_q = await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,
             Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
-            Order.created_at >= midnight_utc,
         )
     )
-    orders_today = orders_q.scalars().all()
+    all_orders = orders_q.scalars().all()
+    orders_today = [o for o in all_orders if o.created_at and o.created_at >= midnight_utc]
 
     trades_count = len(orders_today)
     usdt_traded = sum(o.crypto_amount for o in orders_today)
@@ -2923,9 +2930,13 @@ async def get_today_stats(
     currency_counts = Counter(o.crypto_currency for o in orders_today if o.crypto_currency)
     dominant_currency = currency_counts.most_common(1)[0][0] if currency_counts else 'USDT'
 
-    # Gross profit + avg rates from the central Orders table (same calc as the Profit Breakdown)
-    from app.services.tracking import compute_pnl
+    # Avg rates from today's orders; profit from the cost-basis method (matches Profit Tracker)
+    from app.services.tracking import compute_pnl, today_realized_pnl
     _pnl = compute_pnl(orders_today)
+    _tp = today_realized_pnl(all_orders)
+    _pnl["gross_profit"] = _tp["gross"]
+    _pnl["fees_kes"] = _tp["fees"]
+    _pnl["net_profit"] = _tp["net"]
     gross_profit = _pnl["gross_profit"]
 
     # Treat every stats poll as a web-presence heartbeat so admin can see the trader is online
