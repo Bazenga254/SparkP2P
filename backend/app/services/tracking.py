@@ -617,7 +617,7 @@ async def track_trader(db, trader) -> int:
     # alerted on — regardless of order status — so the merchant sees buyer details even
     # before Choice Bank is configured.
     try:
-        if getattr(trader, "telegram_chat_id", None):
+        if getattr(trader, "telegram_chat_id", None) and (getattr(trader, "telegram_notify_scope", "both") or "both") != "buy":
             from sqlalchemy import text as _sql_text
             from app.services.binance.sapi_client import get_counterparty_statistic, get_order_payment_details
             from app.api.routes.telegram import notify_trader, send_trader_message, _pending_approvals
@@ -809,7 +809,7 @@ async def track_trader(db, trader) -> int:
     # ── Telegram alert for NEW buy orders (SELLER payment details via EP-13) ──
     # On a buy order WE pay the seller, so show their account/phone/paybill + amount.
     try:
-        if getattr(trader, "telegram_chat_id", None):
+        if getattr(trader, "telegram_chat_id", None) and (getattr(trader, "telegram_notify_scope", "both") or "both") != "sell":
             from sqlalchemy import text as _sql_text2
             from app.services.binance.sapi_client import get_order_payment_details, get_counterparty_statistic
             from app.api.routes.telegram import send_trader_message as _send2

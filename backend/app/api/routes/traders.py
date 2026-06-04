@@ -80,6 +80,7 @@ class TradingConfigRequest(BaseModel):
     dd_min_all_trades: Optional[int] = None
     dd_auto_cancel_new: Optional[bool] = None
     telegram_approval_enabled: Optional[bool] = None
+    telegram_notify_scope: Optional[str] = None  # both | sell | buy
     # Counterparty filters (pushed to Binance via EP-7)
     cf_filters_enabled:        Optional[bool]  = None
     cf_completion_rate_min:    Optional[float] = None  # ratio 0.0–1.0
@@ -185,6 +186,7 @@ class TraderProfileResponse(BaseModel):
     cf_last_pushed_at:         Optional[str] = None
     telegram_connected: bool = False
     telegram_approval_enabled: bool = False
+    telegram_notify_scope: str = 'both'
     trade_tokens: float = 0
     trade_tokens_expiring: int = 0
     choice_account_id: Optional[str] = None
@@ -839,6 +841,7 @@ async def get_profile(
         cf_last_pushed_at=trader.cf_last_pushed_at.isoformat() if trader.cf_last_pushed_at else None,
         telegram_connected=bool(trader.telegram_chat_id),
         telegram_approval_enabled=bool(trader.telegram_approval_enabled),
+        telegram_notify_scope=trader.telegram_notify_scope or 'both',
         trade_tokens=float(trader.trade_tokens or 0),
         trade_tokens_expiring=trader.trade_tokens_expiring or 0,
         choice_account_id=trader.choice_account_id or None,
@@ -1165,6 +1168,8 @@ async def update_trading_config(
         trader.dd_auto_cancel_new = data.dd_auto_cancel_new
     if data.telegram_approval_enabled is not None:
         trader.telegram_approval_enabled = data.telegram_approval_enabled
+    if data.telegram_notify_scope in ('both', 'sell', 'buy'):
+        trader.telegram_notify_scope = data.telegram_notify_scope
 
     # Counterparty filters
     cf_changed = False

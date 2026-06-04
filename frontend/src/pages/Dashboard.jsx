@@ -848,6 +848,22 @@ export default function Dashboard() {
   const [ddAutoCancelNew, setDdAutoCancelNew] = useState(false);
   const [tgApprovalEnabled, setTgApprovalEnabled] = useState(false);
   const [tgConnectedForConfig, setTgConnectedForConfig] = useState(false);
+  const [tgNotifyScope, setTgNotifyScope] = useState('both');   // both | sell | buy
+  const [tgCodeCfg, setTgCodeCfg] = useState(null);             // {code, expires_in} when linking
+  const [tgCodeCfgLoading, setTgCodeCfgLoading] = useState(false);
+  const genTgCodeCfg = async () => {
+    setTgCodeCfgLoading(true);
+    try {
+      const r = await api.post('/telegram/generate-link-code');
+      setTgCodeCfg(r.data);
+      const iv = setInterval(async () => {
+        try { const s = await api.get('/telegram/status'); if (s.data.connected) { setTgConnectedForConfig(true); setTgCodeCfg(null); clearInterval(iv); } } catch {}
+      }, 3000);
+      setTimeout(() => clearInterval(iv), 600000);
+    } catch {} finally { setTgCodeCfgLoading(false); }
+  };
+  const disconnectTgCfg = async () => { try { await api.post('/telegram/disconnect'); setTgConnectedForConfig(false); setTgCodeCfg(null); } catch {} };
+  const testTgCfg = async () => { try { await api.post('/telegram/test'); } catch {} };
   const [cfEnabled, setCfEnabled] = useState(false);
   const [cfAllTradesMin, setCfAllTradesMin] = useState('0');
   const [cfAllTradesMinAll, setCfAllTradesMinAll] = useState('0');
@@ -956,7 +972,7 @@ export default function Dashboard() {
       // NOTE: Orders are NOT fetched here — the dedicated binance-orders effect (keyed on
       // activeTab/ordersFilter/ordersPage) owns the Orders list so the filter never gets
       // overwritten by a background loadData refresh.
-      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); setCfEnabled(p.cf_filters_enabled || false); setCfAllTradesMin(String(p.cf_all_trades_min ?? 0)); setCfAllTradesMinAll(String(p.cf_all_trades_min_all ?? 0)); setCfMaxPayMins(String(p.cf_max_pay_mins ?? 0)); setCfMaxReleaseMins(String(p.cf_max_release_mins ?? 0)); } }
+      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); setTgNotifyScope(p.telegram_notify_scope || 'both'); setCfEnabled(p.cf_filters_enabled || false); setCfAllTradesMin(String(p.cf_all_trades_min ?? 0)); setCfAllTradesMinAll(String(p.cf_all_trades_min_all ?? 0)); setCfMaxPayMins(String(p.cf_max_pay_mins ?? 0)); setCfMaxReleaseMins(String(p.cf_max_release_mins ?? 0)); } }
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
       if (results[3].status === 'fulfilled') setTransactions(results[3].value.data);
@@ -2526,7 +2542,7 @@ export default function Dashboard() {
                 onClick={async () => {
                   setSavingConfig(true);
                   try {
-                    const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0 });
+                    const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0, telegram_notify_scope: tgNotifyScope });
                     configSavedAt.current = Date.now();
                     setConfigSaved(true);
                     setTimeout(() => { setConfigSaved(false); }, 1500);
@@ -2597,13 +2613,65 @@ export default function Dashboard() {
               )}
               {ddEnabled && !tgConnectedForConfig && (
                 <div style={{ marginTop: 12, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '12px 14px' }}>
-                  <div style={{ color: '#f59e0b', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>⚠ Telegram not connected</div>
-                  <p style={{ margin: '0 0 10px', color: '#9ca3af', fontSize: 12, lineHeight: 1.5 }}>Connect your Telegram to use this feature.</p>
-                  <button onClick={() => { setSettingsInitialSection('notifications'); setActiveTab('settings'); }}
-                    style={{ padding: '8px 14px', borderRadius: 7, border: '1px solid rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>
-                    Connect Telegram → Settings / Notifications
-                  </button>
+                  <div style={{ color: '#f59e0b', fontSize: 13, fontWeight: 700, marginBottom: 4 }}>⚠ Telegram not connected</div>
+                  <p style={{ margin: 0, color: '#9ca3af', fontSize: 12, lineHeight: 1.5 }}>Connect it in <strong style={{ color: '#e5e7eb' }}>Telegram Notifications</strong> just below.</p>
                 </div>
+              )}
+            </div>
+
+            {/* Telegram Notifications — connect + choose which alerts to receive */}
+            <div style={{ background: '#0d1117', border: '0.5px solid #1f2937', borderRadius: 10, padding: '14px 16px', marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Telegram Notifications</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>
+                    {tgConnectedForConfig ? 'Connected to @Sparkp2p_bot — choose which order alerts you receive.' : 'Connect Telegram to receive buy / sell order alerts.'}
+                  </div>
+                </div>
+                {tgConnectedForConfig && <span style={{ color: '#10b981', fontSize: 12, fontWeight: 700, flexShrink: 0, marginLeft: 12 }}>✓ Connected</span>}
+              </div>
+
+              {!tgConnectedForConfig && (
+                tgCodeCfg ? (
+                  <div style={{ marginTop: 12, background: 'rgba(79,70,229,0.08)', border: '1px solid rgba(79,70,229,0.3)', borderRadius: 8, padding: '14px 16px' }}>
+                    <div style={{ color: '#a5b4fc', fontWeight: 600, marginBottom: 8, fontSize: 13 }}>Connect: open <strong style={{ color: '#fff' }}>@Sparkp2p_bot</strong> on Telegram, tap Start, then send:</div>
+                    <div style={{ margin: '8px 0', padding: '10px 14px', background: '#0f1117', borderRadius: 8, fontFamily: 'monospace', fontSize: 17, fontWeight: 700, color: '#a5b4fc', textAlign: 'center', letterSpacing: 3 }}>/link {tgCodeCfg.code}</div>
+                    <div style={{ color: '#6b7280', fontSize: 11, textAlign: 'center' }}>Updates automatically once connected · code expires in {Math.floor((tgCodeCfg.expires_in || 600) / 60)} min</div>
+                  </div>
+                ) : (
+                  <button onClick={genTgCodeCfg} disabled={tgCodeCfgLoading}
+                    style={{ marginTop: 12, padding: '9px 18px', borderRadius: 8, border: 'none', background: '#4f46e5', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                    {tgCodeCfgLoading ? 'Generating…' : 'Connect Telegram'}
+                  </button>
+                )
+              )}
+
+              {tgConnectedForConfig && (
+                <>
+                  <div style={{ marginTop: 14 }}>
+                    <div style={{ color: '#9ca3af', fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Receive notifications for</div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {[['both', 'Buy & Sell'], ['sell', 'Sell orders only'], ['buy', 'Buy orders only']].map(([v, l]) => (
+                        <button key={v} onClick={() => setTgNotifyScope(v)}
+                          style={{ padding: '6px 14px', borderRadius: 16, border: '1px solid',
+                            borderColor: tgNotifyScope === v ? '#f59e0b' : '#374151',
+                            background: tgNotifyScope === v ? 'rgba(245,158,11,0.15)' : 'transparent',
+                            color: tgNotifyScope === v ? '#f59e0b' : '#9ca3af', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                          {l}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ color: '#6b7280', fontSize: 11, marginTop: 6 }}>
+                      {tgNotifyScope === 'both' ? 'You get an alert for every buy and sell order.'
+                        : tgNotifyScope === 'sell' ? 'Only sell-order alerts (buyer screening). Buy-order alerts are muted.'
+                        : 'Only buy-order alerts (pay the seller). Sell-order alerts are muted.'} Press “Save changes” to apply.
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+                    <button onClick={testTgCfg} style={{ padding: '7px 14px', borderRadius: 7, border: '1px solid #10b981', background: 'transparent', color: '#10b981', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Send Test</button>
+                    <button onClick={disconnectTgCfg} style={{ padding: '7px 14px', borderRadius: 7, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Disconnect</button>
+                  </div>
+                </>
               )}
             </div>
 
@@ -3954,6 +4022,48 @@ export default function Dashboard() {
               )}
             </div>
 
+            {/* Telegram Notifications (mobile) — connect + alert scope */}
+            <div style={{ borderTop: '1px solid #1f2937', marginTop: 8, paddingTop: 16, marginBottom: 8 }}>
+              <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 700 }}>Telegram Notifications</div>
+              <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2, marginBottom: 12 }}>
+                {tgConnectedForConfig ? 'Connected — choose which order alerts you receive.' : 'Connect Telegram to receive buy / sell order alerts.'}
+              </div>
+              {!tgConnectedForConfig ? (
+                tgCodeCfg ? (
+                  <div style={{ background: 'rgba(79,70,229,0.08)', border: '1px solid rgba(79,70,229,0.3)', borderRadius: 10, padding: '14px 16px' }}>
+                    <div style={{ color: '#a5b4fc', fontWeight: 600, marginBottom: 8, fontSize: 12 }}>Open @Sparkp2p_bot, tap Start, then send:</div>
+                    <div style={{ margin: '8px 0', padding: '10px', background: '#0f1117', borderRadius: 8, fontFamily: 'monospace', fontSize: 16, fontWeight: 700, color: '#a5b4fc', textAlign: 'center', letterSpacing: 2 }}>/link {tgCodeCfg.code}</div>
+                    <div style={{ color: '#6b7280', fontSize: 11, textAlign: 'center' }}>Updates automatically once connected.</div>
+                  </div>
+                ) : (
+                  <button onClick={genTgCodeCfg} disabled={tgCodeCfgLoading}
+                    style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: 'none', background: '#4f46e5', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                    {tgCodeCfgLoading ? 'Generating…' : 'Connect Telegram'}
+                  </button>
+                )
+              ) : (
+                <>
+                  <div style={{ color: '#9ca3af', fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Receive notifications for</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                    {[['both', 'Buy & Sell'], ['sell', 'Sell only'], ['buy', 'Buy only']].map(([v, l]) => (
+                      <button key={v} onClick={() => setTgNotifyScope(v)}
+                        style={{ padding: '7px 14px', borderRadius: 16, border: '1px solid',
+                          borderColor: tgNotifyScope === v ? '#f59e0b' : '#374151',
+                          background: tgNotifyScope === v ? 'rgba(245,158,11,0.15)' : 'transparent',
+                          color: tgNotifyScope === v ? '#f59e0b' : '#9ca3af', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 10 }}>Press “Save changes” to apply.</div>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button onClick={testTgCfg} style={{ flex: 1, padding: '8px 0', borderRadius: 7, border: '1px solid #10b981', background: 'transparent', color: '#10b981', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Send Test</button>
+                    <button onClick={disconnectTgCfg} style={{ flex: 1, padding: '8px 0', borderRadius: 7, border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Disconnect</button>
+                  </div>
+                </>
+              )}
+            </div>
+
             {/* Binance Ad Counterparty Filters (modal) */}
             <div style={{ background: '#111827', border: `1px solid ${cfEnabled ? 'rgba(245,158,11,0.4)' : '#374151'}`, borderRadius: 10, padding: '14px 16px', marginBottom: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: cfEnabled ? 14 : 0 }}>
@@ -4012,7 +4122,7 @@ export default function Dashboard() {
               onClick={async () => {
                 setSavingConfig(true);
                 try {
-                  const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0 });
+                  const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0, telegram_notify_scope: tgNotifyScope });
                   configSavedAt.current = Date.now();
                   setConfigSaved(true);
                   setTimeout(() => { setConfigSaved(false); if (showConfigModal) setShowConfigModal(false); }, 1500);

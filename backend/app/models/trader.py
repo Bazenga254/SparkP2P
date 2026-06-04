@@ -170,6 +170,7 @@ class Trader(Base):
     # Telegram integration
     telegram_chat_id = Column(String(50), nullable=True)  # Set when trader links via /link command
     telegram_approval_enabled = Column(Boolean, default=False)  # Require Telegram YES/NO for every sell order
+    telegram_notify_scope = Column(String(8), default='both')  # which alerts to send: both | sell | buy
 
     # Trade tokens (buy-side token gate)
     trade_tokens = Column(Numeric(12, 2), default=0)    # Purchased — never expire (numeric for fractional charges)
