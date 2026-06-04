@@ -36,37 +36,30 @@ const SUPPORTED_COINS = ['USDT', 'USDC', 'BTC', 'ETH', 'BNB', 'BUSD'];
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 function ProfitTracker() {
-  const now = new Date();
   const [gran, setGran] = useState('day');          // day | week | month
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [anchor, setAnchor] = useState('');          // '' = today; otherwise YYYY-MM-DD
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     let cancel = false;
     setLoading(true);
-    api.get('/traders/profit-history', { params: { granularity: gran, year, month } })
+    api.get('/traders/profit-history', { params: { granularity: gran, anchor } })
       .then(r => { if (!cancel) setData(r.data); })
       .catch(() => { if (!cancel) setData(null); })
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
-  }, [gran, year, month]);
+  }, [gran, anchor]);
 
-  const periodLabel = gran === 'month' ? `${year}` : `${MONTH_NAMES[month - 1]} ${year}`;
-  const prev = () => {
-    if (gran === 'month') return setYear(y => y - 1);
-    setMonth(m => { if (m === 1) { setYear(y => y - 1); return 12; } return m - 1; });
-  };
-  const next = () => {
-    if (gran === 'month') return setYear(y => y + 1);
-    setMonth(m => { if (m === 12) { setYear(y => y + 1); return 1; } return m + 1; });
-  };
+  // Switching granularity resets the view to the current (today's) period
+  const switchGran = (g) => { setGran(g); setAnchor(''); };
 
-  const rows = data?.rows || [];
-  const total = data?.total || { net: 0, trades: 0, volume: 0 };
-  const maxNet = Math.max(1, ...rows.map(r => Math.abs(r.net || 0)));
-  const navBtn = { width: 30, height: 30, borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#9ca3af', fontSize: 18, lineHeight: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' };
+  const navBtn = (disabled) => ({ width: 32, height: 32, borderRadius: 8, border: '1px solid var(--border)',
+    background: 'transparent', color: disabled ? '#374151' : '#cbd5e1', fontSize: 18, lineHeight: 1,
+    cursor: disabled ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' });
+
+  const net = data?.net ?? 0;
+  const periodWord = gran === 'day' ? "day's" : gran === 'week' ? "week's" : "month's";
 
   return (
     <div className="card" style={{ marginBottom: 16 }}>
@@ -75,7 +68,7 @@ function ProfitTracker() {
         <h3>Profit Tracker</h3>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           {[['day','Daily'],['week','Weekly'],['month','Monthly']].map(([g, label]) => (
-            <button key={g} onClick={() => setGran(g)}
+            <button key={g} onClick={() => switchGran(g)}
               style={{ padding: '4px 12px', borderRadius: 16, border: '1px solid',
                 borderColor: gran === g ? '#10b981' : 'var(--border)',
                 background: gran === g ? 'rgba(16,185,129,0.15)' : 'transparent',
@@ -86,37 +79,46 @@ function ProfitTracker() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0 14px', flexWrap: 'wrap', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button onClick={prev} style={navBtn}>‹</button>
-          <span style={{ fontWeight: 700, fontSize: 14, color: '#e5e7eb', minWidth: 120, textAlign: 'center' }}>{periodLabel}</span>
-          <button onClick={next} style={navBtn}>›</button>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 11, color: '#6b7280' }}>{gran === 'month' ? 'Year total' : 'Month total'} · {total.trades || 0} trades</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: (total.net || 0) >= 0 ? '#10b981' : '#ef4444' }}>{fmtKES(total.net)}</div>
-        </div>
+      {/* Period navigation */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, padding: '10px 0 4px' }}>
+        <button onClick={() => data?.prev && setAnchor(data.prev)} style={navBtn(false)}>‹</button>
+        <span style={{ fontWeight: 700, fontSize: 15, color: '#e5e7eb', minWidth: 160, textAlign: 'center' }}>
+          {data?.label || '—'}{data?.is_current ? '  ·  now' : ''}
+        </span>
+        <button onClick={() => data?.next && setAnchor(data.next)} disabled={!data?.next} style={navBtn(!data?.next)}>›</button>
       </div>
 
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '24px 0', color: '#6b7280', fontSize: 13 }}>Loading…</div>
-      ) : rows.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '24px 0', color: '#6b7280', fontSize: 13 }}>No profit recorded for this period yet.</div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-          {rows.map(r => (
-            <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ width: 96, fontSize: 12, color: '#cbd5e1', flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.label}</span>
-              <div style={{ flex: 1, minWidth: 30, height: 8, background: 'rgba(255,255,255,0.05)', borderRadius: 4, overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${Math.max(2, Math.abs(r.net || 0) / maxNet * 100)}%`, background: (r.net || 0) >= 0 ? '#10b981' : '#ef4444', borderRadius: 4 }} />
-              </div>
-              <span style={{ width: 96, textAlign: 'right', fontSize: 13, fontWeight: 700, color: (r.net || 0) >= 0 ? '#10b981' : '#ef4444', flexShrink: 0 }}>{fmtKES(r.net)}</span>
+      {/* The one accumulated figure for this period */}
+      <div style={{ textAlign: 'center', padding: '14px 0 6px' }}>
+        {loading ? (
+          <div style={{ color: '#6b7280', fontSize: 14, padding: '14px 0' }}>Loading…</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>{`This ${periodWord} profit`}</div>
+            <div style={{ fontSize: 38, fontWeight: 800, lineHeight: 1.1, color: net >= 0 ? '#10b981' : '#ef4444' }}>{fmtKES(net)}</div>
+            <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 6 }}>
+              {(data?.trades || 0).toLocaleString()} trade{(data?.trades === 1) ? '' : 's'} · {fmtKES(data?.volume)} volume
             </div>
-          ))}
+          </>
+        )}
+      </div>
+
+      {/* Gross / fees supporting line */}
+      {!loading && (data?.trades > 0) && (
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 28, padding: '10px 0 2px', borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: 8 }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 10, color: '#6b7280' }}>Gross</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#10b981' }}>{fmtKES(data?.gross)}</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 10, color: '#6b7280' }}>Binance fees</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#ef4444' }}>− {fmtKES(data?.fees)}</div>
+          </div>
         </div>
       )}
-      <div style={{ marginTop: 12, fontSize: 10, color: '#6b7280' }}>
-        Realized profit (cost-basis) · each month is its own view · all past months stay available via ‹ ›
+
+      <div style={{ marginTop: 12, fontSize: 10, color: '#6b7280', textAlign: 'center' }}>
+        Realized profit (cost-basis) · use ‹ › to view any past {gran === 'day' ? 'day' : gran === 'week' ? 'week' : 'month'}
       </div>
     </div>
   );
