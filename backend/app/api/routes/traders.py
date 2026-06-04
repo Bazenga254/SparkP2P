@@ -480,8 +480,9 @@ async def profit_breakdown(
         )
     )).scalars().all()
     today_rows = [o for o in all_rows if o.created_at and o.created_at >= today_start]
-    pnl = compute_pnl(today_rows)                 # today's buy/sell cards (volume, avg rates, counts)
-    tp = today_realized_pnl(all_rows)             # cost-basis-correct profit for today
+    fee = trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25
+    pnl = compute_pnl(today_rows, fee)            # today's buy/sell cards (volume, avg rates, counts)
+    tp = today_realized_pnl(all_rows, fee_per_usdt=fee)   # net = USDT_sold x (margin - fee)
     pnl["gross_profit"] = tp["gross"]
     pnl["fees_kes"] = tp["fees"]
     pnl["net_profit"] = tp["net"]
@@ -517,7 +518,8 @@ async def profit_history(
             Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
         )
     )).scalars().all()
-    daily = compute_pnl_daily(rows)   # {'YYYY-MM-DD': {gross,fees,net,volume,trades}} — UTC day
+    _fee = trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25
+    daily = compute_pnl_daily(rows, fee_per_usdt=_fee)   # {'YYYY-MM-DD': {gross,fees,net,volume,trades}} — UTC day
 
     today = datetime.now(timezone.utc).date()   # trading day = UTC day (00:00 UTC = 03:00 EAT)
     try:
@@ -589,7 +591,8 @@ async def profit_series(
             Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
         )
     )).scalars().all()
-    daily = compute_pnl_daily(rows)
+    _fee = trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25
+    daily = compute_pnl_daily(rows, fee_per_usdt=_fee)
 
     today = datetime.now(timezone.utc).date()   # trading day = UTC day (00:00 UTC = 03:00 EAT)
     try:
@@ -647,7 +650,6 @@ async def profit_series(
                 h["buy_usdt"] += u; h["buy_kes"] += k; day_bu += u; day_bk += k
             else:
                 h["sell_usdt"] += u; h["sell_kes"] += k
-                h["fees"] += float(o.binance_commission or 0) * float(o.exchange_rate or 0)
         day_buy_rate = (day_bk / day_bu) if day_bu else 0.0
         for hh in range(24):
             hk = f"{hh:02d}"
@@ -658,6 +660,7 @@ async def profit_series(
                 items = []
             else:
                 gross = h["sell_kes"] - h["sell_usdt"] * day_buy_rate
+                h["fees"] = round(_fee * h["sell_usdt"], 2)   # flat both-sides Binance fee on USDT sold
                 h["gross"] = round(gross, 2); h["net"] = round(gross - h["fees"], 2)
                 items = [h]
             out.append({"key": f"{day_str} {hk}", "label": f"{hk}:00", **metrics(items)})
@@ -3083,10 +3086,11 @@ async def get_today_stats(
     currency_counts = Counter(o.crypto_currency for o in orders_today if o.crypto_currency)
     dominant_currency = currency_counts.most_common(1)[0][0] if currency_counts else 'USDT'
 
-    # Avg rates from today's orders; profit from the cost-basis method (matches Profit Tracker)
+    # Avg rates from today's orders; profit = USDT_sold x (margin - fee) (matches Profit Tracker)
     from app.services.tracking import compute_pnl, today_realized_pnl
-    _pnl = compute_pnl(orders_today)
-    _tp = today_realized_pnl(all_orders)
+    _fee = trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25
+    _pnl = compute_pnl(orders_today, _fee)
+    _tp = today_realized_pnl(all_orders, fee_per_usdt=_fee)
     _pnl["gross_profit"] = _tp["gross"]
     _pnl["fees_kes"] = _tp["fees"]
     _pnl["net_profit"] = _tp["net"]

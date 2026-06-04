@@ -1008,10 +1008,11 @@ async def tracking_poller():
         await asyncio.sleep(POLL_INTERVAL_SECS)
 
 
-def compute_pnl(orders):
+def compute_pnl(orders, fee_per_usdt=0.25):
     """Centralized P&L from a list of COMPLETED Order rows. Used by merchant + admin
     so both show identical figures. Gross = USDT sold x (avg sell - avg buy);
-    fees = actual Binance commission (USDT) x rate; net = gross - fees."""
+    fees = fee_per_usdt x USDT sold (flat both-sides Binance fee, ~0.1%/side x 2 ~= 0.25);
+    net = gross - fees."""
     buys = [o for o in orders if o.side == OrderSide.BUY]
     sells = [o for o in orders if o.side == OrderSide.SELL]
 
@@ -1049,12 +1050,14 @@ def compute_pnl(orders):
     s = _side(sells)
     spread = round(s["avg_rate"] - b["avg_rate"], 4) if (b["avg_rate"] and s["avg_rate"]) else 0.0
     gross = round(_realized, 2)
-    return _finalize_pnl(b, s, spread, gross, orders)
+    return _finalize_pnl(b, s, spread, gross, orders, fee_per_usdt)
 
 
-def _finalize_pnl(b, s, spread, gross, orders):
-    fees_kes = round(sum((o.binance_commission or 0) * (o.exchange_rate or 0)
-                         for o in orders if o.side == OrderSide.SELL), 2)
+def _finalize_pnl(b, s, spread, gross, orders, fee_per_usdt=0.25):
+    # Binance fee modeled as a flat KES-per-USDT charge on the USDT sold. This is the cumulative
+    # both-sides fee (~0.1%/side x 2 ~= 0.25), which correctly captures the buy-leg commission too
+    # -- summing only per-order SELL commission previously omitted the buy leg and overstated net.
+    fees_kes = round(fee_per_usdt * s["usdt"], 2)
     net = round(gross - fees_kes, 2)
     return {
         "buy": b, "sell": s, "spread": spread,
@@ -1064,14 +1067,15 @@ def _finalize_pnl(b, s, spread, gross, orders):
     }
 
 
-def compute_pnl_daily(orders, tz_offset_hours=0):
+def compute_pnl_daily(orders, tz_offset_hours=0, fee_per_usdt=0.25):
     # tz_offset_hours=0 -> the trading day boundary is 00:00 UTC (= 03:00 EAT), matching
     # Binance's daily reset, so daily figures roll over at the same time Binance does.
-    """Attribute realized profit (same cumulative cost-basis method as compute_pnl) to each
-    EAT calendar day. Replays ALL orders chronologically so the running cost basis is correct,
-    then buckets each sell's booked profit by the day it was created. Returns
-    {'YYYY-MM-DD': {gross, fees, net, volume, trades}} in EAT. Pass the trader's full completed
-    order history so earlier buys correctly inform the cost basis of later sells."""
+    """Per-day realized profit using the merchant's own method:
+        net = USDT_sold x (avg_sell_rate - avg_buy_rate - fee_per_usdt)
+    Each day stands on its own: gross = revenue from USDT SOLD that day minus what it would cost
+    at the day's average buy rate (carried forward on no-buy days); fees = fee_per_usdt x USDT sold
+    (flat both-sides Binance fee). Returns {'YYYY-MM-DD': {gross, fees, net, volume, trades}} keyed
+    by the UTC trading day."""
     from collections import defaultdict
     off = timedelta(hours=tz_offset_hours)
     day = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0,
@@ -1089,7 +1093,6 @@ def compute_pnl_daily(orders, tz_offset_hours=0):
         else:
             d["sell_usdt"] += u
             d["sell_kes"] += k
-            d["fees"] += float(o.binance_commission or 0) * float(o.exchange_rate or 0)
     # Per-day spread profit: each day stands on its own — gross = revenue from the USDT you
     # SOLD that day, minus what that USDT cost you to BUY at the day's average buy rate (carried
     # forward when a day has no buys). This is stable and intuitive (no coupling to ancient
@@ -1106,19 +1109,19 @@ def compute_pnl_daily(orders, tz_offset_hours=0):
         else:
             br = (d["sell_kes"] / d["sell_usdt"]) if d["sell_usdt"] else 0.0
         gross = d["sell_kes"] - d["sell_usdt"] * br
+        fees = fee_per_usdt * d["sell_usdt"]   # flat both-sides Binance fee on USDT sold
         d["gross"] = round(gross, 2)
-        d["net"] = round(gross - d["fees"], 2)
-        d["fees"] = round(d["fees"], 2)
+        d["fees"] = round(fees, 2)
+        d["net"] = round(gross - fees, 2)
         d["volume"] = round(d["volume"], 2)
     return dict(day)
 
 
-def today_realized_pnl(all_orders, tz_offset_hours=0):
-    """Cost-basis-correct realized profit for the CURRENT EAT day, computed over the trader's
-    FULL order history (so a sell today is matched against USDT bought on earlier days). This
-    is the figure the Profit Tracker shows; the dashboard 'Today' figures should use this too,
-    otherwise a sell of previously-bought USDT looks like 0 gross. Returns {gross,fees,net,
-    volume,trades} (zeros if no activity today)."""
-    daily = compute_pnl_daily(all_orders, tz_offset_hours)
+def today_realized_pnl(all_orders, tz_offset_hours=0, fee_per_usdt=0.25):
+    """Realized profit for the CURRENT trading day (00:00 UTC boundary), using the per-day
+    spread method: net = USDT_sold x (avg_sell - avg_buy - fee_per_usdt). This is the figure the
+    Profit Tracker and dashboard 'Today' show. Returns {gross,fees,net,volume,trades} (zeros if
+    no activity today)."""
+    daily = compute_pnl_daily(all_orders, tz_offset_hours, fee_per_usdt)
     today_key = (datetime.now(timezone.utc) + timedelta(hours=tz_offset_hours)).strftime("%Y-%m-%d")
     return daily.get(today_key, {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0})

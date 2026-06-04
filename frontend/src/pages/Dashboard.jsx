@@ -695,12 +695,12 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
               <div style={{ fontSize: 11, color: '#6b7280' }}>{realProfit !== null ? 'from completed trades' : 'from spread × volume'}</div>
             </div>
 
-            {/* Card 1b — Binance Fees (actual commission) */}
+            {/* Card 1b — Binance Fees (flat fee per USDT sold) */}
             {realProfit !== null && (
               <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
                 <div style={{ fontSize: 11, color: '#9ca3af' }}>Binance Fees</div>
                 <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>− {fmtKESFee(binanceFees)}</div>
-                <div style={{ fontSize: 11, color: '#6b7280' }}>actual commission</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>KES {binanceFeePerUsdt}/USDT · buy + sell</div>
               </div>
             )}
 
@@ -2148,7 +2148,7 @@ export default function Dashboard() {
                     <span className="positive">KES {(profitData?.gross_profit ?? stats?.today?.gross_profit ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                   </div>
                   <div className="profit-row fee-row">
-                    <span>Binance Fees (actual commission)</span>
+                    <span>Binance Fees (KES {binanceFeePerUsdt}/USDT · buy + sell)</span>
                     <span>-KES {(profitData?.fees_kes ?? stats?.today?.binance_fees ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                   </div>
                 </div>

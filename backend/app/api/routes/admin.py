@@ -2598,6 +2598,9 @@ async def get_trader_pnl(
     # match the merchant's to the cent. (Previously admin used compute_pnl per-day, a different
     # cost-basis method, which diverged.)
     from app.services.tracking import compute_pnl_daily
+    # Use the trader's own configured Binance fee so admin figures match the merchant Profit page.
+    _t = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
+    _fee = (_t.binance_fee_per_usdt if _t and _t.binance_fee_per_usdt is not None else 0.25)
     orders_result = await db.execute(
         select(Order).where(
             Order.trader_id == trader_id,
@@ -2605,7 +2608,7 @@ async def get_trader_pnl(
         ).order_by(Order.created_at)
     )
     all_orders = orders_result.scalars().all()
-    daily_map = compute_pnl_daily(all_orders)   # {'YYYY-MM-DD': {gross,fees,net,volume,trades}}
+    daily_map = compute_pnl_daily(all_orders, fee_per_usdt=_fee)   # {'YYYY-MM-DD': {gross,fees,net,volume,trades}}
 
     daily = []
     for i in range(days):
