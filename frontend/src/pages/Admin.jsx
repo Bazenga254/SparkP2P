@@ -1784,6 +1784,14 @@ export default function Admin() {
                               return <svg title={`${t.binance_merchant_tier} merchant`} width="13" height="13" viewBox="0 0 24 24" fill={c} stroke={c} strokeWidth="1" strokeLinejoin="round" style={{ flexShrink: 0 }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>;
                             })()}
                             {t.binance_api_key_saved && t.binance_api_key_invalid && <span title="Binance rejects this key — trader must reconnect" style={{ background: 'rgba(239,68,68,0.18)', color: '#ef4444', fontSize: 9, padding: '1px 5px', borderRadius: 3, fontWeight: 700, flexShrink: 0 }}>⚠ KEY</span>}
+                            {!t.binance_api_key_invalid && (
+                              <span title={t.binance_api_key_saved ? 'Binance API connected' : 'Binance API not connected'}
+                                style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, fontWeight: 700, flexShrink: 0,
+                                  background: t.binance_api_key_saved ? 'rgba(16,185,129,0.18)' : 'rgba(239,68,68,0.15)',
+                                  color: t.binance_api_key_saved ? '#10b981' : '#ef4444' }}>
+                                API {t.binance_api_key_saved ? '✓' : '✗'}
+                              </span>
+                            )}
                           </div>
                           <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.email}</div>
                           <div style={{ color: '#9ca3af', fontSize: 11, marginTop: 2 }}>{t.phone || 'No phone'}</div>
@@ -1910,6 +1918,19 @@ export default function Admin() {
                               );
                             })()}
                             {t.binance_api_key_saved && t.binance_api_key_invalid && <span title="Binance rejects this key (likely regenerated/removed). Trader must reconnect a valid key." style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)', cursor: 'help' }}>⚠ API key invalid</span>}
+                            {(() => {
+                              const connected = t.binance_api_key_saved && !t.binance_api_key_invalid;
+                              const label = !t.binance_api_key_saved ? 'Binance API ✗' : t.binance_api_key_invalid ? 'Binance API ⚠' : 'Binance API ✓';
+                              const title = !t.binance_api_key_saved ? 'No Binance API key connected' : t.binance_api_key_invalid ? 'Binance API key is invalid — trader must reconnect' : 'Binance API key connected';
+                              return (
+                                <span title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: 'help',
+                                  background: connected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.12)',
+                                  color: connected ? '#10b981' : '#ef4444',
+                                  border: `1px solid ${connected ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.35)'}` }}>
+                                  {label}
+                                </span>
+                              );
+                            })()}
                             <span title={t.telegram_connected ? `Telegram connected${t.telegram_notify_scope && t.telegram_notify_scope !== 'both' ? ` (${t.telegram_notify_scope} alerts)` : ''}` : 'Telegram not connected'}
                               style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: 'help',
                                 background: t.telegram_connected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.12)',
