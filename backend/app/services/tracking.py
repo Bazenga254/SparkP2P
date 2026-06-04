@@ -923,6 +923,7 @@ async def track_trader(db, trader) -> int:
             from sqlalchemy import text as _sql_text3
             from app.services.binance.sapi_client import get_order_payment_details  # noqa: F401
             from app.api.routes.telegram import send_trader_message as _send3, _pending_approvals as _pa3
+            _scope = (getattr(trader, "telegram_notify_scope", "both") or "both")
             _TERMINAL = {
                 "COMPLETED":           ("✅", "Order completed"),
                 "CANCELLED":           ("❌", "Order cancelled — not completed"),
@@ -936,22 +937,27 @@ async def track_trader(db, trader) -> int:
                 if _cur not in _TERMINAL:
                     continue
                 row = (await db.execute(_sql_text3(
-                    "SELECT tg_message_id, last_status, status_notified FROM sell_order_notifications WHERE order_number = :o"
+                    "SELECT tg_message_id, last_status, status_notified, trade_type FROM sell_order_notifications WHERE order_number = :o"
                 ), {"o": str(ono)})).first()
                 if not row:
                     continue  # we never alerted on this order — don't announce its outcome
-                _mid_orig, _last, _done = row[0], row[1], row[2]
+                _mid_orig, _last, _done, _tt = row[0], row[1], row[2], (row[3] or "").upper()
                 if _done:
                     continue
-                _icon, _label = _TERMINAL[_cur]
-                await _send3(trader, f"{_icon} <b>{_label}</b>\nOrder: {ono}", reply_to=_mid_orig)
-                await db.execute(_sql_text3(
-                    "UPDATE sell_order_notifications SET status_notified = TRUE, last_status = :s WHERE order_number = :o"
-                ), {"s": _cur, "o": str(ono)})
-                # Keep the relationship cache accurate: a freshly COMPLETED order now counts
-                # toward this counterparty's trade history; a cancelled one must not.
+                # Keep the relationship cache accurate regardless of notification settings:
+                # a freshly COMPLETED order counts toward history; a cancelled one must not.
                 await db.execute(_sql_text3(
                     "UPDATE counterparty_trades SET status = :s WHERE order_number = :o"
+                ), {"s": _cur, "o": str(ono)})
+                # Respect the merchant's notification scope — don't announce the outcome of an
+                # order type they've muted (e.g. a BUY order's 'completed' when scope = sell).
+                _muted = (_scope == "sell" and _tt == "BUY") or (_scope == "buy" and _tt == "SELL")
+                if not _muted:
+                    _icon, _label = _TERMINAL[_cur]
+                    await _send3(trader, f"{_icon} <b>{_label}</b>\nOrder: {ono}", reply_to=_mid_orig)
+                # Mark handled either way so it isn't re-processed every poll.
+                await db.execute(_sql_text3(
+                    "UPDATE sell_order_notifications SET status_notified = TRUE, last_status = :s WHERE order_number = :o"
                 ), {"s": _cur, "o": str(ono)})
                 await db.commit()
                 # Clear any pending-approval entry (order is resolved)
@@ -959,7 +965,8 @@ async def track_trader(db, trader) -> int:
                     _pa3.pop(str(ono), None)
                 except Exception:
                     pass
-                logger.info("[Tracking] order %s status follow-up sent: %s", ono, _cur)
+                if not _muted:
+                    logger.info("[Tracking] order %s status follow-up sent: %s", ono, _cur)
     except Exception as _se:
         logger.warning("[Tracking] status follow-up failed: %s", _se)
 
