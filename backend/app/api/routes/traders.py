@@ -614,6 +614,7 @@ async def profit_series(
         return {
             "net": round(g - f, 2), "gross": g, "fees": f,
             "volume": round(sum(i["volume"] for i in items), 2),
+            "buy_volume": round(bk, 2), "sell_volume": round(sk, 2),
             "trades": sum(i["trades"] for i in items),
             "buy_rate": buy_rate, "sell_rate": sell_rate,
             "spread": round(sell_rate - buy_rate, 2) if (buy_rate and sell_rate) else 0.0,
@@ -621,7 +622,44 @@ async def profit_series(
         }
 
     out = []
-    if bucket == "month":
+    if bucket == "hour":
+        # Intraday view for a single day: bucket the selected day's orders by hour and value
+        # each hour's sells at the day's average buy rate (intraday buy price barely moves).
+        off = timedelta(hours=3)
+        day_str = e.isoformat()
+        from collections import defaultdict
+        hourly = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0,
+                                      "buy_usdt": 0.0, "buy_kes": 0.0, "sell_usdt": 0.0, "sell_kes": 0.0})
+        day_bu = day_bk = 0.0
+        for o in rows:
+            ts = o.created_at + off
+            if ts.strftime("%Y-%m-%d") != day_str:
+                continue
+            u = float(o.crypto_amount or 0); k = float(o.fiat_amount or 0)
+            h = hourly[ts.strftime("%H")]
+            h["volume"] += k; h["trades"] += 1
+            if (o.side.value if o.side else "") == "buy":
+                h["buy_usdt"] += u; h["buy_kes"] += k; day_bu += u; day_bk += k
+            else:
+                h["sell_usdt"] += u; h["sell_kes"] += k
+                h["fees"] += float(o.binance_commission or 0) * float(o.exchange_rate or 0)
+        day_buy_rate = (day_bk / day_bu) if day_bu else 0.0
+        for hh in range(24):
+            hk = f"{hh:02d}"
+            h = hourly.get(hk)
+            if h is None:
+                if e == today and hh > (datetime.now(timezone.utc) + off).hour:
+                    continue   # don't show future hours of the current day
+                items = []
+            else:
+                gross = h["sell_kes"] - h["sell_usdt"] * day_buy_rate
+                h["gross"] = round(gross, 2); h["net"] = round(gross - h["fees"], 2)
+                items = [h]
+            out.append({"key": f"{day_str} {hk}", "label": f"{hk}:00", **metrics(items)})
+        return {"bucket": bucket, "start": day_str, "end": day_str, "rows": out,
+                "total": metrics(list(hourly.values())),
+                "range": {"min": (sorted(daily)[0] if daily else None), "max": (sorted(daily)[-1] if daily else None)}}
+    elif bucket == "month":
         cur = s.replace(day=1)
         while cur <= e:
             mkey = cur.strftime("%Y-%m")
