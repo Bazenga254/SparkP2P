@@ -2592,37 +2592,30 @@ async def get_trader_pnl(
         since_eat = now_eat.replace(hour=0, minute=0, second=0, microsecond=0)
         days = 1
 
-    since = since_eat.astimezone(timezone.utc)
-
-    # Pull completed orders from the central Orders table and compute per-day P&L
-    # with the SAME compute_pnl used on the merchant side, so admin matches exactly.
-    from app.services.tracking import compute_pnl
+    # Use the EXACT same per-day calc as the merchant Profit page (compute_pnl_daily over the
+    # trader's FULL completed history), then slice out the requested period — so admin figures
+    # match the merchant's to the cent. (Previously admin used compute_pnl per-day, a different
+    # cost-basis method, which diverged.)
+    from app.services.tracking import compute_pnl_daily
     orders_result = await db.execute(
         select(Order).where(
             Order.trader_id == trader_id,
             Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
-            Order.created_at >= since,
         ).order_by(Order.created_at)
     )
-    period_orders = orders_result.scalars().all()
-
-    from collections import defaultdict
-    by_day = defaultdict(list)
-    for o in period_orders:
-        day_key = o.created_at.astimezone(EAT).strftime("%Y-%m-%d")
-        by_day[day_key].append(o)
+    all_orders = orders_result.scalars().all()
+    daily_map = compute_pnl_daily(all_orders)   # {'YYYY-MM-DD': {gross,fees,net,volume,trades}}
 
     daily = []
     for i in range(days):
         d = (since_eat + timedelta(days=i)).strftime("%Y-%m-%d")
-        day_orders = by_day.get(d, [])
-        pnl = compute_pnl(day_orders)
+        m = daily_map.get(d, {"gross": 0.0, "fees": 0.0, "net": 0.0, "trades": 0})
         daily.append({
             "date": d,
-            "revenue": pnl["gross_profit"],
-            "fees": pnl["fees_kes"],
-            "net": pnl["net_profit"],
-            "trades": pnl["trades"],
+            "revenue": m["gross"],
+            "fees": m["fees"],
+            "net": m["net"],
+            "trades": m["trades"],
         })
 
     total_revenue = round(sum(d["revenue"] for d in daily), 2)
