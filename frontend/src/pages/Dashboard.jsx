@@ -872,6 +872,7 @@ export default function Dashboard() {
   const [cfAllTradesMinAll, setCfAllTradesMinAll] = useState('0');
   const [cfMaxPayMins, setCfMaxPayMins] = useState('0');
   const [cfMaxReleaseMins, setCfMaxReleaseMins] = useState('0');
+  const [binanceFeePerUsdt, setBinanceFeePerUsdt] = useState('0.25');
   const [cfSync, setCfSync] = useState(null); // live Binance sync status: { available, synced, expected, binance_values }
   const checkCfSync = async () => {
     try { const r = await api.get('/traders/cf-sync-status'); setCfSync(r.data); } catch { setCfSync(null); }
@@ -975,7 +976,7 @@ export default function Dashboard() {
       // NOTE: Orders are NOT fetched here — the dedicated binance-orders effect (keyed on
       // activeTab/ordersFilter/ordersPage) owns the Orders list so the filter never gets
       // overwritten by a background loadData refresh.
-      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); setTgNotifyScope(p.telegram_notify_scope || 'both'); setCfEnabled(p.cf_filters_enabled || false); setCfAllTradesMin(String(p.cf_all_trades_min ?? 0)); setCfAllTradesMinAll(String(p.cf_all_trades_min_all ?? 0)); setCfMaxPayMins(String(p.cf_max_pay_mins ?? 0)); setCfMaxReleaseMins(String(p.cf_max_release_mins ?? 0)); } }
+      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); setTgNotifyScope(p.telegram_notify_scope || 'both'); setCfEnabled(p.cf_filters_enabled || false); setCfAllTradesMin(String(p.cf_all_trades_min ?? 0)); setCfAllTradesMinAll(String(p.cf_all_trades_min_all ?? 0)); setCfMaxPayMins(String(p.cf_max_pay_mins ?? 0)); setCfMaxReleaseMins(String(p.cf_max_release_mins ?? 0)); setBinanceFeePerUsdt(String(p.binance_fee_per_usdt ?? 0.25)); } }
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
       if (results[3].status === 'fulfilled') setTransactions(results[3].value.data);
@@ -2545,7 +2546,7 @@ export default function Dashboard() {
                 onClick={async () => {
                   setSavingConfig(true);
                   try {
-                    const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0, telegram_notify_scope: tgNotifyScope });
+                    const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0, telegram_notify_scope: tgNotifyScope, binance_fee_per_usdt: parseFloat(binanceFeePerUsdt) || 0.25 });
                     configSavedAt.current = Date.now();
                     setConfigSaved(true);
                     setTimeout(() => { setConfigSaved(false); }, 1500);
@@ -2748,6 +2749,18 @@ export default function Dashboard() {
                   </div>
                 </div>
               </>)}
+            </div>
+
+            {/* Profit Calculation — Binance fee per USDT (net margin = avg sell − avg buy − fee) */}
+            <div style={{ background: '#0d1117', border: '0.5px solid #1f2937', borderRadius: 10, padding: '14px 16px', marginBottom: 8 }}>
+              <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Profit Calculation</div>
+              <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3, marginBottom: 12 }}>Binance fee deducted from your gross margin. Net margin = avg sell − avg buy − this fee.</div>
+              <div style={{ maxWidth: 260 }}>
+                <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 5 }}>Binance Fee (KES per USDT)</div>
+                <input type="number" min="0" step="0.01" value={binanceFeePerUsdt} onChange={e => setBinanceFeePerUsdt(e.target.value)}
+                  style={{ width: '100%', background: '#111827', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
+                <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>Cumulative buy + sell (~0.1% per side). Default 0.25.</div>
+              </div>
             </div>
           </div>
         )}
@@ -4115,6 +4128,18 @@ export default function Dashboard() {
               </>)}
             </div>
 
+            {/* Profit Calculation — Binance fee per USDT (net margin = avg sell − avg buy − fee) */}
+            <div style={{ background: '#111827', border: '1px solid #374151', borderRadius: 10, padding: '14px 16px', marginBottom: 8 }}>
+              <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Profit Calculation</div>
+              <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2, marginBottom: 12 }}>Binance fee deducted from your gross margin. Net margin = avg sell − avg buy − this fee.</div>
+              <div style={{ maxWidth: 260 }}>
+                <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Binance Fee (KES per USDT)</div>
+                <input type="number" min="0" step="0.01" value={binanceFeePerUsdt} onChange={e => setBinanceFeePerUsdt(e.target.value)}
+                  style={{ width: '100%', background: '#0d1117', border: '1px solid #374151', borderRadius: 7, padding: '8px 10px', color: '#e5e7eb', fontSize: 14, boxSizing: 'border-box' }} />
+                <div style={{ color: '#6b7280', fontSize: 10, marginTop: 3 }}>Cumulative buy + sell (~0.1% per side). Default 0.25.</div>
+              </div>
+            </div>
+
             {configSaved && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 0', borderRadius: 8, background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)', marginBottom: 8 }}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -4125,7 +4150,7 @@ export default function Dashboard() {
               onClick={async () => {
                 setSavingConfig(true);
                 try {
-                  const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0, telegram_notify_scope: tgNotifyScope });
+                  const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0, telegram_notify_scope: tgNotifyScope, binance_fee_per_usdt: parseFloat(binanceFeePerUsdt) || 0.25 });
                   configSavedAt.current = Date.now();
                   setConfigSaved(true);
                   setTimeout(() => { setConfigSaved(false); if (showConfigModal) setShowConfigModal(false); }, 1500);

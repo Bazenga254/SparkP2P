@@ -159,6 +159,12 @@ class Trader(Base):
     cf_max_release_mins       = Column(Integer, default=0)   # flag sellers slower than this avg release time (0=off)
     cf_last_pushed_at         = Column(DateTime(timezone=True), nullable=True)
 
+    # Profit calc: Binance fee deducted from the gross margin, in KES per USDT (net margin =
+    # avg_sell - avg_buy - this). It is the CUMULATIVE both-sides fee: Binance charges ~0.1% per
+    # side, so at ~129 KES/USDT that's 0.129 x 2 = ~0.258, rounded down to a safe flat 0.25.
+    # Configurable in case Binance's fee changes. Default 0.25.
+    binance_fee_per_usdt      = Column(Float, default=0.25)
+
     # Affiliate referral tracking
     referred_by_code = Column(String(20), nullable=True)  # referral code used at sign-up
 

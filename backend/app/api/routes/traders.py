@@ -97,6 +97,7 @@ class TradingConfigRequest(BaseModel):
     cf_all_trades_min_all:     Optional[int]   = None
     cf_max_pay_mins:           Optional[int]   = None
     cf_max_release_mins:       Optional[int]   = None
+    binance_fee_per_usdt:      Optional[float] = None
 
 
 class BinanceApiKeyRequest(BaseModel):
@@ -183,6 +184,7 @@ class TraderProfileResponse(BaseModel):
     cf_all_trades_min_all:     int   = 0
     cf_max_pay_mins:           int   = 0
     cf_max_release_mins:       int   = 0
+    binance_fee_per_usdt:      float = 0.25
     cf_last_pushed_at:         Optional[str] = None
     telegram_connected: bool = False
     telegram_approval_enabled: bool = False
@@ -839,6 +841,7 @@ async def get_profile(
         cf_all_trades_min_all=trader.cf_all_trades_min_all or 0,
         cf_max_pay_mins=trader.cf_max_pay_mins or 0,
         cf_max_release_mins=trader.cf_max_release_mins or 0,
+        binance_fee_per_usdt=trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25,
         cf_last_pushed_at=trader.cf_last_pushed_at.isoformat() if trader.cf_last_pushed_at else None,
         telegram_connected=bool(trader.telegram_chat_id),
         telegram_approval_enabled=bool(trader.telegram_approval_enabled),
@@ -1217,6 +1220,8 @@ async def update_trading_config(
         trader.cf_max_pay_mins = data.cf_max_pay_mins
     if data.cf_max_release_mins is not None:
         trader.cf_max_release_mins = data.cf_max_release_mins
+    if data.binance_fee_per_usdt is not None:
+        trader.binance_fee_per_usdt = data.binance_fee_per_usdt
 
     await db.commit()
 
