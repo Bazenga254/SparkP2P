@@ -151,12 +151,56 @@ function ProfitPage() {
 
       {/* Chart */}
       <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-header"><BarChart2 size={18} style={{ color: M.color }} /><h3>{M.label} — {rangeLabel}</h3></div>
+        <div className="card-header">
+          <BarChart2 size={18} style={{ color: M.color }} /><h3>{M.label} — {rangeLabel}</h3>
+          {metric === 'price' && (
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: 14, fontSize: 11, color: '#9ca3af' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: '#3b82f6' }} />Buy</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: '#10b981' }} />Sell</span>
+            </span>
+          )}
+        </div>
         {loading ? (
           <div style={{ textAlign: 'center', padding: '60px 0', color: '#6b7280' }}>Loading…</div>
         ) : rows.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px 0', color: '#6b7280' }}>No data for this period.</div>
-        ) : (
+        ) : metric === 'price' ? (() => {
+          // Price: grouped Buy + Sell bars on a zoomed axis (prices barely vary, so a 0-based
+          // axis looks flat — zoom to the actual min/max to reveal the movement and the spread).
+          const rates = rows.flatMap(r => [r.buy_rate, r.sell_rate].filter(x => x > 0));
+          const lo = rates.length ? Math.min(...rates) : 0;
+          const hi = rates.length ? Math.max(...rates) : 1;
+          const pad = (hi - lo) * 0.25 || 0.5;
+          const pMin = lo - pad, pSpan = (hi + pad - pMin) || 1;
+          const bh = (v) => (v > 0 ? Math.max(2, (v - pMin) / pSpan * H) : 0);
+          return (
+            <div style={{ display: 'flex', gap: 8, paddingTop: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: H, width: 52, textAlign: 'right', paddingBottom: 22 }}>
+                <span style={{ fontSize: 10, color: '#6b7280' }}>{(hi + pad).toFixed(2)}</span>
+                <span style={{ fontSize: 10, color: '#6b7280' }}>{((hi + pad + pMin) / 2).toFixed(2)}</span>
+                <span style={{ fontSize: 10, color: '#6b7280' }}>{pMin.toFixed(2)}</span>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: rows.length > 16 ? 1 : 4, height: H }}>
+                  {rows.map((r) => (
+                    <div key={r.key} style={{ flex: 1, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 2, minWidth: 0 }}
+                      title={`${r.label} — Buy ${r.buy_rate || '—'} · Sell ${r.sell_rate || '—'} (spread ${(r.spread || 0).toFixed(2)})`}>
+                      <div style={{ width: '42%', height: bh(r.buy_rate), background: '#3b82f6', borderRadius: '2px 2px 0 0', opacity: 0.9 }} />
+                      <div style={{ width: '42%', height: bh(r.sell_rate), background: '#10b981', borderRadius: '2px 2px 0 0', opacity: 0.9 }} />
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: rows.length > 16 ? 1 : 4, marginTop: 4 }}>
+                  {rows.map((r, i) => (
+                    <div key={r.key} style={{ flex: 1, textAlign: 'center', fontSize: 9, color: '#6b7280', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+                      {rows.length > 16 ? (i % 3 === 0 ? r.label.split(' ').pop() : '') : r.label}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })() : (
           <div style={{ display: 'flex', gap: 8, paddingTop: 8 }}>
             {/* Y axis */}
             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: H, width: 52, textAlign: 'right', paddingBottom: 22 }}>

@@ -1067,41 +1067,40 @@ def compute_pnl_daily(orders, tz_offset_hours=3):
     off = timedelta(hours=tz_offset_hours)
     day = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0,
                                "buy_usdt": 0.0, "buy_kes": 0.0, "sell_usdt": 0.0, "sell_kes": 0.0})
-    chron = sorted(orders, key=lambda o: (o.created_at, o.id))
-    inv_usdt = 0.0
-    inv_cost = 0.0
-    for o in chron:
+    for o in orders:
         u = float(o.crypto_amount or 0)
         k = float(o.fiat_amount or 0)
-        ts = o.created_at
-        dkey = (ts + off).strftime("%Y-%m-%d")
+        dkey = (o.created_at + off).strftime("%Y-%m-%d")
         d = day[dkey]
         d["volume"] += k
         d["trades"] += 1
         if o.side == OrderSide.BUY:
-            inv_usdt += u
-            inv_cost += k
             d["buy_usdt"] += u
             d["buy_kes"] += k
         else:
-            avg = (inv_cost / inv_usdt) if inv_usdt > 0 else ((k / u) if u else 0)
-            rate = (k / u) if u else 0
-            d["gross"] += u * (rate - avg)
-            d["fees"] += float(o.binance_commission or 0) * float(o.exchange_rate or 0)
             d["sell_usdt"] += u
             d["sell_kes"] += k
-            draw = min(u, inv_usdt)
-            if inv_usdt > 0:
-                inv_cost -= avg * draw
-                inv_usdt -= draw
-                if inv_usdt < 0.0001:
-                    inv_usdt = 0.0
-                    inv_cost = 0.0
-    for dk in day:
-        day[dk]["net"] = round(day[dk]["gross"] - day[dk]["fees"], 2)
-        day[dk]["gross"] = round(day[dk]["gross"], 2)
-        day[dk]["fees"] = round(day[dk]["fees"], 2)
-        day[dk]["volume"] = round(day[dk]["volume"], 2)
+            d["fees"] += float(o.binance_commission or 0) * float(o.exchange_rate or 0)
+    # Per-day spread profit: each day stands on its own — gross = revenue from the USDT you
+    # SOLD that day, minus what that USDT cost you to BUY at the day's average buy rate (carried
+    # forward when a day has no buys). This is stable and intuitive (no coupling to ancient
+    # history), unlike a global cost-basis replay which made one day's profit depend on months
+    # of earlier inventory.
+    last_buy_rate = None
+    for dk in sorted(day.keys()):
+        d = day[dk]
+        if d["buy_usdt"] > 0:
+            br = d["buy_kes"] / d["buy_usdt"]
+            last_buy_rate = br
+        elif last_buy_rate is not None:
+            br = last_buy_rate
+        else:
+            br = (d["sell_kes"] / d["sell_usdt"]) if d["sell_usdt"] else 0.0
+        gross = d["sell_kes"] - d["sell_usdt"] * br
+        d["gross"] = round(gross, 2)
+        d["net"] = round(gross - d["fees"], 2)
+        d["fees"] = round(d["fees"], 2)
+        d["volume"] = round(d["volume"], 2)
     return dict(day)
 
 
