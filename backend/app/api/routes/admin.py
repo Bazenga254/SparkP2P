@@ -2577,21 +2577,20 @@ async def get_trader_pnl(
     db: AsyncSession = Depends(get_db),
 ):
     """P&L breakdown for a trader: daily revenue, fees, and net profit."""
+    # Trading day boundary is 00:00 UTC (= 03:00 EAT) to match Binance and compute_pnl_daily.
     now = datetime.now(timezone.utc)
-    EAT = timezone(timedelta(hours=3))
-    now_eat = now.astimezone(EAT)
 
     if period == "today":
-        since_eat = now_eat.replace(hour=0, minute=0, second=0, microsecond=0)
+        since_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         days = 1
     elif period == "week":
-        since_eat = (now_eat - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+        since_day = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
         days = 7
     elif period == "month":
-        since_eat = (now_eat - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
+        since_day = (now - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
         days = 30
     else:
-        since_eat = now_eat.replace(hour=0, minute=0, second=0, microsecond=0)
+        since_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         days = 1
 
     # Use the EXACT same per-day calc as the merchant Profit page (compute_pnl_daily over the
@@ -2610,7 +2609,7 @@ async def get_trader_pnl(
 
     daily = []
     for i in range(days):
-        d = (since_eat + timedelta(days=i)).strftime("%Y-%m-%d")
+        d = (since_day + timedelta(days=i)).strftime("%Y-%m-%d")
         m = daily_map.get(d, {"gross": 0.0, "fees": 0.0, "net": 0.0, "trades": 0})
         daily.append({
             "date": d,

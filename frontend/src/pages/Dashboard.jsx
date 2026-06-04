@@ -57,8 +57,11 @@ function ProfitPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // Resolve bucket + range from the view preset + offset
-  const now = new Date();
+  // Resolve bucket + range from the view preset + offset.
+  // The backend buckets the trading day at 00:00 UTC (= 03:00 EAT, matching Binance's reset),
+  // so build a pseudo-UTC "now" whose local-field getters (getDate/getDay/…) read in UTC.
+  // This keeps all the date math below unchanged while producing UTC-correct date strings.
+  const now = new Date(Date.now() + new Date().getTimezoneOffset() * 60000);
   let bucket, startD, endD, rangeLabel;
   if (view === 'today') {
     const d = new Date(now); d.setDate(d.getDate() + offset);

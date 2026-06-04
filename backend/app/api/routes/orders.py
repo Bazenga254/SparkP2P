@@ -55,9 +55,8 @@ async def create_order(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new P2P order for tracking."""
-    # Check daily limits
-    _eat_now = datetime.now(timezone.utc) + timedelta(hours=3)
-    today_start = _eat_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=3)
+    # Check daily limits — trading day resets at 00:00 UTC (= 03:00 EAT), matching Binance.
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     result = await db.execute(
         select(func.count(Order.id)).where(
             Order.trader_id == trader.id,
@@ -130,8 +129,8 @@ async def get_order_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """Get trading statistics."""
-    _eat_now = datetime.now(timezone.utc) + timedelta(hours=3)
-    today_start = _eat_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=3)
+    # Trading day resets at 00:00 UTC (= 03:00 EAT) to align with Binance's daily reset.
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     # Only count orders that actually completed — not pending/cancelled/expired
     completed_statuses = [OrderStatus.RELEASED, OrderStatus.COMPLETED]
 

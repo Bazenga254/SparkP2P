@@ -467,8 +467,8 @@ async def profit_breakdown(
     from app.models.order import Order, OrderStatus
     from app.services.tracking import compute_pnl, today_realized_pnl
     now = datetime.now(timezone.utc)
-    eat_midnight = (now + timedelta(hours=3)).replace(hour=0, minute=0, second=0, microsecond=0)
-    today_start = eat_midnight - timedelta(hours=3)
+    # Trading day resets at 00:00 UTC (= 03:00 EAT) to match Binance's daily reset.
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     # Pull the FULL completed history so today's realized profit is matched against the cost
     # basis of USDT bought on earlier days (else selling old USDT shows 0 gross).
     all_rows = (await db.execute(
@@ -485,7 +485,7 @@ async def profit_breakdown(
     pnl["net_profit"] = tp["net"]
     return {
         "available": True,
-        "date": eat_midnight.strftime("%Y-%m-%d"),
+        "date": today_start.strftime("%Y-%m-%d"),
         **pnl,
         "tier": trader.binance_merchant_tier or "bronze",
     }
@@ -515,9 +515,9 @@ async def profit_history(
             Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
         )
     )).scalars().all()
-    daily = compute_pnl_daily(rows)   # {'YYYY-MM-DD': {gross,fees,net,volume,trades}}
+    daily = compute_pnl_daily(rows)   # {'YYYY-MM-DD': {gross,fees,net,volume,trades}} — UTC day
 
-    today = (datetime.now(timezone.utc) + timedelta(hours=3)).date()
+    today = datetime.now(timezone.utc).date()   # trading day = UTC day (00:00 UTC = 03:00 EAT)
     try:
         a = _date.fromisoformat(anchor) if anchor else today
     except Exception:
@@ -589,7 +589,7 @@ async def profit_series(
     )).scalars().all()
     daily = compute_pnl_daily(rows)
 
-    today = (datetime.now(timezone.utc) + timedelta(hours=3)).date()
+    today = datetime.now(timezone.utc).date()   # trading day = UTC day (00:00 UTC = 03:00 EAT)
     try:
         e = _date.fromisoformat(end) if end else today
     except Exception:
@@ -627,7 +627,8 @@ async def profit_series(
     if bucket == "hour":
         # Intraday view for a single day: bucket the selected day's orders by hour and value
         # each hour's sells at the day's average buy rate (intraday buy price barely moves).
-        off = timedelta(hours=3)
+        # Hours are in UTC so the day runs 00:00–24:00 UTC (= 03:00 EAT reset), matching Binance.
+        off = timedelta(hours=0)
         day_str = e.isoformat()
         from collections import defaultdict
         hourly = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0,
@@ -3054,13 +3055,10 @@ async def get_today_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Return 24-hour trading statistics that reset at midnight Kenyan time (EAT = UTC+3).
+    Return 24-hour trading statistics that reset at 00:00 UTC (= 03:00 EAT), matching Binance.
     """
-    # Midnight today in EAT (UTC+3)
-    eat_offset = timedelta(hours=3)
-    now_eat = datetime.now(timezone.utc) + eat_offset
-    midnight_eat = now_eat.replace(hour=0, minute=0, second=0, microsecond=0)
-    midnight_utc = midnight_eat - eat_offset  # convert back to UTC for DB query
+    # Trading day resets at 00:00 UTC (= 03:00 EAT) to align with Binance's daily reset.
+    midnight_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Full completed history (RELEASED = sell done, COMPLETED = buy done) so today's realized
     # profit is matched against the cost basis of USDT bought on earlier days.

@@ -1064,7 +1064,9 @@ def _finalize_pnl(b, s, spread, gross, orders):
     }
 
 
-def compute_pnl_daily(orders, tz_offset_hours=3):
+def compute_pnl_daily(orders, tz_offset_hours=0):
+    # tz_offset_hours=0 -> the trading day boundary is 00:00 UTC (= 03:00 EAT), matching
+    # Binance's daily reset, so daily figures roll over at the same time Binance does.
     """Attribute realized profit (same cumulative cost-basis method as compute_pnl) to each
     EAT calendar day. Replays ALL orders chronologically so the running cost basis is correct,
     then buckets each sell's booked profit by the day it was created. Returns
@@ -1111,7 +1113,7 @@ def compute_pnl_daily(orders, tz_offset_hours=3):
     return dict(day)
 
 
-def today_realized_pnl(all_orders, tz_offset_hours=3):
+def today_realized_pnl(all_orders, tz_offset_hours=0):
     """Cost-basis-correct realized profit for the CURRENT EAT day, computed over the trader's
     FULL order history (so a sell today is matched against USDT bought on earlier days). This
     is the figure the Profit Tracker shows; the dashboard 'Today' figures should use this too,
