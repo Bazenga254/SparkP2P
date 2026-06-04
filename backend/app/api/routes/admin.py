@@ -481,6 +481,8 @@ async def get_trader_detail(
         "binance_api_key_invalid": bool(trader.binance_api_key_invalid),
         "binance_merchant_tier": (trader.binance_merchant_tier or None),
         "binance_api_key_saved": bool(trader.binance_api_key),
+        "telegram_connected": bool(trader.telegram_chat_id),
+        "telegram_notify_scope": trader.telegram_notify_scope or 'both',
         "last_web_active": (trader.last_web_active or trader.last_login).isoformat() if (trader.last_web_active or trader.last_login) else None,
         "total_trades": max(trader.total_trades or 0, live_trades),
         "total_volume": max(float(trader.total_volume or 0), live_volume),

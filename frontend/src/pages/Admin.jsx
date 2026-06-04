@@ -1910,6 +1910,13 @@ export default function Admin() {
                               );
                             })()}
                             {t.binance_api_key_saved && t.binance_api_key_invalid && <span title="Binance rejects this key (likely regenerated/removed). Trader must reconnect a valid key." style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)', cursor: 'help' }}>⚠ API key invalid</span>}
+                            <span title={t.telegram_connected ? `Telegram connected${t.telegram_notify_scope && t.telegram_notify_scope !== 'both' ? ` (${t.telegram_notify_scope} alerts)` : ''}` : 'Telegram not connected'}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: 'help',
+                                background: t.telegram_connected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.12)',
+                                color: t.telegram_connected ? '#10b981' : '#ef4444',
+                                border: `1px solid ${t.telegram_connected ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.35)'}` }}>
+                              {t.telegram_connected ? 'Telegram ✓' : 'Telegram ✗'}
+                            </span>
                             {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_web_active || t.last_login); return (
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: s.online ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.12)', color: s.online ? '#10b981' : '#9ca3af', border: `1px solid ${s.online ? 'rgba(16,185,129,0.3)' : 'rgba(107,114,128,0.25)'}` }}>
                                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.online ? '#10b981' : '#6b7280', flexShrink: 0 }} />
