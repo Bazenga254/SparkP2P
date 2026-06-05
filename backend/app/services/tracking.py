@@ -1,12 +1,15 @@
-"""While-online order tracking.
+"""24/7 server-side order tracking + notifications.
 
-A server-side poller runs every 30s. For every trader whose bot is ONLINE (recent
-heartbeat) and has a Binance API key, it pulls their recent Binance order history and
-records orders completed *while the bot is online* into the central Orders table.
+A server-side poller runs every 30s. For every trader with a Binance API key — whether or
+not their app is open — it pulls their recent Binance order history, records completed orders
+into the central Orders table, and fires Telegram alerts for new orders. Data and alerts no
+longer require the desktop app to be running; the stored API key drives everything.
 
-It never backtracks: on first activation or after any offline gap, it sets a session
-floor at 'now', so orders from before activation / during downtime are ignored. Both the
-merchant dashboard and the admin read these central Orders, so figures are consistent.
+The incremental recorder never backtracks: on first activation or after an offline gap it sets
+a session floor at 'now', so it won't flood stale-order alerts. The separate _backfill_orders
+pass imports the FULL completed-order history (idempotent, every ~30 min), so the dashboard
+reflects ALL trading — including trades done while the app was closed. Both the merchant
+dashboard and the admin read these central Orders, so figures are consistent.
 """
 import asyncio
 import logging
@@ -978,25 +981,24 @@ async def track_trader(db, trader) -> int:
 
 
 async def tracking_poller():
-    """Every 30s: track all online traders' while-online Binance orders."""
+    """Every 30s: track EVERY trader with a Binance API key — 24/7, regardless of whether their
+    app is open. Records completed orders into the central Orders table (so the dashboard reflects
+    ALL trading, even trades done while the app was closed) and fires Telegram alerts for new
+    orders. Notifications and data no longer depend on the desktop app being online; they run
+    server-side from the stored Binance API key + secret."""
     global _poller_boot
     _poller_boot = datetime.now(timezone.utc)
     await asyncio.sleep(10)
-    logger.info("[Tracking] poller started (every %ds)", POLL_INTERVAL_SECS)
+    logger.info("[Tracking] poller started (every %ds, 24/7 for all API-key traders)", POLL_INTERVAL_SECS)
     while True:
         try:
             async with async_session() as db:
-                cutoff = datetime.now(timezone.utc) - timedelta(seconds=ONLINE_WINDOW_SECS)
-                # Online = app open (web heartbeat) OR bot loop heartbeat within the window.
-                from sqlalchemy import or_ as _or
+                # 24/7: poll every trader that has a Binance API key, online or not. The per-trader
+                # floor/gap logic in track_trader handles the transition gracefully — a long offline
+                # gap just resets the floor to 'now' (so there is no flood of stale-order alerts),
+                # and _backfill_orders catches up any completed trades made while the app was closed.
                 traders = (await db.execute(
-                    select(Trader).where(
-                        Trader.binance_api_key.isnot(None),
-                        _or(
-                            Trader.last_extension_sync >= cutoff,
-                            Trader.last_web_active >= cutoff,
-                        ),
-                    )
+                    select(Trader).where(Trader.binance_api_key.isnot(None))
                 )).scalars().all()
                 for tr in traders:
                     try:
