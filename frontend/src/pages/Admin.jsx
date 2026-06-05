@@ -1633,7 +1633,7 @@ export default function Admin() {
               return colors[Math.abs(h) % colors.length];
             };
             const avatarFg = () => '#c7d2fe';
-            const tierLabel = (tier) => tier === 'advanced' ? 'Advanced' : tier === 'pro_max' ? 'Pro Max' : tier === 'pro' ? 'Pro' : tier === 'starter' ? 'Starter' : 'Free';
+            const tierLabel = (tier) => tier === 'pro_max' ? 'Starter Pro Max' : tier === 'pro' ? 'Starter Pro' : tier === 'starter' ? 'Starter' : 'Free';
             const tierColor = (tier) => tier === 'advanced' ? { bg: 'rgba(239,68,68,0.15)', color: '#ef4444' }
               : tier === 'pro_max' ? { bg: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }
               : tier === 'pro' ? { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b' }
@@ -1716,7 +1716,7 @@ export default function Admin() {
                         </div>
                         <div style={{ color: '#9ca3af', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 7 }}>Tier</div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 12 }}>
-                          {[['all','All'],['free','Free'],['starter','Starter'],['pro','Pro'],['pro_max','Pro Max'],['advanced','Advanced']].map(([v,l]) => (
+                          {[['all','All'],['free','Free'],['starter','Starter'],['pro','Starter Pro'],['pro_max','Starter Pro Max']].map(([v,l]) => (
                             <button key={v} onClick={() => setTraderTierFilter(v)}
                               style={{ padding: '5px 10px', borderRadius: 12, border: ('0.5px solid ' + (traderTierFilter === v ? '#f59e0b' : '#374151')), background: traderTierFilter === v ? 'rgba(245,158,11,0.15)' : '#111827', color: traderTierFilter === v ? '#f59e0b' : '#9ca3af', fontSize: 11, cursor: 'pointer' }}>{l}</button>
                           ))}
@@ -1808,7 +1808,7 @@ export default function Admin() {
                           </span>
                           {traderDrop?.type === 'tier' && traderDrop?.id === t.id && (
                             <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 4, background: '#1f2937', border: '1px solid #374151', borderRadius: 8, zIndex: 100, minWidth: 90, overflow: 'hidden' }}>
-                              {[['standard','Free'],['starter','Starter'],['pro','Pro'],['pro_max','Pro Max'],['advanced','Advanced']].map(([v,l]) => (
+                              {[['standard','Free'],['starter','Starter'],['pro','Starter Pro'],['pro_max','Starter Pro Max']].map(([v,l]) => (
                                 <button key={v} onClick={(e) => { e.stopPropagation(); handleTierChange(t.id, v); setTraderDrop(null); }}
                                   style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: (t.tier||'standard') === v ? 'rgba(245,158,11,0.1)' : 'none', border: 'none', color: (t.tier||'standard') === v ? '#f59e0b' : '#d1d5db', fontSize: 12, cursor: 'pointer' }}>{l}</button>
                               ))}
@@ -1897,7 +1897,7 @@ export default function Admin() {
                           <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>{t.full_name}</div>
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${statusColor}22`, color: statusColor, border: `1px solid ${statusColor}44` }}>{t.status}</span>
-                            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${tierColor}22`, color: tierColor, border: `1px solid ${tierColor}44` }}>{t.tier === 'standard' ? 'Free' : t.tier === 'pro_max' ? 'Pro Max' : t.tier === 'advanced' ? 'Advanced' : t.tier === 'pro' ? 'Pro' : t.tier === 'starter' ? 'Starter' : t.tier}</span>
+                            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${tierColor}22`, color: tierColor, border: `1px solid ${tierColor}44` }}>{t.tier === 'standard' ? 'Free' : t.tier === 'pro_max' ? 'Starter Pro Max' : t.tier === 'pro' ? 'Starter Pro' : t.tier === 'starter' ? 'Starter' : t.tier}</span>
                             <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(156,163,175,0.15)', color: '#9ca3af', border: '1px solid rgba(156,163,175,0.3)' }}>{t.role || 'trader'}</span>
                             {t.binance_connected && <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' }}>Binance ✓</span>}
                             {t.binance_api_key_saved && !t.binance_api_key_invalid && (() => {
@@ -1954,11 +1954,10 @@ export default function Admin() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                             <label style={{ fontSize: 11, color: '#6b7280' }}>Tier</label>
                             <select className="adm-select" value={t.tier || "standard"} onChange={async (e) => { await handleTierChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, tier: e.target.value })); }}>
-                              <option value="standard">Free (0 credits)</option>
-                              <option value="starter">Starter (167 credits)</option>
-                              <option value="pro">Pro (500 credits)</option>
-                              <option value="pro_max">Pro Max (2,000 credits)</option>
-                              <option value="advanced">Advanced (8,000 credits)</option>
+                              <option value="standard">Free</option>
+                              <option value="starter">Starter — KES 3,000/mo</option>
+                              <option value="pro">Starter Pro — KES 5,000/mo</option>
+                              <option value="pro_max">Starter Pro Max — KES 10,000/mo</option>
                             </select>
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

@@ -878,9 +878,10 @@ async def update_trader_tier(
 ):
     """Update trader's subscription tier. Creates/updates subscription accordingly."""
     from app.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
+    from app.services.plans import plan_price
     from datetime import timedelta
 
-    if tier not in ("standard", "starter", "pro", "pro_max", "advanced"):
+    if tier not in ("standard", "starter", "pro", "pro_max"):
         raise HTTPException(status_code=400, detail="Invalid tier")
 
     result = await db.execute(select(Trader).where(Trader.id == trader_id))
@@ -891,10 +892,7 @@ async def update_trader_tier(
 
     trader.tier = tier
 
-    # KES amount per plan
-    PLAN_AMOUNT  = {"starter": 5000, "pro": 10000, "pro_max": 20000, "advanced": 40000}
-
-    if tier in ("starter", "pro", "pro_max", "advanced"):
+    if tier in ("starter", "pro", "pro_max"):
         # Check for existing active subscription
         sub_result = await db.execute(
             select(Subscription).where(
@@ -905,18 +903,18 @@ async def update_trader_tier(
         existing_sub = sub_result.scalar_one_or_none()
 
         now = datetime.now(timezone.utc)
-        plan_amount = PLAN_AMOUNT[tier]
+        plan_amount = plan_price(SubscriptionPlan(tier))   # central config (3k/5k/10k)
 
         if existing_sub:
-            # Update existing subscription
+            # Update existing subscription. Mark as ADMIN_GRANT so an admin tier change NEVER
+            # counts as subscription revenue (revenue excludes ADMIN_GRANT).
             existing_sub.plan = SubscriptionPlan(tier)
             existing_sub.amount = plan_amount
-            # Extend expiry if not set or already expired
-            if not existing_sub.expires_at or existing_sub.expires_at < now:
-                existing_sub.started_at = now
-                existing_sub.expires_at = now + timedelta(days=30)
+            existing_sub.mpesa_transaction_id = "ADMIN_GRANT"
+            existing_sub.started_at = now
+            existing_sub.expires_at = now + timedelta(days=30)
         else:
-            # Create new subscription (admin-granted)
+            # Create new subscription (admin-granted — excluded from revenue).
             sub = Subscription(
                 trader_id=trader_id,
                 plan=SubscriptionPlan(tier),
