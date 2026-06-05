@@ -2325,7 +2325,11 @@ async def revenue_subscriptions(
     from app.models.order import OrderSide as _OrderSide
     _ob_markup = 0.0
     _ob_gross = 0.0
-    _pay_where = [Payment.transaction_type == "CHOICE_OUTBOUND", Payment.status != PaymentStatus.FAILED]
+    # Only count transactions that actually recorded a fee under the new model (fee > 0) — this
+    # excludes old/test withdrawals from before fee recording (which would otherwise add phantom
+    # markup recomputed from their amount).
+    _pay_where = [Payment.transaction_type == "CHOICE_OUTBOUND", Payment.status != PaymentStatus.FAILED,
+                  Payment.fee > 0]
     if start:
         _pay_where.append(Payment.created_at >= start)
     for _p in (await db.execute(
