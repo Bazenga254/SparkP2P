@@ -53,6 +53,16 @@ async def send_trader_message(trader, message: str, reply_markup=None, reply_to=
     chat_id = getattr(trader, "telegram_chat_id", None)
     if not chat_id:
         return None
+    # Daily Telegram-alert cap by subscription tier (Starter 100 / Starter Pro 200 / Pro Max
+    # unlimited). Once over cap, skip silently until the 03:00 EAT reset.
+    tid = getattr(trader, "id", None)
+    if tid is not None:
+        try:
+            from app.services.rate_limits import consume_tg_alert
+            if not await consume_tg_alert(tid):
+                return None
+        except Exception:
+            pass
     payload = {"chat_id": chat_id, "text": message}
     if "<b>" in message or "</b>" in message:
         payload["parse_mode"] = "HTML"
@@ -63,14 +73,6 @@ async def send_trader_message(trader, message: str, reply_markup=None, reply_to=
         payload["allow_sending_without_reply"] = True
     result = await _tg_send("sendMessage", payload)
     ok = bool(result and result.get("ok"))
-    if ok:
-        try:
-            from app.services import credits as _credits
-            tid = getattr(trader, "id", None)
-            if tid is not None:
-                await _credits.charge_standalone(tid, _credits.TELEGRAM_NOTIFY_CREDIT, reason="telegram notify")
-        except Exception:
-            pass
     return result if ok else None
 
 
@@ -326,6 +328,11 @@ async def request_approval(
         {"text": "❌ NO - Reject",   "callback_data": f"reject:{order_number}"},
     ]]}
 
+    # Daily Telegram-alert cap by tier — once over cap, don't send the approval prompt.
+    from app.services.rate_limits import consume_tg_alert as _consume_tg
+    if not await _consume_tg(trader.id):
+        return {"ok": False, "capped": True}
+
     resp = await _tg_send("sendMessage", {
         "chat_id": trader.telegram_chat_id,
         "text": text,
@@ -335,11 +342,6 @@ async def request_approval(
     msg_id = None
     if resp and resp.get("ok"):
         msg_id = resp.get("result", {}).get("message_id")
-        try:
-            from app.services import credits as _credits
-            await _credits.charge_standalone(trader.id, _credits.TELEGRAM_NOTIFY_CREDIT, reason="telegram approval")
-        except Exception:
-            pass
 
     _pending_approvals[order_number] = {
         "chat_id": trader.telegram_chat_id,

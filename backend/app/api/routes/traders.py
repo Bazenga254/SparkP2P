@@ -3144,6 +3144,27 @@ async def verify_pin_change(data: PinChangeVerifyRequest, trader: Trader = Depen
     return {"authorized": True}
 
 
+@router.get("/rate-limit")
+async def get_rate_limit(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Daily rate-limit status for the dashboard: trades + Telegram alerts vs the trader's
+    subscription-tier caps, with the reset time (03:00 EAT). Used to show usage + a 'limit
+    reached' countdown when exhausted."""
+    from app.services.rate_limits import trade_rate_status, tg_rate_status
+    from app.services.plans import active_plan, plan_label
+    plan = await active_plan(db, trader.id)
+    trades = await trade_rate_status(db, trader)
+    telegram = tg_rate_status(plan, trader)
+    return {
+        "plan": plan.value if plan else None,
+        "plan_label": plan_label(plan),
+        "trades": trades,
+        "telegram": telegram,
+    }
+
+
 # ── Trade Token helpers ──────────────────────────────────────────
 
 def _calc_tokens(amount_kes: float) -> tuple[int, float]:

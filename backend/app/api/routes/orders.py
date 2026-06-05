@@ -56,18 +56,16 @@ async def create_order(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new P2P order for tracking."""
-    # Check daily limits — trading day boundary comes from the central source of truth.
-    today_start = trading_day_start()
-    result = await db.execute(
-        select(func.count(Order.id)).where(
-            Order.trader_id == trader.id,
-            Order.created_at >= today_start,
-        )
-    )
-    daily_count = result.scalar() or 0
-
-    if daily_count >= trader.daily_trade_limit:
-        raise HTTPException(status_code=400, detail="Daily trade limit reached")
+    # Daily trade rate limit — per active subscription tier (Starter 30 / Starter Pro 80 /
+    # Starter Pro Max unlimited), resets at 03:00 EAT. Non-subscribers keep existing behavior.
+    from app.services.rate_limits import trade_rate_status
+    _rl = await trade_rate_status(db, trader)
+    if not _rl["allowed"]:
+        raise HTTPException(status_code=429, detail={
+            "error": "daily_trade_limit_reached",
+            "message": f"Daily trade limit reached ({_rl['used']}/{_rl['limit']}). Trading resets at 3:00 AM.",
+            "used": _rl["used"], "limit": _rl["limit"], "reset_at": _rl["reset_at"],
+        })
 
     if data.fiat_amount > trader.max_single_trade:
         raise HTTPException(status_code=400, detail="Amount exceeds max single trade limit")
