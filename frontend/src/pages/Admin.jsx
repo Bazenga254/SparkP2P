@@ -4365,7 +4365,9 @@ export default function Admin() {
 
               {/* Profit Summary — always visible */}
               {(() => {
-                const totalRevenue = revBreakdown?.summary?.total ?? 0;
+                const subRevenue = revBreakdown?.summary?.total ?? 0;
+                const outboundRevenue = revBreakdown?.summary?.outbound_markup ?? 0;
+                const totalRevenue = subRevenue + outboundRevenue;
                 const totalExpenses = expensesTotal ?? 0;
                 const netProfit = totalRevenue - totalExpenses;
                 const isProfit = netProfit >= 0;
@@ -4374,7 +4376,7 @@ export default function Admin() {
                     <div style={{ padding: '16px 20px', background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 12 }}>
                       <div style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>Total Revenue</div>
                       <div style={{ color: '#10b981', fontWeight: 800, fontSize: 24 }}>{fmtKES(totalRevenue)}</div>
-                      <div style={{ color: '#4b5563', fontSize: 11, marginTop: 4 }}>All subscription payments</div>
+                      <div style={{ color: '#4b5563', fontSize: 11, marginTop: 4 }}>Subscriptions {fmtKES(subRevenue)} + outbound fees {fmtKES(outboundRevenue)}</div>
                     </div>
                     <div style={{ padding: '16px 20px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 12 }}>
                       <div style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>Total Expenses</div>
@@ -4434,6 +4436,17 @@ export default function Admin() {
                     <div style={{ fontSize: 26, fontWeight: 800, color: '#10b981' }}>{fmtKES(revBreakdown?.summary?.total ?? 0)}</div>
                   </div>
                   <div style={{ fontSize: 12, color: '#6b7280' }}>Excludes admin-granted plans</div>
+                </div>
+                {/* Outbound transaction-fee revenue (our markup, remitted monthly by Choice Bank) */}
+                <div className="adm-card" style={{ padding: '14px 20px', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderLeft: '3px solid #3b82f6' }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 4 }}>Outbound Fee Revenue (Our Markup)</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: '#3b82f6' }}>{fmtKES(revBreakdown?.summary?.outbound_markup ?? 0)}</div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#6b7280', textAlign: 'right' }}>
+                    Withheld by Choice Bank, remitted monthly<br/>
+                    Gross fees charged: {fmtKES(revBreakdown?.summary?.outbound_gross ?? 0)}
+                  </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
                   {[

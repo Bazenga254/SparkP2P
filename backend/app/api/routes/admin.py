@@ -2317,6 +2317,35 @@ async def revenue_subscriptions(
         summary[f"{pv}_count"] = int(row.count or 0)
         summary["total"] = round(summary["total"] + float(row.total or 0), 2)
 
+    # ── Outbound transaction-fee revenue (our markup) ──────────────────────────
+    # Choice Bank withholds the full fee on each outbound transfer and remits OUR markup monthly.
+    # Revenue = sum of markups across withdrawals (payments) + buy-order seller payments (orders).
+    # 'gross' is the full fee traders paid (incl. Choice Bank's own cost) — shown for reference.
+    from app.services.outbound_fees import outbound_markup
+    from app.models.order import OrderSide as _OrderSide
+    _ob_markup = 0.0
+    _ob_gross = 0.0
+    _pay_where = [Payment.transaction_type == "CHOICE_OUTBOUND", Payment.status != PaymentStatus.FAILED]
+    if start:
+        _pay_where.append(Payment.created_at >= start)
+    for _p in (await db.execute(
+        select(Payment.amount, Payment.fee, Payment.destination_type).where(*_pay_where)
+    )).all():
+        _ch = "MPESA" if "M-PESA" in (_p.destination_type or "").upper() or "MPESA" in (_p.destination_type or "").upper() else "BANK"
+        _ob_markup += outbound_markup(_ch, _p.amount or 0)
+        _ob_gross += float(_p.fee or 0)
+    _ord_where = [Order.side == _OrderSide.BUY, Order.choice_fee > 0]
+    if start:
+        _ord_where.append(Order.created_at >= start)
+    for _o in (await db.execute(
+        select(Order.fiat_amount, Order.choice_fee, Order.seller_payment_method).where(*_ord_where)
+    )).all():
+        _ch = "MPESA" if (_o.seller_payment_method or "").lower() in ("mpesa", "m-pesa") else "BANK"
+        _ob_markup += outbound_markup(_ch, _o.fiat_amount or 0)
+        _ob_gross += float(_o.choice_fee or 0)
+    summary["outbound_markup"] = round(_ob_markup, 2)   # our revenue (remitted monthly by Choice Bank)
+    summary["outbound_gross"] = round(_ob_gross, 2)     # total fees traders paid (for reference)
+
     # Total count for pagination
     total_count = (
         await db.execute(
