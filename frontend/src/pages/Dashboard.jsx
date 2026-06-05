@@ -7,23 +7,26 @@ import SettingsPanel from '../components/SettingsPanel';
 import { kycCreateSession } from '../services/api';
 import SupportChat from '../components/SupportChat';
 
-const B2C_FEES = [
-  [1000,9],[1500,14],[2500,19],[3500,24],[5000,33],[7500,40],[10000,46],
-  [15000,55],[20000,60],[25000,65],[30000,70],[35000,80],[40000,96],[45000,100],[50000,105],[150000,105],
-];
-function mpesaB2CFee(amount) {
-  for (const [threshold, fee] of B2C_FEES) { if (amount <= threshold) return fee; }
-  return 105;
+// Choice Bank outbound transaction fees (KES) — mirror backend app/services/outbound_fees.py.
+// Choice Bank withholds these on its side (debits amount + fee); shown here so the trader sees it.
+const MPESA_MIN_WITHDRAWAL = 1501;
+function mpesaOutboundFee(amount) {
+  const a = amount || 0;
+  if (a <= 2500) return 20;
+  if (a <= 3500) return 21;
+  if (a <= 7500) return 24;
+  if (a <= 15000) return 28;
+  if (a <= 25000) return 31;
+  if (a <= 30000) return 32;
+  if (a <= 40000) return 39;
+  return 40;
 }
-const BANK_FLAT_FEES = [[20000,10],[50000,25],[150000,35],[300000,45],[500000,60]];
-function bankFlatFee(amount) {
-  for (const [threshold, fee] of BANK_FLAT_FEES) { if (amount <= threshold) return fee; }
-  return 60;
+function pesalinkOutboundFee(amount) {
+  return (amount || 0) <= 1000 ? 10 : 25;
 }
 function getWithdrawalFee(method, amount) {
   if (amount <= 0) return 0;
-  if (method === 'mpesa') return mpesaB2CFee(amount) + 25;
-  return bankFlatFee(amount);
+  return method === 'mpesa' ? mpesaOutboundFee(amount) : pesalinkOutboundFee(amount);
 }
 const fmtCountdown = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 const fmtKES = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -1279,7 +1282,12 @@ export default function Dashboard() {
       }
 
       setWithdrawPreview(p);
-      setWithdrawCustomAmount(String(Math.round((p.balance ?? 0) * 100) / 100));
+      // Prefill the max RECEIVABLE amount (balance minus the Choice Bank fee, which is debited on top).
+      {
+        const _bal = p.balance ?? 0;
+        const _maxRecv = Math.max(0, _bal - getWithdrawalFee(p.settlement_method || 'mpesa', _bal));
+        setWithdrawCustomAmount(String(Math.round(_maxRecv * 100) / 100));
+      }
       setWithdrawOtp('');
       setWithdrawOtpSent(false);
       setWithdrawMsg('');
@@ -3446,21 +3454,28 @@ export default function Dashboard() {
 
             {/* Amount input */}
             {withdrawPreview && (() => {
+              const method = withdrawPreview.settlement_method || 'mpesa';
               const balance = withdrawPreview.balance ?? 0;
-              const minWd = withdrawPreview.min_withdrawal ?? 1000;
+              const minWd = method === 'mpesa'
+                ? Math.max(MPESA_MIN_WITHDRAWAL, withdrawPreview.min_withdrawal ?? 0)
+                : (withdrawPreview.min_withdrawal ?? 1000);
               const forceFullBalance = withdrawPreview.force_full_withdrawal;
               const customAmt = parseFloat(withdrawCustomAmount) || 0;
-              const clampedAmt = Math.min(customAmt, balance);
-              const liveFee = getWithdrawalFee(withdrawPreview.settlement_method || 'mpesa', clampedAmt);
-              const liveReceive = Math.max(0, clampedAmt - liveFee);
-              const remainingAfter = balance - clampedAmt;
-              const wouldStrand = clampedAmt > 0 && clampedAmt < balance && remainingAfter > 0 && remainingAfter < minWd;
-              const amtErr = customAmt > balance
-                ? `Max KES ${balance.toLocaleString()}`
+              // Choice Bank debits (amount + fee) from the balance and sends the FULL amount to the
+              // payee. So the most a trader can RECEIVE is their balance minus the fee on that amount.
+              const maxReceive = Math.max(0, balance - getWithdrawalFee(method, balance));
+              const clampedAmt = Math.min(customAmt, maxReceive);
+              const liveFee = getWithdrawalFee(method, clampedAmt);
+              const liveReceive = clampedAmt;                 // recipient gets the full amount
+              const totalDebit = clampedAmt + liveFee;        // deducted from the Choice balance
+              const remainingAfter = balance - totalDebit;
+              const wouldStrand = clampedAmt > 0 && totalDebit < balance && remainingAfter > 0 && remainingAfter < minWd;
+              const amtErr = customAmt > maxReceive
+                ? `Max KES ${maxReceive.toLocaleString()}`
                 : customAmt > 0 && customAmt < minWd
                   ? `Min KES ${minWd.toLocaleString()}`
                   : wouldStrand
-                    ? `Withdrawing KES ${clampedAmt.toLocaleString()} would leave KES ${remainingAfter.toLocaleString()} which can't be withdrawn later. Withdraw the full KES ${balance.toLocaleString()} instead.`
+                    ? `Withdrawing KES ${clampedAmt.toLocaleString()} would leave KES ${remainingAfter.toLocaleString()} which can't be withdrawn later. Withdraw the full KES ${maxReceive.toLocaleString()} instead.`
                     : '';
               return (
                 <>
@@ -3481,7 +3496,7 @@ export default function Dashboard() {
                       <input
                         type="number"
                         min={0}
-                        max={balance}
+                        max={maxReceive}
                         step={1}
                         value={withdrawCustomAmount}
                         onChange={e => { if (!forceFullBalance) setWithdrawCustomAmount(e.target.value); }}
@@ -3490,7 +3505,7 @@ export default function Dashboard() {
                       />
                       {!forceFullBalance && (
                       <button
-                        onClick={() => setWithdrawCustomAmount(String(Math.round(balance * 100) / 100))}
+                        onClick={() => setWithdrawCustomAmount(String(Math.round(maxReceive * 100) / 100))}
                         style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#10b981', fontSize: 11, cursor: 'pointer', fontWeight: 700 }}
                       >MAX</button>
                       )}
@@ -3499,13 +3514,13 @@ export default function Dashboard() {
                   </div>
                   <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: 20, fontSize: 13 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
-                      <span>Withdrawal Amount</span><span style={{ color: '#fff', fontWeight: 600 }}>KES {clampedAmt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      <span>You Receive</span><span style={{ color: '#10b981', fontWeight: 700 }}>KES {liveReceive.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
-                      <span>Transaction Fee</span><span style={{ color: '#f59e0b', fontWeight: 600 }}>- KES {liveFee.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      <span>Transaction Fee <span style={{ color: '#6b7280', fontSize: 11 }}>(Choice Bank)</span></span><span style={{ color: '#f59e0b', fontWeight: 600 }}>+ KES {liveFee.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                     <div style={{ borderTop: '1px solid #374151', paddingTop: 8, display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#10b981', fontWeight: 700 }}>You Receive</span><span style={{ color: '#10b981', fontWeight: 700, fontSize: 15 }}>KES {liveReceive.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      <span style={{ color: '#fff', fontWeight: 700 }}>Deducted from balance</span><span style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>KES {totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                   </div>
                 </>

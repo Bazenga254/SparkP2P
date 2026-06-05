@@ -73,6 +73,7 @@ class Order(Base):
     # Fees
     platform_fee = Column(Float, default=0.0)
     settlement_fee = Column(Float, default=0.0)  # KES
+    choice_fee = Column(Float, default=0.0)  # Choice Bank outbound fee withheld on buy-order seller payment (KES)
 
     # AI fraud check
     risk_score = Column(Float, nullable=True)  # 0-100

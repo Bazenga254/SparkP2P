@@ -341,16 +341,16 @@ async def report_payment_sent(
         _already_sent = order.status == OrderStatus.PAYMENT_SENT
         order.status = OrderStatus.PAYMENT_SENT
         order.payment_sent_at = datetime.now(timezone.utc)
-        # Charge the outbound credit fee once, on the first payment-sent transition.
-        # Buy order = outbound to seller: M-Pesa tiered, or bank/PesaLink flat 20.
+        # Buy order = outbound payment to the seller via Choice Bank. Choice Bank withholds the KES
+        # fee on its side (debits amount + fee from the trader's account) and remits our markup
+        # monthly — so no credit charge here. Record the fee once for reconciliation.
         if not _already_sent:
             try:
-                from app.services import credits as _credits
+                from app.services.outbound_fees import outbound_fee as _outbound_fee
                 _ch = (data.channel or "BANK").upper()
-                _fee = _credits.withdrawal_credit_fee(_ch, order.fiat_amount or 0)
-                _credits.charge(db, trader, _fee, reason=f"buy order {_ch} {order.fiat_amount}")
+                order.choice_fee = _outbound_fee(_ch, order.fiat_amount or 0)
             except Exception as _e:
-                logger.warning(f"buy-order credit charge failed for {data.order_number}: {_e}")
+                logger.warning(f"buy-order fee record failed for {data.order_number}: {_e}")
         await db.commit()
         logger.info(f"Buy order {data.order_number} marked as paid via extension")
     else:

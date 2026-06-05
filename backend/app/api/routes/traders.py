@@ -2055,13 +2055,10 @@ async def cb_withdraw_initiate(
     if body.amount < 100:
         raise HTTPException(status_code=400, detail="Minimum withdrawal is KES 100")
 
-    from app.services import credits as _credits
-    WITHDRAWAL_CREDIT_FEE = _credits.withdrawal_credit_fee("BANK", body.amount)
-    if float(trader.trade_tokens or 0) < WITHDRAWAL_CREDIT_FEE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Insufficient credits. This withdrawal costs {WITHDRAWAL_CREDIT_FEE} credits (you have {float(trader.trade_tokens or 0):.1f}).",
-        )
+    # Choice Bank withholds the outbound fee on its side (debits amount + fee from the trader's
+    # account). We compute it here only to show + record it; we do NOT deduct it ourselves.
+    from app.services.outbound_fees import outbound_fee as _outbound_fee
+    _fee = _outbound_fee("BANK", body.amount)
 
     # Block if there's already a PENDING withdrawal in the last 2 hours
     from datetime import datetime, timezone, timedelta
@@ -2112,11 +2109,13 @@ async def cb_withdraw_initiate(
     except Exception as exc:
         logger.warning(f"[ChoiceBank] sendOtp call failed: {exc}")
 
-    _pending_withdrawal_tx[trader.email] = {"tx_id": tx_id, "amount": body.amount}
+    _pending_withdrawal_tx[trader.email] = {"tx_id": tx_id, "amount": body.amount, "fee": _fee}
     masked = trader.phone[-4:] if trader.phone else "****"
     return {
         "status": "otp_sent",
-        "message": f"OTP sent by Choice Bank to your registered phone ending {masked}. Enter it to confirm the transfer.",
+        "fee": _fee,
+        "message": f"OTP sent by Choice Bank to your registered phone ending {masked}. "
+                   f"A transaction fee of KES {_fee} applies (deducted by Choice Bank). Enter the OTP to confirm.",
     }
 
 
@@ -2137,16 +2136,13 @@ async def cb_withdraw_to_mpesa_initiate(
         raise HTTPException(status_code=400, detail="No Choice Bank account linked")
     if not trader.settlement_phone:
         raise HTTPException(status_code=400, detail="No M-Pesa settlement number configured. Please set your M-Pesa number in Settings.")
-    if body.amount < 10:
-        raise HTTPException(status_code=400, detail="Minimum M-Pesa withdrawal is KES 10")
+    from app.services.outbound_fees import outbound_fee as _outbound_fee, MPESA_MIN_WITHDRAWAL
+    if body.amount < MPESA_MIN_WITHDRAWAL:
+        raise HTTPException(status_code=400, detail=f"Minimum M-Pesa withdrawal is KES {MPESA_MIN_WITHDRAWAL:,}")
 
-    from app.services import credits as _credits
-    WITHDRAWAL_CREDIT_FEE = _credits.withdrawal_credit_fee("MPESA", body.amount)
-    if float(trader.trade_tokens or 0) < WITHDRAWAL_CREDIT_FEE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Insufficient credits. This withdrawal costs {WITHDRAWAL_CREDIT_FEE} credits (you have {float(trader.trade_tokens or 0):.1f}).",
-        )
+    # Choice Bank withholds the outbound fee on its side (debits amount + fee from the trader's
+    # account). We compute it here only to show + record it; we do NOT deduct it ourselves.
+    _fee = _outbound_fee("MPESA", body.amount)
 
     # Block if there's already a PENDING withdrawal in the last 2 hours
     from datetime import datetime, timezone, timedelta
@@ -2203,11 +2199,13 @@ async def cb_withdraw_to_mpesa_initiate(
     except Exception as exc:
         logger.warning(f"[ChoiceBank] M-Pesa sendOtp failed: {exc}")
 
-    _pending_withdrawal_tx[trader.email] = {"tx_id": tx_id, "amount": body.amount, "channel": "MPESA", "phone": phone}
+    _pending_withdrawal_tx[trader.email] = {"tx_id": tx_id, "amount": body.amount, "channel": "MPESA", "phone": phone, "fee": _fee}
     masked = trader.settlement_phone[-4:] if trader.settlement_phone else "****"
     return {
         "status": "otp_sent",
-        "message": f"OTP sent by Choice Bank to your registered phone. Enter it to confirm the M-Pesa transfer to ...{masked}.",
+        "fee": _fee,
+        "message": f"OTP sent by Choice Bank to your registered phone. A transaction fee of KES {_fee} "
+                   f"applies (deducted by Choice Bank). Enter the OTP to confirm the M-Pesa transfer to ...{masked}.",
     }
 
 
@@ -2503,6 +2501,7 @@ async def cb_withdraw_to_bank(
 
     tx_id  = pending.get("tx_id", "")
     amount = pending["amount"]
+    fee    = pending.get("fee", 0)
 
     if not tx_id:
         raise HTTPException(status_code=400, detail="Invalid pending state. Please start over.")
@@ -2524,10 +2523,8 @@ async def cb_withdraw_to_bank(
     _channel  = pending.get("channel", "BANK")
     _mpesa_ph = pending.get("phone", "")
 
-    # Tiered credit fee: M-Pesa scales by amount, PesaLink/bank flat 20
-    from app.services import credits as _credits
-    WITHDRAWAL_CREDIT_FEE = _credits.withdrawal_credit_fee(_channel, amount)
-    _credits.charge(db, trader, WITHDRAWAL_CREDIT_FEE, reason=f"withdrawal {_channel} {amount}")
+    # No credit charge on outbound: Choice Bank withholds the KES fee on its side (debits
+    # amount + fee from the trader's account) and remits our markup monthly. We just record it.
     if _channel == "MPESA":
         _dest      = trader.phone or _mpesa_ph  # full phone stored on trader
         _dest_type = "M-Pesa"
@@ -2549,6 +2546,7 @@ async def cb_withdraw_to_bank(
         mpesa_transaction_id=tx_id,
         transaction_type="CHOICE_OUTBOUND",
         amount=amount,
+        fee=fee,
         destination=_dest,
         destination_type=_dest_type,
         sender_name=_ben_name,
@@ -2562,6 +2560,7 @@ async def cb_withdraw_to_bank(
         await notify_trader(trader,
             "📤 KES " + f"{amount:,.0f}" + " withdrawal confirmed" + chr(10) +
             "To: " + _tg_dest + chr(10) +
+            "Fee: KES " + f"{fee:,.0f}" + chr(10) +
             "Ref: " + tx_id + chr(10) +
             "Status: Processing (you'll be notified when funds arrive)"
         )

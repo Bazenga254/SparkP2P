@@ -35,6 +35,7 @@ class Payment(Base):
 
     # Payment details
     amount = Column(Float, nullable=False)
+    fee = Column(Float, nullable=True, default=0)  # Choice Bank outbound fee withheld (KES), for reconciliation
     phone = Column(String(100), nullable=True)
     bill_ref_number = Column(String(100), nullable=True)  # Account number for C2B
     sender_name = Column(String(255), nullable=True)
