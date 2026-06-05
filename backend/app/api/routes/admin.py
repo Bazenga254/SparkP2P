@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import create_access_token
+from app.core.trading_day import trading_day_start, trading_month_start, trading_day_key, now_utc
 from app.models import Trader, TraderStatus, Order, OrderStatus, Payment, PaymentDirection, PaymentStatus, ChatMessage
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.message_template import MessageTemplate
@@ -79,10 +80,8 @@ async def admin_dashboard(
     db: AsyncSession = Depends(get_db),
 ):
     """Get admin dashboard overview."""
-    # Use Kenya time (EAT = UTC+3) so "today" matches the admin's local date
-    EAT = timezone(timedelta(hours=3))
-    now_eat = datetime.now(EAT)
-    today_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    # Trading day resets at 00:00 UTC (= 03:00 EAT) to match Binance — central source of truth.
+    today_start = trading_day_start()
 
     # Total traders
     result = await db.execute(select(func.count(Trader.id)))
@@ -197,12 +196,9 @@ async def list_traders(
     result = await db.execute(query)
     traders = result.scalars().all()
 
-    # Current-month (EAT) volume + trades per trader from the central Orders table,
-    # so the list matches the Top Traders panel and resets at month start.
-    from datetime import timezone as _tz, timedelta as _td
-    _now = datetime.now(_tz.utc)
-    _eat = _now + _td(hours=3)
-    _month_start = (_eat.replace(day=1, hour=0, minute=0, second=0, microsecond=0)) - _td(hours=3)
+    # Current-month volume + trades per trader from the central Orders table, so the list matches
+    # the Top Traders panel and resets at the start of each trading month (00:00 UTC = 03:00 EAT).
+    _month_start = trading_month_start()
     _agg = (await db.execute(
         select(
             Order.trader_id,
@@ -1215,12 +1211,10 @@ async def resolve_unmatched_payment(
 
 
 def _get_period_start(period: str):
-    """Return the start datetime for a given period filter (Kenya timezone for 'today')."""
+    """Return the start datetime for a given period filter (trading day for 'today')."""
     now = datetime.now(timezone.utc)
     if period == "today":
-        EAT = timezone(timedelta(hours=3))
-        now_eat = now.astimezone(EAT)
-        return now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        return trading_day_start(now)
     elif period == "week":
         return now - timedelta(days=7)
     elif period == "month":
@@ -1387,10 +1381,8 @@ async def admin_analytics(
     db: AsyncSession = Depends(get_db),
 ):
     """Comprehensive platform analytics."""
-    EAT = timezone(timedelta(hours=3))  # Africa/Nairobi = UTC+3
     now = datetime.now(timezone.utc)
-    now_eat = now.astimezone(EAT)
-    today_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    today_start = trading_day_start(now)
     week_start = now - timedelta(days=7)
     month_start = now - timedelta(days=30)
     year_start = now - timedelta(days=365)
@@ -1464,11 +1456,10 @@ async def admin_analytics(
     )
     online_traders = r.scalar()
 
-    # Top 5 traders by CURRENT-MONTH volume (EAT) — same source as the All Traders list,
-    # resets at the start of each month.
+    # Top 5 traders by CURRENT-MONTH volume — same source as the All Traders list,
+    # resets at the start of each trading month (00:00 UTC = 03:00 EAT).
     from sqlalchemy import and_ as sql_and
-    _eat_now = now + timedelta(hours=3)
-    _top_month_start = (_eat_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)) - timedelta(hours=3)
+    _top_month_start = trading_month_start(now)
     top_q = (
         select(
             Trader.full_name,
@@ -1992,8 +1983,7 @@ async def get_withdrawals(
             pass
 
     now = datetime.now(timezone.utc)
-    EAT = timezone(timedelta(hours=3))
-    today_start = now.astimezone(EAT).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    today_start = trading_day_start(now)
     if period == "today":
         filters.append(Payment.created_at >= today_start)
     elif period == "week":
@@ -2156,9 +2146,7 @@ async def revenue_breakdown(
     from sqlalchemy import case as sa_case, text as sa_text
 
     now = datetime.now(timezone.utc)
-    EAT = timezone(timedelta(hours=3))
-    now_eat = now.astimezone(EAT)
-    today_start_utc = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    today_start_utc = trading_day_start(now)
     period_starts = {
         "today": today_start_utc,
         "week":  now - timedelta(days=7),
@@ -2289,9 +2277,7 @@ async def revenue_subscriptions(
     from app.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
 
     now = datetime.now(timezone.utc)
-    EAT = timezone(timedelta(hours=3))
-    now_eat = now.astimezone(EAT)
-    today_start_utc = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    today_start_utc = trading_day_start(now)
     period_starts = {
         "today": today_start_utc,
         "week":  now - timedelta(days=7),
@@ -2397,9 +2383,7 @@ async def admin_credit_purchases(
     from app.models.trade_tokens import TradeTokenPurchase
 
     now = datetime.now(timezone.utc)
-    EAT = timezone(timedelta(hours=3))
-    now_eat = now.astimezone(EAT)
-    today_start_utc = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    today_start_utc = trading_day_start(now)
     period_starts = {
         "today": today_start_utc,
         "week":  now - timedelta(days=7),
@@ -2544,11 +2528,8 @@ async def retry_sweep(
 # ═══════════════════════════════════════════════════════════
 
 def _apply_period(q, model_col, period, now):
-    EAT = timezone(timedelta(hours=3))
     if period == "today":
-        now_eat = now.astimezone(EAT)
-        today_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-        return q.where(model_col >= today_start)
+        return q.where(model_col >= trading_day_start(now))
     elif period == "week":
         return q.where(model_col >= now - timedelta(days=7))
     elif period == "month":
@@ -2580,17 +2561,14 @@ async def get_trader_pnl(
     # Trading day boundary is 00:00 UTC (= 03:00 EAT) to match Binance and compute_pnl_daily.
     now = datetime.now(timezone.utc)
 
-    if period == "today":
-        since_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        days = 1
-    elif period == "week":
-        since_day = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "week":
+        since_day = trading_day_start(now - timedelta(days=6))
         days = 7
     elif period == "month":
-        since_day = (now - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
+        since_day = trading_day_start(now - timedelta(days=29))
         days = 30
-    else:
-        since_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:   # today (and any unknown period)
+        since_day = trading_day_start(now)
         days = 1
 
     # Use the EXACT same per-day calc as the merchant Profit page (compute_pnl_daily over the

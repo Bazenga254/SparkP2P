@@ -8,6 +8,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.trading_day import trading_day_start
 from app.models import Order, OrderSide, OrderStatus, Trader
 from app.api.deps import get_current_trader
 
@@ -55,8 +56,8 @@ async def create_order(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new P2P order for tracking."""
-    # Check daily limits — trading day resets at 00:00 UTC (= 03:00 EAT), matching Binance.
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Check daily limits — trading day boundary comes from the central source of truth.
+    today_start = trading_day_start()
     result = await db.execute(
         select(func.count(Order.id)).where(
             Order.trader_id == trader.id,
@@ -129,8 +130,8 @@ async def get_order_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """Get trading statistics."""
-    # Trading day resets at 00:00 UTC (= 03:00 EAT) to align with Binance's daily reset.
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Trading day boundary from the central source of truth (00:00 UTC = 03:00 EAT).
+    today_start = trading_day_start()
     # Only count orders that actually completed — not pending/cancelled/expired
     completed_statuses = [OrderStatus.RELEASED, OrderStatus.COMPLETED]
 

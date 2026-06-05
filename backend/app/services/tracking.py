@@ -1069,23 +1069,21 @@ def _finalize_pnl(b, s, spread, gross, orders, fee_per_usdt=0.25):
     }
 
 
-def compute_pnl_daily(orders, tz_offset_hours=0, fee_per_usdt=0.25):
-    # tz_offset_hours=0 -> the trading day boundary is 00:00 UTC (= 03:00 EAT), matching
-    # Binance's daily reset, so daily figures roll over at the same time Binance does.
+def compute_pnl_daily(orders, fee_per_usdt=0.25):
     """Per-day realized profit using the merchant's own method:
         net = USDT_sold x (avg_sell_rate - avg_buy_rate - fee_per_usdt)
     Each day stands on its own: gross = revenue from USDT SOLD that day minus what it would cost
     at the day's average buy rate (carried forward on no-buy days); fees = fee_per_usdt x USDT sold
     (flat both-sides Binance fee). Returns {'YYYY-MM-DD': {gross, fees, net, volume, trades}} keyed
-    by the UTC trading day."""
+    by the trading day (boundary comes from the central source of truth, app.core.trading_day)."""
     from collections import defaultdict
-    off = timedelta(hours=tz_offset_hours)
+    from app.core.trading_day import trading_day_key
     day = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0,
                                "buy_usdt": 0.0, "buy_kes": 0.0, "sell_usdt": 0.0, "sell_kes": 0.0})
     for o in orders:
         u = float(o.crypto_amount or 0)
         k = float(o.fiat_amount or 0)
-        dkey = (o.created_at + off).strftime("%Y-%m-%d")
+        dkey = trading_day_key(o.created_at)
         d = day[dkey]
         d["volume"] += k
         d["trades"] += 1
@@ -1119,11 +1117,12 @@ def compute_pnl_daily(orders, tz_offset_hours=0, fee_per_usdt=0.25):
     return dict(day)
 
 
-def today_realized_pnl(all_orders, tz_offset_hours=0, fee_per_usdt=0.25):
-    """Realized profit for the CURRENT trading day (00:00 UTC boundary), using the per-day
-    spread method: net = USDT_sold x (avg_sell - avg_buy - fee_per_usdt). This is the figure the
-    Profit Tracker and dashboard 'Today' show. Returns {gross,fees,net,volume,trades} (zeros if
-    no activity today)."""
-    daily = compute_pnl_daily(all_orders, tz_offset_hours, fee_per_usdt)
-    today_key = (datetime.now(timezone.utc) + timedelta(hours=tz_offset_hours)).strftime("%Y-%m-%d")
-    return daily.get(today_key, {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0})
+def today_realized_pnl(all_orders, fee_per_usdt=0.25):
+    """Realized profit for the CURRENT trading day, using the per-day spread method:
+    net = USDT_sold x (avg_sell - avg_buy - fee_per_usdt). This is the figure the Profit Tracker
+    and dashboard 'Today' show. The trading-day boundary comes from the central source of truth.
+    Returns {gross,fees,net,volume,trades} (zeros if no activity today)."""
+    from app.core.trading_day import trading_day_key, now_utc
+    daily = compute_pnl_daily(all_orders, fee_per_usdt)
+    return daily.get(trading_day_key(now_utc()),
+                     {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0})
