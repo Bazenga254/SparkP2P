@@ -130,6 +130,9 @@ async def get_order_stats(
     """Get trading statistics."""
     # Trading day boundary from the central source of truth (00:00 UTC = 03:00 EAT).
     today_start = trading_day_start()
+    # Daily trade limit comes from the active subscription tier (Starter 30 / Pro 80 / Pro Max ∞).
+    from app.services.rate_limits import trade_rate_status
+    _rl = await trade_rate_status(db, trader)
     # Only count orders that actually completed — not pending/cancelled/expired
     completed_statuses = [OrderStatus.RELEASED, OrderStatus.COMPLETED]
 
@@ -253,8 +256,12 @@ async def get_order_stats(
             "total_volume": trader.total_volume,
         },
         "limits": {
-            "daily_limit": trader.daily_trade_limit,
-            "remaining_today": trader.daily_trade_limit - today_count,
+            "daily_limit": _rl["limit"],
+            "remaining_today": (None if _rl["unlimited"] else max(0, _rl["limit"] - _rl["used"])),
+            "used_today": _rl["used"],
+            "unlimited": _rl["unlimited"],
+            "reset_at": _rl["reset_at"],
+            "plan": _rl["plan"],
             "max_single_trade": trader.max_single_trade,
         },
     }

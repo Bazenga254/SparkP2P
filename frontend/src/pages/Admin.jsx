@@ -2077,6 +2077,40 @@ export default function Admin() {
                       </div>
                     </div>
 
+                    {/* Subscription & Daily Limits Card */}
+                    <div className="adm-card" style={{ marginBottom: 16 }}>
+                      <div className="adm-card-header"><h3>📦 Subscription & Daily Limits</h3></div>
+                      <div style={{ padding: '16px 20px 20px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+                          <div>
+                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Current Plan</div>
+                            <div style={{ fontSize: 18, fontWeight: 800, color: viewingTrader.plan ? '#f59e0b' : '#6b7280' }}>{viewingTrader.plan_label || 'No active subscription'}</div>
+                          </div>
+                          {viewingTrader.subscription_expires_at && (
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Expires</div>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: '#d1d5db' }}>
+                                {new Date(viewingTrader.subscription_expires_at).toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric' })}
+                                {(() => { const d = Math.ceil((new Date(viewingTrader.subscription_expires_at) - new Date()) / 86400000); return d >= 0 ? <span style={{ color: '#6b7280', fontWeight: 400 }}> · {d}d left</span> : <span style={{ color: '#ef4444', fontWeight: 400 }}> · expired</span>; })()}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+                          {[
+                            ['Trades today', viewingTrader.daily_trade_unlimited, viewingTrader.daily_trade_used, viewingTrader.daily_trade_limit, '#3b82f6'],
+                            ['Telegram alerts today', viewingTrader.daily_tg_unlimited, viewingTrader.daily_tg_used, viewingTrader.daily_tg_limit, '#10b981'],
+                          ].map(([label, unlimited, used, limit, color]) => (
+                            <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
+                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{label}</div>
+                              <div style={{ fontSize: 20, fontWeight: 800, color }}>{unlimited ? <>{used ?? 0} <span style={{ fontSize: 13, color: '#6b7280' }}>/ ∞</span></> : <>{used ?? 0} <span style={{ fontSize: 13, color: '#6b7280' }}>/ {limit ?? 0}</span></>}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#4b5563', marginTop: 12 }}>Daily limits reset at 3:00 AM (EAT). Non-subscribers are not blocked.</div>
+                      </div>
+                    </div>
+
                     {/* Bot Logs Card */}
                     <div className="adm-card" style={{ marginBottom: 16 }}>
                       <div className="adm-card-header" style={{ justifyContent: 'space-between' }}>

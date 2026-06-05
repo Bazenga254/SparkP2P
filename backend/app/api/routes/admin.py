@@ -459,7 +459,36 @@ async def get_trader_detail(
     live_trades = int(counts_row.cnt or 0)
     live_volume = float(counts_row.vol or 0)
 
+    # Subscription plan + per-tier daily limits (trades + Telegram) and today's usage.
+    from app.services.plans import active_plan, plan_label
+    from app.services.rate_limits import trade_rate_status, tg_rate_status
+    from app.models.subscription import Subscription, SubscriptionStatus
+    _plan = await active_plan(db, trader_id)
+    _trades = await trade_rate_status(db, trader)
+    _tg = tg_rate_status(_plan, trader)
+    _expires = _trades.get("reset_at")
+    try:
+        _sub = (await db.execute(
+            select(Subscription).where(
+                Subscription.trader_id == trader_id,
+                Subscription.status == SubscriptionStatus.ACTIVE,
+            ).order_by(Subscription.expires_at.desc())
+        )).scalars().first()
+        _sub_expires = _sub.expires_at.isoformat() if (_sub and _sub.expires_at) else None
+    except Exception:
+        _sub_expires = None
+
     return {
+        "plan": _plan.value if _plan else None,
+        "plan_label": plan_label(_plan),
+        "subscription_expires_at": _sub_expires,
+        "daily_trade_limit": _trades["limit"],
+        "daily_trade_used": _trades["used"],
+        "daily_trade_unlimited": _trades["unlimited"],
+        "daily_tg_limit": _tg["limit"],
+        "daily_tg_used": _tg["used"],
+        "daily_tg_unlimited": _tg["unlimited"],
+        "limits_reset_at": _trades["reset_at"],
         "security_question": trader.security_question or "",
         "security_answer": (getattr(trader, 'security_answer_plain', '') or "") if is_full_admin else "— restricted —",
         "settlement_method": trader.settlement_method or "" if is_full_admin else "— restricted —",

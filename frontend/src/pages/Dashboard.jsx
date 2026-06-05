@@ -2086,7 +2086,7 @@ export default function Dashboard() {
               </div>
               <div className="mini-stat-card">
                 <BarChart2 size={18} style={{ color: '#8b5cf6', marginBottom: 4 }} />
-                <span className="mini-stat-value">{stats?.limits?.remaining_today || 0}/{stats?.limits?.daily_limit || 0}</span>
+                <span className="mini-stat-value">{stats?.limits?.unlimited ? '∞' : `${stats?.limits?.remaining_today ?? 0}/${stats?.limits?.daily_limit ?? 0}`}</span>
                 <span className="mini-stat-label">Daily Limit</span>
               </div>
             </div>
