@@ -16,7 +16,6 @@ from app.core.trading_day import trading_day_start, trading_month_start, trading
 from app.models import Trader, TraderStatus, Order, OrderStatus, Payment, PaymentDirection, PaymentStatus, ChatMessage
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.message_template import MessageTemplate
-from app.models.trade_tokens import TradeTokenPurchase
 from app.api.deps import get_admin_trader, get_employee_or_admin, get_client_ip, write_audit_log
 from app.services.message_templates import seed_default_templates, refresh_template_cache
 
@@ -863,8 +862,6 @@ async def update_trader_tier(
 
     trader.tier = tier
 
-    # Credits granted per plan tier
-    PLAN_CREDITS = {"starter": 167, "pro": 500, "pro_max": 2000, "advanced": 8000}
     # KES amount per plan
     PLAN_AMOUNT  = {"starter": 5000, "pro": 10000, "pro_max": 20000, "advanced": 40000}
 
@@ -901,18 +898,6 @@ async def update_trader_tier(
                 mpesa_transaction_id="ADMIN_GRANT",
             )
             db.add(sub)
-
-        # Auto-grant trade credits for the plan
-        credits_to_grant = PLAN_CREDITS[tier]
-        trader.trade_tokens = (trader.trade_tokens or 0) + credits_to_grant
-        purchase = TradeTokenPurchase(
-            trader_id=trader_id,
-            amount_kes=0,
-            tokens_granted=credits_to_grant,
-            rate_per_token=0,
-            source="admin",
-        )
-        db.add(purchase)
 
         # Send notification email
         from app.services.email import send_subscription_activated
@@ -952,148 +937,6 @@ async def update_trader_im_account(
     trader.settlement_account = account.strip() or None
     await db.commit()
     return {"status": "updated", "trader_id": trader_id, "im_account": trader.settlement_account}
-
-
-class AdminAddTokensRequest(BaseModel):
-    tokens: int
-    note: Optional[str] = None
-
-
-@router.post("/traders/{trader_id}/trade-tokens")
-async def admin_add_trade_tokens(
-    trader_id: int,
-    data: AdminAddTokensRequest,
-    admin: Trader = Depends(get_admin_trader),
-    db: AsyncSession = Depends(get_db),
-):
-    """Manually add permanent trade tokens to a trader's account."""
-    if data.tokens <= 0:
-        raise HTTPException(status_code=400, detail="tokens must be > 0")
-    result = await db.execute(select(Trader).where(Trader.id == trader_id))
-    trader = result.scalar_one_or_none()
-    if not trader:
-        raise HTTPException(status_code=404, detail="Trader not found")
-
-    trader.trade_tokens = (trader.trade_tokens or 0) + data.tokens
-
-    purchase = TradeTokenPurchase(
-        trader_id=trader_id,
-        amount_kes=0,
-        tokens_granted=data.tokens,
-        rate_per_token=0,
-        source="admin",
-    )
-    db.add(purchase)
-    await db.commit()
-
-    # Notify the trader (in-app + SMS)
-    from app.api.routes.traders import add_notification
-    from app.services.sms import send_sms
-    note_text = f" — {data.note}" if data.note else ""
-    msg = f"SparkP2P: {data.tokens} trade token{'s' if data.tokens != 1 else ''} added to your account{note_text}. New balance: {trader.trade_tokens}."
-    add_notification(trader_id, "Trade tokens added", msg, "info")
-    try:
-        send_sms(trader.phone, msg)
-    except Exception as e:
-        logger.warning(f"Token grant SMS failed for trader {trader_id}: {e}")
-
-    return {
-        "ok": True,
-        "tokens_added": data.tokens,
-        "new_balance": trader.trade_tokens,
-        "note": data.note,
-    }
-
-
-class AdminRemoveTokensRequest(BaseModel):
-    tokens: int
-    note: Optional[str] = None
-
-
-@router.delete("/traders/{trader_id}/trade-tokens")
-async def admin_remove_trade_tokens(
-    trader_id: int,
-    data: AdminRemoveTokensRequest,
-    admin: Trader = Depends(get_admin_trader),
-    db: AsyncSession = Depends(get_db),
-):
-    """Subtract trade tokens from a trader's account (permanent first, then expiring)."""
-    if data.tokens <= 0:
-        raise HTTPException(status_code=400, detail="tokens must be > 0")
-    result = await db.execute(select(Trader).where(Trader.id == trader_id))
-    trader = result.scalar_one_or_none()
-    if not trader:
-        raise HTTPException(status_code=404, detail="Trader not found")
-
-    total = (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0)
-    to_remove = min(data.tokens, total)
-
-    # Deduct from permanent first, then expiring
-    perm = trader.trade_tokens or 0
-    if to_remove <= perm:
-        trader.trade_tokens = perm - to_remove
-    else:
-        trader.trade_tokens = 0
-        trader.trade_tokens_expiring = max(0, (trader.trade_tokens_expiring or 0) - (to_remove - perm))
-
-    await db.commit()
-
-    # Notify the trader (in-app + SMS)
-    from app.api.routes.traders import add_notification
-    from app.services.sms import send_sms
-    note_text = f" — {data.note}" if data.note else ""
-    new_total = (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0)
-    msg = f"SparkP2P: {to_remove} trade token{'s' if to_remove != 1 else ''} removed from your account{note_text}. Remaining balance: {new_total}."
-    add_notification(trader_id, "Trade tokens removed", msg, "warning")
-    try:
-        send_sms(trader.phone, msg)
-    except Exception as e:
-        logger.warning(f"Token removal SMS failed for trader {trader_id}: {e}")
-
-    return {
-        "ok": True,
-        "tokens_removed": to_remove,
-        "new_balance": new_total,
-        "note": data.note,
-    }
-
-
-@router.get("/traders/{trader_id}/trade-tokens")
-async def admin_get_trade_tokens(
-    trader_id: int,
-    admin: Trader = Depends(get_admin_trader),
-    db: AsyncSession = Depends(get_db),
-):
-    """Get a trader's token balance and full purchase/grant history."""
-    result = await db.execute(select(Trader).where(Trader.id == trader_id))
-    trader = result.scalar_one_or_none()
-    if not trader:
-        raise HTTPException(status_code=404, detail="Trader not found")
-
-    hist_result = await db.execute(
-        select(TradeTokenPurchase)
-        .where(TradeTokenPurchase.trader_id == trader_id)
-        .order_by(TradeTokenPurchase.created_at.desc())
-        .limit(100)
-    )
-    history = hist_result.scalars().all()
-
-    return {
-        "trade_tokens": trader.trade_tokens or 0,
-        "trade_tokens_expiring": trader.trade_tokens_expiring or 0,
-        "total": (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0),
-        "history": [
-            {
-                "id": p.id,
-                "amount_kes": p.amount_kes,
-                "tokens_granted": p.tokens_granted,
-                "rate_per_token": p.rate_per_token,
-                "source": p.source,
-                "created_at": p.created_at.isoformat() if p.created_at else None,
-            }
-            for p in history
-        ],
-    }
 
 
 @router.get("/orders/disputed")
@@ -2403,97 +2246,6 @@ async def revenue_subscriptions(
 
 
 # ── Credit / Trade Token Purchases ───────────────────────────────────────────
-
-@router.get("/credit-purchases")
-async def admin_credit_purchases(
-    period: str = Query("all"),   # today | week | month | all
-    page: int = Query(1, ge=1),
-    limit: int = Query(50, le=200),
-    admin: Trader = Depends(get_employee_or_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """Trade token / credit purchases by all traders."""
-    from app.models.trade_tokens import TradeTokenPurchase
-
-    now = datetime.now(timezone.utc)
-    today_start_utc = trading_day_start(now)
-    period_starts = {
-        "today": today_start_utc,
-        "week":  now - timedelta(days=7),
-        "month": now - timedelta(days=30),
-    }
-    start = period_starts.get(period)
-
-    filters = []
-    if start:
-        filters.append(TradeTokenPurchase.created_at >= start)
-
-    # Summary
-    summary_q = select(
-        func.count(TradeTokenPurchase.id).label("count"),
-        func.coalesce(func.sum(TradeTokenPurchase.amount_kes), 0).label("total_revenue"),
-        func.coalesce(func.sum(TradeTokenPurchase.tokens_granted), 0).label("total_credits"),
-    )
-    if filters:
-        summary_q = summary_q.where(*filters)
-    summary_row = (await db.execute(summary_q)).one()
-    summary = {
-        "count": int(summary_row.count or 0),
-        "total_revenue": float(summary_row.total_revenue or 0),
-        "total_credits": int(summary_row.total_credits or 0),
-    }
-
-    count_q = select(func.count()).select_from(TradeTokenPurchase)
-    if filters:
-        count_q = count_q.where(*filters)
-    total_count = (await db.execute(count_q)).scalar_one()
-
-    txns_q = (
-        select(
-            TradeTokenPurchase.id,
-            TradeTokenPurchase.trader_id,
-            TradeTokenPurchase.amount_kes,
-            TradeTokenPurchase.tokens_granted,
-            TradeTokenPurchase.rate_per_token,
-            TradeTokenPurchase.source,
-            TradeTokenPurchase.created_at,
-            Trader.full_name.label("trader_name"),
-            Trader.email.label("trader_email"),
-            Trader.phone.label("trader_phone"),
-        )
-        .join(Trader, Trader.id == TradeTokenPurchase.trader_id)
-        .order_by(TradeTokenPurchase.created_at.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-    )
-    if filters:
-        txns_q = txns_q.where(*filters)
-    txns = (await db.execute(txns_q)).all()
-
-    return {
-        "summary": summary,
-        "total": total_count,
-        "pages": max(1, -(-total_count // limit)),
-        "page": page,
-        "transactions": [
-            {
-                "id": t.id,
-                "trader_id": t.trader_id,
-                "trader_name": t.trader_name,
-                "trader_email": t.trader_email,
-                "trader_phone": t.trader_phone,
-                "amount_kes": float(t.amount_kes),
-                "tokens_granted": int(t.tokens_granted),
-                "rate_per_token": float(t.rate_per_token),
-                "source": t.source,
-                "created_at": t.created_at.isoformat() if t.created_at else None,
-            }
-            for t in txns
-        ],
-    }
-
-
-# ── Auto-Sweep History ─────────────────────────────────────────────────────────
 
 @router.get("/sweeps")
 async def get_sweeps(

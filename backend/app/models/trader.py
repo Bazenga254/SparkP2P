@@ -182,11 +182,7 @@ class Trader(Base):
     tg_alerts_count = Column(Integer, default=0)
     tg_alerts_day = Column(String(10), nullable=True)
 
-    # Trade tokens (buy-side token gate)
-    trade_tokens = Column(Numeric(12, 2), default=0)    # Purchased — never expire (numeric for fractional charges)
-    credits_low_alerted = Column(Boolean, default=False)  # True once a low-balance SMS sent; reset on top-up
-    trade_tokens_expiring = Column(Integer, default=0)  # Reimbursed — expire at midnight daily
-    trade_tokens_expiring_granted_at = Column(DateTime(timezone=True), nullable=True)
+    # (Credit / trade-token system retired — replaced by subscription tiers + daily rate limits.)
 
     # Login security
     failed_login_attempts = Column(Integer, default=0)

@@ -369,92 +369,6 @@ async def batch_monitor():
         await _check_stuck_batches()
 
 
-async def _reimburse_trade_tokens():
-    """
-    At midnight EAT:
-    1. Expire all existing trade_tokens_expiring for every trader.
-    2. For traders who generated platform revenue from sell orders in the past 24h:
-       - KES 600–999  → tokens at KES 20/token  (reimbursed, expire next midnight)
-       - KES 1,000+   → tokens at KES 15/token  (reimbursed, expire next midnight)
-    """
-    from app.models import Trader
-    from app.models.trade_tokens import TradeTokenPurchase
-    from app.models.wallet import WalletTransaction, TransactionType
-    from sqlalchemy import select, func
-
-    EAT = timezone(timedelta(hours=3))
-    now_eat = datetime.now(EAT)
-    window_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
-    window_start_utc = window_start.astimezone(timezone.utc)
-
-    async with async_session() as db:
-        try:
-            # Step 1 — expire all existing reimbursed tokens
-            traders_result = await db.execute(
-                select(Trader).where(Trader.trade_tokens_expiring > 0)
-            )
-            for trader in traders_result.scalars().all():
-                trader.trade_tokens_expiring = 0
-
-            # Step 2 — calculate yesterday's platform fee revenue per trader
-            fee_result = await db.execute(
-                select(
-                    WalletTransaction.trader_id,
-                    func.sum(func.abs(WalletTransaction.amount)).label("total_fees"),
-                )
-                .where(
-                    WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE,
-                    WalletTransaction.created_at >= window_start_utc,
-                )
-                .group_by(WalletTransaction.trader_id)
-            )
-            fee_rows = fee_result.all()
-
-            for row in fee_rows:
-                if row.total_fees < 600:
-                    continue
-
-                trader_result = await db.execute(select(Trader).where(Trader.id == row.trader_id))
-                trader = trader_result.scalar_one_or_none()
-                if not trader:
-                    continue
-
-                if row.total_fees >= 1000:
-                    rate = 15.0
-                else:
-                    rate = 20.0
-
-                tokens = round(row.total_fees / rate)
-                trader.trade_tokens_expiring = tokens
-                trader.trade_tokens_expiring_granted_at = datetime.now(timezone.utc)
-
-                purchase = TradeTokenPurchase(
-                    trader_id=trader.id,
-                    amount_kes=row.total_fees,
-                    tokens_granted=tokens,
-                    rate_per_token=rate,
-                    source="reimbursement",
-                )
-                db.add(purchase)
-
-            await db.commit()
-            logger.info(f"[TokenReimburse] Processed {len(fee_rows)} traders for midnight reimbursement.")
-        except Exception as e:
-            logger.error(f"[TokenReimburse] Failed: {e}")
-
-
-async def token_reimbursement_scheduler():
-    """Run token reimbursement at midnight EAT every day."""
-    EAT = timezone(timedelta(hours=3))
-    while True:
-        now = datetime.now(EAT)
-        # Next midnight EAT
-        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        sleep_secs = (tomorrow - now).total_seconds()
-        logger.info(f"[TokenReimburse] Next run at midnight EAT (in {sleep_secs / 3600:.1f}h)")
-        await asyncio.sleep(sleep_secs)
-        await _reimburse_trade_tokens()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -470,8 +384,6 @@ async def lifespan(app: FastAPI):
     batch_task = asyncio.create_task(batch_scheduler())
     # Start batch stuck-alert + retry monitor (every 30 min)
     batch_monitor_task = asyncio.create_task(batch_monitor())
-    # Start midnight trade token reimbursement scheduler
-    token_reimburse_task = asyncio.create_task(token_reimbursement_scheduler())
     # Start while-online order tracking poller (every 30s, all online traders)
     from app.services.tracking import tracking_poller
     tracking_task = asyncio.create_task(tracking_poller())
@@ -482,7 +394,6 @@ async def lifespan(app: FastAPI):
     monitor_task.cancel()
     batch_task.cancel()
     batch_monitor_task.cancel()
-    token_reimburse_task.cancel()
 
 
 app = FastAPI(
