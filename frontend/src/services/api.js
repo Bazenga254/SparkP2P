@@ -66,6 +66,7 @@ export const createOrder = (data) => api.post('/orders', data);
 export const initiateSubscription = (plan, phone) => api.post('/subscriptions/initiate', { plan, phone });
 export const getSubscriptionStatus = () => api.get('/subscriptions/status');
 export const renewSubscription = (plan, phone) => api.post('/subscriptions/renew', { plan, phone });
+export const getRateLimit = () => api.get('/traders/rate-limit');
 
 // Admin
 export const getAdminDashboard = () => api.get('/admin/dashboard');

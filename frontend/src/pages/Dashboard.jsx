@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -382,6 +382,8 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
   const [adSource, setAdSource] = useState(''); // 'orders' | 'ads' | 'market' | ''
   const [missingAd, setMissingAd] = useState(''); // 'buy' | 'sell' | ''
   const [todayStats, setTodayStats] = useState(null); // 24h live stats from backend
+  const [rateLimit, setRateLimit] = useState(null);   // daily trade/telegram caps + reset
+  const [rlNow, setRlNow] = useState(Date.now());     // ticks for the limit-reached countdown
   const [statsLoading, setStatsLoading] = useState(true);
 
   // Priority 1: use actual avg rates from today's completed orders (most accurate)
@@ -459,6 +461,7 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
       } finally {
         setStatsLoading(false);
       }
+      try { const rl = await getRateLimit(); setRateLimit(rl.data); } catch {}
     };
     fetchStats();
 
@@ -960,6 +963,12 @@ export default function Dashboard() {
     };
     tick();
     const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Tick once a second so the "limit reached" countdown to the 3 AM reset stays live.
+  useEffect(() => {
+    const id = setInterval(() => setRlNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -1903,6 +1912,34 @@ export default function Dashboard() {
         <main className="dash-content">
 {activeTab === 'overview' && (
           <>
+            {/* Daily trade-limit reached — blocking banner with live countdown to the 3 AM reset */}
+            {rateLimit?.trades && !rateLimit.trades.allowed && (() => {
+              const ms = Math.max(0, new Date(rateLimit.trades.reset_at).getTime() - rlNow);
+              const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
+              const pad = (n) => String(n).padStart(2, '0');
+              return (
+                <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 12, padding: '14px 18px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 20 }}>⏳</span>
+                  <div style={{ flex: 1, minWidth: 220 }}>
+                    <div style={{ color: '#ef4444', fontWeight: 800, fontSize: 14 }}>Daily trade limit reached ({rateLimit.trades.used}/{rateLimit.trades.limit})</div>
+                    <div style={{ color: '#9ca3af', fontSize: 12, marginTop: 2 }}>
+                      Trading is paused until the 3:00 AM reset. {rateLimit.plan_label ? `Upgrade your plan for a higher limit.` : 'Subscribe for a higher limit.'}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'center', minWidth: 92 }}>
+                    <div style={{ color: '#ef4444', fontWeight: 800, fontSize: 20, fontVariantNumeric: 'tabular-nums', letterSpacing: '1px' }}>{pad(h)}:{pad(m)}:{pad(s)}</div>
+                    <div style={{ color: '#6b7280', fontSize: 10 }}>until reset</div>
+                  </div>
+                  <button onClick={() => setActiveTab('credits')} style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#ef4444', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Upgrade</button>
+                </div>
+              );
+            })()}
+            {/* Telegram alert cap reached — informational */}
+            {rateLimit?.telegram && !rateLimit.telegram.allowed && (
+              <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 10, padding: '10px 16px', marginBottom: 16, fontSize: 12, color: '#d97706' }}>
+                🔕 Daily Telegram alert limit reached ({rateLimit.telegram.used}/{rateLimit.telegram.limit}). Alerts resume after the 3:00 AM reset.
+              </div>
+            )}
             {/* Choice Bank verification banner — only after profile loads */}
             {profile && !profile.choice_account_id && (
               <div onClick={async () => {
@@ -3166,8 +3203,9 @@ export default function Dashboard() {
                         <div style={{ position: 'absolute', top: -10, left: '50%', transform: 'translateX(-50%)', background: p.accent, color: '#000', fontSize: 9, fontWeight: 800, letterSpacing: '0.5px', padding: '3px 10px', borderRadius: 99, whiteSpace: 'nowrap' }}>★ {p.topLabel}</div>
                       )}
                       <div style={{ color: '#e5e7eb', fontSize: 15, fontWeight: 800, marginTop: 4 }}>{p.label}</div>
-                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, margin: '8px 0 12px' }}>
-                        <span style={{ color: p.accent, fontWeight: 900, fontSize: 26, letterSpacing: '-1px' }}>KES {p.amount.toLocaleString()}</span>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, margin: '8px 0 14px', whiteSpace: 'nowrap' }}>
+                        <span style={{ color: '#6b7280', fontSize: 12, fontWeight: 700 }}>KES</span>
+                        <span style={{ color: p.accent, fontWeight: 900, fontSize: 22, letterSpacing: '-0.5px' }}>{p.amount.toLocaleString()}</span>
                         <span style={{ color: '#6b7280', fontSize: 12 }}>/mo</span>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 14, flex: 1 }}>

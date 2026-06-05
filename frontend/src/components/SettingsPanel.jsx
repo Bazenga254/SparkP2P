@@ -1683,51 +1683,6 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
             </div>
             <p className="help-text">Automatically pay sellers when you place a buy order.</p>
 
-            {/* ── Available Trade Limit ── */}
-            <div style={{ marginBottom: 20, padding: '16px', background: tradeTokens < 20 ? 'rgba(239,68,68,0.07)' : 'rgba(16,185,129,0.06)', border: `1px solid ${tradeTokens < 20 ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.2)'}`, borderRadius: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <span style={{ color: '#d1d5db', fontWeight: 600, fontSize: 13 }}>Available Trade Limit</span>
-                <span style={{ fontSize: 22, fontWeight: 800, color: tradeTokens < 20 ? '#ef4444' : '#10b981' }}>{tradeTokens}</span>
-              </div>
-              <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
-                <span style={{ color: '#9ca3af', fontSize: 11 }}>Permanent: <b style={{ color: '#d1d5db' }}>{profile?.trade_tokens || 0}</b></span>
-                <span style={{ color: '#9ca3af', fontSize: 11 }}>Expiring (resets midnight): <b style={{ color: '#d1d5db' }}>{profile?.trade_tokens_expiring || 0}</b></span>
-              </div>
-              {tradeTokens < 20 && (
-                <p style={{ color: '#ef4444', fontSize: 12, margin: '0 0 10px' }}>
-                  ⚠️ Your trade limit is low. Buy orders will be skipped when it reaches 0.
-                </p>
-              )}
-              <p style={{ color: '#6b7280', fontSize: 11, margin: '0 0 12px' }}>
-                1 token = 1 bot-completed buy order. Tokens are charged at KES 40 each (KES 5,000+ = KES 25, KES 10,000+ = KES 10). Dual traders earn free expiring tokens nightly based on sell-side revenue.
-              </p>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input
-                  type="text"
-                  placeholder="KES amount (min 1,000)"
-                  value={tokenAmount}
-                  onChange={(e) => setTokenAmount(e.target.value)}
-                  style={{ flex: 1, minWidth: 160, background: '#0d1117', border: '1px solid #1f2937', borderRadius: 7, color: '#fff', padding: '8px 12px', fontSize: 13 }}
-                />
-                <button
-                  type="button"
-                  onClick={handlePurchaseTokens}
-                  disabled={tokenBuying}
-                  style={{ padding: '8px 18px', borderRadius: 7, background: '#f59e0b', border: 'none', color: '#000', fontWeight: 700, fontSize: 13, cursor: tokenBuying ? 'not-allowed' : 'pointer', opacity: tokenBuying ? 0.7 : 1 }}
-                >
-                  {tokenBuying ? 'Processing...' : 'Buy from Balance'}
-                </button>
-              </div>
-              {tokenAmount && calcTokenPreview(tokenAmount) && (
-                <p style={{ color: '#10b981', fontSize: 12, margin: '8px 0 0' }}>
-                  → You will receive <b>{calcTokenPreview(tokenAmount).tokens}</b> tokens @ KES {calcTokenPreview(tokenAmount).rate}/token
-                </p>
-              )}
-              {tokenAmount && !calcTokenPreview(tokenAmount) && parseFloat(tokenAmount.replace(/[^0-9.]/g, '')) > 0 && (
-                <p style={{ color: '#ef4444', fontSize: 12, margin: '8px 0 0' }}>Minimum purchase is KES 1,000</p>
-              )}
-              {tokenMsg && <p style={{ color: tokenMsg.startsWith('✓') ? '#10b981' : '#ef4444', fontSize: 12, margin: '8px 0 0' }}>{tokenMsg}</p>}
-            </div>
 
             <label>Daily Trade Limit</label>
             <input
