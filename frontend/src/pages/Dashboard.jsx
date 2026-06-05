@@ -3136,9 +3136,15 @@ export default function Dashboard() {
         {/* ==================== BUY CREDITS TAB ==================== */}
         {activeTab === 'credits' && (() => {
           const SUB_PLANS = [
-            { key: 'starter',  label: 'Starter',         amount: 3000,  accent: '#9ca3af', glow: '107,114,128', topLabel: null,           features: ['30 trades per day (buy + sell)', '100 Telegram alerts per day', 'Resets daily at 3:00 AM'] },
-            { key: 'pro',      label: 'Starter Pro',     amount: 5000,  accent: '#f59e0b', glow: '245,158,11',  topLabel: 'MOST POPULAR', features: ['80 trades per day (buy + sell)', '200 Telegram alerts per day', 'Resets daily at 3:00 AM'] },
-            { key: 'pro_max',  label: 'Starter Pro Max', amount: 10000, accent: '#10b981', glow: '16,185,129',  topLabel: 'BEST VALUE',   features: ['Unlimited trades per day', 'Unlimited Telegram alerts', 'Priority support'] },
+            { key: 'starter',  name: 'Starter',         amount: 3000,  cls: '',        ribbon: null,             btn: 'btn-ghost', check: 'check-a',
+              blurb: 'For casual traders getting started.', summary: '30 trades & 100 Telegram alerts per day',
+              features: ['<b>30 trades</b> per day (buy + sell)', '<b>100</b> Telegram alerts per day', 'Resets daily at 3:00 AM'] },
+            { key: 'pro',      name: 'Starter Pro',     amount: 5000,  cls: 'popular', ribbon: '★ MOST POPULAR', btn: 'btn-amber', check: 'check-a',
+              blurb: 'Best balance of volume and value.', summary: '80 trades & 200 Telegram alerts per day',
+              features: ['<b>80 trades</b> per day (buy + sell)', '<b>200</b> Telegram alerts per day', 'Resets daily at 3:00 AM'] },
+            { key: 'pro_max',  name: 'Starter Pro Max', amount: 10000, cls: 'best',    ribbon: '★ BEST VALUE',   btn: 'btn-green', check: 'check-g',
+              blurb: 'For high-volume power traders.', summary: 'Unlimited trades & Telegram alerts',
+              features: ['<b>Unlimited</b> trades per day', '<b>Unlimited</b> Telegram alerts', '<b>Priority</b> support'] },
           ];
           const currentPlanKey = profile?.subscription_plan || null;
           const currentPlan = SUB_PLANS.find(p => p.key === currentPlanKey) || null;
@@ -3167,82 +3173,138 @@ export default function Dashboard() {
             setCreditBuying(false);
           };
 
+          const Check = ({ cls }) => (<svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>);
+
           return (
-            <div style={{ maxWidth: 600, margin: '0 auto', padding: '4px 0 40px' }}>
+            <div className="sp-sub">
+              <style>{`
+                @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@500;700&display=swap');
+                .sp-sub{--panel:#13171f;--panel-2:#161b24;--line:rgba(255,255,255,0.07);--line-2:rgba(255,255,255,0.12);--txt:#eef1f6;--txt-dim:#9aa3b2;--txt-faint:#646e7e;--amber:#f5a623;--amber-bright:#ffb937;--amber-deep:#c9821a;--green:#34d27b;--green-soft:#1f8f56;--radius:18px;
+                  max-width:1080px;margin:0 auto;padding:14px 6px 60px;font-family:'DM Sans',sans-serif;color:var(--txt)}
+                .sp-sub .page-head{text-align:center;margin-bottom:34px}
+                .sp-sub .eyebrow{font-size:11px;letter-spacing:.22em;color:var(--amber);font-weight:600;text-transform:uppercase}
+                .sp-sub .page-head h2{font-family:'Bricolage Grotesque',sans-serif;font-size:32px;font-weight:800;letter-spacing:-.5px;margin-top:6px}
+                .sp-sub .page-head p{color:var(--txt-dim);font-size:14.5px;margin-top:8px}
+                .sp-sub .top-grid{display:grid;grid-template-columns:1.25fr 1fr;gap:20px;margin-bottom:44px}
+                .sp-sub .card{background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid var(--line);border-radius:var(--radius);padding:26px;position:relative;overflow:hidden}
+                .sp-sub .plan-now{border:1px solid rgba(245,166,35,0.28);background:radial-gradient(420px 220px at 100% 0%, rgba(245,166,35,0.16), transparent 70%),linear-gradient(180deg,var(--panel),var(--panel-2))}
+                .sp-sub .tag{font-size:11px;letter-spacing:.16em;color:var(--txt-faint);font-weight:600}
+                .sp-sub .plan-now h3{font-family:'Bricolage Grotesque',sans-serif;font-size:28px;font-weight:800;color:var(--amber-bright);margin:8px 0 4px;letter-spacing:-.4px}
+                .sp-sub .plan-now .sub{color:var(--txt-dim);font-size:13px}
+                .sp-sub .plan-now .reset{display:inline-flex;gap:7px;align-items:center;margin-top:18px;font-size:12.5px;color:var(--txt-dim);background:rgba(255,255,255,0.03);border:1px solid var(--line);padding:7px 12px;border-radius:10px}
+                .sp-sub .plan-now .reset b{color:var(--txt)}
+                .sp-sub .mpesa label{display:block;font-size:13px;color:var(--txt-dim);margin:14px 0 9px}
+                .sp-sub .field{display:flex;align-items:center;gap:10px;background:#0a0c10;border:1px solid var(--line-2);border-radius:12px;padding:0 14px;transition:.18s}
+                .sp-sub .field:focus-within{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,166,35,0.15)}
+                .sp-sub .field .cc{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--txt-dim);font-weight:700}
+                .sp-sub .field input{flex:1;background:transparent;border:0;outline:0;color:var(--txt);font-family:'JetBrains Mono',monospace;font-size:15px;padding:14px 0;letter-spacing:.04em}
+                .sp-sub .field input::placeholder{color:var(--txt-faint)}
+                .sp-sub .mpesa .hint{font-size:12px;color:var(--txt-faint);margin-top:11px;line-height:1.5}
+                .sp-sub .plans-head{text-align:center;margin-bottom:24px}
+                .sp-sub .plans-head h3{font-family:'Bricolage Grotesque',sans-serif;font-size:23px;font-weight:700;margin-top:6px;letter-spacing:-.3px}
+                .sp-sub .plans-head .eyebrow{color:var(--txt-faint)}
+                .sp-sub .plans{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:stretch}
+                .sp-sub .plan{position:relative;display:flex;flex-direction:column;background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid var(--line);border-radius:var(--radius);padding:26px 22px 24px;transition:transform .25s cubic-bezier(.2,.8,.2,1),border-color .25s,box-shadow .25s}
+                .sp-sub .plan:hover{transform:translateY(-6px);border-color:var(--line-2);box-shadow:0 24px 50px -28px rgba(0,0,0,0.8)}
+                .sp-sub .plan .ribbon{position:absolute;top:-12px;left:50%;transform:translateX(-50%);font-size:10.5px;font-weight:700;letter-spacing:.1em;white-space:nowrap;padding:5px 13px;border-radius:99px}
+                .sp-sub .plan.popular{border-color:rgba(245,166,35,0.45);background:radial-gradient(360px 200px at 50% -10%, rgba(245,166,35,0.14), transparent 70%),linear-gradient(180deg,var(--panel),var(--panel-2));box-shadow:0 22px 60px -30px rgba(245,166,35,0.5)}
+                .sp-sub .plan.popular .ribbon{background:linear-gradient(135deg,var(--amber-bright),var(--amber-deep));color:#1a1206}
+                .sp-sub .plan.best{border-color:rgba(52,210,123,0.4)}
+                .sp-sub .plan.best .ribbon{background:linear-gradient(135deg,#3fe089,var(--green-soft));color:#04150c}
+                .sp-sub .plan .name{font-family:'Bricolage Grotesque',sans-serif;font-size:19px;font-weight:700;letter-spacing:-.2px}
+                .sp-sub .plan .price{display:flex;align-items:baseline;gap:6px;margin:10px 0 4px}
+                .sp-sub .plan .price .cur{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--txt-dim);font-weight:700}
+                .sp-sub .plan .price .amt{font-family:'JetBrains Mono',monospace;font-size:32px;font-weight:700;letter-spacing:-1px;color:var(--txt)}
+                .sp-sub .plan.popular .price .amt{color:var(--amber-bright)}
+                .sp-sub .plan.best .price .amt{color:var(--green)}
+                .sp-sub .plan .price .per{font-size:13px;color:var(--txt-faint)}
+                .sp-sub .plan .blurb{font-size:12.5px;color:var(--txt-faint);min-height:18px}
+                .sp-sub .plan ul{list-style:none;margin:20px 0 22px;padding:0;display:flex;flex-direction:column;gap:13px;flex:1}
+                .sp-sub .plan li{display:flex;gap:10px;font-size:13.5px;color:var(--txt-dim);line-height:1.4}
+                .sp-sub .plan li svg{width:17px;height:17px;flex:0 0 17px;margin-top:1px}
+                .sp-sub .plan li b{color:var(--txt);font-weight:600}
+                .sp-sub .check-a{color:var(--amber)} .sp-sub .check-g{color:var(--green)}
+                .sp-sub .btn{width:100%;border:0;cursor:pointer;border-radius:12px;padding:13px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;transition:.18s;display:flex;align-items:center;justify-content:center;gap:8px}
+                .sp-sub .btn:disabled{cursor:not-allowed;opacity:.55}
+                .sp-sub .btn-ghost{background:rgba(255,255,255,0.04);color:var(--txt-dim);border:1px solid var(--line-2)}
+                .sp-sub .btn-ghost:hover{background:rgba(255,255,255,0.08);color:var(--txt)}
+                .sp-sub .btn-amber{background:linear-gradient(135deg,var(--amber-bright),var(--amber-deep));color:#1a1206}
+                .sp-sub .btn-amber:hover{filter:brightness(1.08)}
+                .sp-sub .btn-current{background:rgba(52,210,123,0.14);color:var(--green);border:1px solid rgba(52,210,123,0.35);cursor:default}
+                .sp-sub .btn-green{background:linear-gradient(135deg,#3fe089,var(--green-soft));color:#04150c}
+                .sp-sub .btn-green:hover{filter:brightness(1.06)}
+                .sp-sub .sp-msg{margin-top:18px;text-align:center;font-size:13px;padding:11px 16px;border-radius:11px;max-width:520px;margin-left:auto;margin-right:auto}
+                .sp-sub .reveal{opacity:0;transform:translateY(14px);animation:spRise .6s cubic-bezier(.2,.8,.2,1) forwards}
+                @keyframes spRise{to{opacity:1;transform:none}}
+                .sp-sub .d1{animation-delay:.05s}.sp-sub .d2{animation-delay:.13s}.sp-sub .d3{animation-delay:.21s}.sp-sub .d4{animation-delay:.29s}.sp-sub .d5{animation-delay:.37s}.sp-sub .d6{animation-delay:.45s}
+                @media(max-width:900px){.sp-sub .top-grid{grid-template-columns:1fr}.sp-sub .plans{grid-template-columns:1fr}}
+              `}</style>
 
-              {/* Current plan */}
-              <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 14, padding: '18px 20px', marginBottom: 14 }}>
-                <div style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 8 }}>Your Plan</div>
-                <div style={{ color: currentPlan ? currentPlan.accent : '#6b7280', fontWeight: 900, fontSize: 28, letterSpacing: '-0.5px' }}>
-                  {currentPlan ? currentPlan.label : 'No active subscription'}
+              <div className="page-head reveal d1">
+                <div className="eyebrow">Billing &amp; Plans</div>
+                <h2>Manage your subscription</h2>
+                <p>Pay securely via M-PESA. Daily limits reset at 3:00 AM (EAT).</p>
+              </div>
+
+              <div className="top-grid">
+                <div className="card plan-now reveal d2">
+                  <div className="tag">YOUR CURRENT PLAN</div>
+                  <h3>{currentPlan ? currentPlan.name : 'No active subscription'}</h3>
+                  <div className="sub">{currentPlan ? currentPlan.summary : 'Subscribe to a plan to use the bot.'}</div>
+                  <div className="reset">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                    Daily limits reset at <b>3:00 AM (EAT)</b>
+                  </div>
                 </div>
-                <div style={{ color: '#6b7280', fontSize: 12, marginTop: 6 }}>
-                  {currentPlan ? 'Daily limits reset at 3:00 AM (EAT).' : 'Subscribe to a plan to use the bot.'}
+                <div className="card mpesa reveal d3">
+                  <div className="tag">M-PESA NUMBER FOR PAYMENT</div>
+                  <label>We'll send an STK push to this number</label>
+                  <div className="field">
+                    <span className="cc">+254</span>
+                    <input type="tel" inputMode="numeric" placeholder="712 345 678" value={creditPhone} onChange={e => setCreditPhone(e.target.value)} disabled={creditBuying || creditPolling} />
+                  </div>
+                  <div className="hint">Make sure the number is registered to your Safaricom line and has sufficient balance before subscribing.</div>
                 </div>
               </div>
 
-              {/* M-Pesa number */}
-              <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 14, padding: '16px 20px', marginBottom: 18 }}>
-                <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>M-Pesa number for payment</div>
-                <input type="tel" placeholder="e.g. 0712 345 678" value={creditPhone} onChange={e => setCreditPhone(e.target.value)} disabled={creditBuying || creditPolling}
-                  style={{ width: '100%', background: '#0d1117', border: '1px solid #374151', borderRadius: 10, color: '#fff', padding: '11px 14px', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+              <div className="plans-head reveal d3">
+                <div className="eyebrow">Subscription Plans</div>
+                <h3>Choose the plan that fits your trading volume</h3>
               </div>
 
-              {/* Section header */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '8px 0 16px' }}>
-                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
-                <span style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>Subscription Plans</span>
-                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
-              </div>
-
-              {/* Plan cards */}
-              <div className="bc-plans-grid">
-                {SUB_PLANS.map(p => {
+              <div className="plans">
+                {SUB_PLANS.map((p, idx) => {
                   const isCurrent = currentPlanKey === p.key;
                   const busy = (creditBuying || creditPolling) && creditPlan === p.key;
                   return (
-                    <div key={p.key} style={{ background: `rgba(${p.glow},0.05)`, border: `1px solid rgba(${p.glow},0.3)`, borderRadius: 14, padding: '18px 18px 16px', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-                      {p.topLabel && (
-                        <div style={{ position: 'absolute', top: -10, left: '50%', transform: 'translateX(-50%)', background: p.accent, color: '#000', fontSize: 9, fontWeight: 800, letterSpacing: '0.5px', padding: '3px 10px', borderRadius: 99, whiteSpace: 'nowrap' }}>★ {p.topLabel}</div>
-                      )}
-                      <div style={{ color: '#e5e7eb', fontSize: 15, fontWeight: 800, marginTop: 4 }}>{p.label}</div>
-                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, margin: '8px 0 14px', whiteSpace: 'nowrap' }}>
-                        <span style={{ color: '#6b7280', fontSize: 12, fontWeight: 700 }}>KES</span>
-                        <span style={{ color: p.accent, fontWeight: 900, fontSize: 22, letterSpacing: '-0.5px' }}>{p.amount.toLocaleString()}</span>
-                        <span style={{ color: '#6b7280', fontSize: 12 }}>/mo</span>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 14, flex: 1 }}>
+                    <div key={p.key} className={`plan ${p.cls} reveal d${idx + 4}`}>
+                      {p.ribbon && <div className="ribbon">{p.ribbon}</div>}
+                      <div className="name">{p.name}</div>
+                      <div className="price"><span className="cur">KES</span><span className="amt">{p.amount.toLocaleString()}</span><span className="per">/mo</span></div>
+                      <div className="blurb">{p.blurb}</div>
+                      <ul>
                         {p.features.map((f, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12, color: '#9ca3af' }}>
-                            <span style={{ color: p.accent, fontWeight: 800 }}>✓</span><span>{f}</span>
-                          </div>
+                          <li key={i}><Check cls={p.check} /><span dangerouslySetInnerHTML={{ __html: f }} /></li>
                         ))}
-                      </div>
-                      <button onClick={() => handleSubscribe(p.key)} disabled={isCurrent || creditBuying || creditPolling || !creditPhone.trim()}
-                        style={{ width: '100%', padding: '11px 0', borderRadius: 10, border: 'none',
-                          background: isCurrent ? '#1f2937' : (busy || !creditPhone.trim()) ? '#1f2937' : p.accent,
-                          color: isCurrent ? '#10b981' : (busy || !creditPhone.trim()) ? '#4b5563' : (p.accent === '#9ca3af' ? '#111' : '#000'),
-                          fontWeight: 800, fontSize: 13, cursor: (isCurrent || busy || !creditPhone.trim()) ? 'not-allowed' : 'pointer' }}>
-                        {isCurrent ? '✓ Current plan' : busy ? (creditPolling ? 'Waiting...' : 'Sending...') : `Choose ${p.label} →`}
-                      </button>
+                      </ul>
+                      {isCurrent ? (
+                        <button className="btn btn-current">✓ Current plan</button>
+                      ) : (
+                        <button className={`btn ${p.btn}`} disabled={busy || !creditPhone.trim()} onClick={() => handleSubscribe(p.key)}>
+                          {busy ? (creditPolling ? 'Waiting…' : 'Sending…') : `Choose ${p.name} →`}
+                        </button>
+                      )}
                     </div>
                   );
                 })}
               </div>
 
-              {creditPolling && (
-                <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b' }} />
-                  <span style={{ color: '#9ca3af', fontSize: 12 }}>Check your phone for the M-Pesa PIN prompt...</span>
-                </div>
-              )}
               {creditMsg && (
-                <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 9, fontSize: 12, textAlign: 'center',
-                  background: creditMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(59,130,246,0.08)',
-                  color: creditMsg.type === 'success' ? '#10b981' : creditMsg.type === 'error' ? '#ef4444' : creditMsg.type === 'warning' ? '#f59e0b' : '#60a5fa',
-                  border: `1px solid ${creditMsg.type === 'success' ? 'rgba(16,185,129,0.2)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.2)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.15)'}` }}>
-                  {creditMsg.text}
-                </div>
+                <div className="sp-msg" style={{
+                  background: creditMsg.type === 'success' ? 'rgba(52,210,123,0.12)' : creditMsg.type === 'error' ? 'rgba(255,90,90,0.12)' : 'rgba(245,166,35,0.1)',
+                  color: creditMsg.type === 'success' ? '#34d27b' : creditMsg.type === 'error' ? '#ff5a5a' : '#f5a623',
+                  border: `1px solid ${creditMsg.type === 'success' ? 'rgba(52,210,123,0.3)' : creditMsg.type === 'error' ? 'rgba(255,90,90,0.3)' : 'rgba(245,166,35,0.3)'}`,
+                }}>{creditMsg.text}</div>
               )}
 
             </div>
