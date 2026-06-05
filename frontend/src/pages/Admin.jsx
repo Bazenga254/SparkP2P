@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getAdminCreditPurchases, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal } from 'lucide-react';
-import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, adminGetTradeTokens, adminAddTradeTokens, adminRemoveTradeTokens, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense } from '../services/api';
+import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense } from '../services/api';
 
 const sidebarSections = [
   {
@@ -137,7 +137,6 @@ export default function Admin() {
   const [txPage, setTxPage] = useState(1);
   const [ordersPage, setOrdersPage] = useState(1);
   const PAGE_SIZE = 15;
-  const [traderTokenData, setTraderTokenData] = useState(null);
   const [addTokensAmount, setAddTokensAmount] = useState('');
   const [addTokensNote, setAddTokensNote] = useState('');
   const [addTokensLoading, setAddTokensLoading] = useState(false);
@@ -429,9 +428,7 @@ export default function Admin() {
   const loadSubData = async (view = subView, period = subPeriod, page = subPage) => {
     setSubLoading(true);
     try {
-      const res = view === 'plans'
-        ? await getSubscriptionRevenue({ period, page, limit: 50 })
-        : await getAdminCreditPurchases({ period, page, limit: 50 });
+      const res = await getSubscriptionRevenue({ period, page, limit: 50 });
       setSubData(res.data);
     } catch (e) {
       console.error('Subscriptions load error:', e);
@@ -887,7 +884,6 @@ export default function Admin() {
     setViewingTraderTx([]);
     setViewingTraderOrders([]);
     setTraderPnl(null);
-    setTraderTokenData(null);
     setAddTokensMsg(''); setAddTokensAmount(''); setAddTokensNote('');
     setPnlPeriod('today');
     setViewingTraderLoading(true);
@@ -898,13 +894,12 @@ export default function Admin() {
     setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
     setImAccountInput(trader.settlement_account || ''); setImAccountMsg('');
     try {
-      const [detailRes, walletRes, txRes, ordersRes, pnlRes, tokenRes, logsRes] = await Promise.allSettled([
+      const [detailRes, walletRes, txRes, ordersRes, pnlRes, logsRes] = await Promise.allSettled([
         api.get(`/admin/traders/${trader.id}/detail`),
         api.get(`/admin/traders/${trader.id}/wallet`),
         api.get(`/admin/traders/${trader.id}/transactions?limit=60`),
         api.get(`/admin/traders/${trader.id}/orders?limit=60`),
         getTraderPnl(trader.id, 'today'),
-        adminGetTradeTokens(trader.id),
         getAdminTraderBotLogs(trader.id),
       ]);
       if (detailRes.status === 'fulfilled') setViewingTrader(prev => ({ ...prev, ...(detailRes.value.data || {}) }));
@@ -912,7 +907,6 @@ export default function Admin() {
       if (txRes.status === 'fulfilled') setViewingTraderTx(txRes.value.data || []);
       if (ordersRes.status === 'fulfilled') setViewingTraderOrders(ordersRes.value.data || []);
       if (pnlRes.status === 'fulfilled') setTraderPnl(pnlRes.value.data);
-      if (tokenRes.status === 'fulfilled') setTraderTokenData(tokenRes.value.data);
       if (logsRes.status === 'fulfilled') setTraderBotLogs(logsRes.value.data || []);
     } catch (e) { console.error('Trader detail load error:', e); }
     setViewingTraderLoading(false);
@@ -2080,102 +2074,6 @@ export default function Admin() {
                           </button>
                           {resetPwMsg && <div style={{ marginTop: 6, fontSize: 12, color: resetPwMsg.includes('Failed') ? '#ef4444' : '#10b981', textAlign: 'center' }}>{resetPwMsg}</div>}
                         </div>
-                      </div>
-                    </div>
-
-                    {/* Trade Tokens Card */}
-                    <div className="adm-card" style={{ marginBottom: 16 }}>
-                      <div className="adm-card-header"><h3>🪙 Trade Tokens</h3></div>
-                      <div style={{ padding: '16px 20px 20px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-                          {[
-                            ['Permanent', traderTokenData?.trade_tokens ?? '—', '#10b981'],
-                            ['Expiring (resets midnight)', traderTokenData?.trade_tokens_expiring ?? '—', '#f59e0b'],
-                            ['Total Available', traderTokenData?.total ?? '—', '#3b82f6'],
-                          ].map(([label, val, color]) => (
-                            <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
-                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{label}</div>
-                              <div style={{ fontSize: 22, fontWeight: 800, color }}>{val}</div>
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Add tokens */}
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
-                          <input
-                            type="number"
-                            min="1"
-                            placeholder="Tokens to add"
-                            value={addTokensAmount}
-                            onChange={e => setAddTokensAmount(e.target.value)}
-                            style={{ width: 140, background: '#0d1117', border: '1px solid #1f2937', borderRadius: 7, color: '#fff', padding: '7px 12px', fontSize: 13 }}
-                          />
-                          <input
-                            type="text"
-                            placeholder="Note (optional)"
-                            value={addTokensNote}
-                            onChange={e => setAddTokensNote(e.target.value)}
-                            style={{ flex: 1, minWidth: 120, background: '#0d1117', border: '1px solid #1f2937', borderRadius: 7, color: '#fff', padding: '7px 12px', fontSize: 13 }}
-                          />
-                          <button
-                            disabled={addTokensLoading}
-                            onClick={async () => {
-                              const n = parseInt(addTokensAmount);
-                              if (!n || n <= 0) { setAddTokensMsg('Enter a valid number'); return; }
-                              setAddTokensLoading(true); setAddTokensMsg('');
-                              try {
-                                const res = await adminAddTradeTokens(t.id, n, addTokensNote);
-                                setAddTokensMsg(`✓ ${n} tokens added — new balance: ${res.data.new_balance}`);
-                                setAddTokensAmount(''); setAddTokensNote('');
-                                const tokenRes = await adminGetTradeTokens(t.id);
-                                setTraderTokenData(tokenRes.data);
-                              } catch (e) { setAddTokensMsg(e?.response?.data?.detail || 'Failed to add tokens'); }
-                              setAddTokensLoading(false);
-                            }}
-                            style={{ padding: '7px 18px', borderRadius: 7, background: '#10b981', border: 'none', color: '#000', fontWeight: 700, fontSize: 13, cursor: addTokensLoading ? 'not-allowed' : 'pointer', opacity: addTokensLoading ? 0.7 : 1 }}
-                          >
-                            {addTokensLoading ? 'Adding...' : 'Add Tokens'}
-                          </button>
-                          <button
-                            disabled={addTokensLoading}
-                            onClick={async () => {
-                              const n = parseInt(addTokensAmount);
-                              if (!n || n <= 0) { setAddTokensMsg('Enter a valid number to remove'); return; }
-                              setAddTokensLoading(true); setAddTokensMsg('');
-                              try {
-                                const res = await adminRemoveTradeTokens(t.id, n, addTokensNote);
-                                setAddTokensMsg(`✓ ${res.data.tokens_removed} tokens removed — new balance: ${res.data.new_balance}`);
-                                setAddTokensAmount(''); setAddTokensNote('');
-                                const tokenRes = await adminGetTradeTokens(t.id);
-                                setTraderTokenData(tokenRes.data);
-                              } catch (e) { setAddTokensMsg(e?.response?.data?.detail || 'Failed to remove tokens'); }
-                              setAddTokensLoading(false);
-                            }}
-                            style={{ padding: '7px 18px', borderRadius: 7, background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.5)', color: '#ef4444', fontWeight: 700, fontSize: 13, cursor: addTokensLoading ? 'not-allowed' : 'pointer', opacity: addTokensLoading ? 0.7 : 1 }}
-                          >
-                            Remove Tokens
-                          </button>
-                        </div>
-                        {addTokensMsg && <div style={{ fontSize: 12, color: addTokensMsg.startsWith('✓') ? '#10b981' : '#ef4444', marginBottom: 12 }}>{addTokensMsg}</div>}
-
-                        {/* Purchase history */}
-                        {traderTokenData?.history?.length > 0 && (
-                          <div>
-                            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Purchase / Grant History</div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 80px 100px', gap: '6px 12px', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>
-                              <span>Date</span><span>Tokens</span><span>KES</span><span>Rate</span><span>Source</span>
-                            </div>
-                            {traderTokenData.history.slice(0, 20).map((p, i) => (
-                              <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 80px 100px', gap: '6px 12px', fontSize: 12, padding: '6px 0', borderTop: '1px solid rgba(255,255,255,0.05)', alignItems: 'center' }}>
-                                <span style={{ color: '#d1d5db' }}>{p.created_at ? new Date(p.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
-                                <span style={{ color: '#10b981', fontWeight: 700 }}>{p.tokens_granted}</span>
-                                <span>{p.amount_kes > 0 ? `${p.amount_kes.toLocaleString()}` : '—'}</span>
-                                <span>{p.rate_per_token > 0 ? `KES ${p.rate_per_token}` : '—'}</span>
-                                <span style={{ color: p.source === 'admin' ? '#f59e0b' : p.source === 'reimbursement' ? '#3b82f6' : '#9ca3af' }}>{p.source}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
                       </div>
                     </div>
 
@@ -3459,7 +3357,7 @@ export default function Admin() {
               {/* Sub-tabs + period filter row */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', gap: 0, background: '#111827', borderRadius: 10, padding: 4, border: '1px solid #1f2937' }}>
-                  {[['plans', 'Platform Plans'], ['credits', 'Trade Credits']].map(([v, l]) => (
+                  {[['plans', 'Platform Plans']].map(([v, l]) => (
                     <button key={v} onClick={() => { setSubView(v); setSubPage(1); loadSubData(v, subPeriod, 1); }}
                       style={{ padding: '7px 20px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
                         background: subView === v ? '#f59e0b' : 'transparent',

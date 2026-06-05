@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, purchaseTradeTokens, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank, verifyBankAccount } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank, verifyBankAccount } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -315,33 +315,6 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   }, [cbBankCooldownUntil]);
   const [batchThreshold, setBatchThreshold] = useState(profile?.batch_threshold || 50000);
 
-  // Trade tokens
-  const [tokenAmount, setTokenAmount] = useState('');
-  const [tokenBuying, setTokenBuying] = useState(false);
-  const [tokenMsg, setTokenMsg] = useState('');
-  const tradeTokens = (profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0);
-
-  function calcTokenPreview(amtStr) {
-    const amt = parseFloat(amtStr.replace(/[^0-9.]/g, '')) || 0;
-    if (amt < 1000) return null;
-    const rate = amt >= 10000 ? 10 : amt >= 5000 ? 25 : 40;
-    return { tokens: Math.round(amt / rate), rate };
-  }
-
-  const handlePurchaseTokens = async () => {
-    const amt = parseFloat(tokenAmount.replace(/[^0-9.]/g, ''));
-    if (!amt || amt < 1000) { setTokenMsg('Minimum purchase is KES 1,000'); return; }
-    setTokenBuying(true); setTokenMsg('');
-    try {
-      const res = await purchaseTradeTokens(amt);
-      setTokenMsg(`✓ ${res.data.tokens_granted} tokens added to your account`);
-      setTokenAmount('');
-      if (onUpdate) onUpdate();
-    } catch (err) {
-      setTokenMsg(err?.response?.data?.detail || 'Purchase failed — check wallet balance');
-    }
-    setTokenBuying(false);
-  };
 
   const showMsg = (msg) => {
     setMessage(msg);

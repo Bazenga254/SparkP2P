@@ -111,7 +111,6 @@ export const sendTelegramTest = () => api.post('/telegram/test');
 export const getAdminWithdrawals = (params = {}) => api.get('/admin/withdrawals', { params });
 export const getRevenueBreakdown = (params = {}) => api.get("/admin/revenue/breakdown", { params });
 export const getSubscriptionRevenue = (params = {}) => api.get("/admin/revenue/subscriptions", { params });
-export const getAdminCreditPurchases = (params = {}) => api.get("/admin/credit-purchases", { params });
 export const markWithdrawalComplete = (txId) => api.put(`/admin/withdrawals/${txId}/complete`);
 export const markWithdrawalPending = (txId) => api.put(`/admin/withdrawals/${txId}/pending`);
 export const deleteWithdrawal = (txId) => api.delete(`/admin/withdrawals/${txId}`);
@@ -140,18 +139,6 @@ export const getMyReferrals = () => api.get('/affiliates/me/referrals');
 export const getMyPayouts = () => api.get('/affiliates/me/payouts');
 export const applyForAffiliate = (message = '') => api.post('/affiliates/apply', { message });
 export const validateReferralCode = (code) => api.get(`/affiliates/validate/${code}`);
-
-// Trade Tokens
-export const getTradeTokens = () => api.get('/traders/trade-tokens');
-export const purchaseTradeTokens = (amount_kes) => api.post("/traders/trade-tokens/purchase", { amount_kes });
-export const purchaseCredits = (plan, phone, customAmount) => api.post('/traders/credits/purchase', { plan, phone, ...(customAmount ? { custom_amount: customAmount } : {}) });
-export const pollCreditsStatus = (checkoutId) => api.get(`/traders/credits/status/${checkoutId}`);
-export const consumeTradeToken = () => api.post('/traders/trade-tokens/consume');
-
-// Admin — Trade Tokens
-export const adminGetTradeTokens = (traderId) => api.get(`/admin/traders/${traderId}/trade-tokens`);
-export const adminAddTradeTokens = (traderId, tokens, note = '') => api.post(`/admin/traders/${traderId}/trade-tokens`, { tokens, note });
-export const adminRemoveTradeTokens = (traderId, tokens, note = '') => api.delete(`/admin/traders/${traderId}/trade-tokens`, { data: { tokens, note } });
 
 // Admin — Bot Logs
 export const getAdminTraderBotLogs = (traderId) => api.get(`/admin/traders/${traderId}/bot-logs`);
