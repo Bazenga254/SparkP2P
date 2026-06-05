@@ -16,14 +16,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-PLAN_PRICES = {
-    SubscriptionPlan.STARTER: 5000,
-    SubscriptionPlan.PRO: 10000,
-}
+# Prices come from the central plan config (app/services/plans.py) — single source of truth.
+from app.services.plans import PLAN_CONFIG, plan_price as _plan_price
+
+PLAN_PRICES = {plan: cfg["price"] for plan, cfg in PLAN_CONFIG.items()}
 
 PLAN_TIERS = {
     SubscriptionPlan.STARTER: "standard",
     SubscriptionPlan.PRO: "pro",
+    SubscriptionPlan.PRO_MAX: "pro_max",
 }
 
 
@@ -56,7 +57,9 @@ async def initiate_subscription(
     try:
         plan = SubscriptionPlan(data.plan.lower())
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid plan. Use 'starter' or 'pro'.")
+        raise HTTPException(status_code=400, detail="Invalid plan. Use 'starter', 'pro', or 'pro_max'.")
+    if plan not in PLAN_PRICES:
+        raise HTTPException(status_code=400, detail="That plan is not available. Use 'starter', 'pro', or 'pro_max'.")
 
     amount = PLAN_PRICES[plan]
 
@@ -196,7 +199,9 @@ async def renew_subscription(
     try:
         plan = SubscriptionPlan(data.plan.lower())
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid plan. Use 'starter' or 'pro'.")
+        raise HTTPException(status_code=400, detail="Invalid plan. Use 'starter', 'pro', or 'pro_max'.")
+    if plan not in PLAN_PRICES:
+        raise HTTPException(status_code=400, detail="That plan is not available. Use 'starter', 'pro', or 'pro_max'.")
 
     amount = PLAN_PRICES[plan]
 

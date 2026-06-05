@@ -4419,7 +4419,7 @@ export default function Admin() {
                     ))}
                   </div>
                   <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                    {[['all','All Plans'], ['starter','Starter'], ['pro','Pro'], ['pro_max','Pro Max'], ['advanced','Advanced']].map(([val, label]) => (
+                    {[['all','All Plans'], ['starter','Starter'], ['pro','Starter Pro'], ['pro_max','Starter Pro Max']].map(([val, label]) => (
                       <button key={val} onClick={() => { setRevPlan(val); setRevPage(1); loadRevenueBreakdown(revPeriod, val, 1); }}
                         style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
                           background: revPlan === val ? '#10b981' : 'transparent', color: revPlan === val ? '#000' : '#9ca3af' }}>
@@ -4448,12 +4448,11 @@ export default function Admin() {
                     Gross fees charged: {fmtKES(revBreakdown?.summary?.outbound_gross ?? 0)}
                   </div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
                   {[
-                    { key: 'starter',  label: 'Starter',  color: '#10b981', kes: 5000  },
-                    { key: 'pro',      label: 'Pro',      color: '#f59e0b', kes: 10000 },
-                    { key: 'pro_max',  label: 'Pro Max',  color: '#8b5cf6', kes: 20000 },
-                    { key: 'advanced', label: 'Advanced', color: '#ef4444', kes: 40000 },
+                    { key: 'starter',  label: 'Starter',         color: '#10b981', kes: 3000  },
+                    { key: 'pro',      label: 'Starter Pro',     color: '#f59e0b', kes: 5000  },
+                    { key: 'pro_max',  label: 'Starter Pro Max', color: '#8b5cf6', kes: 10000 },
                   ].map(p => (
                     <div key={p.key} className="adm-card" style={{ padding: '14px 16px', borderTop: `2px solid ${p.color}` }}>
                       <div style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: 700, marginBottom: 8 }}>{p.label}</div>
