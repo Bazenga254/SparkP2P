@@ -52,6 +52,7 @@ export const changePassword = (otp_code, new_password) => api.post('/traders/cha
 export const getBinanceAccountData = () => api.get('/ext/account-data');
 export const getMarketPrices = () => api.get('/ext/market-prices');
 export const getMyAdPrices = () => api.get('/ext/my-ad-prices');
+export const postBotLog = (entry) => api.post('/ext/bot-log', entry);
 export const initiateDeposit = (amount, phone) => api.post('/traders/deposit', { amount, phone });
 export const getDepositHistory = (limit = 50) => api.get(`/traders/deposit/history?limit=${limit}`);
 export const checkDepositStatus = (checkoutId) => api.get(`/traders/deposit/status/${checkoutId}`);

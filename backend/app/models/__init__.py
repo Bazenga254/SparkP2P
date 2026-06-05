@@ -10,6 +10,7 @@ from app.models.audit_log import AuditLog
 from app.models.batch import WithdrawalBatch, BatchItem
 from app.models.survey import SurveyResponse
 from app.models.affiliate import Affiliate, AffiliateEarning, AffiliatePayout, AffiliateStatus, AffiliatePayoutStatus
+from app.models.bot_log import BotLog
 
 __all__ = [
     "Trader", "SettlementMethod", "TraderStatus",
@@ -24,4 +25,5 @@ __all__ = [
     "WithdrawalBatch", "BatchItem",
     "SurveyResponse",
     "Affiliate", "AffiliateEarning", "AffiliatePayout", "AffiliateStatus", "AffiliatePayoutStatus",
+    "BotLog",
 ]

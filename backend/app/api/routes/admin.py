@@ -2355,11 +2355,16 @@ def _apply_period(q, model_col, period, now):
 async def get_trader_bot_logs(
     trader_id: int,
     admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Return the most recent bot activity logs for a trader (newest first)."""
-    from app.api.routes.extension import _trader_bot_logs
-    logs = list(_trader_bot_logs.get(trader_id, []))
-    return list(reversed(logs))
+    """Return the most recent bot activity logs for a trader (newest first), from the DB so they
+    persist across backend restarts."""
+    from app.models.bot_log import BotLog
+    rows = (await db.execute(
+        select(BotLog).where(BotLog.trader_id == trader_id)
+        .order_by(BotLog.created_at.desc()).limit(200)
+    )).scalars().all()
+    return [{"level": r.level, "message": r.message, "time": r.time} for r in rows]
 
 
 @router.get("/traders/{trader_id}/pnl")

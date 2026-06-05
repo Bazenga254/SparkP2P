@@ -776,8 +776,10 @@ class BotLogRequest(BaseModel):
 async def receive_bot_log(
     data: BotLogRequest,
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Desktop app pushes each log entry here so admins can view live trader logs."""
+    """Desktop app pushes each log entry here. Persisted to the DB so admins can review a
+    trader's logs even across backend restarts (also kept in memory for fast live reads)."""
     tid = trader.id
     if tid not in _trader_bot_logs:
         _trader_bot_logs[tid] = deque(maxlen=_BOT_LOG_MAX)
@@ -786,6 +788,17 @@ async def receive_bot_log(
         "message": data.message,
         "time": data.time,
     })
+    try:
+        from app.models.bot_log import BotLog
+        from sqlalchemy import text as _sqltext
+        db.add(BotLog(trader_id=tid, level=(data.level or "")[:20], message=data.message, time=(data.time or "")[:40]))
+        # Keep the table tidy — drop this trader's log lines older than 14 days.
+        await db.execute(_sqltext(
+            "DELETE FROM bot_logs WHERE trader_id = :t AND created_at < now() - interval '14 days'"
+        ), {"t": tid})
+        await db.commit()
+    except Exception as _e:
+        logger.warning(f"bot-log persist failed for trader {tid}: {_e}")
     return {"ok": True}
 
 
