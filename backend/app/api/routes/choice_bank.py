@@ -172,12 +172,8 @@ async def _handle_transaction_result(params: dict, raw: dict):
                         elif _tx_failed:
                             _existing.status = PaymentStatus.FAILED
                             await _db.commit()
-                            _t = await _db.get(Trader, _existing.trader_id)
-                            if _t:
-                                _t.trade_tokens = (_t.trade_tokens or 0) + 20
-                                await _db.commit()
-                                _credits_refunded = True
-                            logger.info(f"[ChoiceBank] 0002: Payment {_existing.id} PENDING->FAILED, credits refunded={_credits_refunded}")
+                            # Credits retired — no refund needed (withdrawal fee is withheld by Choice Bank).
+                            logger.info(f"[ChoiceBank] 0002: Payment {_existing.id} PENDING->FAILED")
                     elif _tx_success:
                         _db.add(Payment(
                             trader_id=_trader.id,

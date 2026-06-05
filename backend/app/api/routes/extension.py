@@ -265,13 +265,7 @@ async def report_release(
         _was_released = order.status in (OrderStatus.RELEASED, OrderStatus.COMPLETED)
         order.status = OrderStatus.RELEASED
         order.released_at = datetime.now(timezone.utc)
-        # Sell order = inbound: flat 0.5 credits, charged once on first release
-        if not _was_released:
-            try:
-                from app.services import credits as _credits
-                _credits.charge(db, trader, 0.5, reason=f"sell order {data.order_number}")
-            except Exception as _e:
-                logger.warning(f"sell-order credit charge failed for {data.order_number}: {_e}")
+        # Credits retired — billing is now subscription + per-tier rate limits (no per-order charge).
         await db.commit()
 
         logger.info(f"Order {data.order_number} released via extension for trader {trader.full_name}")
@@ -1146,13 +1140,7 @@ async def _complete_sell_order(order: Order, trader: Trader, db: AsyncSession) -
 
     trader.total_trades += 1
     trader.total_volume += order.fiat_amount
-
-    # Sell order = inbound (buyer pays us, bot releases crypto): flat 0.5 credits
-    try:
-        from app.services import credits as _credits
-        _credits.charge(db, trader, 0.5, reason=f"sell order {order.binance_order_number}")
-    except Exception as _e:
-        logger.warning(f"sell-order credit charge failed for {order.binance_order_number}: {_e}")
+    # Credits retired — billing is now subscription + per-tier rate limits (no per-order charge).
 
     logger.info(
         f"Sell order {order.binance_order_number} RELEASED (reconcile) — "

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, purchaseCredits, pollCreditsStatus, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -1725,7 +1725,7 @@ export default function Dashboard() {
           style={{ display: 'flex', alignItems: 'center', gap: 5, color: activeTab === 'credits' ? '#fff' : '#10b981', fontWeight: 700 }}
           onClick={() => setActiveTab('credits')}
         >
-          <DollarSign size={14} /> Buy Credits
+          <DollarSign size={14} /> Subscriptions
         </button>
         <div style={{ position: 'relative', marginLeft: 'auto' }}>
           <button
@@ -1882,7 +1882,7 @@ export default function Dashboard() {
             className={`dsb-nav-item dsb-green${activeTab === 'credits' ? ' dsb-active' : ''}`}
             onClick={() => setActiveTab('credits')}
           >
-            <DollarSign size={16} /><span>Buy Credits</span>
+            <DollarSign size={16} /><span>Subscriptions</span>
           </button>
 
           {/* Footer */}
@@ -2053,46 +2053,6 @@ export default function Dashboard() {
 
 
 
-            {/* ── Trade Credits Progress Bar ── */}
-            {(() => {
-              const totalCredits = (profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0);
-              const refMax = totalCredits >= 2000 ? 8000 : totalCredits >= 500 ? 2000 : totalCredits >= 167 ? 500 : 167;
-              const pct = Math.min(100, Math.round((totalCredits / refMax) * 100));
-              const barColor = pct > 50 ? '#10b981' : pct > 20 ? '#f59e0b' : '#ef4444';
-              const label = totalCredits === 0 ? 'No credits — buy a pack to start trading' : pct <= 20 ? 'Credits running low — top up soon' : 'Trade credits available';
-              return (
-                <div style={{ margin: '0 0 16px', padding: '14px 20px', background: '#0d1117', border: `1px solid ${pct <= 20 ? 'rgba(239,68,68,0.25)' : pct <= 50 ? 'rgba(245,158,11,0.2)' : 'rgba(16,185,129,0.15)'}`, borderRadius: 12 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ fontSize: 14 }}>🎯</span>
-                      <div>
-                        <span style={{ color: '#d1d5db', fontSize: 13, fontWeight: 600 }}>Trade Credits</span>
-                        <span style={{ color: pct <= 20 ? '#ef4444' : '#6b7280', fontSize: 11, marginLeft: 10 }}>{label}</span>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                      <div style={{ textAlign: 'right' }}>
-                        <span style={{ color: barColor, fontWeight: 800, fontSize: 18 }}>{totalCredits.toLocaleString()}</span>
-                        <span style={{ color: '#4b5563', fontSize: 12, marginLeft: 4 }}>/ {refMax.toLocaleString()}</span>
-                      </div>
-                      <button onClick={() => setActiveTab('credits')}
-                        style={{ padding: '5px 14px', borderRadius: 8, border: `1px solid ${barColor}44`, background: 'transparent', color: barColor, fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                        + Buy Credits
-                      </button>
-                    </div>
-                  </div>
-                  {/* Track */}
-                  <div style={{ height: 8, background: '#1a1d27', borderRadius: 99, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${pct}%`, borderRadius: 99, background: `linear-gradient(90deg, ${barColor}99, ${barColor})`, transition: 'width 0.6s ease' }} />
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5 }}>
-                    <span style={{ color: '#374151', fontSize: 10 }}>0</span>
-                    <span style={{ color: barColor, fontSize: 10, fontWeight: 600 }}>{pct}% remaining</span>
-                    <span style={{ color: '#374151', fontSize: 10 }}>{refMax.toLocaleString()}</span>
-                  </div>
-                </div>
-              );
-            })()}
 
             {/* Row 3: Buy/Sell Breakdown + Profit */}
             <div className="overview-grid-mid">
@@ -3135,279 +3095,114 @@ export default function Dashboard() {
         )}
         {/* ==================== BUY CREDITS TAB ==================== */}
         {activeTab === 'credits' && (() => {
-          const PAY_GO = { key: 'pay_on_the_go', label: 'Pay On The Go', subtitle: 'No commitment', amount: null, credits: null, rate: 40, savings: null, accent: '#fb923c', glow: '251,146,60', features: ['Pay any amount', 'Never expires', 'Instant credit'], topLabel: null, border: '#1f2937', flexible: true };
-          const STARTER_PLANS = [
-            { key: 'starter',         label: 'Starter',        subtitle: 'Try the bot',   amount: 3000,  credits: 100,  rate: 30, savings: 25, accent: '#9ca3af', glow: '107,114,128', features: ['~100 buy orders', 'Never expires'],                          topLabel: null,           border: '#1f2937' },
-            { key: 'starter_pro',     label: 'Starter Pro',    subtitle: 'Active trader', amount: 5000,  credits: 250,  rate: 20, savings: 50, accent: '#f59e0b', glow: '245,158,11',  features: ['~250 buy orders', 'Never expires'],                          topLabel: 'MOST POPULAR', border: 'rgba(245,158,11,0.35)' },
-            { key: 'starter_pro_max', label: 'Starter Pro Max',subtitle: 'Power user',    amount: 10000, credits: 1000, rate: 10, savings: 75, accent: '#10b981', glow: '16,185,129',  features: ['~1,000 buy orders', 'Priority support', 'Never expires'],    topLabel: 'BEST VALUE',   border: 'rgba(16,185,129,0.35)' },
+          const SUB_PLANS = [
+            { key: 'starter',  label: 'Starter',         amount: 3000,  accent: '#9ca3af', glow: '107,114,128', topLabel: null,           features: ['30 trades per day (buy + sell)', '100 Telegram alerts per day', 'Resets daily at 3:00 AM'] },
+            { key: 'pro',      label: 'Starter Pro',     amount: 5000,  accent: '#f59e0b', glow: '245,158,11',  topLabel: 'MOST POPULAR', features: ['80 trades per day (buy + sell)', '200 Telegram alerts per day', 'Resets daily at 3:00 AM'] },
+            { key: 'pro_max',  label: 'Starter Pro Max', amount: 10000, accent: '#10b981', glow: '16,185,129',  topLabel: 'BEST VALUE',   features: ['Unlimited trades per day', 'Unlimited Telegram alerts', 'Priority support'] },
           ];
-          const ENTERPRISE_PLANS = [
-            { key: 'enterprise',         label: 'Enterprise',        subtitle: 'High volume',  amount: 15000, credits: 1875,  rate: 8, savings: 80, accent: '#9ca3af', glow: '107,114,128', features: ['~1,875 buy orders', 'Priority support', 'Never expires'],     topLabel: null,           border: '#1f2937' },
-            { key: 'enterprise_pro',     label: 'Enterprise Pro',    subtitle: 'Scaling up',   amount: 20000, credits: 4000,  rate: 5, savings: 87, accent: '#f59e0b', glow: '245,158,11',  features: ['~4,000 buy orders', 'Priority support', 'Never expires'],     topLabel: 'MOST POPULAR', border: 'rgba(245,158,11,0.35)' },
-            { key: 'enterprise_pro_max', label: 'Enterprise Pro Max',subtitle: 'Max scale',    amount: 40000, credits: 10000, rate: 4, savings: 90, accent: '#a78bfa', glow: '139,92,246',  features: ['~10,000 buy orders', 'Dedicated support', 'Never expires'],   topLabel: 'BEST VALUE',   border: 'rgba(167,139,250,0.35)' },
-          ];
-          const PLANS = creditCategory === 'enterprise' ? ENTERPRISE_PLANS : STARTER_PLANS;
+          const currentPlanKey = profile?.subscription_plan || null;
+          const currentPlan = SUB_PLANS.find(p => p.key === currentPlanKey) || null;
 
-          const handleBuyCredits = async () => {
-            if (!creditPlan || !creditPhone.trim()) { setCreditMsg({ type: 'error', text: 'Select a plan and enter your M-Pesa number.' }); return; }
-            if (creditPlan === 'pay_on_the_go' && (!parseFloat(payGoAmount) || parseFloat(payGoAmount) < 500)) { setCreditMsg({ type: 'error', text: 'Minimum amount is KES 500 for Pay On The Go.' }); return; }
-            setCreditBuying(true); setCreditMsg(null);
+          const handleSubscribe = async (planKey) => {
+            if (!creditPhone.trim()) { setCreditMsg({ type: 'error', text: 'Enter your M-Pesa number first.' }); return; }
+            setCreditPlan(planKey); setCreditBuying(true); setCreditMsg(null);
             try {
-              const customAmt = creditPlan === 'pay_on_the_go' ? parseFloat(payGoAmount) : undefined;
-              const res = await purchaseCredits(creditPlan, creditPhone.trim(), customAmt);
-              const checkoutId = res.data.checkout_id;
-              setCreditCheckoutId(checkoutId);
-              setCreditMsg({ type: 'info', text: res.data.message });
+              await initiateSubscription(planKey, creditPhone.trim());
+              setCreditMsg({ type: 'info', text: 'STK push sent — enter your M-Pesa PIN to confirm.' });
               setCreditPolling(true);
               const interval = setInterval(async () => {
                 try {
-                  const ps = await pollCreditsStatus(checkoutId);
-                  if (ps.data.status === 'completed') {
-                    clearInterval(interval);
-                    setCreditPolling(false);
-                    setCreditCheckoutId(null);
-                    setCreditMsg({ type: 'success', text: '✔ Payment confirmed! Credits have been added to your account.' });
-                    setCreditPlan(null);
-                    setCreditPhone('');
+                  const ps = await getSubscriptionStatus();
+                  if (ps.data?.has_subscription && (ps.data?.status === 'active')) {
+                    clearInterval(interval); setCreditPolling(false); setCreditPlan(null);
+                    setCreditMsg({ type: 'success', text: '✔ Subscription active! Your daily limits are now applied.' });
                     if (typeof loadData === 'function') loadData();
                   }
                 } catch {}
               }, 5000);
-              setTimeout(() => { clearInterval(interval); if (creditPolling) { setCreditPolling(false); setCreditMsg({ type: 'warning', text: 'Payment not yet confirmed. If you completed payment, your credits will appear shortly.' }); } }, 120000);
+              setTimeout(() => { clearInterval(interval); setCreditPolling(false); }, 120000);
             } catch (err) {
-              setCreditMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to send STK Push. Try again.' });
+              setCreditMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to send STK push. Try again.' });
             }
             setCreditBuying(false);
           };
 
-          const sel = creditPlan === 'pay_on_the_go' ? PAY_GO : [...STARTER_PLANS, ...ENTERPRISE_PLANS].find(p => p.key === creditPlan);
-          const tc = (profile?.trade_tokens || 0) + (profile?.trade_tokens_expiring || 0);
-          const rm = tc >= 2000 ? 8000 : tc >= 500 ? 2000 : tc >= 167 ? 500 : 167;
-          const pp = Math.min(100, Math.round((tc / rm) * 100));
-          const bc = pp > 50 ? '#10b981' : pp > 20 ? '#f59e0b' : '#ef4444';
+          return (
+            <div style={{ maxWidth: 600, margin: '0 auto', padding: '4px 0 40px' }}>
 
-          const renderPaymentForm = (p) => (
-            <div style={{ background: `rgba(${p.glow},0.05)`, border: `1px solid rgba(${p.glow},0.25)`, borderTop: 'none', borderRadius: '0 0 14px 14px', padding: '16px 20px' }}>
-              {p.flexible && (
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 6 }}>
-                    Amount (min KES 500) · You get <strong style={{ color: p.accent }}>{Math.floor(parseFloat(payGoAmount || 0) / 40)}</strong> credits
-                  </div>
-                  <input type="number" min="500" step="100" placeholder="e.g. 1000" value={payGoAmount} onChange={e => setPayGoAmount(e.target.value)} disabled={creditBuying || creditPolling}
-                    style={{ width: '100%', background: '#0d1117', border: `1px solid ${p.accent}55`, borderRadius: 10, color: '#fff', padding: '11px 14px', fontSize: 14, outline: 'none', boxSizing: 'border-box', marginBottom: 4 }} />
-                  {parseFloat(payGoAmount) >= 500 && <div style={{ fontSize: 11, color: '#6b7280' }}>KES {parseFloat(payGoAmount).toLocaleString()} → {Math.floor(parseFloat(payGoAmount) / 40)} credits @ KES 40/credit</div>}
+              {/* Current plan */}
+              <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 14, padding: '18px 20px', marginBottom: 14 }}>
+                <div style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 8 }}>Your Plan</div>
+                <div style={{ color: currentPlan ? currentPlan.accent : '#6b7280', fontWeight: 900, fontSize: 28, letterSpacing: '-0.5px' }}>
+                  {currentPlan ? currentPlan.label : 'No active subscription'}
                 </div>
-              )}
-              <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Pay via M-Pesa</div>
-              <input type="tel" placeholder="e.g. 0712 345 678" value={creditPhone} onChange={e => setCreditPhone(e.target.value)} disabled={creditBuying || creditPolling}
-                style={{ width: '100%', background: '#0d1117', border: `1px solid ${p.accent}33`, borderRadius: 10, color: '#fff', padding: '11px 14px', fontSize: 14, outline: 'none', boxSizing: 'border-box', marginBottom: 8 }} />
-              <button onClick={handleBuyCredits} disabled={creditBuying || creditPolling || !creditPhone.trim()}
-                style={{ width: '100%', padding: '12px 0', borderRadius: 10, border: 'none',
-                  background: (creditBuying || creditPolling || !creditPhone.trim()) ? '#1f2937' : p.accent,
-                  color: (creditBuying || creditPolling || !creditPhone.trim()) ? '#4b5563' : (p.accent === '#9ca3af' ? '#111' : '#000'),
-                  fontWeight: 800, fontSize: 14, cursor: (creditBuying || creditPolling || !creditPhone.trim()) ? 'not-allowed' : 'pointer' }}>
-                {creditPolling ? 'Waiting...' : creditBuying ? 'Sending...' : 'Pay Now'}
-              </button>
+                <div style={{ color: '#6b7280', fontSize: 12, marginTop: 6 }}>
+                  {currentPlan ? 'Daily limits reset at 3:00 AM (EAT).' : 'Subscribe to a plan to use the bot.'}
+                </div>
+              </div>
+
+              {/* M-Pesa number */}
+              <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 14, padding: '16px 20px', marginBottom: 18 }}>
+                <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>M-Pesa number for payment</div>
+                <input type="tel" placeholder="e.g. 0712 345 678" value={creditPhone} onChange={e => setCreditPhone(e.target.value)} disabled={creditBuying || creditPolling}
+                  style={{ width: '100%', background: '#0d1117', border: '1px solid #374151', borderRadius: 10, color: '#fff', padding: '11px 14px', fontSize: 14, outline: 'none', boxSizing: 'border-box' }} />
+              </div>
+
+              {/* Section header */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '8px 0 16px' }}>
+                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
+                <span style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>Subscription Plans</span>
+                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
+              </div>
+
+              {/* Plan cards */}
+              <div className="bc-plans-grid">
+                {SUB_PLANS.map(p => {
+                  const isCurrent = currentPlanKey === p.key;
+                  const busy = (creditBuying || creditPolling) && creditPlan === p.key;
+                  return (
+                    <div key={p.key} style={{ background: `rgba(${p.glow},0.05)`, border: `1px solid rgba(${p.glow},0.3)`, borderRadius: 14, padding: '18px 18px 16px', position: 'relative', display: 'flex', flexDirection: 'column' }}>
+                      {p.topLabel && (
+                        <div style={{ position: 'absolute', top: -10, left: '50%', transform: 'translateX(-50%)', background: p.accent, color: '#000', fontSize: 9, fontWeight: 800, letterSpacing: '0.5px', padding: '3px 10px', borderRadius: 99, whiteSpace: 'nowrap' }}>★ {p.topLabel}</div>
+                      )}
+                      <div style={{ color: '#e5e7eb', fontSize: 15, fontWeight: 800, marginTop: 4 }}>{p.label}</div>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, margin: '8px 0 12px' }}>
+                        <span style={{ color: p.accent, fontWeight: 900, fontSize: 26, letterSpacing: '-1px' }}>KES {p.amount.toLocaleString()}</span>
+                        <span style={{ color: '#6b7280', fontSize: 12 }}>/mo</span>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 14, flex: 1 }}>
+                        {p.features.map((f, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12, color: '#9ca3af' }}>
+                            <span style={{ color: p.accent, fontWeight: 800 }}>✓</span><span>{f}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={() => handleSubscribe(p.key)} disabled={isCurrent || creditBuying || creditPolling || !creditPhone.trim()}
+                        style={{ width: '100%', padding: '11px 0', borderRadius: 10, border: 'none',
+                          background: isCurrent ? '#1f2937' : (busy || !creditPhone.trim()) ? '#1f2937' : p.accent,
+                          color: isCurrent ? '#10b981' : (busy || !creditPhone.trim()) ? '#4b5563' : (p.accent === '#9ca3af' ? '#111' : '#000'),
+                          fontWeight: 800, fontSize: 13, cursor: (isCurrent || busy || !creditPhone.trim()) ? 'not-allowed' : 'pointer' }}>
+                        {isCurrent ? '✓ Current plan' : busy ? (creditPolling ? 'Waiting...' : 'Sending...') : `Choose ${p.label} →`}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
               {creditPolling && (
-                <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}>
                   <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b' }} />
                   <span style={{ color: '#9ca3af', fontSize: 12 }}>Check your phone for the M-Pesa PIN prompt...</span>
                 </div>
               )}
               {creditMsg && (
-                <div style={{ marginTop: 10, padding: '8px 14px', borderRadius: 9, fontSize: 12,
+                <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 9, fontSize: 12, textAlign: 'center',
                   background: creditMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.1)' : 'rgba(59,130,246,0.08)',
                   color: creditMsg.type === 'success' ? '#10b981' : creditMsg.type === 'error' ? '#ef4444' : creditMsg.type === 'warning' ? '#f59e0b' : '#60a5fa',
                   border: `1px solid ${creditMsg.type === 'success' ? 'rgba(16,185,129,0.2)' : creditMsg.type === 'error' ? 'rgba(239,68,68,0.2)' : creditMsg.type === 'warning' ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.15)'}` }}>
                   {creditMsg.text}
                 </div>
               )}
-            </div>
-          );
-
-          return (
-            <div className="bc-outer" style={{ maxWidth: 560, margin: '0 auto', padding: '4px 0 40px' }}>
-
-              {/* YOUR BALANCE */}
-              <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 14, padding: '18px 20px', marginBottom: 6 }}>
-                <div style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 8 }}>Your Balance</div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
-                  <span style={{ color: bc, fontWeight: 900, fontSize: 36, letterSpacing: '-1px' }}>{tc.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
-                  <span style={{ color: '#6b7280', fontSize: 14 }}>credits</span>
-                </div>
-                <div style={{ height: 6, background: '#1a1d27', borderRadius: 99, overflow: 'hidden', marginBottom: 6 }}>
-                  <div style={{ height: '100%', width: `${pp}%`, background: bc, borderRadius: 99 }} />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: tc < 100 ? '#ef4444' : '#6b7280', fontSize: 11 }}>{tc < 100 ? '⚠ Low balance — top up to avoid interruptions' : 'Credits power your bot, withdrawals & alerts'}</span>
-                  <span style={{ color: '#374151', fontSize: 11 }}>{tc.toLocaleString(undefined, { maximumFractionDigits: 1 })} / {rm.toLocaleString()}</span>
-                </div>
-              </div>
-
-              {/* HOW CREDITS ARE USED */}
-              <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 14, padding: '16px 20px', marginBottom: 6 }}>
-                <div style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 12 }}>How Credits Are Used</div>
-                {[
-                  { label: 'Telegram notification', detail: 'per alert / approval message', cost: '0.1' },
-                  { label: 'Bot-completed sell order', detail: 'inbound — buyer pays you', cost: '0.5' },
-                  { label: 'Bot-completed buy order (to bank)', detail: 'outbound via PesaLink', cost: '20' },
-                  { label: 'Withdraw to bank (PesaLink)', detail: 'flat, any amount', cost: '20' },
-                ].map((r, i) => (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #161b24' }}>
-                    <div>
-                      <div style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600 }}>{r.label}</div>
-                      <div style={{ color: '#4b5563', fontSize: 11 }}>{r.detail}</div>
-                    </div>
-                    <span style={{ color: '#f59e0b', fontWeight: 800, fontSize: 14, whiteSpace: 'nowrap' }}>{r.cost} cr</span>
-                  </div>
-                ))}
-                {/* M-Pesa tiered — applies to both M-Pesa withdrawals and buy orders paid to M-Pesa */}
-                <div style={{ padding: '9px 0 2px' }}>
-                  <div style={{ color: '#e5e7eb', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Withdraw / buy order to M-Pesa <span style={{ color: '#4b5563', fontWeight: 400, fontSize: 11 }}>· by amount</span></div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    {[
-                      { range: 'Up to KES 1,500', cost: '6' },
-                      { range: 'KES 1,501 – 7,500', cost: '12' },
-                      { range: 'KES 7,501 – 15,000', cost: '18' },
-                      { range: 'KES 15,001 – 40,000', cost: '22' },
-                      { range: 'KES 40,001 – 250,000', cost: '24' },
-                    ].map((t, i) => (
-                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                        <span style={{ color: '#6b7280' }}>{t.range}</span>
-                        <span style={{ color: '#f59e0b', fontWeight: 700 }}>{t.cost} cr</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Section: Credit Packages */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '22px 0 14px' }}>
-                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
-                <span style={{ color: '#4b5563', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>Credit Packages</span>
-                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
-              </div>
-
-              {/* Category toggle: Starter / Enterprise */}
-              <div style={{ display: 'flex', gap: 6, background: '#0d1117', border: '1px solid #1f2937', borderRadius: 10, padding: 4, marginBottom: 16, maxWidth: 360, marginLeft: 'auto', marginRight: 'auto' }}>
-                {[{ k: 'starter', label: 'Starter' }, { k: 'enterprise', label: 'Enterprise' }].map(({ k, label }) => (
-                  <button key={k} onClick={() => setCreditCategory(k)}
-                    style={{ flex: 1, padding: '9px 0', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700,
-                      background: creditCategory === k ? '#f59e0b' : 'transparent',
-                      color: creditCategory === k ? '#000' : '#9ca3af' }}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Plan cards */}
-              <div className="bc-plans-grid">
-              {PLANS.map(p => {
-                const isSelected = creditPlan === p.key;
-                return (
-                  <div key={p.key} style={{ marginBottom: 10 }}>
-                    {p.topLabel && (
-                      <div style={{ background: p.accent === '#10b981' ? 'rgba(16,185,129,0.15)' : 'rgba(167,139,250,0.15)', color: p.accent, textAlign: 'center', padding: '5px 0', fontSize: 10, fontWeight: 800, letterSpacing: '0.8px', textTransform: 'uppercase', borderRadius: '12px 12px 0 0', border: `1px solid ${isSelected ? p.accent : p.border}`, borderBottom: 'none' }}>
-                        ★ {p.topLabel}
-                      </div>
-                    )}
-                    <div onClick={() => { setCreditPlan(p.key); setCreditMsg(null); }}
-                      style={{ background: '#0d1117', border: `1px solid ${isSelected ? p.accent : p.border}`,
-                        borderRadius: p.topLabel ? '0 0 14px 14px' : 14, padding: '18px 20px', cursor: 'pointer', userSelect: 'none',
-                        ...(isSelected ? { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, boxShadow: `0 0 0 1px ${p.accent}` } : {}) }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-                        <div>
-                          <div style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>{p.label}</div>
-                          <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>{p.subtitle}</div>
-                        </div>
-                        <span style={{ background: `rgba(${p.glow},0.12)`, color: p.accent, fontSize: 10, fontWeight: 700, padding: '4px 9px', borderRadius: 6, whiteSpace: 'nowrap', flexShrink: 0 }}>Save {p.savings}%</span>
-                      </div>
-                      <div style={{ marginBottom: 14 }}>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 40, fontWeight: 900, color: '#fff', lineHeight: 1.1, letterSpacing: '-1px' }}>{p.credits.toLocaleString()}</span>
-                          <span style={{ fontSize: 14, color: '#6b7280' }}>credits</span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-                          <span style={{ color: p.accent, fontWeight: 800, fontSize: 20 }}>KES {p.amount.toLocaleString()}</span>
-                          <span style={{ color: '#4b5563', fontSize: 11 }}>KES {p.rate}/credit</span>
-                        </div>
-                      </div>
-                      <div style={{ borderTop: '1px dashed #1f2937', marginBottom: 12 }} />
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 16 }}>
-                        {p.features.map((feat, i) => (
-                          <div key={i} style={{ color: i === 0 ? p.accent : '#6b7280', fontSize: 13 }}>❆ {feat}</div>
-                        ))}
-                      </div>
-                      <button style={{ width: '100%', padding: '11px 0', borderRadius: 10, cursor: 'pointer', fontWeight: 700, fontSize: 14,
-                        border: isSelected ? 'none' : `1px solid ${p.accent}55`,
-                        background: isSelected ? p.accent : 'transparent',
-                        color: isSelected ? (p.accent === '#9ca3af' ? '#111' : '#000') : p.accent }}>
-                        {isSelected ? '✓ Selected' : `Choose ${p.label} →`}
-                      </button>
-                    </div>
-                    <div className="bc-plan-form">{isSelected && renderPaymentForm(p)}</div>
-                  </div>
-                );
-              })}
-              </div>
-              {/* Desktop: selected plan payment form shown full-width below the grid */}
-              <div className="bc-desktop-form">
-                {creditPlan && creditPlan !== 'pay_on_the_go' && (() => {
-                  const sp = PLANS.find(pp => pp.key === creditPlan);
-                  return sp ? renderPaymentForm(sp) : null;
-                })()}
-              </div>
-
-              {/* Section: Pay As You Go */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '22px 0 14px' }}>
-                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
-                <span style={{ color: '#fb923c', fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>Pay As You Go</span>
-                <div style={{ flex: 1, height: 1, background: '#1f2937' }} />
-              </div>
-
-              {(() => {
-                const p = PAY_GO;
-                const isSelected = creditPlan === p.key;
-                return (
-                  <div style={{ marginBottom: 10 }}>
-                    <div onClick={() => { setCreditPlan(p.key); setCreditMsg(null); }}
-                      style={{ background: '#0d1117', border: `1px solid ${isSelected ? p.accent : '#1f2937'}`, borderRadius: 14, padding: '18px 20px', cursor: 'pointer', userSelect: 'none',
-                        ...(isSelected ? { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, boxShadow: '0 0 0 1px #fb923c' } : {}) }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-                        <div>
-                          <div style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>Pay On The Go</div>
-                          <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>No commitment · buy only what you need</div>
-                        </div>
-                        <span style={{ background: 'rgba(251,146,60,0.12)', color: '#fb923c', fontSize: 10, fontWeight: 700, padding: '4px 9px', borderRadius: 6 }}>FLEXIBLE</span>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-                        <div style={{ background: 'rgba(251,146,60,0.07)', border: '1px solid rgba(251,146,60,0.15)', borderRadius: 10, padding: '12px 14px' }}>
-                          <div style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Rate</div>
-                          <div style={{ color: '#fff', fontWeight: 900, fontSize: 24, lineHeight: 1 }}>KES 40</div>
-                          <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>per credit</div>
-                        </div>
-                        <div style={{ background: 'rgba(251,146,60,0.07)', border: '1px solid rgba(251,146,60,0.15)', borderRadius: 10, padding: '12px 14px' }}>
-                          <div style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Minimum</div>
-                          <div style={{ color: '#fb923c', fontWeight: 900, fontSize: 24, lineHeight: 1 }}>KES 500</div>
-                          <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>any amount above</div>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-                        {['Pay any amount', 'Never expires', 'Instant credit'].map(chip => (
-                          <span key={chip} style={{ background: 'rgba(251,146,60,0.1)', color: '#fb923c', fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 20 }}>{chip}</span>
-                        ))}
-                      </div>
-                      <button style={{ width: '100%', padding: '11px 0', borderRadius: 10, cursor: 'pointer', fontWeight: 700, fontSize: 14,
-                        border: isSelected ? 'none' : '1px solid rgba(251,146,60,0.4)',
-                        background: isSelected ? '#fb923c' : 'transparent',
-                        color: isSelected ? '#000' : '#fb923c' }}>
-                        {isSelected ? '✓ Selected' : 'Pay as you go →'}
-                      </button>
-                    </div>
-                    {isSelected && renderPaymentForm(p)}
-                  </div>
-                );
-              })()}
 
             </div>
           );
@@ -4310,26 +4105,18 @@ export default function Dashboard() {
                 {/* Fee breakdown */}
                 {parseFloat(cbWithdrawAmount) > 0 && (() => {
                   const amt = parseFloat(cbWithdrawAmount) || 0;
-                  const CREDIT_FEE = 20;
-                  const traderCredits = profile?.trade_tokens || 0;
-                  const hasCredits = traderCredits >= CREDIT_FEE;
+                  const fee = getWithdrawalFee(cbWithdrawChannel === 'mpesa' ? 'mpesa' : 'bank', amt);
                   return (
                     <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: 16, fontSize: 13 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
-                        <span>Withdrawal Amount</span><span style={{ color: '#fff', fontWeight: 600 }}>KES {amt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span>You Receive</span><span style={{ color: '#10b981', fontWeight: 700 }}>KES {amt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                       </div>
-                      <div style={{ borderTop: '1px solid #374151', paddingTop: 8, marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: '#10b981', fontWeight: 700 }}>You Receive</span>
-                        <span style={{ color: '#10b981', fontWeight: 700, fontSize: 15 }}>KES {amt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
+                        <span>Transaction Fee <span style={{ color: '#6b7280', fontSize: 11 }}>(Choice Bank)</span></span><span style={{ color: '#f59e0b', fontWeight: 600 }}>+ KES {fee.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                       </div>
-                      <div style={{ borderTop: '1px solid #1f2937', paddingTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          <div style={{ color: '#a78bfa', fontWeight: 700, fontSize: 12 }}>SparkP2P Service Fee</div>
-                          <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>Your balance: {traderCredits.toLocaleString()} credits</div>
-                        </div>
-                        <span style={{ color: hasCredits ? '#a78bfa' : '#ef4444', fontWeight: 700, fontSize: 13 }}>
-                          {CREDIT_FEE} credits {hasCredits ? '' : '(insufficient)'}
-                        </span>
+                      <div style={{ borderTop: '1px solid #374151', paddingTop: 8, display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#fff', fontWeight: 700 }}>Deducted from balance</span>
+                        <span style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>KES {(amt + fee).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                       </div>
                     </div>
                   );
@@ -4356,10 +4143,9 @@ export default function Dashboard() {
                         : 'Funds will be sent to your configured bank account via Pesalink.'}
                     </p>
                     <button
-                      disabled={cbWithdrawOtpLoading || !parseFloat(cbWithdrawAmount) || (profile?.trade_tokens || 0) < 20}
+                      disabled={cbWithdrawOtpLoading || !parseFloat(cbWithdrawAmount)}
                       onClick={async () => {
-                        const minAmt = cbWithdrawChannel === 'mpesa' ? 10 : 100; if (!parseFloat(cbWithdrawAmount) || parseFloat(cbWithdrawAmount) < minAmt) { setCbWithdrawMsg(`Minimum withdrawal is KES ${minAmt}`); return; }
-                        if ((profile?.trade_tokens || 0) < 20) { setCbWithdrawMsg('You need at least 20 credits to withdraw'); return; }
+                        const minAmt = cbWithdrawChannel === 'mpesa' ? 1501 : 100; if (!parseFloat(cbWithdrawAmount) || parseFloat(cbWithdrawAmount) < minAmt) { setCbWithdrawMsg(`Minimum ${cbWithdrawChannel === 'mpesa' ? 'M-Pesa ' : ''}withdrawal is KES ${minAmt.toLocaleString()}`); return; }
                         setCbWithdrawOtpLoading(true); setCbWithdrawMsg('');
                         try {
                           const initFn = cbWithdrawChannel === 'mpesa' ? cbWithdrawToMpesaInitiate : cbWithdrawInitiate;
@@ -4369,9 +4155,9 @@ export default function Dashboard() {
                         } catch(e) { setCbWithdrawMsg(e.response?.data?.detail || 'Failed to send OTP'); }
                         setCbWithdrawOtpLoading(false);
                       }}
-                      style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: (parseFloat(cbWithdrawAmount) >= 100 && (profile?.trade_tokens || 0) >= 20) ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: (parseFloat(cbWithdrawAmount) >= 100 && (profile?.trade_tokens || 0) >= 20) ? 'pointer' : 'not-allowed' }}
+                      style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: parseFloat(cbWithdrawAmount) > 0 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: parseFloat(cbWithdrawAmount) > 0 ? 'pointer' : 'not-allowed' }}
                     >
-                      {cbWithdrawOtpLoading ? 'Sending OTP...' : (profile?.trade_tokens || 0) < 20 ? 'Insufficient credits (need 20)' : 'Send OTP to authorize'}
+                      {cbWithdrawOtpLoading ? 'Sending OTP...' : 'Send OTP to authorize'}
                     </button>
                   </>
                 ) : (
@@ -4509,7 +4295,7 @@ export default function Dashboard() {
               { key: 'profit',       label: 'Profit',      icon: BarChart2   },
               { key: 'logs',         label: 'Bot Logs',    icon: Activity    },
               ...(affiliateData?.affiliate ? [{ key: 'affiliates', label: 'Affiliates', icon: Share2 }] : []),
-              { key: 'credits',      label: 'Buy Credits', icon: DollarSign  },
+              { key: 'credits',      label: 'Subscriptions', icon: DollarSign  },
             ].map(({ key, label, icon: Icon }) => (
               <button key={key}
                 onClick={() => { setActiveTab(key); setMobMoreOpen(false); }}
