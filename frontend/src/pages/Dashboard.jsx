@@ -382,8 +382,6 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
   const [adSource, setAdSource] = useState(''); // 'orders' | 'ads' | 'market' | ''
   const [missingAd, setMissingAd] = useState(''); // 'buy' | 'sell' | ''
   const [todayStats, setTodayStats] = useState(null); // 24h live stats from backend
-  const [rateLimit, setRateLimit] = useState(null);   // daily trade/telegram caps + reset
-  const [rlNow, setRlNow] = useState(Date.now());     // ticks for the limit-reached countdown
   const [statsLoading, setStatsLoading] = useState(true);
 
   // Priority 1: use actual avg rates from today's completed orders (most accurate)
@@ -461,7 +459,6 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
       } finally {
         setStatsLoading(false);
       }
-      try { const rl = await getRateLimit(); setRateLimit(rl.data); } catch {}
     };
     fetchStats();
 
@@ -760,6 +757,8 @@ export default function Dashboard() {
   const scanStepRef = useRef(null);
   const [appVersion, setAppVersion] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [rateLimit, setRateLimit] = useState(null);   // daily trade/telegram caps + reset (for the banner)
+  const [rlNow, setRlNow] = useState(Date.now());     // ticks the limit-reached countdown
 
   // Fetch Choice Bank balance — poll every 10s when account is verified
   useEffect(() => {
@@ -966,10 +965,14 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, []);
 
-  // Tick once a second so the "limit reached" countdown to the 3 AM reset stays live.
+  // Fetch daily rate-limit status (for the limit-reached banner) + tick the countdown each second.
   useEffect(() => {
+    if (!localStorage.getItem('token')) return;
+    const fetchRL = () => { getRateLimit().then(r => setRateLimit(r.data)).catch(() => {}); };
+    fetchRL();
+    const poll = setInterval(fetchRL, 60000);
     const id = setInterval(() => setRlNow(Date.now()), 1000);
-    return () => clearInterval(id);
+    return () => { clearInterval(poll); clearInterval(id); };
   }, []);
 
   const loadData = async () => {
