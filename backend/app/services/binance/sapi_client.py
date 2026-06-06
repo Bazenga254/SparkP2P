@@ -82,6 +82,29 @@ async def _post(path: str, api_key: str, params: dict, body: dict) -> dict:
     return r.json()
 
 
+async def _get(path: str, api_key: str, params: dict) -> dict:
+    """GET from Binance — same egress routing as _post (per-trader desktop, shared relay, or
+    direct). Without this, GET endpoints silently bypass the relay and hit the geo-blocked VPS IP."""
+    headers = _build_headers(api_key)
+
+    # Per-trader egress: route through this trader's desktop (must be running).
+    if _RELAY_MODE == "per_trader":
+        tid = relay_trader.get()
+        if tid is not None:
+            from app.services.binance import relay_router
+            return await relay_router.execute(tid, path, params, None, headers, method="GET")
+
+    base = _RELAY_URL if _RELAY_URL else SAPI_BASE
+    url  = f"{base}{path}"
+    if _RELAY_URL:
+        logger.debug("Routing GET via shared relay: %s", url)
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(url, params=params, headers=headers)
+
+    return r.json()
+
+
 async def push_counterparty_filters(
     api_key: str,
     api_secret: str,
@@ -175,12 +198,7 @@ async def get_user_order_history(api_key: str, api_secret: str, page: int = 1, r
     params["page"] = page
     params["rows"] = rows
     params["signature"] = _sign(api_secret, params)
-    base = _RELAY_URL if _RELAY_URL else SAPI_BASE
-    headers = _build_headers(api_key)
-    url = f"{base}/sapi/v1/c2c/orderMatch/listUserOrderHistory"
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(url, params=params, headers=headers)
-    data = r.json()
+    data = await _get("/sapi/v1/c2c/orderMatch/listUserOrderHistory", api_key, params)
     # Surface Binance auth errors so callers can flag a dead/invalid key
     code = str(data.get("code")) if isinstance(data, dict) else None
     if code in ("-2008", "-2014", "-2015"):

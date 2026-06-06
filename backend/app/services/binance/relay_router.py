@@ -39,14 +39,14 @@ def is_connected(trader_id: int) -> bool:
     return (time.time() - _last_poll.get(trader_id, 0)) < _PRESENCE_WINDOW
 
 
-async def execute(trader_id: int, path: str, params: dict, body: dict, headers: dict) -> dict:
+async def execute(trader_id: int, path: str, params: dict, body: dict, headers: dict, method: str = "POST") -> dict:
     """Enqueue a signed Binance request for the trader's desktop and await its response.
     Returns the parsed JSON body. Raises RelayOffline on timeout."""
     job_id = uuid.uuid4().hex
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
     _job_futures[job_id] = fut
     await _queue(trader_id).put({
-        "job_id": job_id, "method": "POST", "path": path,
+        "job_id": job_id, "method": method, "path": path,
         "params": params, "body": body, "headers": headers,
     })
     try:
