@@ -2124,7 +2124,7 @@ export default function Admin() {
                           ].map(([label, unlimited, used, limit, color]) => (
                             <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
                               <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{label}</div>
-                              <div style={{ fontSize: 20, fontWeight: 800, color }}>{unlimited ? <>{used ?? 0} <span style={{ fontSize: 13, color: '#6b7280' }}>/ ∞</span></> : <>{used ?? 0} <span style={{ fontSize: 13, color: '#6b7280' }}>/ {limit ?? 0}</span></>}</div>
+                              <div style={{ fontSize: 20, fontWeight: 800, color }}>{unlimited ? <>{used ?? 0} <span style={{ fontSize: 13, color: '#6b7280' }}>/ unlimited</span></> : <>{used ?? 0} <span style={{ fontSize: 13, color: '#6b7280' }}>/ {limit ?? 0}</span></>}</div>
                             </div>
                           ))}
                         </div>
