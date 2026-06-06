@@ -850,6 +850,14 @@ export default function Admin() {
     return () => clearInterval(poll);
   }, [activeTab, txType, cryptoPeriod, txPeriod]);
 
+  // Keep the dashboard's "Recent orders" widget live — it otherwise only loads
+  // once on mount and freezes, so new orders never appear until a manual reload.
+  useEffect(() => {
+    if (activeTab !== 'dashboard') return;
+    const poll = setInterval(() => loadOrders(cryptoPeriod, ordersSearch), 15000);
+    return () => clearInterval(poll);
+  }, [activeTab, cryptoPeriod, ordersSearch]);
+
   const handleStatusChange = async (traderId, newStatus) => {
     await updateTraderStatus(traderId, newStatus);
     loadData();
@@ -1359,7 +1367,7 @@ export default function Admin() {
               <div className="adm-card">
                 <div className="adm-card-header">
                   <h3>Recent orders</h3>
-                  <span className="adm-card-count" style={{ cursor: 'pointer' }} onClick={() => setActiveTab('transactions')}>{orders.total} today →</span>
+                  <span className="adm-card-count" style={{ cursor: 'pointer' }} onClick={() => setActiveTab('transactions')}>{orders.total} total →</span>
                 </div>
                 <div>
                   {orders.orders.slice(0, 8).map((o, i) => (
