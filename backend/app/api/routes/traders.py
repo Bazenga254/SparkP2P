@@ -1231,7 +1231,8 @@ async def update_trading_config(
     if cf_changed and trader.binance_api_key and trader.binance_api_secret:
         try:
             from app.core.security import decrypt_data
-            from app.services.binance.sapi_client import get_merchant_ads, push_counterparty_filters
+            from app.services.binance.sapi_client import get_merchant_ads, push_counterparty_filters, relay_trader
+            relay_trader.set(trader.id)   # route via this trader's desktop in per_trader mode
             api_key    = decrypt_data(trader.binance_api_key)
             api_secret = decrypt_data(trader.binance_api_secret)
             ads = await get_merchant_ads(api_key, api_secret)
@@ -1314,7 +1315,8 @@ async def save_binance_api_key(
 ):
     """Save Binance API key + secret (encrypted). Verifies via EP-4, probes EP-7 for Gold Merchant tier."""
     from app.core.security import encrypt_data
-    from app.services.binance.sapi_client import get_merchant_ads, push_counterparty_filters
+    from app.services.binance.sapi_client import get_merchant_ads, push_counterparty_filters, relay_trader
+    relay_trader.set(trader.id)   # route via this trader's desktop in per_trader mode
 
     if not data.api_key.strip() or not data.api_secret.strip():
         raise HTTPException(status_code=400, detail="API key and secret are required.")

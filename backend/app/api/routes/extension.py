@@ -16,7 +16,7 @@ Flow:
 import logging
 from collections import deque
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from typing import List, Optional, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -802,6 +802,31 @@ async def receive_bot_log(
     return {"ok": True}
 
 
+# ── Per-trader Binance relay (the desktop executes the trader's Binance calls on its own IP) ──
+
+class RelayResultRequest(BaseModel):
+    job_id: str
+    body: Any = None
+
+
+@router.get("/relay/poll")
+async def relay_poll(trader: Trader = Depends(get_current_trader)):
+    """Desktop long-polls here. Returns the next signed Binance job for THIS trader to execute on
+    its own IP, or {job: None} if none arrives within the wait window. The desktop must pin the
+    host to Binance and only forward the returned path/params/body/headers."""
+    from app.services.binance import relay_router
+    job = await relay_router.next_job(trader.id, wait=25.0)
+    return job or {"job": None}
+
+
+@router.post("/relay/result")
+async def relay_result(data: RelayResultRequest, trader: Trader = Depends(get_current_trader)):
+    """Desktop posts back the Binance response (parsed JSON) for a job it executed."""
+    from app.services.binance import relay_router
+    delivered = relay_router.deliver_result(data.job_id, data.body)
+    return {"ok": delivered}
+
+
 @router.post("/heartbeat")
 async def heartbeat(
     trader: Trader = Depends(get_current_trader),
@@ -1391,7 +1416,8 @@ async def counterparty_stats(
         return {"ok": False, "error": "no_api_key"}
     try:
         from app.core.security import decrypt_data
-        from app.services.binance.sapi_client import get_counterparty_statistic
+        from app.services.binance.sapi_client import get_counterparty_statistic, relay_trader
+        relay_trader.set(trader.id)   # route via this trader's desktop in per_trader mode
         api_key = decrypt_data(trader.binance_api_key)
         api_secret = decrypt_data(trader.binance_api_secret)
         d = await get_counterparty_statistic(api_key, api_secret, order_number)

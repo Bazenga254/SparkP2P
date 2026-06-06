@@ -13,6 +13,7 @@ import hashlib
 import os
 import time
 import logging
+import contextvars
 
 import httpx
 
@@ -26,9 +27,15 @@ try:
     from app.core.config import settings as _cfg
     _RELAY_URL    = (_cfg.BINANCE_RELAY_URL or "").rstrip("/")
     _RELAY_SECRET = _cfg.BINANCE_RELAY_SECRET or ""
+    _RELAY_MODE   = (_cfg.RELAY_MODE or "shared").lower()
 except Exception:
     _RELAY_URL    = os.environ.get("BINANCE_RELAY_URL", "").rstrip("/")
     _RELAY_SECRET = os.environ.get("BINANCE_RELAY_SECRET", "")
+    _RELAY_MODE   = os.environ.get("RELAY_MODE", "shared").lower()
+
+# Set per-request so _post knows which trader's desktop to route through (per_trader mode).
+# Callers wrap their Binance work with relay_trader.set(trader.id); awaited calls inherit it.
+relay_trader: "contextvars.ContextVar[int | None]" = contextvars.ContextVar("relay_trader_id", default=None)
 
 
 def _sign(secret: str, params: dict) -> str:
@@ -52,13 +59,22 @@ def _build_headers(api_key: str) -> dict:
 
 
 async def _post(path: str, api_key: str, params: dict, body: dict) -> dict:
-    """POST to Binance directly, or via the residential relay if configured."""
+    """POST to Binance — via the trader's own desktop (per_trader mode), the shared residential
+    relay, or directly. In per_trader mode the desktop pins the host to Binance and only forwards
+    these params/body/headers, so api keys stay on the VPS and egress uses the trader's IP."""
     headers = _build_headers(api_key)
-    base    = _RELAY_URL if _RELAY_URL else SAPI_BASE
-    url     = f"{base}{path}"
 
+    # Per-trader egress: route through this trader's desktop (must be running).
+    if _RELAY_MODE == "per_trader":
+        tid = relay_trader.get()
+        if tid is not None:
+            from app.services.binance import relay_router
+            return await relay_router.execute(tid, path, params, body, headers)
+
+    base = _RELAY_URL if _RELAY_URL else SAPI_BASE
+    url  = f"{base}{path}"
     if _RELAY_URL:
-        logger.debug("Routing via relay: %s", url)
+        logger.debug("Routing via shared relay: %s", url)
 
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.post(url, params=params, json=body, headers=headers)

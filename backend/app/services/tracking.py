@@ -508,8 +508,12 @@ async def track_trader(db, trader) -> int:
     """Record this trader's newly-completed Binance orders into the Orders table,
     counting only those created during the current continuous online session."""
     from app.core.security import decrypt_data
-    from app.services.binance.sapi_client import get_user_order_history, get_order_identity
+    from app.services.binance.sapi_client import get_user_order_history, get_order_identity, relay_trader
     from sqlalchemy import text as _cpt_text
+
+    # Route this trader's Binance calls through their own desktop (per_trader mode). Inherited by
+    # the background tasks created below; harmless no-op in shared mode.
+    relay_trader.set(trader.id)
 
     now = datetime.now(timezone.utc)
     now_ms = int(now.timestamp() * 1000)

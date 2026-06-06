@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     BINANCE_DEFAULT_USER_AGENT: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     BINANCE_RELAY_URL: str = ""
     BINANCE_RELAY_SECRET: str = ""
+    # Binance egress mode: "shared" = one residential relay (BINANCE_RELAY_URL); "per_trader" =
+    # route each trader's calls through their OWN desktop (app must be running). Default shared.
+    RELAY_MODE: str = "shared"
 
     # Claude AI
     ANTHROPIC_API_KEY: str = ""
