@@ -425,7 +425,60 @@ app.whenReady().then(() => {
   createTray();
   aiScanner.initAI(anthropicApiKey);
   checkForUpdates();
+  startRelayAgent();   // execute this trader's Binance calls from THIS machine's IP
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// PER-TRADER BINANCE RELAY AGENT
+// The VPS is geo-blocked by Binance, so it hands this trader's signed Binance requests to this
+// machine (the trader's own residential IP) to execute. The VPS signs everything; we only forward
+// the request to Binance (host pinned) and return the response. Runs only while logged in.
+// ═══════════════════════════════════════════════════════════════════
+const BINANCE_API_BASE = 'https://api.binance.com';
+let relayAgentRunning = false;
+
+async function startRelayAgent() {
+  if (relayAgentRunning) return;
+  relayAgentRunning = true;
+  const nap = ms => new Promise(r => setTimeout(r, ms));
+  for (;;) {
+    if (!token) { await nap(3000); continue; }
+    let job = null;
+    try {
+      const r = await fetch(`${API_BASE}/ext/relay/poll`, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (r.ok) { const d = await r.json(); if (d && d.job_id) job = d; }
+      else { await nap(2000); continue; }
+    } catch { await nap(2000); continue; }
+    if (!job) continue;   // no job within the long-poll window — re-poll immediately
+
+    let respBody = null;
+    try {
+      const url = new URL(BINANCE_API_BASE + job.path);
+      const params = job.params || {};
+      for (const k of Object.keys(params)) url.searchParams.set(k, String(params[k]));
+      const headers = {};
+      for (const [k, v] of Object.entries(job.headers || {})) {
+        if (/^x-relay-/i.test(k)) continue;   // relay-only headers don't go to Binance
+        headers[k] = v;
+      }
+      const br = await fetch(url.toString(), {
+        method: job.method || 'POST',
+        headers,
+        body: (job.body !== null && job.body !== undefined) ? JSON.stringify(job.body) : undefined,
+      });
+      try { respBody = await br.json(); } catch { respBody = null; }
+    } catch (e) {
+      respBody = { code: 'RELAY_EXEC_ERROR', msg: String(e && e.message ? e.message : e) };
+    }
+    try {
+      await fetch(`${API_BASE}/ext/relay/result`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ job_id: job.job_id, body: respBody }),
+      });
+    } catch { /* VPS will time the job out; next poll continues */ }
+  }
+}
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // AUTO-UPDATE â€” checks GitHub Releases for new versions
