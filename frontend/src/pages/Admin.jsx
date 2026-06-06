@@ -1643,6 +1643,7 @@ export default function Admin() {
               : { bg: 'rgba(156,163,175,0.12)', color: '#9ca3af' };
             const onlineCount = traders.filter(t => fmtLastSeen(t.last_seen_at, t.last_web_active).online).length;
             const adminCount  = traders.filter(t => t.role === 'admin').length;
+            const relayCount  = traders.filter(t => t.relay_connected).length;
             // CSV export
             const exportCSV = () => {
               const header = 'Name,Email,Phone,Tier,Role,Trades,Volume,Status';
@@ -1657,7 +1658,7 @@ export default function Admin() {
                   <div>
                     <div style={{ color: '#e5e7eb', fontSize: 18, fontWeight: 600 }}>All traders</div>
                     <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>
-                      {traders.length} total · {adminCount} admin · {onlineCount} online now
+                      {traders.length} total · {adminCount} admin · {onlineCount} online now · <span style={{ color: relayCount > 0 ? '#10b981' : '#9ca3af' }}>{relayCount} on v1.9.2 relay</span>
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -1786,6 +1787,12 @@ export default function Admin() {
                                 API {t.binance_api_key_saved ? '✓' : '✗'}
                               </span>
                             )}
+                            <span title={t.relay_connected ? 'Relay connected (v1.9.2) — uses own IP' : 'Relay not connected (not on v1.9.2 / app off)'}
+                              style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, fontWeight: 700, flexShrink: 0,
+                                background: t.relay_connected ? 'rgba(16,185,129,0.18)' : 'rgba(107,114,128,0.15)',
+                                color: t.relay_connected ? '#10b981' : '#9ca3af' }}>
+                              Relay {t.relay_connected ? '✓' : '✗'}
+                            </span>
                           </div>
                           <div style={{ color: '#6b7280', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.email}</div>
                           <div style={{ color: '#9ca3af', fontSize: 11, marginTop: 2 }}>{t.phone || 'No phone'}</div>
@@ -1931,6 +1938,13 @@ export default function Admin() {
                                 color: t.telegram_connected ? '#10b981' : '#ef4444',
                                 border: `1px solid ${t.telegram_connected ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.35)'}` }}>
                               {t.telegram_connected ? 'Telegram ✓' : 'Telegram ✗'}
+                            </span>
+                            <span title={t.relay_connected ? 'Relay connected — on v1.9.2, Binance calls run from this trader’s own IP' : 'Relay not connected — trader not on v1.9.2, or app not running'}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: 'help',
+                                background: t.relay_connected ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.12)',
+                                color: t.relay_connected ? '#10b981' : '#9ca3af',
+                                border: `1px solid ${t.relay_connected ? 'rgba(16,185,129,0.4)' : 'rgba(107,114,128,0.25)'}` }}>
+                              {t.relay_connected ? 'Relay ✓' : 'Relay ✗'}
                             </span>
                             {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_web_active || t.last_login); return (
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: s.online ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.12)', color: s.online ? '#10b981' : '#9ca3af', border: `1px solid ${s.online ? 'rgba(16,185,129,0.3)' : 'rgba(107,114,128,0.25)'}` }}>

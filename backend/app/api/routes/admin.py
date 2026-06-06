@@ -212,6 +212,8 @@ async def list_traders(
 
     is_full_admin = admin.is_admin and admin.role == "admin"
 
+    from app.services.binance import relay_router as _relay  # per-trader relay presence (v1.9.2+)
+
     await write_audit_log(
         db, admin, "list_traders",
         ip_address=get_client_ip(request),
@@ -239,6 +241,7 @@ async def list_traders(
             "choice_account_id": t.choice_account_id or None,
             "choice_account_number": t.choice_account_number or None,
             "choice_kyc_status": t.choice_kyc_status or None,
+            "relay_connected": _relay.is_connected(t.id),
         }
         for t in traders
     ]
@@ -463,6 +466,7 @@ async def get_trader_detail(
     from app.services.plans import active_plan, plan_label
     from app.services.rate_limits import trade_rate_status, tg_rate_status
     from app.models.subscription import Subscription, SubscriptionStatus
+    from app.services.binance import relay_router as _relaymod
     _plan = await active_plan(db, trader_id)
     _trades = await trade_rate_status(db, trader)
     _tg = tg_rate_status(_plan, trader)
@@ -507,6 +511,7 @@ async def get_trader_detail(
         "binance_api_key_saved": bool(trader.binance_api_key),
         "telegram_connected": bool(trader.telegram_chat_id),
         "telegram_notify_scope": trader.telegram_notify_scope or 'both',
+        "relay_connected": _relaymod.is_connected(trader.id),
         "last_web_active": (trader.last_web_active or trader.last_login).isoformat() if (trader.last_web_active or trader.last_login) else None,
         "total_trades": max(trader.total_trades or 0, live_trades),
         "total_volume": max(float(trader.total_volume or 0), live_volume),
