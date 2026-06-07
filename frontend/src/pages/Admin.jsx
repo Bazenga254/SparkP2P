@@ -152,6 +152,7 @@ export default function Admin() {
   const [unmatched, setUnmatched] = useState({ deposits: [], withdrawals: [] });
   const [unmatchedTab, setUnmatchedTab] = useState('deposits');
   const [analytics, setAnalytics] = useState(null);
+  const [chartTip, setChartTip] = useState(null); // hover tooltip for monthly volume bars
   const [onlineTraders, setOnlineTraders] = useState([]);
   const [transactions, setTransactions] = useState({ total: 0, transactions: [] });
   const [orders, setOrders] = useState({ total: 0, orders: [] });
@@ -1333,8 +1334,16 @@ export default function Admin() {
                             {analytics.monthly_volumes.map((m, i) => (
                               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
                                 <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', height: 272 }}>
-                                  <div style={{ width: 22, background: '#3b82f6', borderRadius: '3px 3px 0 0', height: `${Math.max((m.buy_volume / maxVolume) * 272, 2)}px` }} title={`Buy: ${fmtKES(m.buy_volume)}`} />
-                                  <div style={{ width: 22, background: '#10b981', borderRadius: '3px 3px 0 0', height: `${Math.max((m.sell_volume / maxVolume) * 272, 2)}px` }} title={`Sell: ${fmtKES(m.sell_volume)}`} />
+                                  {[{ key: 'buy', color: '#3b82f6', val: m.buy_volume }, { key: 'sell', color: '#10b981', val: m.sell_volume }].map(b => (
+                                    <div key={b.key}
+                                      onMouseEnter={(e) => setChartTip({ x: e.clientX, y: e.clientY, m, focus: b.key })}
+                                      onMouseMove={(e) => setChartTip(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
+                                      onMouseLeave={() => setChartTip(null)}
+                                      style={{ width: 22, background: b.color, borderRadius: '3px 3px 0 0', cursor: 'pointer',
+                                        height: `${Math.max((b.val / maxVolume) * 272, 2)}px`,
+                                        boxShadow: (chartTip && chartTip.m === m && chartTip.focus === b.key) ? '0 0 0 2px rgba(255,255,255,0.55)' : 'none',
+                                        transition: 'box-shadow .1s' }} />
+                                  ))}
                                 </div>
                                 <span style={{ fontSize: 13, fontWeight: 600, color: '#cbd5e1', marginTop: 8 }}>{m.month.split(' ')[0]}</span>
                               </div>
@@ -1343,6 +1352,23 @@ export default function Admin() {
                         </div>
                       </div>
                     ) : <p className="adm-empty" style={{ padding: '40px 0' }}>No volume data yet</p>}
+                    {chartTip && (
+                      <div style={{ position: 'fixed', left: Math.min(chartTip.x + 14, (typeof window !== 'undefined' ? window.innerWidth : 9999) - 210), top: chartTip.y - 12, zIndex: 1000, pointerEvents: 'none', background: '#0f1117', border: '1px solid #2a2f3a', borderRadius: 8, padding: '10px 12px', minWidth: 180, boxShadow: '0 10px 30px rgba(0,0,0,0.55)', fontSize: 12 }}>
+                        <div style={{ fontWeight: 700, color: '#e5e7eb', marginBottom: 7 }}>{chartTip.m.month}</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, color: chartTip.focus === 'buy' ? '#60a5fa' : '#9ca3af', fontWeight: chartTip.focus === 'buy' ? 700 : 500 }}>
+                          <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: '#3b82f6', marginRight: 6 }} />Buy</span><span>{fmtKES(chartTip.m.buy_volume)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginTop: 4, color: chartTip.focus === 'sell' ? '#34d399' : '#9ca3af', fontWeight: chartTip.focus === 'sell' ? 700 : 500 }}>
+                          <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: '#10b981', marginRight: 6 }} />Sell</span><span>{fmtKES(chartTip.m.sell_volume)}</span>
+                        </div>
+                        <div style={{ borderTop: '1px solid #2a2f3a', marginTop: 7, paddingTop: 6, display: 'flex', justifyContent: 'space-between', color: '#cbd5e1' }}>
+                          <span>Total</span><span style={{ fontWeight: 700 }}>{fmtKES(chartTip.m.total_volume)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6b7280', marginTop: 2 }}>
+                          <span>Trades</span><span>{chartTip.m.trades}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {analytics?.monthly_volumes?.length > 0 && (
                     <div style={{ display: 'flex', gap: 24, padding: '4px 20px 16px', fontSize: 14, fontWeight: 700, color: '#e5e7eb' }}>
