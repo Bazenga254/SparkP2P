@@ -557,8 +557,9 @@ async def track_trader(db, trader) -> int:
 
     # Live in-progress order count (orders the merchant is currently processing —
     # not yet completed/cancelled). Surfaced on the admin trader-detail page.
+    _DONE_STATUSES = TERMINAL | {"EXPIRED", "EXPIRED_BY_SYSTEM"}  # finished, NOT processing
     trader.pending_orders_count = sum(
-        1 for o in rows if (o.get("orderStatus") or "").upper() not in TERMINAL
+        1 for o in rows if (o.get("orderStatus") or "").upper() not in _DONE_STATUSES
     )
     # Commit the trader-row updates NOW so the row lock is released before the slow
     # relay-based enrichment below. Otherwise the trader row stays locked across every
