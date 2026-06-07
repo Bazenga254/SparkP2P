@@ -2210,9 +2210,11 @@ export default function Admin() {
                       <div className="card-b">
                         {(() => {
                           const method = (t.settlement_method || '').toString().toLowerCase();
-                          const methodLabel = method === 'mpesa' ? 'M-Pesa' : method === 'paybill' ? 'Paybill' : method === 'bank' ? 'I&M Bank' : method || '—';
+                          const isBank = method === 'bank' || method === 'bank_paybill';
+                          const methodLabel = method === 'mpesa' ? 'M-Pesa' : method === 'paybill' ? 'Paybill' : isBank ? 'I&M Bank' : method || '—';
                           const pendingMethod = (t.pending_settlement_method || '').toString().toLowerCase();
-                          const pendingLabel = pendingMethod === 'mpesa' ? 'M-Pesa' : pendingMethod === 'paybill' ? 'Paybill' : pendingMethod === 'bank' ? 'I&M Bank' : pendingMethod || '';
+                          const isPendBank = pendingMethod === 'bank' || pendingMethod === 'bank_paybill' || pendingMethod === 'im_update';
+                          const pendingLabel = (pendingMethod === 'mpesa' || pendingMethod === 'mpesa_update') ? 'M-Pesa' : pendingMethod === 'paybill' ? 'Paybill' : isPendBank ? 'I&M Bank' : pendingMethod || '';
                           return (
                             <>
                               <div className="wd-head">
@@ -2223,8 +2225,9 @@ export default function Admin() {
                                 {method === 'mpesa' && t.settlement_phone && <div className="kv-row"><span className="kv-k">M-Pesa Phone</span><span className="kv-v">{t.settlement_phone}</span></div>}
                                 {method === 'paybill' && t.settlement_paybill && <div className="kv-row"><span className="kv-k">Paybill Number</span><span className="kv-v">{t.settlement_paybill}</span></div>}
                                 {method === 'paybill' && t.settlement_account && <div className="kv-row"><span className="kv-k">Account Reference</span><span className="kv-v">{t.settlement_account}</span></div>}
-                                {method === 'bank' && t.settlement_account && <div className="kv-row"><span className="kv-k">Account Number</span><span className="kv-v">{t.settlement_account}</span></div>}
-                                {method === 'bank' && t.settlement_bank_name && <div className="kv-row"><span className="kv-k">Bank Name</span><span className="kv-v">{t.settlement_bank_name}</span></div>}
+                                {isBank && t.settlement_account && <div className="kv-row"><span className="kv-k">Account Number</span><span className="kv-v">{t.settlement_account}</span></div>}
+                                {isBank && t.settlement_bank_name && <div className="kv-row"><span className="kv-k">Bank Name</span><span className="kv-v">{t.settlement_bank_name}</span></div>}
+                                {isBank && t.settlement_phone && <div className="kv-row"><span className="kv-k">M-Pesa Fallback</span><span className="kv-v">{t.settlement_phone}</span></div>}
                               </div>
                               {pendingMethod && (
                                 <div className="wd-pending-box">
@@ -2233,8 +2236,8 @@ export default function Admin() {
                                     {pendingMethod === 'mpesa' && t.pending_settlement_phone && <div className="kv-row"><span className="kv-k">New Phone</span><span className="kv-v">{t.pending_settlement_phone}</span></div>}
                                     {pendingMethod === 'paybill' && t.pending_settlement_paybill && <div className="kv-row"><span className="kv-k">New Paybill</span><span className="kv-v">{t.pending_settlement_paybill}</span></div>}
                                     {pendingMethod === 'paybill' && t.pending_settlement_account && <div className="kv-row"><span className="kv-k">New Account Ref</span><span className="kv-v">{t.pending_settlement_account}</span></div>}
-                                    {pendingMethod === 'bank' && t.pending_settlement_account && <div className="kv-row"><span className="kv-k">New Account</span><span className="kv-v">{t.pending_settlement_account}</span></div>}
-                                    {pendingMethod === 'bank' && t.pending_settlement_bank_name && <div className="kv-row"><span className="kv-k">New Bank</span><span className="kv-v">{t.pending_settlement_bank_name}</span></div>}
+                                    {isPendBank && t.pending_settlement_account && <div className="kv-row"><span className="kv-k">New Account</span><span className="kv-v">{t.pending_settlement_account}</span></div>}
+                                    {isPendBank && t.pending_settlement_bank_name && <div className="kv-row"><span className="kv-k">New Bank</span><span className="kv-v">{t.pending_settlement_bank_name}</span></div>}
                                   </div>
                                 </div>
                               )}
