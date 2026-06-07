@@ -262,20 +262,24 @@ function ProfitPage() {
       {/* Detailed breakdown */}
       <div className="card">
         <div className="card-header"><List size={18} /><h3>Breakdown</h3></div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1fr 0.7fr', gap: 6, fontSize: 11, color: '#6b7280', padding: '6px 0', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>
-          <span>Period</span><span style={{ textAlign: 'right' }}>Profit</span><span style={{ textAlign: 'right' }}>Volume</span><span style={{ textAlign: 'right' }}>Spread</span><span style={{ textAlign: 'right' }}>Trades</span>
-        </div>
-        {rows.filter(r => r.trades > 0).length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '24px 0', color: '#6b7280', fontSize: 13 }}>No trades in this period.</div>
-        ) : rows.filter(r => r.trades > 0).map(r => (
-          <div key={r.key} style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1fr 0.7fr', gap: 6, fontSize: 13, padding: '9px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-            <span style={{ color: '#cbd5e1' }}>{r.label}</span>
-            <span style={{ textAlign: 'right', fontWeight: 700, color: (r.net || 0) >= 0 ? '#10b981' : '#ef4444' }}>{fmtKES(r.net)}</span>
-            <span style={{ textAlign: 'right', color: '#9ca3af' }}>KES {fmtCompact(r.volume)}</span>
-            <span style={{ textAlign: 'right', color: '#f59e0b' }}>{(r.spread || 0).toFixed(2)}</span>
-            <span style={{ textAlign: 'right', color: '#6b7280' }}>{r.trades}</span>
+        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          <div style={{ minWidth: 460 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1fr 0.7fr', gap: 6, fontSize: 11, color: '#6b7280', padding: '6px 0', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>
+              <span>Period</span><span style={{ textAlign: 'right' }}>Profit</span><span style={{ textAlign: 'right' }}>Volume</span><span style={{ textAlign: 'right' }}>Spread</span><span style={{ textAlign: 'right' }}>Trades</span>
+            </div>
+            {rows.filter(r => r.trades > 0).length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '24px 0', color: '#6b7280', fontSize: 13 }}>No trades in this period.</div>
+            ) : rows.filter(r => r.trades > 0).map(r => (
+              <div key={r.key} style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1fr 0.7fr', gap: 6, fontSize: 13, padding: '9px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                <span style={{ color: '#cbd5e1' }}>{r.label}</span>
+                <span style={{ textAlign: 'right', fontWeight: 700, color: (r.net || 0) >= 0 ? '#10b981' : '#ef4444' }}>{fmtKES(r.net)}</span>
+                <span style={{ textAlign: 'right', color: '#9ca3af' }}>KES {fmtCompact(r.volume)}</span>
+                <span style={{ textAlign: 'right', color: '#f59e0b' }}>{(r.spread || 0).toFixed(2)}</span>
+                <span style={{ textAlign: 'right', color: '#6b7280' }}>{r.trades}</span>
+              </div>
+            ))}
           </div>
-        ))}
+        </div>
         <div style={{ marginTop: 10, fontSize: 10, color: '#6b7280' }}>Realized profit (cost-basis) · includes all completed trades, online or off · use ‹ › to view any past period</div>
       </div>
     </div>
