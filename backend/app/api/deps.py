@@ -79,6 +79,21 @@ async def get_current_trader(
     return trader
 
 
+async def get_current_trader_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> int:
+    """Lightweight auth — returns the trader id straight from the JWT, WITHOUT
+    opening a DB connection. Use for long-lived endpoints (e.g. the relay
+    long-poll) so they don't pin a pool connection for the whole request."""
+    if not credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    payload = decode_access_token(credentials.credentials)
+    sub = payload.get("sub") if payload else None
+    if not sub:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    return int(sub)
+
+
 async def get_admin_trader(
     request: Request,
     trader: Trader = Depends(get_current_trader),

@@ -30,7 +30,7 @@ from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.im_sweep import ImSweep
 from app.models.batch import WithdrawalBatch, BatchItem
 from app.services.settlement.engine import SettlementEngine
-from app.api.deps import get_current_trader
+from app.api.deps import get_current_trader, get_current_trader_id
 
 logger = logging.getLogger(__name__)
 
@@ -810,17 +810,20 @@ class RelayResultRequest(BaseModel):
 
 
 @router.get("/relay/poll")
-async def relay_poll(trader: Trader = Depends(get_current_trader)):
+async def relay_poll(trader_id: int = Depends(get_current_trader_id)):
     """Desktop long-polls here. Returns the next signed Binance job for THIS trader to execute on
     its own IP, or {job: None} if none arrives within the wait window. The desktop must pin the
-    host to Binance and only forward the returned path/params/body/headers."""
+    host to Binance and only forward the returned path/params/body/headers.
+
+    Auth is token-only (no DB) so the 25s wait does NOT hold a pool connection — otherwise every
+    online trader polling back-to-back pins a connection and exhausts the DB pool."""
     from app.services.binance import relay_router
-    job = await relay_router.next_job(trader.id, wait=25.0)
+    job = await relay_router.next_job(trader_id, wait=25.0)
     return job or {"job": None}
 
 
 @router.post("/relay/result")
-async def relay_result(data: RelayResultRequest, trader: Trader = Depends(get_current_trader)):
+async def relay_result(data: RelayResultRequest, _tid: int = Depends(get_current_trader_id)):
     """Desktop posts back the Binance response (parsed JSON) for a job it executed."""
     from app.services.binance import relay_router
     delivered = relay_router.deliver_result(data.job_id, data.body)
