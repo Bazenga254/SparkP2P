@@ -560,6 +560,11 @@ async def track_trader(db, trader) -> int:
     trader.pending_orders_count = sum(
         1 for o in rows if (o.get("orderStatus") or "").upper() not in TERMINAL
     )
+    # Commit the trader-row updates NOW so the row lock is released before the slow
+    # relay-based enrichment below. Otherwise the trader row stays locked across every
+    # get_order_identity relay call (up to ~25s each), blocking heartbeats/logins/alerts
+    # for that trader and piling up DB connections until the pool is exhausted.
+    await db.commit()
 
     # Backfill ALL completed Binance orders into the Orders table (not just while-online ones)
     # so profit/volume + cost basis are complete. Self-gated to re-run every ~30 min, so trades
@@ -606,6 +611,7 @@ async def track_trader(db, trader) -> int:
             settled_at=(datetime.fromtimestamp(ct / 1000, tz=timezone.utc) if (ct and status == OrderStatus.COMPLETED) else None),
         ))
         inserted += 1
+        await db.commit()   # persist order + release row locks BEFORE the relay call below
 
         # Incrementally cache this COMPLETED order's counterparty (stable takerUserNo) so the
         # buy/sell relationship history converges to completeness over time — no slow backfill
@@ -622,6 +628,7 @@ async def track_trader(db, trader) -> int:
                         "n": _idd.get("counterparty_nickname"),
                         "tt": (o.get("tradeType") or "").upper(),
                         "p": float(o.get("totalPrice") or 0), "c": ct})
+                    await db.commit()   # never hold this lock across the next iteration's relay call
             except Exception:
                 pass
 
@@ -962,6 +969,7 @@ async def track_trader(db, trader) -> int:
                 await db.execute(_sql_text3(
                     "UPDATE counterparty_trades SET status = :s WHERE order_number = :o"
                 ), {"s": _cur, "o": str(ono)})
+                await db.commit()   # release the lock before the (network) Telegram send below
                 # Respect the merchant's notification scope — don't announce the outcome of an
                 # order type they've muted (e.g. a BUY order's 'completed' when scope = sell).
                 _muted = (_scope == "sell" and _tt == "BUY") or (_scope == "buy" and _tt == "SELL")
