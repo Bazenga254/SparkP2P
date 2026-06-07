@@ -197,6 +197,7 @@ class Trader(Base):
     live_alltime_volume   = Column(Numeric(18, 2), default=0)
     live_alltime_trades   = Column(Integer, default=0)
     live_alltime_at       = Column(DateTime(timezone=True), nullable=True)
+    pending_orders_count  = Column(Integer, default=0, server_default="0")  # live in-progress (non-terminal) Binance orders, refreshed each poll
     password_changed_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

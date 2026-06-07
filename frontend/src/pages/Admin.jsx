@@ -1999,6 +1999,21 @@ export default function Admin() {
                       {/* Trader info grid */}
                       <div className="adm-card" style={{ flex: '1 1 0' }}>
                         <div className="adm-card-header"><h3>Account Info</h3></div>
+                        {typeof t.pending_orders_count === 'number' && (
+                          <div style={{
+                            margin: '12px 20px 0', padding: '10px 14px', borderRadius: 8,
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            background: t.pending_orders_count > 0 ? 'rgba(245,158,11,0.12)' : 'rgba(107,114,128,0.10)',
+                            border: '1px solid ' + (t.pending_orders_count > 0 ? 'rgba(245,158,11,0.35)' : 'var(--border)'),
+                          }}>
+                            <span style={{ fontSize: 12, color: '#9ca3af' }}>
+                              Pending orders <span style={{ color: '#6b7280' }}>(processing now)</span>
+                            </span>
+                            <span style={{ fontWeight: 800, fontSize: 18, color: t.pending_orders_count > 0 ? '#f59e0b' : '#6b7280' }}>
+                              {t.pending_orders_count}
+                            </span>
+                          </div>
+                        )}
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 24px', fontSize: 13, padding: '16px 20px 20px' }}>
                           {[
                             ['Email', t.email],

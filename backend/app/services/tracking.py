@@ -555,6 +555,12 @@ async def track_trader(db, trader) -> int:
     if trader.binance_api_key_invalid:
         trader.binance_api_key_invalid = False  # healthy read -> clear stale flag
 
+    # Live in-progress order count (orders the merchant is currently processing —
+    # not yet completed/cancelled). Surfaced on the admin trader-detail page.
+    trader.pending_orders_count = sum(
+        1 for o in rows if (o.get("orderStatus") or "").upper() not in TERMINAL
+    )
+
     # Backfill ALL completed Binance orders into the Orders table (not just while-online ones)
     # so profit/volume + cost basis are complete. Self-gated to re-run every ~30 min, so trades
     # made while the bot was off are captured without a restart.
