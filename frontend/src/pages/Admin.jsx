@@ -878,6 +878,15 @@ export default function Admin() {
     }
   };
 
+  // Re-pull the full trader detail so derived fields (plan, plan_label, daily
+  // limits, expiry) reflect a tier/status change immediately — not just on reload.
+  const refreshTraderDetail = async (traderId) => {
+    try {
+      const r = await api.get(`/admin/traders/${traderId}/detail`);
+      setViewingTrader(prev => (prev && prev.id === traderId) ? { ...prev, ...(r.data || {}) } : prev);
+    } catch (_) {}
+  };
+
   const loadTraderPnl = async (traderId, period) => {
     setPnlLoading(true);
     try {
@@ -1942,7 +1951,7 @@ export default function Admin() {
                       <div className="hero-actions">
                         <div className="field">
                           <label>Status</label>
-                          <select value={t.status || 'pending'} onChange={async (e) => { await handleStatusChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, status: e.target.value })); }}>
+                          <select value={t.status || 'pending'} onChange={async (e) => { const v = e.target.value; setViewingTrader(prev => ({ ...prev, status: v })); await handleStatusChange(t.id, v); await refreshTraderDetail(t.id); }}>
                             <option value="pending">Pending</option>
                             <option value="active">Active</option>
                             <option value="paused">Paused</option>
@@ -1951,7 +1960,15 @@ export default function Admin() {
                         </div>
                         <div className="field">
                           <label>Tier</label>
-                          <select value={t.tier || 'standard'} onChange={async (e) => { await handleTierChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, tier: e.target.value })); }}>
+                          <select value={t.tier || 'standard'} onChange={async (e) => {
+                            const v = e.target.value;
+                            const labelMap = { standard: null, starter: 'Starter', pro: 'Starter Pro', pro_max: 'Starter Pro Max' };
+                            // Optimistic: tier chip + plan label update instantly
+                            setViewingTrader(prev => ({ ...prev, tier: v, plan: v === 'standard' ? null : v, plan_label: labelMap[v] }));
+                            await handleTierChange(t.id, v);
+                            // Authoritative: pull fresh plan, daily limits, expiry
+                            await refreshTraderDetail(t.id);
+                          }}>
                             <option value="standard">Free</option>
                             <option value="starter">Starter — KES 3,000/mo</option>
                             <option value="pro">Starter Pro — KES 5,000/mo</option>
@@ -1960,7 +1977,7 @@ export default function Admin() {
                         </div>
                         <div className="field">
                           <label>Role</label>
-                          <select value={t.role || 'trader'} onChange={async (e) => { await handleRoleChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, role: e.target.value })); }}>
+                          <select value={t.role || 'trader'} onChange={async (e) => { const v = e.target.value; setViewingTrader(prev => ({ ...prev, role: v })); await handleRoleChange(t.id, v); await refreshTraderDetail(t.id); }}>
                             <option value="trader">Trader</option>
                             <option value="employee">Employee</option>
                             <option value="admin">Admin</option>
