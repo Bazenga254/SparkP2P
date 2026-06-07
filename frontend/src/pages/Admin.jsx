@@ -136,6 +136,7 @@ export default function Admin() {
   const [pnlLoading, setPnlLoading] = useState(false);
   const [txPage, setTxPage] = useState(1);
   const [ordersPage, setOrdersPage] = useState(1);
+  const [ledgerTab, setLedgerTab] = useState('activity');
   const PAGE_SIZE = 15;
   const [addTokensAmount, setAddTokensAmount] = useState('');
   const [addTokensNote, setAddTokensNote] = useState('');
@@ -1882,221 +1883,199 @@ export default function Admin() {
             const statusColor = t.status === 'active' ? '#10b981' : t.status === 'suspended' ? '#ef4444' : '#f59e0b';
             const tierColor = t.tier === 'advanced' ? '#ef4444' : t.tier === 'pro_max' ? '#8b5cf6' : t.tier === 'pro' ? '#f59e0b' : t.tier === 'starter' ? '#3b82f6' : '#6b7280';
 
+            const fmtCompact = (v) => {
+              const n = Math.abs(v || 0);
+              if (n >= 1e9) return (v / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+              if (n >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+              if (n >= 1e3) return (v / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+              return String(v || 0);
+            };
+            const tierLabel = t.tier === 'standard' ? 'Free' : t.tier === 'pro_max' ? 'Starter Pro Max' : t.tier === 'pro' ? 'Starter Pro' : t.tier === 'starter' ? 'Starter' : (t.tier || 'Free');
+            const MT = { gold: { l: 'Gold Merchant', c: 'var(--gold)' }, silver: { l: 'Silver Merchant', c: '#cbd5e1' }, bronze: { l: 'Bronze Merchant', c: '#d97757' } };
+            const merchant = (t.binance_api_key_saved && !t.binance_api_key_invalid) ? MT[(t.binance_merchant_tier || '').toLowerCase()] : null;
+            const seen = fmtLastSeen(t.last_seen_at, t.last_web_active || t.last_login);
+
             return (
-              <div>
+              <div className="tdx">
                 {/* Back bar */}
-                <div style={{ marginBottom: 16 }}>
-                  <button
-                    onClick={() => setViewingTrader(null)}
-                    style={{ background: 'none', border: '1px solid var(--border)', color: '#9ca3af', padding: '8px 16px', borderRadius: 8, cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}
-                  >
+                <div className="tdx-back">
+                  <button onClick={() => setViewingTrader(null)} className="back-btn">
                     ← All Traders
                   </button>
                 </div>
 
                 {viewingTraderLoading && (
-                  <div style={{ textAlign: 'center', color: '#6b7280', padding: 40 }}>Loading trader details...</div>
+                  <div className="tdx-loading">Loading trader details…</div>
                 )}
 
                 {!viewingTraderLoading && (
                   <>
-                    {/* Hero card */}
-                    <div className="adm-card" style={{ marginBottom: 16 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', padding: '20px 24px' }}>
-                        {/* Avatar */}
-                        <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg, #f59e0b, #ef4444)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
-                          {initials}
-                        </div>
-                        {/* Name + badges */}
-                        <div style={{ flex: 1, minWidth: 200 }}>
-                          <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>{t.full_name}</div>
-                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${statusColor}22`, color: statusColor, border: `1px solid ${statusColor}44` }}>{t.status}</span>
-                            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: `${tierColor}22`, color: tierColor, border: `1px solid ${tierColor}44` }}>{t.tier === 'standard' ? 'Free' : t.tier === 'pro_max' ? 'Starter Pro Max' : t.tier === 'pro' ? 'Starter Pro' : t.tier === 'starter' ? 'Starter' : t.tier}</span>
-                            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(156,163,175,0.15)', color: '#9ca3af', border: '1px solid rgba(156,163,175,0.3)' }}>{t.role || 'trader'}</span>
-                            {t.binance_connected && <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)' }}>Binance ✓</span>}
-                            {t.binance_api_key_saved && !t.binance_api_key_invalid && (() => {
-                              const TM = { gold: { l: 'Gold Merchant', c: '#f59e0b' }, silver: { l: 'Silver Merchant', c: '#cbd5e1' }, bronze: { l: 'Bronze Merchant', c: '#d97757' } };
-                              const m = TM[(t.binance_merchant_tier || '').toLowerCase()];
-                              if (!m) return null;
-                              return (
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, background: `${m.c}22`, color: m.c, border: `1px solid ${m.c}55` }}>
-                                  <svg width="13" height="13" viewBox="0 0 24 24" fill={m.c} stroke={m.c} strokeWidth="1" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
-                                  {m.l}
-                                </span>
-                              );
-                            })()}
-                            {t.binance_api_key_saved && t.binance_api_key_invalid && <span title="Binance rejects this key (likely regenerated/removed). Trader must reconnect a valid key." style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)', cursor: 'help' }}>⚠ API key invalid</span>}
+                    {/* ===== HERO ===== */}
+                    <div className="card hero">
+                      <div className="hero-main">
+                        <div className="avatar">{initials}</div>
+                        <div className="hero-id">
+                          <div className="hero-name">{t.full_name}</div>
+                          <div className="hero-sub">Trader ID #{t.id}{t.created_at ? ` · Joined ${fmtDateOnlyEAT(t.created_at)}` : ''}</div>
+                          <div className="chips">
+                            <span className={`chip ${t.status === 'active' ? 'chip--pos' : t.status === 'suspended' ? 'chip--neg' : 'chip--warn'}`}>{t.status || 'pending'}</span>
+                            <span className="chip chip--brand">{tierLabel}</span>
+                            <span className="chip">{t.role || 'trader'}</span>
+                            {merchant && (
+                              <span className="chip chip--gold" style={{ color: merchant.c, borderColor: merchant.c }}>
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
+                                {merchant.l}
+                              </span>
+                            )}
                             {(() => {
                               const connected = t.binance_api_key_saved && !t.binance_api_key_invalid;
                               const label = !t.binance_api_key_saved ? 'Binance API ✗' : t.binance_api_key_invalid ? 'Binance API ⚠' : 'Binance API ✓';
                               const title = !t.binance_api_key_saved ? 'No Binance API key connected' : t.binance_api_key_invalid ? 'Binance API key is invalid — trader must reconnect' : 'Binance API key connected';
-                              return (
-                                <span title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: 'help',
-                                  background: connected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.12)',
-                                  color: connected ? '#10b981' : '#ef4444',
-                                  border: `1px solid ${connected ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.35)'}` }}>
-                                  {label}
-                                </span>
-                              );
+                              return <span title={title} className={`chip ${connected ? 'chip--pos' : 'chip--neg'}`}>{label}</span>;
                             })()}
-                            <span title={t.telegram_connected ? `Telegram connected${t.telegram_notify_scope && t.telegram_notify_scope !== 'both' ? ` (${t.telegram_notify_scope} alerts)` : ''}` : 'Telegram not connected'}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: 'help',
-                                background: t.telegram_connected ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.12)',
-                                color: t.telegram_connected ? '#10b981' : '#ef4444',
-                                border: `1px solid ${t.telegram_connected ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.35)'}` }}>
-                              {t.telegram_connected ? 'Telegram ✓' : 'Telegram ✗'}
-                            </span>
-                            <span title={t.relay_connected ? 'Relay connected — on v1.9.2, Binance calls run from this trader’s own IP' : 'Relay not connected — trader not on v1.9.2, or app not running'}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: 'help',
-                                background: t.relay_connected ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.12)',
-                                color: t.relay_connected ? '#10b981' : '#9ca3af',
-                                border: `1px solid ${t.relay_connected ? 'rgba(16,185,129,0.4)' : 'rgba(107,114,128,0.25)'}` }}>
-                              {t.relay_connected ? 'Relay ✓' : 'Relay ✗'}
-                            </span>
-                            {(() => { const s = fmtLastSeen(t.last_seen_at, t.last_web_active || t.last_login); return (
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: s.online ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.12)', color: s.online ? '#10b981' : '#9ca3af', border: `1px solid ${s.online ? 'rgba(16,185,129,0.3)' : 'rgba(107,114,128,0.25)'}` }}>
-                                <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.online ? '#10b981' : '#6b7280', flexShrink: 0 }} />
-                                {s.online ? s.label : `Last seen ${s.label}`}
-                              </span>
-                            ); })()}
+                            <span title={t.telegram_connected ? `Telegram connected${t.telegram_notify_scope && t.telegram_notify_scope !== 'both' ? ` (${t.telegram_notify_scope} alerts)` : ''}` : 'Telegram not connected'} className={`chip ${t.telegram_connected ? 'chip--pos' : 'chip--neg'}`}>{t.telegram_connected ? 'Telegram ✓' : 'Telegram ✗'}</span>
+                            <span title={t.relay_connected ? 'Relay connected — Binance calls run from this trader’s own IP' : 'Relay not connected'} className={`chip ${t.relay_connected ? 'chip--pos' : ''}`}>{t.relay_connected ? 'Relay ✓' : 'Relay ✗'}</span>
+                            <span className={`chip ${seen.online ? 'chip--pos' : ''}`}><span className="dot" style={{ background: seen.online ? 'var(--pos)' : 'var(--text-3)' }} />{seen.online ? seen.label : `Last seen ${seen.label}`}</span>
                           </div>
                         </div>
-                        {/* Quick actions */}
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <label style={{ fontSize: 11, color: '#6b7280' }}>Status</label>
-                            <select className="adm-select" value={t.status || "pending"} onChange={async (e) => { await handleStatusChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, status: e.target.value })); }}>
-                              <option value="pending">Pending</option>
-                              <option value="active">Active</option>
-                              <option value="paused">Paused</option>
-                              <option value="suspended">Suspended</option>
-                            </select>
-                          </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <label style={{ fontSize: 11, color: '#6b7280' }}>Tier</label>
-                            <select className="adm-select" value={t.tier || "standard"} onChange={async (e) => { await handleTierChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, tier: e.target.value })); }}>
-                              <option value="standard">Free</option>
-                              <option value="starter">Starter — KES 3,000/mo</option>
-                              <option value="pro">Starter Pro — KES 5,000/mo</option>
-                              <option value="pro_max">Starter Pro Max — KES 10,000/mo</option>
-                            </select>
-                          </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <label style={{ fontSize: 11, color: '#6b7280' }}>Role</label>
-                            <select className="adm-select" value={t.role || 'trader'} onChange={async (e) => { await handleRoleChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, role: e.target.value })); }}>
-                              <option value="trader">Trader</option>
-                              <option value="employee">Employee</option>
-                              <option value="admin">Admin</option>
-                            </select>
-                          </div>
+                      </div>
+                      <div className="hero-actions">
+                        <div className="field">
+                          <label>Status</label>
+                          <select value={t.status || 'pending'} onChange={async (e) => { await handleStatusChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, status: e.target.value })); }}>
+                            <option value="pending">Pending</option>
+                            <option value="active">Active</option>
+                            <option value="paused">Paused</option>
+                            <option value="suspended">Suspended</option>
+                          </select>
+                        </div>
+                        <div className="field">
+                          <label>Tier</label>
+                          <select value={t.tier || 'standard'} onChange={async (e) => { await handleTierChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, tier: e.target.value })); }}>
+                            <option value="standard">Free</option>
+                            <option value="starter">Starter — KES 3,000/mo</option>
+                            <option value="pro">Starter Pro — KES 5,000/mo</option>
+                            <option value="pro_max">Starter Pro Max — KES 10,000/mo</option>
+                          </select>
+                        </div>
+                        <div className="field">
+                          <label>Role</label>
+                          <select value={t.role || 'trader'} onChange={async (e) => { await handleRoleChange(t.id, e.target.value); setViewingTrader(prev => ({ ...prev, role: e.target.value })); }}>
+                            <option value="trader">Trader</option>
+                            <option value="employee">Employee</option>
+                            <option value="admin">Admin</option>
+                          </select>
                         </div>
                       </div>
                     </div>
 
-                    {/* Info + Wallet row */}
-                    <div className="adm-two-col" style={{ marginBottom: 16, alignItems: 'flex-start' }}>
-                      {/* Trader info grid */}
-                      <div className="adm-card" style={{ flex: '1 1 0' }}>
-                        <div className="adm-card-header"><h3>Account Info</h3></div>
-                        {typeof t.pending_orders_count === 'number' && (
-                          <div style={{
-                            margin: '12px 20px 0', padding: '10px 14px', borderRadius: 8,
-                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                            background: t.pending_orders_count > 0 ? 'rgba(245,158,11,0.12)' : 'rgba(107,114,128,0.10)',
-                            border: '1px solid ' + (t.pending_orders_count > 0 ? 'rgba(245,158,11,0.35)' : 'var(--border)'),
-                          }}>
-                            <span style={{ fontSize: 12, color: '#9ca3af' }}>
-                              Pending orders <span style={{ color: '#6b7280' }}>(processing now)</span>
-                            </span>
-                            <span style={{ fontWeight: 800, fontSize: 18, color: t.pending_orders_count > 0 ? '#f59e0b' : '#6b7280' }}>
-                              {t.pending_orders_count}
-                            </span>
+                    {/* ===== PENDING ORDERS BANNER ===== */}
+                    {typeof t.pending_orders_count === 'number' && (
+                      <div className={`banner ${t.pending_orders_count > 0 ? 'banner--warn' : 'banner--dim'}`}>
+                        <div className="banner-text">
+                          <span className="banner-title">Pending orders</span>
+                          <span className="banner-note">processing now</span>
+                        </div>
+                        <div className="banner-num">{t.pending_orders_count}</div>
+                      </div>
+                    )}
+
+                    {/* ===== KPI ROW ===== */}
+                    {(() => {
+                      const net = (traderPnl?.summary?.net != null) ? traderPnl.summary.net : (t.live_today_net_profit || 0);
+                      const sellTrades = traderPnl?.summary?.trades ?? 0;
+                      return (
+                        <div className="kpi-row">
+                          <div className="kpi">
+                            <div className="kpi-label">Live Balance</div>
+                            <div className="kpi-val num" style={{ color: 'var(--pos)' }}>
+                              {t.choice_account_id ? (cbBalance ? `KES ${(parseFloat(cbBalance.balance) || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—') : 'No account'}
+                            </div>
+                            <div className="kpi-delta">{t.choice_account_id ? (t.choice_account_id) : 'No Choice Bank account'}</div>
                           </div>
-                        )}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 24px', fontSize: 13, padding: '16px 20px 20px' }}>
-                          {[
-                            ['Email', t.email],
-                            ['Phone', t.phone],
-                            ['Trades', t.total_trades ?? '—'],
-                            ['Volume', fmtKES(t.total_volume)],
-                            ['Joined', t.created_at ? fmtDateOnlyEAT(t.created_at) : '—'],
-                            ['Last Login', t.last_login ? fmtDateEAT(t.last_login) : '—'],
-                            ['Bot Last Sync', t.last_seen_at ? fmtDateEAT(t.last_seen_at) : '—'],
-                            ['Web Last Active', t.last_login ? fmtDateEAT(t.last_login) : '—'],
-                            ['Security Q', t.security_question || '—'],
-                          ].map(([label, value]) => (
-                            <div key={label}>
-                              <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>{label}</div>
-                              <div style={{ fontWeight: 600, wordBreak: 'break-all' }}>{value}</div>
+                          <div className="kpi">
+                            <div className="kpi-label">Net P&amp;L · Today</div>
+                            <div className="kpi-val num" style={{ color: net > 0 ? 'var(--pos)' : net < 0 ? 'var(--neg)' : 'var(--text)' }}>
+                              {net > 0 ? '+' : net < 0 ? '-' : ''}KES {Math.abs(net).toLocaleString('en-KE', { maximumFractionDigits: 0 })}
                             </div>
-                          ))}
-                          <div>
-                            <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Answer</div>
-                            <div style={{ fontWeight: 600, wordBreak: 'break-all', display: 'flex', alignItems: 'center', gap: 8 }}>
-                              {showSecurityAnswer ? (t.security_answer || '—') : '••••••••'}
-                              <button
-                                onClick={() => setShowSecurityAnswer(v => !v)}
-                                style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', fontSize: 11, padding: '1px 6px', borderRadius: 4, border: '1px solid #f59e0b' }}
-                              >
-                                {showSecurityAnswer ? 'Hide' : 'Show'}
-                              </button>
-                            </div>
+                            <div className="kpi-delta">{sellTrades} completed sell orders</div>
                           </div>
-                          {t.google_id && (
-                            <div style={{ gridColumn: '1 / -1' }}>
-                              <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Google ID</div>
-                              <div style={{ fontWeight: 600, fontSize: 12, wordBreak: 'break-all' }}>{t.google_id}</div>
+                          <div className="kpi">
+                            <div className="kpi-label">Total Trades</div>
+                            <div className="kpi-val num">{t.total_trades ?? 0}</div>
+                            <div className="kpi-delta">lifetime</div>
+                          </div>
+                          <div className="kpi">
+                            <div className="kpi-label">Lifetime Volume</div>
+                            <div className="kpi-val num">{fmtKES(t.total_volume)}</div>
+                            <div className="kpi-delta">{fmtCompact(t.total_volume)} total</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* ===== GRID2: ACCOUNT INFO + CHOICE BANK ===== */}
+                    <div className="grid2">
+                      {/* Account Information */}
+                      <div className="card">
+                        <div className="card-h"><h3>Account Information</h3></div>
+                        <div className="card-b">
+                          <div className="kv">
+                            <div className="kv-row"><span className="kv-k">Email</span><span className="kv-v">{t.email || '—'}</span></div>
+                            <div className="kv-row"><span className="kv-k">Phone</span><span className="kv-v">{t.phone || '—'}</span></div>
+                            <div className="kv-row"><span className="kv-k">Trades</span><span className="kv-v num">{t.total_trades ?? '—'}</span></div>
+                            <div className="kv-row"><span className="kv-k">Volume</span><span className="kv-v num">{fmtKES(t.total_volume)}</span></div>
+                            <div className="kv-row"><span className="kv-k">Joined</span><span className="kv-v">{t.created_at ? fmtDateOnlyEAT(t.created_at) : '—'}</span></div>
+                            <div className="kv-row"><span className="kv-k">Last Login</span><span className="kv-v">{t.last_login ? fmtDateEAT(t.last_login) : '—'}</span></div>
+                            <div className="kv-row"><span className="kv-k">Bot Last Sync</span><span className="kv-v">{t.last_seen_at ? fmtDateEAT(t.last_seen_at) : '—'}</span></div>
+                            <div className="kv-row"><span className="kv-k">Web Last Active</span><span className="kv-v">{t.last_login ? fmtDateEAT(t.last_login) : '—'}</span></div>
+                            <div className="kv-row"><span className="kv-k">Security Q</span><span className="kv-v">{t.security_question || '—'}</span></div>
+                            <div className="kv-row">
+                              <span className="kv-k">Answer</span>
+                              <span className="kv-v" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                {showSecurityAnswer ? (t.security_answer || '—') : '••••••••'}
+                                <button className="mini-btn" onClick={() => setShowSecurityAnswer(v => !v)}>{showSecurityAnswer ? 'Hide' : 'Show'}</button>
+                              </span>
                             </div>
-                          )}
+                            {t.google_id && (
+                              <div className="kv-row"><span className="kv-k">Google ID</span><span className="kv-v" style={{ fontSize: 12, wordBreak: 'break-all' }}>{t.google_id}</span></div>
+                            )}
+                          </div>
                         </div>
                       </div>
 
-                      {/* Choice Bank live balance */}
-                      <div className="adm-card" style={{ flex: '1 1 0' }}>
-                        <div className="adm-card-header">
-                          <h3>🏦 Choice Bank</h3>
-                          <button
-                            className="adm-btn"
-                            style={{ fontSize: 12 }}
-                            disabled={cbBalanceLoading}
-                            onClick={() => { setCbBalanceLoading(true); adminGetTraderChoiceBalance(t.id).then(r => { setCbBalance(r.data); setCbBalanceLoading(false); }).catch(() => setCbBalanceLoading(false)); }}
-                          >
+                      {/* Choice Bank */}
+                      <div className="card">
+                        <div className="card-h">
+                          <h3>Choice Bank</h3>
+                          <button className="ghost-btn" disabled={cbBalanceLoading} onClick={() => { setCbBalanceLoading(true); adminGetTraderChoiceBalance(t.id).then(r => { setCbBalance(r.data); setCbBalanceLoading(false); }).catch(() => setCbBalanceLoading(false)); }}>
                             <RefreshCw size={13} /> {cbBalanceLoading ? 'Loading…' : 'Refresh'}
                           </button>
                         </div>
                         <CbBalancePoller traderId={t.id} onData={setCbBalance} />
-                        <div style={{ padding: '16px 20px 0' }}>
+                        <div className="card-b">
                           {t.choice_account_id ? (
                             cbBalance ? (
-                              <div>
-                                <div style={{ marginBottom: 6 }}>
-                                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Live Balance</div>
-                                  <div style={{ fontSize: 26, fontWeight: 800, color: '#10b981' }}>KES {(parseFloat(cbBalance.balance) || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                                </div>
-                                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>{t.choice_account_id}</div>
-                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
-                                  {[['Status', cbBalance.account_status, cbBalance.account_status === 'Normal' ? '#10b981' : '#ef4444'],
-                                    ['Dormant', cbBalance.dormant_status, cbBalance.dormant_status === 'Normal' ? '#10b981' : '#f59e0b'],
-                                    ['Freeze', cbBalance.freeze_status, cbBalance.freeze_status === 'Normal' ? '#10b981' : '#ef4444'],
-                                  ].map(([lbl, val, col]) => (
-                                    <span key={lbl} style={{ background: col + '22', color: col, border: '1px solid ' + col + '44', borderRadius: 4, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>{lbl}: {val}</span>
+                              <>
+                                <div className="cb-bal-label">Live Balance</div>
+                                <div className="cb-bal num">KES {(parseFloat(cbBalance.balance) || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                                <div className="cb-acct num">{t.choice_account_id}</div>
+                                <div className="cb-tags">
+                                  {[['Status', cbBalance.account_status, cbBalance.account_status === 'Normal'],
+                                    ['Dormant', cbBalance.dormant_status, cbBalance.dormant_status === 'Normal'],
+                                    ['Freeze', cbBalance.freeze_status, cbBalance.freeze_status === 'Normal'],
+                                  ].map(([lbl, val, ok]) => (
+                                    <span key={lbl} className={`cb-tag ${ok ? 'cb-tag--ok' : 'cb-tag--bad'}`}>{lbl}: {val}</span>
                                   ))}
                                 </div>
-                              </div>
+                              </>
                             ) : (
-                              <div style={{ color: '#4b5563', fontSize: 13, padding: '12px 0' }}>Click Refresh to load balance</div>
+                              <div className="muted">Click Refresh to load balance</div>
                             )
                           ) : (
-                            <div style={{ color: '#4b5563', fontSize: 13, padding: '12px 0' }}>No Choice Bank account</div>
+                            <div className="muted">No Choice Bank account</div>
                           )}
-                        </div>
-
-                        {/* Reset Password */}
-                        <div style={{ margin: '16px 20px 20px' }}>
-                          <button
-                            style={{ width: '100%', padding: '10px', borderRadius: 8, border: '1px solid #ef4444', background: 'rgba(239,68,68,0.1)', color: '#ef4444', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
-                            disabled={resetPwLoading}
+                          <button className="danger-btn" disabled={resetPwLoading}
                             onClick={async () => {
                               setResetPwLoading(true);
                               try {
@@ -2104,269 +2083,141 @@ export default function Admin() {
                                 setResetPwMsg('Password reset! New password sent via SMS.');
                               } catch (e) { setResetPwMsg('Failed to reset password.'); }
                               setResetPwLoading(false);
-                            }}
-                          >
-                            {resetPwLoading ? 'Resetting...' : 'Reset Password'}
+                            }}>
+                            {resetPwLoading ? 'Resetting…' : 'Reset Password'}
                           </button>
-                          {resetPwMsg && <div style={{ marginTop: 6, fontSize: 12, color: resetPwMsg.includes('Failed') ? '#ef4444' : '#10b981', textAlign: 'center' }}>{resetPwMsg}</div>}
+                          {resetPwMsg && <div className="reset-msg" style={{ color: resetPwMsg.includes('Failed') ? 'var(--neg)' : 'var(--pos)' }}>{resetPwMsg}</div>}
                         </div>
                       </div>
                     </div>
 
-                    {/* Subscription & Daily Limits Card */}
-                    <div className="adm-card" style={{ marginBottom: 16 }}>
-                      <div className="adm-card-header"><h3>📦 Subscription & Daily Limits</h3></div>
-                      <div style={{ padding: '16px 20px 20px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+                    {/* ===== SUBSCRIPTION & DAILY LIMITS ===== */}
+                    <div className="card">
+                      <div className="card-h"><h3>Subscription &amp; Daily Limits</h3></div>
+                      <div className="card-b">
+                        <div className="sub-head">
                           <div>
-                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Current Plan</div>
-                            <div style={{ fontSize: 18, fontWeight: 800, color: viewingTrader.plan ? '#f59e0b' : '#6b7280' }}>{viewingTrader.plan_label || 'No active subscription'}</div>
+                            <div className="kv-k">Current Plan</div>
+                            <div className="sub-plan" style={{ color: t.plan ? 'var(--brand)' : 'var(--text-3)' }}>{t.plan_label || 'No active subscription'}</div>
                           </div>
-                          {viewingTrader.subscription_expires_at && (
+                          {t.subscription_expires_at && (
                             <div style={{ textAlign: 'right' }}>
-                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Expires</div>
-                              <div style={{ fontSize: 13, fontWeight: 700, color: '#d1d5db' }}>
-                                {new Date(viewingTrader.subscription_expires_at).toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric' })}
-                                {(() => { const d = Math.ceil((new Date(viewingTrader.subscription_expires_at) - new Date()) / 86400000); return d >= 0 ? <span style={{ color: '#6b7280', fontWeight: 400 }}> · {d}d left</span> : <span style={{ color: '#ef4444', fontWeight: 400 }}> · expired</span>; })()}
+                              <div className="kv-k">Expires</div>
+                              <div className="sub-exp">
+                                {new Date(t.subscription_expires_at).toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric' })}
+                                {(() => { const d = Math.ceil((new Date(t.subscription_expires_at) - new Date()) / 86400000); return d >= 0 ? <span className="sub-days"> · {d}d left</span> : <span className="sub-days sub-days--exp"> · expired</span>; })()}
                               </div>
                             </div>
                           )}
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+                        <div className="limit-grid">
                           {[
-                            ['Trades today', viewingTrader.daily_trade_unlimited, viewingTrader.daily_trade_used, viewingTrader.daily_trade_limit, '#3b82f6'],
-                            ['Telegram alerts today', viewingTrader.daily_tg_unlimited, viewingTrader.daily_tg_used, viewingTrader.daily_tg_limit, '#10b981'],
+                            ['Trades today', t.daily_trade_unlimited, t.daily_trade_used, t.daily_trade_limit, 'var(--info)'],
+                            ['Telegram alerts today', t.daily_tg_unlimited, t.daily_tg_used, t.daily_tg_limit, 'var(--pos)'],
                           ].map(([label, unlimited, used, limit, color]) => (
-                            <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
-                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{label}</div>
-                              <div style={{ fontSize: 20, fontWeight: 800, color }}>{unlimited ? <>{used ?? 0} <span style={{ fontSize: 13, color: '#6b7280' }}>/ unlimited</span></> : <>{used ?? 0} <span style={{ fontSize: 13, color: '#6b7280' }}>/ {limit ?? 0}</span></>}</div>
+                            <div key={label} className="limit-card">
+                              <div className="kv-k">{label}</div>
+                              <div className="limit-val num" style={{ color }}>{used ?? 0} <span className="limit-sub">/ {unlimited ? 'unlimited' : (limit ?? 0)}</span></div>
                             </div>
                           ))}
                         </div>
-                        <div style={{ fontSize: 11, color: '#4b5563', marginTop: 12 }}>Daily limits reset at 3:00 AM (EAT). Non-subscribers are not blocked.</div>
+                        <div className="fine-print">Daily limits reset at 3:00 AM (EAT). Non-subscribers are not blocked.</div>
                       </div>
                     </div>
 
-                    {/* Bot Logs Card */}
-                    <div className="adm-card" style={{ marginBottom: 16 }}>
-                      <div className="adm-card-header" style={{ justifyContent: 'space-between' }}>
-                        <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ fontSize: 16 }}>📋</span> Bot Activity Logs
-                        </h3>
-                        <button
-                          onClick={async () => {
-                            setBotLogsLoading(true);
-                            try {
-                              const r = await getAdminTraderBotLogs(viewingTrader.id);
-                              setTraderBotLogs(r.data || []);
-                            } catch (_) {}
-                            setBotLogsLoading(false);
-                          }}
-                          style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid #374151', background: '#1f2937', color: '#9ca3af', fontSize: 12, cursor: 'pointer' }}
-                        >
-                          {botLogsLoading ? 'Refreshing…' : '↻ Refresh'}
-                        </button>
-                      </div>
-                      <div style={{ fontFamily: 'monospace', fontSize: 12, maxHeight: 360, overflowY: 'auto', marginTop: 8 }}>
-                        {traderBotLogs.length === 0 ? (
-                          <div style={{ padding: '24px 0', textAlign: 'center', color: '#6b7280' }}>
-                            No logs yet — logs appear here once the trader's bot sends activity.
-                          </div>
-                        ) : (
-                          traderBotLogs.map((log, i) => {
-                            const colors = { success: '#10b981', error: '#ef4444', warning: '#f59e0b', info: '#6b7280', warn: '#f59e0b' };
-                            const badges = { success: '✓', error: '✕', warning: '⚠', warn: '⚠', info: '·' };
-                            const color = colors[log.level] || '#6b7280';
-                            const badge = badges[log.level] || '·';
-                            const time = log.time ? new Date(log.time).toLocaleTimeString('en-KE', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
-                            return (
-                              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '4px 6px', borderRadius: 4, background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
-                                <span style={{ color, minWidth: 14, marginTop: 1 }}>{badge}</span>
-                                <span style={{ color: '#374151', minWidth: 70, fontSize: 10, marginTop: 2 }}>{time}</span>
-                                <span style={{ color: log.level === 'error' ? '#fca5a5' : log.level === 'success' ? '#6ee7b7' : (log.level === 'warning' || log.level === 'warn') ? '#fcd34d' : '#9ca3af', flex: 1, wordBreak: 'break-word' }}>{log.message}</span>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    </div>
-
-                    {/* P&L Card */}
-                    <div className="adm-card" style={{ marginBottom: 16 }}>
-                      <div className="adm-card-header" style={{ flexWrap: 'wrap', gap: 8 }}>
-                        <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <TrendingUp size={16} style={{ color: '#10b981' }} />
-                          Profit & Loss
-                        </h3>
-                        <div style={{ display: 'flex', gap: 6 }}>
+                    {/* ===== PROFIT & LOSS ===== */}
+                    <div className="card">
+                      <div className="card-h">
+                        <h3><TrendingUp size={15} style={{ color: 'var(--pos)', verticalAlign: '-2px', marginRight: 6 }} />Profit &amp; Loss</h3>
+                        <div className="seg">
                           {['today', 'week', 'month'].map(p => (
-                            <button
-                              key={p}
-                              onClick={async () => { setPnlPeriod(p); await loadTraderPnl(t.id, p); }}
-                              style={{
-                                padding: '4px 12px', borderRadius: 20, fontSize: 12, cursor: 'pointer', border: 'none',
-                                background: pnlPeriod === p ? '#10b981' : 'rgba(255,255,255,0.07)',
-                                color: pnlPeriod === p ? '#000' : '#9ca3af', fontWeight: pnlPeriod === p ? 700 : 400,
-                              }}
-                            >
+                            <button key={p} className={pnlPeriod === p ? 'active' : ''} onClick={async () => { setPnlPeriod(p); await loadTraderPnl(t.id, p); }}>
                               {p === 'today' ? 'Today' : p === 'week' ? '7 Days' : '30 Days'}
                             </button>
                           ))}
                         </div>
                       </div>
-                      {pnlLoading ? (
-                        <div style={{ padding: '24px', textAlign: 'center', color: '#6b7280', fontSize: 13 }}>Loading…</div>
-                      ) : traderPnl ? (() => {
-                        const s = traderPnl.summary;
-                        return (
-                          <div style={{ padding: '16px 20px 20px' }}>
-                            {/* Summary cards */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
-                              {[
-                                { label: 'Gross Revenue', value: s.revenue, color: '#10b981', prefix: '+' },
-                                { label: 'Fees Paid', value: s.fees, color: '#ef4444', prefix: '-' },
-                                { label: 'Net P&L', value: s.net, color: s.net > 0 ? '#10b981' : s.net < 0 ? '#ef4444' : '#6b7280', prefix: s.net > 0 ? '+' : s.net < 0 ? '-' : '' },
-                                { label: 'Sell Orders', value: s.trades, color: '#f59e0b', isCount: true },
-                              ].map(({ label, value, color, isCount, prefix }) => (
-                                <div key={label} style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 14px', border: `1px solid ${color}33` }}>
-                                  <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{label}</div>
-                                  <div style={{ fontSize: 17, fontWeight: 700, color }}>
-                                    {isCount ? value : `${prefix || ''}KES ${Math.abs(value).toLocaleString('en-KE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+                      <div className="card-b">
+                        {pnlLoading ? (
+                          <div className="muted center">Loading…</div>
+                        ) : traderPnl ? (() => {
+                          const s = traderPnl.summary;
+                          return (
+                            <>
+                              <div className="pnl-grid">
+                                {[
+                                  { label: 'Gross Revenue', value: s.revenue, color: 'var(--pos)', prefix: '+' },
+                                  { label: 'Fees Paid', value: s.fees, color: 'var(--neg)', prefix: '-' },
+                                  { label: 'Net P&L', value: s.net, color: s.net > 0 ? 'var(--pos)' : s.net < 0 ? 'var(--neg)' : 'var(--text)', prefix: s.net > 0 ? '+' : s.net < 0 ? '-' : '' },
+                                  { label: 'Sell Orders', value: s.trades, color: 'var(--brand)', isCount: true },
+                                ].map(({ label, value, color, isCount, prefix }) => (
+                                  <div key={label} className="pnl-card">
+                                    <div className="kv-k">{label}</div>
+                                    <div className="pnl-val num" style={{ color }}>{isCount ? value : `${prefix || ''}KES ${Math.abs(value).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`}</div>
                                   </div>
-                                </div>
-                              ))}
-                            </div>
-                            {/* Daily breakdown table (hidden for today single-day) */}
-                            {traderPnl.daily.length > 1 && (
-                              <div className="adm-table-wrap">
-                                <table className="adm-table">
-                                  <thead>
-                                    <tr>
-                                      <th>Date</th>
-                                      <th>Sell Orders</th>
-                                      <th style={{ textAlign: 'right' }}>Revenue</th>
-                                      <th style={{ textAlign: 'right' }}>Fees</th>
-                                      <th style={{ textAlign: 'right' }}>Net P&L</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {[...traderPnl.daily].reverse().map(row => (
-                                      <tr key={row.date}>
-                                        <td style={{ color: '#9ca3af' }}>{new Date(row.date + 'T12:00:00Z').toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', weekday: 'short', month: 'short', day: 'numeric' })}</td>
-                                        <td><span style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', padding: '2px 8px', borderRadius: 10, fontSize: 12, fontWeight: 600 }}>{row.trades}</span></td>
-                                        <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 600 }}>{row.revenue > 0 ? `+KES ${row.revenue.toLocaleString()}` : '—'}</td>
-                                        <td style={{ textAlign: 'right', color: '#ef4444' }}>{row.fees > 0 ? `-KES ${row.fees.toLocaleString()}` : '—'}</td>
-                                        <td style={{ textAlign: 'right', fontWeight: 700, color: row.net >= 0 ? '#3b82f6' : '#ef4444' }}>
-                                          {(row.net != null && row.net !== 0) ? `${row.net >= 0 ? '+' : ''}KES ${(row.net || 0).toLocaleString()}` : '—'}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                                ))}
                               </div>
-                            )}
-                            {traderPnl.daily.length === 1 && s.trades === 0 && (
-                              <div style={{ textAlign: 'center', color: '#4b5563', fontSize: 13, padding: '8px 0 4px' }}>No completed sell orders today.</div>
-                            )}
-                          </div>
-                        );
-                      })() : null}
+                              {traderPnl.daily.length > 1 && (
+                                <div className="tbl-wrap">
+                                  <table className="tdx-tbl">
+                                    <thead><tr><th>Date</th><th>Sell Orders</th><th className="r">Revenue</th><th className="r">Fees</th><th className="r">Net P&amp;L</th></tr></thead>
+                                    <tbody>
+                                      {[...traderPnl.daily].reverse().map(row => (
+                                        <tr key={row.date}>
+                                          <td className="dim">{new Date(row.date + 'T12:00:00Z').toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', weekday: 'short', month: 'short', day: 'numeric' })}</td>
+                                          <td><span className="pill pill--brand">{row.trades}</span></td>
+                                          <td className="r num" style={{ color: 'var(--pos)' }}>{row.revenue > 0 ? `+KES ${row.revenue.toLocaleString()}` : '—'}</td>
+                                          <td className="r num" style={{ color: 'var(--neg)' }}>{row.fees > 0 ? `-KES ${row.fees.toLocaleString()}` : '—'}</td>
+                                          <td className="r num" style={{ color: row.net >= 0 ? 'var(--info)' : 'var(--neg)', fontWeight: 700 }}>{(row.net != null && row.net !== 0) ? `${row.net >= 0 ? '+' : ''}KES ${(row.net || 0).toLocaleString()}` : '—'}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                              {traderPnl.daily.length === 1 && s.trades === 0 && (
+                                <div className="muted center">No completed sell orders today.</div>
+                              )}
+                            </>
+                          );
+                        })() : null}
+                      </div>
                     </div>
 
-                    {/* Withdrawal Method */}
-                    <div className="adm-card" style={{ marginBottom: 16 }}>
-                      <div className="adm-card-header">
+                    {/* ===== WITHDRAWAL METHOD ===== */}
+                    <div className="card">
+                      <div className="card-h">
                         <h3>Withdrawal Method</h3>
-                        {t.settlement_changed_at && (
-                          <span className="adm-card-count">Changed {fmtDateOnlyEAT(t.settlement_changed_at)}</span>
-                        )}
+                        {t.settlement_changed_at && <span className="card-count">Changed {fmtDateOnlyEAT(t.settlement_changed_at)}</span>}
                       </div>
-                      <div style={{ padding: '16px 20px 20px' }}>
+                      <div className="card-b">
                         {(() => {
                           const method = (t.settlement_method || '').toString().toLowerCase();
                           const methodLabel = method === 'mpesa' ? 'M-Pesa' : method === 'paybill' ? 'Paybill' : method === 'bank' ? 'I&M Bank' : method || '—';
-                          const methodColor = method === 'mpesa' ? '#10b981' : method === 'paybill' ? '#3b82f6' : method === 'bank' ? '#8b5cf6' : '#6b7280';
-
                           const pendingMethod = (t.pending_settlement_method || '').toString().toLowerCase();
                           const pendingLabel = pendingMethod === 'mpesa' ? 'M-Pesa' : pendingMethod === 'paybill' ? 'Paybill' : pendingMethod === 'bank' ? 'I&M Bank' : pendingMethod || '';
-
                           return (
                             <>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-                                <span style={{ background: methodColor + '22', color: methodColor, padding: '4px 12px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>{methodLabel}</span>
-                                {pendingMethod && (
-                                  <span style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', padding: '4px 12px', borderRadius: 20, fontSize: 12 }}>
-                                    Pending change → {pendingLabel}
-                                  </span>
-                                )}
+                              <div className="wd-head">
+                                <span className="wd-method">{methodLabel}</span>
+                                {pendingMethod && <span className="wd-pending">Pending change → {pendingLabel}</span>}
                               </div>
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 24px', fontSize: 13 }}>
-                                {method === 'mpesa' && t.settlement_phone && (
-                                  <div>
-                                    <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>M-Pesa Phone</div>
-                                    <div style={{ fontWeight: 600 }}>{t.settlement_phone}</div>
-                                  </div>
-                                )}
-                                {method === 'paybill' && t.settlement_paybill && (
-                                  <div>
-                                    <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Paybill Number</div>
-                                    <div style={{ fontWeight: 600 }}>{t.settlement_paybill}</div>
-                                  </div>
-                                )}
-                                {method === 'paybill' && t.settlement_account && (
-                                  <div>
-                                    <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Account Reference</div>
-                                    <div style={{ fontWeight: 600 }}>{t.settlement_account}</div>
-                                  </div>
-                                )}
-                                {method === 'bank' && t.settlement_account && (
-                                  <div>
-                                    <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Account Number</div>
-                                    <div style={{ fontWeight: 600 }}>{t.settlement_account}</div>
-                                  </div>
-                                )}
-                                {method === 'bank' && t.settlement_bank_name && (
-                                  <div>
-                                    <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>Bank Name</div>
-                                    <div style={{ fontWeight: 600 }}>{t.settlement_bank_name}</div>
-                                  </div>
-                                )}
+                              <div className="kv">
+                                {method === 'mpesa' && t.settlement_phone && <div className="kv-row"><span className="kv-k">M-Pesa Phone</span><span className="kv-v">{t.settlement_phone}</span></div>}
+                                {method === 'paybill' && t.settlement_paybill && <div className="kv-row"><span className="kv-k">Paybill Number</span><span className="kv-v">{t.settlement_paybill}</span></div>}
+                                {method === 'paybill' && t.settlement_account && <div className="kv-row"><span className="kv-k">Account Reference</span><span className="kv-v">{t.settlement_account}</span></div>}
+                                {method === 'bank' && t.settlement_account && <div className="kv-row"><span className="kv-k">Account Number</span><span className="kv-v">{t.settlement_account}</span></div>}
+                                {method === 'bank' && t.settlement_bank_name && <div className="kv-row"><span className="kv-k">Bank Name</span><span className="kv-v">{t.settlement_bank_name}</span></div>}
                               </div>
-
                               {pendingMethod && (
-                                <div style={{ marginTop: 16, padding: '12px 14px', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)', background: 'rgba(245,158,11,0.05)' }}>
-                                  <div style={{ fontSize: 12, color: '#f59e0b', fontWeight: 700, marginBottom: 8 }}>Pending Change (48hr cooldown)</div>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', fontSize: 12 }}>
-                                    {pendingMethod === 'mpesa' && t.pending_settlement_phone && (
-                                      <div>
-                                        <div style={{ color: '#6b7280', fontSize: 11 }}>New Phone</div>
-                                        <div style={{ fontWeight: 600, color: '#fff' }}>{t.pending_settlement_phone}</div>
-                                      </div>
-                                    )}
-                                    {pendingMethod === 'paybill' && t.pending_settlement_paybill && (
-                                      <div>
-                                        <div style={{ color: '#6b7280', fontSize: 11 }}>New Paybill</div>
-                                        <div style={{ fontWeight: 600, color: '#fff' }}>{t.pending_settlement_paybill}</div>
-                                      </div>
-                                    )}
-                                    {pendingMethod === 'paybill' && t.pending_settlement_account && (
-                                      <div>
-                                        <div style={{ color: '#6b7280', fontSize: 11 }}>New Account Ref</div>
-                                        <div style={{ fontWeight: 600, color: '#fff' }}>{t.pending_settlement_account}</div>
-                                      </div>
-                                    )}
-                                    {pendingMethod === 'bank' && t.pending_settlement_account && (
-                                      <div>
-                                        <div style={{ color: '#6b7280', fontSize: 11 }}>New Account</div>
-                                        <div style={{ fontWeight: 600, color: '#fff' }}>{t.pending_settlement_account}</div>
-                                      </div>
-                                    )}
-                                    {pendingMethod === 'bank' && t.pending_settlement_bank_name && (
-                                      <div>
-                                        <div style={{ color: '#6b7280', fontSize: 11 }}>New Bank</div>
-                                        <div style={{ fontWeight: 600, color: '#fff' }}>{t.pending_settlement_bank_name}</div>
-                                      </div>
-                                    )}
+                                <div className="wd-pending-box">
+                                  <div className="wd-pending-title">Pending Change (48hr cooldown)</div>
+                                  <div className="kv">
+                                    {pendingMethod === 'mpesa' && t.pending_settlement_phone && <div className="kv-row"><span className="kv-k">New Phone</span><span className="kv-v">{t.pending_settlement_phone}</span></div>}
+                                    {pendingMethod === 'paybill' && t.pending_settlement_paybill && <div className="kv-row"><span className="kv-k">New Paybill</span><span className="kv-v">{t.pending_settlement_paybill}</span></div>}
+                                    {pendingMethod === 'paybill' && t.pending_settlement_account && <div className="kv-row"><span className="kv-k">New Account Ref</span><span className="kv-v">{t.pending_settlement_account}</span></div>}
+                                    {pendingMethod === 'bank' && t.pending_settlement_account && <div className="kv-row"><span className="kv-k">New Account</span><span className="kv-v">{t.pending_settlement_account}</span></div>}
+                                    {pendingMethod === 'bank' && t.pending_settlement_bank_name && <div className="kv-row"><span className="kv-k">New Bank</span><span className="kv-v">{t.pending_settlement_bank_name}</span></div>}
                                   </div>
                                 </div>
                               )}
@@ -2376,239 +2227,198 @@ export default function Admin() {
                       </div>
                     </div>
 
-                    {/* Choice Bank Account Details */}
-                    <div className="adm-card" style={{ marginBottom: 16 }}>
-                      <div className="adm-card-header">
-                        <h3>🏦 Choice Bank Account</h3>
-                        <span className="adm-card-count" style={{ color: t.choice_account_id ? '#10b981' : '#f59e0b' }}>
-                          {t.choice_account_id ? `Approved` : t.choice_kyc_status ? t.choice_kyc_status : 'Not verified'}
-                        </span>
+                    {/* ===== CHOICE BANK ACCOUNT ===== */}
+                    <div className="card">
+                      <div className="card-h">
+                        <h3>Choice Bank Account</h3>
+                        <span className="card-count" style={{ color: t.choice_account_id ? 'var(--pos)' : 'var(--warn)' }}>{t.choice_account_id ? 'Approved' : t.choice_kyc_status ? t.choice_kyc_status : 'Not verified'}</span>
                       </div>
-                      <div style={{ padding: '12px 20px 20px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
-                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Account Number</div>
-                            <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>{t.choice_account_id || '—'}</div>
-                          </div>
-                          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
-                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Paybill</div>
-                            <div style={{ fontSize: 15, fontWeight: 700, color: '#a78bfa' }}>{connProfile?.choice_paybill || '444174'}</div>
-                          </div>
-                          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
-                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>KYC Status</div>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: t.choice_account_id ? '#10b981' : '#f59e0b' }}>
-                              {t.choice_account_id ? '✅ Approved' : t.choice_kyc_status || 'Not started'}
-                            </div>
-                          </div>
-                          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '12px 16px', border: '1px solid var(--border)' }}>
-                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Account Status</div>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: cbBalance?.account_status === 'Normal' ? '#10b981' : cbBalance ? '#ef4444' : '#4b5563' }}>
-                              {cbBalance?.account_status || '—'}
-                            </div>
-                          </div>
+                      <div className="card-b">
+                        <div className="limit-grid">
+                          <div className="limit-card"><div className="kv-k">Account Number</div><div className="limit-val num">{t.choice_account_id || '—'}</div></div>
+                          <div className="limit-card"><div className="kv-k">Paybill</div><div className="limit-val num" style={{ color: 'var(--gold)' }}>{connProfile?.choice_paybill || '444174'}</div></div>
+                          <div className="limit-card"><div className="kv-k">KYC Status</div><div className="limit-val" style={{ fontSize: 14, color: t.choice_account_id ? 'var(--pos)' : 'var(--warn)' }}>{t.choice_account_id ? 'Approved' : t.choice_kyc_status || 'Not started'}</div></div>
+                          <div className="limit-card"><div className="kv-k">Account Status</div><div className="limit-val" style={{ fontSize: 14, color: cbBalance?.account_status === 'Normal' ? 'var(--pos)' : cbBalance ? 'var(--neg)' : 'var(--text-3)' }}>{cbBalance?.account_status || '—'}</div></div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Resolve Payment */}
-                    <div className="adm-card" style={{ marginBottom: 16, border: '1px solid rgba(245,158,11,0.3)' }}>
-                      <div className="adm-card-header">
-                        <h3 style={{ color: '#f59e0b' }}>Resolve Unmatched Payment</h3>
-                      </div>
-                      <div style={{ padding: '4px 20px 20px' }}>
-                      <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 14 }}>
-                        Enter the M-Pesa reference and amount to verify with Safaricom and credit this trader's wallet.
-                      </p>
-                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
-                        <input
-                          value={resolveRef}
-                          onChange={e => setResolveRef(e.target.value.toUpperCase())}
-                          placeholder="M-Pesa Ref e.g. QK12AB3CD4"
-                          style={{ flex: '2 1 180px', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }}
-                        />
-                        <input
-                          value={resolveAmount}
-                          onChange={e => setResolveAmount(e.target.value)}
-                          placeholder="Amount (KES)"
-                          type="number"
-                          style={{ flex: '1 1 120px', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }}
-                        />
-                        <button
-                          disabled={resolveLoading || !resolveRef || !resolveAmount}
-                          style={{ flex: '1 1 140px', padding: '10px 16px', borderRadius: 8, border: 'none', background: resolveLoading ? '#374151' : '#f59e0b', color: '#000', fontWeight: 700, fontSize: 13, cursor: resolveLoading ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
-                          onClick={async () => {
-                            setResolveLoading(true);
-                            setResolveMsg({ text: '', type: '' });
-                            try {
-                              const res = await api.post(`/admin/traders/${t.id}/resolve-payment`, {
-                                mpesa_ref: resolveRef,
-                                amount: parseFloat(resolveAmount),
-                              });
-                              const { status, message } = res.data;
+                    {/* ===== RESOLVE UNMATCHED PAYMENT ===== */}
+                    <div className="card card--warn">
+                      <div className="card-h"><h3 style={{ color: 'var(--brand)' }}>Resolve Unmatched Payment</h3></div>
+                      <div className="card-b">
+                        <p className="resolve-desc">Enter the M-Pesa reference and amount to verify with Safaricom and credit this trader's wallet.</p>
+                        <div className="resolve-row">
+                          <input className="tdx-input" value={resolveRef} onChange={e => setResolveRef(e.target.value.toUpperCase())} placeholder="M-Pesa Ref e.g. QK12AB3CD4" />
+                          <input className="tdx-input" value={resolveAmount} onChange={e => setResolveAmount(e.target.value)} placeholder="Amount (KES)" type="number" />
+                          <button className="verify-btn" disabled={resolveLoading || !resolveRef || !resolveAmount}
+                            onClick={async () => {
+                              setResolveLoading(true);
+                              setResolveMsg({ text: '', type: '' });
+                              try {
+                                const res = await api.post(`/admin/traders/${t.id}/resolve-payment`, {
+                                  mpesa_ref: resolveRef,
+                                  amount: parseFloat(resolveAmount),
+                                });
+                                const { status, message } = res.data;
 
-                              // Fast path: payment already in our DB — credited immediately
-                              if (status === 'credited') {
-                                setResolveMsg({ text: message, type: 'success' });
-                                setResolveRef(''); setResolveAmount('');
-                                api.get(`/admin/traders/${t.id}/wallet`).then(r => setViewingTraderWallet(r.data)).catch(() => {});
-                                setResolveLoading(false);
-                                return;
+                                // Fast path: payment already in our DB — credited immediately
+                                if (status === 'credited') {
+                                  setResolveMsg({ text: message, type: 'success' });
+                                  setResolveRef(''); setResolveAmount('');
+                                  api.get(`/admin/traders/${t.id}/wallet`).then(r => setViewingTraderWallet(r.data)).catch(() => {});
+                                  setResolveLoading(false);
+                                  return;
+                                }
+
+                                // Slow path: not in DB, waiting for Safaricom async callback
+                                setResolveMsg({ text: message || 'Querying Safaricom...', type: 'info' });
+                                let attempts = 0;
+                                const poll = setInterval(async () => {
+                                  attempts++;
+                                  try {
+                                    const r = await api.get(`/admin/traders/${t.id}/resolve-payment/status?mpesa_ref=${resolveRef}`);
+                                    const { status: st, message: msg } = r.data;
+                                    if (st === 'credited') {
+                                      setResolveMsg({ text: msg, type: 'success' });
+                                      setResolveRef(''); setResolveAmount('');
+                                      clearInterval(poll);
+                                      api.get(`/admin/traders/${t.id}/wallet`).then(r => setViewingTraderWallet(r.data)).catch(() => {});
+                                    } else if (st === 'failed') {
+                                      setResolveMsg({ text: msg, type: 'error' });
+                                      clearInterval(poll);
+                                    } else if (attempts >= 12) {
+                                      setResolveMsg({ text: 'Safaricom took too long to respond. Try again.', type: 'error' });
+                                      clearInterval(poll);
+                                    }
+                                  } catch (e) { clearInterval(poll); }
+                                }, 3000);
+                              } catch (e) {
+                                setResolveMsg({ text: e.response?.data?.detail || 'Failed to resolve payment.', type: 'error' });
                               }
-
-                              // Slow path: not in DB, waiting for Safaricom async callback
-                              setResolveMsg({ text: message || 'Querying Safaricom...', type: 'info' });
-                              let attempts = 0;
-                              const poll = setInterval(async () => {
-                                attempts++;
-                                try {
-                                  const r = await api.get(`/admin/traders/${t.id}/resolve-payment/status?mpesa_ref=${resolveRef}`);
-                                  const { status: st, message: msg } = r.data;
-                                  if (st === 'credited') {
-                                    setResolveMsg({ text: msg, type: 'success' });
-                                    setResolveRef(''); setResolveAmount('');
-                                    clearInterval(poll);
-                                    api.get(`/admin/traders/${t.id}/wallet`).then(r => setViewingTraderWallet(r.data)).catch(() => {});
-                                  } else if (st === 'failed') {
-                                    setResolveMsg({ text: msg, type: 'error' });
-                                    clearInterval(poll);
-                                  } else if (attempts >= 12) {
-                                    setResolveMsg({ text: 'Safaricom took too long to respond. Try again.', type: 'error' });
-                                    clearInterval(poll);
-                                  }
-                                } catch (e) { clearInterval(poll); }
-                              }, 3000);
-                            } catch (e) {
-                              setResolveMsg({ text: e.response?.data?.detail || 'Failed to resolve payment.', type: 'error' });
-                            }
-                            setResolveLoading(false);
-                          }}
-                        >
-                          {resolveLoading ? 'Submitting...' : 'Verify & Credit Wallet'}
-                        </button>
-                      </div>
-                      {resolveMsg.text && (
-                        <div style={{ fontSize: 13, padding: '8px 12px', borderRadius: 8, marginTop: 4,
-                          color: resolveMsg.type === 'success' ? '#10b981' : resolveMsg.type === 'error' ? '#ef4444' : '#f59e0b',
-                          background: resolveMsg.type === 'success' ? 'rgba(16,185,129,0.1)' : resolveMsg.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)',
-                        }}>
-                          {resolveMsg.text}
+                              setResolveLoading(false);
+                            }}>
+                            {resolveLoading ? 'Submitting…' : 'Verify & Credit'}
+                          </button>
                         </div>
-                      )}
-                      </div>{/* end padding wrapper */}
-                    </div>{/* end resolve card */}
+                        {resolveMsg.text && (
+                          <div className={`resolve-msg resolve-msg--${resolveMsg.type || 'info'}`}>{resolveMsg.text}</div>
+                        )}
+                      </div>
+                    </div>
 
-                    {/* Recent Transactions */}
+                    {/* ===== LEDGER (tabbed) ===== */}
                     {(() => {
                       const txTotalPages = Math.ceil(viewingTraderTx.length / PAGE_SIZE);
                       const txSlice = viewingTraderTx.slice((txPage - 1) * PAGE_SIZE, txPage * PAGE_SIZE);
-                      return (
-                        <div className="adm-card" style={{ marginBottom: 16 }}>
-                          <div className="adm-card-header">
-                            <h3>Recent Activity</h3>
-                            <span className="adm-card-count">{viewingTraderTx.length} total</span>
-                          </div>
-                          <div className="adm-table-wrap">
-                            <table className="adm-table">
-                              <thead>
-                                <tr>
-                                  <th>Type</th>
-                                  <th>Direction</th>
-                                  <th>Amount</th>
-                                  <th>Balance After</th>
-                                  <th>M-Pesa Code</th>
-                                  <th>Description</th>
-                                  <th>Status</th>
-                                  <th>Time</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {txSlice.length === 0 ? (
-                                  <tr><td colSpan={8} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No transactions</td></tr>
-                                ) : txSlice.map((tx) => (
-                                  <tr key={tx.id}>
-                                    <td style={{ textTransform: 'capitalize' }}>{(tx.transaction_type || '').replace(/_/g, ' ')}</td>
-                                    <td><span className={`adm-badge ${tx.direction === 'inbound' ? 'green' : 'yellow'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
-                                    <td style={{ fontWeight: 600, color: tx.direction === 'inbound' ? '#10b981' : '#f59e0b' }}>{tx.direction === 'inbound' ? '+' : '-'}{fmtKESFee(tx.amount)}</td>
-                                    <td style={{ color: '#9ca3af' }}>{tx.balance_after != null ? fmtKES(tx.balance_after) : '—'}</td>
-                                    <td className="mono" style={{ color: '#f59e0b', fontSize: 11 }}>{tx.mpesa_transaction_id || tx.bill_ref_number || '—'}</td>
-                                    <td style={{ fontSize: 12, color: '#9ca3af', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.description || '—'}</td>
-                                    <td><span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`}>{tx.status}</span></td>
-                                    <td>{tx.created_at ? fmtDateEAT(tx.created_at) : '—'}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          {txTotalPages > 1 && (
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
-                              <button onClick={() => setTxPage(p => Math.max(1, p - 1))} disabled={txPage === 1}
-                                style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: txPage === 1 ? 'transparent' : 'var(--bg)', color: txPage === 1 ? '#4b5563' : '#fff', cursor: txPage === 1 ? 'default' : 'pointer', fontSize: 13 }}>
-                                ← Prev
-                              </button>
-                              <span style={{ fontSize: 13, color: '#6b7280' }}>Page {txPage} of {txTotalPages} · {viewingTraderTx.length} transactions</span>
-                              <button onClick={() => setTxPage(p => Math.min(txTotalPages, p + 1))} disabled={txPage === txTotalPages}
-                                style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: txPage === txTotalPages ? 'transparent' : 'var(--bg)', color: txPage === txTotalPages ? '#4b5563' : '#fff', cursor: txPage === txTotalPages ? 'default' : 'pointer', fontSize: 13 }}>
-                                Next →
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-
-                    {/* Recent Orders */}
-                    {(() => {
                       const ordTotalPages = Math.ceil(viewingTraderOrders.length / PAGE_SIZE);
                       const ordSlice = viewingTraderOrders.slice((ordersPage - 1) * PAGE_SIZE, ordersPage * PAGE_SIZE);
                       return (
-                        <div className="adm-card">
-                          <div className="adm-card-header">
-                            <h3>Recent Orders</h3>
-                            <span className="adm-card-count">{viewingTraderOrders.length} total</span>
-                          </div>
-                          <div className="adm-table-wrap">
-                            <table className="adm-table">
-                              <thead>
-                                <tr>
-                                  <th>Order #</th>
-                                  <th>Side</th>
-                                  <th>Crypto</th>
-                                  <th>Fiat Amount</th>
-                                  <th>Rate</th>
-                                  <th>Counterparty</th>
-                                  <th>Status</th>
-                                  <th>Created</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {ordSlice.length === 0 ? (
-                                  <tr><td colSpan={8} style={{ textAlign: 'center', color: '#6b7280', padding: 24 }}>No orders</td></tr>
-                                ) : ordSlice.map((o) => (
-                                  <tr key={o.id}>
-                                    <td className="mono" style={{ fontSize: 11 }}>{o.binance_order_number || o.id}</td>
-                                    <td><span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`}>{o.side}</span></td>
-                                    <td style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset || 'USDT'}</td>
-                                    <td style={{ fontWeight: 600, color: '#10b981' }}>{fmtKES(o.fiat_amount)}</td>
-                                    <td style={{ color: '#9ca3af', fontSize: 12 }}>{o.price ? `${(o.price).toLocaleString()}/${o.asset || 'USDT'}` : '—'}</td>
-                                    <td style={{ fontSize: 12 }}>{o.counterparty || '—'}</td>
-                                    <td><span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`}>{o.status}</span></td>
-                                    <td>{o.created_at ? fmtDateEAT(o.created_at) : '—'}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          {ordTotalPages > 1 && (
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
-                              <button onClick={() => setOrdersPage(p => Math.max(1, p - 1))} disabled={ordersPage === 1}
-                                style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: ordersPage === 1 ? 'transparent' : 'var(--bg)', color: ordersPage === 1 ? '#4b5563' : '#fff', cursor: ordersPage === 1 ? 'default' : 'pointer', fontSize: 13 }}>
-                                ← Prev
+                        <div className="card">
+                          <div className="tabs">
+                            <button className={`tab ${ledgerTab === 'activity' ? 'tab--on' : ''}`} onClick={() => setLedgerTab('activity')}>Recent Activity <span className="tab-count">{viewingTraderTx.length}</span></button>
+                            <button className={`tab ${ledgerTab === 'orders' ? 'tab--on' : ''}`} onClick={() => setLedgerTab('orders')}>Recent Orders <span className="tab-count">{viewingTraderOrders.length}</span></button>
+                            <button className={`tab ${ledgerTab === 'logs' ? 'tab--on' : ''}`} onClick={() => setLedgerTab('logs')}>Bot Activity Logs</button>
+                            {ledgerTab === 'logs' && (
+                              <button className="ghost-btn tabs-action" onClick={async () => {
+                                setBotLogsLoading(true);
+                                try { const r = await getAdminTraderBotLogs(viewingTrader.id); setTraderBotLogs(r.data || []); } catch (_) {}
+                                setBotLogsLoading(false);
+                              }}>
+                                <RefreshCw size={12} /> {botLogsLoading ? 'Refreshing…' : 'Refresh'}
                               </button>
-                              <span style={{ fontSize: 13, color: '#6b7280' }}>Page {ordersPage} of {ordTotalPages} · {viewingTraderOrders.length} orders</span>
-                              <button onClick={() => setOrdersPage(p => Math.min(ordTotalPages, p + 1))} disabled={ordersPage === ordTotalPages}
-                                style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: ordersPage === ordTotalPages ? 'transparent' : 'var(--bg)', color: ordersPage === ordTotalPages ? '#4b5563' : '#fff', cursor: ordersPage === ordTotalPages ? 'default' : 'pointer', fontSize: 13 }}>
-                                Next →
-                              </button>
+                            )}
+                          </div>
+
+                          {/* ACTIVITY PANE */}
+                          {ledgerTab === 'activity' && (
+                            <div className="pane">
+                              <div className="tbl-wrap">
+                                <table className="tdx-tbl">
+                                  <thead><tr><th>Type</th><th>Direction</th><th>Amount</th><th>Balance After</th><th>M-Pesa Code</th><th>Description</th><th>Status</th><th>Time</th></tr></thead>
+                                  <tbody>
+                                    {txSlice.length === 0 ? (
+                                      <tr><td colSpan={8} className="empty">No transactions</td></tr>
+                                    ) : txSlice.map((tx) => (
+                                      <tr key={tx.id}>
+                                        <td style={{ textTransform: 'capitalize' }}>{(tx.transaction_type || '').replace(/_/g, ' ')}</td>
+                                        <td><span className={`tag ${tx.direction === 'inbound' ? 'tag--in' : 'tag--out'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
+                                        <td className="num" style={{ fontWeight: 600, color: tx.direction === 'inbound' ? 'var(--pos)' : 'var(--brand)' }}>{tx.direction === 'inbound' ? '+' : '-'}{fmtKESFee(tx.amount)}</td>
+                                        <td className="dim num">{tx.balance_after != null ? fmtKES(tx.balance_after) : '—'}</td>
+                                        <td className="num" style={{ color: 'var(--brand)', fontSize: 11 }}>{tx.mpesa_transaction_id || tx.bill_ref_number || '—'}</td>
+                                        <td className="dim" style={{ fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.description || '—'}</td>
+                                        <td><span className={`st ${tx.status === 'completed' ? 'st--done' : tx.status === 'failed' ? 'st--cancel' : 'st--pend'}`}>{tx.status}</span></td>
+                                        <td className="dim">{tx.created_at ? fmtDateEAT(tx.created_at) : '—'}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {txTotalPages > 1 && (
+                                <div className="pager">
+                                  <button onClick={() => setTxPage(p => Math.max(1, p - 1))} disabled={txPage === 1}>← Prev</button>
+                                  <span>Page {txPage} of {txTotalPages} · {viewingTraderTx.length} transactions</span>
+                                  <button onClick={() => setTxPage(p => Math.min(txTotalPages, p + 1))} disabled={txPage === txTotalPages}>Next →</button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* ORDERS PANE */}
+                          {ledgerTab === 'orders' && (
+                            <div className="pane">
+                              <div className="tbl-wrap">
+                                <table className="tdx-tbl">
+                                  <thead><tr><th>Order #</th><th>Side</th><th>Crypto</th><th>Fiat Amount</th><th>Rate</th><th>Counterparty</th><th>Status</th><th>Created</th></tr></thead>
+                                  <tbody>
+                                    {ordSlice.length === 0 ? (
+                                      <tr><td colSpan={8} className="empty">No orders</td></tr>
+                                    ) : ordSlice.map((o) => (
+                                      <tr key={o.id}>
+                                        <td className="num" style={{ fontSize: 11 }}>{o.binance_order_number || o.id}</td>
+                                        <td><span className={`tag ${o.side === 'BUY' ? 'tag--buy' : 'tag--sell'}`}>{o.side}</span></td>
+                                        <td className="num" style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset || 'USDT'}</td>
+                                        <td className="num" style={{ fontWeight: 600, color: 'var(--pos)' }}>{fmtKES(o.fiat_amount)}</td>
+                                        <td className="dim num" style={{ fontSize: 12 }}>{o.price ? `${(o.price).toLocaleString()}/${o.asset || 'USDT'}` : '—'}</td>
+                                        <td style={{ fontSize: 12 }}>{o.counterparty || '—'}</td>
+                                        <td><span className={`st ${o.status === 'completed' ? 'st--done' : o.status === 'disputed' ? 'st--cancel' : o.status === 'cancelled' ? 'st--cancel' : 'st--pend'}`}>{o.status}</span></td>
+                                        <td className="dim">{o.created_at ? fmtDateEAT(o.created_at) : '—'}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {ordTotalPages > 1 && (
+                                <div className="pager">
+                                  <button onClick={() => setOrdersPage(p => Math.max(1, p - 1))} disabled={ordersPage === 1}>← Prev</button>
+                                  <span>Page {ordersPage} of {ordTotalPages} · {viewingTraderOrders.length} orders</span>
+                                  <button onClick={() => setOrdersPage(p => Math.min(ordTotalPages, p + 1))} disabled={ordersPage === ordTotalPages}>Next →</button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* LOGS PANE */}
+                          {ledgerTab === 'logs' && (
+                            <div className="pane">
+                              <div className="logs">
+                                {traderBotLogs.length === 0 ? (
+                                  <div className="empty">No logs yet — logs appear here once the trader's bot sends activity.</div>
+                                ) : traderBotLogs.map((log, i) => {
+                                  const colors = { success: 'var(--pos)', error: 'var(--neg)', warning: 'var(--warn)', warn: 'var(--warn)', info: 'var(--text-3)' };
+                                  const badges = { success: '✓', error: '✕', warning: '⚠', warn: '⚠', info: '·' };
+                                  const color = colors[log.level] || 'var(--text-3)';
+                                  const badge = badges[log.level] || '·';
+                                  const time = log.time ? new Date(log.time).toLocaleTimeString('en-KE', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+                                  return (
+                                    <div key={i} className="log-row">
+                                      <span className="log-badge" style={{ color }}>{badge}</span>
+                                      <span className="log-time num">{time}</span>
+                                      <span className="log-msg" style={{ color: log.level === 'error' ? '#fca5a5' : log.level === 'success' ? '#6ee7b7' : (log.level === 'warning' || log.level === 'warn') ? '#fcd34d' : 'var(--text-2)' }}>{log.message}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
                           )}
                         </div>
