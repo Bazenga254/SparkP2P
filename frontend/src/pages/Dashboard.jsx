@@ -49,7 +49,7 @@ const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
 const PROFIT_METRICS = {
   net:    { label: 'Profit', color: '#10b981', neg: '#ef4444', fmt: (v) => fmtKES(v),                          axis: (v) => fmtCompact(v) },
   volume: { label: 'Volume', color: '#3b82f6', neg: '#3b82f6', fmt: (v) => 'KES ' + fmtCompact(v),             axis: (v) => fmtCompact(v) },
-  spread: { label: 'Spread', color: '#f59e0b', neg: '#ef4444', fmt: (v) => 'KES ' + (v || 0).toFixed(2),       axis: (v) => (v || 0).toFixed(2) },
+  spread: { label: 'Margin', color: '#f59e0b', neg: '#ef4444', fmt: (v) => 'KES ' + (v || 0).toFixed(2),       axis: (v) => (v || 0).toFixed(2) },
   price:  { label: 'Price',  color: '#a78bfa', neg: '#a78bfa', fmt: (v) => 'KES ' + (v || 0).toFixed(2),       axis: (v) => (v || 0).toFixed(2) },
 };
 
@@ -149,7 +149,7 @@ function ProfitPage() {
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', paddingBottom: 6 }}>
           {[['Net Profit', fmtKES(total.net), (total.net || 0) >= 0 ? '#10b981' : '#ef4444'],
             ['Volume', 'KES ' + fmtCompact(total.volume), '#3b82f6'],
-            ['Avg Spread', 'KES ' + (total.spread || 0).toFixed(2), '#f59e0b'],
+            ['Avg Margin', 'KES ' + (total.spread || 0).toFixed(2), '#f59e0b'],
             ['Trades', (total.trades || 0).toLocaleString(), '#e5e7eb']].map(([l, v, c]) => (
             <div key={l} style={{ flex: 1, minWidth: 130, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px' }}>
               <div style={{ fontSize: 11, color: '#6b7280' }}>{l}</div>
@@ -265,7 +265,7 @@ function ProfitPage() {
         <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <div style={{ minWidth: 460 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr 1fr 0.7fr', gap: 6, fontSize: 11, color: '#6b7280', padding: '6px 0', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>
-              <span>Period</span><span style={{ textAlign: 'right' }}>Profit</span><span style={{ textAlign: 'right' }}>Volume</span><span style={{ textAlign: 'right' }}>Spread</span><span style={{ textAlign: 'right' }}>Trades</span>
+              <span>Period</span><span style={{ textAlign: 'right' }}>Profit</span><span style={{ textAlign: 'right' }}>Volume</span><span style={{ textAlign: 'right' }}>Margin</span><span style={{ textAlign: 'right' }}>Trades</span>
             </div>
             {rows.filter(r => r.trades > 0).length === 0 ? (
               <div style={{ textAlign: 'center', padding: '24px 0', color: '#6b7280', fontSize: 13 }}>No trades in this period.</div>
@@ -516,7 +516,7 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
     <div className="card" style={{ marginBottom: 16 }}>
       <div className="card-header">
         <TrendingUp size={20} />
-        <h3>Spread Calculator</h3>
+        <h3>Margin Calculator</h3>
         {autoLoaded && (
           <span style={{ marginLeft: 'auto', fontSize: 11, color: '#10b981', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', animation: 'pulse-green 1.5s ease-in-out infinite' }} />
@@ -592,7 +592,7 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
 
           {/* Spread per coin — calculated from inputs */}
           <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 11, color: '#9ca3af' }}>Spread per {coin}</div>
+            <div style={{ fontSize: 11, color: '#9ca3af' }}>Margin per {coin}</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: profitable ? '#10b981' : '#ef4444' }}>KSh {spread.toFixed(2)}</div>
             <div style={{ fontSize: 11, color: '#6b7280' }}>{spreadPct.toFixed(3)}%</div>
           </div>
@@ -628,7 +628,7 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
                 <div style={{ fontSize: 18, fontWeight: 700, color: todayStats.gross_profit >= 0 ? '#10b981' : '#ef4444' }}>
                   {fmtKES(todayStats.gross_profit)}
                 </div>
-                <div style={{ fontSize: 11, color: '#6b7280' }}>from spread</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>from margin</div>
               </>
             ) : (
               <div style={{ fontSize: 14, color: '#6b7280' }}>N/A</div>
@@ -699,7 +699,7 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
             <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
               <div style={{ fontSize: 11, color: '#9ca3af' }}>{realProfit !== null ? 'Today\'s Gross Profit' : 'Est. Gross Profit'}</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: '#10b981' }}>+ {fmtKESFee(baseProfit)}</div>
-              <div style={{ fontSize: 11, color: '#6b7280' }}>{realProfit !== null ? 'from completed trades' : 'from spread × volume'}</div>
+              <div style={{ fontSize: 11, color: '#6b7280' }}>{realProfit !== null ? 'from completed trades' : 'from margin × volume'}</div>
             </div>
 
             {/* Card 1b — Binance Fees (flat fee per USDT sold) */}
@@ -741,7 +741,7 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
             }}>
               {netProfitable
                 ? `✓ You receive the full ${fmtKES(wdReceived)} to ${wdDestLabel} — withdrawal is paid using your credits, no cash fee`
-                : `✗ Binance fees exceed gross by ${fmtKES(Math.abs(netProfit))} — increase your spread`}
+                : `✗ Binance fees exceed gross by ${fmtKES(Math.abs(netProfit))} — increase your margin`}
             </div>
           )}
         </div>
@@ -2155,7 +2155,7 @@ export default function Dashboard() {
                 </div>
                 <div className="profit-breakdown">
                   <div className="profit-row spread-row">
-                    <span>Spread</span>
+                    <span>Margin</span>
                     <span>KES {(profitData?.spread ?? stats?.today?.spread ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({(profitData?.spread_pct ?? stats?.today?.spread_pct ?? 0)}%)</span>
                   </div>
                   <div className="profit-row">
