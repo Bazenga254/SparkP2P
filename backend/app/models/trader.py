@@ -171,7 +171,7 @@ class Trader(Base):
     # Choice Bank BaaS sub-account
     choice_account_id = Column(String(100), nullable=True, index=True)  # Choice Bank internal account ID
     choice_account_number = Column(String(50), nullable=True, index=True)  # Account number for receiving payments
-    choice_kyc_status = Column(String(20), nullable=True)       # pending / approved / rejected
+    choice_kyc_status = Column(String(100), nullable=True)      # approved/rejected, or pending:<onboardingId> / onboarding:<onboardingId>
 
     # Telegram integration
     telegram_chat_id = Column(String(50), nullable=True)  # Set when trader links via /link command

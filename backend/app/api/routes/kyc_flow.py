@@ -118,6 +118,14 @@ async def submit_mobile_kyc(token: str, body: MobileKycBody, db: AsyncSession = 
     if not onboarding_id:
         raise HTTPException(500, "Choice Bank did not return an onboarding ID")
 
+    # Persist the onboarding link IMMEDIATELY — BEFORE the media uploads — so a hiccup in any
+    # upload can never lose it. (This was the bug: the save ran only AFTER all 4 uploads, so a
+    # single failed upload left choice_kyc_status NULL while the onboarding already existed at
+    # Choice — exactly why an approved KYC never reflected back.) The KYC poller relies on this
+    # "pending:<id>" link to reconcile the approval later.
+    trader.choice_kyc_status = "pending:" + onboarding_id
+    await db.commit()
+
     for upload_args in [
         ("KYCF00001", body.front_photo_b64, "image"),
         ("KYCF00002", body.back_photo_b64, "image"),
@@ -128,10 +136,6 @@ async def submit_mobile_kyc(token: str, body: MobileKycBody, db: AsyncSession = 
         upload_res = await choice.upload_kyc_media(onboarding_id, media_type, b64, ct)
         if upload_res.get("code") != "00000":
             raise HTTPException(400, "Failed to upload " + media_type + ": " + upload_res.get("msg", "Upload error"))
-
-    # Save status before OTP so we never lose the onboarding ID if OTP fails
-    trader.choice_kyc_status = "pending:" + onboarding_id
-    await db.commit()
 
     otp_res = await choice.send_otp(onboarding_id)
     if otp_res.get("code") != "00000":

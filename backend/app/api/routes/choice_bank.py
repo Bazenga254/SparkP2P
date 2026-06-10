@@ -678,11 +678,13 @@ async def check_onboarding_status(onboarding_request_id: str, trader_id: int, db
     """
     result = await choice.get_onboarding_status(onboarding_request_id)
     data = result.get("data") or {}
-    status = data.get("status")
+    # Choice returns the onboarding state as `onboardingStatus` (3 = passed, 7 = active),
+    # NOT `status` — reading the wrong field meant approvals were never captured here.
+    status = data.get("onboardingStatus", data.get("status"))
 
     if status in (3, 7, "3", "7"):
         account_id     = data.get("accountId") or data.get("account_id") or ""
-        account_number = data.get("accountNumber") or data.get("account_number") or ""
+        account_number = data.get("accountNumber") or data.get("account_number") or account_id
 
         if account_id:
             trader = await db.get(Trader, trader_id)
