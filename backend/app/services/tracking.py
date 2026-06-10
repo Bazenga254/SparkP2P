@@ -55,13 +55,12 @@ _orders_backfill_at = {}        # trader_id -> last completed-order backfill tim
 _ORDERS_BACKFILL_INTERVAL = 1800  # re-scan full history every 30 min to catch offline trades
 
 
-async def _backfill_orders(trader_id, api_key, api_secret):
-    """Import EVERY COMPLETED Binance order into the Orders table — not just the ones tracked
-    while the bot was online — so profit/volume figures reflect ALL trading and the cost-basis
-    replay has the full set of buys. EP-16 returns every field we need (amount, price,
-    commission), so no per-order detail calls. Idempotent (dedup on binance_order_number), and
-    self-gated to re-run at most every 30 min so trades made while the bot was OFF get picked
-    up without needing a restart."""
+async def _backfill_orders(trader_id, api_key, api_secret, connect_floor_ms=0):
+    """Import COMPLETED Binance orders made FROM THE CONNECTION POINT FORWARD into the Orders
+    table — catching trades done while the app was closed, WITHOUT pulling in the trader's
+    pre-connection history. `connect_floor_ms` is the trader's connection time (epoch ms): any
+    order older than it is skipped. Idempotent (dedup on binance_order_number), self-gated to
+    re-run at most every 30 min."""
     last = _orders_backfill_at.get(trader_id)
     nowt = datetime.now(timezone.utc)
     if last is not None and (nowt - last).total_seconds() < _ORDERS_BACKFILL_INTERVAL:
@@ -75,7 +74,8 @@ async def _backfill_orders(trader_id, api_key, api_secret):
         scanned = 0
         async with async_session() as db:
             page = 1
-            while page <= _REL_MAX_PAGES:        # full available history (~30 days)
+            done = False
+            while page <= _REL_MAX_PAGES and not done:   # only back to the connection point
                 try:
                     rows = await get_user_order_history(api_key, api_secret, page=page, rows=50)
                 except Exception:
@@ -85,6 +85,12 @@ async def _backfill_orders(trader_id, api_key, api_secret):
                     break
                 for o in rows:
                     scanned += 1
+                    ct = int(o.get("createTime") or 0)
+                    # Never import pre-connection history. EP-16 is newest-first, so once an
+                    # order predates the connection floor every remaining order is older too.
+                    if connect_floor_ms and ct and ct < connect_floor_ms:
+                        done = True
+                        break
                     if (o.get("orderStatus") or "").upper() != "COMPLETED":
                         continue
                     ono = o.get("orderNumber")
@@ -92,7 +98,6 @@ async def _backfill_orders(trader_id, api_key, api_secret):
                         continue
                     if (await db.execute(_sel(Order.id).where(Order.binance_order_number == ono))).scalar_one_or_none():
                         continue   # already recorded (by the live poller or a prior backfill)
-                    ct = int(o.get("createTime") or 0)
                     side = OrderSide.SELL if (o.get("tradeType") or "").upper() == "SELL" else OrderSide.BUY
                     ts = datetime.fromtimestamp(ct / 1000, tz=timezone.utc) if ct else datetime.now(timezone.utc)
                     db.add(Order(
@@ -567,10 +572,12 @@ async def track_trader(db, trader) -> int:
     # for that trader and piling up DB connections until the pool is exhausted.
     await db.commit()
 
-    # Backfill ALL completed Binance orders into the Orders table (not just while-online ones)
-    # so profit/volume + cost basis are complete. Self-gated to re-run every ~30 min, so trades
-    # made while the bot was off are captured without a restart.
-    asyncio.create_task(_backfill_orders(trader.id, api_key, api_secret))
+    # Backfill completed Binance orders made FROM THE CONNECTION POINT FORWARD (catches trades
+    # done while the app was closed) — but never the trader's pre-connection history. The floor
+    # is tracking_started_at (~when they connected), so connecting an API no longer back-imports
+    # weeks of old trades. Self-gated to re-run every ~30 min.
+    _connect_floor_ms = int(trader.tracking_started_at.timestamp() * 1000) if trader.tracking_started_at else 0
+    asyncio.create_task(_backfill_orders(trader.id, api_key, api_secret, _connect_floor_ms))
 
     # One-time gentle backfill of the full counterparty history so every buyer's buy/sell
     # breakdown is available instantly from cache (runs in the background, once per process).
