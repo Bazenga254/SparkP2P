@@ -391,6 +391,10 @@ async def lifespan(app: FastAPI):
     # after the trader leaves the onboarding page (every 5 min).
     from app.services.kyc_poller import kyc_status_poller
     kyc_task = asyncio.create_task(kyc_status_poller())
+    # Re-push counterparty filters that never synced (relay was down at save) + self-heal the
+    # Gold Merchant badge — only when the trader's relay is up (every 5 min).
+    from app.services.filter_poller import filter_sync_poller
+    filter_task = asyncio.create_task(filter_sync_poller())
     yield
     # Shutdown
     order_poller.stop()
@@ -400,6 +404,7 @@ async def lifespan(app: FastAPI):
     batch_monitor_task.cancel()
     tracking_task.cancel()
     kyc_task.cancel()
+    filter_task.cancel()
 
 
 app = FastAPI(
