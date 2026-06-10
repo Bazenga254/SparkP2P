@@ -2089,6 +2089,7 @@ export default function Dashboard() {
               <div className="mini-stat-card">
                 <DollarSign size={18} style={{ color: '#f59e0b', marginBottom: 4 }} />
                 <span className="mini-stat-value">KES {(profitData ? ((profitData.buy?.kes || 0) + (profitData.sell?.kes || 0)) : (stats?.today?.volume || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                <span style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>{((profitData?.buy?.usdt ?? stats?.today?.buy_crypto ?? 0) + (profitData?.sell?.usdt ?? stats?.today?.sell_crypto ?? 0)).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDT</span>
                 <span className="mini-stat-label">Total Volume</span>
               </div>
               <div className="mini-stat-card">
