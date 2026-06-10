@@ -114,6 +114,7 @@ async def _backfill_orders(trader_id, api_key, api_secret, connect_floor_ms=0):
                         counterparty_name=o.get("counterPartNickName"),
                         created_at=ts,
                         settled_at=ts,
+                        tracked_live=False,   # backfilled offline trade -> tracked for P&L, NOT the daily cap
                     ))
                     inserted += 1
                 await db.commit()
@@ -617,6 +618,7 @@ async def track_trader(db, trader) -> int:
             counterparty_name=o.get("counterPartNickName"),
             created_at=datetime.fromtimestamp(ct / 1000, tz=timezone.utc) if ct else now,
             settled_at=(datetime.fromtimestamp(ct / 1000, tz=timezone.utc) if (ct and status == OrderStatus.COMPLETED) else None),
+            tracked_live=True,   # recorded live while the bot/relay was online -> counts toward daily limit
         ))
         inserted += 1
         await db.commit()   # persist order + release row locks BEFORE the relay call below

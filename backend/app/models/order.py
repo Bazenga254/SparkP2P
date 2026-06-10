@@ -2,7 +2,7 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, Integer, String, Float, Enum, DateTime, Text, ForeignKey, JSON
+    Column, Integer, String, Float, Enum, DateTime, Text, ForeignKey, JSON, Boolean
 )
 from app.core.database import Base
 
@@ -61,6 +61,11 @@ class Order(Base):
 
     # Status tracking
     status = Column(Enum(OrderStatus), default=OrderStatus.PENDING, index=True)
+
+    # True = recorded LIVE by the poller while the trader's bot/relay was online (a trade the bot
+    # actually processed). False = backfilled (the trade completed while they were offline). The
+    # daily trade limit counts only tracked_live trades, so offline catch-up never burns the cap.
+    tracked_live = Column(Boolean, default=False, server_default="false", index=True)
 
     # Timestamps
     payment_confirmed_at = Column(DateTime(timezone=True), nullable=True)

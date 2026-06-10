@@ -28,11 +28,16 @@ async def trade_rate_status(db, trader) -> dict:
         limit = plan_daily_trades(plan)
     else:
         limit = int(trader.daily_trade_limit or 0)   # non-subscriber: keep existing behavior
+    # Count only trades the bot processed LIVE (tracked_live) — NOT backfilled offline trades.
+    # Otherwise a trader who traded offline all day would have those orders dumped into today's
+    # count on reconnect and instantly blow a Starter/Pro daily cap. Offline trades are still
+    # recorded (for P&L/volume); they just don't burn the daily limit.
     used = (await db.execute(
         select(func.count(Order.id)).where(
             Order.trader_id == trader.id,
             Order.created_at >= trading_day_start(),
             Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
+            Order.tracked_live.is_(True),
         )
     )).scalar() or 0
     unlimited = (limit == UNLIMITED)
