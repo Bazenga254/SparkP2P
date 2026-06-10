@@ -1282,6 +1282,11 @@ async def update_trading_config(
                 logger.warning("CF verify-after-push failed: %s", ve)
             if pushed > 0:
                 trader.cf_last_pushed_at = datetime.now(timezone.utc)
+                # A successful EP-7 push only works for Gold Merchants, so tag the tier here too.
+                # This self-heals the badge when the connect-time probe missed it (e.g. the relay
+                # was offline at key-save), without any extra/destructive Binance call.
+                if (trader.binance_merchant_tier or "").lower() != "gold":
+                    trader.binance_merchant_tier = "gold"
                 await db.commit()
             if synced and not push_warnings:
                 return {"status": "updated", "filters_pushed": pushed, "synced": True}
