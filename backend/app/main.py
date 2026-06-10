@@ -387,6 +387,10 @@ async def lifespan(app: FastAPI):
     # Start while-online order tracking poller (every 30s, all online traders)
     from app.services.tracking import tracking_poller
     tracking_task = asyncio.create_task(tracking_poller())
+    # Start KYC reconciliation poller — auto-captures Choice Bank approvals that land
+    # after the trader leaves the onboarding page (every 5 min).
+    from app.services.kyc_poller import kyc_status_poller
+    kyc_task = asyncio.create_task(kyc_status_poller())
     yield
     # Shutdown
     order_poller.stop()
@@ -394,6 +398,8 @@ async def lifespan(app: FastAPI):
     monitor_task.cancel()
     batch_task.cancel()
     batch_monitor_task.cancel()
+    tracking_task.cancel()
+    kyc_task.cancel()
 
 
 app = FastAPI(
