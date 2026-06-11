@@ -134,6 +134,11 @@ export default function Admin() {
   const [traderPnl, setTraderPnl] = useState(null);
   const [pnlPeriod, setPnlPeriod] = useState('today');
   const [pnlLoading, setPnlLoading] = useState(false);
+  // Outbound-fee revenue simulation (buy orders)
+  const [traderRevSim, setTraderRevSim] = useState(null);
+  const [revSimPeriod, setRevSimPeriod] = useState('today');
+  const [revSimLoading, setRevSimLoading] = useState(false);
+  const [revMode, setRevMode] = useState(localStorage.getItem('sparkp2p_revenue_mode') || 'sim'); // 'sim' | 'prod'
   const [txPage, setTxPage] = useState(1);
   const [ordersPage, setOrdersPage] = useState(1);
   const [ledgerTab, setLedgerTab] = useState('activity');
@@ -897,12 +902,23 @@ export default function Admin() {
     setPnlLoading(false);
   };
 
+  const loadTraderRevenueSim = async (traderId, period) => {
+    setRevSimLoading(true);
+    try {
+      const r = await api.get(`/admin/traders/${traderId}/revenue-sim?period=${period}`);
+      setTraderRevSim(r.data);
+    } catch (e) { console.error('Revenue sim load error:', e); }
+    setRevSimLoading(false);
+  };
+
   const openTraderPage = async (trader) => {
     setViewingTrader({ ...trader });
     setViewingTraderWallet(null);
     setViewingTraderTx([]);
     setViewingTraderOrders([]);
     setTraderPnl(null);
+    setTraderRevSim(null);
+    setRevSimPeriod('today');
     setAddTokensMsg(''); setAddTokensAmount(''); setAddTokensNote('');
     setPnlPeriod('today');
     setViewingTraderLoading(true);
@@ -913,12 +929,13 @@ export default function Admin() {
     setResolveRef(''); setResolveAmount(''); setResolveMsg({ text: '', type: '' });
     setImAccountInput(trader.settlement_account || ''); setImAccountMsg('');
     try {
-      const [detailRes, walletRes, txRes, ordersRes, pnlRes, logsRes] = await Promise.allSettled([
+      const [detailRes, walletRes, txRes, ordersRes, pnlRes, revSimRes, logsRes] = await Promise.allSettled([
         api.get(`/admin/traders/${trader.id}/detail`),
         api.get(`/admin/traders/${trader.id}/wallet`),
         api.get(`/admin/traders/${trader.id}/transactions?limit=60`),
         api.get(`/admin/traders/${trader.id}/orders?limit=60`),
         getTraderPnl(trader.id, 'today'),
+        api.get(`/admin/traders/${trader.id}/revenue-sim?period=today`),
         getAdminTraderBotLogs(trader.id),
       ]);
       if (detailRes.status === 'fulfilled') setViewingTrader(prev => ({ ...prev, ...(detailRes.value.data || {}) }));
@@ -926,6 +943,7 @@ export default function Admin() {
       if (txRes.status === 'fulfilled') setViewingTraderTx(txRes.value.data || []);
       if (ordersRes.status === 'fulfilled') setViewingTraderOrders(ordersRes.value.data || []);
       if (pnlRes.status === 'fulfilled') setTraderPnl(pnlRes.value.data);
+      if (revSimRes.status === 'fulfilled') setTraderRevSim(revSimRes.value.data);
       if (logsRes.status === 'fulfilled') setTraderBotLogs(logsRes.value.data || []);
     } catch (e) { console.error('Trader detail load error:', e); }
     setViewingTraderLoading(false);
@@ -2165,6 +2183,76 @@ export default function Admin() {
                           ))}
                         </div>
                         <div className="fine-print">Daily limits reset at 3:00 AM (EAT). Non-subscribers are not blocked.</div>
+                      </div>
+                    </div>
+
+                    {/* ===== REVENUE SIMULATION (BUY ORDERS) ===== */}
+                    <div className="card">
+                      <div className="card-h">
+                        <h3>
+                          💰 Revenue Simulation
+                          <span className={`tag ${revMode === 'prod' ? 'tag--buy' : 'tag--out'}`} style={{ marginLeft: 8, verticalAlign: 'middle' }}>
+                            {revMode === 'prod' ? 'PRODUCTION' : 'SIMULATION'}
+                          </span>
+                        </h3>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <button
+                            onClick={() => {
+                              const next = revMode === 'prod' ? 'sim' : 'prod';
+                              if (next === 'prod' && !window.confirm('Switch revenue tracking to PRODUCTION?\n\nUse this only once Choice Microfinance approval is live and we are actually collecting these fees.')) return;
+                              setRevMode(next);
+                              localStorage.setItem('sparkp2p_revenue_mode', next);
+                            }}
+                            style={{ padding: '5px 12px', borderRadius: 7, border: '1px solid var(--line)', background: 'var(--s2)', color: 'var(--text-2)', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                          >
+                            {revMode === 'prod' ? 'Back to Simulation' : 'Switch to Production'}
+                          </button>
+                          <div className="seg">
+                            {['today', 'week', 'month'].map(p => (
+                              <button key={p} className={revSimPeriod === p ? 'active' : ''} onClick={async () => { setRevSimPeriod(p); await loadTraderRevenueSim(t.id, p); }}>
+                                {p === 'today' ? 'Today' : p === 'week' ? '7 Days' : '30 Days'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="card-b">
+                        {revSimLoading ? (
+                          <div className="muted center">Loading…</div>
+                        ) : traderRevSim ? (() => {
+                          const T = traderRevSim.total, M = traderRevSim.channels.MPESA, P = traderRevSim.channels.PESALINK;
+                          const kes = n => `KES ${Math.round(n || 0).toLocaleString('en-KE')}`;
+                          return (
+                            <>
+                              <p className="muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 12 }}>
+                                {revMode === 'prod' ? 'Live' : 'Projected'} outbound-fee revenue from <strong>{T.count}</strong> completed buy order{T.count === 1 ? '' : 's'} — the fee earned when we pay the seller from the trader's Choice Bank account. Sell orders carry no outbound fee.
+                              </p>
+                              <div className="pnl-grid">
+                                <div className="pnl-card"><div className="kv-k">Merchant Charged</div><div className="pnl-val num" style={{ color: 'var(--text)' }}>{kes(T.merchant_charged)}</div></div>
+                                <div className="pnl-card"><div className="kv-k">Choice Bank Keeps</div><div className="pnl-val num" style={{ color: 'var(--neg)' }}>{kes(T.choice_keeps)}</div></div>
+                                <div className="pnl-card"><div className="kv-k">SparkP2P Profit</div><div className="pnl-val num" style={{ color: 'var(--pos)' }}>{kes(T.our_profit)}</div></div>
+                                <div className="pnl-card"><div className="kv-k">Buy Orders</div><div className="pnl-val num" style={{ color: 'var(--brand)' }}>{T.count}</div></div>
+                              </div>
+                              <div className="tbl-wrap" style={{ marginTop: 12 }}>
+                                <table className="tdx-tbl">
+                                  <thead><tr><th>Method</th><th className="r">Orders</th><th className="r">Volume</th><th className="r">Merchant Charged</th><th className="r">Choice Keeps</th><th className="r">SparkP2P Profit</th></tr></thead>
+                                  <tbody>
+                                    {[['M-Pesa', M], ['Pesalink', P]].map(([label, c]) => (
+                                      <tr key={label}>
+                                        <td><span className={`tag ${label === 'M-Pesa' ? 'tag--buy' : 'tag--sell'}`}>{label}</span></td>
+                                        <td className="r num">{c.count}</td>
+                                        <td className="r num">{kes(c.volume)}</td>
+                                        <td className="r num">{kes(c.merchant_charged)}</td>
+                                        <td className="r num" style={{ color: 'var(--neg)' }}>{kes(c.choice_keeps)}</td>
+                                        <td className="r num" style={{ color: 'var(--pos)', fontWeight: 700 }}>{kes(c.our_profit)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </>
+                          );
+                        })() : <div className="muted center">No buy orders in this period.</div>}
                       </div>
                     </div>
 

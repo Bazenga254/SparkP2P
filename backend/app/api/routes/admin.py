@@ -2457,6 +2457,71 @@ async def get_trader_pnl(
     }
 
 
+@router.get("/traders/{trader_id}/revenue-sim")
+async def get_trader_revenue_sim(
+    trader_id: int,
+    period: str = Query("today"),   # today | week | month
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Outbound-fee revenue simulation for a trader, from their completed BUY orders.
+
+    On a buy order WE send KES to the seller out of the trader's Choice Bank account, so that is
+    where the outbound fee (and our markup) is earned. Per order we know the rail from
+    seller_payment_method ('mpesa' -> M-Pesa B2C, anything else -> PesaLink/bank). For each order:
+      merchant_charged = outbound_fee   (Choice base cost + our markup, debited from the trader)
+      choice_keeps     = outbound_fee - outbound_markup   (Choice Bank's tariff — see charges PDF)
+      our_profit       = outbound_markup (the portion Choice remits to us monthly)
+    """
+    from app.models.order import OrderSide
+    from app.services.outbound_fees import outbound_fee, outbound_markup
+
+    now = datetime.now(timezone.utc)
+    if period == "week":
+        since_day = trading_day_start(now - timedelta(days=6)); days = 7
+    elif period == "month":
+        since_day = trading_day_start(now - timedelta(days=29)); days = 30
+    else:
+        since_day = trading_day_start(now); days = 1
+    period_end = since_day + timedelta(days=days)
+
+    rows = (await db.execute(
+        select(Order).where(
+            Order.trader_id == trader_id,
+            Order.side == OrderSide.BUY,
+            Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+            Order.created_at >= since_day,
+            Order.created_at < period_end,
+        )
+    )).scalars().all()
+
+    def _blank():
+        return {"count": 0, "volume": 0.0, "merchant_charged": 0, "choice_keeps": 0, "our_profit": 0}
+
+    channels = {"MPESA": _blank(), "PESALINK": _blank()}
+
+    for o in rows:
+        ch = "MPESA" if (o.seller_payment_method or "").lower() == "mpesa" else "PESALINK"
+        amt = float(o.fiat_amount or 0)
+        fee = outbound_fee(ch, amt)
+        markup = outbound_markup(ch, amt)
+        c = channels[ch]
+        c["count"] += 1
+        c["volume"] += amt
+        c["merchant_charged"] += fee
+        c["choice_keeps"] += (fee - markup)
+        c["our_profit"] += markup
+
+    total = _blank()
+    for c in channels.values():
+        for k in total:
+            total[k] += c[k]
+    for c in list(channels.values()) + [total]:
+        c["volume"] = round(c["volume"], 2)
+
+    return {"period": period, "channels": channels, "total": total}
+
+
 @router.get("/paybill-transactions")
 async def get_paybill_transactions(
     period: str = Query("today"),   # today | week | month | year | all
