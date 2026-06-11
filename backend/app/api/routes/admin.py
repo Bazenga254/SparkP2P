@@ -2503,9 +2503,14 @@ async def get_trader_revenue_sim(
     )).scalars().all()
 
     def channel_of(amt: float) -> str:
+        # Each mode is a distinct assumption:
+        #   mpesa    -> assume every payout via M-Pesa
+        #   pesalink -> assume every payout via Pesalink
+        #   auto     -> realistic split: M-Pesa up to the per-transaction cap, Pesalink above
+        if method == "mpesa":
+            return "MPESA"
         if method == "pesalink":
             return "PESALINK"
-        # 'auto' and 'mpesa': M-Pesa is only possible up to the per-transaction cap.
         return "MPESA" if amt <= MPESA_TX_CAP else "PESALINK"
 
     def _blank():

@@ -2235,7 +2235,11 @@ export default function Admin() {
                             <>
                               <p className="muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 12 }}>
                                 {revMode === 'prod' ? 'Live' : 'Projected'} outbound-fee revenue from <strong>{T.count}</strong> completed buy order{T.count === 1 ? '' : 's'} — the fee earned when we pay the seller from the trader's Choice Bank account. Sell orders carry no outbound fee.
-                                {' '}Payout rail is <strong>inferred</strong> ({revSimMethod === 'pesalink' ? 'all via Pesalink' : 'M-Pesa up to KES 250,000/order, Pesalink above'}) — the actual rail isn't recorded on historical orders.
+                                {' '}{revSimMethod === 'auto'
+                                  ? <>Rail is <strong>inferred by amount</strong> — M-Pesa up to KES 250,000/order, Pesalink above (the actual rail isn't recorded on historical orders).</>
+                                  : revSimMethod === 'mpesa'
+                                    ? <>Assuming <strong>every payout via M-Pesa</strong> (what-if).</>
+                                    : <>Assuming <strong>every payout via Pesalink</strong> (what-if).</>}
                               </p>
                               <div className="pnl-grid">
                                 <div className="pnl-card"><div className="kv-k">Merchant Charged</div><div className="pnl-val num" style={{ color: 'var(--text)' }}>{kes(T.merchant_charged)}</div></div>
