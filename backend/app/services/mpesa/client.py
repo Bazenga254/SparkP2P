@@ -97,33 +97,7 @@ class MpesaClient:
         logger.info(f"C2B Simulation: {result}")
         return result
 
-    # ── B2C (Paybill → M-Pesa) ────────────────────────────────────
-
-    async def send_b2c(
-        self,
-        phone: str,
-        amount: float,
-        remarks: str = "",
-        occasion: str = "",
-    ) -> dict:
-        """Send money from Paybill to M-Pesa number (B2C)."""
-        import uuid
-        payload = {
-            "OriginatorConversationID": str(uuid.uuid4()),
-            "InitiatorName": self.initiator_name,
-            "SecurityCredential": self.security_credential,
-            "CommandID": "BusinessPayment",
-            "Amount": str(int(amount)),
-            "PartyA": self.shortcode,
-            "PartyB": self._format_phone(phone),
-            "Remarks": remarks[:100],
-            "QueueTimeOutURL": f"{self.callback_base}/api/payment/b2c/timeout",
-            "ResultURL": f"{self.callback_base}/api/payment/b2c/result",
-            "Occasion": occasion[:100],
-        }
-        result = await self._make_request("/mpesa/b2c/v1/paymentrequest", payload)
-        logger.info(f"B2C sent: {amount} to {phone} - {result}")
-        return result
+    # ── B2C removed: M-Pesa payouts now go through Choice Bank (cb-withdraw-to-mpesa) ──
 
     # ── B2B (Paybill → Paybill/Till) ──────────────────────────────
 

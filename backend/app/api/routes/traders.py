@@ -1889,40 +1889,11 @@ async def request_withdrawal(
             "batch_id": batch_result["batch_id"],
         }
 
-    # ── M-PESA traders: immediate B2C (unchanged flow) ────────────────────────
-    from app.services.sweep_service import trigger_im_sweep
-    sweep_ref = f"WD-{trader.email[:20]}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-    sweep_result = await trigger_im_sweep(
-        amount=withdraw_amount,
-        trader_id=trader.id,
-        withdrawal_tx_id=None,
-        reference=sweep_ref,
-        db=db,
+    # ── M-PESA traders: B2C retired — withdrawals now go through Choice Bank ────
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="M-Pesa withdrawals now go through your Choice Bank account. Use Withdraw → Choice Bank → M-Pesa.",
     )
-    if sweep_result.get("success"):
-        logger.info(f"[Sweep] Initiated for KES {withdraw_amount:,.0f} — sweep_id={sweep_result.get('sweep_id')}")
-    elif not sweep_result.get("skipped"):
-        logger.error(f"[Sweep] Failed for trader {trader.id}: {sweep_result.get('error')}")
-
-    engine = SettlementEngine(db)
-    # Force withdraw — bypass batch threshold for manual withdrawals
-    original_threshold = trader.batch_threshold
-    trader.batch_threshold = 0
-    success = await engine.batch_settle(trader.id, amount=withdraw_amount if withdraw_amount < wallet.balance else None)
-    trader.batch_threshold = original_threshold
-
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Withdrawal failed. Please try again.",
-        )
-
-    return {
-        "status": "success",
-        "message": f"KES {net_amount:,.0f} sent to your M-PESA",
-        "amount_sent": net_amount,
-        "transaction_fee": total_fee,
-    }
 
 
 @router.get("/wallet/withdraw/preview")

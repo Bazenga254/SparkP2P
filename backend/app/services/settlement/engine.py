@@ -564,13 +564,13 @@ class SettlementEngine:
                 return True
 
             if trader.settlement_method == SettlementMethod.MPESA:
-                # B2C to trader's M-Pesa
-                result = await mpesa_client.send_b2c(
-                    phone=trader.settlement_phone,
-                    amount=amount,
-                    remarks=remarks,
-                    occasion=occasion,
+                # M-Pesa B2C payouts are retired — M-Pesa withdrawals now go through Choice Bank
+                # (/cb-withdraw-to-mpesa). Any legacy/auto-settle caller gets a clean no-op failure
+                # (no wallet transaction is created downstream when this returns False).
+                logger.warning(
+                    f"M-Pesa B2C settlement retired — trader {trader.id} must withdraw via Choice Bank"
                 )
+                return False
 
             elif trader.settlement_method == SettlementMethod.BANK_PAYBILL:
                 # Sweep is already queued by trigger_im_sweep() in the withdrawal route
@@ -630,85 +630,6 @@ class SettlementEngine:
 
         except Exception as e:
             logger.error(f"Settlement failed for trader {trader.id}: {e}")
-            return False
-
-    async def pay_buy_side_seller(
-        self, order: Order, trader: Trader
-    ) -> bool:
-        """Pay the seller on the buy side (merchant is buying USDT)."""
-        if not order.seller_payment_destination:
-            logger.error(f"No seller payment details for order {order.id}")
-            return False
-
-        amount = order.fiat_amount
-        remarks = f"Payment from {trader.full_name}"
-
-        try:
-            if order.seller_payment_method == "mpesa":
-                result = await mpesa_client.send_b2c(
-                    phone=order.seller_payment_destination,
-                    amount=amount,
-                    remarks=remarks,
-                    occasion=f"P2P Order {order.binance_order_number}",
-                )
-            elif order.seller_payment_method == "bank":
-                # Parse paybill and account from destination
-                parts = order.seller_payment_destination.split(":")
-                paybill = parts[0]
-                account = parts[1] if len(parts) > 1 else ""
-                result = await mpesa_client.send_b2b(
-                    receiver_shortcode=paybill,
-                    amount=amount,
-                    account_number=account,
-                    remarks=remarks,
-                )
-            else:
-                logger.error(f"Unknown seller payment method: {order.seller_payment_method}")
-                return False
-
-            # Deduct from trader wallet
-            wallet = await self._get_wallet(trader.id)
-            if wallet:
-                wallet.balance -= amount
-                wallet.reserved -= amount
-
-                txn = WalletTransaction(
-                    trader_id=trader.id,
-                    wallet_id=wallet.id,
-                    order_id=order.id,
-                    transaction_type=TransactionType.BUY_DEBIT,
-                    amount=-amount,
-                    balance_after=wallet.balance,
-                    description=f"Buy side payment for order {order.binance_order_number}",
-                )
-                self.db.add(txn)
-
-            order.status = OrderStatus.PAYMENT_SENT
-            order.payment_sent_at = datetime.now(timezone.utc)
-
-            payment = Payment(
-                order_id=order.id,
-                trader_id=trader.id,
-                direction=PaymentDirection.OUTBOUND,
-                transaction_type="B2C",
-                amount=amount,
-                destination=order.seller_payment_destination,
-                destination_type=order.seller_payment_method,
-                remarks=remarks,
-                status=PaymentStatus.COMPLETED,
-                raw_callback=result,
-            )
-            self.db.add(payment)
-            await self.db.commit()
-
-            logger.info(
-                f"Buy side payment sent: KES {amount} to {order.seller_payment_destination} "
-                f"for order {order.binance_order_number}"
-            )
-            return True
-
-        except Exception as e:
-            logger.error(f"Buy side payment failed for order {order.id}: {e}")
             return False
 
     def _get_platform_fee(self, trader: Trader) -> float:

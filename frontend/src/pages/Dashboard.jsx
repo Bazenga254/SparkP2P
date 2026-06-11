@@ -2888,7 +2888,12 @@ export default function Dashboard() {
                     </div>
                     <div style={{ color: '#6b7280', fontSize: 12, marginTop: 6, marginBottom: 16 }}>Available for withdrawal</div>
                     <button
-                      onClick={() => setShowWithdrawModal(true)}
+                      onClick={async () => {
+                        setCbWithdrawMsg(''); setCbWithdrawAmount(''); setCbWithdrawOtp('');
+                        setCbWithdrawOtpSent(false);
+                        try { const r = await getCbWithdrawalBank(); setCbWithdrawBank(r.data); } catch { setCbWithdrawBank(null); }
+                        setShowCbWithdrawModal(true);
+                      }}
                       style={{ width: '100%', padding: '12px 0', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', marginBottom: 16 }}>
                       Withdraw
                     </button>
