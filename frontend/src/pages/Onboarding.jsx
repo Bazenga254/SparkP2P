@@ -49,7 +49,6 @@ const STEPS = [
   { key: 'verification', title: 'Verification', icon: Shield },
   { key: 'settlement', title: 'Settlement', icon: Banknote },
   { key: 'authenticator', title: '2FA Setup', icon: Smartphone },
-  { key: 'im_pin', title: 'I&M PIN', icon: Shield },
 ];
 
 export default function Onboarding() {
@@ -214,11 +213,8 @@ export default function Onboarding() {
       }
       // Resume at the furthest completed step
       if (p.settlement_method) setSettlementSaved(true);
-      if (p.binance_connected && p.settlement_method && p.security_question) {
-        // Everything done except I&M PIN — go to last step
-        setCurrentStep(5);
-      } else if (p.binance_connected && p.settlement_method) {
-        // Settlement done, go to 2FA setup
+      if (p.binance_connected && p.settlement_method) {
+        // Settlement done, go to 2FA setup (final step)
         setCurrentStep(4);
         getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
       } else if (p.binance_connected && (p.verify_method || (p.binance_api_key_saved && !p.binance_api_key_invalid))) {
@@ -1214,86 +1210,15 @@ export default function Onboarding() {
                 className="onb-btn-primary"
                 disabled={!sqDone || !totpSetupDone}
                 style={{ opacity: sqDone && totpSetupDone ? 1 : 0.4, cursor: sqDone && totpSetupDone ? 'pointer' : 'not-allowed' }}
-                onClick={() => setCurrentStep(5)}
+                onClick={() => setCompleted(true)}
               >
-                Next
+                Finish Setup
                 <ChevronRight size={18} />
               </button>
             </div>
             {(!sqDone || !totpSetupDone) && (
               <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 10 }}>
                 Both security question and Google Authenticator must be completed to continue.
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Step 6: I&M Online Banking PIN */}
-        {currentStep === 5 && (
-          <div className="onb-step-content">
-            <div style={{ textAlign: 'center', marginBottom: 28 }}>
-              <div style={{ fontSize: 48, marginBottom: 12 }}>🏦</div>
-              <h2>Set Your I&amp;M Online Banking PIN</h2>
-              <p style={{ color: '#9ca3af', fontSize: 14, maxWidth: 440, margin: '8px auto 0' }}>
-                The bot uses this PIN to authorise payments on your behalf. It is encrypted using your OS keychain and stored <strong style={{ color: '#e4e4e7' }}>only on this device</strong> — never on our servers.
-              </p>
-            </div>
-
-            <div style={{ maxWidth: 420, margin: '0 auto' }}>
-              {onbImPinSaved ? (
-                <div style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: 12, padding: 20, textAlign: 'center', marginBottom: 20 }}>
-                  <div style={{ fontSize: 28, marginBottom: 8 }}>✅</div>
-                  <p style={{ color: '#10b981', fontWeight: 600, margin: 0 }}>PIN saved securely on this device</p>
-                  <p style={{ color: '#6b7280', fontSize: 12, marginTop: 4 }}>You can change it anytime in Settings.</p>
-                </div>
-              ) : (
-                <div style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 12, padding: 20, marginBottom: 20 }}>
-                  <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 8 }}>Enter your I&amp;M Online Banking PIN</label>
-                  <input
-                    type="password"
-                    placeholder="PIN (dots only — never shown)"
-                    value={onbImPin}
-                    onChange={e => { setOnbImPin(e.target.value); setOnbImPinMsg(''); }}
-                    maxLength={8} inputMode="numeric"
-                    className="onb-input"
-                    style={{ width: '100%', letterSpacing: '0.3em', marginBottom: 12 }}
-                    onKeyDown={e => e.key === 'Enter' && handleSaveOnbImPin()}
-                  />
-                  <button
-                    className="onb-btn-primary"
-                    style={{ width: '100%', opacity: onbImPinSaving || !onbImPin ? 0.5 : 1, cursor: onbImPinSaving || !onbImPin ? 'not-allowed' : 'pointer' }}
-                    disabled={onbImPinSaving || !onbImPin}
-                    onClick={handleSaveOnbImPin}
-                  >
-                    {onbImPinSaving ? 'Saving...' : 'Save PIN Securely'}
-                  </button>
-                  {onbImPinMsg && (
-                    <p style={{ fontSize: 12, marginTop: 10, color: '#ef4444', textAlign: 'center' }}>{onbImPinMsg}</p>
-                  )}
-                </div>
-              )}
-
-              <p style={{ fontSize: 11, color: '#4b5563', textAlign: 'center', lineHeight: 1.5 }}>
-                🔒 Encrypted with Windows Credential Store · Never transmitted · Only accessible on this device
-              </p>
-            </div>
-
-            <div className="onb-actions" style={{ marginTop: 28 }}>
-              <button className="onb-btn-ghost" onClick={() => setCurrentStep(4)}>
-                <ChevronLeft size={18} />
-                Back
-              </button>
-              <button
-                className="onb-btn-primary"
-                onClick={() => setCompleted(true)}
-              >
-                {onbImPinSaved ? 'Finish Setup' : 'Skip for now'}
-                <ChevronRight size={18} />
-              </button>
-            </div>
-            {!onbImPinSaved && (
-              <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 10 }}>
-                You can add your PIN later in Settings → Binance tab.
               </p>
             )}
           </div>
