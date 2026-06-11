@@ -112,6 +112,7 @@ export default function Onboarding() {
   // Verification step
   const [verifyMethod, setVerifyMethod] = useState('totp');
   const [fundPassword, setFundPassword] = useState('');
+  const [verifyExpanded, setVerifyExpanded] = useState(false); // merchant chose to set up TOTP anyway
 
   // Settlement step
   const [settlementMethod, setSettlementMethod] = useState('mpesa');
@@ -216,11 +217,11 @@ export default function Onboarding() {
         // Settlement done, go to 2FA setup
         setCurrentStep(4);
         getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
-      } else if (p.binance_connected && p.verify_method) {
-        // Verification done, go to settlement
+      } else if (p.binance_connected && (p.verify_method || (p.binance_api_key_saved && !p.binance_api_key_invalid))) {
+        // Verification done OR a verified merchant (TOTP not required) — go to settlement
         setCurrentStep(3);
       } else if (p.binance_connected) {
-        // Binance connected, go to verification
+        // Binance connected (non-merchant) — go to verification
         setCurrentStep(2);
       } else {
         // Start from Connect Binance (skip Install App step)
@@ -370,6 +371,9 @@ export default function Onboarding() {
 
   const canAdvanceStep2 = profile?.binance_connected;
   const canAdvanceStep3 = settlementSaved || profile?.settlement_method;
+  // A verified Binance merchant (connected via API key) doesn't need the TOTP release step —
+  // releases go through the merchant API. Only non-merchants (browser login) must set up TOTP.
+  const isMerchant = profile?.binance_api_key_saved && !profile?.binance_api_key_invalid;
 
   if (loading) {
     return (
@@ -700,10 +704,53 @@ export default function Onboarding() {
               <Shield size={28} className="onb-step-icon" />
               <div>
                 <h2>Release Verification</h2>
-                <p>Google Authenticator (TOTP) is required to automate crypto releases</p>
+                <p>
+                  {isMerchant
+                    ? 'Optional for merchant accounts — your releases go through the Binance merchant API.'
+                    : 'Recommended: Google Authenticator (TOTP) lets the bot release crypto automatically.'}
+                </p>
               </div>
             </div>
 
+            {/* Merchant: not required — they can skip. Non-merchant: required. */}
+            {isMerchant && !verifyExpanded ? (
+              <>
+                <div className="onb-card onb-success-card">
+                  <Check size={24} className="onb-success-icon" />
+                  <div>
+                    <h3>Not required for your account</h3>
+                    <p>
+                      You're connected as a verified Binance{' '}
+                      {profile?.binance_merchant_tier ? <strong style={{ textTransform: 'capitalize' }}>{profile.binance_merchant_tier} merchant</strong> : 'merchant'}.
+                      {' '}Crypto releases are handled through the merchant API, so you don't need to
+                      set up a Google Authenticator code here. You can skip this step.
+                    </p>
+                    <button
+                      className="onb-btn-link"
+                      style={{ marginTop: 8 }}
+                      onClick={() => {
+                        setVerifyExpanded(true);
+                        getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
+                      }}
+                    >
+                      Set up Google Authenticator anyway
+                    </button>
+                  </div>
+                </div>
+
+                <div className="onb-actions">
+                  <button className="onb-btn-ghost" onClick={() => setCurrentStep(1)}>
+                    <ChevronLeft size={18} />
+                    Back
+                  </button>
+                  <button className="onb-btn-primary" onClick={() => setCurrentStep(3)}>
+                    Continue
+                    <ChevronRight size={18} />
+                  </button>
+                </div>
+              </>
+            ) : (
+            <>
             <div className="onb-card">
               <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>
                 When releasing crypto on Binance P2P, Binance asks for a Google Authenticator code. Enter your TOTP secret key below so the bot can generate codes automatically.
@@ -749,25 +796,42 @@ export default function Onboarding() {
             </div>
 
             <div className="onb-actions">
-              <button className="onb-btn-primary" onClick={async () => {
-                if (!totpSecret) return;
-                try {
-                  await updateVerification({
-                    verify_method: 'totp',
-                    totp_secret: totpSecret,
-                    fund_password: null,
-                  });
-                  setCurrentStep(3);
-                } catch (err) {
-                  console.error('Verification save failed:', err);
-                }
-              }}>
+              <button className="onb-btn-ghost" onClick={() => isMerchant ? setVerifyExpanded(false) : setCurrentStep(1)}>
+                <ChevronLeft size={18} />
+                Back
+              </button>
+              <button
+                className="onb-btn-primary"
+                disabled={!totpSecret}
+                style={{ opacity: totpSecret ? 1 : 0.5, cursor: totpSecret ? 'pointer' : 'not-allowed' }}
+                onClick={async () => {
+                  if (!totpSecret) return;
+                  try {
+                    await updateVerification({
+                      verify_method: 'totp',
+                      totp_secret: totpSecret,
+                      fund_password: null,
+                    });
+                    setCurrentStep(3);
+                  } catch (err) {
+                    console.error('Verification save failed:', err);
+                  }
+                }}>
                 Next <ChevronRight size={16} />
               </button>
-              <button className="onb-btn-text" onClick={() => setCurrentStep(3)}>
-                Skip for now
-              </button>
+              {isMerchant && (
+                <button className="onb-btn-text" onClick={() => setCurrentStep(3)}>
+                  Skip for now
+                </button>
+              )}
             </div>
+            {!isMerchant && !totpSecret && (
+              <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 10 }}>
+                Enter your TOTP secret key to continue — this step is required for browser-connected accounts.
+              </p>
+            )}
+            </>
+            )}
           </div>
         )}
 
