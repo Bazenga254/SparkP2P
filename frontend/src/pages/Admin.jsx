@@ -2198,10 +2198,9 @@ export default function Admin() {
                                     <div className="kv-k">{label}</div>
                                     <div className="pnl-val num" style={{ color }}>{isCount ? value : `${prefix || ''}KES ${Math.abs(value).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`}</div>
                                     {breakdown && (
-                                      <div style={{ fontSize: 11, marginTop: 3 }}>
-                                        <span style={{ color: 'var(--pos)' }}>↗ {breakdown.buy} buy</span>
-                                        <span style={{ color: 'var(--muted)' }}> · </span>
-                                        <span style={{ color: 'var(--info)' }}>↘ {breakdown.sell} sell</span>
+                                      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                                        <span className="tag tag--buy">{breakdown.buy} Buy</span>
+                                        <span className="tag tag--sell">{breakdown.sell} Sell</span>
                                       </div>
                                     )}
                                   </div>
