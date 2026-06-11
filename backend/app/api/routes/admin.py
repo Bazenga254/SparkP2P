@@ -2428,6 +2428,20 @@ async def get_trader_pnl(
     total_net = round(total_revenue - total_fees, 2)
     total_trades = sum(d["trades"] for d in daily)
 
+    # Completed-order counts split by side, over the SAME window the daily slice covers.
+    from app.models.order import OrderSide
+    period_end = since_day + timedelta(days=days)
+
+    def _in_period(o):
+        ca = o.created_at
+        if ca is not None and ca.tzinfo is None:
+            ca = ca.replace(tzinfo=timezone.utc)
+        return ca is not None and since_day <= ca < period_end
+
+    period_orders = [o for o in all_orders if _in_period(o)]
+    buy_orders = sum(1 for o in period_orders if o.side == OrderSide.BUY)
+    sell_orders = sum(1 for o in period_orders if o.side == OrderSide.SELL)
+
     return {
         "period": period,
         "daily": daily,
@@ -2436,6 +2450,9 @@ async def get_trader_pnl(
             "fees": total_fees,
             "net": total_net,
             "trades": total_trades,
+            "buy_orders": buy_orders,
+            "sell_orders": sell_orders,
+            "completed_orders": len(period_orders),
         },
     }
 

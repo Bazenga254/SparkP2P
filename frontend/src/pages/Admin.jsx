@@ -2192,18 +2192,25 @@ export default function Admin() {
                                   { label: 'Gross Revenue', value: s.revenue, color: 'var(--pos)', prefix: '+' },
                                   { label: 'Fees Paid', value: s.fees, color: 'var(--neg)', prefix: '-' },
                                   { label: 'Net P&L', value: s.net, color: s.net > 0 ? 'var(--pos)' : s.net < 0 ? 'var(--neg)' : 'var(--text)', prefix: s.net > 0 ? '+' : s.net < 0 ? '-' : '' },
-                                  { label: 'Sell Orders', value: s.trades, color: 'var(--brand)', isCount: true },
-                                ].map(({ label, value, color, isCount, prefix }) => (
+                                  { label: 'Completed Orders', value: s.completed_orders ?? s.trades, color: 'var(--brand)', isCount: true, breakdown: { buy: s.buy_orders ?? 0, sell: s.sell_orders ?? 0 } },
+                                ].map(({ label, value, color, isCount, prefix, breakdown }) => (
                                   <div key={label} className="pnl-card">
                                     <div className="kv-k">{label}</div>
                                     <div className="pnl-val num" style={{ color }}>{isCount ? value : `${prefix || ''}KES ${Math.abs(value).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`}</div>
+                                    {breakdown && (
+                                      <div style={{ fontSize: 11, marginTop: 3 }}>
+                                        <span style={{ color: 'var(--pos)' }}>↗ {breakdown.buy} buy</span>
+                                        <span style={{ color: 'var(--muted)' }}> · </span>
+                                        <span style={{ color: 'var(--info)' }}>↘ {breakdown.sell} sell</span>
+                                      </div>
+                                    )}
                                   </div>
                                 ))}
                               </div>
                               {traderPnl.daily.length > 1 && (
                                 <div className="tbl-wrap">
                                   <table className="tdx-tbl">
-                                    <thead><tr><th>Date</th><th>Sell Orders</th><th className="r">Revenue</th><th className="r">Fees</th><th className="r">Net P&amp;L</th></tr></thead>
+                                    <thead><tr><th>Date</th><th>Orders</th><th className="r">Revenue</th><th className="r">Fees</th><th className="r">Net P&amp;L</th></tr></thead>
                                     <tbody>
                                       {[...traderPnl.daily].reverse().map(row => (
                                         <tr key={row.date}>
@@ -2218,8 +2225,8 @@ export default function Admin() {
                                   </table>
                                 </div>
                               )}
-                              {traderPnl.daily.length === 1 && s.trades === 0 && (
-                                <div className="muted center">No completed sell orders today.</div>
+                              {traderPnl.daily.length === 1 && (s.completed_orders ?? s.trades) === 0 && (
+                                <div className="muted center">No completed orders today.</div>
                               )}
                             </>
                           );
