@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import urllib.request
 
 from app.core.config import settings
@@ -10,6 +11,28 @@ from app.services.message_templates import get_cached_template
 logger = logging.getLogger(__name__)
 
 ADVANTA_BASE_URL = "https://quicksms.advantasms.com"
+
+# Emoji / pictographic symbol ranges. SMS gateways mangle these into garbage
+# (e.g. the warning sign ⚠️ arrived as "as i,"), so strip them before sending.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"  # emoji & supplemental symbols
+    "\U00002600-\U000027BF"  # misc symbols + dingbats (✅ ✕ ✓ etc.)
+    "\U00002300-\U000023FF"  # technical (⏳ ⌛ etc.)
+    "\U00002B00-\U00002BFF"  # arrows/stars
+    "\U00002190-\U000021FF"  # arrows
+    "\U0000FE00-\U0000FE0F"  # variation selectors
+    "\U000020D0-\U000020FF"  # combining marks for symbols
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def gsm_safe(text: str) -> str:
+    """Strip emoji/symbols and collapse leftover spaces so SMS text isn't garbled by the gateway."""
+    if not text:
+        return text
+    return re.sub(r"\s{2,}", " ", _EMOJI_RE.sub("", text)).strip()
 
 
 def send_sms(phone: str, message: str) -> bool:
@@ -24,6 +47,7 @@ def send_sms(phone: str, message: str) -> bool:
 
     # Normalize phone number to 254 format
     phone = normalize_phone(phone)
+    message = gsm_safe(message)
 
     payload = json.dumps({
         "apikey": api_key,
@@ -64,6 +88,7 @@ def send_otp_sms(phone: str, message: str) -> bool:
         return False
 
     phone = normalize_phone(phone)
+    message = gsm_safe(message)
 
     payload = json.dumps({
         "apikey": api_key,

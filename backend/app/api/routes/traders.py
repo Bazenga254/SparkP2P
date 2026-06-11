@@ -195,9 +195,6 @@ class TraderProfileResponse(BaseModel):
     choice_paybill: str = "444174"
 
 
-# In-memory store for phone verification results
-_phone_verifications: dict[str, dict] = {}
-
 # In-memory store for settlement-phone OTP verification (normalized phone -> {code, expires_at, trader_id, attempts})
 _settle_phone_otps: dict[str, dict] = {}
 
@@ -224,10 +221,6 @@ def add_notification(trader_id: int, title: str, message: str, notif_type: str =
     _notifications[trader_id] = _notifications[trader_id][:50]
 
 
-class VerifyPhoneRequest(BaseModel):
-    phone: str
-
-
 class SendPhoneOtpRequest(BaseModel):
     phone: str
 
@@ -239,96 +232,7 @@ class VerifyPhoneOtpRequest(BaseModel):
 
 # ── Routes ────────────────────────────────────────────────────────
 
-@router.post("/verify-phone")
-async def verify_phone(
-    data: VerifyPhoneRequest,
-    trader: Trader = Depends(get_current_trader),
-    db: AsyncSession = Depends(get_db),
-):
-    """Send KES 1 to the phone number via B2C to retrieve the M-Pesa registered name."""
-    phone = data.phone.strip().replace(" ", "")
-    if phone.startswith("07") or phone.startswith("01"):
-        phone = "254" + phone[1:]
-    if not phone.startswith("254") or len(phone) != 12:
-        raise HTTPException(status_code=400, detail="Invalid phone number")
-
-    try:
-        from app.services.mpesa.client import mpesa_client
-        result = await mpesa_client.send_b2c(
-            phone=phone,
-            amount=10,
-            occasion="SparkP2P phone verification",
-            remarks="Phone name verification",
-        )
-        conv_id = result.get("ConversationID", "")
-        logger.info(f"Phone verification B2C sent to {phone}, ConversationID: {conv_id}")
-
-        # Store pending verification
-        _phone_verifications[phone] = {
-            "conversation_id": conv_id,
-            "trader_id": trader.id,
-            "status": "pending",
-            "mpesa_name": None,
-        }
-
-        return {
-            "status": "sent",
-            "message": f"KES 1 sent to {phone}. Waiting for M-Pesa confirmation...",
-            "conversation_id": conv_id,
-        }
-    except Exception as e:
-        logger.error(f"Phone verification B2C failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to send verification: {str(e)}")
-
-
-@router.get("/verify-phone/result")
-async def verify_phone_result(
-    phone: str,
-    trader: Trader = Depends(get_current_trader),
-):
-    """Check the result of a phone verification — returns M-Pesa name if available."""
-    phone = phone.strip().replace(" ", "")
-    if phone.startswith("07") or phone.startswith("01"):
-        phone = "254" + phone[1:]
-
-    logger.info(f"Checking verification for {phone}, known keys: {list(_phone_verifications.keys())}")
-
-    verification = _phone_verifications.get(phone)
-    if not verification:
-        return {"status": "not_found", "message": "No verification found for this number"}
-
-    if verification["status"] == "pending":
-        return {"status": "pending", "message": "Waiting for M-Pesa response..."}
-
-    if verification["status"] == "failed":
-        return {"status": "failed", "message": verification.get("error") or "M-Pesa could not complete the verification payment. Please try again."}
-
-    mpesa_name = verification.get("mpesa_name", "")
-    registered_name = trader.full_name.upper().strip()
-
-    # Compare names — at least 2 name parts must match
-    if mpesa_name:
-        mpesa_parts = mpesa_name.upper().split()
-        reg_parts = registered_name.split()
-        match_count = sum(1 for p in reg_parts if p in mpesa_parts)
-        name_match = match_count >= 2 or mpesa_name.upper() == registered_name
-
-        return {
-            "status": "verified",
-            "mpesa_name": mpesa_name,
-            "registered_name": registered_name,
-            "name_match": name_match,
-            "match_count": match_count,
-        }
-
-    return {"status": "failed", "message": "Could not retrieve M-Pesa name"}
-
-
-def update_phone_verification(phone: str, mpesa_name: str, status: str = "verified"):
-    """Called by B2C callback to update the verification result."""
-    if phone in _phone_verifications:
-        _phone_verifications[phone]["mpesa_name"] = mpesa_name
-        _phone_verifications[phone]["status"] = status
+# (M-Pesa B2C phone verification removed — replaced by SMS OTP below)
 
 
 @router.post("/settlement/send-phone-otp")

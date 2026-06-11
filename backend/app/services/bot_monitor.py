@@ -96,8 +96,7 @@ async def _notify_offline(trader, silent_minutes: int):
         from app.api.routes.telegram import notify_trader
         sent = await notify_trader(trader, msg)
         if not sent:
-            from app.services.sms import send_otp_sms
-            send_otp_sms(trader.phone, msg)
+            logger.info(f"[BotMonitor] Trader {trader.id} has no Telegram connected — offline alert not delivered (SMS disabled)")
     except Exception as e:
         logger.warning(f"[BotMonitor] Offline notification failed for trader {trader.id}: {e}")
 
@@ -106,10 +105,7 @@ async def _notify_recovered(trader):
     logger.info(f"[BotMonitor] Trader {trader.id} ({trader.full_name}) bot back online — notifying")
     try:
         from app.api.routes.telegram import notify_trader
-        sent = await notify_trader(trader, "✅ SparkP2P: Your trading bot is back online. Automation has resumed.")
-        if not sent:
-            from app.services.sms import send_otp_sms
-            send_otp_sms(trader.phone, "SparkP2P: Your trading bot is back online. Automation has resumed.")
+        await notify_trader(trader, "✅ SparkP2P: Your trading bot is back online. Automation has resumed.")
     except Exception as e:
         logger.warning(f"[BotMonitor] Recovery notification failed for trader {trader.id}: {e}")
 
@@ -158,10 +154,7 @@ async def _check_pending_withdrawals():
         )
         try:
             from app.api.routes.telegram import notify_trader
-            sent = await notify_trader(trader, wd_msg)
-            if not sent:
-                from app.services.sms import send_otp_sms
-                send_otp_sms(trader.phone, wd_msg)
+            await notify_trader(trader, wd_msg)
         except Exception as e:
             logger.warning(f"[BotMonitor] Pending-wd notification failed for trader {trader_id}: {e}")
 
