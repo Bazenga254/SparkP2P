@@ -841,8 +841,8 @@ export default function Onboarding() {
             <div className="onb-step-header">
               <Banknote size={28} className="onb-step-icon" />
               <div>
-                <h2>How do you want to receive payments?</h2>
-                <p>Choose where your earnings will be sent</p>
+                <h2>Verify your Safaricom phone number</h2>
+                <p>This is where your earnings will be sent</p>
               </div>
             </div>
 
