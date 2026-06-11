@@ -124,6 +124,10 @@ export default function Onboarding() {
   const [mpesaVerifying, setMpesaVerifying] = useState(false);
   const [mpesaName, setMpesaName] = useState(null); // { name, match }
   const [mpesaVerifyMsg, setMpesaVerifyMsg] = useState('');
+  // Settlement phone OTP verification (replaces the old B2C name-match check)
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpConfirmed, setOtpConfirmed] = useState(false);
   const [verifyAttempts, setVerifyAttempts] = useState(parseInt(localStorage.getItem('sparkp2p_verify_attempts') || '0'));
   const [accountSuspended, setAccountSuspended] = useState(localStorage.getItem('sparkp2p_suspended') === 'true');
   const [customPaybill, setCustomPaybill] = useState('');
@@ -842,7 +846,7 @@ export default function Onboarding() {
               <Banknote size={28} className="onb-step-icon" />
               <div>
                 <h2>Verify your Safaricom phone number</h2>
-                <p>This is where your earnings will be sent</p>
+                <p>We'll text a one-time code to confirm it's yours. This is where your settlements are paid out from your bank.</p>
               </div>
             </div>
 
@@ -889,172 +893,119 @@ export default function Onboarding() {
 
                   {!accountSuspended && settlementMethod === 'mpesa' && (
                     <>
-                      {verifyAttempts > 0 && verifyAttempts < 3 && (
-                        <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', borderRadius: 8, fontSize: 13, color: '#ef4444', marginBottom: 8 }}>
-                          Warning: {3 - verifyAttempts} attempt{3 - verifyAttempts === 1 ? '' : 's'} remaining. Your account will be permanently suspended after 3 failed verifications.
-                        </div>
-                      )}
                       <label>M-Pesa Phone Number</label>
                       <div style={{ display: 'flex', gap: 8 }}>
                         <input
                           type="tel"
                           placeholder="0712345678"
                           value={settlementPhone}
-                          onChange={(e) => { setSettlementPhone(e.target.value); setMpesaName(null); setMpesaVerifyMsg(''); }}
-                          required
-                          style={{ flex: 1 }}
-                        />
-                        <button
-                          type="button"
-                          className="onb-btn-secondary"
-                          style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}
-                          disabled={mpesaVerifying || !settlementPhone || settlementPhone.length < 10}
-                          onClick={async () => {
-                            setMpesaVerifying(true);
-                            setMpesaName(null);
-                            setMpesaVerifyMsg('Sending KES 1 to verify...');
-                            try {
-                              const token = localStorage.getItem('token');
-                              const res = await fetch('/api/traders/verify-phone', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                                body: JSON.stringify({ phone: settlementPhone }),
-                              });
-                              if (!res.ok) { const d = await res.json(); setMpesaVerifyMsg(d.detail || 'Failed'); setMpesaVerifying(false); return; }
-                              setMpesaVerifyMsg('KES 1 sent. Waiting for M-Pesa confirmation...');
-
-                              // Poll for result every 3 seconds, up to 30 seconds
-                              let attempts = 0;
-                              const poll = setInterval(async () => {
-                                attempts++;
-                                if (attempts > 10) { clearInterval(poll); setMpesaVerifying(false); setMpesaVerifyMsg('Timeout — try again'); return; }
-                                const r = await fetch(`/api/traders/verify-phone/result?phone=${settlementPhone}`, {
-                                  headers: { 'Authorization': `Bearer ${token}` },
-                                });
-                                const d = await r.json();
-                                if (d.status === 'failed') {
-                                  clearInterval(poll);
-                                  setMpesaVerifying(false);
-                                  setMpesaVerifyMsg(d.message || 'Verification payment failed — please try again.');
-                                  return;
-                                }
-                                if (d.status === 'verified') {
-                                  clearInterval(poll);
-                                  setMpesaVerifying(false);
-                                  setMpesaName({ name: d.mpesa_name, match: d.name_match });
-                                  setMpesaVerifyMsg('');
-                                  if (!d.name_match) {
-                                    const newAttempts = verifyAttempts + 1;
-                                    setVerifyAttempts(newAttempts);
-                                    localStorage.setItem('sparkp2p_verify_attempts', String(newAttempts));
-                                    if (newAttempts >= 3) {
-                                      setAccountSuspended(true);
-                                      localStorage.setItem('sparkp2p_suspended', 'true');
-                                      fetch('/api/traders/suspend-self', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                                        body: JSON.stringify({ reason: 'Settlement verification failed 3 times — name mismatch' }),
-                                      }).catch(() => {});
-                                    }
-                                  } else {
-                                    // Name matched — auto-save and advance
-                                    setVerifyAttempts(0);
-                                    localStorage.setItem('sparkp2p_verify_attempts', '0');
-                                    setMpesaVerifyMsg('Verified! Saving and continuing...');
-                                    const ok = await saveSettlement(settlementPhone);
-                                    if (ok) {
-                                      setTimeout(() => {
-                                        setCurrentStep(4);
-                                        getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
-                                      }, 800);
-                                    }
-                                  }
-                                }
-                              }, 3000);
-                            } catch (e) {
-                              setMpesaVerifyMsg('Error: ' + e.message);
-                              setMpesaVerifying(false);
-                            }
+                          onChange={(e) => {
+                            setSettlementPhone(e.target.value);
+                            // Editing the number invalidates any sent/confirmed code
+                            setOtpSent(false); setOtpConfirmed(false); setOtpCode(''); setMpesaVerifyMsg('');
                           }}
-                        >
-                          {mpesaVerifying ? 'Verifying...' : 'Verify'}
-                        </button>
+                          required
+                          readOnly={otpConfirmed}
+                          style={{ flex: 1, opacity: otpConfirmed ? 0.7 : 1 }}
+                        />
+                        {!otpConfirmed && (
+                          <button
+                            type="button"
+                            className="onb-btn-secondary"
+                            style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}
+                            disabled={mpesaVerifying || !settlementPhone || settlementPhone.length < 10}
+                            onClick={async () => {
+                              setMpesaVerifying(true);
+                              setMpesaVerifyMsg('Sending code...');
+                              try {
+                                const token = localStorage.getItem('token');
+                                const res = await fetch('/api/traders/settlement/send-phone-otp', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                  body: JSON.stringify({ phone: settlementPhone }),
+                                });
+                                const d = await res.json();
+                                if (!res.ok) { setMpesaVerifyMsg(d.detail || 'Could not send the code.'); setMpesaVerifying(false); return; }
+                                setOtpSent(true);
+                                setOtpCode('');
+                                setMpesaVerifyMsg(d.message ? `${d.message}. Enter it below.` : 'Code sent. Enter it below.');
+                              } catch (e) {
+                                setMpesaVerifyMsg('Error: ' + e.message);
+                              }
+                              setMpesaVerifying(false);
+                            }}
+                          >
+                            {mpesaVerifying ? 'Sending...' : (otpSent ? 'Resend' : 'Send code')}
+                          </button>
+                        )}
                       </div>
 
-                      {mpesaVerifyMsg && (
-                        <div style={{ fontSize: 12, color: '#f59e0b', marginTop: 4 }}>{mpesaVerifyMsg}</div>
-                      )}
-
-                      {mpesaName && mpesaName.match && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: 'rgba(16,185,129,0.1)', borderRadius: 8, fontSize: 13, color: '#10b981', marginTop: 8 }}>
-                          <Check size={16} />
-                          M-Pesa name: <strong>{mpesaName.name}</strong> — matches your account
-                        </div>
-                      )}
-                      {mpesaName && !mpesaName.match && (
-                        <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, padding: 14, marginTop: 8 }}>
-                          <div style={{ fontSize: 13, color: '#ef4444', marginBottom: 10 }}>
-                            <strong>Name mismatch!</strong> M-Pesa name: <strong>{mpesaName.name}</strong><br />
-                            Your registered name: <strong>{profile?.full_name}</strong>. Update your name below to match.
-                          </div>
-                          <label style={{ fontSize: 12, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Update Your Full Name (as on Binance KYC)</label>
-                          <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                      {/* OTP entry */}
+                      {otpSent && !otpConfirmed && (
+                        <div style={{ marginTop: 10 }}>
+                          <label>Enter the 6-digit code sent to your phone</label>
+                          <div style={{ display: 'flex', gap: 8 }}>
                             <input
                               type="text"
-                              value={correctedName}
-                              onChange={(e) => { setCorrectedName(e.target.value.toUpperCase()); setCorrectedNameMsg(''); }}
-                              placeholder={mpesaName.name?.toUpperCase()}
-                              style={{ flex: 1, textTransform: 'uppercase' }}
+                              inputMode="numeric"
+                              maxLength={6}
+                              placeholder="000000"
+                              value={otpCode}
+                              onChange={(e) => { setOtpCode(e.target.value.replace(/\D/g, '')); setMpesaVerifyMsg(''); }}
+                              style={{ flex: 1, letterSpacing: 6, textAlign: 'center', fontSize: 18 }}
                             />
                             <button
                               type="button"
                               className="onb-btn-secondary"
-                              style={{ whiteSpace: 'nowrap', padding: '8px 14px' }}
-                              onClick={() => setCorrectedName(mpesaName.name?.toUpperCase() || '')}
+                              style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}
+                              disabled={mpesaVerifying || otpCode.length !== 6}
+                              onClick={async () => {
+                                setMpesaVerifying(true);
+                                setMpesaVerifyMsg('Verifying code...');
+                                try {
+                                  const token = localStorage.getItem('token');
+                                  const res = await fetch('/api/traders/settlement/verify-phone-otp', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                    body: JSON.stringify({ phone: settlementPhone, code: otpCode }),
+                                  });
+                                  const d = await res.json();
+                                  if (!res.ok) { setMpesaVerifyMsg(d.detail || 'Incorrect code.'); setMpesaVerifying(false); return; }
+                                  // Confirmed — save settlement and advance
+                                  setOtpConfirmed(true);
+                                  setMpesaVerifyMsg('Number verified! Saving and continuing...');
+                                  const ok = await saveSettlement(settlementPhone);
+                                  if (ok) {
+                                    setTimeout(() => {
+                                      setCurrentStep(4);
+                                      getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
+                                    }, 800);
+                                  }
+                                } catch (e) {
+                                  setMpesaVerifyMsg('Error: ' + e.message);
+                                }
+                                setMpesaVerifying(false);
+                              }}
                             >
-                              Use M-Pesa Name
+                              {mpesaVerifying ? 'Verifying...' : 'Confirm'}
                             </button>
                           </div>
-                          <button
-                            type="button"
-                            className="onb-btn-primary"
-                            style={{ width: '100%' }}
-                            disabled={savingCorrectedName || correctedName.trim().length < 3}
-                            onClick={async () => {
-                              setSavingCorrectedName(true);
-                              setCorrectedNameMsg('');
-                              try {
-                                const token = localStorage.getItem('token');
-                                const res = await fetch('/api/traders/profile', {
-                                  method: 'PUT',
-                                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                                  body: JSON.stringify({ full_name: correctedName.trim().toUpperCase() }),
-                                });
-                                if (res.ok) {
-                                  setCorrectedNameMsg('Name updated! Now click Verify again.');
-                                  await refreshProfile();
-                                  setMpesaName(null);
-                                  setCorrectedName('');
-                                } else {
-                                  const d = await res.json();
-                                  setCorrectedNameMsg(d.detail || 'Failed to update name');
-                                }
-                              } catch { setCorrectedNameMsg('Network error'); }
-                              setSavingCorrectedName(false);
-                            }}
-                          >
-                            {savingCorrectedName ? 'Saving...' : 'Save Name & Re-verify'}
-                          </button>
-                          {correctedNameMsg && (
-                            <div style={{ fontSize: 12, color: correctedNameMsg.includes('updated') ? '#10b981' : '#ef4444', marginTop: 6 }}>
-                              {correctedNameMsg}
-                            </div>
-                          )}
                         </div>
                       )}
 
-                      <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>
-                        We send KES 10 to verify the phone is registered under your name.
+                      {mpesaVerifyMsg && (
+                        <div style={{ fontSize: 12, color: otpConfirmed ? '#10b981' : '#f59e0b', marginTop: 6 }}>{mpesaVerifyMsg}</div>
+                      )}
+
+                      {otpConfirmed && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: 'rgba(16,185,129,0.1)', borderRadius: 8, fontSize: 13, color: '#10b981', marginTop: 8 }}>
+                          <Check size={16} />
+                          Number verified
+                        </div>
+                      )}
+
+                      <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 8 }}>
+                        We send a one-time code to confirm this number is yours. Your settlements are paid out here from your bank.
                       </div>
                     </>
                   )}

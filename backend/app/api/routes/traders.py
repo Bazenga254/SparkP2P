@@ -198,6 +198,9 @@ class TraderProfileResponse(BaseModel):
 # In-memory store for phone verification results
 _phone_verifications: dict[str, dict] = {}
 
+# In-memory store for settlement-phone OTP verification (normalized phone -> {code, expires_at, trader_id, attempts})
+_settle_phone_otps: dict[str, dict] = {}
+
 # In-memory OTP store for Google profile phone verification (phone -> otp)
 _profile_otp_codes: dict[str, str] = {}
 
@@ -223,6 +226,15 @@ def add_notification(trader_id: int, title: str, message: str, notif_type: str =
 
 class VerifyPhoneRequest(BaseModel):
     phone: str
+
+
+class SendPhoneOtpRequest(BaseModel):
+    phone: str
+
+
+class VerifyPhoneOtpRequest(BaseModel):
+    phone: str
+    code: str
 
 
 # ── Routes ────────────────────────────────────────────────────────
@@ -317,6 +329,66 @@ def update_phone_verification(phone: str, mpesa_name: str, status: str = "verifi
     if phone in _phone_verifications:
         _phone_verifications[phone]["mpesa_name"] = mpesa_name
         _phone_verifications[phone]["status"] = status
+
+
+@router.post("/settlement/send-phone-otp")
+async def send_settlement_phone_otp(
+    data: SendPhoneOtpRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Send a one-time code by SMS to the Safaricom number the trader wants to use for settlement,
+    to confirm they own the line. Replaces the old 'send KES 10 and read the M-Pesa name' check —
+    name/KYC is now handled at the Choice Bank layer."""
+    from app.services.sms import normalize_phone, sms_verification_code
+
+    phone = normalize_phone(data.phone)
+    if not phone.startswith("254") or len(phone) != 12:
+        raise HTTPException(status_code=400, detail="Enter a valid Safaricom number, e.g. 0712345678.")
+
+    code = str(random.randint(100000, 999999))
+    _settle_phone_otps[phone] = {
+        "code": code,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
+        "trader_id": trader.id,
+        "attempts": 0,
+    }
+
+    sent = sms_verification_code(phone, code)
+    if not sent:
+        raise HTTPException(status_code=502, detail="Could not send the SMS code. Please try again.")
+
+    logger.info(f"Settlement phone OTP sent to {phone} for trader {trader.id}")
+    return {"status": "sent", "message": f"Code sent to ***{phone[-3:]}"}
+
+
+@router.post("/settlement/verify-phone-otp")
+async def verify_settlement_phone_otp(
+    data: VerifyPhoneOtpRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Confirm the SMS code for the settlement phone number."""
+    from app.services.sms import normalize_phone
+
+    phone = normalize_phone(data.phone)
+    rec = _settle_phone_otps.get(phone)
+    if not rec or rec.get("trader_id") != trader.id:
+        raise HTTPException(status_code=400, detail="No code was sent to this number. Tap “Send code” first.")
+
+    if datetime.now(timezone.utc) > rec["expires_at"]:
+        _settle_phone_otps.pop(phone, None)
+        raise HTTPException(status_code=400, detail="That code has expired. Tap “Send code” to get a new one.")
+
+    rec["attempts"] = rec.get("attempts", 0) + 1
+    if rec["attempts"] > 5:
+        _settle_phone_otps.pop(phone, None)
+        raise HTTPException(status_code=429, detail="Too many incorrect attempts. Tap “Send code” to get a new one.")
+
+    if data.code.strip() != rec["code"]:
+        raise HTTPException(status_code=401, detail="Incorrect code. Please check and try again.")
+
+    _settle_phone_otps.pop(phone, None)
+    logger.info(f"Settlement phone {phone} verified by OTP for trader {trader.id}")
+    return {"status": "verified"}
 
 
 @router.post("/suspend-self")
