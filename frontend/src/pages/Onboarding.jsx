@@ -510,10 +510,14 @@ export default function Onboarding() {
                       <Key size={28} />
                     </div>
                     <div>
-                      <h3>Connect via Binance API</h3>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <h3 style={{ margin: 0 }}>Connect via Binance API</h3>
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 9px', borderRadius: 20, background: 'rgba(245,158,11,0.18)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.35)', letterSpacing: '0.4px', whiteSpace: 'nowrap' }}>★ RECOMMENDED · FOR MERCHANTS</span>
+                      </div>
                       <p>
-                        Create a Binance API key, paste it below with its secret, and test the
-                        connection. This links your account without a Chrome login.
+                        Best for verified Binance merchants. Create a Binance API key, paste it below
+                        with its secret, and test the connection — this links your account without a
+                        Chrome login.
                       </p>
                     </div>
                   </div>
@@ -599,7 +603,10 @@ export default function Onboarding() {
                       <Zap size={32} />
                     </div>
                     <div>
-                      <h3>Or connect via Desktop App</h3>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <h3 style={{ margin: 0 }}>Or connect via Desktop App</h3>
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 9px', borderRadius: 20, background: 'rgba(99,102,241,0.18)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.35)', letterSpacing: '0.4px', whiteSpace: 'nowrap' }}>FOR NON-MERCHANTS</span>
+                      </div>
                       <p>
                         {window.sparkp2p?.isDesktop
                           ? <>Click <strong>Connect Binance</strong> below and log into your Binance account in the Chrome window that opens. The bot will detect your login and start automatically.</>
