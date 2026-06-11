@@ -288,6 +288,9 @@ async def verify_phone_result(
     if verification["status"] == "pending":
         return {"status": "pending", "message": "Waiting for M-Pesa response..."}
 
+    if verification["status"] == "failed":
+        return {"status": "failed", "message": verification.get("error") or "M-Pesa could not complete the verification payment. Please try again."}
+
     mpesa_name = verification.get("mpesa_name", "")
     registered_name = trader.full_name.upper().strip()
 

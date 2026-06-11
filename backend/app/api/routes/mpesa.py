@@ -430,14 +430,19 @@ async def b2c_result(request: Request, db: AsyncSession = Depends(get_db)):
         try:
             from app.api.routes.traders import _phone_verifications, update_phone_verification
             print(f"B2C VERIFY: ConvID={conversation_id}, name={clean_name}, code={result_code}, pending={list(_phone_verifications.keys())}")
-            if result_code == 0:
-                for phone, v in list(_phone_verifications.items()):
-                    if v.get("conversation_id") == conversation_id:
+            for phone, v in list(_phone_verifications.items()):
+                if v.get("conversation_id") == conversation_id:
+                    if result_code == 0:
                         update_phone_verification(phone, clean_name or "UNKNOWN", "verified")
                         logger.info(f"Phone verification updated: {phone} = {clean_name}")
-                        break
-                else:
-                    logger.warning(f"No matching verification found for ConvID {conversation_id}")
+                    else:
+                        # Surface the failure instead of letting the frontend poll until timeout
+                        update_phone_verification(phone, "", "failed")
+                        _phone_verifications[phone]["error"] = result_desc or f"M-Pesa error {result_code}"
+                        logger.warning(f"Phone verification FAILED for {phone}: code={result_code} {result_desc}")
+                    break
+            else:
+                logger.warning(f"No matching verification found for ConvID {conversation_id}")
         except Exception as ve:
             logger.warning(f"Phone verification update error: {ve}")
 

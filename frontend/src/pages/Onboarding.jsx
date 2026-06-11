@@ -932,6 +932,12 @@ export default function Onboarding() {
                                   headers: { 'Authorization': `Bearer ${token}` },
                                 });
                                 const d = await r.json();
+                                if (d.status === 'failed') {
+                                  clearInterval(poll);
+                                  setMpesaVerifying(false);
+                                  setMpesaVerifyMsg(d.message || 'Verification payment failed — please try again.');
+                                  return;
+                                }
                                 if (d.status === 'verified') {
                                   clearInterval(poll);
                                   setMpesaVerifying(false);
