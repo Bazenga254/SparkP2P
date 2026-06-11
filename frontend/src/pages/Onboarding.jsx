@@ -819,15 +819,15 @@ export default function Onboarding() {
                 }}>
                 Next <ChevronRight size={16} />
               </button>
-              {isMerchant && (
-                <button className="onb-btn-text" onClick={() => setCurrentStep(3)}>
-                  Skip for now
-                </button>
-              )}
+              <button className="onb-btn-text" onClick={() => setCurrentStep(3)}>
+                Skip for now
+              </button>
             </div>
-            {!isMerchant && !totpSecret && (
+            {!isMerchant && (
               <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 10 }}>
-                Enter your TOTP secret key to continue — this step is required for browser-connected accounts.
+                {totpSecret
+                  ? 'Click Next to save your authenticator key.'
+                  : 'Recommended for browser-connected accounts — without it you’ll approve crypto releases manually. You can add it later in Settings.'}
               </p>
             )}
             </>
