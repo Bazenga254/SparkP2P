@@ -2052,6 +2052,16 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
               >
                 Save Withdrawal Account
               </button>
+
+              {profile?.settlement_mpesa_phone && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 8, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)' }}>
+                  <span style={{ fontSize: 15 }}>📱</span>
+                  <div style={{ fontSize: 12, color: '#9ca3af', lineHeight: 1.4 }}>
+                    M-Pesa withdrawals are also available to <strong style={{ color: '#e5e7eb' }}>{profile.settlement_mpesa_phone}</strong> (your onboarding number).
+                    Choose M-Pesa at withdrawal time — limit KES 250,000 per transaction.
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             /* ── Identity verification step ── */
