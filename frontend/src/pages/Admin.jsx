@@ -139,6 +139,10 @@ export default function Admin() {
   const [revSimPeriod, setRevSimPeriod] = useState('today');
   const [revSimMethod, setRevSimMethod] = useState('auto'); // auto | mpesa | pesalink
   const [revSimLoading, setRevSimLoading] = useState(false);
+  // Total Trades / Volume period filter (24h | 7d | 30d | all)
+  const [activityPeriod, setActivityPeriod] = useState('all');
+  const [activity, setActivity] = useState(null); // { trades, volume } for the selected window
+  const [activityLoading, setActivityLoading] = useState(false);
   const [revMode, setRevMode] = useState(localStorage.getItem('sparkp2p_revenue_mode') || 'sim'); // 'sim' | 'prod'
   const [txPage, setTxPage] = useState(1);
   const [ordersPage, setOrdersPage] = useState(1);
@@ -912,6 +916,16 @@ export default function Admin() {
     setRevSimLoading(false);
   };
 
+  const loadTraderActivity = async (traderId, period) => {
+    if (period === 'all') { setActivity(null); return; }   // Lifetime uses the trader's own totals
+    setActivityLoading(true);
+    try {
+      const r = await api.get(`/admin/traders/${traderId}/activity?period=${period}`);
+      setActivity(r.data);
+    } catch (e) { console.error('Activity load error:', e); }
+    setActivityLoading(false);
+  };
+
   const openTraderPage = async (trader) => {
     setViewingTrader({ ...trader });
     setViewingTraderWallet(null);
@@ -921,6 +935,8 @@ export default function Admin() {
     setTraderRevSim(null);
     setRevSimPeriod('today');
     setRevSimMethod('auto');
+    setActivityPeriod('all');
+    setActivity(null);
     setAddTokensMsg(''); setAddTokensAmount(''); setAddTokensNote('');
     setPnlPeriod('today');
     setViewingTraderLoading(true);
@@ -2063,16 +2079,35 @@ export default function Admin() {
                             </div>
                             <div className="kpi-delta">{sellTrades} completed sell orders</div>
                           </div>
-                          <div className="kpi">
-                            <div className="kpi-label">Total Trades</div>
-                            <div className="kpi-val num">{t.total_trades ?? 0}</div>
-                            <div className="kpi-delta">lifetime</div>
-                          </div>
-                          <div className="kpi">
-                            <div className="kpi-label">Lifetime Volume</div>
-                            <div className="kpi-val num">{fmtKES(t.total_volume)}</div>
-                            <div className="kpi-delta">{fmtCompact(t.total_volume)} total</div>
-                          </div>
+                          {(() => {
+                            const actSeg = (
+                              <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+                                {[['24h', '24h'], ['7d', '7d'], ['30d', '30d'], ['all', 'Life']].map(([p, lbl]) => (
+                                  <button key={p} onClick={() => { setActivityPeriod(p); loadTraderActivity(t.id, p); }}
+                                    style={{ flex: 1, padding: '3px 0', borderRadius: 5, fontSize: 10, fontWeight: 600, cursor: 'pointer',
+                                      border: `1px solid ${activityPeriod === p ? 'var(--brand)' : 'var(--line)'}`,
+                                      background: activityPeriod === p ? 'rgba(242,145,30,.14)' : 'transparent',
+                                      color: activityPeriod === p ? 'var(--brand)' : 'var(--text-3)' }}>
+                                    {lbl}
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                            return (
+                              <>
+                                <div className="kpi">
+                                  <div className="kpi-label">Total Trades</div>
+                                  <div className="kpi-val num">{activityPeriod === 'all' ? (t.total_trades ?? 0) : (activityLoading ? '…' : (activity?.trades ?? 0))}</div>
+                                  {actSeg}
+                                </div>
+                                <div className="kpi">
+                                  <div className="kpi-label">Volume</div>
+                                  <div className="kpi-val num">{activityPeriod === 'all' ? fmtKES(t.total_volume) : (activityLoading ? '…' : fmtKES(activity?.volume))}</div>
+                                  {actSeg}
+                                </div>
+                              </>
+                            );
+                          })()}
                         </div>
                       );
                     })()}

@@ -2540,6 +2540,31 @@ async def get_trader_revenue_sim(
     return {"period": period, "method": method, "inferred": True, "channels": channels, "total": total}
 
 
+@router.get("/traders/{trader_id}/activity")
+async def get_trader_activity(
+    trader_id: int,
+    period: str = Query("24h"),   # 24h | 7d | 30d
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Completed-trade count + KES volume for a trader over a rolling window (for the trader-detail
+    Total Trades / Volume filter). 'Lifetime' is shown from the trader's own totals on the client."""
+    from sqlalchemy import func
+    now = datetime.now(timezone.utc)
+    deltas = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
+    since = now - deltas.get(period, timedelta(hours=24))
+
+    row = (await db.execute(
+        select(func.count(Order.id), func.coalesce(func.sum(Order.fiat_amount), 0)).where(
+            Order.trader_id == trader_id,
+            Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+            Order.created_at >= since,
+        )
+    )).one()
+
+    return {"period": period, "trades": int(row[0] or 0), "volume": float(row[1] or 0)}
+
+
 @router.get("/paybill-transactions")
 async def get_paybill_transactions(
     period: str = Query("today"),   # today | week | month | year | all
