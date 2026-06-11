@@ -137,6 +137,7 @@ export default function Admin() {
   // Outbound-fee revenue simulation (buy orders)
   const [traderRevSim, setTraderRevSim] = useState(null);
   const [revSimPeriod, setRevSimPeriod] = useState('today');
+  const [revSimMethod, setRevSimMethod] = useState('auto'); // auto | mpesa | pesalink
   const [revSimLoading, setRevSimLoading] = useState(false);
   const [revMode, setRevMode] = useState(localStorage.getItem('sparkp2p_revenue_mode') || 'sim'); // 'sim' | 'prod'
   const [txPage, setTxPage] = useState(1);
@@ -902,10 +903,10 @@ export default function Admin() {
     setPnlLoading(false);
   };
 
-  const loadTraderRevenueSim = async (traderId, period) => {
+  const loadTraderRevenueSim = async (traderId, period, methodArg) => {
     setRevSimLoading(true);
     try {
-      const r = await api.get(`/admin/traders/${traderId}/revenue-sim?period=${period}`);
+      const r = await api.get(`/admin/traders/${traderId}/revenue-sim?period=${period}&method=${methodArg || revSimMethod}`);
       setTraderRevSim(r.data);
     } catch (e) { console.error('Revenue sim load error:', e); }
     setRevSimLoading(false);
@@ -919,6 +920,7 @@ export default function Admin() {
     setTraderPnl(null);
     setTraderRevSim(null);
     setRevSimPeriod('today');
+    setRevSimMethod('auto');
     setAddTokensMsg(''); setAddTokensAmount(''); setAddTokensNote('');
     setPnlPeriod('today');
     setViewingTraderLoading(true);
@@ -943,7 +945,7 @@ export default function Admin() {
       if (txRes.status === 'fulfilled') setViewingTraderTx(txRes.value.data || []);
       if (ordersRes.status === 'fulfilled') setViewingTraderOrders(ordersRes.value.data || []);
       if (pnlRes.status === 'fulfilled') setTraderPnl(pnlRes.value.data);
-      if (revSimRes.status === 'fulfilled') setTraderRevSim(revSimRes.value.data);
+      if (revSimRes.status === 'fulfilled') setTraderRevSim(revSimRes.value.data);  // revenue-sim?period=today&method=auto
       if (logsRes.status === 'fulfilled') setTraderBotLogs(logsRes.value.data || []);
     } catch (e) { console.error('Trader detail load error:', e); }
     setViewingTraderLoading(false);
@@ -2208,8 +2210,15 @@ export default function Admin() {
                             {revMode === 'prod' ? 'Back to Simulation' : 'Switch to Production'}
                           </button>
                           <div className="seg">
+                            {[['auto', 'Auto'], ['mpesa', 'M-Pesa'], ['pesalink', 'Pesalink']].map(([m, lbl]) => (
+                              <button key={m} className={revSimMethod === m ? 'active' : ''} title="Assumed payout rail — inferred from amount, since historical orders don't record it" onClick={async () => { setRevSimMethod(m); await loadTraderRevenueSim(t.id, revSimPeriod, m); }}>
+                                {lbl}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="seg">
                             {['today', 'week', 'month'].map(p => (
-                              <button key={p} className={revSimPeriod === p ? 'active' : ''} onClick={async () => { setRevSimPeriod(p); await loadTraderRevenueSim(t.id, p); }}>
+                              <button key={p} className={revSimPeriod === p ? 'active' : ''} onClick={async () => { setRevSimPeriod(p); await loadTraderRevenueSim(t.id, p, revSimMethod); }}>
                                 {p === 'today' ? 'Today' : p === 'week' ? '7 Days' : '30 Days'}
                               </button>
                             ))}
@@ -2226,6 +2235,7 @@ export default function Admin() {
                             <>
                               <p className="muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 12 }}>
                                 {revMode === 'prod' ? 'Live' : 'Projected'} outbound-fee revenue from <strong>{T.count}</strong> completed buy order{T.count === 1 ? '' : 's'} — the fee earned when we pay the seller from the trader's Choice Bank account. Sell orders carry no outbound fee.
+                                {' '}Payout rail is <strong>inferred</strong> ({revSimMethod === 'pesalink' ? 'all via Pesalink' : 'M-Pesa up to KES 250,000/order, Pesalink above'}) — the actual rail isn't recorded on historical orders.
                               </p>
                               <div className="pnl-grid">
                                 <div className="pnl-card"><div className="kv-k">Merchant Charged</div><div className="pnl-val num" style={{ color: 'var(--text)' }}>{kes(T.merchant_charged)}</div></div>

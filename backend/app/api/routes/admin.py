@@ -2457,21 +2457,28 @@ async def get_trader_pnl(
     }
 
 
+MPESA_TX_CAP = 250000   # M-Pesa caps a single transaction at KES 250,000 — above that must use a bank/Pesalink
+
 @router.get("/traders/{trader_id}/revenue-sim")
 async def get_trader_revenue_sim(
     trader_id: int,
     period: str = Query("today"),   # today | week | month
+    method: str = Query("auto"),    # auto (infer by amount) | mpesa | pesalink
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
     """Outbound-fee revenue simulation for a trader, from their completed BUY orders.
 
     On a buy order WE send KES to the seller out of the trader's Choice Bank account, so that is
-    where the outbound fee (and our markup) is earned. Per order we know the rail from
-    seller_payment_method ('mpesa' -> M-Pesa B2C, anything else -> PesaLink/bank). For each order:
+    where the outbound fee (and our markup) is earned. For each order:
       merchant_charged = outbound_fee   (Choice base cost + our markup, debited from the trader)
       choice_keeps     = outbound_fee - outbound_markup   (Choice Bank's tariff — see charges PDF)
       our_profit       = outbound_markup (the portion Choice remits to us monthly)
+
+    The seller's payout rail is NOT recorded on historical orders (SparkP2P didn't execute these
+    payouts — the merchant did them on Binance), so the rail is INFERRED:
+      - method=auto / mpesa: amount <= 250,000 -> M-Pesa, above -> Pesalink (M-Pesa can't exceed the cap)
+      - method=pesalink: everything via Pesalink (conservative / flat-fee scenario)
     """
     from app.models.order import OrderSide
     from app.services.outbound_fees import outbound_fee, outbound_markup
@@ -2495,14 +2502,20 @@ async def get_trader_revenue_sim(
         )
     )).scalars().all()
 
+    def channel_of(amt: float) -> str:
+        if method == "pesalink":
+            return "PESALINK"
+        # 'auto' and 'mpesa': M-Pesa is only possible up to the per-transaction cap.
+        return "MPESA" if amt <= MPESA_TX_CAP else "PESALINK"
+
     def _blank():
         return {"count": 0, "volume": 0.0, "merchant_charged": 0, "choice_keeps": 0, "our_profit": 0}
 
     channels = {"MPESA": _blank(), "PESALINK": _blank()}
 
     for o in rows:
-        ch = "MPESA" if (o.seller_payment_method or "").lower() == "mpesa" else "PESALINK"
         amt = float(o.fiat_amount or 0)
+        ch = channel_of(amt)
         fee = outbound_fee(ch, amt)
         markup = outbound_markup(ch, amt)
         c = channels[ch]
@@ -2519,7 +2532,7 @@ async def get_trader_revenue_sim(
     for c in list(channels.values()) + [total]:
         c["volume"] = round(c["volume"], 2)
 
-    return {"period": period, "channels": channels, "total": total}
+    return {"period": period, "method": method, "inferred": True, "channels": channels, "total": total}
 
 
 @router.get("/paybill-transactions")
