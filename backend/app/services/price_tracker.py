@@ -40,6 +40,8 @@ def _parse(items: list) -> list[dict]:
             "grade": a.get("userGrade"),
             "orders30d": int(a.get("monthOrderCount") or 0),
             "finishRate": round((a.get("monthFinishRate") or 0) * 100, 1),
+            "vip": int(a.get("vipLevel") or 0),
+            "merchantType": a.get("userIdentity"),
             "available": float(adv.get("tradableQuantity") or adv.get("surplusAmount") or 0),
             "minAmount": float(adv.get("minSingleTransAmount") or 0),
             "maxAmount": float(adv.get("maxSingleTransAmount") or 0),
@@ -60,7 +62,7 @@ async def _fetch(asset: str, fiat: str, trade_type: str, rows: int) -> list[dict
     return _parse(data)
 
 
-async def get_board(asset: str = "USDT", fiat: str = "KES", rows: int = 15) -> dict:
+async def get_board(asset: str = "USDT", fiat: str = "KES", rows: int = 20) -> dict:
     """Both sides of the order book, ranked. Cached briefly per asset/fiat."""
     key = f"{asset}:{fiat}:{rows}"
     now = time.time()

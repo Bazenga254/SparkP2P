@@ -92,8 +92,8 @@ export default function PriceTracker({ enabled }) {
       ) : (
         <>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
-            <Side title="Buy USDT" hint="cheapest first — best to buy from" rows={board.buy} accent="#3b82f6" />
             <Side title="Sell USDT" hint="highest first — best to sell to" rows={board.sell} accent="#10b981" />
+            <Side title="Buy USDT" hint="cheapest first — best to buy from" rows={board.buy} accent="#3b82f6" />
           </div>
           <p style={{ fontSize: 11, color: '#6b7280', marginTop: 10, marginBottom: 0 }}>
             Rank #1 is the most competitive merchant on each side. Prices update automatically every 30s.
