@@ -1851,6 +1851,7 @@ export default function Dashboard() {
             { key: 'orders',        icon: List,            label: 'Orders'        },
             { key: 'transactions',  icon: ArrowRightLeft,  label: 'Transactions'  },
             { key: 'profit',        icon: BarChart2,       label: 'Profit'        },
+            ...(profile?.price_tracker_enabled ? [{ key: 'pricetracker', icon: TrendingUp, label: 'Price Tracker' }] : []),
             { key: 'logs',          icon: Activity,        label: 'Logs'          },
           ].map(({ key, icon: Icon, label }) => (
             <button key={key}
@@ -2178,9 +2179,6 @@ export default function Dashboard() {
             {/* Profit Tracker — daily/weekly/monthly accumulation with history */}
             <ProfitTracker />
 
-            {/* Price Tracker — live Binance P2P competitor board (admin-gated per trader) */}
-            <PriceTracker enabled={!!profile?.price_tracker_enabled} />
-
             {/* Affiliate Quick-Action Card */}
             {affiliateData !== null && (
               <div className="card" style={{ marginBottom: 16 }}>
@@ -2434,6 +2432,13 @@ export default function Dashboard() {
 
         {/* ── Profit Tab ── */}
         {activeTab === 'profit' && <ProfitPage />}
+
+        {/* ── Price Tracker Tab (admin-gated) ── */}
+        {activeTab === 'pricetracker' && (
+          profile?.price_tracker_enabled
+            ? <PriceTracker enabled={true} />
+            : <div className="card"><p style={{ color: '#9ca3af', padding: '14px 0', margin: 0 }}>Price Tracker is not enabled for your account.</p></div>
+        )}
 
         {/* ── Transactions Tab ── */}
         {activeTab === 'transactions' && (
