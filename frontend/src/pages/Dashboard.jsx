@@ -6,6 +6,7 @@ import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, Arrow
 import SettingsPanel from '../components/SettingsPanel';
 import { kycCreateSession } from '../services/api';
 import SupportChat from '../components/SupportChat';
+import PriceTracker from '../components/PriceTracker';
 
 // Choice Bank outbound transaction fees (KES) — mirror backend app/services/outbound_fees.py.
 // Choice Bank withholds these on its side (debits amount + fee); shown here so the trader sees it.
@@ -2176,6 +2177,9 @@ export default function Dashboard() {
 
             {/* Profit Tracker — daily/weekly/monthly accumulation with history */}
             <ProfitTracker />
+
+            {/* Price Tracker — live Binance P2P competitor board (admin-gated per trader) */}
+            <PriceTracker enabled={!!profile?.price_tracker_enabled} />
 
             {/* Affiliate Quick-Action Card */}
             {affiliateData !== null && (

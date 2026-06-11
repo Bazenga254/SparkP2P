@@ -2045,6 +2045,20 @@ export default function Admin() {
                             <option value="admin">Admin</option>
                           </select>
                         </div>
+                        <div className="field">
+                          <label>Price Tracker</label>
+                          <select
+                            value={t.price_tracker_enabled ? 'on' : 'off'}
+                            onChange={async (e) => {
+                              const on = e.target.value === 'on';
+                              setViewingTrader(prev => ({ ...prev, price_tracker_enabled: on }));
+                              try { await api.put(`/admin/traders/${t.id}/price-tracker?enabled=${on}`); } catch (_) {}
+                              await refreshTraderDetail(t.id);
+                            }}>
+                            <option value="off">Off</option>
+                            <option value="on">On</option>
+                          </select>
+                        </div>
                       </div>
                     </div>
 

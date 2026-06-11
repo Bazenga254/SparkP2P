@@ -169,6 +169,7 @@ class TraderProfileResponse(BaseModel):
     binance_merchant_tier: Optional[str] = None  # 'gold', 'silver', 'bronze'
     binance_api_key_saved: bool = False  # True if API key is stored (never expose the key itself)
     binance_api_key_invalid: bool = False  # True if Binance rejects the stored key
+    price_tracker_enabled: bool = False  # admin-gated live competitor price tracker
     cf_filters_enabled:        bool  = False
     cf_completion_rate_min:    float = 0.0
     cf_completion_rate_window: int   = 2
@@ -293,6 +294,23 @@ async def verify_settlement_phone_otp(
     _settle_phone_otps.pop(phone, None)
     logger.info(f"Settlement phone {phone} verified by OTP for trader {trader.id}")
     return {"status": "verified"}
+
+
+@router.get("/price-tracker")
+async def get_price_tracker(
+    asset: str = "USDT",
+    fiat: str = "KES",
+    trader: Trader = Depends(get_current_trader),
+):
+    """Live Binance P2P competitor order book (both sides, ranked). Admin-gated per trader."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    from app.services.price_tracker import get_board
+    try:
+        return await get_board(asset=asset.upper(), fiat=fiat.upper())
+    except Exception as e:
+        logger.warning(f"Price tracker fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not load live prices right now. Please try again.")
 
 
 @router.post("/suspend-self")
@@ -806,6 +824,7 @@ async def get_profile(
         dd_auto_cancel_new=bool(trader.dd_auto_cancel_new),
         binance_merchant_tier=trader.binance_merchant_tier or 'bronze',
         binance_api_key_saved=bool(trader.binance_api_key),
+        price_tracker_enabled=bool(getattr(trader, "price_tracker_enabled", False)),
         binance_api_key_invalid=bool(trader.binance_api_key_invalid),
         cf_filters_enabled=bool(trader.cf_filters_enabled),
         cf_completion_rate_min=trader.cf_completion_rate_min or 0.0,

@@ -509,6 +509,7 @@ async def get_trader_detail(
         "binance_api_key_invalid": bool(trader.binance_api_key_invalid),
         "binance_merchant_tier": (trader.binance_merchant_tier or None),
         "binance_api_key_saved": bool(trader.binance_api_key),
+        "price_tracker_enabled": bool(getattr(trader, "price_tracker_enabled", False)),
         "telegram_connected": bool(trader.telegram_chat_id),
         "telegram_notify_scope": trader.telegram_notify_scope or 'both',
         "relay_connected": _relaymod.is_connected(trader.id),
@@ -873,6 +874,22 @@ async def update_trader_status(
     await db.commit()
 
     return {"status": "updated", "trader_id": trader_id, "new_status": new_status.value}
+
+
+@router.put("/traders/{trader_id}/price-tracker")
+async def update_trader_price_tracker(
+    trader_id: int,
+    enabled: bool,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Enable/disable the live Binance P2P price tracker for a trader (admin-gated feature)."""
+    trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    trader.price_tracker_enabled = bool(enabled)
+    await db.commit()
+    return {"status": "updated", "trader_id": trader_id, "price_tracker_enabled": bool(enabled)}
 
 
 @router.put("/traders/{trader_id}/tier")

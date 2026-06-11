@@ -129,6 +129,9 @@ class Trader(Base):
     # Bot online/offline state — set by desktop app on graceful shutdown
     bot_intentionally_stopped = Column(Boolean, default=False)
 
+    # Admin-gated feature: live Binance P2P competitor price tracker on the merchant dashboard
+    price_tracker_enabled = Column(Boolean, default=False, server_default="false")
+
     # Employee permissions (JSON object, only relevant when role="employee")
     # e.g. {"disputes": true, "orders": true, "chat": true, "transactions": false, "withdrawals": false}
     permissions = Column(JSON, nullable=True)
