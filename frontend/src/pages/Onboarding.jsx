@@ -10,6 +10,7 @@ import {
   getSubscriptionStatus,
   getTotpSetup,
   verifyAndSaveTotp,
+  saveBinanceApiKey,
 } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
@@ -70,6 +71,43 @@ export default function Onboarding() {
   const [binanceLoading, setBinanceLoading] = useState(false);
   const [binanceMsg, setBinanceMsg] = useState(null);
   const [nameVerification, setNameVerification] = useState(null);
+
+  // Connect via API key (primary method — desktop app stays on as the residential relay)
+  const [apiKey, setApiKey] = useState('');
+  const [apiSecret, setApiSecret] = useState('');
+  const [showSecret, setShowSecret] = useState(false);
+  const [apiKeySaving, setApiKeySaving] = useState(false);
+  const [apiKeyMsg, setApiKeyMsg] = useState(null); // { type, text }
+
+  const handleConnectApiKey = async () => {
+    if (!apiKey.trim() || !apiSecret.trim()) {
+      setApiKeyMsg({ type: 'error', text: 'Enter both your API key and secret key.' });
+      return;
+    }
+    setApiKeySaving(true);
+    setApiKeyMsg({ type: 'info', text: 'Testing connection to Binance…' });
+    try {
+      const res = await saveBinanceApiKey({ api_key: apiKey.trim(), api_secret: apiSecret.trim() });
+      const capable = res.data?.merchant_capable;
+      const adsFound = res.data?.ads_found ?? 0;
+      setApiKeyMsg({
+        type: 'success',
+        text: capable
+          ? `Connection verified — Gold Merchant detected (${adsFound} ad${adsFound === 1 ? '' : 's'} found). Binance connected!`
+          : `Connection verified (${adsFound} ad${adsFound === 1 ? '' : 's'} found). Binance connected!`,
+      });
+      setApiKey('');
+      setApiSecret('');
+      await refreshProfile();
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Could not verify your API credentials.';
+      const hint = /verify|fetch ads|no response|offline|relay/i.test(detail)
+        ? ' Make sure the SparkP2P desktop app is installed and running — it securely relays the connection to Binance.'
+        : '';
+      setApiKeyMsg({ type: 'error', text: detail + hint });
+    }
+    setApiKeySaving(false);
+  };
 
   // Verification step
   const [verifyMethod, setVerifyMethod] = useState('totp');
@@ -465,13 +503,103 @@ export default function Onboarding() {
               </div>
             ) : (
               <>
+                {/* Primary: connect with a Binance API key + secret */}
+                <div className="onb-card">
+                  <div className="onb-ext-info">
+                    <div className="onb-ext-icon">
+                      <Key size={28} />
+                    </div>
+                    <div>
+                      <h3>Connect via Binance API</h3>
+                      <p>
+                        Create a Binance API key, paste it below with its secret, and test the
+                        connection. This links your account without a Chrome login.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Required key permissions */}
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '14px 0 16px' }}>
+                    {[
+                      { label: 'Enable Reading', ok: true },
+                      { label: 'Enable Spot & Margin Trading', ok: true },
+                      { label: 'Enable Withdrawals — keep OFF', ok: false },
+                    ].map(({ label, ok }) => (
+                      <span key={label} style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 5,
+                        fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 20,
+                        background: ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                        border: `1px solid ${ok ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)'}`,
+                        color: ok ? '#10b981' : '#ef4444',
+                      }}>
+                        {ok ? '✓' : '✕'} {label}
+                      </span>
+                    ))}
+                  </div>
+
+                  <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>API Key</label>
+                  <input
+                    type="text"
+                    placeholder="Paste your Binance API key"
+                    value={apiKey}
+                    onChange={(e) => { setApiKey(e.target.value); setApiKeyMsg(null); }}
+                    className="onb-input"
+                    style={{ fontFamily: 'monospace', marginBottom: 12 }}
+                  />
+
+                  <label style={{ display: 'block', fontSize: 13, color: '#9ca3af', marginBottom: 4 }}>Secret Key</label>
+                  <div style={{ position: 'relative', marginBottom: 6 }}>
+                    <input
+                      type={showSecret ? 'text' : 'password'}
+                      placeholder="Paste your API secret"
+                      value={apiSecret}
+                      onChange={(e) => { setApiSecret(e.target.value); setApiKeyMsg(null); }}
+                      className="onb-input"
+                      style={{ fontFamily: 'monospace', paddingRight: 64, width: '100%', boxSizing: 'border-box' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSecret((v) => !v)}
+                      style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', padding: '4px 10px', borderRadius: 6, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: '#9ca3af', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      {showSecret ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  <p style={{ fontSize: 11, color: '#10b981', marginTop: 0, marginBottom: 14 }}>
+                    🔒 Encrypted at rest. Withdrawals stay disabled — the bot can never move your funds.
+                    {' '}
+                    <a href="https://www.binance.com/en/support/faq/360002502072" target="_blank" rel="noreferrer" style={{ color: '#f59e0b', textDecoration: 'none' }}>
+                      Where do I find these?
+                    </a>
+                  </p>
+
+                  {apiKeyMsg && (
+                    <div className={`onb-msg ${apiKeyMsg.type}`} style={{ marginBottom: 12 }}>{apiKeyMsg.text}</div>
+                  )}
+
+                  <button
+                    className="onb-btn-primary"
+                    style={{ width: '100%', opacity: apiKeySaving || !apiKey.trim() || !apiSecret.trim() ? 0.5 : 1 }}
+                    disabled={apiKeySaving || !apiKey.trim() || !apiSecret.trim()}
+                    onClick={handleConnectApiKey}
+                  >
+                    {apiKeySaving ? 'Testing…' : 'Test Connection & Connect'}
+                  </button>
+
+                  <p style={{ fontSize: 11, color: '#6b7280', marginTop: 10, lineHeight: 1.5 }}>
+                    Keep the SparkP2P desktop app installed and running — it securely relays the
+                    connection to Binance from your own device.
+                  </p>
+                </div>
+
+                {/* Alternative: legacy desktop Chrome-login flow */}
                 <div className="onb-card">
                   <div className="onb-ext-info">
                     <div className="onb-ext-icon">
                       <Zap size={32} />
                     </div>
                     <div>
-                      <h3>Connect via Desktop App</h3>
+                      <h3>Or connect via Desktop App</h3>
                       <p>
                         {window.sparkp2p?.isDesktop
                           ? <>Click <strong>Connect Binance</strong> below and log into your Binance account in the Chrome window that opens. The bot will detect your login and start automatically.</>
