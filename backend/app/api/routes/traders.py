@@ -2091,6 +2091,9 @@ async def cb_withdraw_to_mpesa_initiate(
     from app.services.outbound_fees import outbound_fee as _outbound_fee, MPESA_MIN_WITHDRAWAL
     if body.amount < MPESA_MIN_WITHDRAWAL:
         raise HTTPException(status_code=400, detail=f"Minimum M-Pesa withdrawal is KES {MPESA_MIN_WITHDRAWAL:,}")
+    # M-Pesa caps a single transaction at KES 250,000 — larger amounts must go to a bank account.
+    if body.amount > 250000:
+        raise HTTPException(status_code=400, detail="M-Pesa withdrawals are limited to KES 250,000 per transaction. Withdraw to your bank for larger amounts.")
 
     # Choice Bank withholds the outbound fee on its side (debits amount + fee from the trader's
     # account). We compute it here only to show + record it; we do NOT deduct it ourselves.

@@ -4180,23 +4180,48 @@ export default function Dashboard() {
               <button onClick={() => setShowCbWithdrawModal(false)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 22 }}>×</button>
             </div>
 
-            {/* No bank configured */}
-            {!cbWithdrawBank?.bank_code ? (
+            {/* Channel selector — choose where to withdraw first */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              {['mpesa', 'bank'].map(ch => (
+                <button key={ch} onClick={() => { setCbWithdrawChannel(ch); setCbWithdrawOtpSent(false); setCbWithdrawOtp(''); setCbWithdrawMsg(''); }}
+                  style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${cbWithdrawChannel === ch ? '#10b981' : '#374151'}`, background: cbWithdrawChannel === ch ? 'rgba(16,185,129,0.15)' : 'none', color: cbWithdrawChannel === ch ? '#10b981' : '#9ca3af', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                  {ch === 'mpesa' ? '📱 M-Pesa' : '🏦 Bank (Pesalink)'}
+                </button>
+              ))}
+            </div>
+
+            {/* Bank channel needs a configured bank; M-Pesa needs the onboarding number */}
+            {cbWithdrawChannel === 'bank' && !cbWithdrawBank?.bank_code ? (
               <div style={{ textAlign: 'center', padding: '24px 0' }}>
                 <div style={{ fontSize: 36, marginBottom: 12 }}>🏦</div>
                 <p style={{ color: '#f59e0b', fontWeight: 700, marginBottom: 8 }}>No withdrawal bank set up</p>
-                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 20 }}>Go to Settings → Bank Account to add your bank account before withdrawing.</p>
+                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 20 }}>Go to Settings → Bank Account to add your bank account, or switch to M-Pesa above.</p>
                 <button onClick={() => { setShowCbWithdrawModal(false); setSettingsInitialSection("bank"); setActiveTab("settings"); }} style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: "#f59e0b", color: "#000", fontWeight: 700, cursor: "pointer" }}>
                   Go to Settings
                 </button>
               </div>
+            ) : cbWithdrawChannel === 'mpesa' && !profile?.settlement_mpesa_phone ? (
+              <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>📱</div>
+                <p style={{ color: '#f59e0b', fontWeight: 700, marginBottom: 8 }}>No M-Pesa number set up</p>
+                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 20 }}>Add your M-Pesa settlement number in Settings → Settlement to withdraw to M-Pesa.</p>
+              </div>
             ) : (
               <>
-                {/* Saved bank details */}
+                {/* Destination (depends on selected channel) */}
                 <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
                   <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>Withdrawal Destination</div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: '#fff', marginBottom: 2 }}>{cbWithdrawBank.bank_name}</div>
-                  <div style={{ fontSize: 13, color: '#9ca3af' }}>{cbWithdrawBank.account} · {cbWithdrawBank.account_name}</div>
+                  {cbWithdrawChannel === 'mpesa' ? (
+                    <>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: '#fff', marginBottom: 2 }}>M-Pesa</div>
+                      <div style={{ fontSize: 13, color: '#9ca3af' }}>{profile?.settlement_mpesa_phone}</div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: '#fff', marginBottom: 2 }}>{cbWithdrawBank.bank_name}</div>
+                      <div style={{ fontSize: 13, color: '#9ca3af' }}>{cbWithdrawBank.account} · {cbWithdrawBank.account_name}</div>
+                    </>
+                  )}
                 </div>
 
                 {/* Amount */}
@@ -4216,6 +4241,9 @@ export default function Dashboard() {
                       MAX
                     </button>
                   </div>
+                  {cbWithdrawChannel === 'mpesa' && (
+                    <div style={{ fontSize: 11, color: '#6b7280', marginTop: 6 }}>M-Pesa limit: KES 250,000 per withdrawal — withdraw to your bank for larger amounts.</div>
+                  )}
                 </div>
 
                 {/* Fee breakdown */}
@@ -4242,15 +4270,6 @@ export default function Dashboard() {
                   <p style={{ color: cbWithdrawMsg.includes('sent') || cbWithdrawMsg.includes('success') ? '#10b981' : '#ef4444', fontSize: 12, marginBottom: 10 }}>{cbWithdrawMsg}</p>
                 )}
 
-                {/* Channel selector */}
-                <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-                  {['mpesa', 'bank'].map(ch => (
-                    <button key={ch} onClick={() => { setCbWithdrawChannel(ch); setCbWithdrawOtpSent(false); setCbWithdrawOtp(''); setCbWithdrawMsg(''); }}
-                      style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${cbWithdrawChannel === ch ? '#10b981' : '#374151'}`, background: cbWithdrawChannel === ch ? 'rgba(16,185,129,0.15)' : 'none', color: cbWithdrawChannel === ch ? '#10b981' : '#9ca3af', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
-                      {ch === 'mpesa' ? '📱 M-Pesa' : '🏦 Bank (Pesalink)'}
-                    </button>
-                  ))}
-                </div>
                 {!cbWithdrawOtpSent ? (
                   <>
                     <p style={{ color: '#9ca3af', fontSize: 12, marginBottom: 14 }}>
@@ -4262,6 +4281,7 @@ export default function Dashboard() {
                       disabled={cbWithdrawOtpLoading || !parseFloat(cbWithdrawAmount)}
                       onClick={async () => {
                         const minAmt = cbWithdrawChannel === 'mpesa' ? 1501 : 100; if (!parseFloat(cbWithdrawAmount) || parseFloat(cbWithdrawAmount) < minAmt) { setCbWithdrawMsg(`Minimum ${cbWithdrawChannel === 'mpesa' ? 'M-Pesa ' : ''}withdrawal is KES ${minAmt.toLocaleString()}`); return; }
+                        if (cbWithdrawChannel === 'mpesa' && parseFloat(cbWithdrawAmount) > 250000) { setCbWithdrawMsg('M-Pesa withdrawals are limited to KES 250,000 per transaction. Withdraw to your bank for larger amounts.'); return; }
                         setCbWithdrawOtpLoading(true); setCbWithdrawMsg('');
                         try {
                           const initFn = cbWithdrawChannel === 'mpesa' ? cbWithdrawToMpesaInitiate : cbWithdrawInitiate;
