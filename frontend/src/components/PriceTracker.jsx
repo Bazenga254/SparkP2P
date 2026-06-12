@@ -5,12 +5,13 @@ import api from '../services/api';
 // Live Binance P2P competitor order book (admin-gated). Renders nothing unless enabled.
 // Tier (Gold/Silver/Bronze) = Binance P2P Merchant level, read from the feed's vipLevel
 // (verified against the web-UI medal badges: vip3=Gold, vip2=Silver, vip1/0=Bronze).
-const TIER_COLOR = { gold: '#f5c33b', silver: '#ffffff', bronze: '#cd7f32' };
+const TIER_COLOR = { gold: '#f5c33b', silver: '#ffffff', bronze: '#cd7f32', normal: '#9ca3af' };
 const TIERS = [
   { key: 'all', label: 'All' },
   { key: 'gold', label: 'Gold' },
   { key: 'silver', label: 'Silver' },
   { key: 'bronze', label: 'Bronze' },
+  { key: 'normal', label: 'Normal' },
 ];
 
 export default function PriceTracker({ enabled, binanceName }) {
@@ -214,7 +215,7 @@ export default function PriceTracker({ enabled, binanceName }) {
             <Column side="sell" title="Sell USDT" clarify={'“merchant is buying”'} hint="highest first — best to sell to" rows={pick(board.sell)} />
           </div>
           <div className="pt-footnote">
-            Tier is the merchant's <strong>Binance P2P Merchant level</strong> (🥇 Gold · 🥈 Silver · 🥉 Bronze). Rank #1 is the most competitive on each side. Prices update every 30s.
+            Tier = <strong>Binance P2P Merchant level</strong> (🥇 Gold · 🥈 Silver · 🥉 Bronze · <span style={{ color: '#9ca3af' }}>Normal</span> = non-merchant). Rank #1 is the most competitive on each side. Prices update every 30s.
           </div>
         </>
       )}

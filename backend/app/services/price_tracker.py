@@ -25,10 +25,12 @@ _cache: dict[str, tuple[float, dict]] = {}
 _CACHE_TTL = 20  # seconds
 
 
-def _tier_from_vip(vip: int) -> str:
-    # In the P2P adv/search feed, vipLevel IS the Binance P2P Merchant tier (verified against the
-    # web-UI medal badges): 3 -> Gold, 2 -> Silver, 1/0 -> Bronze. (This is the P2P Merchant VIP
-    # Program, NOT the separate spot-trading VIP level on the fee page.)
+def _tier(user_type: str, vip: int) -> str:
+    # Non-merchants (regular users selling/buying crypto) -> "normal".
+    # Verified merchants -> the P2P Merchant tier from vipLevel (verified against the web-UI medals):
+    # 3 -> Gold, 2 -> Silver, 1/0 -> Bronze. (This is the P2P Merchant VIP Program, NOT the spot VIP.)
+    if (user_type or "").lower() != "merchant":
+        return "normal"
     if vip >= 3:
         return "gold"
     if vip == 2:
@@ -48,9 +50,9 @@ def _parse(items: list, start: int = 0) -> list[dict]:
             "price": float(adv.get("price") or 0),
             "nick": a.get("nickName"),
             "userNo": a.get("userNo"),
-            "identity": a.get("userIdentity"),         # MASS_MERCHANT / BLOCK_MERCHANT / ...
+            "identity": a.get("userIdentity"),         # MASS_MERCHANT / BLOCK_MERCHANT / '' (user)
             "vip": vip,
-            "tier": _tier_from_vip(vip),
+            "tier": _tier(a.get("userType"), vip),
             "orders30d": int(a.get("monthOrderCount") or 0),
             "finishRate": round((a.get("monthFinishRate") or 0) * 100, 1),
             "available": float(adv.get("tradableQuantity") or adv.get("surplusAmount") or 0),
@@ -69,7 +71,7 @@ async def _fetch(asset: str, fiat: str, trade_type: str, pages: int = 3, rows: i
         for page in range(1, pages + 1):
             payload = {
                 "asset": asset, "fiat": fiat, "tradeType": trade_type,
-                "page": page, "rows": rows, "publisherType": "merchant",
+                "page": page, "rows": rows,   # no publisherType -> include non-merchants ("normal") too
             }
             r = await client.post(SEARCH_URL, json=payload, headers=_HEADERS)
             data = (r.json() or {}).get("data", []) or []
