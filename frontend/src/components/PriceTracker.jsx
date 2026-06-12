@@ -322,9 +322,16 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                   <option value="live">Live — automatically change my ad price</option>
                 </select>
                 {pm.autoprice === 'live' && (
-                  <div className="pt-mon-warn" style={{ color: '#ef6a7e' }}>
-                    ⚠ Live mode changes your real Binance ad price automatically — only while your desktop app (relay) is online. It always stays within your margin band and never below your minimum margin. Updates at most once every 5 minutes, max 1 KES per move.
-                  </div>
+                  <>
+                    <div className="pt-mon-warn" style={{ color: '#ef6a7e' }}>
+                      ⚠ Live mode changes your real Binance ad price automatically — only while your desktop app (relay) is online. It always stays within your margin band and never below your minimum margin. Updates at most once every 5 minutes, max 1 KES per move.
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: board?.relay_connected ? '#34c759' : '#ef6a7e' }}>
+                      {board?.relay_connected
+                        ? '🟢 Relay online — auto-pricing is ACTIVE.'
+                        : '🔴 Relay offline — auto-pricing is PAUSED. Open your SparkP2P desktop app and keep it running for prices to change.'}
+                    </div>
+                  </>
                 )}
                 {pm.autoprice !== 'off' && (
                   <>

@@ -318,8 +318,11 @@ async def get_price_tracker(
     if not getattr(trader, "price_tracker_enabled", False):
         raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
     from app.services.price_tracker import get_board
+    from app.services.binance import relay_router
     try:
-        return await get_board(asset=asset.upper(), fiat=fiat.upper())
+        board = await get_board(asset=asset.upper(), fiat=fiat.upper())
+        board["relay_connected"] = bool(relay_router.is_connected(trader.id))
+        return board
     except Exception as e:
         logger.warning(f"Price tracker fetch failed: {e}")
         raise HTTPException(status_code=502, detail="Could not load live prices right now. Please try again.")
