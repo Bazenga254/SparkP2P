@@ -149,6 +149,11 @@ class Trader(Base):
     pm_alert_overtaken = Column(Boolean, default=False, server_default="false")
     pm_alert_summary = Column(Boolean, default=False, server_default="false")
 
+    # Auto-pricing (Phase 2 — the bot adjusts price to hold target rank within a KES margin band).
+    pm_autoprice = Column(String(10), default="off")          # 'off' | 'sim' (preview) | 'live'
+    pm_margin_min = Column(Float, default=0.0)                # KES per USDT — hard profit floor
+    pm_margin_max = Column(Float, default=0.0)                # KES per USDT — most generous margin (when uncontested)
+
     # Employee permissions (JSON object, only relevant when role="employee")
     # e.g. {"disputes": true, "orders": true, "chat": true, "transactions": false, "withdrawals": false}
     permissions = Column(JSON, nullable=True)

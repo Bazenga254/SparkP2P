@@ -51,6 +51,9 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
     top1: !!profile?.pm_alert_top1,
     overtaken: !!profile?.pm_alert_overtaken,
     summary: !!profile?.pm_alert_summary,
+    autoprice: profile?.pm_autoprice || 'off',
+    marginMin: profile?.pm_margin_min || '',
+    marginMax: profile?.pm_margin_max || '',
   });
   const [pmSaving, setPmSaving] = useState(false);
   const [pmMsg, setPmMsg] = useState('');
@@ -61,6 +64,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
       await api.put('/traders/price-monitor/settings', {
         enabled: pm.enabled, target_rank: Number(pm.target), scope: pm.scope,
         alert_drop: pm.drop, alert_top1: pm.top1, alert_overtaken: pm.overtaken, alert_summary: pm.summary,
+        autoprice: pm.autoprice, margin_min: parseFloat(pm.marginMin) || 0, margin_max: parseFloat(pm.marginMax) || 0,
       });
       setPmMsg('Saved ✓');
     } catch (e) { setPmMsg(e.response?.data?.detail || 'Save failed'); }
@@ -109,6 +113,31 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
     if (!mine) return null;
     const tierRank = (rows || []).filter(r => r.tier === mine.tier && r.rank < mine.rank).length + 1;
     return { ...mine, tierRank };
+  };
+
+  // ── Auto-price simulation (client-side, relay-free) ──
+  const round2 = n => Math.round(n * 100) / 100;
+  const median = arr => {
+    const s = [...arr].filter(x => x > 0).sort((a, b) => a - b);
+    const n = s.length;
+    return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0;
+  };
+  const TICK = 0.01;
+  // isSell=true => your SELL ad on the Buy-USDT board (cheapest first); ref = cost to acquire.
+  // isSell=false => your BUY ad on the Sell-USDT board (highest first); ref = sale revenue.
+  const simSide = (rows, isSell, ref, mmin, mmax) => {
+    if (!(mmax > 0) || !ref) return null;
+    const myRow = (rows || []).filter(r => isMe(r.nick)).sort((a, b) => a.rank - b.rank)[0];
+    let comps = (rows || []).filter(r => !isMe(r.nick));
+    if (pm.scope === 'tier' && myRow) comps = comps.filter(r => r.tier === myRow.tier);
+    if (!comps.length) return null;
+    const tgt = comps[Math.min(Number(pm.target) || 1, comps.length) - 1];
+    const peg = isSell ? tgt.price - TICK : tgt.price + TICK;
+    const lo = isSell ? ref + mmin : ref - mmax;   // sell: cost+min ; buy: revenue-max
+    const hi = isSell ? ref + mmax : ref - mmin;   // sell: cost+max ; buy: revenue-min
+    const target = round2(Math.min(Math.max(peg, lo), hi));
+    const margin = round2(isSell ? target - ref : ref - target);
+    return { current: myRow ? myRow.price : null, target, margin };
   };
 
   const Column = ({ side, title, clarify, hint, rows }) => (
@@ -286,6 +315,28 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                     {lbl}
                   </label>
                 ))}
+                <div className="pt-mon-lbl" style={{ marginTop: 14 }}>Auto-pricing</div>
+                <select className="pt-mon-sel" style={{ maxWidth: 320 }} value={pm.autoprice} onChange={e => setPm({ ...pm, autoprice: e.target.value })}>
+                  <option value="off">Off — monitor / alerts only</option>
+                  <option value="sim">Simulate — preview the price it would set (no change)</option>
+                </select>
+                {pm.autoprice !== 'off' && (
+                  <>
+                    <div className="pt-mon-grid" style={{ marginTop: 10 }}>
+                      <div>
+                        <div className="pt-mon-lbl">Min margin (KES/USDT)</div>
+                        <input className="pt-mon-sel" type="number" step="0.01" min="0" placeholder="e.g. 0.38" value={pm.marginMin} onChange={e => setPm({ ...pm, marginMin: e.target.value })} />
+                      </div>
+                      <div>
+                        <div className="pt-mon-lbl">Max margin (KES/USDT)</div>
+                        <input className="pt-mon-sel" type="number" step="0.01" min="0" placeholder="e.g. 0.46" value={pm.marginMax} onChange={e => setPm({ ...pm, marginMax: e.target.value })} />
+                      </div>
+                    </div>
+                    <div className="pt-mon-warn" style={{ color: 'var(--pt-faint)' }}>
+                      Margin = sell − buy (round-trip profit per USDT). The bot keeps you within this band while chasing your target rank — never below the min. Live price-changing comes after you're happy with the simulation (and needs your desktop relay online).
+                    </div>
+                  </>
+                )}
                 <div className="pt-mon-actions">
                   <button className="pt-mon-save" onClick={savePm} disabled={pmSaving}>{pmSaving ? 'Saving…' : 'Save settings'}</button>
                   {pmMsg && <span className="pt-mon-msg">{pmMsg}</span>}
@@ -293,6 +344,36 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
               </div>
             )}
           </div>
+
+          {/* Auto-price simulation (preview only) */}
+          {pm.autoprice === 'sim' && meq && (() => {
+            const mmin = parseFloat(pm.marginMin) || 0, mmax = parseFloat(pm.marginMax) || 0;
+            const cost = median((board.buy || []).slice(0, 5).map(r => r.price));      // cost to acquire USDT
+            const revenue = median((board.sell || []).slice(0, 5).map(r => r.price));  // revenue when selling
+            const simSell = simSide(board.buy, true, cost, mmin, mmax);
+            const simBuy = simSide(board.sell, false, revenue, mmin, mmax);
+            if (!simSell && !simBuy) return null;
+            const Cell = (lbl, s, acc) => (
+              <div className="pt-pos-cell">
+                <div className="pt-pos-side" style={{ color: acc }}>{lbl} → would set</div>
+                {s ? (
+                  <>
+                    <div className="pt-pos-val">KES {s.target.toFixed(2)} {s.current != null && <span className="pt-pos-dim">(now {s.current.toFixed(2)})</span>}</div>
+                    <div className="pt-pos-dim" style={{ fontSize: 11, marginTop: 2 }}>margin KES {s.margin.toFixed(2)} · holds top {pm.target}</div>
+                  </>
+                ) : <div className="pt-pos-val pt-pos-dim">no live ad / set margin band</div>}
+              </div>
+            );
+            return (
+              <div className="pt-sim">
+                <div className="pt-sim-h">🧪 Auto-price simulation <span>preview only — your price is NOT changed</span></div>
+                <div className="pt-pos-grid">
+                  {Cell('Sell ad', simSell, '#34c759')}
+                  {Cell('Buy ad', simBuy, '#4a9eff')}
+                </div>
+              </div>
+            );
+          })()}
 
           <div className="pt-columns">
             <Column side="buy" title="Buy USDT" clarify={'“merchant is selling”'} hint="cheapest first — best to buy from" rows={pick(board.buy)} />
@@ -371,6 +452,9 @@ const PT_CSS = `
 .pt-mon-save:disabled { opacity:.6; cursor:default; }
 .pt-mon-msg { font-size:12.5px; color:var(--pt-sell); font-weight:600; }
 @media (max-width:760px){ .pt-mon-grid { grid-template-columns:1fr; } }
+.pt-sim { background:rgba(52,199,89,0.06); border:1px solid rgba(52,199,89,0.22); border-radius:10px; padding:.85rem 1rem; margin-bottom:1.25rem; }
+.pt-sim-h { font-size:13.5px; font-weight:700; color:var(--pt-text); margin-bottom:.75rem; }
+.pt-sim-h span { font-size:11px; font-weight:500; color:var(--pt-faint); margin-left:8px; }
 .pt-columns { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
 .pt-col-head { display:flex; align-items:center; gap:8px; margin-bottom:1rem; padding-bottom:.75rem; border-bottom:1px solid var(--pt-border); }
 .pt-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }

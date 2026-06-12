@@ -179,6 +179,9 @@ class TraderProfileResponse(BaseModel):
     pm_alert_top1: bool = False
     pm_alert_overtaken: bool = False
     pm_alert_summary: bool = False
+    pm_autoprice: str = "off"
+    pm_margin_min: float = 0.0
+    pm_margin_max: float = 0.0
     cf_filters_enabled:        bool  = False
     cf_completion_rate_min:    float = 0.0
     cf_completion_rate_window: int   = 2
@@ -330,6 +333,9 @@ class PriceMonitorSettings(BaseModel):
     alert_top1: bool = False
     alert_overtaken: bool = False
     alert_summary: bool = False
+    autoprice: str = "off"      # 'off' | 'sim' | 'live'
+    margin_min: float = 0.0     # KES per USDT
+    margin_max: float = 0.0     # KES per USDT
 
 
 @router.put("/price-monitor/settings")
@@ -348,6 +354,9 @@ async def save_price_monitor_settings(
     trader.pm_alert_top1 = bool(data.alert_top1)
     trader.pm_alert_overtaken = bool(data.alert_overtaken)
     trader.pm_alert_summary = bool(data.alert_summary)
+    trader.pm_autoprice = data.autoprice if data.autoprice in ("off", "sim", "live") else "off"
+    trader.pm_margin_min = max(0.0, float(data.margin_min or 0))
+    trader.pm_margin_max = max(0.0, float(data.margin_max or 0))
     await db.commit()
     return {"status": "saved"}
 
@@ -900,6 +909,9 @@ async def get_profile(
         pm_alert_top1=bool(getattr(trader, "pm_alert_top1", False)),
         pm_alert_overtaken=bool(getattr(trader, "pm_alert_overtaken", False)),
         pm_alert_summary=bool(getattr(trader, "pm_alert_summary", False)),
+        pm_autoprice=getattr(trader, "pm_autoprice", "off") or "off",
+        pm_margin_min=float(getattr(trader, "pm_margin_min", 0.0) or 0.0),
+        pm_margin_max=float(getattr(trader, "pm_margin_max", 0.0) or 0.0),
         binance_api_key_invalid=bool(trader.binance_api_key_invalid),
         cf_filters_enabled=bool(trader.cf_filters_enabled),
         cf_completion_rate_min=trader.cf_completion_rate_min or 0.0,
