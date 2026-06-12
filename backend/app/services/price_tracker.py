@@ -83,6 +83,30 @@ async def _fetch(asset: str, fiat: str, trade_type: str, pages: int = 3, rows: i
     return out
 
 
+async def detect_nickname_from_ads(ads: list, asset: str = "USDT", fiat: str = "KES") -> str | None:
+    """Resolve a merchant's public Binance nickname from their own ads (EP-4 output).
+    Prefer a nickname carried on the ad; otherwise match the ad's advNo against the public board
+    (which carries nickName per ad). Returns None if it can't be resolved."""
+    # 1) nickname directly on the ad object, if present
+    for a in ads or []:
+        nk = a.get("nickName") or (a.get("advertiser") or {}).get("nickName")
+        if nk:
+            return nk
+    # 2) match advNo against the public board
+    advnos = {str(a.get("advNo")) for a in (ads or []) if a.get("advNo")}
+    if not advnos:
+        return None
+    try:
+        board = await get_board(asset, fiat)
+    except Exception:
+        return None
+    for side in (board.get("buy", []), board.get("sell", [])):
+        for r in side:
+            if str(r.get("advNo")) in advnos:
+                return r.get("nick")
+    return None
+
+
 async def get_board(asset: str = "USDT", fiat: str = "KES", pages: int = 5) -> dict:
     """Both sides of the order book, ranked, with up to `pages`*20 merchants. Cached briefly.
     A deeper pool (pages*20) lets the client-side merchant search find names beyond the top 20."""

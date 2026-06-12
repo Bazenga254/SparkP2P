@@ -13,15 +13,31 @@ const TIERS = [
   { key: 'bronze', label: 'Bronze' },
 ];
 
-export default function PriceTracker({ enabled }) {
+export default function PriceTracker({ enabled, binanceName }) {
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [updatedAt, setUpdatedAt] = useState(null);
   const [query, setQuery] = useState('');
   const [tier, setTier] = useState('all');
-  const [me, setMe] = useState(() => localStorage.getItem('sparkp2p_pt_me') || '');
+  const [me, setMe] = useState(() => (binanceName || localStorage.getItem('sparkp2p_pt_me') || ''));
+  const [detecting, setDetecting] = useState(false);
+  const [detectMsg, setDetectMsg] = useState('');
   const saveMe = v => { setMe(v); localStorage.setItem('sparkp2p_pt_me', v); };
+
+  // Auto-fill from the API-detected Binance nickname when it arrives.
+  useEffect(() => { if (binanceName && !me) saveMe(binanceName); /* eslint-disable-next-line */ }, [binanceName]);
+
+  const detect = async () => {
+    setDetecting(true); setDetectMsg('');
+    try {
+      const r = await api.post('/traders/detect-binance-name');
+      if (r.data?.nickname) saveMe(r.data.nickname);
+    } catch (e) {
+      setDetectMsg(e.response?.data?.detail || 'Could not detect your name.');
+    }
+    setDetecting(false);
+  };
 
   const load = async () => {
     setLoading(true); setErr('');
@@ -159,13 +175,18 @@ export default function PriceTracker({ enabled }) {
               <div className="pt-pos-inputwrap">
                 <input
                   className="pt-pos-field"
-                  placeholder="e.g. FOMO_Depot — see where you rank"
+                  placeholder="auto-detected from your Binance API"
                   value={me}
                   onChange={e => saveMe(e.target.value)}
                 />
                 {me && <button className="pt-pos-clear" onClick={() => saveMe('')} title="Clear"><X size={13} /></button>}
               </div>
+              <button className="pt-pos-detect" onClick={detect} disabled={detecting}>
+                {detecting ? 'Detecting…' : 'Detect from Binance'}
+              </button>
             </div>
+            {binanceName && me === binanceName && <div className="pt-pos-auto">✓ Auto-detected from your Binance API</div>}
+            {detectMsg && <div className="pt-pos-none">{detectMsg}</div>}
             {meq && (() => {
               const pb = myPos(board.buy), ps = myPos(board.sell);
               if (!pb && !ps) return <div className="pt-pos-none">No live ad found for “{me}” in the current results — you may not be advertising, or you're ranked beyond what we pull.</div>;
@@ -243,6 +264,10 @@ const PT_CSS = `
 .pt-pos-val { font-size:14px; color:var(--pt-text); font-weight:500; }
 .pt-pos-dim { color:var(--pt-faint); font-weight:500; }
 .pt-pos-none { font-size:12.5px; color:var(--pt-faint); margin-top:.6rem; }
+.pt-pos-detect { background:transparent; border:1px solid rgba(74,158,255,0.4); color:var(--pt-buy); padding:.5rem .85rem; border-radius:8px; font-size:12.5px; font-weight:600; cursor:pointer; white-space:nowrap; }
+.pt-pos-detect:hover { background:rgba(74,158,255,0.1); }
+.pt-pos-detect:disabled { opacity:.6; cursor:default; }
+.pt-pos-auto { font-size:11.5px; color:var(--pt-sell); margin-top:.55rem; font-weight:600; }
 .pt-youtag { font-size:9px; font-weight:800; letter-spacing:.5px; color:#0f1318; background:#4a9eff; border-radius:4px; padding:1px 5px; margin-left:2px; }
 @media (max-width:760px){ .pt-pos-grid { grid-template-columns:1fr; } }
 .pt-columns { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }

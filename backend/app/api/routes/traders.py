@@ -170,6 +170,7 @@ class TraderProfileResponse(BaseModel):
     binance_api_key_saved: bool = False  # True if API key is stored (never expose the key itself)
     binance_api_key_invalid: bool = False  # True if Binance rejects the stored key
     price_tracker_enabled: bool = False  # admin-gated live competitor price tracker
+    binance_nickname: Optional[str] = None  # auto-detected Binance P2P nickname (for "your rank")
     cf_filters_enabled:        bool  = False
     cf_completion_rate_min:    float = 0.0
     cf_completion_rate_window: int   = 2
@@ -311,6 +312,31 @@ async def get_price_tracker(
     except Exception as e:
         logger.warning(f"Price tracker fetch failed: {e}")
         raise HTTPException(status_code=502, detail="Could not load live prices right now. Please try again.")
+
+
+@router.post("/detect-binance-name")
+async def detect_binance_name(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve + cache the merchant's public Binance nickname from their API (needs the relay online).
+    Used by the price-tracker 'your rank' view so the merchant doesn't have to type their name."""
+    if not trader.binance_api_key:
+        raise HTTPException(status_code=400, detail="Connect your Binance API key first.")
+    from app.core.security import decrypt_data
+    from app.services.binance.sapi_client import get_merchant_ads, relay_trader
+    from app.services.price_tracker import detect_nickname_from_ads
+    relay_trader.set(trader.id)
+    try:
+        ads = await get_merchant_ads(decrypt_data(trader.binance_api_key), decrypt_data(trader.binance_api_secret))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Couldn't reach your Binance ads — open the SparkP2P desktop app so your relay is online, then try again.")
+    nick = await detect_nickname_from_ads(ads)
+    if not nick:
+        raise HTTPException(status_code=404, detail="No live USDT/KES ad found to read your name from. Post an ad on Binance and try again.")
+    trader.binance_nickname = nick
+    await db.commit()
+    return {"nickname": nick}
 
 
 @router.post("/suspend-self")
@@ -825,6 +851,7 @@ async def get_profile(
         binance_merchant_tier=trader.binance_merchant_tier or 'bronze',
         binance_api_key_saved=bool(trader.binance_api_key),
         price_tracker_enabled=bool(getattr(trader, "price_tracker_enabled", False)),
+        binance_nickname=getattr(trader, "binance_nickname", None),
         binance_api_key_invalid=bool(trader.binance_api_key_invalid),
         cf_filters_enabled=bool(trader.cf_filters_enabled),
         cf_completion_rate_min=trader.cf_completion_rate_min or 0.0,
@@ -1356,6 +1383,17 @@ async def save_binance_api_key(
     trader.binance_api_key    = encrypt_data(data.api_key.strip())
     trader.binance_api_secret = encrypt_data(data.api_secret.strip())
     trader.binance_api_key_invalid = False  # freshly verified key is valid
+
+    # Auto-detect the merchant's public nickname now (relay is online at connect time) so the
+    # price-tracker "your rank" view can match them without a live relay call later.
+    try:
+        from app.services.price_tracker import detect_nickname_from_ads
+        nick = await detect_nickname_from_ads(ads)
+        if nick:
+            trader.binance_nickname = nick
+    except Exception:
+        pass
+
     await db.commit()
 
     return {"status": "saved", "ads_found": len(ads), "merchant_capable": merchant_capable}
