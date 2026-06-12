@@ -140,6 +140,15 @@ class Trader(Base):
     # non-merchant). Drives the sidebar badge — only shown for confirmed merchants. NULL = unknown.
     binance_p2p_tier = Column(String(10), nullable=True)
 
+    # Price-monitor (Phase 2 Monitor) — merchant's rank-alert settings.
+    pm_enabled = Column(Boolean, default=False, server_default="false")
+    pm_target_rank = Column(Integer, default=1)
+    pm_scope = Column(String(10), default="all")        # 'all' = whole table | 'tier' = within my tier
+    pm_alert_drop = Column(Boolean, default=True, server_default="true")
+    pm_alert_top1 = Column(Boolean, default=False, server_default="false")
+    pm_alert_overtaken = Column(Boolean, default=False, server_default="false")
+    pm_alert_summary = Column(Boolean, default=False, server_default="false")
+
     # Employee permissions (JSON object, only relevant when role="employee")
     # e.g. {"disputes": true, "orders": true, "chat": true, "transactions": false, "withdrawals": false}
     permissions = Column(JSON, nullable=True)

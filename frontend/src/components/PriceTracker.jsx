@@ -14,7 +14,7 @@ const TIERS = [
   { key: 'normal', label: 'Normal' },
 ];
 
-export default function PriceTracker({ enabled, binanceName }) {
+export default function PriceTracker({ enabled, binanceName, profile }) {
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
@@ -39,6 +39,32 @@ export default function PriceTracker({ enabled, binanceName }) {
       setDetectMsg(e.response?.data?.detail || 'Could not detect your name.');
     }
     setDetecting(false);
+  };
+
+  // ── Alerts & Targets (Monitor settings) ──
+  const [pmOpen, setPmOpen] = useState(false);
+  const [pm, setPm] = useState({
+    enabled: !!profile?.pm_enabled,
+    target: profile?.pm_target_rank || 1,
+    scope: profile?.pm_scope || 'all',
+    drop: profile?.pm_alert_drop ?? true,
+    top1: !!profile?.pm_alert_top1,
+    overtaken: !!profile?.pm_alert_overtaken,
+    summary: !!profile?.pm_alert_summary,
+  });
+  const [pmSaving, setPmSaving] = useState(false);
+  const [pmMsg, setPmMsg] = useState('');
+  const tgConnected = !!profile?.telegram_connected;
+  const savePm = async () => {
+    setPmSaving(true); setPmMsg('');
+    try {
+      await api.put('/traders/price-monitor/settings', {
+        enabled: pm.enabled, target_rank: Number(pm.target), scope: pm.scope,
+        alert_drop: pm.drop, alert_top1: pm.top1, alert_overtaken: pm.overtaken, alert_summary: pm.summary,
+      });
+      setPmMsg('Saved ✓');
+    } catch (e) { setPmMsg(e.response?.data?.detail || 'Save failed'); }
+    setPmSaving(false);
   };
 
   const load = async () => {
@@ -219,6 +245,55 @@ export default function PriceTracker({ enabled, binanceName }) {
             })()}
           </div>
 
+          {/* Alerts & Targets (Monitor settings) */}
+          <div className="pt-mon">
+            <button className="pt-mon-head" onClick={() => setPmOpen(o => !o)}>
+              <span>⚙ Alerts &amp; Targets</span>
+              <span className="pt-mon-state">{pm.enabled ? 'Alerts ON' : 'Alerts off'} &nbsp;{pmOpen ? '▴' : '▾'}</span>
+            </button>
+            {pmOpen && (
+              <div className="pt-mon-body">
+                <label className="pt-mon-row">
+                  <input type="checkbox" checked={pm.enabled} onChange={e => setPm({ ...pm, enabled: e.target.checked })} />
+                  Enable rank alerts via Telegram
+                </label>
+                {pm.enabled && !tgConnected && (
+                  <div className="pt-mon-warn">⚠ Connect Telegram in Settings to actually receive these alerts.</div>
+                )}
+                <div className="pt-mon-grid">
+                  <div>
+                    <div className="pt-mon-lbl">Target rank</div>
+                    <select className="pt-mon-sel" value={pm.target} onChange={e => setPm({ ...pm, target: e.target.value })}>
+                      <option value={1}>Always #1</option>
+                      <option value={2}>Top 2</option>
+                      <option value={3}>Top 3</option>
+                      <option value={5}>Top 5</option>
+                      <option value={10}>Top 10</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div className="pt-mon-lbl">Compare against</div>
+                    <select className="pt-mon-sel" value={pm.scope} onChange={e => setPm({ ...pm, scope: e.target.value })}>
+                      <option value="all">Whole table</option>
+                      <option value="tier">My tier only</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="pt-mon-lbl" style={{ marginTop: 12 }}>Notify me when…</div>
+                {[['drop', 'I drop out of my target rank'], ['overtaken', 'Someone overtakes me'], ['top1', 'The #1 merchant changes'], ['summary', 'Send a periodic rank summary (every 6h)']].map(([k, lbl]) => (
+                  <label key={k} className="pt-mon-row">
+                    <input type="checkbox" checked={pm[k]} onChange={e => setPm({ ...pm, [k]: e.target.checked })} />
+                    {lbl}
+                  </label>
+                ))}
+                <div className="pt-mon-actions">
+                  <button className="pt-mon-save" onClick={savePm} disabled={pmSaving}>{pmSaving ? 'Saving…' : 'Save settings'}</button>
+                  {pmMsg && <span className="pt-mon-msg">{pmMsg}</span>}
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="pt-columns">
             <Column side="buy" title="Buy USDT" clarify={'“merchant is selling”'} hint="cheapest first — best to buy from" rows={pick(board.buy)} />
             <Column side="sell" title="Sell USDT" clarify={'“merchant is buying”'} hint="highest first — best to sell to" rows={pick(board.sell)} />
@@ -280,6 +355,22 @@ const PT_CSS = `
 .pt-pos-auto { font-size:11.5px; color:var(--pt-sell); margin-top:.55rem; font-weight:600; }
 .pt-youtag { font-size:9px; font-weight:800; letter-spacing:.5px; color:#0f1318; background:#4a9eff; border-radius:4px; padding:1px 5px; margin-left:2px; }
 @media (max-width:760px){ .pt-pos-grid { grid-template-columns:1fr; } }
+.pt-mon { border:1px solid var(--pt-border); border-radius:10px; margin-bottom:1.25rem; overflow:hidden; }
+.pt-mon-head { width:100%; display:flex; align-items:center; justify-content:space-between; background:var(--pt-card); border:none; color:var(--pt-text); padding:.7rem 1rem; font-size:13.5px; font-weight:600; cursor:pointer; }
+.pt-mon-head:hover { background:var(--pt-hover); }
+.pt-mon-state { font-size:12px; color:var(--pt-faint); }
+.pt-mon-body { padding:1rem; border-top:1px solid var(--pt-border); }
+.pt-mon-row { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--pt-dim); padding:5px 0; cursor:pointer; }
+.pt-mon-row input { accent-color:var(--pt-buy); width:15px; height:15px; }
+.pt-mon-warn { font-size:12px; color:#f5a623; margin:4px 0 8px; }
+.pt-mon-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px; }
+.pt-mon-lbl { font-size:11px; color:var(--pt-faint); font-weight:700; text-transform:uppercase; letter-spacing:.4px; margin-bottom:5px; }
+.pt-mon-sel { width:100%; box-sizing:border-box; padding:.45rem .6rem; border-radius:7px; border:1px solid var(--pt-border); background:#0f1318; color:var(--pt-text); font-size:13px; }
+.pt-mon-actions { display:flex; align-items:center; gap:12px; margin-top:14px; }
+.pt-mon-save { background:var(--pt-buy); border:none; color:#0f1318; font-weight:700; padding:.5rem 1.1rem; border-radius:8px; font-size:13px; cursor:pointer; }
+.pt-mon-save:disabled { opacity:.6; cursor:default; }
+.pt-mon-msg { font-size:12.5px; color:var(--pt-sell); font-weight:600; }
+@media (max-width:760px){ .pt-mon-grid { grid-template-columns:1fr; } }
 .pt-columns { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
 .pt-col-head { display:flex; align-items:center; gap:8px; margin-bottom:1rem; padding-bottom:.75rem; border-bottom:1px solid var(--pt-border); }
 .pt-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }

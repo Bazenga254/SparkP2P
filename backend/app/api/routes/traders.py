@@ -172,6 +172,13 @@ class TraderProfileResponse(BaseModel):
     price_tracker_enabled: bool = False  # admin-gated live competitor price tracker
     binance_nickname: Optional[str] = None  # auto-detected Binance P2P nickname (for "your rank")
     binance_p2p_tier: Optional[str] = None  # real detected tier (gold/silver/bronze/normal) — drives badge
+    pm_enabled: bool = False
+    pm_target_rank: int = 1
+    pm_scope: str = "all"
+    pm_alert_drop: bool = True
+    pm_alert_top1: bool = False
+    pm_alert_overtaken: bool = False
+    pm_alert_summary: bool = False
     cf_filters_enabled:        bool  = False
     cf_completion_rate_min:    float = 0.0
     cf_completion_rate_window: int   = 2
@@ -313,6 +320,36 @@ async def get_price_tracker(
     except Exception as e:
         logger.warning(f"Price tracker fetch failed: {e}")
         raise HTTPException(status_code=502, detail="Could not load live prices right now. Please try again.")
+
+
+class PriceMonitorSettings(BaseModel):
+    enabled: bool = False
+    target_rank: int = 1
+    scope: str = "all"          # 'all' | 'tier'
+    alert_drop: bool = True
+    alert_top1: bool = False
+    alert_overtaken: bool = False
+    alert_summary: bool = False
+
+
+@router.put("/price-monitor/settings")
+async def save_price_monitor_settings(
+    data: PriceMonitorSettings,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save the merchant's price-monitor rank-alert settings."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    trader.pm_enabled = bool(data.enabled)
+    trader.pm_target_rank = max(1, min(int(data.target_rank or 1), 50))
+    trader.pm_scope = "tier" if data.scope == "tier" else "all"
+    trader.pm_alert_drop = bool(data.alert_drop)
+    trader.pm_alert_top1 = bool(data.alert_top1)
+    trader.pm_alert_overtaken = bool(data.alert_overtaken)
+    trader.pm_alert_summary = bool(data.alert_summary)
+    await db.commit()
+    return {"status": "saved"}
 
 
 @router.post("/detect-binance-name")
@@ -856,6 +893,13 @@ async def get_profile(
         price_tracker_enabled=bool(getattr(trader, "price_tracker_enabled", False)),
         binance_nickname=getattr(trader, "binance_nickname", None),
         binance_p2p_tier=getattr(trader, "binance_p2p_tier", None),
+        pm_enabled=bool(getattr(trader, "pm_enabled", False)),
+        pm_target_rank=int(getattr(trader, "pm_target_rank", 1) or 1),
+        pm_scope=getattr(trader, "pm_scope", "all") or "all",
+        pm_alert_drop=bool(getattr(trader, "pm_alert_drop", True)),
+        pm_alert_top1=bool(getattr(trader, "pm_alert_top1", False)),
+        pm_alert_overtaken=bool(getattr(trader, "pm_alert_overtaken", False)),
+        pm_alert_summary=bool(getattr(trader, "pm_alert_summary", False)),
         binance_api_key_invalid=bool(trader.binance_api_key_invalid),
         cf_filters_enabled=bool(trader.cf_filters_enabled),
         cf_completion_rate_min=trader.cf_completion_rate_min or 0.0,

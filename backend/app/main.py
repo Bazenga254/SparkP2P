@@ -395,6 +395,9 @@ async def lifespan(app: FastAPI):
     # Gold Merchant badge — only when the trader's relay is up (every 5 min).
     from app.services.filter_poller import filter_sync_poller
     filter_task = asyncio.create_task(filter_sync_poller())
+    # Price Monitor — relay-free rank alerts (every 3 min).
+    from app.services import price_monitor
+    price_monitor_task = asyncio.create_task(price_monitor.start())
     yield
     # Shutdown
     order_poller.stop()
@@ -405,6 +408,7 @@ async def lifespan(app: FastAPI):
     tracking_task.cancel()
     kyc_task.cancel()
     filter_task.cancel()
+    price_monitor_task.cancel()
 
 
 app = FastAPI(

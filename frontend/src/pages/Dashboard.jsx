@@ -2437,7 +2437,7 @@ export default function Dashboard() {
         {/* ── Price Tracker Tab (admin-gated) ── */}
         {activeTab === 'pricetracker' && (
           profile?.price_tracker_enabled
-            ? <PriceTracker enabled={true} binanceName={profile?.binance_nickname} />
+            ? <PriceTracker enabled={true} binanceName={profile?.binance_nickname} profile={profile} />
             : <div className="card"><p style={{ color: '#9ca3af', padding: '14px 0', margin: 0 }}>Price Tracker is not enabled for your account.</p></div>
         )}
 
