@@ -38,7 +38,10 @@ export default function PriceTracker({ enabled }) {
     <div className={`pt-col pt-${side}`}>
       <div className="pt-col-head">
         <div className="pt-dot" />
-        <h2>{title} <span className="pt-tag">{clarify}</span></h2>
+        <div className="pt-col-titles">
+          <h2>{title}</h2>
+          <div className="pt-clarify">{clarify}</div>
+        </div>
         <span className="pt-sort">{hint}</span>
       </div>
       <div className="pt-list">
@@ -114,8 +117,10 @@ const PT_CSS = `
 .pt-columns { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
 .pt-col-head { display:flex; align-items:center; gap:8px; margin-bottom:1rem; padding-bottom:.75rem; border-bottom:1px solid var(--pt-border); }
 .pt-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
-.pt-col-head h2 { font-size:14px; font-weight:600; flex:1; }
-.pt-sort { font-size:11px; color:var(--pt-faint); }
+.pt-col-titles { flex:1; min-width:0; }
+.pt-col-head h2 { font-size:15px; font-weight:700; }
+.pt-clarify { font-size:13.5px; font-weight:700; color:var(--pt-dim); margin-top:3px; letter-spacing:.2px; }
+.pt-sort { font-size:11px; color:var(--pt-faint); text-align:right; }
 .pt-sell .pt-dot { background:var(--pt-sell); } .pt-sell h2 { color:var(--pt-sell); }
 .pt-buy .pt-dot { background:var(--pt-buy); } .pt-buy h2 { color:var(--pt-buy); }
 .pt-list { display:flex; flex-direction:column; gap:.6rem; }
@@ -123,7 +128,6 @@ const PT_CSS = `
 .pt-row:hover { background:var(--pt-hover); border-color:rgba(255,255,255,0.15); }
 .pt-rank { width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.06); color:var(--pt-faint); font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .pt-row.pt-best .pt-rank { background:rgba(245,166,35,0.15); color:var(--pt-top); }
-.pt-tag { font-size:11px; font-style:italic; font-weight:400; color:var(--pt-faint); margin-left:6px; }
 .pt-info { flex:1; min-width:0; }
 .pt-name { font-size:14.5px; font-weight:600; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--pt-text); }
 .pt-submeta { font-size:13px; color:var(--pt-dim); display:flex; gap:10px; flex-wrap:wrap; font-weight:500; }
