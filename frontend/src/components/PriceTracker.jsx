@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Activity, RefreshCw } from 'lucide-react';
+import { Zap, RefreshCw } from 'lucide-react';
 import api from '../services/api';
 
 // Live Binance P2P competitor order book (admin-gated). Renders nothing unless enabled.
+// Card-based layout (Sell USDT left, Buy USDT right).
 export default function PriceTracker({ enabled }) {
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -33,73 +34,108 @@ export default function PriceTracker({ enabled }) {
 
   const fmt = n => Number(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 2 });
 
-  const Side = ({ title, hint, rows, accent }) => (
-    <div style={{ flex: 1, minWidth: 300 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
-        <span style={{ fontWeight: 700, color: accent, fontSize: 14 }}>{title}</span>
-        <span style={{ fontSize: 11, color: '#6b7280' }}>{hint}</span>
+  const Column = ({ side, title, hint, rows }) => (
+    <div className={`pt-col pt-${side}`}>
+      <div className="pt-col-head">
+        <div className="pt-dot" />
+        <h2>{title}</h2>
+        <span className="pt-sort">{hint}</span>
       </div>
-      <div style={{ overflowX: 'auto', border: '1px solid #1f2937', borderRadius: 10 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-          <thead>
-            <tr style={{ color: '#6b7280', textAlign: 'left' }}>
-              <th style={{ padding: '8px 10px', fontWeight: 600 }}>#</th>
-              <th style={{ padding: '8px 10px', fontWeight: 600 }}>Merchant</th>
-              <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>Price</th>
-              <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>Done</th>
-              <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>30d</th>
-              <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>Available</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rows || []).map((r) => (
-              <tr key={r.advNo} style={{ borderTop: '1px solid #1f2937', background: r.rank === 1 ? 'rgba(245,158,11,0.06)' : 'transparent' }}>
-                <td style={{ padding: '8px 10px', color: r.rank === 1 ? '#f59e0b' : '#9ca3af', fontWeight: 700 }}>{r.rank}</td>
-                <td style={{ padding: '8px 10px', color: '#e5e7eb' }}>
-                  {r.nick}
-                  {r.floating && <span title="Floating (auto) price ad" style={{ marginLeft: 6, fontSize: 9, color: '#818cf8', border: '1px solid rgba(129,140,248,0.4)', borderRadius: 4, padding: '0 4px' }}>AUTO</span>}
-                </td>
-                <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: accent }}>{fmt(r.price)}</td>
-                <td style={{ padding: '8px 10px', textAlign: 'right', color: '#9ca3af' }}>{r.finishRate}%</td>
-                <td style={{ padding: '8px 10px', textAlign: 'right', color: '#9ca3af' }}>{r.orders30d.toLocaleString()}</td>
-                <td style={{ padding: '8px 10px', textAlign: 'right', color: '#9ca3af' }}>{fmt(r.available)}</td>
-              </tr>
-            ))}
-            {(!rows || rows.length === 0) && (
-              <tr><td colSpan={6} style={{ padding: 14, textAlign: 'center', color: '#6b7280' }}>No ads.</td></tr>
-            )}
-          </tbody>
-        </table>
+      <div className="pt-list">
+        {(rows || []).map((r, i) => (
+          <div key={r.advNo} className={`pt-row${i === 0 ? ' pt-best' : ''}`}>
+            <div className="pt-rank">{i + 1}</div>
+            <div className="pt-info">
+              <div className="pt-name">{r.nick}</div>
+              <div className="pt-submeta">
+                <span className={r.finishRate >= 95 ? 'pt-good' : 'pt-done'}>{r.finishRate}%</span>
+                <span>{Number(r.orders30d || 0).toLocaleString()} trades</span>
+              </div>
+            </div>
+            <div className="pt-right">
+              <div className="pt-price">{Number(r.price || 0).toFixed(2)}</div>
+              <div className="pt-avail">{fmt(r.available)}</div>
+            </div>
+          </div>
+        ))}
+        {(!rows || rows.length === 0) && (
+          <div className="pt-empty">No ads.</div>
+        )}
       </div>
     </div>
   );
 
   return (
-    <div className="card" style={{ marginBottom: 16 }}>
-      <div className="card-header">
-        <Activity size={20} style={{ color: '#f59e0b' }} />
-        <h3>Price Tracker</h3>
-        <span style={{ marginLeft: 10, fontSize: 12, color: '#6b7280' }}>Live Binance P2P · USDT/KES{updatedAt ? ` · updated ${new Date(updatedAt).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
-        <button onClick={load} disabled={loading} title="Refresh" style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
-          <RefreshCw size={15} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+    <div className="pt-root">
+      <style>{PT_CSS}</style>
+      <div className="pt-head">
+        <div>
+          <h1><Zap size={18} style={{ color: '#f5a623' }} /> Price Tracker</h1>
+          <div className="pt-meta">
+            Live Binance P2P · USDT/KES{updatedAt ? ` · updated ${new Date(updatedAt).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}
+          </div>
+        </div>
+        <button className="pt-refresh" onClick={load} disabled={loading}>
+          <RefreshCw size={14} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} /> Refresh
         </button>
       </div>
 
       {err ? (
-        <div style={{ padding: '14px 0', color: '#ef4444', fontSize: 13 }}>{err}</div>
+        <div className="pt-state pt-err">{err}</div>
       ) : !board ? (
-        <div style={{ padding: '14px 0', color: '#6b7280', fontSize: 13 }}>Loading live prices…</div>
+        <div className="pt-state">Loading live prices…</div>
       ) : (
         <>
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
-            <Side title="Sell USDT" hint="highest first — best to sell to" rows={board.sell} accent="#10b981" />
-            <Side title="Buy USDT" hint="cheapest first — best to buy from" rows={board.buy} accent="#3b82f6" />
+          <div className="pt-columns">
+            <Column side="sell" title="Sell USDT" hint="highest first — best to sell to" rows={board.sell} />
+            <Column side="buy" title="Buy USDT" hint="cheapest first — best to buy from" rows={board.buy} />
           </div>
-          <p style={{ fontSize: 11, color: '#6b7280', marginTop: 10, marginBottom: 0 }}>
-            Rank #1 is the most competitive merchant on each side. Prices update automatically every 30s.
-          </p>
+          <div className="pt-footnote">Rank #1 is the most competitive merchant on each side. Prices update automatically every 30s.</div>
         </>
       )}
     </div>
   );
 }
+
+const PT_CSS = `
+.pt-root {
+  --pt-sell:#34c759; --pt-buy:#4a9eff; --pt-top:#f5a623;
+  --pt-text:#fff; --pt-dim:#c4c9d0; --pt-faint:#7d848c;
+  --pt-card:rgba(255,255,255,0.03); --pt-border:rgba(255,255,255,0.08); --pt-hover:rgba(255,255,255,0.06);
+  background:#161b22; border:1px solid var(--pt-border); border-radius:12px; padding:1.5rem; color:var(--pt-text);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,sans-serif;
+}
+.pt-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; }
+.pt-head h1 { font-size:18px; font-weight:600; display:flex; align-items:center; gap:8px; color:var(--pt-text); }
+.pt-meta { font-size:12px; color:var(--pt-faint); margin-top:3px; }
+.pt-refresh { background:transparent; border:1px solid var(--pt-border); color:var(--pt-dim); padding:.45rem .9rem; border-radius:6px; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; transition:background .15s; }
+.pt-refresh:hover { background:var(--pt-hover); }
+.pt-refresh:disabled { opacity:.6; cursor:default; }
+.pt-columns { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
+.pt-col-head { display:flex; align-items:center; gap:8px; margin-bottom:1rem; padding-bottom:.75rem; border-bottom:1px solid var(--pt-border); }
+.pt-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.pt-col-head h2 { font-size:14px; font-weight:600; flex:1; }
+.pt-sort { font-size:11px; color:var(--pt-faint); }
+.pt-sell .pt-dot { background:var(--pt-sell); } .pt-sell h2 { color:var(--pt-sell); }
+.pt-buy .pt-dot { background:var(--pt-buy); } .pt-buy h2 { color:var(--pt-buy); }
+.pt-list { display:flex; flex-direction:column; gap:.6rem; }
+.pt-row { background:var(--pt-card); border:1px solid var(--pt-border); border-radius:8px; padding:.7rem .85rem; display:flex; align-items:center; gap:.75rem; transition:background .15s,border-color .15s; }
+.pt-row:hover { background:var(--pt-hover); border-color:rgba(255,255,255,0.15); }
+.pt-rank { width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.06); color:var(--pt-faint); font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.pt-row.pt-best .pt-rank { background:rgba(245,166,35,0.15); color:var(--pt-top); }
+.pt-info { flex:1; min-width:0; }
+.pt-name { font-size:13px; font-weight:600; margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--pt-text); }
+.pt-submeta { font-size:11px; color:var(--pt-faint); display:flex; gap:8px; flex-wrap:wrap; }
+.pt-submeta .pt-done { color:var(--pt-dim); }
+.pt-submeta .pt-good { color:var(--pt-sell); }
+.pt-right { text-align:right; flex-shrink:0; }
+.pt-price { font-size:15px; font-weight:700; }
+.pt-sell .pt-price { color:var(--pt-sell); } .pt-buy .pt-price { color:var(--pt-buy); }
+.pt-avail { font-size:10px; color:var(--pt-faint); margin-top:2px; }
+.pt-footnote { font-size:11px; color:var(--pt-faint); margin-top:1.25rem; text-align:center; }
+.pt-state { padding:24px 0; text-align:center; color:var(--pt-faint); font-size:13px; }
+.pt-err { color:#ff6b6b; }
+.pt-empty { padding:14px; text-align:center; color:var(--pt-faint); font-size:12px; }
+@media (max-width:760px){ .pt-columns{ grid-template-columns:1fr; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+`;
