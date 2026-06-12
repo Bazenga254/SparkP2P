@@ -3,12 +3,23 @@ import { Zap, RefreshCw, Search, X } from 'lucide-react';
 import api from '../services/api';
 
 // Live Binance P2P competitor order book (admin-gated). Renders nothing unless enabled.
+// Tier (Gold/Silver/Bronze) = Binance P2P Merchant level, read from the feed's vipLevel
+// (verified against the web-UI medal badges: vip3=Gold, vip2=Silver, vip1/0=Bronze).
+const TIER_COLOR = { gold: '#f5c33b', silver: '#ffffff', bronze: '#cd7f32' };
+const TIERS = [
+  { key: 'all', label: 'All' },
+  { key: 'gold', label: 'Gold' },
+  { key: 'silver', label: 'Silver' },
+  { key: 'bronze', label: 'Bronze' },
+];
+
 export default function PriceTracker({ enabled }) {
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [updatedAt, setUpdatedAt] = useState(null);
   const [query, setQuery] = useState('');
+  const [tier, setTier] = useState('all');
 
   const load = async () => {
     setLoading(true); setErr('');
@@ -34,9 +45,13 @@ export default function PriceTracker({ enabled }) {
 
   const fmt = n => Number(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 2 });
   const q = query.trim().toLowerCase();
-  const pick = rows => (q
-    ? (rows || []).filter(r => (r.nick || '').toLowerCase().includes(q))
-    : (rows || []).slice(0, 20));
+  const pick = rows => {
+    let list = rows || [];
+    if (tier !== 'all') list = list.filter(r => r.tier === tier);
+    if (q) list = list.filter(r => (r.nick || '').toLowerCase().includes(q));
+    else list = list.slice(0, 20);
+    return list;
+  };
 
   const Column = ({ side, title, clarify, hint, rows }) => (
     <div className={`pt-col pt-${side}`}>
@@ -50,11 +65,15 @@ export default function PriceTracker({ enabled }) {
       </div>
       <div className="pt-list">
         {rows.map((r) => (
-          <div key={r.advNo} className={`pt-row${r.rank === 1 && !q ? ' pt-best' : ''}`}>
+          <div key={r.advNo} className={`pt-row${r.rank === 1 && !q && tier === 'all' ? ' pt-best' : ''}`}>
             <div className="pt-rank">{r.rank}</div>
             <div className="pt-info">
-              <div className="pt-name">{r.nick}</div>
+              <div className="pt-name">
+                <span className="pt-medal" style={{ background: TIER_COLOR[r.tier] }} />
+                <span style={{ color: TIER_COLOR[r.tier] || '#fff' }}>{r.nick}</span>
+              </div>
               <div className="pt-submeta">
+                <span className="pt-tier" style={{ color: TIER_COLOR[r.tier] }}>{r.tier}</span>
                 <span className={r.finishRate >= 95 ? 'pt-good' : 'pt-done'}>{r.finishRate}%</span>
                 <span>{Number(r.orders30d || 0).toLocaleString()} trades</span>
               </div>
@@ -66,7 +85,7 @@ export default function PriceTracker({ enabled }) {
           </div>
         ))}
         {rows.length === 0 && (
-          <div className="pt-empty">{q ? `No "${query}" ad on this side.` : 'No ads.'}</div>
+          <div className="pt-empty">{q ? `No "${query}" ad here.` : `No ${tier === 'all' ? '' : tier + ' '}merchants.`}</div>
         )}
       </div>
     </div>
@@ -93,17 +112,30 @@ export default function PriceTracker({ enabled }) {
         <div className="pt-state">Loading live prices…</div>
       ) : (
         <>
-          <div className="pt-searchbar">
-            <Search size={15} className="pt-search-ic" />
-            <input
-              className="pt-search"
-              placeholder="Track a merchant — search by name…"
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-            />
-            {query && (
-              <button className="pt-search-clear" onClick={() => setQuery('')} title="Clear"><X size={14} /></button>
-            )}
+          <div className="pt-controls">
+            <div className="pt-filters">
+              {TIERS.map(t => (
+                <button
+                  key={t.key}
+                  className={`pt-filter${tier === t.key ? ' pt-active' : ''}`}
+                  style={tier === t.key && t.key !== 'all' ? { color: TIER_COLOR[t.key], borderColor: TIER_COLOR[t.key] } : undefined}
+                  onClick={() => setTier(t.key)}
+                >
+                  {t.key !== 'all' && <span className="pt-swatch" style={{ background: TIER_COLOR[t.key] }} />}
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <div className="pt-searchbar">
+              <Search size={15} className="pt-search-ic" />
+              <input
+                className="pt-search"
+                placeholder="Track a merchant — search by name…"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+              />
+              {query && <button className="pt-search-clear" onClick={() => setQuery('')} title="Clear"><X size={14} /></button>}
+            </div>
           </div>
 
           <div className="pt-columns">
@@ -111,9 +143,7 @@ export default function PriceTracker({ enabled }) {
             <Column side="sell" title="Sell USDT" clarify={'“merchant is buying”'} hint="highest first — best to sell to" rows={pick(board.sell)} />
           </div>
           <div className="pt-footnote">
-            {q
-              ? 'Showing every live ad whose merchant name matches your search, on both sides.'
-              : 'Rank #1 is the most competitive merchant on each side. Prices update automatically every 30s — search above to track a specific merchant.'}
+            Tier is the merchant's <strong>Binance P2P Merchant level</strong> (🥇 Gold · 🥈 Silver · 🥉 Bronze). Rank #1 is the most competitive on each side. Prices update every 30s.
           </div>
         </>
       )}
@@ -135,9 +165,15 @@ const PT_CSS = `
 .pt-refresh { background:transparent; border:1px solid var(--pt-border); color:var(--pt-dim); padding:.45rem .9rem; border-radius:6px; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; transition:background .15s; }
 .pt-refresh:hover { background:var(--pt-hover); }
 .pt-refresh:disabled { opacity:.6; cursor:default; }
-.pt-searchbar { position:relative; display:flex; align-items:center; margin-bottom:1.25rem; }
+.pt-controls { display:flex; gap:12px; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; }
+.pt-filters { display:flex; gap:8px; flex-wrap:wrap; }
+.pt-filter { display:flex; align-items:center; gap:6px; background:var(--pt-card); border:1px solid var(--pt-border); color:var(--pt-dim); padding:.4rem .85rem; border-radius:7px; font-size:13px; font-weight:600; cursor:pointer; transition:background .15s,border-color .15s; }
+.pt-filter:hover { background:var(--pt-hover); }
+.pt-filter.pt-active { background:var(--pt-hover); border-color:rgba(255,255,255,0.25); color:#fff; }
+.pt-swatch { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.pt-searchbar { position:relative; display:flex; align-items:center; flex:1; min-width:220px; }
 .pt-search-ic { position:absolute; left:12px; color:var(--pt-faint); pointer-events:none; }
-.pt-search { width:100%; box-sizing:border-box; padding:.6rem .9rem .6rem 36px; border-radius:8px; border:1px solid var(--pt-border); background:var(--pt-card); color:var(--pt-text); font-size:13.5px; outline:none; }
+.pt-search { width:100%; box-sizing:border-box; padding:.55rem .9rem .55rem 36px; border-radius:8px; border:1px solid var(--pt-border); background:var(--pt-card); color:var(--pt-text); font-size:13.5px; outline:none; }
 .pt-search:focus { border-color:rgba(255,255,255,0.25); }
 .pt-search::placeholder { color:var(--pt-faint); }
 .pt-search-clear { position:absolute; right:8px; background:none; border:none; color:var(--pt-faint); cursor:pointer; display:flex; padding:4px; }
@@ -157,8 +193,10 @@ const PT_CSS = `
 .pt-rank { width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.06); color:var(--pt-faint); font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .pt-row.pt-best .pt-rank { background:rgba(245,166,35,0.15); color:var(--pt-top); }
 .pt-info { flex:1; min-width:0; }
-.pt-name { font-size:14.5px; font-weight:600; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--pt-text); }
-.pt-submeta { font-size:13px; color:var(--pt-dim); display:flex; gap:10px; flex-wrap:wrap; font-weight:500; }
+.pt-name { font-size:14.5px; font-weight:600; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; align-items:center; gap:6px; }
+.pt-medal { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.pt-submeta { font-size:13px; color:var(--pt-dim); display:flex; gap:10px; flex-wrap:wrap; font-weight:500; align-items:center; }
+.pt-tier { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
 .pt-submeta .pt-done { color:var(--pt-dim); }
 .pt-submeta .pt-good { color:var(--pt-sell); }
 .pt-right { text-align:right; flex-shrink:0; }

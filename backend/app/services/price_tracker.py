@@ -25,11 +25,23 @@ _cache: dict[str, tuple[float, dict]] = {}
 _CACHE_TTL = 20  # seconds
 
 
+def _tier_from_vip(vip: int) -> str:
+    # In the P2P adv/search feed, vipLevel IS the Binance P2P Merchant tier (verified against the
+    # web-UI medal badges): 3 -> Gold, 2 -> Silver, 1/0 -> Bronze. (This is the P2P Merchant VIP
+    # Program, NOT the separate spot-trading VIP level on the fee page.)
+    if vip >= 3:
+        return "gold"
+    if vip == 2:
+        return "silver"
+    return "bronze"
+
+
 def _parse(items: list, start: int = 0) -> list[dict]:
     out = []
     for i, item in enumerate(items or []):
         adv = item.get("adv", {}) or {}
         a = item.get("advertiser", {}) or {}
+        vip = int(a.get("vipLevel") or 0)
         out.append({
             "rank": start + i + 1,
             "advNo": adv.get("advNo"),
@@ -37,6 +49,8 @@ def _parse(items: list, start: int = 0) -> list[dict]:
             "nick": a.get("nickName"),
             "userNo": a.get("userNo"),
             "identity": a.get("userIdentity"),         # MASS_MERCHANT / BLOCK_MERCHANT / ...
+            "vip": vip,
+            "tier": _tier_from_vip(vip),
             "orders30d": int(a.get("monthOrderCount") or 0),
             "finishRate": round((a.get("monthFinishRate") or 0) * 100, 1),
             "available": float(adv.get("tradableQuantity") or adv.get("surplusAmount") or 0),
