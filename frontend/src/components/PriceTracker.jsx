@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Zap, RefreshCw } from 'lucide-react';
+import { Zap, RefreshCw, Search, X } from 'lucide-react';
 import api from '../services/api';
 
 // Live Binance P2P competitor order book (admin-gated). Renders nothing unless enabled.
-// Card-based layout (Sell USDT left, Buy USDT right).
 export default function PriceTracker({ enabled }) {
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [updatedAt, setUpdatedAt] = useState(null);
+  const [query, setQuery] = useState('');
 
   const load = async () => {
     setLoading(true); setErr('');
@@ -33,6 +33,10 @@ export default function PriceTracker({ enabled }) {
   if (!enabled) return null;
 
   const fmt = n => Number(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 2 });
+  const q = query.trim().toLowerCase();
+  const pick = rows => (q
+    ? (rows || []).filter(r => (r.nick || '').toLowerCase().includes(q))
+    : (rows || []).slice(0, 20));
 
   const Column = ({ side, title, clarify, hint, rows }) => (
     <div className={`pt-col pt-${side}`}>
@@ -45,9 +49,9 @@ export default function PriceTracker({ enabled }) {
         <span className="pt-sort">{hint}</span>
       </div>
       <div className="pt-list">
-        {(rows || []).map((r, i) => (
-          <div key={r.advNo} className={`pt-row${i === 0 ? ' pt-best' : ''}`}>
-            <div className="pt-rank">{i + 1}</div>
+        {rows.map((r) => (
+          <div key={r.advNo} className={`pt-row${r.rank === 1 && !q ? ' pt-best' : ''}`}>
+            <div className="pt-rank">{r.rank}</div>
             <div className="pt-info">
               <div className="pt-name">{r.nick}</div>
               <div className="pt-submeta">
@@ -61,8 +65,8 @@ export default function PriceTracker({ enabled }) {
             </div>
           </div>
         ))}
-        {(!rows || rows.length === 0) && (
-          <div className="pt-empty">No ads.</div>
+        {rows.length === 0 && (
+          <div className="pt-empty">{q ? `No "${query}" ad on this side.` : 'No ads.'}</div>
         )}
       </div>
     </div>
@@ -89,11 +93,28 @@ export default function PriceTracker({ enabled }) {
         <div className="pt-state">Loading live prices…</div>
       ) : (
         <>
-          <div className="pt-columns">
-            <Column side="buy" title="Buy USDT" clarify={'“merchant is selling”'} hint="cheapest first — best to buy from" rows={board.buy} />
-            <Column side="sell" title="Sell USDT" clarify={'“merchant is buying”'} hint="highest first — best to sell to" rows={board.sell} />
+          <div className="pt-searchbar">
+            <Search size={15} className="pt-search-ic" />
+            <input
+              className="pt-search"
+              placeholder="Track a merchant — search by name…"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+            />
+            {query && (
+              <button className="pt-search-clear" onClick={() => setQuery('')} title="Clear"><X size={14} /></button>
+            )}
           </div>
-          <div className="pt-footnote">Rank #1 is the most competitive merchant on each side. Prices update automatically every 30s.</div>
+
+          <div className="pt-columns">
+            <Column side="buy" title="Buy USDT" clarify={'“merchant is selling”'} hint="cheapest first — best to buy from" rows={pick(board.buy)} />
+            <Column side="sell" title="Sell USDT" clarify={'“merchant is buying”'} hint="highest first — best to sell to" rows={pick(board.sell)} />
+          </div>
+          <div className="pt-footnote">
+            {q
+              ? 'Showing every live ad whose merchant name matches your search, on both sides.'
+              : 'Rank #1 is the most competitive merchant on each side. Prices update automatically every 30s — search above to track a specific merchant.'}
+          </div>
         </>
       )}
     </div>
@@ -108,12 +129,19 @@ const PT_CSS = `
   background:#161b22; border:1px solid var(--pt-border); border-radius:12px; padding:1.5rem; color:var(--pt-text);
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,sans-serif;
 }
-.pt-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; }
+.pt-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; }
 .pt-head h1 { font-size:18px; font-weight:600; display:flex; align-items:center; gap:8px; color:var(--pt-text); }
 .pt-meta { font-size:12px; color:var(--pt-faint); margin-top:3px; }
 .pt-refresh { background:transparent; border:1px solid var(--pt-border); color:var(--pt-dim); padding:.45rem .9rem; border-radius:6px; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; transition:background .15s; }
 .pt-refresh:hover { background:var(--pt-hover); }
 .pt-refresh:disabled { opacity:.6; cursor:default; }
+.pt-searchbar { position:relative; display:flex; align-items:center; margin-bottom:1.25rem; }
+.pt-search-ic { position:absolute; left:12px; color:var(--pt-faint); pointer-events:none; }
+.pt-search { width:100%; box-sizing:border-box; padding:.6rem .9rem .6rem 36px; border-radius:8px; border:1px solid var(--pt-border); background:var(--pt-card); color:var(--pt-text); font-size:13.5px; outline:none; }
+.pt-search:focus { border-color:rgba(255,255,255,0.25); }
+.pt-search::placeholder { color:var(--pt-faint); }
+.pt-search-clear { position:absolute; right:8px; background:none; border:none; color:var(--pt-faint); cursor:pointer; display:flex; padding:4px; }
+.pt-search-clear:hover { color:var(--pt-text); }
 .pt-columns { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
 .pt-col-head { display:flex; align-items:center; gap:8px; margin-bottom:1rem; padding-bottom:.75rem; border-bottom:1px solid var(--pt-border); }
 .pt-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
@@ -137,7 +165,7 @@ const PT_CSS = `
 .pt-price { font-size:18px; font-weight:700; }
 .pt-sell .pt-price { color:var(--pt-sell); } .pt-buy .pt-price { color:var(--pt-buy); }
 .pt-avail { font-size:13px; color:var(--pt-dim); margin-top:3px; font-weight:500; }
-.pt-footnote { font-size:11px; color:var(--pt-faint); margin-top:1.25rem; text-align:center; }
+.pt-footnote { font-size:11px; color:var(--pt-faint); margin-top:1.25rem; text-align:center; line-height:1.6; }
 .pt-state { padding:24px 0; text-align:center; color:var(--pt-faint); font-size:13px; }
 .pt-err { color:#ff6b6b; }
 .pt-empty { padding:14px; text-align:center; color:var(--pt-faint); font-size:12px; }
