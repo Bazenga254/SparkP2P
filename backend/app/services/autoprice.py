@@ -132,7 +132,27 @@ async def _run_once():
                 try:
                     await update_ad_price(decrypt_data(t.binance_api_key), decrypt_data(t.binance_api_secret), adv_no, target)
                 except Exception as e:
-                    logger.warning("[AutoPrice] update failed trader %s adv %s: %s", t.id, adv_no, e)
+                    emsg = str(e)
+                    logger.warning("[AutoPrice] update failed trader %s adv %s: %s", t.id, adv_no, emsg)
+                    # -1002 = Binance won't let this account manage ads via API (verified-merchant only).
+                    # Stop retrying: turn Live off, record the reason, tell the trader.
+                    if "-1002" in emsg or "not authorized" in emsg.lower():
+                        reason = ("Binance rejected the price change (-1002): your account isn't authorized to "
+                                  "change ads via the API. Auto-pricing needs a verified Binance P2P merchant account.")
+                        try:
+                            async with async_session() as db2:
+                                tr = (await db2.execute(select(Trader).where(Trader.id == t.id))).scalar_one_or_none()
+                                if tr:
+                                    tr.pm_autoprice = "off"
+                                    tr.pm_autoprice_error = reason
+                                    await db2.commit()
+                        except Exception as e2:
+                            logger.warning("[AutoPrice] could not disable trader %s: %s", t.id, e2)
+                        try:
+                            await notify_trader(t, "⚠ SparkP2P auto-pricing was turned OFF — Binance won't let this account change ads via the API (verified-merchant only).")
+                        except Exception:
+                            pass
+                        break
                     continue
                 _last_push[t.id] = time.time()
                 logger.warning("[AutoPrice] trader %s %s ad %s -> %s (was %s)", t.id, tt, adv_no, target, current)

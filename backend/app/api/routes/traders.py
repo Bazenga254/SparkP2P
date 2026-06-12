@@ -182,6 +182,7 @@ class TraderProfileResponse(BaseModel):
     pm_autoprice: str = "off"
     pm_margin_min: float = 0.0
     pm_margin_max: float = 0.0
+    pm_autoprice_error: Optional[str] = None
     cf_filters_enabled:        bool  = False
     cf_completion_rate_min:    float = 0.0
     cf_completion_rate_window: int   = 2
@@ -360,6 +361,7 @@ async def save_price_monitor_settings(
     trader.pm_autoprice = data.autoprice if data.autoprice in ("off", "sim", "live") else "off"
     trader.pm_margin_min = max(0.0, float(data.margin_min or 0))
     trader.pm_margin_max = max(0.0, float(data.margin_max or 0))
+    trader.pm_autoprice_error = None   # clear any prior failure so the bot retries with new settings
     await db.commit()
     return {"status": "saved"}
 
@@ -915,6 +917,7 @@ async def get_profile(
         pm_autoprice=getattr(trader, "pm_autoprice", "off") or "off",
         pm_margin_min=float(getattr(trader, "pm_margin_min", 0.0) or 0.0),
         pm_margin_max=float(getattr(trader, "pm_margin_max", 0.0) or 0.0),
+        pm_autoprice_error=getattr(trader, "pm_autoprice_error", None),
         binance_api_key_invalid=bool(trader.binance_api_key_invalid),
         cf_filters_enabled=bool(trader.cf_filters_enabled),
         cf_completion_rate_min=trader.cf_completion_rate_min or 0.0,

@@ -153,6 +153,7 @@ class Trader(Base):
     pm_autoprice = Column(String(10), default="off")          # 'off' | 'sim' (preview) | 'live'
     pm_margin_min = Column(Float, default=0.0)                # KES per USDT — hard profit floor
     pm_margin_max = Column(Float, default=0.0)                # KES per USDT — most generous margin (when uncontested)
+    pm_autoprice_error = Column(String(255), nullable=True)  # last hard failure reason (e.g. Binance -1002 not authorized)
 
     # Employee permissions (JSON object, only relevant when role="employee")
     # e.g. {"disputes": true, "orders": true, "chat": true, "transactions": false, "withdrawals": false}

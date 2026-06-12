@@ -316,6 +316,9 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                   </label>
                 ))}
                 <div className="pt-mon-lbl" style={{ marginTop: 14 }}>Auto-pricing</div>
+                {profile?.pm_autoprice_error && (
+                  <div className="pt-mon-warn" style={{ color: '#ef6a7e', marginBottom: 8 }}>⚠ {profile.pm_autoprice_error}</div>
+                )}
                 <select className="pt-mon-sel" style={{ maxWidth: 360 }} value={pm.autoprice} onChange={e => setPm({ ...pm, autoprice: e.target.value })}>
                   <option value="off">Off — monitor / alerts only</option>
                   <option value="sim">Simulate — preview the price it would set (no change)</option>
