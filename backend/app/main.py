@@ -398,6 +398,9 @@ async def lifespan(app: FastAPI):
     # Price Monitor — relay-free rank alerts (every 3 min).
     from app.services import price_monitor
     price_monitor_task = asyncio.create_task(price_monitor.start())
+    # Auto-pricing (Live) — relay-gated, moves real ad prices within the margin band (every 2 min).
+    from app.services import autoprice
+    autoprice_task = asyncio.create_task(autoprice.start())
     yield
     # Shutdown
     order_poller.stop()
@@ -409,6 +412,7 @@ async def lifespan(app: FastAPI):
     kyc_task.cancel()
     filter_task.cancel()
     price_monitor_task.cancel()
+    autoprice_task.cancel()
 
 
 app = FastAPI(

@@ -153,6 +153,21 @@ async def push_counterparty_filters(
     return {"success": True}
 
 
+async def update_ad_price(api_key: str, api_secret: str, adv_no: str, price) -> dict:
+    """Update a single ad's price via /sapi/v1/c2c/ads/update. Send ONLY advNo + price —
+    including surplusAmount/other fields triggers error 187049."""
+    params = _base_params()
+    params["signature"] = _sign(api_secret, params)
+    body = {"advNo": adv_no, "price": str(price)}
+    data = await _post("/sapi/v1/c2c/ads/update", api_key, params, body)
+    success = data.get("success") or data.get("code") == "000000"
+    if not success:
+        code = data.get("code", "?"); msg = data.get("msg", "unknown error")
+        logger.error("ads/update price failed: code=%s msg=%s adv_no=%s", code, msg, adv_no)
+        raise ValueError(f"Binance ads/update error {code}: {msg}")
+    return {"success": True}
+
+
 async def get_merchant_ads(api_key: str, api_secret: str) -> list:
     """Fetch the merchant's active ads via EP-4."""
     params = _base_params()

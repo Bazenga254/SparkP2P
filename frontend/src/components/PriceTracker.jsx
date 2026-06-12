@@ -316,10 +316,16 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                   </label>
                 ))}
                 <div className="pt-mon-lbl" style={{ marginTop: 14 }}>Auto-pricing</div>
-                <select className="pt-mon-sel" style={{ maxWidth: 320 }} value={pm.autoprice} onChange={e => setPm({ ...pm, autoprice: e.target.value })}>
+                <select className="pt-mon-sel" style={{ maxWidth: 360 }} value={pm.autoprice} onChange={e => setPm({ ...pm, autoprice: e.target.value })}>
                   <option value="off">Off — monitor / alerts only</option>
                   <option value="sim">Simulate — preview the price it would set (no change)</option>
+                  <option value="live">Live — automatically change my ad price</option>
                 </select>
+                {pm.autoprice === 'live' && (
+                  <div className="pt-mon-warn" style={{ color: '#ef6a7e' }}>
+                    ⚠ Live mode changes your real Binance ad price automatically — only while your desktop app (relay) is online. It always stays within your margin band and never below your minimum margin. Updates at most once every 5 minutes, max 1 KES per move.
+                  </div>
+                )}
                 {pm.autoprice !== 'off' && (
                   <>
                     <div className="pt-mon-grid" style={{ marginTop: 10 }}>
