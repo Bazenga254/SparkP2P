@@ -20,6 +20,8 @@ export default function PriceTracker({ enabled }) {
   const [updatedAt, setUpdatedAt] = useState(null);
   const [query, setQuery] = useState('');
   const [tier, setTier] = useState('all');
+  const [me, setMe] = useState(() => localStorage.getItem('sparkp2p_pt_me') || '');
+  const saveMe = v => { setMe(v); localStorage.setItem('sparkp2p_pt_me', v); };
 
   const load = async () => {
     setLoading(true); setErr('');
@@ -53,6 +55,17 @@ export default function PriceTracker({ enabled }) {
     return list;
   };
 
+  // "Your position" — match my Binance name against the live board (no relay needed).
+  const meq = me.trim().toLowerCase();
+  const isMe = nick => !!meq && (nick || '').trim().toLowerCase() === meq;
+  const myPos = rows => {
+    if (!meq) return null;
+    const mine = (rows || []).filter(r => isMe(r.nick)).sort((a, b) => a.rank - b.rank)[0];
+    if (!mine) return null;
+    const tierRank = (rows || []).filter(r => r.tier === mine.tier && r.rank < mine.rank).length + 1;
+    return { ...mine, tierRank };
+  };
+
   const Column = ({ side, title, clarify, hint, rows }) => (
     <div className={`pt-col pt-${side}`}>
       <div className="pt-col-head">
@@ -65,12 +78,13 @@ export default function PriceTracker({ enabled }) {
       </div>
       <div className="pt-list">
         {rows.map((r) => (
-          <div key={r.advNo} className={`pt-row${r.rank === 1 && !q && tier === 'all' ? ' pt-best' : ''}`}>
+          <div key={r.advNo} className={`pt-row${r.rank === 1 && !q && tier === 'all' ? ' pt-best' : ''}${isMe(r.nick) ? ' pt-me' : ''}`}>
             <div className="pt-rank">{r.rank}</div>
             <div className="pt-info">
               <div className="pt-name">
                 <span className="pt-medal" style={{ background: TIER_COLOR[r.tier] }} />
                 <span style={{ color: TIER_COLOR[r.tier] || '#fff' }}>{r.nick}</span>
+                {isMe(r.nick) && <span className="pt-youtag">YOU</span>}
               </div>
               <div className="pt-submeta">
                 <span className="pt-tier" style={{ color: TIER_COLOR[r.tier] }}>{r.tier}</span>
@@ -138,6 +152,42 @@ export default function PriceTracker({ enabled }) {
             </div>
           </div>
 
+          {/* Your position — client-side match against the live board (no relay needed) */}
+          <div className="pt-pos">
+            <div className="pt-pos-bar">
+              <span className="pt-pos-label">Your Binance name</span>
+              <div className="pt-pos-inputwrap">
+                <input
+                  className="pt-pos-field"
+                  placeholder="e.g. FOMO_Depot — see where you rank"
+                  value={me}
+                  onChange={e => saveMe(e.target.value)}
+                />
+                {me && <button className="pt-pos-clear" onClick={() => saveMe('')} title="Clear"><X size={13} /></button>}
+              </div>
+            </div>
+            {meq && (() => {
+              const pb = myPos(board.buy), ps = myPos(board.sell);
+              if (!pb && !ps) return <div className="pt-pos-none">No live ad found for “{me}” in the current results — you may not be advertising, or you're ranked beyond what we pull.</div>;
+              const Cell = (label, p, accent) => (
+                <div className="pt-pos-cell">
+                  <div className="pt-pos-side" style={{ color: accent }}>{label}</div>
+                  {p ? (
+                    <div className="pt-pos-val">
+                      <strong>#{p.rank}</strong> overall · <strong style={{ color: TIER_COLOR[p.tier] }}>#{p.tierRank} {p.tier}</strong> · KES {Number(p.price).toFixed(2)}
+                    </div>
+                  ) : <div className="pt-pos-val pt-pos-dim">no live ad on this side</div>}
+                </div>
+              );
+              return (
+                <div className="pt-pos-grid">
+                  {Cell('Buy USDT — your sell ad', pb, '#4a9eff')}
+                  {Cell('Sell USDT — your buy ad', ps, '#34c759')}
+                </div>
+              );
+            })()}
+          </div>
+
           <div className="pt-columns">
             <Column side="buy" title="Buy USDT" clarify={'“merchant is selling”'} hint="cheapest first — best to buy from" rows={pick(board.buy)} />
             <Column side="sell" title="Sell USDT" clarify={'“merchant is buying”'} hint="highest first — best to sell to" rows={pick(board.sell)} />
@@ -178,6 +228,23 @@ const PT_CSS = `
 .pt-search::placeholder { color:var(--pt-faint); }
 .pt-search-clear { position:absolute; right:8px; background:none; border:none; color:var(--pt-faint); cursor:pointer; display:flex; padding:4px; }
 .pt-search-clear:hover { color:var(--pt-text); }
+.pt-pos { background:rgba(74,158,255,0.06); border:1px solid rgba(74,158,255,0.22); border-radius:10px; padding:.85rem 1rem; margin-bottom:1.25rem; }
+.pt-pos-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.pt-pos-label { font-size:12px; font-weight:700; color:var(--pt-dim); white-space:nowrap; }
+.pt-pos-inputwrap { position:relative; flex:1; min-width:200px; display:flex; align-items:center; }
+.pt-pos-field { width:100%; box-sizing:border-box; padding:.5rem .9rem; border-radius:8px; border:1px solid var(--pt-border); background:var(--pt-card); color:var(--pt-text); font-size:13.5px; outline:none; }
+.pt-pos-field:focus { border-color:rgba(255,255,255,0.25); }
+.pt-pos-field::placeholder { color:var(--pt-faint); }
+.pt-pos-clear { position:absolute; right:8px; background:none; border:none; color:var(--pt-faint); cursor:pointer; display:flex; padding:3px; }
+.pt-pos-clear:hover { color:var(--pt-text); }
+.pt-pos-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:.85rem; }
+.pt-pos-cell { background:var(--pt-card); border:1px solid var(--pt-border); border-radius:8px; padding:.6rem .8rem; }
+.pt-pos-side { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; margin-bottom:4px; }
+.pt-pos-val { font-size:14px; color:var(--pt-text); font-weight:500; }
+.pt-pos-dim { color:var(--pt-faint); font-weight:500; }
+.pt-pos-none { font-size:12.5px; color:var(--pt-faint); margin-top:.6rem; }
+.pt-youtag { font-size:9px; font-weight:800; letter-spacing:.5px; color:#0f1318; background:#4a9eff; border-radius:4px; padding:1px 5px; margin-left:2px; }
+@media (max-width:760px){ .pt-pos-grid { grid-template-columns:1fr; } }
 .pt-columns { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
 .pt-col-head { display:flex; align-items:center; gap:8px; margin-bottom:1rem; padding-bottom:.75rem; border-bottom:1px solid var(--pt-border); }
 .pt-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
@@ -192,6 +259,7 @@ const PT_CSS = `
 .pt-row:hover { background:var(--pt-hover); border-color:rgba(255,255,255,0.15); }
 .pt-rank { width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.06); color:var(--pt-faint); font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .pt-row.pt-best .pt-rank { background:rgba(245,166,35,0.15); color:var(--pt-top); }
+.pt-row.pt-me { border-color:rgba(74,158,255,0.55); background:rgba(74,158,255,0.08); }
 .pt-info { flex:1; min-width:0; }
 .pt-name { font-size:14.5px; font-weight:600; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; align-items:center; gap:6px; }
 .pt-medal { width:9px; height:9px; border-radius:50%; flex-shrink:0; }

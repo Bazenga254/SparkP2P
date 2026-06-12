@@ -98,15 +98,15 @@ margin_unit ('kes'|'pct'), fixed_price (fixed mode) · `ap_peg_tiers` · `ap_min
 - **Phase 3** = protection on *incoming/matched trades*: hard never-buy-above / never-sell-below at
   execution + AI counterparty-anomaly decline. The asymmetry advisory bridges the two.
 
-## 10. Open questions (to decide before locking)
-1. **Margin band default unit** — % or KES? (Owner leaned KES → default KES, % optional.)
-2. **Outlier threshold** — how far above the top-N median = "abnormal" before holding? (e.g. >0.5% or
-   >1 KES.) Sensible default, tunable.
-3. **Top-N for the median/pack** — top 5 or top 10? (Screenshots suggest top 10.)
-4. **Launch mode** — ship **Monitor-only first** (zero money risk, immediate rank-alert value), then
-   add Floating/Fixed. **Recommended.**
-5. **Telegram cadence** — alert on every rank change, or batch (only when you drop out of target / every
-   N minutes)?
+## 10. Decisions (LOCKED)
+1. **Margin band unit** — **KES per USDT** (default), with % as an optional alternative.
+2. **Outlier threshold** — default (tunable): flag/hold when rank-1 is **> 0.5% above the top-5
+   average** on that side. Owner to fine-tune after seeing it live.
+3. **Pack baseline** — **top 5** (median/average of the top 5 used for outlier + asymmetry checks).
+4. **Launch mode** — **Monitor-only first**, then add Floating/Fixed. (Confirmed.)
+5. **Telegram alerts** — default trigger: **when you drop out of your target rank.** Made
+   **configurable** so each merchant chooses what they want (drop-out-of-target, who is currently #1,
+   when someone overtakes them, periodic price/rank summary, etc.).
 
 ## 11. Build sequencing (once approved)
 1. DB fields + admin gate + Configure → Auto-Pricing panel (defaults: Monitor / Simulation).
