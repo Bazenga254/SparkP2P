@@ -1810,15 +1810,16 @@ export default function Dashboard() {
         <aside className="dash-sidebar">
           {/* Brand — shows Binance merchant tier once an API key is connected */}
           {(() => {
-            const tierConnected = profile?.binance_api_key_saved && !profile?.binance_api_key_invalid;
-            const tier = (profile?.binance_merchant_tier || '').toLowerCase();
+            // Badge reflects the REAL Binance P2P tier detected from the public board — shown only
+            // for confirmed merchants (gold/silver/bronze). Non-merchants ('normal') / unknown: no badge.
+            const tier = (profile?.binance_p2p_tier || '').toLowerCase();
             const TIERS = {
               gold:   { label: 'Gold Merchant',   color: '#f59e0b', glow: 'rgba(245,158,11,0.18)' },
               silver: { label: 'Silver Merchant', color: '#cbd5e1', glow: 'rgba(203,213,225,0.16)' },
               bronze: { label: 'Bronze Merchant', color: '#d97757', glow: 'rgba(217,119,87,0.16)' },
             };
             const t = TIERS[tier];
-            if (tierConnected && t) {
+            if (t) {
               return (
                 <div className="dsb-brand">
                   <div style={{ width: 28, height: 28, borderRadius: 6, background: t.glow, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>

@@ -171,6 +171,7 @@ class TraderProfileResponse(BaseModel):
     binance_api_key_invalid: bool = False  # True if Binance rejects the stored key
     price_tracker_enabled: bool = False  # admin-gated live competitor price tracker
     binance_nickname: Optional[str] = None  # auto-detected Binance P2P nickname (for "your rank")
+    binance_p2p_tier: Optional[str] = None  # real detected tier (gold/silver/bronze/normal) — drives badge
     cf_filters_enabled:        bool  = False
     cf_completion_rate_min:    float = 0.0
     cf_completion_rate_window: int   = 2
@@ -331,12 +332,14 @@ async def detect_binance_name(
         ads = await get_merchant_ads(decrypt_data(trader.binance_api_key), decrypt_data(trader.binance_api_secret))
     except Exception:
         raise HTTPException(status_code=502, detail="Couldn't reach your Binance ads — open the SparkP2P desktop app so your relay is online, then try again.")
-    nick = await detect_nickname_from_ads(ads)
+    nick, p2p_tier = await detect_nickname_from_ads(ads)
     if not nick:
         raise HTTPException(status_code=404, detail="No live USDT/KES ad found to read your name from. Post an ad on Binance and try again.")
     trader.binance_nickname = nick
+    if p2p_tier:
+        trader.binance_p2p_tier = p2p_tier
     await db.commit()
-    return {"nickname": nick}
+    return {"nickname": nick, "tier": p2p_tier}
 
 
 @router.post("/suspend-self")
@@ -852,6 +855,7 @@ async def get_profile(
         binance_api_key_saved=bool(trader.binance_api_key),
         price_tracker_enabled=bool(getattr(trader, "price_tracker_enabled", False)),
         binance_nickname=getattr(trader, "binance_nickname", None),
+        binance_p2p_tier=getattr(trader, "binance_p2p_tier", None),
         binance_api_key_invalid=bool(trader.binance_api_key_invalid),
         cf_filters_enabled=bool(trader.cf_filters_enabled),
         cf_completion_rate_min=trader.cf_completion_rate_min or 0.0,
@@ -1388,9 +1392,11 @@ async def save_binance_api_key(
     # price-tracker "your rank" view can match them without a live relay call later.
     try:
         from app.services.price_tracker import detect_nickname_from_ads
-        nick = await detect_nickname_from_ads(ads)
+        nick, p2p_tier = await detect_nickname_from_ads(ads)
         if nick:
             trader.binance_nickname = nick
+        if p2p_tier:
+            trader.binance_p2p_tier = p2p_tier
     except Exception:
         pass
 

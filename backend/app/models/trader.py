@@ -136,6 +136,10 @@ class Trader(Base):
     # "your rank" view). Cached because it's stable and the relay isn't always online.
     binance_nickname = Column(String(64), nullable=True)
 
+    # Real Binance P2P tier detected from the public board (gold/silver/bronze, or 'normal' for a
+    # non-merchant). Drives the sidebar badge — only shown for confirmed merchants. NULL = unknown.
+    binance_p2p_tier = Column(String(10), nullable=True)
+
     # Employee permissions (JSON object, only relevant when role="employee")
     # e.g. {"disputes": true, "orders": true, "chat": true, "transactions": false, "withdrawals": false}
     permissions = Column(JSON, nullable=True)

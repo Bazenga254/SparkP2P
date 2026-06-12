@@ -21,6 +21,7 @@ export default function PriceTracker({ enabled, binanceName }) {
   const [updatedAt, setUpdatedAt] = useState(null);
   const [query, setQuery] = useState('');
   const [tier, setTier] = useState('all');
+  const [verifiedOnly, setVerifiedOnly] = useState(false);
   const [me, setMe] = useState(() => (binanceName || localStorage.getItem('sparkp2p_pt_me') || ''));
   const [detecting, setDetecting] = useState(false);
   const [detectMsg, setDetectMsg] = useState('');
@@ -66,6 +67,7 @@ export default function PriceTracker({ enabled, binanceName }) {
   const q = query.trim().toLowerCase();
   const pick = rows => {
     let list = rows || [];
+    if (verifiedOnly) list = list.filter(r => r.tier !== 'normal');
     if (tier !== 'all') list = list.filter(r => r.tier === tier);
     if (q) list = list.filter(r => (r.nick || '').toLowerCase().includes(q));
     else list = list.slice(0, 20);
@@ -145,7 +147,7 @@ export default function PriceTracker({ enabled, binanceName }) {
         <>
           <div className="pt-controls">
             <div className="pt-filters">
-              {TIERS.map(t => (
+              {TIERS.filter(t => !(verifiedOnly && t.key === 'normal')).map(t => (
                 <button
                   key={t.key}
                   className={`pt-filter${tier === t.key ? ' pt-active' : ''}`}
@@ -156,6 +158,13 @@ export default function PriceTracker({ enabled, binanceName }) {
                   {t.label}
                 </button>
               ))}
+              <button
+                className={`pt-filter${verifiedOnly ? ' pt-active' : ''}`}
+                title="Show only verified merchants (Gold/Silver/Bronze), hiding non-merchants"
+                onClick={() => { const v = !verifiedOnly; setVerifiedOnly(v); if (v && tier === 'normal') setTier('all'); }}
+              >
+                {verifiedOnly ? '✓ ' : ''}Verified only
+              </button>
             </div>
             <div className="pt-searchbar">
               <Search size={15} className="pt-search-ic" />
