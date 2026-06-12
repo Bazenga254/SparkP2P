@@ -34,11 +34,11 @@ export default function PriceTracker({ enabled }) {
 
   const fmt = n => Number(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 2 });
 
-  const Column = ({ side, title, hint, rows }) => (
+  const Column = ({ side, title, clarify, hint, rows }) => (
     <div className={`pt-col pt-${side}`}>
       <div className="pt-col-head">
         <div className="pt-dot" />
-        <h2>{title}</h2>
+        <h2>{title} <span className="pt-tag">{clarify}</span></h2>
         <span className="pt-sort">{hint}</span>
       </div>
       <div className="pt-list">
@@ -87,8 +87,8 @@ export default function PriceTracker({ enabled }) {
       ) : (
         <>
           <div className="pt-columns">
-            <Column side="sell" title="Sell USDT" hint="highest first — best to sell to" rows={board.sell} />
-            <Column side="buy" title="Buy USDT" hint="cheapest first — best to buy from" rows={board.buy} />
+            <Column side="buy" title="Buy USDT" clarify={'“merchant is selling”'} hint="cheapest first — best to buy from" rows={board.buy} />
+            <Column side="sell" title="Sell USDT" clarify={'“merchant is buying”'} hint="highest first — best to sell to" rows={board.sell} />
           </div>
           <div className="pt-footnote">Rank #1 is the most competitive merchant on each side. Prices update automatically every 30s.</div>
         </>
@@ -123,15 +123,16 @@ const PT_CSS = `
 .pt-row:hover { background:var(--pt-hover); border-color:rgba(255,255,255,0.15); }
 .pt-rank { width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.06); color:var(--pt-faint); font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .pt-row.pt-best .pt-rank { background:rgba(245,166,35,0.15); color:var(--pt-top); }
+.pt-tag { font-size:11px; font-style:italic; font-weight:400; color:var(--pt-faint); margin-left:6px; }
 .pt-info { flex:1; min-width:0; }
-.pt-name { font-size:13px; font-weight:600; margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--pt-text); }
-.pt-submeta { font-size:11px; color:var(--pt-faint); display:flex; gap:8px; flex-wrap:wrap; }
+.pt-name { font-size:14.5px; font-weight:600; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--pt-text); }
+.pt-submeta { font-size:13px; color:var(--pt-dim); display:flex; gap:10px; flex-wrap:wrap; font-weight:500; }
 .pt-submeta .pt-done { color:var(--pt-dim); }
 .pt-submeta .pt-good { color:var(--pt-sell); }
 .pt-right { text-align:right; flex-shrink:0; }
-.pt-price { font-size:15px; font-weight:700; }
+.pt-price { font-size:18px; font-weight:700; }
 .pt-sell .pt-price { color:var(--pt-sell); } .pt-buy .pt-price { color:var(--pt-buy); }
-.pt-avail { font-size:10px; color:var(--pt-faint); margin-top:2px; }
+.pt-avail { font-size:13px; color:var(--pt-dim); margin-top:3px; font-weight:500; }
 .pt-footnote { font-size:11px; color:var(--pt-faint); margin-top:1.25rem; text-align:center; }
 .pt-state { padding:24px 0; text-align:center; color:var(--pt-faint); font-size:13px; }
 .pt-err { color:#ff6b6b; }
