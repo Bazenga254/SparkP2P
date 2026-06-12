@@ -86,24 +86,38 @@ async def _fetch(asset: str, fiat: str, trade_type: str, pages: int = 3, rows: i
 async def detect_nickname_from_ads(ads: list, asset: str = "USDT", fiat: str = "KES") -> str | None:
     """Resolve a merchant's public Binance nickname from their own ads (EP-4 output).
     Prefer a nickname carried on the ad; otherwise match the ad's advNo against the public board
-    (which carries nickName per ad). Returns None if it can't be resolved."""
-    # 1) nickname directly on the ad object, if present
-    for a in ads or []:
-        nk = a.get("nickName") or (a.get("advertiser") or {}).get("nickName")
-        if nk:
-            return nk
-    # 2) match advNo against the public board
-    advnos = {str(a.get("advNo")) for a in (ads or []) if a.get("advNo")}
+    (searched deep) which carries nickName per ad. Returns None if it can't be resolved."""
+    ads = ads or []
+    logger.warning("[nick-detect] ad count=%s; first-keys=%s", len(ads),
+                sorted(ads[0].keys())[:30] if (ads and isinstance(ads[0], dict)) else None)
+    # 1) nickname carried directly on the ad / its advertiser block, if present
+    for a in ads:
+        if not isinstance(a, dict):
+            continue
+        for key in ("nickName", "nickname", "advertiserName", "userName", "merchantName"):
+            if a.get(key):
+                logger.warning("[nick-detect] resolved via field %s", key)
+                return a.get(key)
+        adv = a.get("advertiser") or {}
+        if isinstance(adv, dict) and adv.get("nickName"):
+            return adv.get("nickName")
+    # 2) match advNo against the public board (search deep, since the merchant may rank low)
+    advnos = {str(a.get("advNo")) for a in ads if isinstance(a, dict) and a.get("advNo")}
+    logger.warning("[nick-detect] my advNos=%s", advnos)
     if not advnos:
         return None
     try:
-        board = await get_board(asset, fiat)
-    except Exception:
+        board = await get_board(asset, fiat, pages=15)
+    except Exception as e:
+        logger.warning("[nick-detect] board fetch failed: %s", e)
         return None
-    for side in (board.get("buy", []), board.get("sell", [])):
-        for r in side:
-            if str(r.get("advNo")) in advnos:
-                return r.get("nick")
+    pool = (board.get("buy", []) or []) + (board.get("sell", []) or [])
+    logger.warning("[nick-detect] board pool=%s", len(pool))
+    for r in pool:
+        if str(r.get("advNo")) in advnos:
+            logger.warning("[nick-detect] matched advNo -> %s", r.get("nick"))
+            return r.get("nick")
+    logger.warning("[nick-detect] no advNo match — ad likely ranked beyond fetched pool")
     return None
 
 
