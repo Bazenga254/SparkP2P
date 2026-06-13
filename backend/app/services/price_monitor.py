@@ -96,15 +96,12 @@ async def _check_trader(trader, board, market, notify):
     wl = [w for w in (getattr(trader, "pm_watchlist", None) or []) if w]
     if getattr(trader, "pm_alert_watchlist", True) and wl:
         wstate = st.setdefault("watch", {})
-        # (board label as shown in the app, what the tracked merchant is doing on it, rows)
-        board_sides = [
-            ("Buy-USDT", "sell", board.get("buy", [])),    # this board lists merchants SELLING USDT
-            ("Sell-USDT", "buy", board.get("sell", [])),   # this board lists merchants BUYING USDT
-        ]
+        # Board labels as shown on the Price Tracker page.
+        board_sides = [("Buy-USDT", board.get("buy", [])), ("Sell-USDT", board.get("sell", []))]
         for nick in wl:
             ws = wstate.setdefault(nick.strip().lower(), {})
             seen = ws.get("_seen", False)
-            for bname, adtype, rows in board_sides:
+            for bname, rows in board_sides:
                 pos = _position(rows, nick, "all")
                 now = pos["rank"] if pos else None
                 prev = ws.get(bname)
@@ -112,14 +109,14 @@ async def _check_trader(trader, board, market, notify):
                     pass  # first observation — record silently, no alert burst
                 elif prev is None and now is not None:
                     # They had no ad on this side before and just posted one.
-                    tag = " — straight to #1 🏁" if now == 1 else ""
-                    msgs.append(f"🆕 {nick} just posted a {adtype} ad ({bname}) — now #{now} at KES {pos['price']}{tag}.")
+                    tag = " — top of the board 🏁" if now == 1 else ""
+                    msgs.append(f"🆕 {nick} posted a new ad ({bname}) at position #{now} — price KES {pos['price']}{tag}.")
                 elif prev is not None and now is None:
-                    msgs.append(f"👋 {nick} pulled their {adtype} ad ({bname}).")
+                    msgs.append(f"👋 {nick} removed their {bname} ad.")
                 elif prev is not None and now is not None and now != prev:
                     arrow = "📈" if now < prev else "📉"
-                    tag = " — now #1 🏁" if now == 1 else ""
-                    msgs.append(f"{arrow} {nick}: #{prev} → #{now} on {bname} (KES {pos['price']}){tag}.")
+                    tag = " — now top of the board 🏁" if now == 1 else ""
+                    msgs.append(f"{arrow} {nick} was position #{prev}, now #{now} ({bname} ad) — price KES {pos['price']}{tag}.")
                 ws[bname] = now
             ws["_seen"] = True
 
