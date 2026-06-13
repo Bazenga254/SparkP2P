@@ -776,6 +776,14 @@ async def track_trader(db, trader) -> int:
                     _base_flags.append(f"Slow to pay — averages {_pay_min:.1f} min to pay (your max is {_maxpay} min)")
                 if _maxrel > 0 and _rel_min and _rel_min > _maxrel:
                     _base_flags.append(f"Slow to release — averages {_rel_min:.1f} min to release (your max is {_maxrel} min)")
+                # Squad self-deal guard — never trade with a squadmate (wash-trading risk).
+                try:
+                    from app.services.squad_guard import squadmate_nicks
+                    _mates = await squadmate_nicks(db, trader.id)
+                    if _mates and (_full_nick or "").strip().lower() in _mates:
+                        _base_flags.append(f"🚫 WASH-TRADING RISK — {_full_nick} is your squadmate. Do NOT trade with squad members.")
+                except Exception:
+                    pass
 
                 # Context for rendering — shared by the initial send AND the background edit
                 _ctx = {

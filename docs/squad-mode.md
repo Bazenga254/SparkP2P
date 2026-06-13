@@ -104,3 +104,27 @@ The "Track a merchant" search evolves into a **Squad** panel (in the Price Track
   worth a policy review before live.
 - Relay flakiness directly degrades the block (offline member = a gap an outsider can fill).
 - Rate limits on `ads/update` under heavy reactive churn — throttle conservatively.
+
+## 11. Compliance guardrails (post-ToS review)
+Mapped to Binance's common suspension reasons; the bot is **maker-only** (it manages your own ads via
+the official merchant API — it never takes other ads), which removes most of the surface.
+
+- **Per-member relay/IP (built).** Every signed call routes through that member's own desktop relay
+  on their own IP — never the VPS or a shared IP, so it never looks like "login from unusual location."
+  *Optional hardening:* each member IP-whitelists their API key on Binance.
+- **Mutual squadmate self-deal guard (built — Phase B).** `squad_guard.squadmate_nicks()` resolves a
+  trader's squadmates' nicknames; the sell-order screening now raises a hard **"WASH-TRADING RISK —
+  counterparty is your squadmate"** flag so a self-deal can't be approved. *Recommended next:* extend
+  to auto-cancel any squadmate-counterparty order across all order types (touches the order pipeline —
+  do it as a careful, tested pass).
+- **Official merchant API only (built).** Price changes use `/sapi/v1/c2c/ads/update`, the sanctioned
+  merchant ad-management endpoint — not scraping/unofficial automation.
+- **Distinct-merchant requirement.** A squad must be **genuinely different KYC'd merchants**, never one
+  person's multiple accounts (multi-accounting = suspension). Invite+accept enforces separate accounts;
+  add an explicit attestation at squad creation. Never market this as "run your own N accounts."
+- **Conservative cadence + jitter (built).** Randomized inter-slot gaps + per-ad push throttle
+  (MIN_PUSH_GAP) + step cap avoid a mechanical signature and stay within merchant API rate limits.
+  *Optional:* also randomize push timing, not just gaps.
+- **Kill switch + audit (built).** `SQUAD_DISABLED=1` halts all live pushing; every push is logged.
+- **Recommendation:** confirm coordinated multi-merchant pricing is acceptable with your Binance P2P
+  merchant account manager / merchant support before relying on Live. Simulation carries none of this risk.
