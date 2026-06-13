@@ -378,9 +378,30 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
         <div className="pt-state">Loading live prices…</div>
       ) : (
         <>
+          {/* Master verified-merchant toggle — gates the whole page (cockpit + lists) */}
+          <div className="pt-vtoggle">
+            <button
+              className={`pt-switch${verifiedOnly ? ' on' : ''}`}
+              role="switch"
+              aria-checked={verifiedOnly}
+              onClick={() => { const v = !verifiedOnly; setVerifiedOnly(v); if (v && tier === 'normal') setTier('all'); }}
+            >
+              <span className="pt-switch-knob" />
+            </button>
+            <div className="pt-vtoggle-text">
+              <div className="pt-vtoggle-label">Verified Merchant Ads only</div>
+              <div className="pt-vtoggle-sub">
+                {verifiedOnly
+                  ? 'Every metric, graph and list below counts verified merchants only (Gold · Silver · Bronze).'
+                  : 'Counting all advertisers — verified merchants and non-merchants ("Normal").'}
+              </div>
+            </div>
+          </div>
+
           {/* ── Analytical cockpit ── */}
           {(() => {
-            const buy = cleanSide(board.buy), sell = cleanSide(board.sell);   // outliers removed
+            const vf = rows => verifiedOnly ? (rows || []).filter(r => r.tier !== 'normal') : (rows || []);
+            const buy = cleanSide(vf(board.buy)), sell = cleanSide(vf(board.sell));   // verified filter + outliers removed
             const ask = buy[0]?.price || 0;          // cheapest legit USDT to buy
             const bid = sell[0]?.price || 0;         // highest legit bid to sell to
             const askMed = medOf(buy.slice(0, 10).map(r => r.price));
@@ -438,13 +459,6 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                   {t.label}
                 </button>
               ))}
-              <button
-                className={`pt-filter${verifiedOnly ? ' pt-active' : ''}`}
-                title="Show only verified merchants (Gold/Silver/Bronze), hiding non-merchants"
-                onClick={() => { const v = !verifiedOnly; setVerifiedOnly(v); if (v && tier === 'normal') setTier('all'); }}
-              >
-                {verifiedOnly ? '✓ ' : ''}Verified only
-              </button>
             </div>
             <div className="pt-searchbar">
               <Search size={15} className="pt-search-ic" />
@@ -690,6 +704,15 @@ const PT_CSS = `
 .pt-refresh { background:transparent; border:1px solid var(--pt-border); color:var(--pt-dim); padding:.45rem .9rem; border-radius:6px; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; transition:background .15s; }
 .pt-refresh:hover { background:var(--pt-hover); }
 .pt-refresh:disabled { opacity:.6; cursor:default; }
+/* ── Master verified toggle ── */
+.pt-vtoggle { display:flex; align-items:center; gap:13px; margin-bottom:1.25rem; padding:.8rem 1rem; background:linear-gradient(180deg,rgba(245,166,35,0.07),rgba(245,166,35,0.02)); border:1px solid rgba(245,166,35,0.25); border-radius:10px; }
+.pt-switch { position:relative; width:44px; height:24px; border-radius:13px; background:rgba(255,255,255,0.16); cursor:pointer; transition:background .18s; flex-shrink:0; border:none; padding:0; }
+.pt-switch.on { background:#f5a623; }
+.pt-switch-knob { position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:#fff; transition:transform .18s; box-shadow:0 1px 2px rgba(0,0,0,0.3); }
+.pt-switch.on .pt-switch-knob { transform:translateX(20px); }
+.pt-vtoggle-text { min-width:0; }
+.pt-vtoggle-label { font-size:13.5px; font-weight:700; color:var(--pt-text); }
+.pt-vtoggle-sub { font-size:11.5px; color:var(--pt-faint); margin-top:2px; }
 /* ── Analytical cockpit ── */
 .pt-cockpit { margin-bottom:1.5rem; }
 .pt-kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin-bottom:1rem; }
