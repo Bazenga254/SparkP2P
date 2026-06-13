@@ -179,6 +179,8 @@ class TraderProfileResponse(BaseModel):
     pm_alert_top1: bool = False
     pm_alert_overtaken: bool = False
     pm_alert_summary: bool = False
+    pm_alert_reached: bool = False
+    pm_alert_anomaly: bool = False
     pm_autoprice: str = "off"
     pm_margin_min: float = 0.0
     pm_margin_max: float = 0.0
@@ -337,6 +339,8 @@ class PriceMonitorSettings(BaseModel):
     alert_top1: bool = False
     alert_overtaken: bool = False
     alert_summary: bool = False
+    alert_reached: bool = False
+    alert_anomaly: bool = False
     autoprice: str = "off"      # 'off' | 'sim' | 'live'
     margin_min: float = 0.0     # KES per USDT
     margin_max: float = 0.0     # KES per USDT
@@ -358,12 +362,26 @@ async def save_price_monitor_settings(
     trader.pm_alert_top1 = bool(data.alert_top1)
     trader.pm_alert_overtaken = bool(data.alert_overtaken)
     trader.pm_alert_summary = bool(data.alert_summary)
+    trader.pm_alert_reached = bool(data.alert_reached)
+    trader.pm_alert_anomaly = bool(data.alert_anomaly)
     trader.pm_autoprice = data.autoprice if data.autoprice in ("off", "sim", "live") else "off"
     trader.pm_margin_min = max(0.0, float(data.margin_min or 0))
     trader.pm_margin_max = max(0.0, float(data.margin_max or 0))
     trader.pm_autoprice_error = None   # clear any prior failure so the bot retries with new settings
     await db.commit()
     return {"status": "saved"}
+
+
+@router.post("/price-monitor/test")
+async def test_price_monitor_alert(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Send a test Telegram message so the merchant can confirm alerts reach their phone."""
+    from app.api.routes.telegram import notify_trader
+    sent = await notify_trader(trader, "✅ SparkP2P test alert — your Telegram price-tracker notifications are working!")
+    if not sent:
+        raise HTTPException(status_code=400, detail="Couldn't send — link Telegram first in Settings → Notifications.")
+    return {"sent": True}
 
 
 @router.post("/detect-binance-name")
@@ -914,6 +932,8 @@ async def get_profile(
         pm_alert_top1=bool(getattr(trader, "pm_alert_top1", False)),
         pm_alert_overtaken=bool(getattr(trader, "pm_alert_overtaken", False)),
         pm_alert_summary=bool(getattr(trader, "pm_alert_summary", False)),
+        pm_alert_reached=bool(getattr(trader, "pm_alert_reached", False)),
+        pm_alert_anomaly=bool(getattr(trader, "pm_alert_anomaly", False)),
         pm_autoprice=getattr(trader, "pm_autoprice", "off") or "off",
         pm_margin_min=float(getattr(trader, "pm_margin_min", 0.0) or 0.0),
         pm_margin_max=float(getattr(trader, "pm_margin_max", 0.0) or 0.0),

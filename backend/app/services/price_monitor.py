@@ -24,6 +24,25 @@ NOTIFY_THROTTLE = 600         # min seconds between event notifications per trad
 _state: dict[int, dict] = {}
 
 
+def _median(vals: list) -> float:
+    s = sorted(v for v in vals if v and v > 0)
+    n = len(s)
+    return (s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2) if n else 0.0
+
+
+def _spike(rows: list):
+    """Detect an abnormal #1 price (>1.5% from the top-10 median). Returns (nick, price, median) or None."""
+    if len(rows or []) < 3:
+        return None
+    med = _median([r.get("price") for r in rows[:10]])
+    if not med:
+        return None
+    top = rows[0].get("price") or 0
+    if abs(top - med) / med > 0.015:
+        return (rows[0].get("nick"), top, round(med, 2))
+    return None
+
+
 def _position(rows: list, nick: str, scope: str) -> dict | None:
     """Find the merchant in one board side and compute rank (overall or within their tier)."""
     nl = (nick or "").strip().lower()
@@ -40,7 +59,7 @@ def _position(rows: list, nick: str, scope: str) -> dict | None:
     return {"rank": rank, "price": m.get("price"), "tier": m.get("tier")}
 
 
-async def _check_trader(trader, board, notify):
+async def _check_trader(trader, board, market, notify):
     st = _state.setdefault(trader.id, {})
     target = int(trader.pm_target_rank or 1)
     scope = trader.pm_scope or "all"
@@ -60,6 +79,10 @@ async def _check_trader(trader, board, notify):
             if prev_rank <= target and pos["rank"] > target:
                 msgs.append(f"⚠️ Your {label} ad slipped to #{pos['rank']} on {scope_txt} (target: top {target}).")
 
+        if trader.pm_alert_reached and prev_rank is not None:
+            if prev_rank > target and pos["rank"] <= target:
+                msgs.append(f"✅ In target — your {label} ad is now #{pos['rank']} on {scope_txt} (target: top {target}).")
+
         if trader.pm_alert_overtaken and prev_rank is not None and pos["rank"] > prev_rank:
             msgs.append(f"↧ Overtaken — your {label} ad moved from #{prev_rank} to #{pos['rank']} on {scope_txt}.")
 
@@ -68,6 +91,21 @@ async def _check_trader(trader, board, notify):
             msgs.append(f"🏁 New #1 on {label}: {top1} at KES {rows[0].get('price')}.")
 
         st[label] = {"rank": pos["rank"], "top1": top1}
+
+    # Aggressive-market advisory (edge-triggered): spread squeeze or an abnormal price spike.
+    if getattr(trader, "pm_alert_anomaly", False):
+        mmin = float(trader.pm_margin_min or 0)
+        spread = market.get("spread")
+        cond_spread = spread is not None and mmin > 0 and spread < mmin
+        spike = market.get("spike_sell") or market.get("spike_buy")
+        cond = bool(cond_spread or spike)
+        if cond and not st.get("anomaly", False):
+            if cond_spread:
+                msgs.append(f"⚠️ Aggressive market — the round-trip spread is only KES {spread} (below your {mmin} min margin). Chasing rank now would eat your profit; hold your price.")
+            else:
+                nk, pr, med = spike
+                msgs.append(f"⚠️ Abnormal pricing — {nk} is pricing at KES {pr} vs the pack ~{med}. Likely a spike/manipulation — don't chase it.")
+        st["anomaly"] = cond
 
     # Periodic summary (independent of throttle)
     if trader.pm_alert_summary and time.time() - st.get("summary_at", 0) > SUMMARY_EVERY:
@@ -108,6 +146,17 @@ async def _run_once():
         logger.warning("[PriceMonitor] board fetch failed: %s", e)
         return
 
+    # Market state for the aggressive-market advisory.
+    buy, sell = board.get("buy", []), board.get("sell", [])
+    cost = _median([r["price"] for r in buy[:5]])
+    revenue = _median([r["price"] for r in sell[:5]])
+    spread = round(revenue - cost, 2) if (revenue and cost) else None
+    market = {
+        "spread": spread,
+        "spike_sell": _spike(sell),   # abnormally high bid
+        "spike_buy": _spike(buy),     # abnormally low ask
+    }
+
     async def notify(trader, msg):
         try:
             await notify_trader(trader, msg)
@@ -116,7 +165,7 @@ async def _run_once():
 
     for t in traders:
         try:
-            await _check_trader(t, board, notify)
+            await _check_trader(t, board, market, notify)
         except Exception as e:
             logger.warning("[PriceMonitor] check failed for trader %s: %s", t.id, e)
 

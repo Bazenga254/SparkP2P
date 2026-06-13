@@ -148,6 +148,8 @@ class Trader(Base):
     pm_alert_top1 = Column(Boolean, default=False, server_default="false")
     pm_alert_overtaken = Column(Boolean, default=False, server_default="false")
     pm_alert_summary = Column(Boolean, default=False, server_default="false")
+    pm_alert_reached = Column(Boolean, default=False, server_default="false")   # reached/regained target rank
+    pm_alert_anomaly = Column(Boolean, default=False, server_default="false")   # aggressive-market advisory
 
     # Auto-pricing (Phase 2 — the bot adjusts price to hold target rank within a KES margin band).
     pm_autoprice = Column(String(10), default="off")          # 'off' | 'sim' (preview) | 'live'

@@ -51,6 +51,8 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
     top1: !!profile?.pm_alert_top1,
     overtaken: !!profile?.pm_alert_overtaken,
     summary: !!profile?.pm_alert_summary,
+    reached: !!profile?.pm_alert_reached,
+    anomaly: !!profile?.pm_alert_anomaly,
     autoprice: profile?.pm_autoprice || 'off',
     marginMin: profile?.pm_margin_min || '',
     marginMax: profile?.pm_margin_max || '',
@@ -64,11 +66,20 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
       await api.put('/traders/price-monitor/settings', {
         enabled: pm.enabled, target_rank: Number(pm.target), scope: pm.scope,
         alert_drop: pm.drop, alert_top1: pm.top1, alert_overtaken: pm.overtaken, alert_summary: pm.summary,
+        alert_reached: pm.reached, alert_anomaly: pm.anomaly,
         autoprice: pm.autoprice, margin_min: parseFloat(pm.marginMin) || 0, margin_max: parseFloat(pm.marginMax) || 0,
       });
       setPmMsg('Saved ✓');
     } catch (e) { setPmMsg(e.response?.data?.detail || 'Save failed'); }
     setPmSaving(false);
+  };
+  const [testing, setTesting] = useState(false);
+  const [testMsg, setTestMsg] = useState('');
+  const sendTest = async () => {
+    setTesting(true); setTestMsg('');
+    try { await api.post('/traders/price-monitor/test'); setTestMsg('Sent ✓ — check your Telegram'); }
+    catch (e) { setTestMsg(e.response?.data?.detail || 'Failed to send'); }
+    setTesting(false);
   };
 
   const load = async () => {
@@ -286,9 +297,17 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                   <input type="checkbox" checked={pm.enabled} onChange={e => setPm({ ...pm, enabled: e.target.checked })} />
                   Enable rank alerts via Telegram
                 </label>
-                {pm.enabled && !tgConnected && (
-                  <div className="pt-mon-warn">⚠ Connect Telegram in Settings to actually receive these alerts.</div>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '4px 0 6px' }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: tgConnected ? 'var(--pt-sell)' : '#f5a623' }}>
+                    {tgConnected ? '✓ Telegram connected' : '⚠ Telegram not connected — link it in Settings → Notifications'}
+                  </span>
+                  {tgConnected && (
+                    <button className="pt-mon-save" style={{ background: 'transparent', border: '1px solid var(--pt-border)', color: 'var(--pt-dim)', padding: '.35rem .8rem' }} onClick={sendTest} disabled={testing}>
+                      {testing ? 'Sending…' : 'Send test alert'}
+                    </button>
+                  )}
+                  {testMsg && <span style={{ fontSize: 12, color: testMsg.includes('✓') ? 'var(--pt-sell)' : '#ef6a7e' }}>{testMsg}</span>}
+                </div>
                 <div className="pt-mon-grid">
                   <div>
                     <div className="pt-mon-lbl">Target rank</div>
@@ -309,7 +328,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                   </div>
                 </div>
                 <div className="pt-mon-lbl" style={{ marginTop: 12 }}>Notify me when…</div>
-                {[['drop', 'I drop out of my target rank'], ['overtaken', 'Someone overtakes me'], ['top1', 'The #1 merchant changes'], ['summary', 'Send a periodic rank summary (every 6h)']].map(([k, lbl]) => (
+                {[['drop', 'I drop out of my target rank'], ['reached', 'I reach / regain my target rank (e.g. become #1)'], ['overtaken', 'Someone overtakes me'], ['top1', 'The #1 merchant changes'], ['anomaly', 'The market turns aggressive (price spike / spread squeeze)'], ['summary', 'Send a periodic rank summary (every 6h)']].map(([k, lbl]) => (
                   <label key={k} className="pt-mon-row">
                     <input type="checkbox" checked={pm[k]} onChange={e => setPm({ ...pm, [k]: e.target.checked })} />
                     {lbl}
