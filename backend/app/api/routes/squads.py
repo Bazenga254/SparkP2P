@@ -72,7 +72,7 @@ class CreateSquad(BaseModel):
 
 
 class InviteBody(BaseModel):
-    email: str
+    identifier: str   # phone number or email of the merchant to invite
 
 
 class RespondBody(BaseModel):
@@ -138,25 +138,46 @@ async def invite_member(body: InviteBody, trader: Trader = Depends(get_current_t
     squad = await _my_squad(db, trader.id)
     if not squad or squad.captain_trader_id != trader.id:
         raise HTTPException(403, "Only the squad captain can invite members.")
-    email = (body.email or "").strip().lower()
-    target = (await db.execute(select(Trader).where(Trader.email == email))).scalar_one_or_none()
+    ident = (body.identifier or "").strip()
+    if not ident:
+        raise HTTPException(400, "Enter the merchant's phone number or email.")
+    # Look up by email or phone (normalize a leading 0 / +254 lightly for KE numbers).
+    low = ident.lower()
+    digits = "".join(c for c in ident if c.isdigit())
+    target = (await db.execute(
+        select(Trader).where(or_(Trader.email == low, Trader.phone == ident, Trader.phone.like(f"%{digits[-9:]}")))
+    )).scalar_one_or_none() if digits or "@" in low else \
+        (await db.execute(select(Trader).where(Trader.email == low))).scalar_one_or_none()
     if not target:
-        raise HTTPException(404, "No SparkP2P account with that email.")
+        raise HTTPException(404, "No SparkP2P account with that phone or email.")
     if target.id == trader.id:
         raise HTTPException(400, "You're already the captain.")
-    # Already a member/invite of this squad?
     existing = (await db.execute(
         select(SquadMember).where(SquadMember.squad_id == squad.id, SquadMember.trader_id == target.id,
                                   SquadMember.status != "left")
     )).scalar_one_or_none()
     if existing:
         raise HTTPException(400, "That merchant is already invited or in the squad.")
-    # In another active squad?
     if await _my_squad(db, target.id):
         raise HTTPException(400, "That merchant is already in another squad.")
     db.add(SquadMember(squad_id=squad.id, trader_id=target.id, status="invited"))
     await db.commit()
-    return {"status": "invited", "name": target.full_name}
+
+    # Deliver the invite to their Telegram with tap-to-accept buttons.
+    delivered = False
+    if target.telegram_chat_id:
+        from app.api.routes.telegram import notify_trader
+        keyboard = {"inline_keyboard": [[
+            {"text": "✅ Accept", "callback_data": f"squadaccept:{squad.id}"},
+            {"text": "❌ Decline", "callback_data": f"squaddecline:{squad.id}"},
+        ]]}
+        delivered = await notify_trader(
+            target,
+            f"🤝 *{trader.full_name}* invited you to join their SparkP2P squad *{squad.name}* — "
+            f"the bot will coordinate your prices to hold the top slots and rotate #1 fairly.\n\nTap Accept to join.",
+            reply_markup=keyboard,
+        )
+    return {"status": "invited", "name": target.full_name, "telegram_delivered": delivered}
 
 
 @router.post("/respond")
@@ -204,10 +225,8 @@ async def update_settings(body: SquadSettings, trader: Trader = Depends(get_curr
     if not squad or squad.captain_trader_id != trader.id:
         raise HTTPException(403, "Only the squad captain can change settings.")
     if body.mode is not None:
-        if body.mode == "live":
-            raise HTTPException(400, "Live coordinated pricing is Phase B — not enabled yet. Use Simulate for now.")
-        squad.mode = body.mode if body.mode in ("off", "sim") else "off"
-        if squad.mode == "sim" and not squad.rotation_anchor:
+        squad.mode = body.mode if body.mode in ("off", "sim", "live") else "off"
+        if squad.mode in ("sim", "live") and not squad.rotation_anchor:
             squad.rotation_anchor = datetime.now(timezone.utc)
     if body.rotation_minutes is not None:
         squad.rotation_minutes = max(1, min(int(body.rotation_minutes), 120))

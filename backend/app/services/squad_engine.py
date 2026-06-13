@@ -114,6 +114,7 @@ def _side_plan(squad, members, rows_all, ref, is_sell, side_key, step):
         plan["members"].append({
             "trader_id": m["trader_id"], "nick": m.get("nick"), "name": m.get("name"),
             "online": m["online"],
+            "adv_no": (m["row"] or {}).get("advNo") if m["online"] else None,
             "current_rank": (m["row"] or {}).get("rank") if m["online"] else None,
             "current_price": (m["row"] or {}).get("price") if m["online"] else None,
             "available": round((m["row"] or {}).get("available", 0)) if m["online"] else None,

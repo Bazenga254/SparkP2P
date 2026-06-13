@@ -164,6 +164,13 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         data = cb.get("data", "")
         parts = data.split(":", 1)
 
+        # ── Squad invite accept / decline ──
+        if len(parts) == 2 and parts[0] in ("squadaccept", "squaddecline"):
+            chat_id = str(cb.get("message", {}).get("chat", {}).get("id", ""))
+            msg_id = cb.get("message", {}).get("message_id")
+            await _handle_squad_invite(db, chat_id, msg_id, cb_id, parts[0], parts[1])
+            return {"ok": True}
+
         if len(parts) == 2:
             action, order_number = parts
             ap = _pending_approvals.get(order_number)
@@ -200,6 +207,51 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 })
 
     return {"ok": True}
+
+
+async def _handle_squad_invite(db, chat_id, msg_id, cb_id, action, sid):
+    """Process a Squad invite Accept/Decline tapped in Telegram."""
+    from sqlalchemy import select
+    from app.models import Trader, Squad, SquadMember
+    try:
+        squad_id = int(sid)
+    except (TypeError, ValueError):
+        return
+    trader = (await db.execute(select(Trader).where(Trader.telegram_chat_id == chat_id))).scalar_one_or_none()
+    if not trader:
+        await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Link your SparkP2P account first."})
+        return
+    inv = (await db.execute(select(SquadMember).where(
+        SquadMember.squad_id == squad_id, SquadMember.trader_id == trader.id, SquadMember.status == "invited"
+    ))).scalar_one_or_none()
+    squad = (await db.execute(select(Squad).where(Squad.id == squad_id))).scalar_one_or_none()
+    if not inv or not squad:
+        await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Invite not found or already handled."})
+        return
+
+    if action == "squaddecline":
+        inv.status = "left"
+        await db.commit()
+        await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Invite declined."})
+        if msg_id:
+            await _tg_send("editMessageText", {"chat_id": chat_id, "message_id": msg_id,
+                                               "text": f"❌ You declined the invite to squad {squad.name}."})
+        return
+
+    # Accept — must not already be in another squad.
+    cap = (await db.execute(select(Squad).where(Squad.captain_trader_id == trader.id))).scalar_one_or_none()
+    mem = (await db.execute(select(SquadMember).where(
+        SquadMember.trader_id == trader.id, SquadMember.status == "active"
+    ))).scalar_one_or_none()
+    if cap or mem:
+        await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "You're already in a squad — leave it first."})
+        return
+    inv.status = "active"
+    await db.commit()
+    await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ Joined the squad!"})
+    if msg_id:
+        await _tg_send("editMessageText", {"chat_id": chat_id, "message_id": msg_id,
+                                           "text": f"✅ You joined squad {squad.name}!\nOpen SparkP2P → Price Tracker → Squad to see the live plan."})
 
 
 # ── Generate a short-lived link code for the logged-in trader ────────────────

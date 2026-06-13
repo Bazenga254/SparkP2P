@@ -63,7 +63,7 @@ export default function SquadPanel({ enabled }) {
 
   const act = async (fn) => { setBusy(true); setMsg(''); try { await fn(); await loadMe(); await loadSim(); } catch (e) { setMsg(e.response?.data?.detail || 'Action failed'); } setBusy(false); };
   const create = () => act(async () => { await api.post('/squads/create', { name: createName.trim() }); setCreateName(''); });
-  const invite = () => act(async () => { const r = await api.post('/squads/invite', { email: inviteEmail.trim() }); setInviteEmail(''); setMsg(`Invited ${r.data.name} ✓`); });
+  const invite = () => act(async () => { const r = await api.post('/squads/invite', { identifier: inviteEmail.trim() }); setInviteEmail(''); setMsg(r.data.telegram_delivered ? `Invite sent to ${r.data.name} on Telegram ✓` : `${r.data.name} invited — but they haven't linked Telegram; they can accept in their app.`); });
   const respond = (squad_id, accept) => act(async () => { await api.post('/squads/respond', { squad_id, accept }); });
   const leave = () => { if (window.confirm(data.role === 'captain' ? 'Disband this squad for everyone?' : 'Leave this squad?')) act(async () => { await api.post('/squads/leave'); setForm(null); }); };
   const saveSettings = () => act(async () => {
@@ -106,7 +106,7 @@ export default function SquadPanel({ enabled }) {
       {!squad ? (
         <div className="sq-card">
           <div className="sq-card-h">Create a squad</div>
-          <p className="sq-note">Form a team of verified merchants, invite them by email, and the bot will keep you all in the top slots — rotating #1 every few minutes and protecting your margin. <strong>Each member must be a verified Binance merchant with their API connected and their desktop app (relay) running.</strong></p>
+          <p className="sq-note">Form a team of verified merchants, invite them by phone or email (they <strong>tap Accept on Telegram</strong> to join), and the bot will keep you all in the top slots — rotating #1 every few minutes and protecting your margin. <strong>Each member must be a verified Binance merchant with their API connected and their desktop app (relay) running.</strong></p>
           <div className="sq-row">
             <input className="sq-input" placeholder="Squad name (e.g. RULU Team)" value={createName} onChange={e => setCreateName(e.target.value)} />
             <button className="sq-btn sq-primary" disabled={busy || !createName.trim()} onClick={create}>Create squad</button>
@@ -135,7 +135,7 @@ export default function SquadPanel({ enabled }) {
             </table>
             {isCap && (
               <div className="sq-row" style={{ marginTop: 12 }}>
-                <input className="sq-input" placeholder="Invite a merchant by their SparkP2P email…" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} />
+                <input className="sq-input" placeholder="Invite by phone number or email — they accept on Telegram…" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} />
                 <button className="sq-btn sq-primary" disabled={busy || !inviteEmail.trim()} onClick={invite}>Invite</button>
                 <button className="sq-btn sq-no" disabled={busy} onClick={leave}>Disband</button>
               </div>
@@ -153,6 +153,7 @@ export default function SquadPanel({ enabled }) {
                   <select value={form.mode} onChange={e => setForm({ ...form, mode: e.target.value })}>
                     <option value="off">Off</option>
                     <option value="sim">Simulate (preview only)</option>
+                    <option value="live">Live — change real prices</option>
                   </select>
                 </label>
                 <label>Coordinate sides
@@ -180,6 +181,11 @@ export default function SquadPanel({ enabled }) {
                   <input type="number" step="0.01" min="0.01" placeholder="0.08" value={form.max_gap} onChange={e => setForm({ ...form, max_gap: e.target.value })} />
                 </label>
               </div>
+              {form.mode === 'live' && (
+                <div className="sq-warn" style={{ marginTop: 12 }}>
+                  ⚠ <strong>Live changes real Binance ad prices</strong> for every online member, within the margin band, never below your min margin. Each member's push routes through their own relay/IP. Needs ≥2 verified members with their relay online; offline members are skipped and the block resizes. Confirm coordinated pricing is acceptable with Binance merchant support before relying on it.
+                </div>
+              )}
               <button className="sq-btn sq-primary" style={{ marginTop: 12 }} disabled={busy} onClick={saveSettings}>Save settings</button>
             </div>
           )}
@@ -187,7 +193,7 @@ export default function SquadPanel({ enabled }) {
           {/* Simulation plan */}
           {sim && (
             <div className="sq-card">
-              <div className="sq-card-h">Live plan {sim.mode === 'sim' ? '(simulating)' : '(preview — set mode to Simulate)'}</div>
+              <div className="sq-card-h">Live plan {sim.mode === 'live' ? '(LIVE — changing real prices)' : sim.mode === 'sim' ? '(simulating)' : '(preview — set mode to Simulate or Live)'}</div>
               {sim.missing_nicks?.length > 0 && (
                 <div className="sq-warn">⚠ Binance name not detected for: {sim.missing_nicks.join(', ')}. They can't be positioned until they detect their name on the Price Tracker.</div>
               )}
@@ -220,7 +226,9 @@ export default function SquadPanel({ enabled }) {
                   </table>
                 </div>
               ))}
-              <div className="sq-foot">Simulation only — no prices are changed. Members with no live ad are skipped and the block resizes to whoever is online. Live coordinated pricing arrives in Phase B.</div>
+              <div className="sq-foot">{sim.mode === 'live'
+                ? 'LIVE — real prices are being adjusted within your margin band (never below min). Each push routes through that member\'s own relay/IP; offline members are skipped and the block resizes.'
+                : 'Preview only — no prices are changed. Members with no live ad are skipped and the block resizes to whoever is online.'}</div>
             </div>
           )}
         </>

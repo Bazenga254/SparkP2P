@@ -407,6 +407,9 @@ async def lifespan(app: FastAPI):
     # Market flow — 24h estimated trading volume from order-book depletion (every 1 min).
     from app.services import market_flow
     market_flow_task = asyncio.create_task(market_flow.start())
+    # Squad Mode — live coordinated team pricing (relay-gated, every 90s).
+    from app.services import squad_pricing
+    squad_pricing_task = asyncio.create_task(squad_pricing.start())
     yield
     # Shutdown
     order_poller.stop()
@@ -421,6 +424,7 @@ async def lifespan(app: FastAPI):
     autoprice_task.cancel()
     market_history_task.cancel()
     market_flow_task.cancel()
+    squad_pricing_task.cancel()
 
 
 app = FastAPI(
