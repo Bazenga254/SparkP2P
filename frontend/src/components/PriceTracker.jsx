@@ -14,6 +14,61 @@ const TIERS = [
   { key: 'normal', label: 'Normal' },
 ];
 
+// ── analytical helpers (module-level so identity is stable) ──
+const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
+const medOf = arr => {
+  const s = [...arr].filter(x => x > 0).sort((a, b) => a - b);
+  const n = s.length;
+  return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0;
+};
+
+// Tiny inline sparkline.
+function Spark({ data, color = '#4a9eff', w = 96, h = 22 }) {
+  const vals = (data || []).filter(v => v != null && !isNaN(v));
+  if (vals.length < 2) return null;
+  const min = Math.min(...vals), max = Math.max(...vals), rng = (max - min) || 1;
+  const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * w},${h - ((v - min) / rng) * (h - 4) - 2}`).join(' ');
+  return (
+    <svg width={w} height={h} className="pt-spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Auto-generated, plain-language market signals from the live board (+ history when available).
+function buildInsights({ board, ask, bid, askMed, bidMed, spread, hist, meq }) {
+  const out = [];
+  const buy = board.buy || [], sell = board.sell || [];
+  // Spread health
+  if (spread > 0) out.push({ tone: 'good', icon: '💰', text: `Maker spread KES ${spread.toFixed(2)} — a top-ranked round trip nets about ${spread.toFixed(2)} per USDT.` });
+  else out.push({ tone: 'warn', icon: '⚠️', text: `Spread is only KES ${spread.toFixed(2)} — margins are thin right now; chasing rank would eat profit.` });
+  // Spread trend (history)
+  if (hist && hist.length >= 3) {
+    const first = r2((hist[0].ask || 0) - (hist[0].bid || 0));
+    if (Math.abs(spread - first) >= 0.03) {
+      const tightening = spread < first;
+      out.push({ tone: tightening ? 'warn' : 'good', icon: tightening ? '📉' : '📈', text: `Spread ${tightening ? 'tightening' : 'widening'}: KES ${first.toFixed(2)} → ${spread.toFixed(2)} over the window.` });
+    }
+  }
+  // Aggressive entrants
+  if (buy[0] && askMed && buy[0].price < askMed - 0.08) out.push({ tone: 'warn', icon: '⚡', text: `Aggressive seller: ${buy[0].nick} at KES ${buy[0].price.toFixed(2)}, ${(askMed - buy[0].price).toFixed(2)} below the pack — undercutting on Buy-USDT.` });
+  if (sell[0] && bidMed && sell[0].price > bidMed + 0.08) out.push({ tone: 'warn', icon: '⚡', text: `Aggressive buyer: ${sell[0].nick} at KES ${sell[0].price.toFixed(2)}, ${(sell[0].price - bidMed).toFixed(2)} above the pack — bidding up Sell-USDT.` });
+  // Your gap to #1
+  if (meq) {
+    const mb = buy.find(r => (r.nick || '').toLowerCase() === meq);
+    const ms = sell.find(r => (r.nick || '').toLowerCase() === meq);
+    if (mb && mb.rank > 1) out.push({ tone: 'info', icon: '🎯', text: `Your Buy-USDT ad is #${mb.rank} — KES ${(mb.price - ask).toFixed(2)} off #1. Price ${(ask - 0.01).toFixed(2)} to take the top.` });
+    if (ms && ms.rank > 1) out.push({ tone: 'info', icon: '🎯', text: `Your Sell-USDT ad is #${ms.rank} — KES ${(bid - ms.price).toFixed(2)} off #1. Price ${(bid + 0.01).toFixed(2)} to take the top.` });
+  }
+  // Thin wall at the top of Buy-USDT
+  const avails = buy.slice(0, 10).map(r => Number(r.available) || 0);
+  if (buy[0] && avails.length > 3) {
+    const m = medOf(avails);
+    if (m && (Number(buy[0].available) || 0) < m * 0.4) out.push({ tone: 'info', icon: '🧱', text: `Thin wall at the top of Buy-USDT — only ${Math.round(buy[0].available).toLocaleString()} USDT at #1. Easy to seize #1 with size.` });
+  }
+  return out.slice(0, 5);
+}
+
 export default function PriceTracker({ enabled, binanceName, profile }) {
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -130,6 +185,16 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
+  // Market trend history (for cockpit sparklines).
+  const [hist, setHist] = useState([]);
+  useEffect(() => {
+    if (!enabled) return;
+    const f = async () => { try { const r = await api.get('/traders/price-tracker/history?hours=6'); setHist(r.data?.points || []); } catch (_) {} };
+    f();
+    const id = setInterval(f, 60000);
+    return () => clearInterval(id);
+  }, [enabled]);
+
   if (!enabled) return null;
 
   const fmt = n => Number(n || 0).toLocaleString('en-KE', { maximumFractionDigits: 2 });
@@ -177,6 +242,62 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
     const target = round2(Math.min(Math.max(peg, lo), hi));
     const margin = round2(isSell ? target - ref : ref - target);
     return { current: myRow ? myRow.price : null, target, margin };
+  };
+
+  // ── Cockpit sub-components ──
+  const Kpi = ({ label, value, sub, accent, series, signed, big, plain }) => (
+    <div className="pt-kpi">
+      <div className="pt-kpi-top">
+        <div className="pt-kpi-label">{label}</div>
+        {series && series.filter(v => v != null).length > 1 && <Spark data={series} color={accent} />}
+      </div>
+      <div className="pt-kpi-val" style={{ color: accent || '#fff' }}>
+        {plain ? Number(value).toLocaleString() : big ? fmt(value) : (signed && value > 0 ? '+' : '') + Number(value).toFixed(2)}
+      </div>
+      <div className="pt-kpi-sub">{sub}</div>
+    </div>
+  );
+
+  const Ladder = ({ rows, side, accent }) => {
+    const top = (rows || []).slice(0, 8);
+    const maxA = Math.max(1, ...top.map(r => Number(r.available) || 0));
+    return (
+      <div className="pt-lad">
+        <div className="pt-lad-h" style={{ color: accent }}>
+          {side === 'buy' ? 'Buy USDT — cheapest asks' : 'Sell USDT — highest bids'}
+        </div>
+        {top.map(r => (
+          <div key={r.advNo} className={`pt-lad-row${isMe(r.nick) ? ' me' : ''}`}>
+            <span className="pt-lad-rank">#{r.rank}</span>
+            <span className="pt-lad-name pt-nick" style={{ color: TIER_COLOR[r.tier] || '#fff' }} title="Click to copy" onClick={() => copyNick(r.nick, 'l:' + r.advNo)}>{r.nick}{isMe(r.nick) && ' ·you'}</span>
+            <span className="pt-lad-barwrap"><span className="pt-lad-bar" style={{ width: `${Math.max(5, (Number(r.available) || 0) / maxA * 100)}%`, background: accent }} /></span>
+            <span className="pt-lad-price" style={{ color: accent }}>{r.price.toFixed(2)}</span>
+          </div>
+        ))}
+        {top.length === 0 && <div className="pt-lad-empty">No live ads.</div>}
+      </div>
+    );
+  };
+
+  const Distribution = ({ rows, accent }) => {
+    const prices = (rows || []).map(r => r.price).filter(Boolean);
+    if (prices.length < 4) return null;
+    const min = Math.min(...prices), max = Math.max(...prices), bins = 8, w = (max - min) || 1;
+    const counts = Array(bins).fill(0);
+    prices.forEach(p => { counts[Math.min(bins - 1, Math.floor((p - min) / w * bins))]++; });
+    const mx = Math.max(...counts);
+    return (
+      <div className="pt-dist">
+        <div className="pt-dist-bars">
+          {counts.map((c, i) => (
+            <div key={i} className="pt-dist-col" title={`KES ${(min + w * i / bins).toFixed(2)}–${(min + w * (i + 1) / bins).toFixed(2)} · ${c} ad${c === 1 ? '' : 's'}`}>
+              <span className="pt-dist-bar" style={{ height: `${mx ? c / mx * 100 : 0}%`, background: accent }} />
+            </div>
+          ))}
+        </div>
+        <div className="pt-dist-axis"><span>{min.toFixed(2)}</span><span>price spread → where merchants cluster</span><span>{max.toFixed(2)}</span></div>
+      </div>
+    );
   };
 
   const Column = ({ side, title, clarify, hint, rows }) => (
@@ -248,6 +369,53 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
         <div className="pt-state">Loading live prices…</div>
       ) : (
         <>
+          {/* ── Analytical cockpit ── */}
+          {(() => {
+            const buy = board.buy || [], sell = board.sell || [];
+            const ask = buy[0]?.price || 0;          // cheapest USDT to buy
+            const bid = sell[0]?.price || 0;         // highest to sell USDT
+            const askMed = medOf(buy.slice(0, 10).map(r => r.price));
+            const bidMed = medOf(sell.slice(0, 10).map(r => r.price));
+            const spread = r2(ask - bid);
+            const buyLiq = buy.reduce((s, r) => s + (Number(r.available) || 0), 0);
+            const sellLiq = sell.reduce((s, r) => s + (Number(r.available) || 0), 0);
+            const merchants = new Set([...buy, ...sell].map(r => (r.nick || '').toLowerCase()).filter(Boolean)).size;
+            const moved = hist.length >= 2;
+            const spSeries = hist.map(p => r2((p.ask || 0) - (p.bid || 0)));
+            const askSeries = hist.map(p => p.ask);
+            const bidSeries = hist.map(p => p.bid);
+            const buyLiqSeries = hist.map(p => p.buy_liq);
+            const sellLiqSeries = hist.map(p => p.sell_liq);
+            const insights = buildInsights({ board, ask, bid, askMed, bidMed, spread, hist, meq });
+            return (
+              <div className="pt-cockpit">
+                <div className="pt-kpis">
+                  <Kpi label="Buy USDT from" value={ask} sub="cheapest ask" accent="var(--pt-buy)" series={askSeries} />
+                  <Kpi label="Sell USDT to" value={bid} sub="highest bid" accent="var(--pt-sell)" series={bidSeries} />
+                  <Kpi label="Maker spread" value={spread} sub="round-trip / USDT" accent={spread > 0 ? '#f5a623' : '#ef6a7e'} series={spSeries} signed />
+                  <Kpi label="Buy liquidity" value={buyLiq} sub="USDT on offer" accent="var(--pt-buy)" series={buyLiqSeries} big />
+                  <Kpi label="Sell liquidity" value={sellLiq} sub="USDT bid" accent="var(--pt-sell)" series={sellLiqSeries} big />
+                  <Kpi label="Merchants" value={merchants} sub="live on the book" plain />
+                </div>
+                {insights.length > 0 && (
+                  <div className="pt-insights">
+                    {insights.map((it, i) => (
+                      <div key={i} className={`pt-insight ${it.tone}`}><span className="pt-insight-ic">{it.icon}</span><span>{it.text}</span></div>
+                    ))}
+                  </div>
+                )}
+                <div className="pt-ladders">
+                  <div className="pt-lad-side"><Ladder rows={buy} side="buy" accent="var(--pt-buy)" /><Distribution rows={buy} accent="var(--pt-buy)" /></div>
+                  <div className="pt-lad-side"><Ladder rows={sell} side="sell" accent="var(--pt-sell)" /><Distribution rows={sell} accent="var(--pt-sell)" /></div>
+                </div>
+                <div className="pt-cockpit-note">
+                  {moved ? 'Sparklines show the last 6 hours · ' : 'Trends build up as data is recorded · '}
+                  Maker spread = best ask − best bid (what a top-ranked round trip earns/USDT).
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="pt-controls">
             <div className="pt-filters">
               {TIERS.filter(t => !(verifiedOnly && t.key === 'normal')).map(t => (
@@ -513,6 +681,41 @@ const PT_CSS = `
 .pt-refresh { background:transparent; border:1px solid var(--pt-border); color:var(--pt-dim); padding:.45rem .9rem; border-radius:6px; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; transition:background .15s; }
 .pt-refresh:hover { background:var(--pt-hover); }
 .pt-refresh:disabled { opacity:.6; cursor:default; }
+/* ── Analytical cockpit ── */
+.pt-cockpit { margin-bottom:1.5rem; }
+.pt-kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin-bottom:1rem; }
+.pt-kpi { background:linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.015)); border:1px solid var(--pt-border); border-radius:10px; padding:.7rem .8rem; min-width:0; }
+.pt-kpi-top { display:flex; align-items:center; justify-content:space-between; gap:6px; height:22px; }
+.pt-kpi-label { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--pt-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pt-kpi-val { font-size:21px; font-weight:800; margin-top:4px; line-height:1.1; letter-spacing:-.3px; }
+.pt-kpi-sub { font-size:10.5px; color:var(--pt-faint); margin-top:2px; }
+.pt-spark { display:block; opacity:.9; flex-shrink:0; }
+.pt-insights { display:flex; flex-direction:column; gap:8px; margin-bottom:1.1rem; }
+.pt-insight { display:flex; align-items:flex-start; gap:10px; font-size:13px; font-weight:500; line-height:1.45; padding:.6rem .85rem; border-radius:9px; border:1px solid var(--pt-border); background:var(--pt-card); }
+.pt-insight-ic { font-size:15px; line-height:1.3; flex-shrink:0; }
+.pt-insight.good { border-color:rgba(52,199,89,0.3); background:rgba(52,199,89,0.06); color:#d6f5df; }
+.pt-insight.warn { border-color:rgba(245,166,35,0.32); background:rgba(245,166,35,0.07); color:#f7e2bf; }
+.pt-insight.info { border-color:rgba(74,158,255,0.3); background:rgba(74,158,255,0.06); color:#cfe4ff; }
+.pt-ladders { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; }
+.pt-lad-side { background:var(--pt-card); border:1px solid var(--pt-border); border-radius:10px; padding:.85rem .95rem; }
+.pt-lad-h { font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; margin-bottom:.6rem; }
+.pt-lad-row { display:flex; align-items:center; gap:10px; padding:3.5px 0; }
+.pt-lad-row.me { background:rgba(74,158,255,0.1); border-radius:6px; margin:0 -6px; padding-left:6px; padding-right:6px; }
+.pt-lad-rank { font-size:11px; font-weight:700; color:var(--pt-faint); width:24px; flex-shrink:0; }
+.pt-lad-name { font-size:12.5px; font-weight:600; width:118px; flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pt-lad-barwrap { flex:1; height:8px; background:rgba(255,255,255,0.05); border-radius:4px; overflow:hidden; min-width:30px; }
+.pt-lad-bar { display:block; height:100%; border-radius:4px; opacity:.6; }
+.pt-lad-price { font-size:13.5px; font-weight:700; width:62px; text-align:right; flex-shrink:0; }
+.pt-lad-empty { font-size:12px; color:var(--pt-faint); padding:8px 0; }
+.pt-dist { margin-top:.85rem; padding-top:.7rem; border-top:1px dashed var(--pt-border); }
+.pt-dist-bars { display:flex; align-items:flex-end; gap:4px; height:38px; }
+.pt-dist-col { flex:1; display:flex; align-items:flex-end; justify-content:center; height:100%; }
+.pt-dist-bar { display:block; width:100%; border-radius:3px 3px 0 0; min-height:2px; opacity:.55; }
+.pt-dist-axis { display:flex; justify-content:space-between; font-size:9.5px; color:var(--pt-faint); margin-top:5px; }
+.pt-dist-axis span:nth-child(2){ font-weight:500; }
+.pt-cockpit-note { font-size:10.5px; color:var(--pt-faint); margin-top:.85rem; text-align:center; }
+@media (max-width:1100px){ .pt-kpis { grid-template-columns:repeat(3,1fr); } }
+@media (max-width:760px){ .pt-kpis { grid-template-columns:repeat(2,1fr); } .pt-ladders { grid-template-columns:1fr; } .pt-lad-name { width:90px; } }
 .pt-controls { display:flex; gap:12px; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; }
 .pt-filters { display:flex; gap:8px; flex-wrap:wrap; }
 .pt-filter { display:flex; align-items:center; gap:6px; background:var(--pt-card); border:1px solid var(--pt-border); color:var(--pt-dim); padding:.4rem .85rem; border-radius:7px; font-size:13px; font-weight:600; cursor:pointer; transition:background .15s,border-color .15s; }

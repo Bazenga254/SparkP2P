@@ -333,6 +333,18 @@ async def get_price_tracker(
         raise HTTPException(status_code=502, detail="Could not load live prices right now. Please try again.")
 
 
+@router.get("/price-tracker/history")
+async def get_price_tracker_history(
+    hours: float = 6.0,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Recent market snapshots (best ask/bid, medians, liquidity) for the cockpit trend sparklines."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    from app.services.market_history import get_history
+    return {"points": get_history(min(max(hours, 0.5), 48))}
+
+
 class PriceMonitorSettings(BaseModel):
     enabled: bool = False
     target_rank: int = 1

@@ -401,6 +401,9 @@ async def lifespan(app: FastAPI):
     # Auto-pricing (Live) — relay-gated, moves real ad prices within the margin band (every 2 min).
     from app.services import autoprice
     autoprice_task = asyncio.create_task(autoprice.start())
+    # Market history — periodic board snapshots for the Price Tracker trend sparklines (every 1 min).
+    from app.services import market_history
+    market_history_task = asyncio.create_task(market_history.start())
     yield
     # Shutdown
     order_poller.stop()
@@ -413,6 +416,7 @@ async def lifespan(app: FastAPI):
     filter_task.cancel()
     price_monitor_task.cancel()
     autoprice_task.cancel()
+    market_history_task.cancel()
 
 
 app = FastAPI(
