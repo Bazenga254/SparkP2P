@@ -85,7 +85,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
   const [updatedAt, setUpdatedAt] = useState(null);
   const [query, setQuery] = useState('');
   const [tier, setTier] = useState('all');
-  const [verifiedOnly, setVerifiedOnly] = useState(false);
+  const [verifiedOnly, setVerifiedOnly] = useState(true);  // default to verified merchants on every open
   const [copied, setCopied] = useState('');
   const copyNick = async (nick, key) => {
     try { await navigator.clipboard.writeText(nick); } catch (_) {}
