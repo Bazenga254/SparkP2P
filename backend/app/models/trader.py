@@ -151,6 +151,10 @@ class Trader(Base):
     pm_alert_reached = Column(Boolean, default=False, server_default="false")   # reached/regained target rank
     pm_alert_anomaly = Column(Boolean, default=False, server_default="false")   # aggressive-market advisory
 
+    # Competitor watchlist — track named merchants and alert when their board rank moves.
+    pm_alert_watchlist = Column(Boolean, default=True, server_default="true")
+    pm_watchlist = Column(JSON, nullable=True)   # list[str] of competitor Binance nicknames
+
     # Auto-pricing (Phase 2 — the bot adjusts price to hold target rank within a KES margin band).
     pm_autoprice = Column(String(10), default="off")          # 'off' | 'sim' (preview) | 'live'
     pm_margin_min = Column(Float, default=0.0)                # KES per USDT — hard profit floor

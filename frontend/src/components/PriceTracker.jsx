@@ -28,6 +28,27 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
     setCopied(key);
     setTimeout(() => setCopied(c => (c === key ? '' : c)), 1200);
   };
+  // ── Competitor watchlist ──
+  const [watch, setWatch] = useState(() => profile?.pm_watchlist || []);
+  const [watchBusy, setWatchBusy] = useState('');
+  const isWatched = nick => watch.some(w => w.toLowerCase() === (nick || '').trim().toLowerCase());
+  const toggleWatch = async (nick) => {
+    const name = (nick || '').trim();
+    if (!name) return;
+    const action = isWatched(name) ? 'remove' : 'add';
+    setWatchBusy(name.toLowerCase());
+    try {
+      const r = await api.post('/traders/price-monitor/watchlist', { nick: name, action });
+      setWatch(r.data.watchlist || []);
+    } catch (e) { /* ignore */ }
+    setWatchBusy('');
+  };
+  const posOf = (rows, nick) => {
+    const nl = (nick || '').trim().toLowerCase();
+    const m = (rows || []).filter(r => (r.nick || '').trim().toLowerCase() === nl).sort((a, b) => a.rank - b.rank)[0];
+    return m ? { rank: m.rank, price: m.price, tier: m.tier } : null;
+  };
+
   const [me, setMe] = useState(() => (binanceName || localStorage.getItem('sparkp2p_pt_me') || ''));
   const [detecting, setDetecting] = useState(false);
   const [detectMsg, setDetectMsg] = useState('');
@@ -59,6 +80,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
     summary: !!profile?.pm_alert_summary,
     reached: !!profile?.pm_alert_reached,
     anomaly: !!profile?.pm_alert_anomaly,
+    watchlist: profile?.pm_alert_watchlist ?? true,
     autoprice: profile?.pm_autoprice || 'off',
     marginMin: profile?.pm_margin_min || '',
     marginMax: profile?.pm_margin_max || '',
@@ -72,7 +94,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
       await api.put('/traders/price-monitor/settings', {
         enabled: pm.enabled, target_rank: Number(pm.target), scope: pm.scope,
         alert_drop: pm.drop, alert_top1: pm.top1, alert_overtaken: pm.overtaken, alert_summary: pm.summary,
-        alert_reached: pm.reached, alert_anomaly: pm.anomaly,
+        alert_reached: pm.reached, alert_anomaly: pm.anomaly, alert_watchlist: pm.watchlist,
         autoprice: pm.autoprice, margin_min: parseFloat(pm.marginMin) || 0, margin_max: parseFloat(pm.marginMax) || 0,
       });
       setPmMsg('Saved ✓');
@@ -175,6 +197,14 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
               <div className="pt-name">
                 <span className="pt-medal" style={{ background: TIER_COLOR[r.tier] }} />
                 <span className="pt-nick" style={{ color: TIER_COLOR[r.tier] || '#fff' }} title="Click to copy name" onClick={() => copyNick(r.nick, r.advNo)}>{r.nick}</span>
+                {!isMe(r.nick) && (
+                  <button
+                    className={`pt-watch-star${isWatched(r.nick) ? ' on' : ''}`}
+                    title={isWatched(r.nick) ? 'Tracking — click to stop' : 'Track this merchant for rank alerts'}
+                    disabled={watchBusy === r.nick.trim().toLowerCase()}
+                    onClick={() => toggleWatch(r.nick)}
+                  >{isWatched(r.nick) ? '★' : '☆'}</button>
+                )}
                 {copied === r.advNo && <span className="pt-copied">✓ copied</span>}
                 {isMe(r.nick) && <span className="pt-youtag">YOU</span>}
               </div>
@@ -250,6 +280,13 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
               {query && <button className="pt-search-clear" onClick={() => setQuery('')} title="Clear"><X size={14} /></button>}
             </div>
           </div>
+          {q && !isWatched(query.trim()) && (
+            <div style={{ margin: '-8px 0 14px' }}>
+              <button className="pt-track-add" onClick={() => toggleWatch(query.trim())} disabled={watchBusy === query.trim().toLowerCase()}>
+                ＋ Track “{query.trim()}” for rank alerts
+              </button>
+            </div>
+          )}
 
           {/* Your position — client-side match against the live board (no relay needed) */}
           <div className="pt-pos">
@@ -290,6 +327,38 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                 </div>
               );
             })()}
+          </div>
+
+          {/* Competitor watchlist — track multiple merchants, alert on rank moves */}
+          <div className="pt-wl">
+            <div className="pt-wl-head">
+              <span className="pt-wl-title">👁 Watchlist <span className="pt-wl-count">{watch.length}</span></span>
+              <span className="pt-wl-hint">Star any merchant below to track them — you'll get a Telegram alert when their rank moves.</span>
+            </div>
+            {watch.length === 0 ? (
+              <div className="pt-wl-empty">No merchants tracked yet. Tap the ☆ next to any merchant (or search a name and “Track”) to start watching them.</div>
+            ) : (
+              <div className="pt-wl-list">
+                {watch.map(nick => {
+                  const pb = posOf(board.buy, nick), ps = posOf(board.sell, nick);
+                  return (
+                    <div key={nick} className="pt-wl-item">
+                      <span className="pt-nick pt-wl-name" title="Click to copy" onClick={() => copyNick(nick, 'w:' + nick)}>
+                        {nick}{copied === 'w:' + nick && <span className="pt-copied"> ✓</span>}
+                      </span>
+                      <span className="pt-wl-pos">
+                        <span className="pt-wl-side" style={{ color: 'var(--pt-buy)' }}>Buy {pb ? `#${pb.rank} · ${pb.price.toFixed(2)}` : '—'}</span>
+                        <span className="pt-wl-side" style={{ color: 'var(--pt-sell)' }}>Sell {ps ? `#${ps.rank} · ${ps.price.toFixed(2)}` : '—'}</span>
+                      </span>
+                      <button className="pt-wl-rm" onClick={() => toggleWatch(nick)} disabled={watchBusy === nick.toLowerCase()} title="Stop tracking"><X size={13} /></button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {watch.length > 0 && !pm.enabled && (
+              <div className="pt-wl-warn">⚠ Turn on “Enable rank alerts” below to actually receive these watchlist notifications.</div>
+            )}
           </div>
 
           {/* Alerts & Targets (Monitor settings) */}
@@ -335,7 +404,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                   </div>
                 </div>
                 <div className="pt-mon-lbl" style={{ marginTop: 12 }}>Notify me when…</div>
-                {[['drop', 'I drop out of my target rank'], ['reached', 'I reach / regain my target rank (e.g. become #1)'], ['overtaken', 'Someone overtakes me'], ['top1', 'The #1 merchant changes'], ['anomaly', 'The market turns aggressive (price spike / spread squeeze)'], ['summary', 'Send a periodic rank summary (every 6h)']].map(([k, lbl]) => (
+                {[['drop', 'I drop out of my target rank'], ['reached', 'I reach / regain my target rank (e.g. become #1)'], ['overtaken', 'Someone overtakes me'], ['top1', 'The #1 merchant changes'], ['anomaly', 'The market turns aggressive (price spike / spread squeeze)'], ['watchlist', 'A merchant on my watchlist moves rank'], ['summary', 'Send a periodic rank summary (every 6h)']].map(([k, lbl]) => (
                   <label key={k} className="pt-mon-row">
                     <input type="checkbox" checked={pm[k]} onChange={e => setPm({ ...pm, [k]: e.target.checked })} />
                     {lbl}
@@ -518,6 +587,27 @@ const PT_CSS = `
 .pt-nick { cursor:pointer; user-select:text; }
 .pt-nick:hover { text-decoration:underline; }
 .pt-copied { font-size:10px; font-weight:700; color:var(--pt-sell); white-space:nowrap; }
+.pt-watch-star { background:none; border:none; cursor:pointer; color:var(--pt-faint); font-size:15px; line-height:1; padding:0 2px; flex-shrink:0; }
+.pt-watch-star:hover { color:var(--pt-top); }
+.pt-watch-star.on { color:var(--pt-top); }
+.pt-watch-star:disabled { opacity:.5; cursor:default; }
+.pt-track-add { background:rgba(245,166,35,0.12); border:1px solid rgba(245,166,35,0.4); color:var(--pt-top); padding:.45rem .9rem; border-radius:7px; font-size:12.5px; font-weight:600; cursor:pointer; }
+.pt-track-add:hover { background:rgba(245,166,35,0.2); }
+.pt-track-add:disabled { opacity:.6; cursor:default; }
+.pt-wl { background:rgba(245,166,35,0.05); border:1px solid rgba(245,166,35,0.22); border-radius:10px; padding:.85rem 1rem; margin-bottom:1.25rem; }
+.pt-wl-head { display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:.65rem; }
+.pt-wl-title { font-size:13.5px; font-weight:700; color:var(--pt-text); }
+.pt-wl-count { font-size:11px; background:rgba(245,166,35,0.2); color:var(--pt-top); border-radius:10px; padding:1px 8px; margin-left:5px; font-weight:700; }
+.pt-wl-hint { font-size:11.5px; color:var(--pt-faint); font-weight:500; }
+.pt-wl-empty { font-size:12.5px; color:var(--pt-faint); }
+.pt-wl-list { display:flex; flex-direction:column; gap:.5rem; }
+.pt-wl-item { display:flex; align-items:center; gap:12px; background:var(--pt-card); border:1px solid var(--pt-border); border-radius:8px; padding:.55rem .8rem; }
+.pt-wl-name { font-size:14px; font-weight:600; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#fff; }
+.pt-wl-pos { display:flex; gap:14px; font-size:12.5px; font-weight:700; white-space:nowrap; }
+.pt-wl-rm { background:none; border:none; color:var(--pt-faint); cursor:pointer; display:flex; padding:3px; flex-shrink:0; }
+.pt-wl-rm:hover { color:#ef6a7e; }
+.pt-wl-warn { font-size:11.5px; color:#f5a623; margin-top:.6rem; font-weight:600; }
+@media (max-width:760px){ .pt-wl-item { flex-wrap:wrap; gap:6px; } .pt-wl-pos { gap:10px; } }
 .pt-submeta { font-size:13px; color:var(--pt-dim); display:flex; gap:10px; flex-wrap:wrap; font-weight:500; align-items:center; }
 .pt-tier { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
 .pt-submeta .pt-done { color:var(--pt-dim); }

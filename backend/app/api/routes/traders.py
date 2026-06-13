@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import select, update as sql_update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -181,6 +181,8 @@ class TraderProfileResponse(BaseModel):
     pm_alert_summary: bool = False
     pm_alert_reached: bool = False
     pm_alert_anomaly: bool = False
+    pm_alert_watchlist: bool = True
+    pm_watchlist: List[str] = []
     pm_autoprice: str = "off"
     pm_margin_min: float = 0.0
     pm_margin_max: float = 0.0
@@ -341,6 +343,7 @@ class PriceMonitorSettings(BaseModel):
     alert_summary: bool = False
     alert_reached: bool = False
     alert_anomaly: bool = False
+    alert_watchlist: bool = True
     autoprice: str = "off"      # 'off' | 'sim' | 'live'
     margin_min: float = 0.0     # KES per USDT
     margin_max: float = 0.0     # KES per USDT
@@ -364,6 +367,7 @@ async def save_price_monitor_settings(
     trader.pm_alert_summary = bool(data.alert_summary)
     trader.pm_alert_reached = bool(data.alert_reached)
     trader.pm_alert_anomaly = bool(data.alert_anomaly)
+    trader.pm_alert_watchlist = bool(data.alert_watchlist)
     trader.pm_autoprice = data.autoprice if data.autoprice in ("off", "sim", "live") else "off"
     trader.pm_margin_min = max(0.0, float(data.margin_min or 0))
     trader.pm_margin_max = max(0.0, float(data.margin_max or 0))
@@ -382,6 +386,40 @@ async def test_price_monitor_alert(
     if not sent:
         raise HTTPException(status_code=400, detail="Couldn't send — link Telegram first in Settings → Notifications.")
     return {"sent": True}
+
+
+class WatchlistAction(BaseModel):
+    nick: str
+    action: str = "add"   # 'add' | 'remove'
+
+
+@router.post("/price-monitor/watchlist")
+async def update_watchlist(
+    data: WatchlistAction,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add/remove a competitor merchant on the trader's price-tracker watchlist (max 25)."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    nick = (data.nick or "").strip()
+    if not nick:
+        raise HTTPException(status_code=400, detail="Merchant name required.")
+    wl = [w for w in (trader.pm_watchlist or []) if w]
+    low = nick.lower()
+    if data.action == "remove":
+        wl = [w for w in wl if w.lower() != low]
+    elif any(w.lower() == low for w in wl):
+        pass  # already tracked — no-op
+    elif len(wl) >= 25:
+        raise HTTPException(status_code=400, detail="Watchlist is full (max 25 merchants).")
+    else:
+        wl.append(nick)
+    trader.pm_watchlist = wl
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(trader, "pm_watchlist")
+    await db.commit()
+    return {"watchlist": wl}
 
 
 @router.post("/detect-binance-name")
@@ -934,6 +972,8 @@ async def get_profile(
         pm_alert_summary=bool(getattr(trader, "pm_alert_summary", False)),
         pm_alert_reached=bool(getattr(trader, "pm_alert_reached", False)),
         pm_alert_anomaly=bool(getattr(trader, "pm_alert_anomaly", False)),
+        pm_alert_watchlist=bool(getattr(trader, "pm_alert_watchlist", True)),
+        pm_watchlist=list(getattr(trader, "pm_watchlist", None) or []),
         pm_autoprice=getattr(trader, "pm_autoprice", "off") or "off",
         pm_margin_min=float(getattr(trader, "pm_margin_min", 0.0) or 0.0),
         pm_margin_max=float(getattr(trader, "pm_margin_max", 0.0) or 0.0),

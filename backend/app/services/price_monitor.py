@@ -92,6 +92,32 @@ async def _check_trader(trader, board, market, notify):
 
         st[label] = {"rank": pos["rank"], "top1": top1}
 
+    # Competitor watchlist — alert when a tracked merchant's board rank moves (edge-triggered).
+    wl = [w for w in (getattr(trader, "pm_watchlist", None) or []) if w]
+    if getattr(trader, "pm_alert_watchlist", True) and wl:
+        wstate = st.setdefault("watch", {})
+        board_sides = [("Buy-USDT", board.get("buy", [])), ("Sell-USDT", board.get("sell", []))]
+        for nick in wl:
+            ws = wstate.setdefault(nick.strip().lower(), {})
+            seen = ws.get("_seen", False)
+            for bname, rows in board_sides:
+                pos = _position(rows, nick, "all")
+                now = pos["rank"] if pos else None
+                prev = ws.get(bname)
+                if not seen:
+                    pass  # first observation — record silently, no alert burst
+                elif prev is None and now is not None:
+                    tag = " — now #1 🏁" if now == 1 else ""
+                    msgs.append(f"👀 {nick} is now live on {bname} at #{now} (KES {pos['price']}){tag}.")
+                elif prev is not None and now is None:
+                    msgs.append(f"👋 {nick} dropped off the {bname} board.")
+                elif prev is not None and now is not None and now != prev:
+                    arrow = "📈" if now < prev else "📉"
+                    tag = " — now #1 🏁" if now == 1 else ""
+                    msgs.append(f"{arrow} {nick}: #{prev} → #{now} on {bname} (KES {pos['price']}){tag}.")
+                ws[bname] = now
+            ws["_seen"] = True
+
     # Aggressive-market advisory (edge-triggered): spread squeeze or an abnormal price spike.
     if getattr(trader, "pm_alert_anomaly", False):
         mmin = float(trader.pm_margin_min or 0)
@@ -130,11 +156,12 @@ async def _run_once():
     from app.api.routes.telegram import notify_trader
 
     async with async_session() as db:
+        # Own-rank alerts need a nickname; watchlist alerts don't — load anyone with alerts on.
+        # _check_trader skips own-rank checks gracefully when binance_nickname is unset.
         traders = (await db.execute(
             select(Trader).where(
                 Trader.pm_enabled.is_(True),
                 Trader.price_tracker_enabled.is_(True),
-                Trader.binance_nickname.isnot(None),
             )
         )).scalars().all()
 
