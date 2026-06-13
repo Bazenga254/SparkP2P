@@ -8,8 +8,10 @@ so it works even when the trader's desktop relay is offline.
 Alerts (edge-triggered, so no spam): drop-out-of-target, overtaken, new #1, periodic summary.
 """
 import asyncio
+import json
 import logging
 import time
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -19,9 +21,34 @@ CHECK_INTERVAL = 180          # seconds between sweeps
 SUMMARY_EVERY = 6 * 3600      # periodic summary cadence
 NOTIFY_THROTTLE = 600         # min seconds between event notifications per trader
 
-# In-memory per-trader state (resets on restart — acceptable):
-#   {trader_id: {"sell": {rank, top1}, "buy": {rank, top1}, "last_notify": ts, "summary_at": ts}}
+# Per-trader monitoring state. Persisted to disk so rank baselines + watchlist tracking
+# survive a server/app restart (otherwise alerts re-baseline silently and skip a beat):
+#   {trader_id: {"sell": {rank, top1}, "buy": {rank, top1}, "last_notify": ts,
+#                "summary_at": ts, "anomaly": bool, "watch": {nick: {...}}}}
 _state: dict[int, dict] = {}
+STATE_FILE = Path(__file__).resolve().parents[2] / "price_monitor_state.json"
+
+
+def _load_state():
+    """Restore monitoring state from disk on startup (best-effort)."""
+    global _state
+    try:
+        if STATE_FILE.exists():
+            raw = json.loads(STATE_FILE.read_text("utf-8"))
+            _state = {int(k): v for k, v in raw.items()}
+            logger.info("[PriceMonitor] restored tracking state for %d traders", len(_state))
+    except Exception as e:
+        logger.warning("[PriceMonitor] could not restore state: %s", e)
+
+
+def _save_state():
+    """Persist monitoring state to disk after each sweep (best-effort, atomic)."""
+    try:
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_state), "utf-8")
+        tmp.replace(STATE_FILE)
+    except Exception as e:
+        logger.warning("[PriceMonitor] could not save state: %s", e)
 
 
 def _median(vals: list) -> float:
@@ -198,8 +225,11 @@ async def _run_once():
         except Exception as e:
             logger.warning("[PriceMonitor] check failed for trader %s: %s", t.id, e)
 
+    _save_state()
+
 
 async def start():
+    _load_state()
     logger.info("[PriceMonitor] started — every %ss", CHECK_INTERVAL)
     while True:
         try:
