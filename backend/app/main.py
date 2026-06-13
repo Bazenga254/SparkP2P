@@ -404,6 +404,9 @@ async def lifespan(app: FastAPI):
     # Market history — periodic board snapshots for the Price Tracker trend sparklines (every 1 min).
     from app.services import market_history
     market_history_task = asyncio.create_task(market_history.start())
+    # Market flow — 24h estimated trading volume from order-book depletion (every 1 min).
+    from app.services import market_flow
+    market_flow_task = asyncio.create_task(market_flow.start())
     yield
     # Shutdown
     order_poller.stop()
@@ -417,6 +420,7 @@ async def lifespan(app: FastAPI):
     price_monitor_task.cancel()
     autoprice_task.cancel()
     market_history_task.cancel()
+    market_flow_task.cancel()
 
 
 app = FastAPI(

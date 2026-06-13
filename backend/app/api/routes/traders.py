@@ -345,6 +345,34 @@ async def get_price_tracker_history(
     return {"points": get_history(min(max(hours, 0.5), 48))}
 
 
+@router.get("/market-activity")
+async def get_market_activity(
+    trader: Trader = Depends(get_current_trader),
+):
+    """24h market-activity estimate: traded volume (order-book depletion), average maker spread,
+    liquidity now, and per-merchant flow. Volume is an ESTIMATE (balances/trades aren't public)."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    from app.services.market_flow import get_summary
+    from app.services.market_history import get_history
+    summary = get_summary()
+
+    pts = get_history(24)
+    spreads = [round((p.get("ask_med") or 0) - (p.get("bid_med") or 0), 4) for p in pts if p.get("ask_med") and p.get("bid_med")]
+    mids = [((p.get("ask_med") or 0) + (p.get("bid_med") or 0)) / 2 for p in pts if p.get("ask_med") and p.get("bid_med")]
+    avg_spread = round(sum(spreads) / len(spreads), 3) if spreads else None
+    avg_mid = (sum(mids) / len(mids)) if mids else 0
+    spread_pct = round(avg_spread / avg_mid * 100, 3) if (avg_spread and avg_mid) else None
+    last = pts[-1] if pts else {}
+    summary["avg_spread"] = avg_spread
+    summary["spread_pct"] = spread_pct
+    summary["min_spread"] = round(min(spreads), 3) if spreads else None
+    summary["max_spread"] = round(max(spreads), 3) if spreads else None
+    summary["buy_liq_now"] = last.get("buy_liq")
+    summary["sell_liq_now"] = last.get("sell_liq")
+    return summary
+
+
 class PriceMonitorSettings(BaseModel):
     enabled: bool = False
     target_rank: int = 1

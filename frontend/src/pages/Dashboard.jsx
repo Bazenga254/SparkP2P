@@ -7,6 +7,7 @@ import SettingsPanel from '../components/SettingsPanel';
 import { kycCreateSession } from '../services/api';
 import SupportChat from '../components/SupportChat';
 import PriceTracker from '../components/PriceTracker';
+import MarketActivity from '../components/MarketActivity';
 
 // Choice Bank outbound transaction fees (KES) — mirror backend app/services/outbound_fees.py.
 // Choice Bank withholds these on its side (debits amount + fee); shown here so the trader sees it.
@@ -1853,6 +1854,7 @@ export default function Dashboard() {
             { key: 'transactions',  icon: ArrowRightLeft,  label: 'Transactions'  },
             { key: 'profit',        icon: BarChart2,       label: 'Profit'        },
             ...(profile?.price_tracker_enabled ? [{ key: 'pricetracker', icon: TrendingUp, label: 'Price Tracker' }] : []),
+            ...(profile?.price_tracker_enabled ? [{ key: 'marketactivity', icon: Activity, label: 'Market Activity' }] : []),
             { key: 'logs',          icon: Activity,        label: 'Logs'          },
           ].map(({ key, icon: Icon, label }) => (
             <button key={key}
@@ -2439,6 +2441,12 @@ export default function Dashboard() {
           profile?.price_tracker_enabled
             ? <PriceTracker enabled={true} binanceName={profile?.binance_nickname} profile={profile} />
             : <div className="card"><p style={{ color: '#9ca3af', padding: '14px 0', margin: 0 }}>Price Tracker is not enabled for your account.</p></div>
+        )}
+
+        {activeTab === 'marketactivity' && (
+          profile?.price_tracker_enabled
+            ? <MarketActivity enabled={true} />
+            : <div className="card"><p style={{ color: '#9ca3af', padding: '14px 0', margin: 0 }}>Market Activity is not enabled for your account.</p></div>
         )}
 
         {/* ── Transactions Tab ── */}
