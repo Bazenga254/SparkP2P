@@ -21,6 +21,15 @@ const medOf = arr => {
   const n = s.length;
   return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0;
 };
+// Drop spoof/outlier ads (prices >3% off the top-15 median) so KPIs/ladder aren't skewed.
+const OUT_PCT = 0.03;
+const cleanSide = rows => {
+  const arr = (rows || []).filter(r => r && r.price > 0);
+  const m = medOf(arr.slice(0, 15).map(r => r.price));
+  if (!m) return arr;
+  const f = arr.filter(r => Math.abs(r.price - m) / m <= OUT_PCT);
+  return f.length ? f : arr;
+};
 
 // Tiny inline sparkline.
 function Spark({ data, color = '#4a9eff', w = 96, h = 22 }) {
@@ -371,9 +380,9 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
         <>
           {/* ── Analytical cockpit ── */}
           {(() => {
-            const buy = board.buy || [], sell = board.sell || [];
-            const ask = buy[0]?.price || 0;          // cheapest USDT to buy
-            const bid = sell[0]?.price || 0;         // highest to sell USDT
+            const buy = cleanSide(board.buy), sell = cleanSide(board.sell);   // outliers removed
+            const ask = buy[0]?.price || 0;          // cheapest legit USDT to buy
+            const bid = sell[0]?.price || 0;         // highest legit bid to sell to
             const askMed = medOf(buy.slice(0, 10).map(r => r.price));
             const bidMed = medOf(sell.slice(0, 10).map(r => r.price));
             const spread = r2(ask - bid);
@@ -386,7 +395,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
             const bidSeries = hist.map(p => p.bid);
             const buyLiqSeries = hist.map(p => p.buy_liq);
             const sellLiqSeries = hist.map(p => p.sell_liq);
-            const insights = buildInsights({ board, ask, bid, askMed, bidMed, spread, hist, meq });
+            const insights = buildInsights({ board: { buy, sell }, ask, bid, askMed, bidMed, spread, hist, meq });
             return (
               <div className="pt-cockpit">
                 <div className="pt-kpis">

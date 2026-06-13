@@ -20,10 +20,23 @@ HIST_FILE = Path(__file__).resolve().parents[2] / "market_history.json"
 _hist: list[dict] = []
 
 
+OUT_PCT = 0.03   # drop spoof/outlier ads >3% off the top-15 median
+
+
 def _median(vals) -> float:
     s = sorted(v for v in vals if v and v > 0)
     n = len(s)
     return (s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2) if n else 0.0
+
+
+def _clean(rows: list) -> list:
+    """Rows with spoof/outlier prices removed (so best ask/bid + liquidity are trustworthy)."""
+    arr = [r for r in (rows or []) if (r.get("price") or 0) > 0]
+    m = _median([r["price"] for r in arr[:15]])
+    if not m:
+        return arr
+    f = [r for r in arr if abs(r["price"] - m) / m <= OUT_PCT]
+    return f or arr
 
 
 def _load():
@@ -54,13 +67,13 @@ def get_history(hours: float = 6.0) -> list[dict]:
 async def _snap_once():
     from app.services.price_tracker import get_board
     board = await get_board("USDT", "KES")
-    buy, sell = board.get("buy", []), board.get("sell", [])
+    buy, sell = _clean(board.get("buy", [])), _clean(board.get("sell", []))
     if not buy and not sell:
         return
     point = {
         "ts": round(time.time()),
-        "ask": round(buy[0]["price"], 2) if buy else None,       # cheapest USDT to buy
-        "bid": round(sell[0]["price"], 2) if sell else None,     # highest to sell USDT
+        "ask": round(buy[0]["price"], 2) if buy else None,       # cheapest legit USDT to buy
+        "bid": round(sell[0]["price"], 2) if sell else None,     # highest legit bid to sell to
         "ask_med": round(_median([r["price"] for r in buy[:10]]), 2),
         "bid_med": round(_median([r["price"] for r in sell[:10]]), 2),
         "buy_liq": round(sum((r.get("available") or 0) for r in buy)),
