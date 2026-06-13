@@ -49,11 +49,11 @@ function buildInsights({ board, ask, bid, askMed, bidMed, spread, hist, meq }) {
   const out = [];
   const buy = board.buy || [], sell = board.sell || [];
   // Spread health
-  if (spread > 0) out.push({ tone: 'good', icon: '💰', text: `Maker spread KES ${spread.toFixed(2)} — a top-ranked round trip nets about ${spread.toFixed(2)} per USDT.` });
-  else out.push({ tone: 'warn', icon: '⚠️', text: `Spread is only KES ${spread.toFixed(2)} — margins are thin right now; chasing rank would eat profit.` });
+  if (spread > 0.1) out.push({ tone: 'good', icon: '💰', text: `Healthy maker spread of KES ${spread.toFixed(2)} — a typical round trip nets about ${spread.toFixed(2)} per USDT.` });
+  else out.push({ tone: 'warn', icon: '⚠️', text: `Maker spread is only KES ${spread.toFixed(2)} — margins are thin right now; chasing rank would eat profit.` });
   // Spread trend (history)
   if (hist && hist.length >= 3) {
-    const first = r2((hist[0].ask || 0) - (hist[0].bid || 0));
+    const first = r2((hist[0].ask_med || 0) - (hist[0].bid_med || 0));
     if (Math.abs(spread - first) >= 0.03) {
       const tightening = spread < first;
       out.push({ tone: tightening ? 'warn' : 'good', icon: tightening ? '📉' : '📈', text: `Spread ${tightening ? 'tightening' : 'widening'}: KES ${first.toFixed(2)} → ${spread.toFixed(2)} over the window.` });
@@ -385,12 +385,12 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
             const bid = sell[0]?.price || 0;         // highest legit bid to sell to
             const askMed = medOf(buy.slice(0, 10).map(r => r.price));
             const bidMed = medOf(sell.slice(0, 10).map(r => r.price));
-            const spread = r2(ask - bid);
+            const spread = r2(askMed - bidMed);   // typical round-trip margin (median-based, stable)
             const buyLiq = buy.reduce((s, r) => s + (Number(r.available) || 0), 0);
             const sellLiq = sell.reduce((s, r) => s + (Number(r.available) || 0), 0);
             const merchants = new Set([...buy, ...sell].map(r => (r.nick || '').toLowerCase()).filter(Boolean)).size;
             const moved = hist.length >= 2;
-            const spSeries = hist.map(p => r2((p.ask || 0) - (p.bid || 0)));
+            const spSeries = hist.map(p => r2((p.ask_med || 0) - (p.bid_med || 0)));
             const askSeries = hist.map(p => p.ask);
             const bidSeries = hist.map(p => p.bid);
             const buyLiqSeries = hist.map(p => p.buy_liq);
@@ -419,7 +419,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                 </div>
                 <div className="pt-cockpit-note">
                   {moved ? 'Sparklines show the last 6 hours · ' : 'Trends build up as data is recorded · '}
-                  Maker spread = best ask − best bid (what a top-ranked round trip earns/USDT).
+                  Maker spread = median ask − median bid (a typical round-trip margin per USDT). Spoof/outlier ads are filtered.
                 </div>
               </div>
             );
