@@ -22,6 +22,12 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
   const [query, setQuery] = useState('');
   const [tier, setTier] = useState('all');
   const [verifiedOnly, setVerifiedOnly] = useState(false);
+  const [copied, setCopied] = useState('');
+  const copyNick = async (nick, key) => {
+    try { await navigator.clipboard.writeText(nick); } catch (_) {}
+    setCopied(key);
+    setTimeout(() => setCopied(c => (c === key ? '' : c)), 1200);
+  };
   const [me, setMe] = useState(() => (binanceName || localStorage.getItem('sparkp2p_pt_me') || ''));
   const [detecting, setDetecting] = useState(false);
   const [detectMsg, setDetectMsg] = useState('');
@@ -168,7 +174,8 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
             <div className="pt-info">
               <div className="pt-name">
                 <span className="pt-medal" style={{ background: TIER_COLOR[r.tier] }} />
-                <span style={{ color: TIER_COLOR[r.tier] || '#fff' }}>{r.nick}</span>
+                <span className="pt-nick" style={{ color: TIER_COLOR[r.tier] || '#fff' }} title="Click to copy name" onClick={() => copyNick(r.nick, r.advNo)}>{r.nick}</span>
+                {copied === r.advNo && <span className="pt-copied">✓ copied</span>}
                 {isMe(r.nick) && <span className="pt-youtag">YOU</span>}
               </div>
               <div className="pt-submeta">
@@ -508,6 +515,9 @@ const PT_CSS = `
 .pt-info { flex:1; min-width:0; }
 .pt-name { font-size:14.5px; font-weight:600; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; align-items:center; gap:6px; }
 .pt-medal { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.pt-nick { cursor:pointer; user-select:text; }
+.pt-nick:hover { text-decoration:underline; }
+.pt-copied { font-size:10px; font-weight:700; color:var(--pt-sell); white-space:nowrap; }
 .pt-submeta { font-size:13px; color:var(--pt-dim); display:flex; gap:10px; flex-wrap:wrap; font-weight:500; align-items:center; }
 .pt-tier { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
 .pt-submeta .pt-done { color:var(--pt-dim); }
