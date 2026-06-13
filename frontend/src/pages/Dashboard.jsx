@@ -818,6 +818,7 @@ export default function Dashboard() {
   const [withdrawalPage, setWithdrawalPage] = useState(1);
   const [sweepSecondsLeft, setSweepSecondsLeft] = useState(0);
   const [activeTab, setActiveTab] = useState('overview');
+  const [ptView, setPtView] = useState('tracker');  // Price Tracker page sub-view: 'tracker' | 'activity'
   const [mobMoreOpen, setMobMoreOpen] = useState(false);
   const [creditPlan, setCreditPlan] = useState(null);
   const [creditCategory, setCreditCategory] = useState('starter'); // 'starter' | 'enterprise'
@@ -1854,7 +1855,6 @@ export default function Dashboard() {
             { key: 'transactions',  icon: ArrowRightLeft,  label: 'Transactions'  },
             { key: 'profit',        icon: BarChart2,       label: 'Profit'        },
             ...(profile?.price_tracker_enabled ? [{ key: 'pricetracker', icon: TrendingUp, label: 'Price Tracker' }] : []),
-            ...(profile?.price_tracker_enabled ? [{ key: 'marketactivity', icon: Activity, label: 'Market Activity' }] : []),
             { key: 'logs',          icon: Activity,        label: 'Logs'          },
           ].map(({ key, icon: Icon, label }) => (
             <button key={key}
@@ -2438,15 +2438,28 @@ export default function Dashboard() {
 
         {/* ── Price Tracker Tab (admin-gated) ── */}
         {activeTab === 'pricetracker' && (
-          profile?.price_tracker_enabled
-            ? <PriceTracker enabled={true} binanceName={profile?.binance_nickname} profile={profile} />
-            : <div className="card"><p style={{ color: '#9ca3af', padding: '14px 0', margin: 0 }}>Price Tracker is not enabled for your account.</p></div>
-        )}
-
-        {activeTab === 'marketactivity' && (
-          profile?.price_tracker_enabled
-            ? <MarketActivity enabled={true} />
-            : <div className="card"><p style={{ color: '#9ca3af', padding: '14px 0', margin: 0 }}>Market Activity is not enabled for your account.</p></div>
+          profile?.price_tracker_enabled ? (
+            <div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                {[['tracker', '⚡ Price Tracker'], ['activity', '📊 Market Activity']].map(([k, lbl]) => (
+                  <button
+                    key={k}
+                    onClick={() => setPtView(k)}
+                    style={{
+                      padding: '.6rem 1.15rem', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                      border: '1px solid ' + (ptView === k ? 'rgba(245,166,35,0.5)' : 'rgba(255,255,255,0.1)'),
+                      background: ptView === k ? 'rgba(245,166,35,0.15)' : 'transparent',
+                      color: ptView === k ? '#f5a623' : '#9ca3af',
+                      transition: 'all .15s',
+                    }}
+                  >{lbl}</button>
+                ))}
+              </div>
+              {ptView === 'tracker'
+                ? <PriceTracker enabled={true} binanceName={profile?.binance_nickname} profile={profile} />
+                : <MarketActivity enabled={true} />}
+            </div>
+          ) : <div className="card"><p style={{ color: '#9ca3af', padding: '14px 0', margin: 0 }}>Price Tracker is not enabled for your account.</p></div>
         )}
 
         {/* ── Transactions Tab ── */}
