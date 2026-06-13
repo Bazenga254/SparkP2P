@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_db, async_session
-from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support, survey, affiliates, telegram, choice_bank, kyc_flow
+from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support, survey, affiliates, telegram, choice_bank, kyc_flow, squads
 from app.services.binance.poller import order_poller
 from app.services.message_templates import seed_default_templates
 from app.services import bot_monitor
@@ -455,6 +455,7 @@ app.include_router(affiliates.router, prefix="/api/affiliates", tags=["Affiliate
 app.include_router(telegram.router, prefix="/api/telegram", tags=["Telegram"])
 app.include_router(choice_bank.router, prefix="/api", tags=["Choice Bank"])
 app.include_router(kyc_flow.router, prefix="/api", tags=["KYC Flow"])
+app.include_router(squads.router, prefix="/api/squads", tags=["Squad Mode"])
 
 @app.get("/api/health")
 async def api_health_check():

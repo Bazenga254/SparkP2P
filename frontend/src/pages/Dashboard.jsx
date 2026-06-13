@@ -8,6 +8,7 @@ import { kycCreateSession } from '../services/api';
 import SupportChat from '../components/SupportChat';
 import PriceTracker from '../components/PriceTracker';
 import MarketActivity from '../components/MarketActivity';
+import SquadPanel from '../components/SquadPanel';
 
 // Choice Bank outbound transaction fees (KES) — mirror backend app/services/outbound_fees.py.
 // Choice Bank withholds these on its side (debits amount + fee); shown here so the trader sees it.
@@ -2441,7 +2442,7 @@ export default function Dashboard() {
           profile?.price_tracker_enabled ? (
             <div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-                {[['tracker', '⚡ Price Tracker'], ['activity', '📊 Market Activity']].map(([k, lbl]) => (
+                {[['tracker', '⚡ Price Tracker'], ['activity', '📊 Market Activity'], ['squad', '🤝 Squad']].map(([k, lbl]) => (
                   <button
                     key={k}
                     onClick={() => setPtView(k)}
@@ -2457,7 +2458,9 @@ export default function Dashboard() {
               </div>
               {ptView === 'tracker'
                 ? <PriceTracker enabled={true} binanceName={profile?.binance_nickname} profile={profile} />
-                : <MarketActivity enabled={true} />}
+                : ptView === 'activity'
+                  ? <MarketActivity enabled={true} />
+                  : <SquadPanel enabled={true} />}
             </div>
           ) : <div className="card"><p style={{ color: '#9ca3af', padding: '14px 0', margin: 0 }}>Price Tracker is not enabled for your account.</p></div>
         )}
