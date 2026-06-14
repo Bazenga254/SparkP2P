@@ -4466,8 +4466,11 @@ export default function Dashboard() {
           >
             <div style={{ width: 36, height: 4, background: '#374151', borderRadius: 2, margin: '12px auto 8px' }} />
             {[
+              ...(profile?.price_tracker_enabled ? [{ key: 'pricetracker', label: 'Price Tracker', icon: TrendingUp }] : []),
               { key: 'profit',       label: 'Profit',      icon: BarChart2   },
               { key: 'logs',         label: 'Bot Logs',    icon: Activity    },
+              { key: 'configure',    label: 'Configure',   icon: SlidersHorizontal },
+              { key: 'paybill',      label: 'My Paybill',  icon: CreditCard  },
               ...(affiliateData?.affiliate ? [{ key: 'affiliates', label: 'Affiliates', icon: Share2 }] : []),
               { key: 'credits',      label: 'Subscriptions', icon: DollarSign  },
             ].map(({ key, label, icon: Icon }) => (
