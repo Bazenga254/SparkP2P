@@ -135,30 +135,45 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
   const meq = me.trim().toLowerCase();
   const isMe = nick => !!meq && (nick || '').trim().toLowerCase() === meq;
   const pick = rows => {
-    let list = rows || [];
-    if (verifiedOnly) list = list.filter(r => r.tier !== 'normal');
-    if (tier !== 'all') list = list.filter(r => r.tier === tier);
-    if (q) list = list.filter(r => (r.nick || '').toLowerCase().includes(q));
-    else list = list.slice(0, 12);
-    return list;
+    let scoped = rows || [];
+    if (verifiedOnly) scoped = scoped.filter(r => r.tier !== 'normal');
+    if (tier !== 'all') scoped = scoped.filter(r => r.tier === tier);
+    // Rank WITHIN the current filter scope (board is already in competitive order), so verified-only
+    // shows verified-only ranks rather than positions that count hidden non-merchants.
+    const ranked = scoped.map((r, i) => ({ ...r, _rank: i + 1 }));
+    return q ? ranked.filter(r => (r.nick || '').toLowerCase().includes(q)) : ranked.slice(0, 12);
   };
   const myPos = rows => { if (!meq) return null; const m = (rows || []).filter(r => isMe(r.nick)).sort((a, b) => a.rank - b.rank)[0]; return m ? { rank: m.rank, price: m.price, tier: m.tier } : null; };
 
   const TICK = 0.01;
-  const simSide = (rows, isSell, ref, mmin, mmax) => {
-    if (!(mmax > 0) || !ref) return null;
-    const myRow = (rows || []).filter(r => isMe(r.nick)).sort((a, b) => a.rank - b.rank)[0];
-    let comps = (rows || []).filter(r => !isMe(r.nick));
-    if (pm.scope === 'tier' && myRow) comps = comps.filter(r => r.tier === myRow.tier);
-    if (!comps.length) return null;
-    const targetRank = Number(pm.target) || 1;
-    const tgt = comps[Math.min(targetRank, comps.length) - 1];
-    const peg = isSell ? tgt.price - TICK : tgt.price + TICK;
-    const lo = isSell ? ref + mmin : ref - mmax, hi = isSell ? ref + mmax : ref - mmin;
-    const target = r2(Math.min(Math.max(peg, lo), hi));
-    // Resulting rank if we actually set this price (cheaper wins on sell side, higher wins on buy side).
-    const rankResult = comps.filter(c => isSell ? c.price < target : c.price > target).length + 1;
-    return { current: myRow ? myRow.price : null, target, marginVsMkt: r2(isSell ? target - ref : ref - target), rankResult, targetRank, holds: rankResult <= targetRank };
+  // Joint round-trip optimiser: find the most competitive (highest-rank) sell+buy pair on BOTH
+  // boards whose round-trip margin (sell − buy) stays at/above the floor. Sell ads live on the
+  // Buy-USDT board (cheaper = better); buy ads on the Sell-USDT board (higher = better).
+  const optimizeRT = (minRT, maxRT, targetRank) => {
+    const tierOf = rows => { const m = (rows || []).find(r => isMe(r.nick)); return m ? m.tier : null; };
+    let sellComps = (board.buy || []).filter(r => !isMe(r.nick) && r.price > 0);
+    let buyComps = (board.sell || []).filter(r => !isMe(r.nick) && r.price > 0);
+    if (pm.scope === 'tier') { const t = tierOf(board.buy) || tierOf(board.sell); if (t) { sellComps = sellComps.filter(r => r.tier === t); buyComps = buyComps.filter(r => r.tier === t); } }
+    if (!sellComps.length || !buyComps.length) return null;
+    const sP = r => sellComps[Math.min(r, sellComps.length) - 1].price - TICK;  // price to sit at sell-rank r
+    const bP = r => buyComps[Math.min(r, buyComps.length) - 1].price + TICK;    // price to sit at buy-rank r
+    const sRankOf = p => sellComps.filter(c => c.price < p).length + 1;
+    const bRankOf = p => buyComps.filter(c => c.price > p).length + 1;
+    const tr = Math.max(1, targetRank);
+    // Can we hold the target rank on both sides while keeping the round-trip floor?
+    const sellT = sP(tr), buyT = bP(tr), rtT = r2(sellT - buyT);
+    if (rtT >= minRT) return { sell: r2(sellT), buy: r2(buyT), sellRank: tr, buyRank: bRankOf(buyT), rt: rtT, holds: true };
+    // Too tight — search the trade-off curve for the best balanced ranks at exactly the floor.
+    let best = null;
+    const N = Math.min(sellComps.length, 60);
+    for (let rs = 1; rs <= N; rs++) {
+      const sell = sP(rs);
+      let buy = sell - minRT; const buy1 = bP(1); if (buy > buy1) buy = buy1;   // most competitive buy at the floor, capped at #1
+      const sr = sRankOf(sell), br = bRankOf(buy);
+      const score = Math.max(sr, br) * 1000 + (sr + br);   // minimise the worse rank, then the sum
+      if (!best || score < best.score) best = { sell: r2(sell), buy: r2(buy), sellRank: sr, buyRank: br, rt: r2(sell - buy), score };
+    }
+    return best ? { sell: best.sell, buy: best.buy, sellRank: best.sellRank, buyRank: best.buyRank, rt: best.rt, holds: best.sellRank <= tr && best.buyRank <= tr } : null;
   };
 
   const upd = new Date(updatedAt || Date.now()).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -204,9 +219,9 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
             return (
               <div className={`book ${side}`}>
                 <h4>{side === 'buy' ? 'Buy USDT — cheapest asks' : 'Sell USDT — highest bids'}</h4>
-                {top.map(r => (
+                {top.map((r, i) => (
                   <div key={r.advNo} className={`lvl t-${r.tier}`}>
-                    <span className="rk">#{r.rank}</span><span className="nm" title={r.nick}>{r.nick}</span>
+                    <span className="rk">#{i + 1}</span><span className="nm" title={r.nick}>{r.nick}</span>
                     <span className="px">{r.price.toFixed(2)}</span>
                     <span className="track"><i style={{ width: `${Math.max(5, (Number(r.available) || 0) / maxA * 100)}%` }} /></span>
                   </div>
@@ -343,10 +358,10 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                 {pm.autoprice !== 'off' && (
                   <>
                     <div className="margin-grid" style={{ marginTop: 18 }}>
-                      <div><div className="flabel" style={{ marginTop: 0 }}>Min margin (KES/USDT)</div><input className="minp" type="number" step="0.01" value={pm.marginMin} onChange={e => setPm({ ...pm, marginMin: e.target.value })} /></div>
-                      <div><div className="flabel" style={{ marginTop: 0 }}>Max margin (KES/USDT)</div><input className="minp" type="number" step="0.01" value={pm.marginMax} onChange={e => setPm({ ...pm, marginMax: e.target.value })} /></div>
+                      <div><div className="flabel" style={{ marginTop: 0 }}>Min round-trip margin (sell − buy)</div><input className="minp" type="number" step="0.01" value={pm.marginMin} onChange={e => setPm({ ...pm, marginMin: e.target.value })} /></div>
+                      <div><div className="flabel" style={{ marginTop: 0 }}>Max round-trip margin</div><input className="minp" type="number" step="0.01" value={pm.marginMax} onChange={e => setPm({ ...pm, marginMax: e.target.value })} /></div>
                     </div>
-                    <div className="note" style={{ marginTop: 12 }}>Margin = sell − buy (round-trip profit per USDT). The bot keeps you within this band while chasing your target rank — never below the min. Live price-changing needs your desktop relay online.</div>
+                    <div className="note" style={{ marginTop: 12 }}>Round-trip margin = your sell price − your buy price (profit per USDT across both ads). The bot jointly optimises both ads — pushing each as competitive as the floor allows to rank as high as possible on both boards, never dropping below your min. Live price-changing needs your desktop relay online.</div>
                     {pm.autoprice === 'live' && <div className="note" style={{ color: board?.relay_connected ? 'var(--green-2)' : '#ef6a7e', fontWeight: 700 }}>{board?.relay_connected ? '🟢 Relay online — auto-pricing is ACTIVE.' : '🔴 Relay offline — auto-pricing is PAUSED. Open your desktop app.'}</div>}
                   </>
                 )}
@@ -356,27 +371,23 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
 
             {/* Auto-pricing simulation */}
             {pm.autoprice === 'sim' && meq && (() => {
-              const mmin = parseFloat(pm.marginMin) || 0, mmax = parseFloat(pm.marginMax) || 0;
-              const cost = medOf((board.buy || []).slice(0, 5).map(r => r.price)), revenue = medOf((board.sell || []).slice(0, 5).map(r => r.price));
-              const sSell = simSide(board.buy, true, cost, mmin, mmax), sBuy = simSide(board.sell, false, revenue, mmin, mmax);
-              if (!sSell && !sBuy) return null;
+              const minRT = parseFloat(pm.marginMin) || 0, maxRT = parseFloat(pm.marginMax) || minRT;
               const tr = Number(pm.target) || 1;
-              const roundTrip = (sSell && sBuy) ? r2(sSell.target - sBuy.target) : (sSell ? sSell.marginVsMkt : sBuy.marginVsMkt);
-              const holds = (!sSell || sSell.holds) && (!sBuy || sBuy.holds);
-              const rankCls = s => s.holds ? 'green' : 'amber';
-              const cards = [];
-              if (sSell) cards.push({ l: 'Sell ad → would set', v: sSell.target.toFixed(2), c: 'green', sub: `ranks #${sSell.rankResult} on Buy-USDT`, warn: !sSell.holds });
-              if (sBuy) cards.push({ l: 'Buy ad → would set', v: sBuy.target.toFixed(2), c: 'blue', sub: `ranks #${sBuy.rankResult} on Sell-USDT`, warn: !sBuy.holds });
-              cards.push({ l: 'Round-trip margin', v: roundTrip.toFixed(2), c: roundTrip > 0 ? 'green' : 'amber', sub: (sSell && sBuy) ? 'sell − buy per USDT' : 'vs market median' });
-              cards.push({ l: `Holds Top ${tr}?`, v: holds ? 'Yes' : 'No', c: holds ? 'green' : 'amber', sub: holds ? 'within your margin band' : 'margin floor caps your rank' });
-              const blocked = [!sSell?.holds && sSell ? `#${sSell.rankResult} on Buy-USDT` : null, !sBuy?.holds && sBuy ? `#${sBuy.rankResult} on Sell-USDT` : null].filter(Boolean);
+              const opt = optimizeRT(minRT, maxRT, tr);
+              if (!opt) return null;
+              const cards = [
+                { l: 'Sell ad → would set', v: opt.sell.toFixed(2), c: 'green', sub: `ranks #${opt.sellRank} on Buy-USDT`, warn: opt.sellRank > tr },
+                { l: 'Buy ad → would set', v: opt.buy.toFixed(2), c: 'blue', sub: `ranks #${opt.buyRank} on Sell-USDT`, warn: opt.buyRank > tr },
+                { l: 'Round-trip margin', v: opt.rt.toFixed(2), c: opt.rt > 0 ? 'green' : 'amber', sub: 'sell − buy per USDT' },
+                { l: `Holds Top ${tr}?`, v: opt.holds ? 'Yes' : 'No', c: opt.holds ? 'green' : 'amber', sub: opt.holds ? 'best margin at this rank' : 'best balance at your floor' },
+              ];
               return (
                 <div className="panel panel-gap">
                   <div className="panel-head"><div className="ph-t"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2 4 14h6l-1 8 9-12h-6z" /></svg>Auto-pricing — simulation preview</div><span className="alerts-pill" style={{ background: 'var(--amber-soft)', color: 'var(--amber-2)', borderColor: 'rgba(245,166,35,.25)', cursor: 'default' }}>Simulation only</span></div>
                   <div className="sim-grid">{cards.map((c, i) => <div className="sim" key={i}><div className="sl">{c.l}</div><div className={`sv ${c.c}`}>{c.v}</div><div className="sim-sub" style={c.warn ? { color: 'var(--amber-2)' } : undefined}>{c.sub}</div></div>)}</div>
-                  {!holds
-                    ? <div className="note" style={{ marginTop: 14, color: 'var(--amber-2)' }}>⚠ Your margin floor keeps you out of Top {tr} — you'd rank {blocked.join(' and ')}. To compete harder, lower your <b style={{ color: 'var(--text)' }}>min margin</b>; otherwise the bot holds price to protect profit (rank over margin is never forced).</div>
-                    : <div className="note" style={{ marginTop: 14 }}>Preview only — no prices were changed. Switch Auto-pricing to <b style={{ color: 'var(--text)' }}>Live</b> (with your desktop relay online) to hold this rank automatically.</div>}
+                  {opt.holds
+                    ? <div className="note" style={{ marginTop: 14, color: 'var(--green-2)' }}>✓ The algorithm holds <b style={{ color: 'var(--text)' }}>Top {tr} on both sides</b> at KES {opt.rt.toFixed(2)} round-trip. Switch Auto-pricing to <b style={{ color: 'var(--text)' }}>Live</b> to maintain it automatically.</div>
+                    : <div className="note" style={{ marginTop: 14, color: 'var(--amber-2)' }}>⚖ Best the algorithm can do at a KES {minRT.toFixed(2)} round-trip floor: <b style={{ color: 'var(--text)' }}>Sell #{opt.sellRank} / Buy #{opt.buyRank}</b> (it pushes both ads as competitive as the floor allows). The market is too tight to hold Top {tr} on both at this margin — lower your <b style={{ color: 'var(--text)' }}>min round-trip margin</b> to climb higher, or keep it to protect profit.</div>}
                 </div>
               );
             })()}
@@ -392,7 +403,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                       <div className="book-head"><div><h4>{ttl}</h4><span className="book-sub">{sub}</span></div><span className="book-hint">{hint}</span></div>
                       {rows.map(r => (
                         <div className={`mrow t-${r.tier}`} key={r.advNo}>
-                          <span className="m-rk">{r.rank}</span>
+                          <span className="m-rk">{r._rank}</span>
                           <div className="m-main">
                             <div className="m-top">
                               <span className="m-dot" />
