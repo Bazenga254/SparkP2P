@@ -2441,16 +2441,18 @@ export default function Dashboard() {
         {activeTab === 'pricetracker' && (
           profile?.price_tracker_enabled ? (
             <div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 18, overflowX: 'auto', paddingBottom: 2 }}>
                 {[['tracker', '⚡ Price Tracker'], ['activity', '📊 Market Activity'], ['squad', '🤝 Squad']].map(([k, lbl]) => (
                   <button
                     key={k}
                     onClick={() => setPtView(k)}
                     style={{
-                      padding: '.6rem 1.15rem', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer',
-                      border: '1px solid ' + (ptView === k ? 'rgba(245,166,35,0.5)' : 'rgba(255,255,255,0.1)'),
-                      background: ptView === k ? 'rgba(245,166,35,0.15)' : 'transparent',
-                      color: ptView === k ? '#f5a623' : '#9ca3af',
+                      display: 'inline-flex', alignItems: 'center', gap: 9, whiteSpace: 'nowrap',
+                      padding: '11px 18px', borderRadius: 12, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                      fontFamily: '"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif',
+                      border: '1px solid ' + (ptView === k ? 'rgba(245,166,35,0.4)' : 'rgba(255,255,255,0.11)'),
+                      background: ptView === k ? 'rgba(245,166,35,0.12)' : '#171B22',
+                      color: ptView === k ? '#FFBE52' : '#929AA6',
                       transition: 'all .15s',
                     }}
                   >{lbl}</button>
