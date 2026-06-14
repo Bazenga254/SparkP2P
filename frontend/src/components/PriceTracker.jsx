@@ -151,11 +151,14 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
     let comps = (rows || []).filter(r => !isMe(r.nick));
     if (pm.scope === 'tier' && myRow) comps = comps.filter(r => r.tier === myRow.tier);
     if (!comps.length) return null;
-    const tgt = comps[Math.min(Number(pm.target) || 1, comps.length) - 1];
+    const targetRank = Number(pm.target) || 1;
+    const tgt = comps[Math.min(targetRank, comps.length) - 1];
     const peg = isSell ? tgt.price - TICK : tgt.price + TICK;
     const lo = isSell ? ref + mmin : ref - mmax, hi = isSell ? ref + mmax : ref - mmin;
     const target = r2(Math.min(Math.max(peg, lo), hi));
-    return { current: myRow ? myRow.price : null, target, margin: r2(isSell ? target - ref : ref - target), rank: myRow ? myRow.rank : null };
+    // Resulting rank if we actually set this price (cheaper wins on sell side, higher wins on buy side).
+    const rankResult = comps.filter(c => isSell ? c.price < target : c.price > target).length + 1;
+    return { current: myRow ? myRow.price : null, target, marginVsMkt: r2(isSell ? target - ref : ref - target), rankResult, targetRank, holds: rankResult <= targetRank };
   };
 
   const upd = new Date(updatedAt || Date.now()).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -357,14 +360,23 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
               const cost = medOf((board.buy || []).slice(0, 5).map(r => r.price)), revenue = medOf((board.sell || []).slice(0, 5).map(r => r.price));
               const sSell = simSide(board.buy, true, cost, mmin, mmax), sBuy = simSide(board.sell, false, revenue, mmin, mmax);
               if (!sSell && !sBuy) return null;
+              const tr = Number(pm.target) || 1;
+              const roundTrip = (sSell && sBuy) ? r2(sSell.target - sBuy.target) : (sSell ? sSell.marginVsMkt : sBuy.marginVsMkt);
+              const holds = (!sSell || sSell.holds) && (!sBuy || sBuy.holds);
+              const rankCls = s => s.holds ? 'green' : 'amber';
               const cards = [];
-              if (sSell) { cards.push({ l: 'Sell ad → would set', v: sSell.target.toFixed(2), c: 'green' }); cards.push({ l: 'Sell margin', v: sSell.margin.toFixed(2), c: 'green' }); }
-              if (sBuy) { cards.push({ l: 'Buy ad → would set', v: sBuy.target.toFixed(2), c: 'blue' }); cards.push({ l: 'Buy margin', v: sBuy.margin.toFixed(2), c: 'blue' }); }
+              if (sSell) cards.push({ l: 'Sell ad → would set', v: sSell.target.toFixed(2), c: 'green', sub: `ranks #${sSell.rankResult} on Buy-USDT`, warn: !sSell.holds });
+              if (sBuy) cards.push({ l: 'Buy ad → would set', v: sBuy.target.toFixed(2), c: 'blue', sub: `ranks #${sBuy.rankResult} on Sell-USDT`, warn: !sBuy.holds });
+              cards.push({ l: 'Round-trip margin', v: roundTrip.toFixed(2), c: roundTrip > 0 ? 'green' : 'amber', sub: (sSell && sBuy) ? 'sell − buy per USDT' : 'vs market median' });
+              cards.push({ l: `Holds Top ${tr}?`, v: holds ? 'Yes' : 'No', c: holds ? 'green' : 'amber', sub: holds ? 'within your margin band' : 'margin floor caps your rank' });
+              const blocked = [!sSell?.holds && sSell ? `#${sSell.rankResult} on Buy-USDT` : null, !sBuy?.holds && sBuy ? `#${sBuy.rankResult} on Sell-USDT` : null].filter(Boolean);
               return (
                 <div className="panel panel-gap">
                   <div className="panel-head"><div className="ph-t"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2 4 14h6l-1 8 9-12h-6z" /></svg>Auto-pricing — simulation preview</div><span className="alerts-pill" style={{ background: 'var(--amber-soft)', color: 'var(--amber-2)', borderColor: 'rgba(245,166,35,.25)', cursor: 'default' }}>Simulation only</span></div>
-                  <div className="sim-grid">{cards.map((c, i) => <div className="sim" key={i}><div className="sl">{c.l}</div><div className={`sv ${c.c}`}>{c.v}</div></div>)}</div>
-                  <div className="note" style={{ marginTop: 14 }}>Preview only — no prices were changed. Switch Auto-pricing to <b style={{ color: 'var(--text)' }}>Live</b> (with your desktop relay online) to hold this rank automatically.</div>
+                  <div className="sim-grid">{cards.map((c, i) => <div className="sim" key={i}><div className="sl">{c.l}</div><div className={`sv ${c.c}`}>{c.v}</div><div className="sim-sub" style={c.warn ? { color: 'var(--amber-2)' } : undefined}>{c.sub}</div></div>)}</div>
+                  {!holds
+                    ? <div className="note" style={{ marginTop: 14, color: 'var(--amber-2)' }}>⚠ Your margin floor keeps you out of Top {tr} — you'd rank {blocked.join(' and ')}. To compete harder, lower your <b style={{ color: 'var(--text)' }}>min margin</b>; otherwise the bot holds price to protect profit (rank over margin is never forced).</div>
+                    : <div className="note" style={{ marginTop: 14 }}>Preview only — no prices were changed. Switch Auto-pricing to <b style={{ color: 'var(--text)' }}>Live</b> (with your desktop relay online) to hold this rank automatically.</div>}
                 </div>
               );
             })()}

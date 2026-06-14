@@ -199,6 +199,7 @@ export const SPK_CSS = `
 .spk .sim{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);padding:15px 16px}
 .spk .sim .sl{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--text-3);font-weight:700}
 .spk .sim .sv{font-size:22px;font-weight:800;margin-top:8px;letter-spacing:-.4px}
+.spk .sim .sim-sub{font-size:11px;color:var(--text-3);margin-top:5px;line-height:1.4}
 
 .spk .squad-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:clamp(20px,3vw,30px)}
 .spk .squad-card h3{margin:0 0 12px;font-size:18px;font-weight:700}
