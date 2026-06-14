@@ -3,9 +3,12 @@ import { getProfile } from '../services/api';
 
 const AuthContext = createContext(null);
 
-const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (web/desktop only)
 const ACTIVITY_EVENTS = ['mousedown', 'keydown', 'touchstart', 'scroll', 'api-activity'];
 const LAST_ACTIVE_KEY = 'sparkp2p_last_active';
+// In the native mobile app users stay logged in (like any phone app); the idle auto-logout is
+// web/desktop-only. The relay also runs independently of the UI session.
+const isNativeApp = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -22,6 +25,7 @@ export function AuthProvider({ children }) {
   const resetInactivityTimer = useCallback(() => {
     if (!localStorage.getItem('token')) return;
     localStorage.setItem(LAST_ACTIVE_KEY, Date.now().toString());
+    if (isNativeApp()) return;   // mobile app: never idle-logout
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
     inactivityTimer.current = setTimeout(() => {
       logout();
@@ -45,7 +49,7 @@ export function AuthProvider({ children }) {
     if (token) {
       // Check if session expired due to inactivity while app was closed
       const lastActive = localStorage.getItem(LAST_ACTIVE_KEY);
-      if (lastActive) {
+      if (lastActive && !isNativeApp()) {
         const elapsed = Date.now() - parseInt(lastActive, 10);
         if (elapsed > INACTIVITY_TIMEOUT_MS) {
           localStorage.removeItem('token');
