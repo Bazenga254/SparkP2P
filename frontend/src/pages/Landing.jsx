@@ -552,6 +552,22 @@ export default function Landing() {
                 Download .exe
               </a>
             </div>
+            <div className="land-download-card featured-dl">
+              <div className="land-download-icon">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M6 9a6 6 0 0 1 12 0v8a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9z"/>
+                  <path strokeLinecap="round" d="M8 4l-1.5-2M16 4l1.5-2M9 13h.01M15 13h.01"/>
+                </svg>
+              </div>
+              <h3>Android</h3>
+              <p>Phone &amp; tablet &nbsp;·&nbsp; APK</p>
+              <a href="/api/download/android" className="land-download-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                Download .apk
+              </a>
+            </div>
             <div className="land-download-card">
               <div className="land-download-icon muted">
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">

@@ -526,6 +526,19 @@ async def download_latest():
         raise HTTPException(status_code=502, detail="Could not fetch latest release")
 
 
+# Android app (sideload APK hosted on the VPS, served for download from sparkp2p.com)
+from fastapi.responses import FileResponse
+_APK_PATH = os.path.join(os.path.dirname(__file__), "..", "static", "sparkp2p.apk")
+
+
+@app.get("/api/download/android")
+async def download_android():
+    from fastapi import HTTPException
+    if not os.path.exists(_APK_PATH):
+        raise HTTPException(status_code=404, detail="Android app isn't available yet.")
+    return FileResponse(_APK_PATH, media_type="application/vnd.android.package-archive", filename="SparkP2P.apk")
+
+
 # Serve uploaded support attachments
 _uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(os.path.join(_uploads_dir, "support"), exist_ok=True)
