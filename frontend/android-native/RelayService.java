@@ -94,7 +94,8 @@ public class RelayService extends Service {
         return new NotificationCompat.Builder(this, CH)
                 .setContentTitle("SparkP2P relay")
                 .setContentText("Keeping your trading relay online")
-                .setSmallIcon(getApplicationInfo().icon)
+                .setSmallIcon(R.drawable.ic_stat_spark)
+                .setColor(0xFFF5A623)
                 .setOngoing(true)
                 .build();
     }
@@ -161,7 +162,8 @@ public class RelayService extends Service {
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-                .setSmallIcon(getApplicationInfo().icon)
+                .setSmallIcon(R.drawable.ic_stat_spark)
+                .setColor(0xFFF5A623)
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH);
         if (pi != null) b.setContentIntent(pi);
