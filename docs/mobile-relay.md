@@ -63,8 +63,10 @@ cd android && ./gradlew assembleRelease
 ## Known limits / next steps
 - **iOS**: relay runs only while the app is active (Apple background limits). Treat as foreground-only,
   or revisit with VoIP/silent-push nudges.
-- **Robustness**: the loop runs in the WebView kept alive by the foreground service. For maximum
-  reliability move the poll/execute/result loop into a **native Kotlin service** (hardening step) so
-  it survives WebView throttling entirely.
+- **Robustness (DONE — recommended path)**: a **native Kotlin foreground-service relay** is provided in
+  `frontend/android-native/` (`SparkRelayPlugin.kt` + `RelayService.kt` + its README). It runs the
+  whole poll/execute/result loop natively via OkHttp with a wake lock, so it survives WebView
+  throttling/Doze. The web agent auto-prefers it (`SparkRelay` plugin) and falls back to the WebView
+  loop only if it isn't installed. Follow `frontend/android-native/README.md` after `npx cap add android`.
 - **Token refresh**: the agent uses the stored `token`; ensure the app refreshes it (the existing
   `/traders/refresh-token` flow) so long-lived relays don't expire.

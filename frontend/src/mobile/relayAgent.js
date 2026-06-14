@@ -13,13 +13,18 @@
 // the WebView's CORS sandbox — a browser fetch to api.binance.com would be blocked by CORS.
 
 const API_BASE = '/api';                       // page is served from sparkp2p.com inside the wrapper
+const ABS_API = (typeof location !== 'undefined' ? location.origin : 'https://sparkp2p.com') + '/api';
 const BINANCE = 'https://api.binance.com';
 
 let running = false;
 let stopFlag = false;
-const status = { running: false, lastPoll: 0, jobs: 0, lastError: '' };
+let nativeTimer = null;
+const status = { running: false, lastPoll: 0, jobs: 0, lastError: '', native: false };
 const listeners = new Set();
 const emit = () => listeners.forEach(fn => { try { fn({ ...status }); } catch (_) {} });
+
+// Native foreground-service relay (Kotlin) — preferred: survives WebView throttling/Doze.
+const nativeRelay = () => window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SparkRelay;
 
 export const onRelayStatus = fn => { listeners.add(fn); fn({ ...status }); return () => listeners.delete(fn); };
 export const getRelayStatus = () => ({ ...status });
@@ -85,19 +90,46 @@ async function stopForegroundService() {
   if (FS) { try { await FS.stopForegroundService(); } catch (_) {} }
 }
 
+function startNativeStatusPolling() {
+  clearInterval(nativeTimer);
+  const NR = nativeRelay();
+  if (!NR) return;
+  nativeTimer = setInterval(async () => {
+    try {
+      const s = await NR.status();
+      status.running = !!s.running; status.lastPoll = s.lastPoll || 0; status.jobs = s.jobs || 0; status.native = true; emit();
+      const tk = localStorage.getItem('token');
+      if (tk) { try { NR.updateToken({ token: tk }); } catch (_) {} }   // keep native loop's token fresh
+    } catch (_) {}
+  }, 5000);
+}
+
 export async function startRelay() {
   if (running || !isNative()) return;
-  running = true; stopFlag = false; status.running = true; status.lastError = ''; emit();
   localStorage.setItem('sparkp2p_relay_on', '1');
+  const token = localStorage.getItem('token') || '';
+  const NR = nativeRelay();
+  if (NR) {
+    // Native foreground service does the loop — most reliable in the background.
+    running = true; status.running = true; status.native = true; status.lastError = ''; emit();
+    try { await NR.start({ apiBase: ABS_API, token }); } catch (e) { status.lastError = 'native start failed'; emit(); }
+    if (token) { try { await fetch(`${API_BASE}/ext/bot-started`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch (_) {} }
+    startNativeStatusPolling();
+    return;
+  }
+  // Fallback: WebView JS loop (foreground-only / iOS) kept alive by a generic foreground-service plugin.
+  running = true; stopFlag = false; status.running = true; status.native = false; status.lastError = ''; emit();
   await startForegroundService();
-  const token = localStorage.getItem('token');
   if (token) { try { await fetch(`${API_BASE}/ext/bot-started`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch (_) {} }
   loop();
 }
 
 export async function stopRelay() {
-  stopFlag = true;
   localStorage.setItem('sparkp2p_relay_on', '0');
+  clearInterval(nativeTimer);
+  const NR = nativeRelay();
+  if (NR) { try { await NR.stop(); } catch (_) {} running = false; status.running = false; emit(); return; }
+  stopFlag = true;
   await stopForegroundService();
 }
 
