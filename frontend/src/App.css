@@ -1640,9 +1640,9 @@ body {
 }
 .land-download-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
-  max-width: 800px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  max-width: 1140px;
   margin: 40px auto 0;
 }
 .land-download-card {
@@ -1909,9 +1909,9 @@ body {
 }
 .land-download-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
-  max-width: 860px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  max-width: 1140px;
   margin: 0 auto;
 }
 .land-download-card.featured-dl {
@@ -6588,3 +6588,8 @@ body {
 .tdx .log-time { color: var(--text-3); min-width: 70px; font-size: 10.5px; }
 .tdx .log-msg { flex: 1; word-break: break-word; }
 
+
+/* Download grid: 2-up on tablet (4-up desktop, 1-up mobile) */
+@media (min-width: 769px) and (max-width: 1040px) {
+  .land-download-grid { grid-template-columns: repeat(2, 1fr); max-width: 600px; }
+}
