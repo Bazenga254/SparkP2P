@@ -92216,3 +92216,8 @@ INFO:     Started server process [8200]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:7842 (Press CTRL+C to quit)
+2026-06-14 10:12:58,672 INFO Starting SparkP2P Binance relay on port 7842
+INFO:     Started server process [8284]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:7842 (Press CTRL+C to quit)

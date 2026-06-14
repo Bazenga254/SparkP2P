@@ -4097,3 +4097,12 @@
 2026-06-13 15:32:32,599 INFO ==================================================
 2026-06-13 15:32:32,631 INFO Relay started  pid=8200  port=7842
 2026-06-13 15:32:36,898 INFO SSH tunnel started  pid=9776  VPS:7843 -> local:7842
+2026-06-14 10:12:54,617 INFO ==================================================
+2026-06-14 10:12:54,633 INFO SparkP2P Relay Keepalive starting
+2026-06-14 10:12:54,633 INFO Relay port : 7842
+2026-06-14 10:12:54,633 INFO VPS tunnel : root@157.245.175.55  remote port 7843
+2026-06-14 10:12:54,633 INFO ==================================================
+2026-06-14 10:12:54,664 INFO Relay started  pid=8284  port=7842
+2026-06-14 10:12:58,672 INFO SSH tunnel started  pid=9148  VPS:7843 -> local:7842
+2026-06-14 11:02:09,466 WARNING SSH tunnel exited (code=255), restarting in 10s...
+2026-06-14 11:02:19,476 INFO SSH tunnel started  pid=9288  VPS:7843 -> local:7842

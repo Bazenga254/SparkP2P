@@ -9,6 +9,7 @@ import SupportChat from '../components/SupportChat';
 import PriceTracker from '../components/PriceTracker';
 import MarketActivity from '../components/MarketActivity';
 import SquadPanel from '../components/SquadPanel';
+import MobileRelayBanner from '../components/MobileRelayBanner';
 
 // Choice Bank outbound transaction fees (KES) — mirror backend app/services/outbound_fees.py.
 // Choice Bank withholds these on its side (debits amount + fee); shown here so the trader sees it.
@@ -1926,6 +1927,7 @@ export default function Dashboard() {
         </aside>
 
         <main className="dash-content">
+<MobileRelayBanner />
 {activeTab === 'overview' && (
           <>
             {/* Daily trade-limit reached — blocking banner with live countdown to the 3 AM reset */}

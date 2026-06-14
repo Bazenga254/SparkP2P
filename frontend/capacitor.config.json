@@ -1,0 +1,18 @@
+{
+  "appId": "com.sparkp2p.app",
+  "appName": "SparkP2P",
+  "webDir": "dist",
+  "server": {
+    "url": "https://sparkp2p.com",
+    "cleartext": false,
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}
