@@ -130,6 +130,7 @@ export async function startRelay() {
   const NR = nativeRelay();
   if (NR) {
     // Native foreground service does the loop — most reliable in the background.
+    try { if (NR.requestNotificationPermission) await NR.requestNotificationPermission(); } catch (_) {}   // Android 13+ notif permission
     if (localStorage.getItem('sparkp2p_batt_asked') !== '1') {
       try { await NR.requestBatteryExemption(); } catch (_) {}
       localStorage.setItem('sparkp2p_batt_asked', '1');   // prompt once

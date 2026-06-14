@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SparkP2P</string>
+    <string name="title_activity_main">SparkP2P</string>
+    <string name="package_name">com.sparkp2p.app</string>
+    <string name="custom_url_scheme">com.sparkp2p.app</string>
+</resources>
