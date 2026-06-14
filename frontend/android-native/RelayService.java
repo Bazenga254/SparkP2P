@@ -3,6 +3,7 @@ package com.sparkp2p.app;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
@@ -45,6 +46,9 @@ public class RelayService extends Service {
     private Thread loopThread;
     private PowerManager.WakeLock wake;
     private long lastRefresh = 0L;
+    private long lastNotifPoll = 0L;
+    private int lastNotifId = 0;
+    private static final String ALERT_CH = "sparkp2p_alerts";
     private final OkHttpClient http = new OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(40, TimeUnit.SECONDS)
@@ -66,10 +70,11 @@ public class RelayService extends Service {
             if (intent.getStringExtra("apiBase") != null) apiBase = intent.getStringExtra("apiBase");
             if (intent.getStringExtra("token") != null) token = intent.getStringExtra("token");
         }
+        SharedPreferences sp0 = getSharedPreferences(PREFS, MODE_PRIVATE);
+        lastNotifId = sp0.getInt("lastNotifId", 0);
         if (token == null || token.isEmpty()) {   // restarted by the OS / boot — recover from prefs
-            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-            token = sp.getString("token", "");
-            apiBase = sp.getString("apiBase", apiBase);
+            token = sp0.getString("token", "");
+            apiBase = sp0.getString("apiBase", apiBase);
         }
         saveState();   // persist so a reboot can auto-restart us with a valid token
         startForeground(NOTIF, buildNotification());
@@ -114,8 +119,53 @@ public class RelayService extends Service {
 
     private void runLoop() {
         while (running) {
-            try { maybeRefreshToken(); tick(); } catch (Exception e) { sleep(2000); }
+            try { maybeRefreshToken(); maybePollNotifications(); tick(); } catch (Exception e) { sleep(2000); }
         }
+    }
+
+    // Poll the VPS for queued alerts and post them to the phone's notification bar.
+    private void maybePollNotifications() {
+        long now = System.currentTimeMillis();
+        if (now - lastNotifPoll < 15000) return;   // every ~15s
+        lastNotifPoll = now;
+        if (token.isEmpty()) return;
+        try {
+            Request req = new Request.Builder().url(apiBase + "/ext/notifications/poll?after=" + lastNotifId)
+                    .header("Authorization", "Bearer " + token).get().build();
+            try (Response r = http.newCall(req).execute()) {
+                if (!r.isSuccessful() || r.body() == null) return;
+                JSONObject o = new JSONObject(r.body().string());
+                JSONArray items = o.optJSONArray("items");
+                if (items != null) {
+                    for (int i = 0; i < items.length(); i++) {
+                        JSONObject n = items.getJSONObject(i);
+                        postAlert(n.optString("title", "SparkP2P"), n.optString("body", ""), n.optInt("id", i));
+                    }
+                }
+                int last = o.optInt("last_id", lastNotifId);
+                if (last > lastNotifId) { lastNotifId = last; prefs().edit().putInt("lastNotifId", lastNotifId).apply(); }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void postAlert(String title, String body, int id) {
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(new NotificationChannel(ALERT_CH, "SparkP2P alerts", NotificationManager.IMPORTANCE_HIGH));
+        }
+        Intent open = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        PendingIntent pi = open == null ? null : PendingIntent.getActivity(this, id, open,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        NotificationCompat.Builder b = new NotificationCompat.Builder(this, ALERT_CH)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+                .setSmallIcon(getApplicationInfo().icon)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH);
+        if (pi != null) b.setContentIntent(pi);
+        nm.notify(10000 + id, b.build());
     }
 
     private void sleep(long ms) { try { Thread.sleep(ms); } catch (InterruptedException ignored) {} }

@@ -95,6 +95,12 @@ async def notify_trader(trader, message: str, reply_markup=None, reply_to=None) 
     """Send a Telegram notification to a trader if they have a chat_id linked.
     Returns True if sent successfully, False otherwise.
     Callers should fall back to SMS for security-critical notifications when False."""
+    # Mirror to the phone's notification bar (independent of Telegram being linked).
+    try:
+        from app.services import push_queue
+        push_queue.add(getattr(trader, "id", None), message)
+    except Exception:
+        pass
     result = await send_trader_message(trader, message, reply_markup=reply_markup, reply_to=reply_to)
     return result is not None
 

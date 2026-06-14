@@ -830,6 +830,15 @@ async def relay_result(data: RelayResultRequest, _tid: int = Depends(get_current
     return {"ok": delivered}
 
 
+@router.get("/notifications/poll")
+async def notifications_poll(after: int = 0, trader_id: int = Depends(get_current_trader_id)):
+    """Phone relay polls this for new alerts to post as native notifications. Token-only auth (no
+    DB) so it doesn't hold a pool connection."""
+    from app.services import push_queue
+    items, last = push_queue.poll(trader_id, after)
+    return {"items": items, "last_id": last}
+
+
 @router.post("/heartbeat")
 async def heartbeat(
     trader: Trader = Depends(get_current_trader),
