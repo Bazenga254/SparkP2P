@@ -6,6 +6,7 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
@@ -23,15 +24,15 @@ import java.util.Iterator;
 import java.util.concurrent.TimeUnit;
 
 // Native SparkP2P relay. Mirrors desktop/app.js startRelayAgent, in a foreground service + wake
-// lock so it survives backgrounding/Doze:
-//   GET {apiBase}/ext/relay/poll  ->  call api.binance.com (from the phone IP, no CORS)  ->
-//   POST {apiBase}/ext/relay/result {job_id, body}
-// Place at: android/app/src/main/java/com/sparkp2p/app/RelayService.java
+// lock so it survives backgrounding/Doze. Persists state to SharedPreferences so it can be
+// auto-restarted after a reboot (BootReceiver), and refreshes its own JWT so it never expires.
 public class RelayService extends Service {
     public static final String ACTION_START = "com.sparkp2p.app.START";
     public static final String ACTION_STOP  = "com.sparkp2p.app.STOP";
+    public static final String PREFS = "spark_relay";
     private static final String CH = "sparkp2p_relay";
     private static final int NOTIF = 1001;
+    private static final long REFRESH_EVERY_MS = 6L * 3600 * 1000;   // refresh the JWT every 6h
 
     public static volatile boolean running = false;
     public static volatile long lastPoll = 0L;
@@ -43,6 +44,7 @@ public class RelayService extends Service {
     private static final MediaType JSONT = MediaType.parse("application/json");
     private Thread loopThread;
     private PowerManager.WakeLock wake;
+    private long lastRefresh = 0L;
     private final OkHttpClient http = new OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(40, TimeUnit.SECONDS)
@@ -54,6 +56,7 @@ public class RelayService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+            saveEnabled(false);
             stopLoop();
             stopForeground(true);
             stopSelf();
@@ -63,10 +66,20 @@ public class RelayService extends Service {
             if (intent.getStringExtra("apiBase") != null) apiBase = intent.getStringExtra("apiBase");
             if (intent.getStringExtra("token") != null) token = intent.getStringExtra("token");
         }
+        if (token == null || token.isEmpty()) {   // restarted by the OS / boot — recover from prefs
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            token = sp.getString("token", "");
+            apiBase = sp.getString("apiBase", apiBase);
+        }
+        saveState();   // persist so a reboot can auto-restart us with a valid token
         startForeground(NOTIF, buildNotification());
         startLoop();
         return START_STICKY;
     }
+
+    private SharedPreferences prefs() { return getSharedPreferences(PREFS, MODE_PRIVATE); }
+    private void saveState() { prefs().edit().putBoolean("enabled", true).putString("apiBase", apiBase).putString("token", token).apply(); }
+    private void saveEnabled(boolean v) { prefs().edit().putBoolean("enabled", v).apply(); }
 
     private Notification buildNotification() {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -101,11 +114,32 @@ public class RelayService extends Service {
 
     private void runLoop() {
         while (running) {
-            try { tick(); } catch (Exception e) { sleep(2000); }
+            try { maybeRefreshToken(); tick(); } catch (Exception e) { sleep(2000); }
         }
     }
 
     private void sleep(long ms) { try { Thread.sleep(ms); } catch (InterruptedException ignored) {} }
+
+    // Keep the JWT fresh from the background service itself (independent of the WebView), so the
+    // relay never expires as long as it's running. A failed refresh doesn't affect Binance jobs.
+    private void maybeRefreshToken() {
+        long now = System.currentTimeMillis();
+        if (now - lastRefresh < REFRESH_EVERY_MS) return;
+        lastRefresh = now;
+        if (token.isEmpty()) return;
+        try {
+            Request req = new Request.Builder().url(apiBase + "/traders/refresh-token")
+                    .header("Authorization", "Bearer " + token)
+                    .post(RequestBody.create(JSONT, "")).build();
+            try (Response r = http.newCall(req).execute()) {
+                if (r.isSuccessful() && r.body() != null) {
+                    JSONObject o = new JSONObject(r.body().string());
+                    String nt = o.optString("access_token", "");
+                    if (!nt.isEmpty()) { token = nt; saveState(); }
+                }
+            }
+        } catch (Exception ignored) {}
+    }
 
     private void tick() throws Exception {
         String tk = token;
