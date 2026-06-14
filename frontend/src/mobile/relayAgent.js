@@ -26,6 +26,25 @@ const emit = () => listeners.forEach(fn => { try { fn({ ...status }); } catch (_
 // Native foreground-service relay (Kotlin) — preferred: survives WebView throttling/Doze.
 const nativeRelay = () => window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SparkRelay;
 
+let refreshTimer = null;
+async function refreshToken() {
+  const tk = localStorage.getItem('token');
+  if (!tk) return;
+  try {
+    const r = await fetch(`${API_BASE}/traders/refresh-token`, { method: 'POST', headers: { Authorization: `Bearer ${tk}` } });
+    if (r.ok) {
+      const d = await r.json();
+      if (d && d.access_token) {
+        localStorage.setItem('token', d.access_token);
+        const NR = nativeRelay();
+        if (NR) { try { NR.updateToken({ token: d.access_token }); } catch (_) {} }
+      }
+    }
+  } catch (_) { /* keep the old token; relay continues until it actually 401s */ }
+}
+function startTokenRefresh() { clearInterval(refreshTimer); refreshTimer = setInterval(refreshToken, 18 * 60 * 1000); }   // mirrors desktop (~20 min)
+function stopTokenRefresh() { clearInterval(refreshTimer); refreshTimer = null; }
+
 export const onRelayStatus = fn => { listeners.add(fn); fn({ ...status }); return () => listeners.delete(fn); };
 export const getRelayStatus = () => ({ ...status });
 export const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -111,22 +130,29 @@ export async function startRelay() {
   const NR = nativeRelay();
   if (NR) {
     // Native foreground service does the loop — most reliable in the background.
+    if (localStorage.getItem('sparkp2p_batt_asked') !== '1') {
+      try { await NR.requestBatteryExemption(); } catch (_) {}
+      localStorage.setItem('sparkp2p_batt_asked', '1');   // prompt once
+    }
     running = true; status.running = true; status.native = true; status.lastError = ''; emit();
     try { await NR.start({ apiBase: ABS_API, token }); } catch (e) { status.lastError = 'native start failed'; emit(); }
     if (token) { try { await fetch(`${API_BASE}/ext/bot-started`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch (_) {} }
     startNativeStatusPolling();
+    startTokenRefresh();
     return;
   }
   // Fallback: WebView JS loop (foreground-only / iOS) kept alive by a generic foreground-service plugin.
   running = true; stopFlag = false; status.running = true; status.native = false; status.lastError = ''; emit();
   await startForegroundService();
   if (token) { try { await fetch(`${API_BASE}/ext/bot-started`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch (_) {} }
+  startTokenRefresh();
   loop();
 }
 
 export async function stopRelay() {
   localStorage.setItem('sparkp2p_relay_on', '0');
   clearInterval(nativeTimer);
+  stopTokenRefresh();
   const NR = nativeRelay();
   if (NR) { try { await NR.stop(); } catch (_) {} running = false; status.running = false; emit(); return; }
   stopFlag = true;
