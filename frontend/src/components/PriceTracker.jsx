@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
 import { SPK_CSS, spark, CVAR } from './trackerTheme';
+import CostBasisCard from './CostBasisCard';
 
 // Live Binance P2P competitor order book (admin-gated). Redesigned cockpit UI.
 const TIER_COLOR = { gold: '#FFBE52', silver: '#D6DBE2', bronze: '#F08A3C', normal: '#929AA6' };
@@ -368,6 +369,9 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                 <div><button className="btn-primary" onClick={savePm} disabled={pmSaving}>{pmSaving ? 'Saving…' : 'Save settings'}</button>{pmMsg && <span className="save-msg">{pmMsg}</span>}</div>
               </div>
             </div>
+
+            {/* Cost-basis sell-down readout */}
+            <CostBasisCard />
 
             {/* Auto-pricing simulation */}
             {pm.autoprice === 'sim' && meq && (() => {

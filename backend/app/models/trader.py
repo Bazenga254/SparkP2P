@@ -155,6 +155,13 @@ class Trader(Base):
     pm_alert_watchlist = Column(Boolean, default=True, server_default="true")
     pm_watchlist = Column(JSON, nullable=True)   # list[str] of competitor Binance nicknames
 
+    # Cost-basis sell-down mode (see docs/cost-basis-mode.md) — never price below what they paid.
+    cb_enabled = Column(Boolean, default=False, server_default="false")
+    cb_starting_stock = Column(Float, default=0.0)    # USDT held at cb_set_at
+    cb_starting_cost = Column(Float, default=0.0)     # KES/USDT avg cost of that stock
+    cb_set_at = Column(DateTime(timezone=True), nullable=True)   # baseline timestamp (one-time entry)
+    cb_cleared_buffer = Column(Float, default=50.0)   # inventory below this = "stock depleted"
+
     # Auto-pricing (Phase 2 — the bot adjusts price to hold target rank within a KES margin band).
     pm_autoprice = Column(String(10), default="off")          # 'off' | 'sim' (preview) | 'live'
     pm_margin_min = Column(Float, default=0.0)                # KES per USDT — hard profit floor

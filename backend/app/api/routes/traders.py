@@ -462,6 +462,49 @@ async def update_watchlist(
     return {"watchlist": wl}
 
 
+async def _cost_basis_status(trader, db):
+    from app.models.order import Order, OrderStatus
+    from app.services.cost_basis import status_for
+    qry = select(Order).where(Order.trader_id == trader.id, Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]))
+    if trader.cb_set_at:
+        qry = qry.where(Order.created_at >= trader.cb_set_at)
+    orders = (await db.execute(qry)).scalars().all()
+    return status_for(trader, orders, min_margin=float(trader.pm_margin_min or 0))
+
+
+@router.get("/cost-basis")
+async def get_cost_basis(trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
+    """Live cost-basis readout: held USDT, weighted-avg cost, phase and sell floor."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    return await _cost_basis_status(trader, db)
+
+
+class CostBasisSettings(BaseModel):
+    enabled: Optional[bool] = None
+    starting_stock: Optional[float] = None
+    starting_cost: Optional[float] = None
+    cleared_buffer: Optional[float] = None
+
+
+@router.put("/cost-basis")
+async def save_cost_basis(data: CostBasisSettings, trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
+    """Enable cost-basis protection and (one-time) set the merchant's current stock + avg cost."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    if data.enabled is not None:
+        trader.cb_enabled = bool(data.enabled)
+    if data.cleared_buffer is not None:
+        trader.cb_cleared_buffer = max(0.0, float(data.cleared_buffer))
+    # Re-baseline the inventory whenever the merchant (re)enters their stock/cost.
+    if data.starting_stock is not None or data.starting_cost is not None:
+        trader.cb_starting_stock = max(0.0, float(data.starting_stock or 0))
+        trader.cb_starting_cost = max(0.0, float(data.starting_cost or 0))
+        trader.cb_set_at = datetime.now(timezone.utc)
+    await db.commit()
+    return await _cost_basis_status(trader, db)
+
+
 @router.post("/detect-binance-name")
 async def detect_binance_name(
     trader: Trader = Depends(get_current_trader),
