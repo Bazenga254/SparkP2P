@@ -591,11 +591,11 @@ export default function Onboarding() {
 
                   <button
                     className="onb-btn-primary"
-                    style={{ width: '100%', opacity: apiKeySaving || !apiKey.trim() || !apiSecret.trim() || relayOnline === false ? 0.5 : 1 }}
-                    disabled={apiKeySaving || !apiKey.trim() || !apiSecret.trim() || relayOnline === false}
+                    style={{ width: '100%', opacity: apiKeySaving || !apiKey.trim() || !apiSecret.trim() ? 0.5 : 1 }}
+                    disabled={apiKeySaving || !apiKey.trim() || !apiSecret.trim()}
                     onClick={handleConnectApiKey}
                   >
-                    {apiKeySaving ? 'Testing…' : relayOnline === false ? 'Turn on your relay to continue' : 'Test Connection & Connect'}
+                    {apiKeySaving ? 'Testing…' : 'Test Connection & Connect'}
                   </button>
 
                   <p style={{ fontSize: 11, color: '#6b7280', marginTop: 10, lineHeight: 1.5 }}>
