@@ -1192,19 +1192,10 @@ export default function Dashboard() {
     return () => clearInterval(binancePoll);
   }, []);
 
-  // Send only brand-new traders (who have done nothing yet) to the guided onboarding. Anyone who
-  // has started connecting — saved an API key or connected before — gets normal dashboard access
-  // and finishes the Binance connection from Settings, so they're never trapped on the connect step.
-  useEffect(() => {
-    if (
-      profile && profile.role === 'trader' &&
-      profile.onboarding_complete === false &&
-      !profile.binance_api_key_saved &&
-      !profile.binance_connected
-    ) {
-      navigate('/onboarding');
-    }
-  }, [profile]);
+  // NOTE: we intentionally do NOT auto-redirect to /onboarding. Traders always land on their
+  // dashboard and finish the Binance connection from Settings (the dashboard shows "Connect
+  // Binance" prompts when not connected). Forcing onboarding trapped users whose API verification
+  // never completed because their relay was offline. Onboarding is still reachable at /onboarding.
 
   // Recompute withdrawal amount error whenever amount or preview changes
   useEffect(() => {
