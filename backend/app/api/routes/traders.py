@@ -1560,6 +1560,16 @@ async def save_binance_api_key(
     if not data.api_key.strip() or not data.api_secret.strip():
         raise HTTPException(status_code=400, detail="API key and secret are required.")
 
+    # Fail fast if the trader's relay isn't online — otherwise verification waits the full ~25s
+    # relay timeout before failing, which looks like the save "hanging". The relay is required
+    # because the server can't reach Binance directly.
+    from app.services.binance import relay_router
+    if not relay_router.is_connected(trader.id):
+        raise HTTPException(
+            status_code=400,
+            detail="Your relay isn't online yet. Turn on the relay on your phone (or open the SparkP2P desktop app), wait until it shows online, then try again.",
+        )
+
     # Verify credentials work before saving (EP-4)
     try:
         ads = await get_merchant_ads(data.api_key.strip(), data.api_secret.strip())
