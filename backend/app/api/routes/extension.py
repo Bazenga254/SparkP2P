@@ -830,6 +830,15 @@ async def relay_result(data: RelayResultRequest, _tid: int = Depends(get_current
     return {"ok": delivered}
 
 
+@router.get("/relay/status")
+async def relay_status(trader_id: int = Depends(get_current_trader_id)):
+    """Whether THIS trader's relay (desktop app or phone) is currently online — i.e. it has
+    long-polled within the presence window. The connect/API screen uses this to tell a merchant
+    to start their relay before testing API keys. Token-only auth (no DB), like /relay/poll."""
+    from app.services.binance import relay_router
+    return {"online": relay_router.is_connected(trader_id)}
+
+
 @router.get("/notifications/poll")
 async def notifications_poll(after: int = 0, trader_id: int = Depends(get_current_trader_id)):
     """Phone relay polls this for new alerts to post as native notifications. Token-only auth (no

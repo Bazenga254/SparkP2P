@@ -14,6 +14,7 @@ import {
 } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
+import RelayConnectStatus from '../components/RelayConnectStatus';
 import {
   Download,
   Link2,
@@ -77,6 +78,7 @@ export default function Onboarding() {
   const [showSecret, setShowSecret] = useState(false);
   const [apiKeySaving, setApiKeySaving] = useState(false);
   const [apiKeyMsg, setApiKeyMsg] = useState(null); // { type, text }
+  const [relayOnline, setRelayOnline] = useState(null); // null=unknown, true, false
 
   const handleConnectApiKey = async () => {
     if (!apiKey.trim() || !apiSecret.trim()) {
@@ -101,7 +103,7 @@ export default function Onboarding() {
     } catch (err) {
       const detail = err.response?.data?.detail || 'Could not verify your API credentials.';
       const hint = /verify|fetch ads|no response|offline|relay/i.test(detail)
-        ? ' Make sure the SparkP2P desktop app is installed and running — it securely relays the connection to Binance.'
+        ? ' Your relay isn’t online. Turn on the relay on this phone (or run the SparkP2P desktop app) so we can reach Binance, then test again.'
         : '';
       setApiKeyMsg({ type: 'error', text: detail + hint });
     }
@@ -581,22 +583,24 @@ export default function Onboarding() {
                     </a>
                   </p>
 
+                  <RelayConnectStatus onStatus={setRelayOnline} />
+
                   {apiKeyMsg && (
                     <div className={`onb-msg ${apiKeyMsg.type}`} style={{ marginBottom: 12 }}>{apiKeyMsg.text}</div>
                   )}
 
                   <button
                     className="onb-btn-primary"
-                    style={{ width: '100%', opacity: apiKeySaving || !apiKey.trim() || !apiSecret.trim() ? 0.5 : 1 }}
-                    disabled={apiKeySaving || !apiKey.trim() || !apiSecret.trim()}
+                    style={{ width: '100%', opacity: apiKeySaving || !apiKey.trim() || !apiSecret.trim() || relayOnline === false ? 0.5 : 1 }}
+                    disabled={apiKeySaving || !apiKey.trim() || !apiSecret.trim() || relayOnline === false}
                     onClick={handleConnectApiKey}
                   >
-                    {apiKeySaving ? 'Testing…' : 'Test Connection & Connect'}
+                    {apiKeySaving ? 'Testing…' : relayOnline === false ? 'Turn on your relay to continue' : 'Test Connection & Connect'}
                   </button>
 
                   <p style={{ fontSize: 11, color: '#6b7280', marginTop: 10, lineHeight: 1.5 }}>
-                    Keep the SparkP2P desktop app installed and running — it securely relays the
-                    connection to Binance from your own device.
+                    Verifying needs your relay running — the phone relay (in this app) or the SparkP2P
+                    desktop app — so the connection to Binance comes from your own device.
                   </p>
                 </div>
 
