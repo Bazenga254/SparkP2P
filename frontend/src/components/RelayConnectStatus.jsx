@@ -1,16 +1,28 @@
 import { useState, useEffect, useRef } from 'react';
 import { getRelayOnline } from '../services/api';
-import { isNative, startRelay } from '../mobile/relayAgent';
+import { isNative, startRelay, platformName } from '../mobile/relayAgent';
 
 // Shows whether THIS trader's relay (desktop app or phone) is online — which the API-key test
-// needs, because the server can't reach Binance directly. On the native phone app it offers a
-// one-tap "Turn on relay"; in a desktop browser it points to the desktop app. Reports status up
-// via onStatus so the parent can gate the "Test Connection" button.
+// needs, because the server can't reach Binance directly. In the native phone app it offers a
+// one-tap "Turn on relay"; otherwise it points to the app/desktop. Reports status up via onStatus
+// so the parent can gate the "Test Connection" button.
 export default function RelayConnectStatus({ onStatus }) {
   const [online, setOnline] = useState(null); // null = checking, true, false
   const [starting, setStarting] = useState(false);
-  const native = isNative();
+  // The Capacitor bridge can attach a moment after first paint on some WebViews, so re-check for
+  // a few seconds rather than trusting a single render-time read.
+  const [native, setNative] = useState(isNative());
   const fastRef = useRef(null);
+
+  useEffect(() => {
+    if (native) return;
+    let n = 0;
+    const id = setInterval(() => {
+      if (isNative()) { setNative(true); clearInterval(id); }
+      else if (++n > 20) clearInterval(id); // ~10s
+    }, 500);
+    return () => clearInterval(id);
+  }, [native]);
 
   const check = async () => {
     try {
@@ -31,7 +43,6 @@ export default function RelayConnectStatus({ onStatus }) {
   const enable = async () => {
     setStarting(true);
     try { localStorage.setItem('sparkp2p_relay_on', '1'); await startRelay(); } catch (_) {}
-    // Poll quickly until the backend sees it (the foreground service takes a few seconds).
     if (!fastRef.current) {
       let tries = 0;
       fastRef.current = setInterval(() => { tries++; check(); if (tries > 20) { clearInterval(fastRef.current); fastRef.current = null; } }, 1500);
@@ -70,6 +81,7 @@ export default function RelayConnectStatus({ onStatus }) {
           Turn on your relay first
         </div>
       </div>
+
       {native ? (
         <>
           <div style={{ fontSize: 12.5, color: '#d4b483', lineHeight: 1.55 }}>
@@ -89,13 +101,25 @@ export default function RelayConnectStatus({ onStatus }) {
           </div>
         </>
       ) : (
-        <div style={{ fontSize: 12.5, color: '#d4b483', lineHeight: 1.6 }}>
-          Verifying your API keys needs a relay running on your device. Open the{' '}
-          <strong>SparkP2P desktop app</strong> and keep it running, or install the{' '}
-          <a href="/api/download/android" style={{ color: '#f59e0b', textDecoration: 'none' }}>Android app</a>{' '}
-          and turn on its phone relay — then test again.
-        </div>
+        <>
+          <div style={{ fontSize: 12.5, color: '#d4b483', lineHeight: 1.55 }}>
+            Verifying your API keys needs the SparkP2P relay running on your device.
+          </div>
+          <a
+            href="/api/download/android"
+            style={{ display: 'block', textAlign: 'center', background: 'linear-gradient(135deg,#FFC85A,#D9760C)', color: '#1a1206', fontWeight: 700, fontSize: 14, borderRadius: 10, padding: '11px 14px', textDecoration: 'none' }}
+          >
+            Download the SparkP2P Android app
+          </a>
+          <div style={{ fontSize: 11.5, color: '#9ca3af', lineHeight: 1.55 }}>
+            <strong>Already installed the app and still seeing this?</strong> Update <strong>Android
+            System WebView</strong> and Chrome in the Play Store, then fully close and reopen the SparkP2P
+            app. (On a computer, run the SparkP2P desktop app instead.)
+          </div>
+        </>
       )}
+
+      <div style={{ fontSize: 10.5, color: '#6b7280', marginTop: 2 }}>Relay agent: {platformName()}</div>
     </div>
   );
 }

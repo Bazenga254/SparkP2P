@@ -47,7 +47,31 @@ function stopTokenRefresh() { clearInterval(refreshTimer); refreshTimer = null; 
 
 export const onRelayStatus = fn => { listeners.add(fn); fn({ ...status }); return () => listeners.delete(fn); };
 export const getRelayStatus = () => ({ ...status });
-export const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+// Robust native detection — the Capacitor bridge can expose any of these, and on some devices/
+// WebViews one signal is present before another. Treat the presence of our own SparkRelay plugin
+// as definitive proof we're inside the native app.
+export const isNative = () => {
+  const C = window.Capacitor;
+  if (!C) return false;
+  try {
+    if (C.Plugins && C.Plugins.SparkRelay) return true;
+    if (typeof C.isNativePlatform === 'function' && C.isNativePlatform()) return true;
+    if (typeof C.getPlatform === 'function' && C.getPlatform() !== 'web') return true;
+    if (C.isNative === true) return true;
+  } catch (_) {}
+  return false;
+};
+
+// Human-readable platform for diagnostics shown on the connect screen.
+export const platformName = () => {
+  const C = window.Capacitor;
+  if (!C) return 'web (no Capacitor bridge)';
+  try {
+    if (typeof C.getPlatform === 'function') return C.getPlatform();
+    if (typeof C.isNativePlatform === 'function') return C.isNativePlatform() ? 'native' : 'web';
+  } catch (_) {}
+  return 'unknown';
+};
 
 const nativeHttp = async (opts) => {
   const H = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp;
