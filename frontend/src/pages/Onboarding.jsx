@@ -757,7 +757,7 @@ export default function Onboarding() {
               </p>
 
               <div style={{ background: '#1a1d27', border: '1px solid #2a2d3a', borderRadius: 10, padding: 16, marginBottom: 16 }}>
-                <strong style={{ color: '#f59e0b', fontSize: 14 }}>How to get your TOTP Secret Key:</strong>
+                <strong style={{ color: '#f59e0b', fontSize: 14 }}>How to get your Google Authenticator secret key:</strong>
 
                 <div style={{ marginTop: 12 }}>
                   <p style={{ fontSize: 12, color: '#e4e4e7', marginBottom: 6 }}>
@@ -770,7 +770,7 @@ export default function Onboarding() {
                   />
 
                   <p style={{ fontSize: 12, color: '#e4e4e7', marginBottom: 6 }}>
-                    <strong>Step 2:</strong> Binance shows a QR code and a <strong>text key</strong> below it (circled). Copy that text key and paste it below. Also scan the QR code in your Google Authenticator app.
+                    <strong>Step 2:</strong> Binance shows a QR code with a <strong>text key</strong> below it (circled). This is for the <strong>Google Authenticator</strong> app — open <strong>Google Authenticator</strong> on your phone, tap <strong>+</strong>, and scan that QR code. Then copy the text key shown below it and paste it here so the bot can generate the same Google Authenticator codes automatically.
                   </p>
                   <img
                     src="/binance-totp-step2.jpg"
@@ -780,7 +780,7 @@ export default function Onboarding() {
                 </div>
 
                 <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, padding: 10 }}>
-                  <p style={{ fontSize: 11, color: '#ef4444' }}>⚠️ If Authenticator App is already ON, click <strong>Manage → Change Authenticator</strong> to reset it and reveal the text key. Make sure to scan the new QR code in your app after resetting.</p>
+                  <p style={{ fontSize: 11, color: '#ef4444' }}>⚠️ If Authenticator App is already ON, click <strong>Manage → Change Authenticator</strong> to reset it and reveal the text key. Make sure to scan the new QR code in your <strong>Google Authenticator</strong> app after resetting.</p>
                 </div>
               </div>
 

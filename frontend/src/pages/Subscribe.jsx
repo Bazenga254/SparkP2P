@@ -2,7 +2,27 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { getSubscriptionStatus, initiateSubscription, renewSubscription } from '../services/api';
-import { ArrowLeft, Check, Crown, Zap, Shield, Clock } from 'lucide-react';
+import { ArrowLeft, Check, Crown, Zap, Shield, Clock, Rocket } from 'lucide-react';
+
+// Plans mirror the backend source of truth: backend/app/services/plans.py PLAN_CONFIG.
+// The frontend only sends the plan id; the backend sets the actual M-Pesa amount.
+const PLANS = [
+  {
+    id: 'starter', name: 'Starter', price: 3000, icon: Zap,
+    features: ['Sell-side automation', 'Automatic crypto release', 'M-Pesa payment matching', 'Up to 30 trades/day', 'Telegram notifications'],
+    disabled: ['Buy-side auto-pay'],
+  },
+  {
+    id: 'pro', name: 'Starter Pro', price: 5000, icon: Crown,
+    features: ['Everything in Starter', 'Buy-side auto-pay', 'Up to 80 trades/day', 'Priority settlement', 'Advanced analytics'],
+  },
+  {
+    id: 'pro_max', name: 'Starter Pro Max', price: 10000, icon: Rocket, badge: 'Most Popular',
+    features: ['Everything in Pro', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Priority support', 'Dedicated onboarding'],
+  },
+];
+const fmtKes = n => 'KES ' + Number(n).toLocaleString('en-KE');
+const planById = id => PLANS.find(p => p.id === id);
 
 export default function Subscribe() {
   const { user } = useAuth();
@@ -96,7 +116,7 @@ export default function Subscribe() {
             <div className="current-plan-info">
               <Shield size={20} />
               <div>
-                <strong>{subscription.plan === 'pro' ? 'Pro' : 'Starter'} Plan</strong>
+                <strong>{(planById(subscription.plan)?.name) || 'Starter'} Plan</strong>
                 <span className="plan-status active">Active</span>
               </div>
             </div>
@@ -116,54 +136,33 @@ export default function Subscribe() {
 
         {/* Plan Cards */}
         <div className="plan-cards">
-          <div
-            className={`plan-card ${selectedPlan === 'starter' ? 'selected' : ''}`}
-            onClick={() => setSelectedPlan('starter')}
-          >
-            <div className="plan-card-header">
-              <Zap size={24} />
-              <h2>Starter</h2>
-            </div>
-            <div className="plan-price">
-              <span className="price-amount">KES 5,000</span>
-              <span className="price-period">/month</span>
-            </div>
-            <ul className="plan-features">
-              <li><Check size={16} /> Sell-side automation</li>
-              <li><Check size={16} /> Auto crypto release</li>
-              <li><Check size={16} /> Payment matching</li>
-              <li><Check size={16} /> Chat notifications</li>
-              <li className="feature-disabled">Buy-side auto-pay</li>
-            </ul>
-            <div className="plan-card-select">
-              {selectedPlan === 'starter' ? 'Selected' : 'Select Plan'}
-            </div>
-          </div>
-
-          <div
-            className={`plan-card pro ${selectedPlan === 'pro' ? 'selected' : ''}`}
-            onClick={() => setSelectedPlan('pro')}
-          >
-            <div className="plan-badge">Most Popular</div>
-            <div className="plan-card-header">
-              <Crown size={24} />
-              <h2>Pro</h2>
-            </div>
-            <div className="plan-price">
-              <span className="price-amount">KES 10,000</span>
-              <span className="price-period">/month</span>
-            </div>
-            <ul className="plan-features">
-              <li><Check size={16} /> Everything in Starter</li>
-              <li><Check size={16} /> Buy-side auto-pay</li>
-              <li><Check size={16} /> Priority settlement</li>
-              <li><Check size={16} /> Advanced analytics</li>
-              <li><Check size={16} /> Priority support</li>
-            </ul>
-            <div className="plan-card-select">
-              {selectedPlan === 'pro' ? 'Selected' : 'Select Plan'}
-            </div>
-          </div>
+          {PLANS.map(plan => {
+            const Icon = plan.icon;
+            return (
+              <div
+                key={plan.id}
+                className={`plan-card ${plan.badge ? 'pro' : ''} ${selectedPlan === plan.id ? 'selected' : ''}`}
+                onClick={() => setSelectedPlan(plan.id)}
+              >
+                {plan.badge && <div className="plan-badge">{plan.badge}</div>}
+                <div className="plan-card-header">
+                  <Icon size={24} />
+                  <h2>{plan.name}</h2>
+                </div>
+                <div className="plan-price">
+                  <span className="price-amount">{fmtKes(plan.price)}</span>
+                  <span className="price-period">/month</span>
+                </div>
+                <ul className="plan-features">
+                  {plan.features.map(f => <li key={f}><Check size={16} /> {f}</li>)}
+                  {(plan.disabled || []).map(f => <li key={f} className="feature-disabled">{f}</li>)}
+                </ul>
+                <div className="plan-card-select">
+                  {selectedPlan === plan.id ? 'Selected' : 'Select Plan'}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         {/* Payment Form */}
@@ -173,7 +172,7 @@ export default function Subscribe() {
               {subscription?.has_subscription ? 'Renew' : 'Pay'} with M-Pesa
             </h3>
             <p className="payment-summary">
-              {selectedPlan === 'pro' ? 'Pro' : 'Starter'} Plan — KES {selectedPlan === 'pro' ? '10,000' : '5,000'}
+              {planById(selectedPlan)?.name} Plan — {fmtKes(planById(selectedPlan)?.price)}
             </p>
 
             <div className="phone-input-group">
@@ -199,7 +198,7 @@ export default function Subscribe() {
               onClick={handleSubscribe}
               disabled={submitting || polling || !phone}
             >
-              {polling ? 'Waiting for payment...' : submitting ? 'Sending STK Push...' : `Pay KES ${selectedPlan === 'pro' ? '10,000' : '5,000'}`}
+              {polling ? 'Waiting for payment...' : submitting ? 'Sending STK Push...' : `Pay ${fmtKes(planById(selectedPlan)?.price)}`}
             </button>
 
             {polling && (

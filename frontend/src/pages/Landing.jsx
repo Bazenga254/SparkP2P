@@ -12,7 +12,7 @@ const FAQS = [
       },
       {
         q: 'Do I need any coding or technical knowledge to use SparkP2P?',
-        a: 'No. SparkP2P is designed for everyday traders. Download the app, connect your Binance account by scanning a QR code in the app, configure your M-Pesa number, and you\'re live. The whole setup takes less than 10 minutes.',
+        a: 'No. SparkP2P is designed for traders, not coders. Download the app, connect your Binance account with your Binance API key and secret, configure your M-Pesa number, and you\'re live. The whole setup takes less than 10 minutes.',
       },
       {
         q: 'Is SparkP2P safe to use with my Binance account?',
@@ -176,8 +176,10 @@ export default function Landing() {
             <a href="#features">Features</a>
             <a href="#why">Why Us</a>
             <a href="#how-it-works">How It Works</a>
+            <a href="#pricing">Pricing</a>
             <a href="#download">Download</a>
             <a href="#faq">FAQ</a>
+            <Link to="/blog">Blog</Link>
             <Link to="/contact">Contact</Link>
           </div>
           <div className="land-nav-actions">
@@ -201,8 +203,11 @@ export default function Landing() {
         <a href="#features" onClick={closeMenu}>Features</a>
         <a href="#why" onClick={closeMenu}>Why Us</a>
         <a href="#how-it-works" onClick={closeMenu}>How It Works</a>
+        <a href="#pricing" onClick={closeMenu}>Pricing</a>
         <a href="#download" onClick={closeMenu}>Download</a>
         <a href="#faq" onClick={closeMenu}>FAQ</a>
+        <Link to="/blog" onClick={closeMenu}>Blog</Link>
+        <Link to="/contact" onClick={closeMenu}>Contact</Link>
       </div>
 
       {/* ── Hero ───────────────────────────────────────────────── */}
@@ -511,6 +516,43 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* ── Pricing ────────────────────────────────────────────── */}
+      <section className="land-pricing" id="pricing">
+        <div className="land-section-inner">
+          <div className="land-section-header">
+            <span className="land-section-tag">Pricing</span>
+            <h2>Simple, Transparent<br /><span className="land-highlight">Pricing</span></h2>
+            <p className="land-section-desc">Pick a plan and automate your Binance P2P trading. Pay with M-Pesa, cancel anytime.</p>
+          </div>
+          <div className="land-pricing-grid">
+            {[
+              { name: 'Starter', price: '3,000', popular: false,
+                features: ['Sell-side automation', 'Automatic crypto release', 'M-Pesa payment matching', 'Up to 30 trades/day', 'Telegram notifications'] },
+              { name: 'Starter Pro', price: '5,000', popular: false,
+                features: ['Everything in Starter', 'Buy-side auto-pay', 'Up to 80 trades/day', 'Priority settlement', 'Advanced analytics'] },
+              { name: 'Starter Pro Max', price: '10,000', popular: true,
+                features: ['Everything in Pro', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Priority support', 'Dedicated onboarding'] },
+            ].map(plan => (
+              <div key={plan.name} className={`land-price-card${plan.popular ? ' popular' : ''}`}>
+                {plan.popular && <div className="land-price-badge">Most Popular</div>}
+                <h3 className="land-price-name">{plan.name}</h3>
+                <div className="land-price-amount"><span className="land-price-cur">KES</span> {plan.price}<span className="land-price-per">/month</span></div>
+                <ul className="land-price-features">
+                  {plan.features.map(f => (
+                    <li key={f}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <Link to="/login" className="land-price-btn">Get Started</Link>
+              </div>
+            ))}
+          </div>
+          <p className="land-pricing-note">All plans include M-Pesa &amp; I&amp;M Bank settlement. Need help choosing? <Link to="/contact">Talk to us</Link>.</p>
+        </div>
+      </section>
+
       {/* ── CTA Banner ─────────────────────────────────────────── */}
       <section className="land-cta-banner">
         <div className="land-section-inner">
@@ -651,6 +693,11 @@ export default function Landing() {
             <a href="#how-it-works">How It Works</a>
             <a href="#download">Download</a>
             <Link to="/install">Install Guide</Link>
+          </div>
+          <div className="land-footer-col">
+            <h5>Guides</h5>
+            <Link to="/binance-p2p-bot-kenya">Binance P2P Bot Kenya</Link>
+            <Link to="/automate-binance-p2p-mpesa">Automate Binance P2P with M-Pesa</Link>
           </div>
           <div className="land-footer-col">
             <h5>Support</h5>

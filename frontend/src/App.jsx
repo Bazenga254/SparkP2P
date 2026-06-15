@@ -13,6 +13,9 @@ import ResetPassword from './pages/ResetPassword';
 import Install from './pages/Install';
 import Contact from './pages/Contact';
 import Survey from './pages/Survey';
+import BinanceP2PBotKenya from './pages/BinanceP2PBotKenya';
+import AutomateBinanceP2PMpesa from './pages/AutomateBinanceP2PMpesa';
+import Blog from './pages/Blog';
 import './App.css';
 
 import KycVerifyPage from './pages/KycVerifyPage';
@@ -40,6 +43,9 @@ function App() {
           <Route path="/employee" element={<ProtectedRoute><Employee /></ProtectedRoute>} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/install" element={<Install />} />
+          <Route path="/blog" element={<Blog />} />
+          <Route path="/binance-p2p-bot-kenya" element={<BinanceP2PBotKenya />} />
+          <Route path="/automate-binance-p2p-mpesa" element={<AutomateBinanceP2PMpesa />} />
           <Route path="/contact" element={<Contact />} />
           <Route path="/survey" element={<Survey />} />
           <Route path="/verify-kyc" element={<KycVerifyPage />} />
