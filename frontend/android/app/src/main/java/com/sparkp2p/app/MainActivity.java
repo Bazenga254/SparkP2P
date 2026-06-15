@@ -5,6 +5,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 
@@ -12,13 +13,16 @@ public class MainActivity extends BridgeActivity {
 
     // Native auto-relay: read the logged-in trader's JWT straight from the web app's localStorage
     // (via WebView.evaluateJavascript, which works even when the Capacitor JS bridge / window.Capacitor
-    // never injected) and run the relay foreground service ourselves. This makes the relay independent
-    // of the JS bridge, so it works on devices whose WebView fails to inject the bridge.
+    // never injected) and run the relay foreground service ourselves — so the relay works on devices
+    // whose WebView fails to inject the bridge. We only start the service while the activity is in the
+    // foreground, because Android 14+ forbids starting a foreground service from the background.
+    private static final String TAG = "SparkAutoRelay";
     private static final String API_BASE = "https://sparkp2p.com/api";
-    private static final long CHECK_EVERY_MS = 30000;   // re-read token / on-off flag every 30s
+    private static final long CHECK_EVERY_MS = 15000;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private String lastToken = "";
+    private volatile boolean resumed = false;
     private final Runnable watcher = new Runnable() {
         @Override public void run() {
             syncRelayFromLocalStorage();
@@ -30,13 +34,20 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(SparkRelayPlugin.class);
         super.onCreate(savedInstanceState);
-        handler.postDelayed(watcher, 4000);   // let the WebView load first
+        handler.postDelayed(watcher, 3000);
     }
 
     @Override
     public void onResume() {
         super.onResume();
+        resumed = true;
         handler.postDelayed(this::syncRelayFromLocalStorage, 800);
+    }
+
+    @Override
+    public void onPause() {
+        resumed = false;
+        super.onPause();
     }
 
     @Override
@@ -48,8 +59,7 @@ public class MainActivity extends BridgeActivity {
     private void syncRelayFromLocalStorage() {
         try {
             WebView wv = (getBridge() != null) ? getBridge().getWebView() : null;
-            if (wv == null) return;
-            // Returns "<token>|<relayFlag>". JWTs are base64url + dots, so '|' is a safe separator.
+            if (wv == null) { Log.i(TAG, "no webview yet"); return; }
             String js = "(function(){try{return (localStorage.getItem('token')||'')+'|'+(localStorage.getItem('sparkp2p_relay_on')||'');}catch(e){return '';}})()";
             wv.evaluateJavascript(js, value -> {
                 String v = unquote(value);
@@ -57,31 +67,41 @@ public class MainActivity extends BridgeActivity {
                 String token = sep >= 0 ? v.substring(0, sep) : v;
                 String relayFlag = sep >= 0 ? v.substring(sep + 1) : "";
                 boolean explicitlyOff = "0".equals(relayFlag);
+                boolean haveToken = token != null && !token.isEmpty();
+                Log.i(TAG, "check: haveToken=" + haveToken + " off=" + explicitlyOff + " resumed=" + resumed
+                        + " running=" + RelayService.running);
 
-                if (token != null && !token.isEmpty() && !explicitlyOff) {
-                    // Logged in and not turned off → make sure the relay is running with this token.
-                    if (!token.equals(lastToken) || !RelayService.running) {
-                        lastToken = token;
-                        Intent i = new Intent(this, RelayService.class);
-                        i.setAction(RelayService.ACTION_START);
-                        i.putExtra("apiBase", API_BASE);
-                        i.putExtra("token", token);
-                        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
-                        else startService(i);
+                if (haveToken && !explicitlyOff) {
+                    boolean needStart = !token.equals(lastToken) || !RelayService.running;
+                    if (needStart && resumed) {   // foreground-only start (Android 14+ rule)
+                        try {
+                            Intent i = new Intent(this, RelayService.class);
+                            i.setAction(RelayService.ACTION_START);
+                            i.putExtra("apiBase", API_BASE);
+                            i.putExtra("token", token);
+                            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
+                            else startService(i);
+                            lastToken = token;   // only mark done on a successful start
+                            Log.i(TAG, "relay service start requested");
+                        } catch (Exception e) {
+                            Log.e(TAG, "start failed: " + e.getMessage());
+                        }
+                    } else if (needStart) {
+                        Log.i(TAG, "want start but not foreground — will retry");
                     }
-                } else if ((token == null || token.isEmpty()) && RelayService.running) {
-                    // Logged out → stop the relay.
+                } else if (!haveToken && RelayService.running) {
                     lastToken = "";
                     Intent i = new Intent(this, RelayService.class);
                     i.setAction(RelayService.ACTION_STOP);
-                    startService(i);
+                    try { startService(i); } catch (Exception ignored) {}
+                    Log.i(TAG, "logged out — relay stopped");
                 }
             });
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            Log.e(TAG, "sync error: " + e.getMessage());
+        }
     }
 
-    // evaluateJavascript hands back a JSON-encoded value ("..." or null). JWT + flag contain no quotes
-    // or backslashes, so a light strip/unescape is enough.
     private static String unquote(String s) {
         if (s == null || s.equals("null")) return "";
         if (s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) {
