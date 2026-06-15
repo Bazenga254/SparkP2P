@@ -162,6 +162,27 @@ export default function Landing() {
       .catch(() => {});
   }, []);
 
+  // Inject the homepage FAQ structured data, built from the SAME FAQS that render visibly below,
+  // so the markup always matches on-page content (a Google requirement). Lives here — not in the
+  // shared index.html — so it appears only on the homepage and not on every SPA route.
+  useEffect(() => {
+    const el = document.createElement('script');
+    el.type = 'application/ld+json';
+    el.setAttribute('data-seo-route', 'home-faq');
+    el.textContent = JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      '@id': 'https://sparkp2p.com/#faq',
+      mainEntity: FAQS.flatMap(c => c.items).map(({ q, a }) => ({
+        '@type': 'Question',
+        name: q,
+        acceptedAnswer: { '@type': 'Answer', text: a },
+      })),
+    });
+    document.head.appendChild(el);
+    return () => { if (el.parentNode) el.parentNode.removeChild(el); };
+  }, []);
+
   return (
     <div className="landing">
 
