@@ -4,6 +4,7 @@ import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuesti
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
+import RelayConnectStatus from './RelayConnectStatus';
 import '@smile_identity/smart-camera-web';
 
 const saveBinanceApiKey = (data) => api.put('/traders/binance-api-key', data);
@@ -969,6 +970,9 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                 </span>
               ))}
             </div>
+
+            {/* Relay must be online to verify keys (server can't reach Binance directly) */}
+            <RelayConnectStatus />
 
             {/* Inputs */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 18 }}>

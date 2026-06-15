@@ -1192,9 +1192,16 @@ export default function Dashboard() {
     return () => clearInterval(binancePoll);
   }, []);
 
-  // Redirect to onboarding if not complete (only for traders, not admin/employees)
+  // Send only brand-new traders (who have done nothing yet) to the guided onboarding. Anyone who
+  // has started connecting — saved an API key or connected before — gets normal dashboard access
+  // and finishes the Binance connection from Settings, so they're never trapped on the connect step.
   useEffect(() => {
-    if (profile && profile.onboarding_complete === false && profile.role === 'trader') {
+    if (
+      profile && profile.role === 'trader' &&
+      profile.onboarding_complete === false &&
+      !profile.binance_api_key_saved &&
+      !profile.binance_connected
+    ) {
       navigate('/onboarding');
     }
   }, [profile]);
