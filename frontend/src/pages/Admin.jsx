@@ -765,6 +765,24 @@ export default function Admin() {
     setRefreshing(false);
   };
 
+  // Lightweight live refresh of just the trader list — keeps the Online / Relay badges current
+  // (relay presence goes stale on the server ~70s after a relay stops). No full-page spinner;
+  // search / filter / sort live in separate state, so replacing the data here doesn't disturb them.
+  const refreshTradersLive = async () => {
+    try {
+      const [tradersRes, onlineRes] = await Promise.all([getAdminTraders(), getAdminOnlineTraders()]);
+      setTraders(tradersRes.data);
+      setOnlineTraders(onlineRes.data);
+    } catch (_) { /* keep last known on a blip */ }
+  };
+
+  // Poll every 30s while viewing the Traders list so badges update without a manual reload.
+  useEffect(() => {
+    if (activeTab !== 'traders') return;
+    const id = setInterval(refreshTradersLive, 30000);
+    return () => clearInterval(id);
+  }, [activeTab]);
+
   const [txnSearch, setTxnSearch] = useState('');
 
   const loadTransactions = async (period, search, resetPage = false) => {
