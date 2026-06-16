@@ -394,6 +394,7 @@ export default function Login() {
                       onChange={(e) => setProfileOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                       maxLength={6}
                       inputMode="numeric"
+                      autoComplete="one-time-code"
                       autoFocus
                       required
                     />
@@ -480,6 +481,8 @@ export default function Login() {
                 <label>Verification Code</label>
                 <input
                   type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
                   placeholder="Enter 6-digit code"
                   value={form.email_code}
                   onChange={(e) => updateForm('email_code', e.target.value)}
@@ -619,6 +622,8 @@ export default function Login() {
                 <label>Verification Code</label>
                 <input
                   type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
                   placeholder="Enter 6-digit OTP"
                   value={otpCode}
                   onChange={(e) => setOtpCode(e.target.value)}

@@ -16,6 +16,7 @@ import Survey from './pages/Survey';
 import BinanceP2PBotKenya from './pages/BinanceP2PBotKenya';
 import AutomateBinanceP2PMpesa from './pages/AutomateBinanceP2PMpesa';
 import Blog from './pages/Blog';
+import BiometricGate from './components/BiometricGate';
 import './App.css';
 
 import KycVerifyPage from './pages/KycVerifyPage';
@@ -31,6 +32,7 @@ function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
+        <BiometricGate>
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
@@ -52,6 +54,7 @@ function App() {
       <Route path="/kyc/:token" element={<KycMobilePage />} />
       <Route path="*" element={<Navigate to="/dashboard" />} />
         </Routes>
+        </BiometricGate>
       </BrowserRouter>
     </AuthProvider>
   );
