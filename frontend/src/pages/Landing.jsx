@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import PublicChat from '../components/PublicChat';
+import NativeWelcome from '../components/NativeWelcome';
+import { isNative } from '../mobile/relayAgent';
 
 const FAQS = [
   {
@@ -182,6 +184,9 @@ export default function Landing() {
     document.head.appendChild(el);
     return () => { if (el.parentNode) el.parentNode.removeChild(el); };
   }, []);
+
+  // Inside the native mobile app, skip the marketing landing and show a simple branded welcome.
+  if (isNative()) return <NativeWelcome />;
 
   return (
     <div className="landing">
