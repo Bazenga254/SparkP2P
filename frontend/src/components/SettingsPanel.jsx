@@ -5,7 +5,37 @@ import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
 import RelayConnectStatus from './RelayConnectStatus';
+import { isNative } from '../mobile/relayAgent';
+import { bioAvailable, bioAuthenticate, bioEnabled, setBioEnabled } from '../mobile/biometric';
 import '@smile_identity/smart-camera-web';
+
+function BiometricSetting() {
+  const [avail, setAvail] = useState(false);
+  const [on, setOn] = useState(bioEnabled());
+  useEffect(() => { if (isNative()) bioAvailable().then(setAvail); }, []);
+  if (!isNative() || !avail) return null;
+  const toggle = async () => {
+    if (on) { setBioEnabled(false); setOn(false); return; }
+    const ok = await bioAuthenticate('Confirm to enable fingerprint unlock');
+    if (ok) { setBioEnabled(true); setOn(true); }
+  };
+  return (
+    <div className="card" style={{ marginBottom: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div style={{ width: 42, height: 42, borderRadius: 11, background: 'rgba(245,176,20,0.14)', color: '#f5b014', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 11c-1.5 0-2.5 1-2.5 3s.5 4 1 5"/><path d="M7 18c-.5-1.5-.7-3-.5-5 .3-2.7 2.4-4.5 5.5-4.5s5.2 1.8 5.5 4.5c.1 1 .1 2 0 3"/><path d="M4.5 14c-.2-1.5-.2-3 .2-4.5C5.6 5.8 8.4 4 12 4s6.4 1.8 7.3 5.5"/><path d="M12 14v3c0 1.5.3 2.7.7 3.5"/></svg>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, color: '#f3f4f6', fontSize: 15 }}>Fingerprint unlock</div>
+          <div style={{ color: '#9ca3af', fontSize: 12.5, marginTop: 2 }}>Unlock the app with your fingerprint or face instead of a password.</div>
+        </div>
+        <div onClick={toggle} style={{ width: 46, height: 26, borderRadius: 20, background: on ? '#33C27A' : '#3a414d', position: 'relative', flex: '0 0 auto', cursor: 'pointer', transition: '.2s' }}>
+          <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 20, height: 20, borderRadius: '50%', background: '#fff', transition: '.2s' }} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const saveBinanceApiKey = (data) => api.put('/traders/binance-api-key', data);
 const deleteBinanceApiKey = () => api.delete('/traders/binance-api-key');
@@ -1162,6 +1192,9 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
 
       {activeSection === 'security' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+          {/* ── Biometric unlock (native app only) ──────────── */}
+          <BiometricSetting />
 
           {/* ── Profile Details ─────────────────────────────── */}
           <div className="card" style={{ marginBottom: 0 }}>
