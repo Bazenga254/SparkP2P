@@ -13,6 +13,7 @@ export default function RelayConnectStatus({ onStatus }) {
   // a few seconds rather than trusting a single render-time read.
   const [native, setNative] = useState(isNative());
   const fastRef = useRef(null);
+  const mobileBrowser = /Android|iPhone|iPad|iPod/i.test(typeof navigator !== 'undefined' ? navigator.userAgent : '');
 
   useEffect(() => {
     if (native) return;
@@ -103,19 +104,35 @@ export default function RelayConnectStatus({ onStatus }) {
       ) : (
         <>
           <div style={{ fontSize: 12.5, color: '#d4b483', lineHeight: 1.55 }}>
-            Verifying your API keys needs the SparkP2P relay running on your device.
+            Verifying your API keys needs the SparkP2P relay running on one of your devices.
           </div>
-          <a
-            href="/api/download/android"
-            style={{ display: 'block', textAlign: 'center', background: 'linear-gradient(135deg,#FFC85A,#D9760C)', color: '#1a1206', fontWeight: 700, fontSize: 14, borderRadius: 10, padding: '11px 14px', textDecoration: 'none' }}
-          >
-            Download the SparkP2P Android app
-          </a>
-          <div style={{ fontSize: 11.5, color: '#9ca3af', lineHeight: 1.55 }}>
-            <strong>Already installed the app and still seeing this?</strong> Update <strong>Android
-            System WebView</strong> and Chrome in the Play Store, then fully close and reopen the SparkP2P
-            app. (On a computer, run the SparkP2P desktop app instead.)
-          </div>
+          {mobileBrowser ? (
+            <>
+              <a
+                href="/api/download/android"
+                style={{ display: 'block', textAlign: 'center', background: 'linear-gradient(135deg,#FFC85A,#D9760C)', color: '#1a1206', fontWeight: 700, fontSize: 14, borderRadius: 10, padding: '11px 14px', textDecoration: 'none' }}
+              >
+                Get the SparkP2P Android app
+              </a>
+              <div style={{ fontSize: 11.5, color: '#9ca3af', lineHeight: 1.55 }}>
+                <strong>Already have the app and still seeing this?</strong> Update <strong>Android System
+                WebView</strong> and Chrome in the Play Store, then fully close and reopen the SparkP2P app.
+              </div>
+            </>
+          ) : (
+            <>
+              <a
+                href="/api/download/latest"
+                style={{ display: 'block', textAlign: 'center', background: 'linear-gradient(135deg,#FFC85A,#D9760C)', color: '#1a1206', fontWeight: 700, fontSize: 14, borderRadius: 10, padding: '11px 14px', textDecoration: 'none' }}
+              >
+                Download the SparkP2P desktop app
+              </a>
+              <div style={{ fontSize: 11.5, color: '#9ca3af', lineHeight: 1.55 }}>
+                Open it and keep it running — it relays the connection from your computer. (Or run the
+                relay from your phone with the <a href="/api/download/android" style={{ color: '#f59e0b', textDecoration: 'none' }}>Android app</a>.)
+              </div>
+            </>
+          )}
         </>
       )}
 
