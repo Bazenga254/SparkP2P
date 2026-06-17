@@ -15,10 +15,27 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle responses - just pass through, auth handled by AuthContext
+// On an expired/invalid session token (401 from an authenticated endpoint), clear it and send the
+// user to log in again — otherwise the page silently fails every request (e.g. "Invalid or expired
+// token" stuck on the API-key card). Login/register/reset 401s are left for those screens to handle.
 api.interceptors.response.use(
   (response) => response,
-  (error) => Promise.reject(error),
+  (error) => {
+    const status = error.response?.status;
+    const url = error.config?.url || '';
+    const isAuthEndpoint = /\/auth\/(login|register|send-verification|reset-password)/.test(url);
+    if (status === 401 && !isAuthEndpoint && localStorage.getItem('token')) {
+      const detail = error.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail : (detail?.message || '');
+      if (/expired|invalid.*token|validate cred|not authenticated/i.test(msg)) {
+        localStorage.removeItem('token');
+        if (!window.location.pathname.startsWith('/login')) {
+          window.location.href = '/login?reason=expired';
+        }
+      }
+    }
+    return Promise.reject(error);
+  },
 );
 
 // Auth

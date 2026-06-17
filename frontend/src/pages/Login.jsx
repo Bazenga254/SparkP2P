@@ -50,6 +50,7 @@ export default function Login() {
 
   // Show inactivity message if redirected
   const inactivityLogout = searchParams.get('reason') === 'inactivity';
+  const sessionExpired = searchParams.get('reason') === 'expired';
 
   // Validate referral code if present in URL
   useEffect(() => {
@@ -302,7 +303,7 @@ export default function Login() {
   };
 
   return (
-    <div className="login-split">
+    <div className="login-split mlg-skin">
       {/* Mobile-only hero panel */}
       <div className="login-mobile-hero">
         <Link to="/" className="login-mobile-hero-brand">
@@ -312,6 +313,10 @@ export default function Login() {
         <div className="login-mobile-hero-content">
           <h1>Automate Your<br />Binance P2P Trading</h1>
           <p>Payments verified. Crypto released. All on autopilot.</p>
+          <div className="mlg-trust">
+            <span className="mlg-tchip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6z"/></svg>Bank-grade security</span>
+            <span className="mlg-tchip"><svg className="gd" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5"/></svg>Binance API verified</span>
+          </div>
         </div>
       </div>
 
@@ -458,6 +463,7 @@ export default function Login() {
               <div className="login-field-with-btn">
                 <input
                   type="email"
+                  data-icon="mail"
                   placeholder="you@example.com"
                   value={form.email}
                   onChange={(e) => updateForm('email', e.target.value)}
@@ -498,6 +504,7 @@ export default function Login() {
               <div className="login-field-with-btn">
                 <input
                   type={showPassword ? 'text' : 'password'}
+                  data-icon="lock"
                   placeholder={isRegister ? 'Create a strong password' : 'Enter your password'}
                   value={form.password}
                   onChange={(e) => updateForm('password', e.target.value)}
@@ -644,6 +651,13 @@ export default function Login() {
               </div>
             )}
 
+            {/* Session expired banner */}
+            {sessionExpired && (
+              <div style={{ background: '#3a2f1e', border: '1px solid #b45309', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#fcd34d', display: 'flex', gap: 8, alignItems: 'center' }}>
+                🔐 Your session expired. Please sign in again to continue.
+              </div>
+            )}
+
             {/* Account lockout banner */}
             {lockoutUntil && (
               <div className="login-lockout-banner">
@@ -686,6 +700,9 @@ export default function Login() {
 
             <button type="submit" className="login-submit" disabled={loading || !!lockoutUntil}>
               {loading ? 'Please wait...' : isRegister ? 'Create Account' : otpRequired ? 'Verify & Sign In' : 'Sign In'}
+              {!loading && !isRegister && !otpRequired && (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              )}
             </button>
 
             {!isRegister && otpRequired && (
