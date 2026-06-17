@@ -59,6 +59,15 @@ def _load():
             _nick_first = d.get("nick_first", {})
             _avail_now = d.get("avail_now", {})
             _started = d.get("started", 0.0) or time.time()
+            # Migrate legacy buckets (buy/sell keys) -> corrected bought/sold. The old 'buy' key
+            # held sell-ad drops (= the merchant SOLD); 'sell' held buy-ad drops (= BOUGHT).
+            for b in _buckets.values():
+                if "bought" not in b:
+                    b["sold"] = b.pop("buy", 0.0)
+                    b["bought"] = b.pop("sell", 0.0)
+                    for mm in b.get("m", {}).values():
+                        mm["sold"] = mm.pop("buy", 0.0)
+                        mm["bought"] = mm.pop("sell", 0.0)
             logger.info("[MarketFlow] restored %d buckets, %d merchants", len(_buckets), len(_avail_now))
     except Exception as e:
         logger.warning("[MarketFlow] load failed: %s", e)
@@ -99,7 +108,7 @@ async def _flow_once():
     now = time.time()
     hk = _hour(now)
     b = _buckets.get(hk)
-    if b is None:
+    if b is None or "bought" not in b:        # missing or legacy-shaped bucket -> start clean
         b = _buckets[hk] = {"bought": 0.0, "sold": 0.0, "m": {}, "start_avail": dict(_avail_now), "ts": now}
 
     cur: dict[str, tuple] = {}
