@@ -26,7 +26,7 @@ export default function MarketActivity({ enabled }) {
     { l: 'Est. USDT Traded (today)', v: fmtU(data.total_vol), c: 'amber', hl: true, extra: <><span className="chg-dn">▼ {fmtU(data.buy_vol)} bought</span> &nbsp; <span className="chg-up">▲ {fmtU(data.sell_vol)} sold</span></> },
     { l: 'Avg Maker Spread', v: data.avg_spread != null ? `KES ${data.avg_spread.toFixed(2)}` : '—', s: data.spread_pct != null ? `${data.spread_pct.toFixed(2)}% of price` : 'building…' },
     { l: 'Spread Range', v: data.min_spread != null ? `${data.min_spread.toFixed(2)}–${data.max_spread.toFixed(2)}` : '—', s: 'KES / USDT' },
-    { l: 'Liquidity Now', v: <><span className="blue">{fmtU(data.buy_liq_now)}</span> / <span className="green">{fmtU(data.sell_liq_now)}</span></>, s: 'buy offered / sell bid' },
+    { l: 'Liquidity Now', v: <span className="green">{fmtU(data.buy_liq_now)}</span>, s: 'USDT for sale' },
     { l: 'Active Merchants', v: String(data.active_merchants ?? '—'), s: data.new_merchants != null ? `+${data.new_merchants} new today` : 'new-count from 3am' },
   ] : [];
 
