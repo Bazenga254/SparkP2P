@@ -113,7 +113,11 @@ async def _flow_once():
             nick = r.get("nick") or ""
             cur[adv] = (nick, side, av)
             if nick:
-                nick_avail[nick] = nick_avail.get(nick, 0.0) + av
+                # "Avail now" = USDT the merchant actually has FOR SALE (sell ads only). The 'buy'
+                # board side IS the sell ads (merchants selling USDT). Buy-ad amounts are inflated
+                # monthly buy-limits, so they're excluded from availability.
+                if side == "buy":
+                    nick_avail[nick] = nick_avail.get(nick, 0.0) + av
                 _nick_first.setdefault(nick, now)
 
     for adv, (nick, side, av) in cur.items():

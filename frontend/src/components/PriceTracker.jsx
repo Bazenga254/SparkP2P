@@ -199,7 +199,9 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
           const askMed = medOf(buy.slice(0, 10).map(r => r.price)), bidMed = medOf(sell.slice(0, 10).map(r => r.price));
           const spread = r2(askMed - bidMed);
           const buyLiq = buy.reduce((s, r) => s + (Number(r.available) || 0), 0);
-          const sellLiq = sell.reduce((s, r) => s + (Number(r.available) || 0), 0);
+          // Sell Liquidity = real USDT merchants actually have FOR SALE (sell-ad coins). The 'sell'
+          // side (buy ads) is inflated monthly buy-limits, so we use real sellable coins instead.
+          const sellLiq = buy.reduce((s, r) => s + (Number(r.available) || 0), 0);
           const merchants = new Set([...buy, ...sell].map(r => (r.nick || '').toLowerCase()).filter(Boolean)).size;
           const spSeries = hist.map(p => r2((p.ask_med || 0) - (p.bid_med || 0)));
           const kpis = [
@@ -207,7 +209,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
             { l: 'Sell USDT To', v: bid.toFixed(2), s: 'highest bid', c: 'green', d: hist.map(p => p.bid) },
             { l: 'Maker Spread', v: (spread > 0 ? '+' : '') + spread.toFixed(2), s: 'round-trip / USDT', c: 'amber', d: spSeries },
             { l: 'Buy Liquidity', v: fmt2(buyLiq), s: 'USDT on offer', c: 'blue', d: hist.map(p => p.buy_liq) },
-            { l: 'Sell Liquidity', v: fmt2(sellLiq), s: 'USDT bid', c: 'green', d: hist.map(p => p.sell_liq) },
+            { l: 'Sell Liquidity', v: fmt2(sellLiq), s: 'USDT for sale', c: 'green', d: hist.map(p => p.buy_liq) },
             { l: 'Merchants', v: String(merchants), s: 'live on the book', c: '', d: null },
           ];
           const insights = buildInsights({ buy, sell, ask, bid, askMed, bidMed, spread, hist, meq });
