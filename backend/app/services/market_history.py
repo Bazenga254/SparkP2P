@@ -29,6 +29,15 @@ def _median(vals) -> float:
     return (s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2) if n else 0.0
 
 
+def _demand(r: dict) -> float:
+    """Realistic USDT a buy-ad merchant will absorb now: their listed coins capped at the USDT
+    value of one max-size trade (maxSingleTransAmount is in fiat). Avoids inflated monthly budgets."""
+    av = r.get("available") or 0
+    price = r.get("price") or 0
+    per_trade = (r.get("maxAmount") or 0) / price if price else 0
+    return min(av, per_trade) if per_trade else av
+
+
 def _clean(rows: list) -> list:
     """Rows with spoof/outlier prices removed (so best ask/bid + liquidity are trustworthy)."""
     arr = [r for r in (rows or []) if (r.get("price") or 0) > 0]
@@ -77,7 +86,9 @@ async def _snap_once():
         "ask_med": round(_median([r["price"] for r in buy[:10]]), 2),
         "bid_med": round(_median([r["price"] for r in sell[:10]]), 2),
         "buy_liq": round(sum((r.get("available") or 0) for r in buy)),
-        "sell_liq": round(sum((r.get("available") or 0) for r in sell)),
+        # Sell liquidity = realistic buyer demand: a buy ad's 'available' is an inflated monthly
+        # budget, so cap each buyer at one max-size trade (maxSingleTransAmount / price) in USDT.
+        "sell_liq": round(sum(_demand(r) for r in sell)),
         "n_buy": len(buy),
         "n_sell": len(sell),
     }

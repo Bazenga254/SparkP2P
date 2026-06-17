@@ -199,9 +199,15 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
           const askMed = medOf(buy.slice(0, 10).map(r => r.price)), bidMed = medOf(sell.slice(0, 10).map(r => r.price));
           const spread = r2(askMed - bidMed);
           const buyLiq = buy.reduce((s, r) => s + (Number(r.available) || 0), 0);
-          // Sell Liquidity = real USDT merchants actually have FOR SALE (sell-ad coins). The 'sell'
-          // side (buy ads) is inflated monthly buy-limits, so we use real sellable coins instead.
-          const sellLiq = buy.reduce((s, r) => s + (Number(r.available) || 0), 0);
+          // Sell Liquidity = realistic buyer demand (how much USDT the market will buy from you now).
+          // A buy ad's 'available' is an inflated monthly budget, so cap each buyer at the USDT value
+          // of ONE max-size trade (maxSingleTransAmount / price). Different pool from the sell side,
+          // so this naturally differs from Buy Liquidity.
+          const sellLiq = sell.reduce((s, r) => {
+            const perTrade = r.price ? (Number(r.maxAmount) || 0) / r.price : 0;
+            const real = perTrade ? Math.min(Number(r.available) || 0, perTrade) : (Number(r.available) || 0);
+            return s + real;
+          }, 0);
           const merchants = new Set([...buy, ...sell].map(r => (r.nick || '').toLowerCase()).filter(Boolean)).size;
           const spSeries = hist.map(p => r2((p.ask_med || 0) - (p.bid_med || 0)));
           const kpis = [
@@ -211,7 +217,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
             { l: 'Sell USDT To', v: bid.toFixed(2), s: 'highest bid', c: 'green', d: hist.map(p => p.bid_med) },
             { l: 'Maker Spread', v: (spread > 0 ? '+' : '') + spread.toFixed(2), s: 'round-trip / USDT', c: 'amber', d: spSeries },
             { l: 'Buy Liquidity', v: fmt2(buyLiq), s: 'USDT on offer', c: 'blue', d: hist.map(p => p.buy_liq) },
-            { l: 'Sell Liquidity', v: fmt2(sellLiq), s: 'USDT for sale', c: 'green', d: hist.map(p => p.buy_liq) },
+            { l: 'Sell Liquidity', v: fmt2(sellLiq), s: 'buyer demand now', c: 'green', d: hist.map(p => p.sell_liq) },
             { l: 'Merchants', v: String(merchants), s: 'live on the book', c: '', d: null },
           ];
           const insights = buildInsights({ buy, sell, ask, bid, askMed, bidMed, spread, hist, meq });
