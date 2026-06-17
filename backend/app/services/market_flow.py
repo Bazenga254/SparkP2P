@@ -137,9 +137,15 @@ async def _flow_once():
     _save()
 
 
+def _day_start(now: float) -> float:
+    # Binance trading day resets at 00:00 UTC == 03:00 EAT. Volume is counted
+    # from this boundary (not a rolling 24h) so the morning shows "since 3am".
+    return now - (now % 86400)
+
+
 def get_summary() -> dict:
     now = time.time()
-    cut = now - WINDOW
+    cut = _day_start(now)
     buy = sell = 0.0
     merch: dict[str, dict] = {}
     live = [b for b in _buckets.values() if b.get("ts", 0) >= cut]
@@ -165,8 +171,13 @@ def get_summary() -> dict:
         })
     rows.sort(key=lambda r: r["sold"], reverse=True)
 
-    age = now - (_started or now)
-    new_m = sum(1 for t in _nick_first.values() if t >= cut) if age >= WINDOW else None
+    since_hours = round((now - cut) / 3600, 1)           # hours since 3am reset
+    started = _started or now
+    # We only have complete "since 3am" data if the tracker was already running
+    # before today's reset. If it started after 3am, today's total is partial.
+    incomplete = started > cut + 120
+    coverage_hours = round((now - max(cut, started)) / 3600, 1)
+    new_m = sum(1 for t in _nick_first.values() if t >= cut) if not incomplete else None
     return {
         "buy_vol": round(buy),
         "sell_vol": round(sell),
@@ -174,7 +185,9 @@ def get_summary() -> dict:
         "active_merchants": len(_avail_now),
         "new_merchants": new_m,
         "merchants": rows[:40],
-        "tracked_hours": round(age / 3600, 1),
+        "tracked_hours": coverage_hours,
+        "since_hours": since_hours,
+        "incomplete_day": incomplete,
         "window_hours": 24,
     }
 

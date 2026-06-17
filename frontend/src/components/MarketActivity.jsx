@@ -20,14 +20,14 @@ export default function MarketActivity({ enabled }) {
   if (!enabled) return null;
 
   const upd = new Date(updatedAt || Date.now()).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const partial = data && data.tracked_hours != null && data.tracked_hours < 24;
+  const partial = data && data.incomplete_day;
 
   const stats = data ? [
-    { l: 'Est. USDT Traded (24h)', v: fmtU(data.total_vol), c: 'amber', hl: true, extra: <><span className="chg-dn">▼ {fmtU(data.buy_vol)} bought</span> &nbsp; <span className="chg-up">▲ {fmtU(data.sell_vol)} sold</span></> },
+    { l: 'Est. USDT Traded (today)', v: fmtU(data.total_vol), c: 'amber', hl: true, extra: <><span className="chg-dn">▼ {fmtU(data.buy_vol)} bought</span> &nbsp; <span className="chg-up">▲ {fmtU(data.sell_vol)} sold</span></> },
     { l: 'Avg Maker Spread', v: data.avg_spread != null ? `KES ${data.avg_spread.toFixed(2)}` : '—', s: data.spread_pct != null ? `${data.spread_pct.toFixed(2)}% of price` : 'building…' },
-    { l: 'Spread Range (24h)', v: data.min_spread != null ? `${data.min_spread.toFixed(2)}–${data.max_spread.toFixed(2)}` : '—', s: 'KES / USDT' },
+    { l: 'Spread Range', v: data.min_spread != null ? `${data.min_spread.toFixed(2)}–${data.max_spread.toFixed(2)}` : '—', s: 'KES / USDT' },
     { l: 'Liquidity Now', v: <><span className="blue">{fmtU(data.buy_liq_now)}</span> / <span className="green">{fmtU(data.sell_liq_now)}</span></>, s: 'buy offered / sell bid' },
-    { l: 'Active Merchants', v: String(data.active_merchants ?? '—'), s: data.new_merchants != null ? `+${data.new_merchants} new in 24h` : 'new-count after 24h' },
+    { l: 'Active Merchants', v: String(data.active_merchants ?? '—'), s: data.new_merchants != null ? `+${data.new_merchants} new today` : 'new-count from 3am' },
   ] : [];
 
   return (
@@ -37,7 +37,7 @@ export default function MarketActivity({ enabled }) {
         <div className="page-head">
           <div>
             <div className="ttl"><span className="hi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19V9M10 19V5M16 19v-7M21 19H3" /></svg></span>Market Activity</div>
-            <div className="sub">Last 24h · USDT/KES · estimated from order-book flow{updatedAt ? ` · updated ${upd}` : ''}</div>
+            <div className="sub">Today · since 3:00 AM EAT · USDT/KES · estimated from order-book flow{updatedAt ? ` · updated ${upd}` : ''}</div>
           </div>
           <div className="right"><button className="btn-refresh" onClick={load} disabled={loading}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }}><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5" /></svg>Refresh</button></div>
         </div>
@@ -46,7 +46,7 @@ export default function MarketActivity({ enabled }) {
           <>
             <div className="insight" style={{ marginBottom: 22, background: 'var(--card)' }}>
               <span className="ii" style={{ background: 'var(--blue-soft)', color: 'var(--blue-2)' }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M12 8h.01M11 12h1v4h1" /></svg></span>
-              <span><b>Volume is an estimate:</b> Binance doesn't publish merchants' balances or trades, so we infer fills from drops in advertised quantity across all ads. Spoof ads and relist/edit spikes are filtered out.{partial && <> Tracking has run for <b>{data.tracked_hours}h</b> so far — figures will reach a full 24h window shortly.</>}</span>
+              <span><b>Volume is an estimate:</b> Binance doesn't publish merchants' balances or trades, so we infer fills from drops in advertised quantity across all ads. Spoof ads and relist/edit spikes are filtered out. Totals reset daily at <b>3:00 AM EAT</b>.{partial && <> Tracking started after today's reset, so today's totals cover the last <b>{data.tracked_hours}h</b> only.</>}</span>
             </div>
 
             <div className="stats s5">
@@ -59,9 +59,9 @@ export default function MarketActivity({ enabled }) {
               ))}
             </div>
 
-            <div className="section-h">Merchant flow — top movers (24h, estimated)</div>
+            <div className="section-h">Merchant flow — top movers (today, estimated)</div>
             <div className="tbl-wrap"><table>
-              <thead><tr><th className="l">Merchant</th><th>Est. Traded</th><th>Bought</th><th>Sold</th><th>Avail Now</th><th>Δ 24h</th></tr></thead>
+              <thead><tr><th className="l">Merchant</th><th>Est. Traded</th><th>Bought</th><th>Sold</th><th>Avail Now</th><th>Δ today</th></tr></thead>
               <tbody>
                 {(!data.merchants || data.merchants.length === 0)
                   ? <tr><td className="l" colSpan="6" style={{ textAlign: 'center', color: 'var(--text-3)' }}>No fills observed yet — give it a few minutes of tracking.</td></tr>
@@ -72,12 +72,12 @@ export default function MarketActivity({ enabled }) {
                       <td data-label="Bought" className="v-bought">{m.buy ? fmtU(m.buy) : <span className="muted">—</span>}</td>
                       <td data-label="Sold" className="v-sold">{m.sell ? fmtU(m.sell) : <span className="muted">—</span>}</td>
                       <td data-label="Avail Now">{m.avail ? fmtU(m.avail) : <span className="muted">0</span>}</td>
-                      <td data-label="Δ 24h" style={{ color: m.delta_pct == null ? 'var(--text-3)' : m.delta_pct < 0 ? '#ef6a7e' : 'var(--green-2)', fontWeight: 600 }}>{m.delta_pct == null ? '—' : `${m.delta_pct > 0 ? '+' : ''}${m.delta_pct}%`}</td>
+                      <td data-label="Δ today" style={{ color: m.delta_pct == null ? 'var(--text-3)' : m.delta_pct < 0 ? '#ef6a7e' : 'var(--green-2)', fontWeight: 600 }}>{m.delta_pct == null ? '—' : `${m.delta_pct > 0 ? '+' : ''}${m.delta_pct}%`}</td>
                     </tr>
                   ))}
               </tbody>
             </table></div>
-            <div className="footnote">“Est. traded” = USDT inferred filled from drops in this merchant's advertised quantity. “Δ 24h” = change in their advertised inventory (a top-up shows positive).</div>
+            <div className="footnote">“Est. traded” = USDT inferred filled from drops in this merchant's advertised quantity. “Δ today” = change in their advertised inventory (a top-up shows positive).</div>
           </>
         )}
       </div>
