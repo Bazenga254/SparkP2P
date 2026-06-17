@@ -205,8 +205,10 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
           const merchants = new Set([...buy, ...sell].map(r => (r.nick || '').toLowerCase()).filter(Boolean)).size;
           const spSeries = hist.map(p => r2((p.ask_med || 0) - (p.bid_med || 0)));
           const kpis = [
-            { l: 'Buy USDT From', v: ask.toFixed(2), s: 'cheapest ask', c: 'blue', d: hist.map(p => p.ask) },
-            { l: 'Sell USDT To', v: bid.toFixed(2), s: 'highest bid', c: 'green', d: hist.map(p => p.bid) },
+            // Sparklines use the median ask/bid: the raw top-of-book bid can be pinned by a
+            // persistent anchor/spoof ad (frozen line), so the median tracks the real market.
+            { l: 'Buy USDT From', v: ask.toFixed(2), s: 'cheapest ask', c: 'blue', d: hist.map(p => p.ask_med) },
+            { l: 'Sell USDT To', v: bid.toFixed(2), s: 'highest bid', c: 'green', d: hist.map(p => p.bid_med) },
             { l: 'Maker Spread', v: (spread > 0 ? '+' : '') + spread.toFixed(2), s: 'round-trip / USDT', c: 'amber', d: spSeries },
             { l: 'Buy Liquidity', v: fmt2(buyLiq), s: 'USDT on offer', c: 'blue', d: hist.map(p => p.buy_liq) },
             { l: 'Sell Liquidity', v: fmt2(sellLiq), s: 'USDT for sale', c: 'green', d: hist.map(p => p.buy_liq) },
