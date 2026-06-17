@@ -26,12 +26,13 @@ api.interceptors.response.use(
     const isAuthEndpoint = /\/auth\/(login|register|send-verification|reset-password)/.test(url);
     if (status === 401 && !isAuthEndpoint && localStorage.getItem('token')) {
       const detail = error.response?.data?.detail;
-      const msg = typeof detail === 'string' ? detail : (detail?.message || '');
-      if (/expired|invalid.*token|validate cred|not authenticated/i.test(msg)) {
+      const msg = typeof detail === 'string' ? detail : '';
+      // EXACT match only — this is the session-JWT failure (deps.py is the sole source). A broad
+      // match also caught "Invalid or expired OTP code" and other 401s, which logged users out
+      // immediately after sign-in (login loop).
+      if (msg === 'Invalid or expired token' && !window.location.pathname.startsWith('/login')) {
         localStorage.removeItem('token');
-        if (!window.location.pathname.startsWith('/login')) {
-          window.location.href = '/login?reason=expired';
-        }
+        window.location.href = '/login?reason=expired';
       }
     }
     return Promise.reject(error);
