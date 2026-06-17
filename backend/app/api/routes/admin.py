@@ -2568,8 +2568,16 @@ async def get_trader_activity(
     Total Trades / Volume filter). 'Lifetime' is shown from the trader's own totals on the client."""
     from sqlalchemy import func
     now = datetime.now(timezone.utc)
-    deltas = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
-    since = now - deltas.get(period, timedelta(hours=24))
+    # Trading day resets at 00:00 UTC (= 03:00 EAT), matching Binance / the daily trade counter.
+    # So "24h" means "today since the reset" (not a rolling 24h window that bleeds into yesterday),
+    # and 7d/30d are the last N calendar days aligned to that same daily boundary.
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "7d":
+        since = today_start - timedelta(days=6)
+    elif period == "30d":
+        since = today_start - timedelta(days=29)
+    else:  # "24h" → today
+        since = today_start
 
     row = (await db.execute(
         select(func.count(Order.id), func.coalesce(func.sum(Order.fiat_amount), 0)).where(

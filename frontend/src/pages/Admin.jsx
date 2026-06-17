@@ -139,8 +139,8 @@ export default function Admin() {
   const [revSimPeriod, setRevSimPeriod] = useState('today');
   const [revSimMethod, setRevSimMethod] = useState('auto'); // auto | mpesa | pesalink
   const [revSimLoading, setRevSimLoading] = useState(false);
-  // Total Trades / Volume period filter (24h | 7d | 30d | all)
-  const [activityPeriod, setActivityPeriod] = useState('all');
+  // Total Trades / Volume period filter (24h | 7d | 30d | all) — default to today (since 03:00 EAT reset)
+  const [activityPeriod, setActivityPeriod] = useState('24h');
   const [activity, setActivity] = useState(null); // { trades, volume } for the selected window
   const [activityLoading, setActivityLoading] = useState(false);
   const [revMode, setRevMode] = useState(localStorage.getItem('sparkp2p_revenue_mode') || 'sim'); // 'sim' | 'prod'
@@ -953,8 +953,9 @@ export default function Admin() {
     setTraderRevSim(null);
     setRevSimPeriod('today');
     setRevSimMethod('auto');
-    setActivityPeriod('all');
+    setActivityPeriod('24h');
     setActivity(null);
+    loadTraderActivity(trader.id, '24h');   // show today's trades/volume by default
     setAddTokensMsg(''); setAddTokensAmount(''); setAddTokensNote('');
     setPnlPeriod('today');
     setViewingTraderLoading(true);
