@@ -1112,7 +1112,8 @@ export default function Dashboard() {
 
   // Listen for setup-incomplete / setup-complete events from desktop app
   useEffect(() => {
-    const onIncomplete = (e) => { setSetupMissing(e.detail?.missing || []); setSetupDismissed(false); };
+    // Gmail is optional (API-key merchants don't need it), so never gate setup on it.
+    const onIncomplete = (e) => { setSetupMissing((e.detail?.missing || []).filter(x => x !== 'Gmail')); setSetupDismissed(false); };
     const onComplete = () => setSetupMissing([]);
     window.addEventListener('setup-incomplete', onIncomplete);
     window.addEventListener('setup-complete', onComplete);
@@ -1127,7 +1128,7 @@ export default function Dashboard() {
     if (!profile) return [];
     const m = [];
     if (!profile.binance_connected) m.push('Binance');
-    if (!profile.gmail_connected) m.push('Gmail');
+    // Gmail is optional — API-key merchants don't need it, so it must not pause the bot.
     return m;
   })();
   const showSetupBanner = (setupMissing.length > 0 || missingConnections.length > 0) && !setupDismissed;
