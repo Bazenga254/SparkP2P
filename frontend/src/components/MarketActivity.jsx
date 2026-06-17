@@ -23,7 +23,7 @@ export default function MarketActivity({ enabled }) {
   const partial = data && data.incomplete_day;
 
   const stats = data ? [
-    { l: 'Est. USDT Traded (today)', v: fmtU(data.total_vol), c: 'amber', hl: true, extra: <><span className="chg-dn">▼ {fmtU(data.buy_vol)} bought</span> &nbsp; <span className="chg-up">▲ {fmtU(data.sell_vol)} sold</span></> },
+    { l: 'Est. USDT Traded (today)', v: fmtU(data.total_vol), c: 'amber', hl: true, extra: <><span className="chg-dn">▼ {fmtU(data.bought_vol)} bought</span> &nbsp; <span className="chg-up">▲ {fmtU(data.sold_vol)} sold</span></> },
     { l: 'Avg Maker Spread', v: data.avg_spread != null ? `KES ${data.avg_spread.toFixed(2)}` : '—', s: data.spread_pct != null ? `${data.spread_pct.toFixed(2)}% of price` : 'building…' },
     { l: 'Spread Range', v: data.min_spread != null ? `${data.min_spread.toFixed(2)}–${data.max_spread.toFixed(2)}` : '—', s: 'KES / USDT' },
     { l: 'Liquidity Now', v: <span className="green">{fmtU(data.buy_liq_now)}</span>, s: 'USDT for sale' },
@@ -68,9 +68,9 @@ export default function MarketActivity({ enabled }) {
                   : data.merchants.map((m, i) => (
                     <tr key={m.nick + i}>
                       <td className="l row-head"><span className="rank">{i + 1}</span> <span className="m-name" style={{ marginLeft: 8 }}>{m.nick}</span></td>
-                      <td data-label="Est. Traded" className="v-traded">{fmtU(m.sold)}</td>
-                      <td data-label="Bought" className="v-bought">{m.buy ? fmtU(m.buy) : <span className="muted">—</span>}</td>
-                      <td data-label="Sold" className="v-sold">{m.sell ? fmtU(m.sell) : <span className="muted">—</span>}</td>
+                      <td data-label="Est. Traded" className="v-traded">{fmtU(m.traded)}</td>
+                      <td data-label="Bought" className="v-bought">{m.bought ? fmtU(m.bought) : <span className="muted">—</span>}</td>
+                      <td data-label="Sold" className="v-sold">{m.sold ? fmtU(m.sold) : <span className="muted">—</span>}</td>
                       <td data-label="Avail Now">{m.avail ? fmtU(m.avail) : <span className="muted">0</span>}</td>
                       <td data-label="Δ today" style={{ color: m.delta_pct == null ? 'var(--text-3)' : m.delta_pct < 0 ? '#ef6a7e' : 'var(--green-2)', fontWeight: 600 }}>{m.delta_pct == null ? '—' : `${m.delta_pct > 0 ? '+' : ''}${m.delta_pct}%`}</td>
                     </tr>

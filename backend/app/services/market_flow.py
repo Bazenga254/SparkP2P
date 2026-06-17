@@ -100,34 +100,38 @@ async def _flow_once():
     hk = _hour(now)
     b = _buckets.get(hk)
     if b is None:
-        b = _buckets[hk] = {"buy": 0.0, "sell": 0.0, "m": {}, "start_avail": dict(_avail_now), "ts": now}
+        b = _buckets[hk] = {"bought": 0.0, "sold": 0.0, "m": {}, "start_avail": dict(_avail_now), "ts": now}
 
     cur: dict[str, tuple] = {}
     nick_avail: dict[str, float] = {}
-    for side, rows in (("buy", buy), ("sell", sell)):
+    # board["buy"] = SELL ads (merchants SELLING USDT); board["sell"] = BUY ads (merchants BUYING).
+    for board_side, rows in (("buy", buy), ("sell", sell)):
         for r in rows:
             adv = str(r.get("advNo") or "")
             if not adv:
                 continue
             av = float(r.get("available") or 0)
             nick = r.get("nick") or ""
-            cur[adv] = (nick, side, av)
+            cur[adv] = (nick, board_side, av)
             if nick:
-                # "Avail now" = USDT the merchant actually has FOR SALE (sell ads only). The 'buy'
-                # board side IS the sell ads (merchants selling USDT). Buy-ad amounts are inflated
-                # monthly buy-limits, so they're excluded from availability.
-                if side == "buy":
+                # "Avail now" = USDT the merchant actually has FOR SALE (their sell ads = board["buy"]).
+                # Buy-ad amounts are inflated monthly buy-limits, so they're excluded from availability.
+                if board_side == "buy":
                     nick_avail[nick] = nick_avail.get(nick, 0.0) + av
                 _nick_first.setdefault(nick, now)
 
-    for adv, (nick, side, av) in cur.items():
+    for adv, (nick, board_side, av) in cur.items():
         if adv in _prev:
             delta = _prev[adv] - av
             if delta > 0:
                 filled = min(delta, MAX_FILL_PER_MIN)
-                b[side] += filled
-                m = b["m"].setdefault(nick, {"buy": 0.0, "sell": 0.0})
-                m[side] += filled
+                # A drop on a SELL ad (board["buy"]) means the merchant SOLD USDT; a drop on a
+                # BUY ad (board["sell"]) means they BOUGHT. (Earlier this was mislabeled, which
+                # made net buyers like our own merchants show up as sellers.)
+                action = "sold" if board_side == "buy" else "bought"
+                b[action] += filled
+                m = b["m"].setdefault(nick, {"bought": 0.0, "sold": 0.0})
+                m[action] += filled
 
     _prev.clear()
     _prev.update({adv: av for adv, (n, s, av) in cur.items()})
@@ -146,30 +150,30 @@ def _day_start(now: float) -> float:
 def get_summary() -> dict:
     now = time.time()
     cut = _day_start(now)
-    buy = sell = 0.0
+    bought = sold = 0.0
     merch: dict[str, dict] = {}
     live = [b for b in _buckets.values() if b.get("ts", 0) >= cut]
     oldest = min(live, key=lambda x: x["ts"]) if live else None
     base_avail = (oldest or {}).get("start_avail", {})
     for b in live:
-        buy += b.get("buy", 0.0)
-        sell += b.get("sell", 0.0)
+        bought += b.get("bought", 0.0)
+        sold += b.get("sold", 0.0)
         for nick, v in b.get("m", {}).items():
-            mm = merch.setdefault(nick, {"buy": 0.0, "sell": 0.0})
-            mm["buy"] += v.get("buy", 0.0)
-            mm["sell"] += v.get("sell", 0.0)
+            mm = merch.setdefault(nick, {"bought": 0.0, "sold": 0.0})
+            mm["bought"] += v.get("bought", 0.0)
+            mm["sold"] += v.get("sold", 0.0)
 
     rows = []
     for nick, v in merch.items():
-        sold = v["buy"] + v["sell"]
+        traded = v["bought"] + v["sold"]
         availn = _avail_now.get(nick, 0.0)
         base = base_avail.get(nick)
         dpct = round((availn - base) / base * 100, 1) if base else None
         rows.append({
-            "nick": nick, "sold": round(sold), "buy": round(v["buy"]), "sell": round(v["sell"]),
+            "nick": nick, "traded": round(traded), "bought": round(v["bought"]), "sold": round(v["sold"]),
             "avail": round(availn), "delta_pct": dpct,
         })
-    rows.sort(key=lambda r: r["sold"], reverse=True)
+    rows.sort(key=lambda r: r["traded"], reverse=True)
 
     since_hours = round((now - cut) / 3600, 1)           # hours since 3am reset
     started = _started or now
@@ -179,9 +183,9 @@ def get_summary() -> dict:
     coverage_hours = round((now - max(cut, started)) / 3600, 1)
     new_m = sum(1 for t in _nick_first.values() if t >= cut) if not incomplete else None
     return {
-        "buy_vol": round(buy),
-        "sell_vol": round(sell),
-        "total_vol": round(buy + sell),
+        "bought_vol": round(bought),
+        "sold_vol": round(sold),
+        "total_vol": round(bought + sold),
         "active_merchants": len(_avail_now),
         "new_merchants": new_m,
         "merchants": rows[:40],
