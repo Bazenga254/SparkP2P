@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { login as apiLogin } from '../services/api';
 import { isNative } from '../mobile/relayAgent';
 import { bioAuthenticate, bioAvailable, bioEnabled } from '../mobile/biometric';
+import { startSmsOtp } from '../mobile/smsOtp';
 import OtpInput from './OtpInput';
 
 const APP_VER = '2.0.0';
@@ -51,6 +52,12 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
 
   // Auto-offer fingerprint the moment the locked screen appears.
   useEffect(() => { if (bioOn) doBio(); }, [bioOn]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When the OTP step opens, let the native SMS Retriever read the code straight into the boxes.
+  useEffect(() => {
+    if (!otpRequired) return undefined;
+    return startSmsOtp((code) => setOtp(code));
+  }, [otpRequired]);
 
   const submit = async (e) => {
     e.preventDefault();

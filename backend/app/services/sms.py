@@ -253,11 +253,15 @@ def sms_subscription_activated(phone: str, plan: str, expires: str) -> bool:
     return send_sms(phone, msg)
 
 
+# Android SMS Retriever hash for the release-signed SparkP2P app (com.sparkp2p.app). The OTP SMS
+# must begin with "<#>" and end with this 11-char hash so the app can auto-read the code into the
+# login boxes. Regenerate if the release signing keystore ever changes.
+SMS_RETRIEVER_HASH = "h3Oop6l5h0F"
+
+
 def sms_verification_code(phone: str, code: str) -> bool:
-    """Send verification code via SMS."""
+    """Send a login/reset verification code, formatted for Android SMS Retriever auto-fill."""
     tpl = get_cached_template("sms_verification_code")
-    if tpl:
-        msg = tpl.format(code=code)
-    else:
-        msg = f"SparkP2P verification code: {code}. Valid for 10 minutes."
+    body = tpl.format(code=code) if tpl else f"SparkP2P verification code: {code}. Valid for 10 minutes."
+    msg = f"<#> {body}\n{SMS_RETRIEVER_HASH}"
     return send_otp_sms(phone, msg)

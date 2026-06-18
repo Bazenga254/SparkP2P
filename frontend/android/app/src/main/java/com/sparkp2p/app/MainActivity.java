@@ -34,6 +34,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(SparkRelayPlugin.class);
         registerPlugin(BiometricAuthPlugin.class);
+        registerPlugin(SmsOtpPlugin.class);
         super.onCreate(savedInstanceState);
         handler.postDelayed(watcher, 3000);
     }
