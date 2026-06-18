@@ -6775,6 +6775,12 @@ body {
 .mlogin-submit:active { transform: scale(0.99); }
 
 .mlogin-create { text-align: center; margin-top: 20px; font-size: 14.5px; color: #93a0b4; }
+.mlogin-google {
+  width: 100%; box-sizing: border-box; margin-top: 4px; padding: 15px; border-radius: 14px; cursor: pointer;
+  background: #fff; color: #1f2430; border: 1px solid #e2e6ee; font-size: 15.5px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+}
+.mlogin-google:active { background: #eef1f6; }
 .mlogin-or { display: flex; align-items: center; gap: 14px; margin: 26px 4px 22px; color: #6b7688; font-size: 13px; }
 .mlogin-or::before, .mlogin-or::after { content: ''; flex: 1; height: 1px; background: #232c3a; }
 .mlogin-bio { display: flex; flex-direction: column; align-items: center; gap: 10px; }
