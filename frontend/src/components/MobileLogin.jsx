@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { login as apiLogin } from '../services/api';
 import { isNative } from '../mobile/relayAgent';
 import { bioAuthenticate, bioAvailable, bioEnabled } from '../mobile/biometric';
+import OtpInput from './OtpInput';
 
 const APP_VER = '2.0.0';
 const greet = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; };
@@ -132,12 +133,7 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
             </button>
           </div>
 
-          {otpRequired && (
-            <div className="mlogin-input-wrap">
-              <input className="mlogin-input" inputMode="numeric" autoComplete="one-time-code" maxLength={6}
-                placeholder="6-digit code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))} autoFocus />
-            </div>
-          )}
+          {otpRequired && <OtpInput value={otp} onChange={setOtp} length={6} />}
           {otpRequired && <div className="mlogin-hint">Code sent to {phoneHint || 'your phone'} — or use your Google Authenticator code.</div>}
 
           <div className="mlogin-forgot">
