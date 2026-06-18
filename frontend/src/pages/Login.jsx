@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { login, register, sendVerificationCode, validateReferralCode } from '../services/api';
+import { isNative } from '../mobile/relayAgent';
+import MobileLogin from '../components/MobileLogin';
 
 const PASSWORD_RULES = [
   { label: 'At least 8 characters', test: (p) => p.length >= 8 },
@@ -301,6 +303,12 @@ export default function Login() {
       setLoading(false);
     }
   };
+
+  // Native mobile app gets the CIC-style entry screen for sign-in; register/Google fall through
+  // to the full form below.
+  if (isNative() && !isRegister && !googleProfile) {
+    return <MobileLogin mode="login" onRegister={() => { setIsRegister(true); setError(''); }} />;
+  }
 
   return (
     <div className="login-split mlg-skin">

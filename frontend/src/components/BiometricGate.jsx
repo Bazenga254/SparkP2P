@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { isNative } from '../mobile/relayAgent';
 import { bioAuthenticate, bioAvailable, bioEnabled, setBioEnabled, bioAsked, markBioAsked } from '../mobile/biometric';
+import MobileLogin from './MobileLogin';
 
 // Wraps the app inside the native mobile app. When the trader has enabled biometric unlock, the app
 // locks on open / when returning to foreground and unlocks with fingerprint/face — no password.
@@ -11,17 +12,6 @@ export default function BiometricGate({ children }) {
   const [locked, setLocked] = useState(() => native && bioEnabled() && hasToken());
   const [busy, setBusy] = useState(false);
   const [askEnable, setAskEnable] = useState(false);
-
-  const attemptUnlock = useCallback(async () => {
-    if (busy) return;
-    setBusy(true);
-    const ok = await bioAuthenticate('Unlock SparkP2P');
-    setBusy(false);
-    if (ok) setLocked(false);
-  }, [busy]);
-
-  // Auto-prompt biometrics whenever we become locked.
-  useEffect(() => { if (locked) attemptUnlock(); }, [locked]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-lock when the app returns to the foreground — but only after a grace period away, so a
   // quick switch out and back (e.g. to copy an OTP) doesn't force a fingerprint every time.
@@ -58,19 +48,9 @@ export default function BiometricGate({ children }) {
   };
   const skipEnable = () => { markBioAsked(); setAskEnable(false); };
 
-  // ── Locked screen ───────────────────────────────────────
+  // ── Locked screen — CIC-style entry (fingerprint resume + password fallback) ──
   if (native && bioEnabled() && locked && hasToken()) {
-    return (
-      <div className="nw-wrap" style={{ animation: 'none' }}>
-        <img src="/spark-ai-logo.png" alt="Spark AI" style={{ width: 130, height: 130, borderRadius: 30, objectFit: 'cover', zIndex: 1, boxShadow: '0 16px 50px rgba(0,0,0,0.45)' }} />
-        <div style={{ zIndex: 1, marginTop: 22, fontSize: 22, fontWeight: 800, color: '#fff' }}>SparkP2P locked</div>
-        <div style={{ zIndex: 1, marginTop: 6, fontSize: 14, color: '#9fb0c9' }}>Unlock with your fingerprint to continue.</div>
-        <button onClick={attemptUnlock} disabled={busy}
-          style={{ zIndex: 1, marginTop: 26, width: '100%', maxWidth: 320, padding: '14px 18px', border: 'none', borderRadius: 13, background: 'linear-gradient(135deg,#FFC85A,#F5A623)', color: '#1a1206', fontSize: 16, fontWeight: 800, cursor: 'pointer', opacity: busy ? 0.7 : 1 }}>
-          {busy ? 'Waiting…' : 'Unlock'}
-        </button>
-      </div>
-    );
+    return <MobileLogin mode="lock" onUnlock={() => setLocked(false)} />;
   }
 
   // ── Children (+ one-time enable prompt) ─────────────────

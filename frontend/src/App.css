@@ -6712,6 +6712,83 @@ body {
   .nw-logo-box, .nw-wordmark-box, .nw-glow, .nw-shine, .nw-title, .nw-sub, .nw-btn, .nw-footer, .nw-wrap::before, .nw-wrap::after { animation: none; }
 }
 
+/* ── Mobile login (CIC-style returning-user entry) ─────────────────── */
+.mlogin {
+  position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
+  background: radial-gradient(120% 80% at 50% -10%, #18202c 0%, #0c0f15 55%, #090b10 100%);
+  color: #e9eef5; padding: 14px 22px 18px;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-tap-highlight-color: transparent; overflow-y: auto;
+}
+.mlogin-topbar { display: flex; align-items: center; justify-content: space-between; padding-top: 6px; }
+.mlogin-icon-btn {
+  width: 42px; height: 42px; border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(255,255,255,0.06); color: #c7d0dd; display: flex; align-items: center; justify-content: center;
+}
+.mlogin-icon-btn svg { width: 20px; height: 20px; }
+.mlogin-icon-btn:active { background: rgba(255,255,255,0.12); }
+.mlogin-brand { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.mlogin-brand img { width: 38px; height: 38px; border-radius: 10px; object-fit: contain; }
+.mlogin-brand span { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; color: #ffb454; }
+
+.mlogin-body { flex: 1; display: flex; flex-direction: column; max-width: 440px; width: 100%; margin: 0 auto; }
+.mlogin-title { text-align: center; font-size: 28px; font-weight: 800; margin: 26px 0 30px; letter-spacing: -0.01em; }
+
+.mlogin-greet { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
+.mlogin-avatar {
+  width: 58px; height: 58px; border-radius: 50%; flex-shrink: 0;
+  background: linear-gradient(135deg, #FFC85A, #F5A623); color: #1a1206;
+  display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 800;
+  box-shadow: 0 8px 22px rgba(245,166,35,0.35);
+}
+.mlogin-greet-hi { font-size: 19px; font-weight: 800; color: #fff; }
+.mlogin-greet-sub { font-size: 14px; color: #93a0b4; margin-top: 2px; }
+.mlogin-notyou { margin-top: 5px; display: inline-block; }
+.mlogin-link { background: none; border: none; padding: 0; color: #ffb454; font-weight: 700; font-size: 14px; cursor: pointer; }
+.mlogin-link:active { opacity: 0.7; }
+
+.mlogin-form { display: flex; flex-direction: column; }
+.mlogin-input-wrap { position: relative; margin-bottom: 14px; }
+.mlogin-input {
+  width: 100%; box-sizing: border-box; padding: 17px 52px 17px 18px; font-size: 16px;
+  background: #11161e; border: 1px solid #283143; border-radius: 14px; color: #fff; outline: none;
+}
+.mlogin-input::placeholder { color: #6b7688; }
+.mlogin-input:focus { border-color: #F5A623; box-shadow: 0 0 0 3px rgba(245,166,35,0.16); }
+.mlogin-eye {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 38px; height: 38px;
+  border: none; background: none; color: #8a97ab; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.mlogin-eye svg { width: 22px; height: 22px; }
+.mlogin-hint { font-size: 12.5px; color: #8a97ab; margin: -6px 2px 12px; line-height: 1.5; }
+.mlogin-forgot { text-align: right; margin: 2px 2px 18px; }
+.mlogin-error {
+  background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3); color: #ff8a9b;
+  font-size: 13.5px; padding: 11px 14px; border-radius: 11px; margin-bottom: 14px; text-align: center;
+}
+.mlogin-submit {
+  width: 100%; padding: 17px; border: none; border-radius: 14px; cursor: pointer;
+  background: linear-gradient(135deg, #FFC85A, #F5A623); color: #1a1206; font-size: 17px; font-weight: 800;
+  box-shadow: 0 12px 30px rgba(245,166,35,0.3);
+}
+.mlogin-submit:disabled { opacity: 0.6; }
+.mlogin-submit:active { transform: scale(0.99); }
+
+.mlogin-create { text-align: center; margin-top: 20px; font-size: 14.5px; color: #93a0b4; }
+.mlogin-or { display: flex; align-items: center; gap: 14px; margin: 26px 4px 22px; color: #6b7688; font-size: 13px; }
+.mlogin-or::before, .mlogin-or::after { content: ''; flex: 1; height: 1px; background: #232c3a; }
+.mlogin-bio { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.mlogin-bio-btn {
+  width: 78px; height: 78px; border-radius: 50%; border: none; cursor: pointer;
+  background: linear-gradient(135deg, #FFC85A, #F5A623); color: #1a1206;
+  display: flex; align-items: center; justify-content: center; box-shadow: 0 12px 30px rgba(245,166,35,0.35);
+}
+.mlogin-bio-btn svg { width: 38px; height: 38px; }
+.mlogin-bio-btn:active { transform: scale(0.96); }
+.mlogin-bio-btn:disabled { opacity: 0.7; }
+.mlogin-bio-label { font-size: 13px; color: #93a0b4; }
+.mlogin-version { text-align: center; font-size: 12px; color: #4f5b71; padding-top: 14px; }
+
 /* ── Landing pricing section ───────────────────────────────────────── */
 .land-pricing { padding: 80px 0; }
 .land-pricing-grid {

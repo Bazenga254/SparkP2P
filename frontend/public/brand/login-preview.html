@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SparkP2P — New Mobile Login</title>
+<style>
+  body { margin:0; background:#05070b; color:#cdd6e3; font-family:Inter,system-ui,"Segoe UI",sans-serif; padding:24px 12px 50px; }
+  h1 { text-align:center; font-size:18px; margin:0 0 4px; }
+  .sub { text-align:center; color:#7e8aa0; font-size:13px; margin:0 0 26px; }
+  .row { display:flex; gap:26px; justify-content:center; flex-wrap:wrap; }
+  .phone { width:300px; height:620px; border-radius:34px; border:9px solid #1b2230; background:#0c0f15; overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,.6); position:relative; }
+  .cap { text-align:center; font-size:12.5px; color:#8a97ab; margin-top:12px; }
+
+  /* ---- mlogin styles (mirrors the app) ---- */
+  .mlogin { position:absolute; inset:0; display:flex; flex-direction:column;
+    background: radial-gradient(120% 80% at 50% -10%, #18202c 0%, #0c0f15 55%, #090b10 100%);
+    color:#e9eef5; padding:14px 20px 16px; }
+  .mlogin-topbar { display:flex; align-items:center; justify-content:space-between; padding-top:4px; }
+  .mlogin-icon-btn { width:38px; height:38px; border-radius:50%; border:none; background:rgba(255,255,255,.06); color:#c7d0dd; display:flex; align-items:center; justify-content:center; }
+  .mlogin-icon-btn svg { width:18px; height:18px; }
+  .mlogin-brand { display:flex; flex-direction:column; align-items:center; gap:3px; }
+  .mlogin-brand img { width:34px; height:34px; border-radius:9px; }
+  .mlogin-brand span { font-size:11px; font-weight:800; letter-spacing:.06em; color:#ffb454; }
+  .mlogin-body { flex:1; display:flex; flex-direction:column; }
+  .mlogin-title { text-align:center; font-size:25px; font-weight:800; margin:20px 0 24px; }
+  .mlogin-greet { display:flex; align-items:center; gap:13px; margin-bottom:22px; }
+  .mlogin-avatar { width:54px; height:54px; border-radius:50%; background:linear-gradient(135deg,#FFC85A,#F5A623); color:#1a1206; display:flex; align-items:center; justify-content:center; font-size:22px; font-weight:800; box-shadow:0 8px 22px rgba(245,166,35,.35); }
+  .mlogin-greet-hi { font-size:18px; font-weight:800; color:#fff; }
+  .mlogin-greet-sub { font-size:13.5px; color:#93a0b4; margin-top:2px; }
+  .mlogin-link { background:none; border:none; padding:0; color:#ffb454; font-weight:700; font-size:13.5px; cursor:pointer; }
+  .mlogin-notyou { margin-top:5px; display:inline-block; }
+  .mlogin-input-wrap { position:relative; margin-bottom:13px; }
+  .mlogin-input { width:100%; box-sizing:border-box; padding:15px 48px 15px 16px; font-size:15px; background:#11161e; border:1px solid #283143; border-radius:13px; color:#fff; }
+  .mlogin-input::placeholder { color:#6b7688; }
+  .mlogin-eye { position:absolute; right:8px; top:50%; transform:translateY(-50%); width:34px; height:34px; border:none; background:none; color:#8a97ab; display:flex; align-items:center; justify-content:center; }
+  .mlogin-eye svg { width:20px; height:20px; }
+  .mlogin-forgot { text-align:right; margin:2px 2px 16px; }
+  .mlogin-submit { width:100%; padding:15px; border:none; border-radius:13px; background:linear-gradient(135deg,#FFC85A,#F5A623); color:#1a1206; font-size:16px; font-weight:800; box-shadow:0 12px 30px rgba(245,166,35,.3); }
+  .mlogin-create { text-align:center; margin-top:18px; font-size:13.5px; color:#93a0b4; }
+  .mlogin-or { display:flex; align-items:center; gap:13px; margin:20px 4px 16px; color:#6b7688; font-size:12.5px; }
+  .mlogin-or::before, .mlogin-or::after { content:''; flex:1; height:1px; background:#232c3a; }
+  .mlogin-bio { display:flex; flex-direction:column; align-items:center; gap:9px; }
+  .mlogin-bio-btn { width:70px; height:70px; border-radius:50%; border:none; background:linear-gradient(135deg,#FFC85A,#F5A623); color:#1a1206; display:flex; align-items:center; justify-content:center; box-shadow:0 12px 30px rgba(245,166,35,.35); }
+  .mlogin-bio-btn svg { width:34px; height:34px; }
+  .mlogin-bio-label { font-size:12.5px; color:#93a0b4; }
+  .mlogin-version { text-align:center; font-size:11px; color:#4f5b71; padding-top:12px; }
+</style></head>
+<body>
+  <h1>SparkP2P — new mobile login</h1>
+  <p class="sub">Amber + lightning-A brand · personalized greeting · fingerprint "Tap to login"</p>
+  <div class="row">
+
+    <div>
+      <div class="phone"><div class="mlogin">
+        <div class="mlogin-topbar">
+          <button class="mlogin-icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg></button>
+          <div class="mlogin-brand"><img src="/logo.png" alt=""/><span>SparkP2P</span></div>
+          <button class="mlogin-icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg></button>
+        </div>
+        <div class="mlogin-body">
+          <div class="mlogin-title">Welcome Back</div>
+          <div class="mlogin-greet">
+            <div class="mlogin-avatar">B</div>
+            <div><div class="mlogin-greet-hi">Good afternoon, Bonito!</div><div class="mlogin-greet-sub">Enter your password to continue</div><button class="mlogin-link mlogin-notyou">Not you?</button></div>
+          </div>
+          <div class="mlogin-input-wrap"><input class="mlogin-input" type="password" placeholder="Password" value="************"/><button class="mlogin-eye"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+          <div class="mlogin-forgot"><button class="mlogin-link">Create/Forgot Password?</button></div>
+          <button class="mlogin-submit">Login</button>
+          <div class="mlogin-or"><span>or</span></div>
+          <div class="mlogin-bio">
+            <button class="mlogin-bio-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 11c-1.5 0-2.5 1-2.5 3s.5 4 1 5"/><path d="M7 18c-.5-1.5-.7-3-.5-5 .3-2.7 2.4-4.5 5.5-4.5s5.2 1.8 5.5 4.5c.1 1 .1 2 0 3"/><path d="M4.5 14c-.2-1.5-.2-3 .2-4.5C5.6 5.8 8.4 4 12 4s6.4 1.8 7.3 5.5"/><path d="M12 14v3c0 1.5.3 2.7.7 3.5"/></svg></button>
+            <div class="mlogin-bio-label">Tap to login</div>
+          </div>
+        </div>
+        <div class="mlogin-version">SparkP2P · v2.0.0</div>
+      </div></div>
+      <div class="cap">Returning user — greeting + fingerprint</div>
+    </div>
+
+    <div>
+      <div class="phone"><div class="mlogin">
+        <div class="mlogin-topbar">
+          <button class="mlogin-icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg></button>
+          <div class="mlogin-brand"><img src="/logo.png" alt=""/><span>SparkP2P</span></div>
+          <button class="mlogin-icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg></button>
+        </div>
+        <div class="mlogin-body">
+          <div class="mlogin-title">Welcome Back</div>
+          <div class="mlogin-greet">
+            <div class="mlogin-avatar">S</div>
+            <div><div class="mlogin-greet-hi">Good afternoon!</div><div class="mlogin-greet-sub">Sign in to continue</div></div>
+          </div>
+          <div class="mlogin-input-wrap"><input class="mlogin-input" type="email" placeholder="Email address"/></div>
+          <div class="mlogin-input-wrap"><input class="mlogin-input" type="password" placeholder="Password"/><button class="mlogin-eye"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+          <div class="mlogin-forgot"><button class="mlogin-link">Create/Forgot Password?</button></div>
+          <button class="mlogin-submit">Login</button>
+          <div class="mlogin-create">Don't have an account? <button class="mlogin-link">Create Account</button></div>
+        </div>
+        <div class="mlogin-version">SparkP2P · v2.0.0</div>
+      </div></div>
+      <div class="cap">New / signed-out user — email + password</div>
+    </div>
+
+  </div>
+</body></html>
