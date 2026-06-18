@@ -1097,12 +1097,12 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 <button
-                  disabled={!apiKey.trim() || apiKeySaving}
+                  disabled={!apiKey.trim() || !apiSecret.trim() || apiKeySaving}
                   onClick={async () => {
                     setApiKeySaving(true);
                     setApiKeyMsg('');
                     try {
-                      await saveBinanceApiKey({ api_key: apiKey.trim(), api_secret: '', test_only: true });
+                      await saveBinanceApiKey({ api_key: apiKey.trim(), api_secret: apiSecret.trim(), test_only: true });
                       setApiKeyMsg('✓ Connection verified');
                     } catch (err) {
                       setApiKeyMsg(err.response?.data?.detail || 'Connection test failed');
@@ -1113,7 +1113,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                   style={{
                     padding: '9px 18px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
                     background: 'transparent', border: '1px solid rgba(245,158,11,0.35)', color: '#f59e0b',
-                    opacity: !apiKey.trim() || apiKeySaving ? 0.4 : 1,
+                    opacity: !apiKey.trim() || !apiSecret.trim() || apiKeySaving ? 0.4 : 1,
                   }}>
                   Test connection
                 </button>

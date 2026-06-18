@@ -103,6 +103,7 @@ class TradingConfigRequest(BaseModel):
 class BinanceApiKeyRequest(BaseModel):
     api_key: str
     api_secret: str
+    test_only: bool = False   # verify the key via the relay but don't persist it
 
 
 class DepositRequest(BaseModel):
@@ -1598,6 +1599,10 @@ async def save_binance_api_key(
         except Exception:
             # -1002 or any error means not Gold Merchant — leave existing tier unchanged
             pass
+
+    # "Test connection" — credentials verified above; report success without saving them.
+    if data.test_only:
+        return {"status": "verified", "ads_found": len(ads), "merchant_capable": merchant_capable}
 
     trader.binance_api_key    = encrypt_data(data.api_key.strip())
     trader.binance_api_secret = encrypt_data(data.api_secret.strip())

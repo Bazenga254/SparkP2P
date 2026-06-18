@@ -23,11 +23,20 @@ export default function BiometricGate({ children }) {
   // Auto-prompt biometrics whenever we become locked.
   useEffect(() => { if (locked) attemptUnlock(); }, [locked]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-lock when the app returns to the foreground.
+  // Re-lock when the app returns to the foreground — but only after a grace period away, so a
+  // quick switch out and back (e.g. to copy an OTP) doesn't force a fingerprint every time.
   useEffect(() => {
     if (!native) return;
+    const GRACE_MS = 60000;   // 1 minute
+    let hiddenAt = 0;
     const onVis = () => {
-      if (document.visibilityState === 'visible' && bioEnabled() && hasToken()) setLocked(true);
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+      } else if (document.visibilityState === 'visible') {
+        if (bioEnabled() && hasToken() && hiddenAt && (Date.now() - hiddenAt) > GRACE_MS) {
+          setLocked(true);
+        }
+      }
     };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
