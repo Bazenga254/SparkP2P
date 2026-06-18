@@ -1,0 +1,7 @@
+<svg width="108" height="108" viewBox="0 0 108 108" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- White lightning-A, sized inside the adaptive safe zone (transparent bg = orange comes from background layer) -->
+  <g transform="translate(23.2 10.8) scale(0.24)">
+    <path fill-rule="evenodd" clip-rule="evenodd" fill="#FFFFFF" d="M128 28 L236 250 L170 250 L150 210 L106 210 L86 250 L20 250 Z M128 116 L162 188 L94 188 Z"/>
+    <path fill="#FFF7EC" d="M154 92 L104 192 L136 192 L92 332 L182 166 L146 166 Z"/>
+  </g>
+</svg>

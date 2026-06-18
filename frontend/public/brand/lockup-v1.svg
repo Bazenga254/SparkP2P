@@ -1,0 +1,32 @@
+<svg width="1180" height="380" viewBox="0 0 1180 380" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF9A2E"/><stop offset="1" stop-color="#EA6A0A"/>
+    </linearGradient>
+    <linearGradient id="boltW" x1="96" y1="44" x2="150" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#FFE9CC"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="40" x2="120" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFBE45"/><stop offset="0.55" stop-color="#FF9A1F"/><stop offset="1" stop-color="#F2780A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Badge -->
+  <rect x="40" y="70" width="200" height="200" rx="48" fill="url(#bg)"/>
+  <g transform="translate(140 178) scale(0.5) translate(-128 -170)">
+    <path fill-rule="evenodd" clip-rule="evenodd" fill="#FFFFFF" d="M128 28 L236 250 L170 250 L150 210 L106 210 L86 250 L20 250 Z M128 116 L162 188 L94 188 Z"/>
+    <path fill="url(#boltW)" d="M154 92 L104 192 L136 192 L92 332 L182 166 L146 166 Z"/>
+  </g>
+
+  <!-- Wordmark: "Sp" + lightning-A + "rkP2P" -->
+  <text x="300" y="232" font-family="Arial, 'Segoe UI', sans-serif" font-weight="800" font-size="172" letter-spacing="-2" fill="#FFFFFF">Sp</text>
+  <!-- the lightning A in place of 'a' -->
+  <g transform="translate(507 95) scale(0.55)">
+    <path fill-rule="evenodd" clip-rule="evenodd" fill="url(#amber)" d="M128 28 L236 250 L170 250 L150 210 L106 210 L86 250 L20 250 Z M128 116 L162 188 L94 188 Z"/>
+    <path fill="url(#amber)" d="M154 92 L104 192 L136 192 L92 332 L182 166 L146 166 Z"/>
+  </g>
+  <text x="645" y="232" font-family="Arial, 'Segoe UI', sans-serif" font-weight="800" font-size="172" letter-spacing="-2"><tspan fill="#FFFFFF">rk</tspan><tspan fill="#FF8A1F" dx="6">P2P</tspan></text>
+
+  <!-- Tagline -->
+  <text x="304" y="300" font-family="Arial, 'Segoe UI', sans-serif" font-weight="500" font-size="40" letter-spacing="1" fill="#9AA4B2">Automated P2P trading · Kenya</text>
+</svg>

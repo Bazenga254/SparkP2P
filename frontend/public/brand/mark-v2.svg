@@ -1,0 +1,38 @@
+<svg width="256" height="340" viewBox="0 0 256 340" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="amber" x1="40" y1="20" x2="210" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFBE45"/>
+      <stop offset="0.55" stop-color="#FF9A1F"/>
+      <stop offset="1" stop-color="#F2780A"/>
+    </linearGradient>
+    <linearGradient id="boltHi" x1="96" y1="96" x2="150" y2="330" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFD37A"/>
+      <stop offset="1" stop-color="#FF9A1F"/>
+    </linearGradient>
+  </defs>
+  <!-- Triangle A: outer silhouette with a hollow counter (even-odd) -->
+  <path fill-rule="evenodd" clip-rule="evenodd" fill="url(#amber)" d="
+    M128 28
+    L236 250
+    L170 250
+    L150 210
+    L106 210
+    L86 250
+    L20 250
+    Z
+    M128 116
+    L162 188
+    L94 188
+    Z
+  "/>
+  <!-- Lightning bolt forms the inner stem and tapers into a long spark tail below the baseline -->
+  <path fill="url(#boltHi)" d="
+    M154 92
+    L104 192
+    L136 192
+    L92 332
+    L182 166
+    L146 166
+    Z
+  "/>
+</svg>
