@@ -683,6 +683,48 @@ async def reset_trader_password(
     return {"status": "ok", "message": "Password reset and sent via SMS"}
 
 
+@router.post("/traders/{trader_id}/backfill-today")
+async def backfill_trader_today(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import this trader's COMPLETED Binance orders from 03:00 EAT today (00:00 UTC) to now,
+    so their P&L/volume for the day reflects trades made before the bot was connected. Idempotent.
+    Requires the trader's relay to be online (Binance is geo-blocked from the VPS)."""
+    from datetime import datetime, timezone
+    from app.core.security import decrypt_data
+    from app.services.binance.sapi_client import relay_trader
+    from app.services.binance import relay_router
+    from app.services.tracking import _backfill_orders
+
+    result = await db.execute(select(Trader).where(Trader.id == trader_id))
+    trader = result.scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    if not trader.binance_api_key or not trader.binance_api_secret:
+        raise HTTPException(status_code=400, detail="Trader has no Binance API key connected.")
+    if not relay_router.is_connected(trader_id):
+        raise HTTPException(status_code=400, detail="Trader's relay is offline — open their app so the relay is online, then retry.")
+
+    relay_trader.set(trader_id)   # route the Binance calls via this trader's relay
+    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    floor_ms = int(day_start.timestamp() * 1000)
+    try:
+        inserted = await _backfill_orders(
+            trader_id,
+            decrypt_data(trader.binance_api_key),
+            decrypt_data(trader.binance_api_secret),
+            connect_floor_ms=floor_ms,
+            force=True,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Backfill failed: {e}")
+
+    logger.info("Admin %s backfilled trader %s today: %d orders", admin.id, trader_id, inserted)
+    return {"status": "ok", "inserted": inserted, "since": day_start.isoformat()}
+
+
 # In-memory store for async Safaricom-verified resolutions
 _pending_resolutions: dict = {}
 

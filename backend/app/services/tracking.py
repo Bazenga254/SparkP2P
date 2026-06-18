@@ -55,23 +55,25 @@ _orders_backfill_at = {}        # trader_id -> last completed-order backfill tim
 _ORDERS_BACKFILL_INTERVAL = 1800  # re-scan full history every 30 min to catch offline trades
 
 
-async def _backfill_orders(trader_id, api_key, api_secret, connect_floor_ms=0):
+async def _backfill_orders(trader_id, api_key, api_secret, connect_floor_ms=0, force=False):
     """Import COMPLETED Binance orders made FROM THE CONNECTION POINT FORWARD into the Orders
     table — catching trades done while the app was closed, WITHOUT pulling in the trader's
     pre-connection history. `connect_floor_ms` is the trader's connection time (epoch ms): any
     order older than it is skipped. Idempotent (dedup on binance_order_number), self-gated to
-    re-run at most every 30 min."""
-    last = _orders_backfill_at.get(trader_id)
+    re-run at most every 30 min. `force` skips the self-gate (admin-triggered backfill).
+    Returns the number of orders inserted."""
     nowt = datetime.now(timezone.utc)
-    if last is not None and (nowt - last).total_seconds() < _ORDERS_BACKFILL_INTERVAL:
-        return
+    if not force:
+        last = _orders_backfill_at.get(trader_id)
+        if last is not None and (nowt - last).total_seconds() < _ORDERS_BACKFILL_INTERVAL:
+            return 0
     _orders_backfill_at[trader_id] = nowt
+    inserted = 0
+    scanned = 0
     try:
         from sqlalchemy import select as _sel
         from app.services.binance.sapi_client import get_user_order_history
         from app.models.order import Order, OrderSide, OrderStatus
-        inserted = 0
-        scanned = 0
         async with async_session() as db:
             page = 1
             done = False
@@ -120,9 +122,11 @@ async def _backfill_orders(trader_id, api_key, api_secret, connect_floor_ms=0):
                 await db.commit()
         if inserted:
             logger.info("[Tracking] order backfill for trader %s: scanned %d, inserted %d completed orders", trader_id, scanned, inserted)
+        return inserted
     except Exception as e:
         logger.warning("[Tracking] order backfill failed for trader %s: %s", trader_id, e)
         _orders_backfill_at.pop(trader_id, None)   # allow retry next poll
+    return inserted
 
 
 async def _backfill_counterparties(trader_id, api_key, api_secret):
