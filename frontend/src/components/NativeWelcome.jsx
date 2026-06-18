@@ -19,13 +19,12 @@ export default function NativeWelcome() {
 
       <div className="nw-stage">
         <div className="nw-glow" />
-        <div className="nw-logo-box">
-          <img src="/spark-ai-logo.png" alt="Spark AI" />
+        <div className="nw-wordmark-box">
+          <img className="nw-wordmark" src="/logo-wordmark-dark.svg" alt="SparkP2P" />
           <div className="nw-shine" />
         </div>
       </div>
 
-      <div className="nw-title">SparkP2P</div>
       <div className="nw-sub">Automated Binance P2P trading — verify payments and release crypto, 24/7.</div>
 
       <div className="nw-spacer" />
