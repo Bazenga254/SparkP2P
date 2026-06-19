@@ -102,8 +102,7 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         </button>
         <div className="mlogin-brand">
-          <img src="/logo.png" alt="SparkP2P" />
-          <span>SparkP2P</span>
+          <img className="mlogin-wordmark" src="/logo-wordmark-dark.svg" alt="SparkP2P" />
         </div>
         <button className="mlogin-icon-btn" onClick={() => navigate('/contact')} aria-label="Help">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3" /><path d="M12 17h.01" /></svg>

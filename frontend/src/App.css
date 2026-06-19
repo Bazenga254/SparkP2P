@@ -6727,9 +6727,8 @@ body {
 }
 .mlogin-icon-btn svg { width: 20px; height: 20px; }
 .mlogin-icon-btn:active { background: rgba(255,255,255,0.12); }
-.mlogin-brand { display: flex; flex-direction: column; align-items: center; gap: 3px; }
-.mlogin-brand img { width: 38px; height: 38px; border-radius: 10px; object-fit: contain; }
-.mlogin-brand span { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; color: #ffb454; }
+.mlogin-brand { display: flex; align-items: center; justify-content: center; }
+.mlogin-wordmark { height: 30px; width: auto; display: block; }
 
 .mlogin-body { flex: 1; display: flex; flex-direction: column; max-width: 440px; width: 100%; margin: 0 auto; }
 .mlogin-title { text-align: center; font-size: 28px; font-weight: 800; margin: 26px 0 30px; letter-spacing: -0.01em; }
