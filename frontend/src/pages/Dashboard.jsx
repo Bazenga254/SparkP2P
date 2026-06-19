@@ -1703,7 +1703,8 @@ export default function Dashboard() {
           <button className="icon-btn" onClick={loadData} disabled={refreshing}>
             <RefreshCw size={18} className={refreshing ? 'spinning' : ''} />
           </button>
-          <button className="icon-btn" onClick={logout}><LogOut size={18} /></button>
+          {/* Logout moved to the mobile "More" menu and the desktop sidebar footer */}
+          <button className="icon-btn dash-header-logout" onClick={logout} title="Logout"><LogOut size={18} /></button>
         </div>
       </header>
 
@@ -4484,6 +4485,16 @@ export default function Dashboard() {
                 {label}
               </button>
             ))}
+            <div style={{ height: 1, background: '#1f2937', margin: '6px 24px' }} />
+            <button
+              onClick={() => { setMobMoreOpen(false); logout(); }}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14,
+                padding: '13px 24px', background: 'none', border: 'none', cursor: 'pointer',
+                color: '#ef4444', fontSize: 14, fontWeight: 600 }}
+            >
+              <LogOut size={20} color="#ef4444" />
+              Log out
+            </button>
           </div>
         </div>
       )}

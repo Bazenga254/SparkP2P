@@ -5911,6 +5911,8 @@ body {
 .mob-bottom-nav { display: none; }
 
 @media (max-width: 767px) {
+  /* Logout lives in the "More" menu on mobile, not the header */
+  .dash-header-logout { display: none !important; }
   .mob-bottom-nav {
     display: flex;
     position: fixed;
