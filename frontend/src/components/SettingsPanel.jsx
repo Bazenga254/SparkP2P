@@ -13,8 +13,9 @@ function BiometricSetting() {
   const [avail, setAvail] = useState(false);
   const [on, setOn] = useState(bioEnabled());
   useEffect(() => { if (isNative()) bioAvailable().then(setAvail); }, []);
-  if (!isNative() || !avail) return null;
+  if (!isNative()) return null;   // hidden only on the web browser; always visible in the app
   const toggle = async () => {
+    if (!avail) return;   // no fingerprint enrolled — hint shown instead
     if (on) { setBioEnabled(false); setOn(false); return; }
     const ok = await bioAuthenticate('Confirm to enable fingerprint unlock');
     if (ok) { setBioEnabled(true); setOn(true); }
@@ -27,9 +28,14 @@ function BiometricSetting() {
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, color: '#f3f4f6', fontSize: 15 }}>Fingerprint unlock</div>
-          <div style={{ color: '#9ca3af', fontSize: 12.5, marginTop: 2 }}>Unlock the app with your fingerprint or face instead of a password.</div>
+          <div style={{ color: '#9ca3af', fontSize: 12.5, marginTop: 2 }}>
+            {avail
+              ? 'Unlock the app with your fingerprint or face instead of a password.'
+              : 'Add a fingerprint or face lock in your phone settings, then turn this on.'}
+          </div>
         </div>
-        <div onClick={toggle} style={{ width: 46, height: 26, borderRadius: 20, background: on ? '#33C27A' : '#3a414d', position: 'relative', flex: '0 0 auto', cursor: 'pointer', transition: '.2s' }}>
+        <div onClick={toggle} title={avail ? '' : 'No fingerprint set up on this device'}
+          style={{ width: 46, height: 26, borderRadius: 20, background: on ? '#33C27A' : '#3a414d', position: 'relative', flex: '0 0 auto', cursor: avail ? 'pointer' : 'not-allowed', opacity: avail ? 1 : 0.45, transition: '.2s' }}>
           <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 20, height: 20, borderRadius: '50%', background: '#fff', transition: '.2s' }} />
         </div>
       </div>
