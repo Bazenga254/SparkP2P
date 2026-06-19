@@ -315,7 +315,7 @@ export default function Login() {
       {/* Mobile-only hero panel */}
       <div className="login-mobile-hero">
         <Link to="/" className="login-mobile-hero-brand">
-          <img src="/logo.png" alt="SparkP2P" style={{ width: 36, height: 36, borderRadius: 9, objectFit: 'contain' }} />
+          <img src="/spark-icon.svg" alt="SparkP2P" style={{ width: 36, height: 36, borderRadius: 9, objectFit: 'contain' }} />
           <span>SparkP2P</span>
         </Link>
         <div className="login-mobile-hero-content">
@@ -330,7 +330,7 @@ export default function Login() {
 
       <div className="login-left">
         <Link to="/" className="login-left-brand">
-          <img src="/logo.png" alt="SparkP2P" className="login-left-logo" />
+          <img src="/spark-icon.svg" alt="SparkP2P" className="login-left-logo" />
           <span className="login-left-name">SparkP2P</span>
         </Link>
         <div className="login-left-content">

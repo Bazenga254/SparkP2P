@@ -89,7 +89,7 @@ const STEPS = [
     illustration: (
       <div className="inst-illus-progress">
         <div className="inst-illus-prog-icon">
-          <img src="/logo.png" alt="SparkP2P" style={{ width: 48, height: 48, borderRadius: 12, objectFit: 'contain' }} onError={e => { e.target.style.display='none'; }} />
+          <img src="/spark-icon.svg" alt="SparkP2P" style={{ width: 48, height: 48, borderRadius: 12, objectFit: 'contain' }} onError={e => { e.target.style.display='none'; }} />
         </div>
         <div className="inst-illus-prog-name">Installing SparkP2P...</div>
         <div className="inst-illus-prog-bar-wrap">
@@ -114,7 +114,7 @@ const STEPS = [
         </div>
         <div className="inst-illus-app-body">
           <div className="inst-illus-app-logo-row">
-            <img src="/logo.png" alt="SparkP2P" style={{ width: 36, height: 36, borderRadius: 9, objectFit: 'contain' }} onError={e => { e.target.style.display='none'; }} />
+            <img src="/spark-icon.svg" alt="SparkP2P" style={{ width: 36, height: 36, borderRadius: 9, objectFit: 'contain' }} onError={e => { e.target.style.display='none'; }} />
             <span style={{ fontWeight: 700, color: '#f59e0b', fontSize: 16 }}>SparkP2P</span>
           </div>
           <div className="inst-illus-app-field">Email</div>
@@ -227,7 +227,7 @@ export default function Install() {
       <nav className="inst-nav">
         <div className="inst-nav-inner">
           <Link to="/" className="inst-nav-brand">
-            <img src="/logo.png" alt="SparkP2P" className="inst-nav-logo" />
+            <img src="/spark-icon.svg" alt="SparkP2P" className="inst-nav-logo" />
             <span>SparkP2P</span>
           </Link>
           <Link to="/login" className="inst-nav-login">Login</Link>
@@ -337,7 +337,7 @@ export default function Install() {
       <footer className="inst-footer">
         <div className="inst-footer-inner">
           <Link to="/" className="inst-footer-brand">
-            <img src="/logo.png" alt="" style={{ width: 24, height: 24, borderRadius: 6, objectFit: 'contain' }} />
+            <img src="/spark-icon.svg" alt="" style={{ width: 24, height: 24, borderRadius: 6, objectFit: 'contain' }} />
             <span>SparkP2P</span>
           </Link>
           <div className="inst-footer-links">

@@ -36,7 +36,7 @@ export default function ArticleLayout({
       <nav className="inst-nav">
         <div className="inst-nav-inner">
           <Link to="/" className="inst-nav-brand">
-            <img src="/logo.png" alt="SparkP2P" className="inst-nav-logo" />
+            <img src="/spark-icon.svg" alt="SparkP2P" className="inst-nav-logo" />
             <span>SparkP2P</span>
           </Link>
           <Link to="/login" className="inst-nav-login">Login</Link>
@@ -114,7 +114,7 @@ export default function ArticleLayout({
       <footer className="inst-footer">
         <div className="inst-footer-inner">
           <Link to="/" className="inst-footer-brand">
-            <img src="/logo.png" alt="" style={{ width: 24, height: 24, borderRadius: 6, objectFit: 'contain' }} />
+            <img src="/spark-icon.svg" alt="" style={{ width: 24, height: 24, borderRadius: 6, objectFit: 'contain' }} />
             <span>SparkP2P</span>
           </Link>
           <div className="inst-footer-links">

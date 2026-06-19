@@ -33,7 +33,7 @@ export default function AdminLogin() {
   return (
     <div className="admin-login-page">
       <div className="admin-login-card">
-        <img src="/logo.png" alt="SparkP2P" className="admin-login-logo" />
+        <img src="/spark-icon.svg" alt="SparkP2P" className="admin-login-logo" />
         <h1>Admin Panel</h1>
         <p className="admin-login-sub">Enter admin password to continue</p>
 

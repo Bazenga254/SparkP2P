@@ -34,7 +34,7 @@ export default function EmployeeLogin() {
   return (
     <div className="emp-login-page">
       <div className="emp-login-card">
-        <img src="/logo.png" alt="SparkP2P" className="login-logo" />
+        <img src="/spark-icon.svg" alt="SparkP2P" className="login-logo" />
         <h1>Employee Portal</h1>
         <p className="emp-login-sub">Sign in with your employee credentials</p>
 

@@ -1559,7 +1559,7 @@ export default function Dashboard() {
 
       <header className="dash-header">
         <div className="dash-header-left">
-          <img src="/logo.png" alt="SparkP2P" className="header-logo" />
+          <img src="/spark-icon.svg" alt="SparkP2P" className="header-logo" />
           <h1>SparkP2P</h1>
           {appVersion && (
             <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 500, letterSpacing: '0.02em', marginLeft: -2, marginTop: 2 }}>
@@ -1839,7 +1839,7 @@ export default function Dashboard() {
             }
             return (
               <div className="dsb-brand">
-                <img src="/logo.png" alt="SparkP2P" style={{ width: 28, height: 28, borderRadius: 6 }} />
+                <img src="/spark-icon.svg" alt="SparkP2P" style={{ width: 28, height: 28, borderRadius: 6 }} />
                 <div style={{ lineHeight: 1.1 }}>
                   <div style={{ color: '#F59E0B', fontWeight: 500, fontSize: 14 }}>SparkP2P</div>
                   {appVersion && <div style={{ color: '#6B7280', fontSize: 10 }}>v{appVersion}</div>}

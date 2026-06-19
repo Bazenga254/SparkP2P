@@ -108,7 +108,7 @@ export default function PublicChat() {
             display: 'flex', alignItems: 'center', gap: 12,
             background: '#0d1117',
           }}>
-            <img src="/logo.png" alt="" style={{ width: 30, height: 30, borderRadius: 6 }} />
+            <img src="/spark-icon.svg" alt="" style={{ width: 30, height: 30, borderRadius: 6 }} />
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>SparkP2P Support</div>
               <div style={{ fontSize: 11, color: '#10b981', display: 'flex', alignItems: 'center', gap: 4 }}>

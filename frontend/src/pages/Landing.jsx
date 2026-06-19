@@ -195,7 +195,7 @@ export default function Landing() {
       <nav className="land-nav">
         <div className="land-nav-inner">
           <div className="land-nav-brand">
-            <img src="/logo.png" alt="SparkP2P" className="land-nav-logo" />
+            <img src="/spark-icon.svg" alt="SparkP2P" className="land-nav-logo" />
             <span className="land-nav-name">SparkP2P</span>
           </div>
           <div className="land-nav-links">
@@ -705,7 +705,7 @@ export default function Landing() {
         <div className="land-footer-inner">
           <div className="land-footer-brand-col">
             <div className="land-footer-brand">
-              <img src="/logo.png" alt="SparkP2P" className="land-footer-logo" />
+              <img src="/spark-icon.svg" alt="SparkP2P" className="land-footer-logo" />
               <span>SparkP2P</span>
             </div>
             <p className="land-footer-tagline">

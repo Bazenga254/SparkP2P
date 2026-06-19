@@ -71,7 +71,7 @@ export default function ResetPassword() {
     <div className="login-split">
       <div className="login-left">
         <Link to="/" className="login-left-brand">
-          <img src="/logo.png" alt="SparkP2P" className="login-left-logo" />
+          <img src="/spark-icon.svg" alt="SparkP2P" className="login-left-logo" />
           <span className="login-left-name">SparkP2P</span>
         </Link>
         <div className="login-left-content">
