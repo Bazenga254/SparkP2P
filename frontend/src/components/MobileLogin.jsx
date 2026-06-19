@@ -143,7 +143,7 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
           {otpRequired && <div className="mlogin-hint">Code sent to {phoneHint || 'your phone'} — or use your Google Authenticator code.</div>}
 
           <div className="mlogin-forgot">
-            <button type="button" className="mlogin-link" onClick={() => navigate('/reset-password')}>Create/Forgot Password?</button>
+            <button type="button" className="mlogin-link" onClick={() => navigate('/reset-password')}>Forgot Password?</button>
           </div>
 
           {error && <div className="mlogin-error">{error}</div>}
