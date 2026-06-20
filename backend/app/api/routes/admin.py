@@ -1909,6 +1909,42 @@ async def get_audit_logs(
     ]
 
 
+@router.get("/audit-notifications")
+async def audit_notifications(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unread sensitive staff actions (by others) for the super-admin bell badge."""
+    from app.models.audit_log import AuditLog
+    from app.api.deps import SENSITIVE_AUDIT_ACTIONS
+    from sqlalchemy import desc, func
+    base = [AuditLog.action.in_(list(SENSITIVE_AUDIT_ACTIONS)), AuditLog.actor_id != admin.id]
+    if admin.audit_seen_at is not None:
+        base.append(AuditLog.created_at > admin.audit_seen_at)
+    count = (await db.execute(select(func.count()).select_from(AuditLog).where(*base))).scalar() or 0
+    rows = (await db.execute(select(AuditLog).where(*base).order_by(desc(AuditLog.created_at)).limit(30))).scalars().all()
+    return {
+        "count": int(count),
+        "items": [{
+            "id": r.id, "actor_id": r.actor_id, "actor_role": r.actor_role, "action": r.action,
+            "target_trader_id": r.target_trader_id, "detail": r.detail,
+            "created_at": r.created_at.isoformat() if r.created_at else "",
+        } for r in rows],
+    }
+
+
+@router.post("/audit-notifications/seen")
+async def audit_notifications_seen(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark the audit alerts as seen (clears the bell badge)."""
+    from datetime import datetime, timezone
+    admin.audit_seen_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"status": "ok"}
+
+
 # ═══════════════════════════════════════════════════════════
 # WITHDRAWALS — Track M-Pesa and I&M Bank disbursements
 # ═══════════════════════════════════════════════════════════

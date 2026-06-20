@@ -18,6 +18,13 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+# Staff actions that should ping the super admin(s) in real time (not just sit in the audit table).
+SENSITIVE_AUDIT_ACTIONS = {
+    "change_role", "change_status", "change_subscription", "toggle_price_tracker",
+    "reset_trader_password", "resolve_payment", "admin_login", "employee_login",
+}
+
+
 async def write_audit_log(
     db: AsyncSession,
     actor: Trader,
@@ -26,7 +33,8 @@ async def write_audit_log(
     target_trader_id: int = None,
     detail: str = None,
 ):
-    """Write an entry to the audit_log table."""
+    """Write an entry to the audit_log table; for sensitive staff actions, also alert the super
+    admin(s) over Telegram so they know in real time what employees/admins are doing."""
     from app.models.audit_log import AuditLog
     log = AuditLog(
         actor_id=actor.id,
@@ -38,6 +46,31 @@ async def write_audit_log(
     )
     db.add(log)
     await db.commit()
+
+    if action in SENSITIVE_AUDIT_ACTIONS:
+        try:
+            await _alert_super_admins(db, actor, action, detail, target_trader_id)
+        except Exception:
+            pass
+
+
+async def _alert_super_admins(db, actor, action, detail, target_trader_id):
+    """Telegram-ping every super admin (role=admin) about a sensitive action by someone else."""
+    from sqlalchemy import select
+    res = await db.execute(select(Trader).where(Trader.is_admin == True, Trader.role == "admin"))
+    label = (action or "").replace("_", " ").title()
+    target = f" — trader #{target_trader_id}" if target_trader_id else ""
+    msg = (f"🔔 *SparkP2P admin activity*\n"
+           f"{actor.full_name} ({actor.role or 'admin'}): {label}{target}"
+           + (f"\n{detail}" if detail else ""))
+    for sa in res.scalars().all():
+        if sa.id == actor.id or not getattr(sa, "telegram_chat_id", None):
+            continue
+        try:
+            from app.api.routes.telegram import notify_trader
+            await notify_trader(sa, msg)
+        except Exception:
+            pass
 
 
 async def log_event(db: AsyncSession, trader_id: int, message: str, level: str = "info"):

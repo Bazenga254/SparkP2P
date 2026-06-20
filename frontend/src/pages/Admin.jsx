@@ -209,6 +209,7 @@ export default function Admin() {
   const [ticketUploading, setTicketUploading] = useState({});
   const adminFileRefs = useRef({});
   const [unreadTicketCount, setUnreadTicketCount] = useState(0);
+  const [auditAlerts, setAuditAlerts] = useState(0);
   const [ticketCategory, setTicketCategory] = useState('open'); // 'open' | 'closed'
   const [ticketPage, setTicketPage] = useState(1);
   const [ticketTotal, setTicketTotal] = useState(0);
@@ -843,6 +844,23 @@ export default function Admin() {
     return () => clearInterval(iv);
   }, [activeTab, ticketCategory]);
 
+  // Super-admin: poll for unseen sensitive staff actions (the audit-alert bell badge).
+  useEffect(() => {
+    const pollAudit = () => api.get('/admin/audit-notifications')
+      .then(r => setAuditAlerts(r.data?.count || 0)).catch(() => {});
+    pollAudit();
+    const iv = setInterval(pollAudit, 30000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Opening the Security (audit) tab marks the alerts as seen.
+  useEffect(() => {
+    if (activeTab === 'security') {
+      api.post('/admin/audit-notifications/seen').catch(() => {});
+      setAuditAlerts(0);
+    }
+  }, [activeTab]);
+
   useEffect(() => {
     loadData();
     loadTransactions(txPeriod);
@@ -1269,6 +1287,15 @@ export default function Admin() {
                     style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 8, border: '1px solid rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.08)', color: '#10b981', fontWeight: 600, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                     <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', flexShrink: 0 }} />
                     {analytics?.online_traders ?? 0} online traders
+                  </button>
+                  {/* Audit-alert bell — unseen sensitive staff actions */}
+                  <button onClick={() => { setActiveTab('security'); api.post('/admin/audit-notifications/seen').catch(() => {}); setAuditAlerts(0); }}
+                    title="Staff activity alerts"
+                    style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', padding: 6, color: auditAlerts > 0 ? '#f59e0b' : '#9ca3af' }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+                    {auditAlerts > 0 && (
+                      <span style={{ position: 'absolute', top: 2, right: 2, minWidth: 16, height: 16, padding: '0 3px', borderRadius: 8, background: '#f59e0b', color: '#1a1206', fontSize: 9, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{auditAlerts > 9 ? '9+' : auditAlerts}</span>
+                    )}
                   </button>
                   <button onClick={() => setActiveTab('disputes')}
                     style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', padding: 6, color: '#9ca3af' }}>
