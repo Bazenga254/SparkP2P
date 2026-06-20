@@ -556,14 +556,21 @@ async def track_trader(db, trader) -> int:
         trader.tracking_last_poll_at = now
         # Flag a dead/invalid key (residual ad filters can still block buyers, so a
         # dead key is otherwise invisible to the admin and trader).
-        if str(e).startswith("INVALID_API_KEY") and not trader.binance_api_key_invalid:
+        newly_invalid = str(e).startswith("INVALID_API_KEY") and not trader.binance_api_key_invalid
+        if newly_invalid:
             trader.binance_api_key_invalid = True
             logger.warning("[Tracking] trader %s API key invalid (%s)", trader.id, e)
         await db.commit()
+        if newly_invalid:
+            from app.api.deps import log_event
+            await log_event(db, trader.id, "Binance API key rejected by Binance — reconnect your API key", "error")
         raise
 
     if trader.binance_api_key_invalid:
         trader.binance_api_key_invalid = False  # healthy read -> clear stale flag
+        await db.commit()
+        from app.api.deps import log_event
+        await log_event(db, trader.id, "Binance API key working again — connection recovered", "success")
 
     # Live in-progress order count (orders the merchant is currently processing —
     # not yet completed/cancelled). Surfaced on the admin trader-detail page.

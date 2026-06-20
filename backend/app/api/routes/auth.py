@@ -298,6 +298,12 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         await db.commit()
         token = create_access_token({"sub": str(trader.id), "email": trader.email})
 
+        from app.api.deps import log_event, write_audit_log
+        await log_event(db, trader.id, "Signed in to SparkP2P", "success")
+        # Staff sign-ins are also recorded in the admin audit trail.
+        if trader.is_admin or (trader.role in ("admin", "employee")):
+            await write_audit_log(db, trader, f"{trader.role or 'admin'}_login", detail=f"{trader.email} signed in")
+
         return {
             "access_token": token,
             "token_type": "bearer",
@@ -387,6 +393,9 @@ async def employee_login(data: EmployeeLoginRequest, db: AsyncSession = Depends(
         "role": employee.role,
     })
 
+    from app.api.deps import write_audit_log
+    await write_audit_log(db, employee, f"{employee.role}_login", detail=f"{employee.email} signed in via staff portal")
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -472,6 +481,9 @@ async def reset_password_confirm(data: ResetConfirmModel, db: AsyncSession = Dep
     trader.locked_until = None
     _reset_otp_codes.pop(data.email, None)
     await db.commit()
+
+    from app.api.deps import log_event
+    await log_event(db, trader.id, "Password reset via OTP", "warning")
 
     return {"message": "Password reset successfully. You can now log in with your new password."}
 

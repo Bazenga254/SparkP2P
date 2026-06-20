@@ -64,6 +64,8 @@ async def admin_login(data: AdminLoginRequest, db: AsyncSession = Depends(get_db
 
     token = create_access_token({"sub": str(admin.id), "email": admin.email})
 
+    await write_audit_log(db, admin, "admin_login", detail=f"{admin.email} signed in to the admin dashboard")
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -658,6 +660,7 @@ async def get_trader_orders(
 @router.post("/traders/{trader_id}/reset-password")
 async def reset_trader_password(
     trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
     """Reset trader password and send new one via SMS."""
@@ -678,6 +681,10 @@ async def reset_trader_password(
         send_sms(trader.phone, f"SparkP2P: Your password has been reset. New password: {new_password}")
     except Exception:
         pass
+
+    from app.api.deps import log_event
+    await write_audit_log(db, admin, "reset_trader_password", target_trader_id=trader_id, detail=f"reset password for {trader.full_name}")
+    await log_event(db, trader_id, f"Password reset by support ({admin.full_name})", "warning")
 
     logger.info(f"Password reset for trader {trader.id} ({trader.full_name})")
     return {"status": "ok", "message": "Password reset and sent via SMS"}
@@ -826,6 +833,9 @@ async def resolve_payment(
         except Exception:
             pass
 
+        from app.api.deps import log_event
+        await write_audit_log(db, admin, "resolve_payment", target_trader_id=trader_id, detail=f"credited KES {credit_amount:,.0f} (ref {mpesa_ref})")
+        await log_event(db, trader_id, f"Payment resolved by support: KES {credit_amount:,.0f} credited (ref {mpesa_ref})", "success")
         logger.info(f"Resolved existing unmatched payment {mpesa_ref}: KES {credit_amount} credited to trader {trader_id}")
         return {
             "status": "credited",
@@ -887,6 +897,7 @@ async def update_trader_role(
     if not trader:
         raise HTTPException(status_code=404, detail="Trader not found")
 
+    old_role = trader.role or "trader"
     trader.role = role
     if role == "admin":
         trader.is_admin = True
@@ -894,6 +905,7 @@ async def update_trader_role(
         trader.is_admin = False
 
     await db.commit()
+    await write_audit_log(db, admin, "change_role", target_trader_id=trader_id, detail=f"{trader.full_name}: role {old_role} → {role}")
 
     return {"status": "updated", "trader_id": trader_id, "role": role}
 
@@ -912,8 +924,10 @@ async def update_trader_status(
     if not trader:
         raise HTTPException(status_code=404, detail="Trader not found")
 
+    old_status = trader.status.value if trader.status else "?"
     trader.status = new_status
     await db.commit()
+    await write_audit_log(db, admin, "change_status", target_trader_id=trader_id, detail=f"{trader.full_name}: status {old_status} → {new_status.value}")
 
     return {"status": "updated", "trader_id": trader_id, "new_status": new_status.value}
 
@@ -931,6 +945,7 @@ async def update_trader_price_tracker(
         raise HTTPException(status_code=404, detail="Trader not found")
     trader.price_tracker_enabled = bool(enabled)
     await db.commit()
+    await write_audit_log(db, admin, "toggle_price_tracker", target_trader_id=trader_id, detail=f"{trader.full_name}: price tracker {'enabled' if enabled else 'disabled'}")
     return {"status": "updated", "trader_id": trader_id, "price_tracker_enabled": bool(enabled)}
 
 
@@ -1010,6 +1025,7 @@ async def update_trader_tier(
             existing_sub.status = SubscriptionStatus.EXPIRED
 
     await db.commit()
+    await write_audit_log(db, admin, "change_subscription", target_trader_id=trader_id, detail=f"{trader.full_name}: subscription set to {tier}")
 
     return {"status": "updated", "trader_id": trader_id, "tier": tier}
 

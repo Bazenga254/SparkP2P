@@ -40,6 +40,25 @@ async def write_audit_log(
     await db.commit()
 
 
+async def log_event(db: AsyncSession, trader_id: int, message: str, level: str = "info"):
+    """Record a server-side activity-log line on a trader's account (logins, password changes,
+    API-key problems, etc.) so it shows in their Logs view and the admin trader-detail logs.
+    Best-effort — never breaks the calling request if logging fails."""
+    try:
+        from app.models.bot_log import BotLog
+        from datetime import datetime, timezone
+        db.add(BotLog(
+            trader_id=trader_id,
+            level=(level or "info")[:20],
+            message=(message or "")[:500],
+            time=datetime.now(timezone.utc).isoformat(),
+        ))
+        await db.commit()
+    except Exception:
+        try: await db.rollback()
+        except Exception: pass
+
+
 async def get_current_trader(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),

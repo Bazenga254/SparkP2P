@@ -1622,6 +1622,9 @@ async def save_binance_api_key(
 
     await db.commit()
 
+    from app.api.deps import log_event
+    await log_event(db, trader.id, f"Binance API key connected{' (Gold Merchant)' if merchant_capable else ''}", "success")
+
     return {"status": "saved", "ads_found": len(ads), "merchant_capable": merchant_capable}
 
 
@@ -1795,6 +1798,8 @@ async def change_password(
     )
     _change_pw_otp_codes.pop(trader.email, None)
     await db.commit()
+    from app.api.deps import log_event
+    await log_event(db, trader.id, "Password changed", "warning")
     cooldown_until = (now + timedelta(hours=48)).isoformat()
     return {"message": "Password changed successfully", "cooldown_until": cooldown_until}
 
