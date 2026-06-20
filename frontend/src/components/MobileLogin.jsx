@@ -51,8 +51,9 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
     const ok = await bioAuthenticate('Log in to SparkP2P');
     setBioBusy(false);
     if (!ok) { setError('Fingerprint not recognized — try again or use your password.'); return; }
-    if (localStorage.getItem('token')) {            // session still active → just enter
-      if (onUnlock) onUnlock(); else navigate('/dashboard', { replace: true });
+    if (localStorage.getItem('token')) {            // session still active → straight to the app
+      if (onUnlock) onUnlock();
+      navigate('/dashboard', { replace: true });
       return;
     }
     const bt = localStorage.getItem('bio_token');   // logged out → restore the saved session
