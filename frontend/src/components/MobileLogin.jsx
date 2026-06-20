@@ -36,19 +36,29 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
   const [bioOn, setBioOn] = useState(false);
   const [bioBusy, setBioBusy] = useState(false);
 
-  // Fingerprint only appears where it can resume a kept session (lock mode + enabled + available).
+  // Fingerprint shows whenever it can sign you in: it's enabled + available, and there is either a
+  // live session to resume (lock screen) OR a saved sign-in token from a previous login (so it
+  // still works after you've logged out — like a banking app).
   useEffect(() => {
-    if (isLock && isNative() && bioEnabled()) bioAvailable().then((av) => setBioOn(!!av));
-  }, [isLock]);
+    if (isNative() && bioEnabled() && (localStorage.getItem('token') || localStorage.getItem('bio_token'))) {
+      bioAvailable().then((av) => setBioOn(!!av));
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doBio = useCallback(async () => {
     if (bioBusy) return;
     setError(''); setBioBusy(true);
     const ok = await bioAuthenticate('Log in to SparkP2P');
     setBioBusy(false);
-    if (ok) onUnlock && onUnlock();
-    else setError('Fingerprint not recognized — try again or use your password.');
-  }, [bioBusy, onUnlock]);
+    if (!ok) { setError('Fingerprint not recognized — try again or use your password.'); return; }
+    if (localStorage.getItem('token')) {            // session still active → just enter
+      if (onUnlock) onUnlock(); else navigate('/dashboard', { replace: true });
+      return;
+    }
+    const bt = localStorage.getItem('bio_token');   // logged out → restore the saved session
+    if (bt) { localStorage.setItem('token', bt); window.location.href = '/dashboard'; }
+    else setError('Sign in with your password once to set up fingerprint login.');
+  }, [bioBusy, onUnlock, navigate]);
 
   // No forced prompt — the user chooses password or the fingerprint icon next to Login.
 
@@ -73,6 +83,8 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
         localStorage.setItem('remembered_email', email);
         if (res.data.full_name) localStorage.setItem('remembered_name', res.data.full_name);
         loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
+        // Remember the sign-in for fingerprint login if biometrics are enabled.
+        if (bioEnabled()) localStorage.setItem('bio_token', res.data.access_token);
         if (isLock && onUnlock) onUnlock();
         navigate(role === 'employee' ? '/employee' : '/dashboard');
       }
@@ -87,8 +99,9 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
   const notYou = () => {
     localStorage.removeItem('remembered_name');
     localStorage.removeItem('remembered_email');
+    localStorage.removeItem('bio_token');   // switching accounts → forget saved fingerprint sign-in
     if (isLock) { localStorage.removeItem('token'); window.location.href = '/login'; }
-    else { setEmail(''); setEditEmail(true); setPassword(''); setError(''); }
+    else { setEmail(''); setEditEmail(true); setPassword(''); setError(''); setBioOn(false); }
   };
 
   const knownUser = !!name && !editEmail;

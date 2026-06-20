@@ -66,6 +66,7 @@ export function AuthProvider({ children }) {
         })
         .catch(() => {
           localStorage.removeItem('token');
+          localStorage.removeItem('bio_token');   // saved fingerprint sign-in is stale too
           localStorage.removeItem(LAST_ACTIVE_KEY);
           setLoading(false);
           window.location.href = '/login';

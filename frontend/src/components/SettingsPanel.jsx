@@ -16,9 +16,14 @@ function BiometricSetting() {
   if (!isNative()) return null;   // hidden only on the web browser; always visible in the app
   const toggle = async () => {
     if (!avail) return;   // no fingerprint enrolled — hint shown instead
-    if (on) { setBioEnabled(false); setOn(false); return; }
+    if (on) { setBioEnabled(false); localStorage.removeItem('bio_token'); setOn(false); return; }
     const ok = await bioAuthenticate('Confirm to enable fingerprint unlock');
-    if (ok) { setBioEnabled(true); setOn(true); }
+    if (ok) {
+      setBioEnabled(true);
+      // Save the current sign-in so fingerprint can log you in later, even after you log out.
+      const t = localStorage.getItem('token'); if (t) localStorage.setItem('bio_token', t);
+      setOn(true);
+    }
   };
   return (
     <div className="card" style={{ marginBottom: 0 }}>
