@@ -6,7 +6,7 @@ from typing import Optional
 from urllib.parse import urlencode
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
@@ -201,7 +201,7 @@ LOCKOUT_HOURS = 24
 
 
 @router.post("/login")
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(data: LoginRequest, request: Request = None, db: AsyncSession = Depends(get_db)):
     """Two-step login with SMS OTP.
     Step 1: Send email + password → returns otp_required=true, sends SMS OTP
     Step 2: Send email + password + otp_code → returns access_token
@@ -237,10 +237,14 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         if trader:
             trader.failed_login_attempts = (trader.failed_login_attempts or 0) + 1
             attempts_remaining = MAX_LOGIN_ATTEMPTS - trader.failed_login_attempts
+            from app.api.deps import log_event, write_audit_log
             if trader.failed_login_attempts >= MAX_LOGIN_ATTEMPTS:
                 trader.locked_until = datetime.now(timezone.utc) + timedelta(hours=LOCKOUT_HOURS)
                 trader.failed_login_attempts = MAX_LOGIN_ATTEMPTS
                 await db.commit()
+                await log_event(db, trader.id, "Account locked — too many failed sign-in attempts", "error")
+                if trader.is_admin or trader.role in ("admin", "employee"):
+                    await write_audit_log(db, trader, f"{trader.role or 'admin'}_login_locked", detail=f"{trader.email} locked after failed sign-ins")
                 raise HTTPException(
                     status_code=423,
                     detail={
@@ -251,6 +255,9 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
                     },
                 )
             await db.commit()
+            await log_event(db, trader.id, f"Failed sign-in attempt — wrong password ({attempts_remaining} left)", "warning")
+            if trader.is_admin or trader.role in ("admin", "employee"):
+                await write_audit_log(db, trader, f"{trader.role or 'admin'}_login_failed", detail=f"{trader.email}: wrong password")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={
@@ -295,11 +302,20 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         trader.failed_login_attempts = 0
         trader.locked_until = None
         trader.last_login = datetime.now(timezone.utc)
+        # New-device / new-network detection (proxy for "reset their computer").
+        from app.api.deps import get_client_ip
+        new_ip = get_client_ip(request) if request else ""
+        prev_ip = trader.last_login_ip
+        is_new_device = bool(new_ip) and bool(prev_ip) and new_ip != prev_ip
+        if new_ip:
+            trader.last_login_ip = new_ip
         await db.commit()
         token = create_access_token({"sub": str(trader.id), "email": trader.email})
 
         from app.api.deps import log_event, write_audit_log
         await log_event(db, trader.id, "Signed in to SparkP2P", "success")
+        if is_new_device:
+            await log_event(db, trader.id, f"Signed in from a new device/network (IP {new_ip})", "warning")
         # Staff sign-ins are also recorded in the admin audit trail.
         if trader.is_admin or (trader.role in ("admin", "employee")):
             await write_audit_log(db, trader, f"{trader.role or 'admin'}_login", detail=f"{trader.email} signed in")

@@ -47,7 +47,7 @@ async def write_audit_log(
     db.add(log)
     await db.commit()
 
-    if action in SENSITIVE_AUDIT_ACTIONS:
+    if action in SENSITIVE_AUDIT_ACTIONS or action.endswith("_login_failed") or action.endswith("_login_locked"):
         try:
             await _alert_super_admins(db, actor, action, detail, target_trader_id)
         except Exception:
