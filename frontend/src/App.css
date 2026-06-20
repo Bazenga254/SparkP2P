@@ -6785,6 +6785,17 @@ body {
 }
 .mlogin-submit:disabled { opacity: 0.6; }
 .mlogin-submit:active { transform: scale(0.99); }
+/* Login button + optional fingerprint icon side by side (shown when biometric is enabled) */
+.mlogin-submit-row { display: flex; gap: 12px; align-items: stretch; }
+.mlogin-submit-row .mlogin-submit { flex: 1; width: auto; }
+.mlogin-bio-inline {
+  flex: 0 0 auto; width: 58px; border-radius: 14px; cursor: pointer;
+  background: rgba(245,166,35,0.12); border: 1.5px solid rgba(245,166,35,0.45); color: #F5A623;
+  display: flex; align-items: center; justify-content: center;
+}
+.mlogin-bio-inline svg { width: 29px; height: 29px; }
+.mlogin-bio-inline:active { background: rgba(245,166,35,0.22); transform: scale(0.97); }
+.mlogin-bio-inline:disabled { opacity: 0.6; }
 
 .mlogin-create { text-align: center; margin-top: 20px; font-size: 14.5px; color: #93a0b4; }
 .mlogin-google {

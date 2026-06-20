@@ -50,8 +50,7 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
     else setError('Fingerprint not recognized — try again or use your password.');
   }, [bioBusy, onUnlock]);
 
-  // Auto-offer fingerprint the moment the locked screen appears.
-  useEffect(() => { if (bioOn) doBio(); }, [bioOn]); // eslint-disable-line react-hooks/exhaustive-deps
+  // No forced prompt — the user chooses password or the fingerprint icon next to Login.
 
   // When the OTP step opens, let the native SMS Retriever read the code straight into the boxes.
   useEffect(() => {
@@ -148,9 +147,19 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
 
           {error && <div className="mlogin-error">{error}</div>}
 
-          <button type="submit" className="mlogin-submit" disabled={loading}>
-            {loading ? 'Please wait…' : otpRequired ? 'Verify & Continue' : 'Login'}
-          </button>
+          <div className="mlogin-submit-row">
+            <button type="submit" className="mlogin-submit" disabled={loading}>
+              {loading ? 'Please wait…' : otpRequired ? 'Verify & Continue' : 'Login'}
+            </button>
+            {bioOn && !otpRequired && (
+              <button type="button" className="mlogin-bio-inline" onClick={doBio} disabled={bioBusy}
+                title="Log in with fingerprint" aria-label="Log in with fingerprint">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 11c-1.5 0-2.5 1-2.5 3s.5 4 1 5" /><path d="M7 18c-.5-1.5-.7-3-.5-5 .3-2.7 2.4-4.5 5.5-4.5s5.2 1.8 5.5 4.5c.1 1 .1 2 0 3" /><path d="M4.5 14c-.2-1.5-.2-3 .2-4.5C5.6 5.8 8.4 4 12 4s6.4 1.8 7.3 5.5" /><path d="M12 14v3c0 1.5.3 2.7.7 3.5" />
+                </svg>
+              </button>
+            )}
+          </div>
         </form>
 
         {!isLock && (
@@ -167,19 +176,6 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
           </>
         )}
 
-        {isLock && bioOn && (
-          <>
-            <div className="mlogin-or"><span>or</span></div>
-            <div className="mlogin-bio">
-              <button className="mlogin-bio-btn" onClick={doBio} disabled={bioBusy} aria-label="Login with fingerprint">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 11c-1.5 0-2.5 1-2.5 3s.5 4 1 5" /><path d="M7 18c-.5-1.5-.7-3-.5-5 .3-2.7 2.4-4.5 5.5-4.5s5.2 1.8 5.5 4.5c.1 1 .1 2 0 3" /><path d="M4.5 14c-.2-1.5-.2-3 .2-4.5C5.6 5.8 8.4 4 12 4s6.4 1.8 7.3 5.5" /><path d="M12 14v3c0 1.5.3 2.7.7 3.5" />
-                </svg>
-              </button>
-              <div className="mlogin-bio-label">{bioBusy ? 'Waiting…' : 'Tap to login'}</div>
-            </div>
-          </>
-        )}
       </div>
 
       <div className="mlogin-version">SparkP2P · v{APP_VER}</div>
