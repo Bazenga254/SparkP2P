@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Crypto Made Simple — SparkP2P</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { margin: 0; padding: 0; font-family: Georgia, 'Times New Roman', serif; color: #1f2430; }
+  .page {
+    width: 210mm; min-height: 297mm; padding: 22mm 20mm 18mm; position: relative;
+    page-break-after: always; background: #ffffff; overflow: hidden;
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* sans for headings/ui */
+  h1, h2, h3, .ui, .tag, .foot, .kicker, .num, .cta, .toc { font-family: 'Segoe UI', Arial, Helvetica, sans-serif; }
+
+  /* ---------- COVER ---------- */
+  .cover { background: radial-gradient(130% 90% at 50% 0%, #20283a 0%, #0e1117 55%, #080a0e 100%); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .cover .glow { position: absolute; width: 460px; height: 460px; border-radius: 50%; background: radial-gradient(circle, rgba(245,166,35,.30) 0%, transparent 65%); top: 90px; }
+  .cover .badge { width: 150px; height: 150px; border-radius: 36px; background: linear-gradient(135deg,#FF9A2E,#EA6A0A); display:flex; align-items:center; justify-content:center; box-shadow: 0 24px 60px rgba(245,140,20,.45); position: relative; z-index:1; }
+  .cover h1 { font-size: 46px; margin: 34px 0 6px; letter-spacing: -.5px; z-index:1; }
+  .cover .amber { color: #FFB454; }
+  .cover .sub { font-size: 17px; color: #c3ccda; max-width: 440px; line-height: 1.6; z-index:1; font-family: 'Segoe UI', Arial, sans-serif; }
+  .cover .by { margin-top: 40px; font-size: 14px; color: #8a97ab; letter-spacing: .12em; text-transform: uppercase; z-index:1; font-family: 'Segoe UI', Arial, sans-serif; }
+  .cover .url { margin-top: 6px; font-size: 15px; color: #FFB454; font-weight: 700; z-index:1; font-family: 'Segoe UI', Arial, sans-serif; }
+
+  /* ---------- CONTENT ---------- */
+  .kicker { color: #EA6A0A; font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 6px; }
+  h2 { font-size: 30px; margin: 0 0 14px; color: #14181f; letter-spacing: -.4px; line-height: 1.15; }
+  h2 .n { display:inline-flex; align-items:center; justify-content:center; width: 40px; height: 40px; border-radius: 11px; background: linear-gradient(135deg,#FFC85A,#F5A623); color:#1a1206; font-size:20px; font-weight:800; margin-right: 12px; vertical-align: middle; }
+  h3 { font-size: 18px; margin: 22px 0 6px; color: #b35e08; }
+  p { font-size: 15.5px; line-height: 1.72; margin: 0 0 12px; }
+  .lead { font-size: 17px; color: #3a4250; line-height: 1.7; }
+  ul { margin: 6px 0 14px; padding-left: 0; list-style: none; }
+  li { font-size: 15px; line-height: 1.6; margin-bottom: 9px; padding-left: 26px; position: relative; }
+  li::before { content: ''; position: absolute; left: 4px; top: 8px; width: 9px; height: 9px; border-radius: 50%; background: linear-gradient(135deg,#FFC85A,#F5A623); }
+  b, strong { color: #14181f; }
+
+  .callout { background: #fff7ec; border: 1px solid #f6d9a8; border-left: 5px solid #F5A623; border-radius: 10px; padding: 14px 18px; margin: 16px 0; font-size: 14.5px; line-height: 1.6; }
+  .callout .t { font-family:'Segoe UI',Arial,sans-serif; font-weight: 800; color: #b35e08; display:block; margin-bottom: 4px; font-size: 13.5px; }
+  .example { background: #0e1117; color: #e7ecf3; border-radius: 12px; padding: 18px 20px; margin: 16px 0; font-family: 'Segoe UI', Arial, sans-serif; }
+  .example .t { color: #FFB454; font-weight: 800; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 8px; }
+  .example p { color: #cdd6e3; font-size: 14.5px; margin: 0 0 6px; font-family: 'Segoe UI', Arial, sans-serif; }
+  .example .big { color: #33C27A; font-weight: 800; font-size: 19px; margin-top: 6px; }
+
+  .coins { margin: 10px 0; }
+  .coin { display: flex; gap: 14px; padding: 13px 0; border-bottom: 1px solid #eef1f5; }
+  .coin:last-child { border-bottom: none; }
+  .coin .ic { flex: 0 0 46px; width: 46px; height: 46px; border-radius: 12px; display:flex; align-items:center; justify-content:center; font-family:'Segoe UI',Arial,sans-serif; font-weight: 800; color: #fff; font-size: 15px; }
+  .coin h3 { margin: 0 0 2px; color: #14181f; font-size: 16px; }
+  .coin p { margin: 0; font-size: 14px; color: #4a5260; line-height: 1.55; }
+
+  .steps { counter-reset: s; margin-top: 8px; }
+  .step { display: flex; gap: 16px; margin-bottom: 16px; align-items: flex-start; }
+  .step .num { flex: 0 0 38px; width: 38px; height: 38px; border-radius: 50%; background: #14181f; color: #FFB454; font-weight: 800; display:flex; align-items:center; justify-content:center; font-size: 17px; }
+  .step h3 { margin: 4px 0 2px; }
+  .step p { margin: 0; font-size: 14.5px; }
+
+  .foot { position: absolute; bottom: 12mm; left: 20mm; right: 20mm; display: flex; align-items: center; justify-content: space-between; font-family:'Segoe UI',Arial,sans-serif; font-size: 11px; color: #9aa4b2; border-top: 1px solid #eef1f5; padding-top: 8px; }
+  .foot b { color: #EA6A0A; }
+
+  .cta-page { background: linear-gradient(135deg,#FF9A2E,#EA6A0A); color: #1a1206; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+  .cta-page h2 { color: #1a1206; font-size: 34px; }
+  .cta-page p { color: #3a2708; font-size: 17px; max-width: 460px; }
+  .cta-page .pill { margin-top: 18px; background: #14181f; color: #FFB454; padding: 14px 30px; border-radius: 40px; font-family:'Segoe UI',Arial,sans-serif; font-weight: 800; font-size: 18px; }
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<div class="page cover">
+  <div class="glow"></div>
+  <div class="badge">
+    <svg width="92" height="116" viewBox="0 0 256 320">
+      <path fill-rule="evenodd" clip-rule="evenodd" fill="#fff" d="M128 28 L236 250 L170 250 L150 210 L106 210 L86 250 L20 250 Z M128 116 L162 188 L94 188 Z"/>
+      <path fill="#FFE9CC" d="M154 92 L104 192 L136 192 L92 312 L182 166 L146 166 Z"/>
+    </svg>
+  </div>
+  <h1>Crypto Made <span class="amber">Simple</span></h1>
+  <div class="sub">A plain-English beginner's guide to cryptocurrency, P2P trading, and how everyday people in Kenya earn — with SparkP2P doing the hard work.</div>
+  <div class="by">Brought to you by</div>
+  <div class="url">SparkP2P · sparkp2p.com</div>
+</div>
+
+<!-- ============ 1. WHAT IS CRYPTO ============ -->
+<div class="page">
+  <div class="kicker">Chapter 1</div>
+  <h2><span class="n">1</span>What is cryptocurrency?</h2>
+  <p class="lead">Cryptocurrency (or “crypto”) is simply <b>money that lives on the internet</b>. You can't hold it in your hand like a coin or a note, but it is real, it has value, and you can send it to anyone in the world in seconds.</p>
+
+  <p>If you use <b>M-Pesa</b>, you already understand most of it. M-Pesa is money on your phone. Crypto is the same idea — money you keep and send from your phone — but with two big differences:</p>
+  <ul>
+    <li><b>No single company or government owns it.</b> M-Pesa is run by Safaricom. Crypto is run by thousands of computers around the world working together, so no one person can freeze it or print more of it to make it worthless.</li>
+    <li><b>It works everywhere.</b> You can send crypto from Nairobi to New York in seconds, any time of day or night, without a bank.</li>
+  </ul>
+
+  <h3>How is it kept safe?</h3>
+  <p>Every crypto payment is written into a giant shared notebook called the <b>blockchain</b>. Thousands of computers all keep the same copy of this notebook, so nobody can cheat, fake a payment, or erase your money. This is why crypto is trusted by millions of people.</p>
+
+  <div class="callout">
+    <span class="t">In one sentence</span>
+    Cryptocurrency is digital money you fully own on your phone — fast, global, and not controlled by any bank or government.
+  </div>
+
+  <div class="foot"><span>Crypto Made Simple — a beginner's guide by <b>SparkP2P</b></span><span>1</span></div>
+</div>
+
+<!-- ============ 2. TYPES ============ -->
+<div class="page">
+  <div class="kicker">Chapter 2</div>
+  <h2><span class="n">2</span>The main types of crypto</h2>
+  <p class="lead">There are thousands of cryptocurrencies, but you only need to know a few. Here are the big ones:</p>
+
+  <div class="coins">
+    <div class="coin">
+      <div class="ic" style="background:#F7931A">₿</div>
+      <div><h3>Bitcoin (BTC)</h3><p>The very first cryptocurrency, and the most famous. People call it “digital gold” because there will only ever be a limited amount, so many buy it and hold it to store their wealth.</p></div>
+    </div>
+    <div class="coin">
+      <div class="ic" style="background:#627EEA">Ξ</div>
+      <div><h3>Ethereum (ETH)</h3><p>Like a “world computer.” On top of Ethereum, people build apps, games, and other money tools. It is the second-biggest crypto after Bitcoin.</p></div>
+    </div>
+    <div class="coin">
+      <div class="ic" style="background:#26A17B">$</div>
+      <div><h3>Stablecoins — USDT &amp; USDC ⭐</h3><p><b>This is the one Kenyan traders use most.</b> A stablecoin is always worth about 1 US dollar — it does not jump up and down. That makes it safe and predictable, perfect for buying and selling. When people “trade USDT” on Binance, this is it.</p></div>
+    </div>
+    <div class="coin">
+      <div class="ic" style="background:#F3BA2F">B</div>
+      <div><h3>Others (BNB, Solana, and more)</h3><p>There are many more coins for different uses — faster payments, cheaper fees, new projects. As a beginner you don't need them. Start with the ones above.</p></div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="t">Why stablecoins matter for you</span>
+    Because USDT stays close to one dollar, you don't have to worry about the price crashing while you trade. You buy it and sell it for a small, steady profit — like buying and selling sugar at a shop, not gambling.
+  </div>
+
+  <div class="foot"><span>Crypto Made Simple — a beginner's guide by <b>SparkP2P</b></span><span>2</span></div>
+</div>
+
+<!-- ============ 3. WHY BIG ============ -->
+<div class="page">
+  <div class="kicker">Chapter 3</div>
+  <h2><span class="n">3</span>Why is crypto so big?</h2>
+  <p class="lead">Crypto has grown into a market worth <b>trillions of dollars</b>, used by hundreds of millions of people. Here's why so many have moved to it:</p>
+  <ul>
+    <li><b>It crosses borders instantly.</b> Sending normal money to another country is slow and expensive. Crypto moves anywhere in minutes for a tiny fee.</li>
+    <li><b>It never closes.</b> No bank hours, no holidays. Crypto works 24 hours a day, 7 days a week.</li>
+    <li><b>You don't need a bank.</b> Anyone with a smartphone can hold and use crypto — powerful in places where many people have no bank account.</li>
+    <li><b>It protects savings.</b> When a local currency loses value, people move into stablecoins like USDT to keep their money safe in “digital dollars.”</li>
+    <li><b>It creates income.</b> Millions earn by trading crypto — and that's exactly what this guide will show you next.</li>
+  </ul>
+
+  <div class="callout">
+    <span class="t">Kenya is a crypto leader</span>
+    Kenya is one of the top countries in the world for everyday crypto use — largely because it pairs so well with M-Pesa. That's a huge opportunity for ordinary people to earn.
+  </div>
+
+  <div class="foot"><span>Crypto Made Simple — a beginner's guide by <b>SparkP2P</b></span><span>3</span></div>
+</div>
+
+<!-- ============ 4. WHAT IS P2P ============ -->
+<div class="page">
+  <div class="kicker">Chapter 4</div>
+  <h2><span class="n">4</span>What is P2P trading?</h2>
+  <p class="lead">P2P means <b>“peer-to-peer”</b> — person to person. Instead of buying crypto from a shop or a bank, you buy and sell it <b>directly with other ordinary people</b>.</p>
+
+  <p>It happens on a marketplace like <b>Binance P2P</b>. Think of it as a busy market:</p>
+  <ul>
+    <li>Some people want to <b>buy</b> USDT and will pay you by <b>M-Pesa or bank transfer</b>.</li>
+    <li>Some people want to <b>sell</b> USDT for cash.</li>
+    <li>You stand in the middle and connect them — and earn a little on every deal.</li>
+  </ul>
+
+  <h3>How a single trade works</h3>
+  <ul>
+    <li>A buyer picks your offer and sends you <b>M-Pesa</b>.</li>
+    <li>You check the money has truly arrived.</li>
+    <li>You release the <b>USDT</b> to them.</li>
+    <li>Done — that's one trade.</li>
+  </ul>
+
+  <div class="callout">
+    <span class="t">You are the shopkeeper</span>
+    In P2P you act like a little money shop: people come to you to swap cash and crypto, and you take a small margin each time. Do it many times and it adds up.
+  </div>
+
+  <div class="foot"><span>Crypto Made Simple — a beginner's guide by <b>SparkP2P</b></span><span>4</span></div>
+</div>
+
+<!-- ============ 5. HOW PEOPLE PROFIT ============ -->
+<div class="page">
+  <div class="kicker">Chapter 5</div>
+  <h2><span class="n">5</span>How people make money</h2>
+  <p class="lead">The secret is simple: <b>buy a little cheaper, sell a little higher.</b> The small difference is your profit. Traders call it the <b>“spread.”</b></p>
+
+  <div class="example">
+    <div class="t">A real example</div>
+    <p>You buy <b>1,000 USDT</b> at <b>129 KES</b> each → you pay 129,000 KES.</p>
+    <p>You sell those <b>1,000 USDT</b> at <b>130 KES</b> each → you receive 130,000 KES.</p>
+    <p class="big">Profit: 1,000 KES — from just one trade.</p>
+  </div>
+
+  <p>One trade may look small. But P2P is about <b>doing it again and again</b>. The real earners win on <b>volume</b>:</p>
+  <ul>
+    <li>A profit of <b>1,000 KES</b> on one trade…</li>
+    <li>…done <b>20–40 times a day</b>…</li>
+    <li>…becomes a serious daily income.</li>
+  </ul>
+
+  <h3>Becoming a “merchant”</h3>
+  <p>When you trade a lot and treat buyers well, you can become a <b>merchant</b> — a trusted seller buyers come to first. More trades, steadier income, a real business run from your phone.</p>
+
+  <div class="callout">
+    <span class="t">The honest truth</span>
+    The money is real — but it depends on speed, trust, and never missing a trade. That is exactly where most people struggle… and exactly where SparkP2P comes in.
+  </div>
+
+  <div class="foot"><span>Crypto Made Simple — a beginner's guide by <b>SparkP2P</b></span><span>5</span></div>
+</div>
+
+<!-- ============ 6. THE HARD PART + SPARKP2P ============ -->
+<div class="page">
+  <div class="kicker">Chapter 6</div>
+  <h2><span class="n">6</span>The hard part — and the fix</h2>
+  <p class="lead">Doing P2P <b>by hand</b> is exhausting. To earn well, a trader must:</p>
+  <ul>
+    <li>Watch their orders <b>all day and all night</b> — buyers expect crypto in minutes.</li>
+    <li>Carefully <b>check every M-Pesa payment</b> truly arrived (scammers send fake “payment received” messages).</li>
+    <li><b>Release the crypto instantly</b>, or buyers complain and your rating drops.</li>
+    <li>Never sleep, never travel, never miss — or they lose money.</li>
+  </ul>
+  <p>It is simply too much for one person to do well, 24 hours a day. <b>That's the problem SparkP2P solves.</b></p>
+
+  <h3 style="color:#EA6A0A">⚡ How SparkP2P helps you</h3>
+  <p><b>SparkP2P is an automatic assistant for your Binance P2P trading.</b> It does the tiring, risky work for you, instantly and around the clock:</p>
+  <ul>
+    <li><b>Watches your orders 24/7</b> — even while you sleep.</li>
+    <li><b>Verifies the M-Pesa payment really landed</b> — no more falling for fake payment tricks.</li>
+    <li><b>Releases the crypto automatically</b>, in seconds, so buyers are happy and your rating stays high.</li>
+    <li><b>Tracks your profit</b> so you always know what you've earned.</li>
+    <li><b>Runs all day and night</b> — you earn even when you're resting.</li>
+  </ul>
+
+  <div class="callout">
+    <span class="t">In short</span>
+    You set it up once. SparkP2P then trades for you — checking payments, releasing coins, and counting your profit — so P2P becomes a calm, steady income instead of a stressful all-day job.
+  </div>
+
+  <div class="foot"><span>Crypto Made Simple — a beginner's guide by <b>SparkP2P</b></span><span>6</span></div>
+</div>
+
+<!-- ============ 7. HOW TO START ============ -->
+<div class="page">
+  <div class="kicker">Get started</div>
+  <h2><span class="n">7</span>How to begin with SparkP2P</h2>
+  <p class="lead">Getting started takes about 10 minutes. No coding, no technical skills.</p>
+
+  <div class="steps">
+    <div class="step"><div class="num">1</div><div><h3>Create your account</h3><p>Go to <b>sparkp2p.com</b> and sign up with your email and phone number.</p></div></div>
+    <div class="step"><div class="num">2</div><div><h3>Connect Binance</h3><p>Link your Binance P2P using your <b>API key and secret</b> — your account stays in your control.</p></div></div>
+    <div class="step"><div class="num">3</div><div><h3>Add your M-Pesa</h3><p>Set the M-Pesa or bank number where payments are received and checked.</p></div></div>
+    <div class="step"><div class="num">4</div><div><h3>Set your prices &amp; limits</h3><p>Choose your buying and selling prices and how much to trade each day.</p></div></div>
+    <div class="step"><div class="num">5</div><div><h3>Switch it on</h3><p>Turn on the bot. SparkP2P now watches, verifies, releases, and tracks — for you, 24/7.</p></div></div>
+  </div>
+
+  <div class="callout">
+    <span class="t">Remember</span>
+    Crypto trading carries risk and prices can move. Start small, learn how it works, and grow as you gain confidence. SparkP2P makes the work easier — but you are always in charge.
+  </div>
+
+  <div class="foot"><span>Crypto Made Simple — a beginner's guide by <b>SparkP2P</b></span><span>7</span></div>
+</div>
+
+<!-- ============ CTA ============ -->
+<div class="page cta-page">
+  <svg width="78" height="98" viewBox="0 0 256 320" style="margin-bottom:18px">
+    <path fill-rule="evenodd" clip-rule="evenodd" fill="#1a1206" d="M128 28 L236 250 L170 250 L150 210 L106 210 L86 250 L20 250 Z M128 116 L162 188 L94 188 Z"/>
+    <path fill="#3a2708" d="M154 92 L104 192 L136 192 L92 312 L182 166 L146 166 Z"/>
+  </svg>
+  <h2>Start earning the smart way</h2>
+  <p>You now understand crypto, USDT, and how P2P traders profit. Let SparkP2P do the hard work while you grow your income.</p>
+  <div class="pill">sparkp2p.com</div>
+</div>
+
+</body>
+</html>
