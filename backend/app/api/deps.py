@@ -43,7 +43,9 @@ async def write_audit_log(
         action=action,
         target_trader_id=target_trader_id,
         detail=detail,
-        ip_address=ip_address,
+        # Fall back to the IP stashed on the actor by the admin/staff dependency, so every
+        # admin-gated action records the IP without each endpoint having to pass it.
+        ip_address=ip_address or getattr(actor, "_client_ip", "") or "",
     )
     db.add(log)
     await db.commit()
@@ -183,10 +185,12 @@ async def get_admin_trader(
                 detail="Access denied: your IP is not authorised for admin access",
             )
 
+    trader._client_ip = get_client_ip(request)   # used by write_audit_log
     return trader
 
 
 async def get_employee_or_admin(
+    request: Request,
     trader: Trader = Depends(get_current_trader),
 ) -> Trader:
     """Ensure current user is an employee or admin."""
@@ -195,6 +199,7 @@ async def get_employee_or_admin(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Employee or admin access required",
         )
+    trader._client_ip = get_client_ip(request)   # used by write_audit_log
     return trader
 
 

@@ -237,14 +237,15 @@ async def login(data: LoginRequest, request: Request = None, db: AsyncSession = 
         if trader:
             trader.failed_login_attempts = (trader.failed_login_attempts or 0) + 1
             attempts_remaining = MAX_LOGIN_ATTEMPTS - trader.failed_login_attempts
-            from app.api.deps import log_event, write_audit_log
+            from app.api.deps import log_event, write_audit_log, get_client_ip
+            fip = get_client_ip(request) if request else ""
             if trader.failed_login_attempts >= MAX_LOGIN_ATTEMPTS:
                 trader.locked_until = datetime.now(timezone.utc) + timedelta(hours=LOCKOUT_HOURS)
                 trader.failed_login_attempts = MAX_LOGIN_ATTEMPTS
                 await db.commit()
                 await log_event(db, trader.id, "Account locked — too many failed sign-in attempts", "error")
                 if trader.is_admin or trader.role in ("admin", "employee"):
-                    await write_audit_log(db, trader, f"{trader.role or 'admin'}_login_locked", detail=f"{trader.email} locked after failed sign-ins")
+                    await write_audit_log(db, trader, f"{trader.role or 'admin'}_login_locked", ip_address=fip, detail=f"{trader.email} locked after failed sign-ins")
                 raise HTTPException(
                     status_code=423,
                     detail={
@@ -257,7 +258,7 @@ async def login(data: LoginRequest, request: Request = None, db: AsyncSession = 
             await db.commit()
             await log_event(db, trader.id, f"Failed sign-in attempt — wrong password ({attempts_remaining} left)", "warning")
             if trader.is_admin or trader.role in ("admin", "employee"):
-                await write_audit_log(db, trader, f"{trader.role or 'admin'}_login_failed", detail=f"{trader.email}: wrong password")
+                await write_audit_log(db, trader, f"{trader.role or 'admin'}_login_failed", ip_address=fip, detail=f"{trader.email}: wrong password")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={
@@ -318,7 +319,7 @@ async def login(data: LoginRequest, request: Request = None, db: AsyncSession = 
             await log_event(db, trader.id, f"Signed in from a new device/network (IP {new_ip})", "warning")
         # Staff sign-ins are also recorded in the admin audit trail.
         if trader.is_admin or (trader.role in ("admin", "employee")):
-            await write_audit_log(db, trader, f"{trader.role or 'admin'}_login", detail=f"{trader.email} signed in")
+            await write_audit_log(db, trader, f"{trader.role or 'admin'}_login", ip_address=new_ip, detail=f"{trader.email} signed in")
 
         return {
             "access_token": token,
@@ -378,7 +379,7 @@ async def extension_login(data: LoginRequest, db: AsyncSession = Depends(get_db)
 
 
 @router.post("/employee/login")
-async def employee_login(data: EmployeeLoginRequest, db: AsyncSession = Depends(get_db)):
+async def employee_login(data: EmployeeLoginRequest, request: Request = None, db: AsyncSession = Depends(get_db)):
     """Login as an employee (support staff)."""
     result = await db.execute(
         select(Trader).where(Trader.email == data.email)
@@ -409,8 +410,8 @@ async def employee_login(data: EmployeeLoginRequest, db: AsyncSession = Depends(
         "role": employee.role,
     })
 
-    from app.api.deps import write_audit_log
-    await write_audit_log(db, employee, f"{employee.role}_login", detail=f"{employee.email} signed in via staff portal")
+    from app.api.deps import write_audit_log, get_client_ip
+    await write_audit_log(db, employee, f"{employee.role}_login", ip_address=get_client_ip(request) if request else "", detail=f"{employee.email} signed in via staff portal")
 
     return {
         "access_token": token,

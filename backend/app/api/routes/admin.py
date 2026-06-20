@@ -36,7 +36,7 @@ class AdminLoginRequest(BaseModel):
 
 
 @router.post("/login")
-async def admin_login(data: AdminLoginRequest, db: AsyncSession = Depends(get_db)):
+async def admin_login(data: AdminLoginRequest, request: Request = None, db: AsyncSession = Depends(get_db)):
     """Login as admin with master password. Creates admin account if needed."""
     if data.password != settings.ADMIN_PASSWORD:
         raise HTTPException(status_code=401, detail="Invalid admin password")
@@ -64,7 +64,7 @@ async def admin_login(data: AdminLoginRequest, db: AsyncSession = Depends(get_db
 
     token = create_access_token({"sub": str(admin.id), "email": admin.email})
 
-    await write_audit_log(db, admin, "admin_login", detail=f"{admin.email} signed in to the admin dashboard")
+    await write_audit_log(db, admin, "admin_login", ip_address=get_client_ip(request) if request else "", detail=f"{admin.email} signed in to the admin dashboard")
 
     return {
         "access_token": token,
