@@ -43,6 +43,21 @@ const sidebarSections = [
 ];
 
 const fmtDateEAT = (ts) => new Date(ts).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' });
+
+// Friendly labels for audit-log actions (raw snake_case → readable). Unknown actions fall back
+// to title-cased words. Actions in AUDIT_DANGER render in red (failures / denials / locks).
+const AUDIT_ACTION_LABELS = {
+  admin_login: 'Admin login', employee_login: 'Staff login',
+  admin_login_failed: 'Admin login — FAILED', employee_login_failed: 'Staff login — FAILED',
+  admin_login_locked: 'Admin account LOCKED', employee_login_locked: 'Staff account LOCKED',
+  change_role: 'Changed role', change_status: 'Changed status',
+  change_subscription: 'Changed subscription', toggle_price_tracker: 'Toggled price tracker',
+  reset_trader_password: 'Reset trader password', resolve_payment: 'Resolved payment',
+  denied_action: 'DENIED action', list_traders: 'Viewed traders list',
+  view_trader_detail: 'Viewed trader detail',
+};
+const fmtAuditAction = (a) => AUDIT_ACTION_LABELS[a] || (a || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+const isAuditDanger = (a) => /denied|failed|locked|suspend/i.test(a || '');
 const fmtTimeEAT = (ts) => new Date(ts).toLocaleTimeString('en-KE', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const fmtDateOnlyEAT = (ts) => new Date(ts).toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi' });
 
@@ -3433,7 +3448,7 @@ export default function Admin() {
                                   <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{log.created_at ? fmtDateEAT(log.created_at) : '—'}</td>
                                   <td>#{log.actor_id}</td>
                                   <td><span style={{ background: log.actor_role === 'admin' ? '#7c3aed22' : '#0e3a5a', color: log.actor_role === 'admin' ? '#a78bfa' : '#38bdf8', borderRadius: 4, padding: '2px 7px', fontSize: 11, fontWeight: 600 }}>{log.actor_role}</span></td>
-                                  <td style={{ fontSize: 12, color: '#f59e0b' }}>{log.action}</td>
+                                  <td style={{ fontSize: 12, fontWeight: 600, color: isAuditDanger(log.action) ? '#ef4444' : '#f59e0b' }}>{fmtAuditAction(log.action)}</td>
                                   <td>{log.target_trader_id ? `#${log.target_trader_id}` : '—'}</td>
                                   <td style={{ fontSize: 11, color: '#9ca3af', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{log.detail || '—'}</td>
                                   <td style={{ fontSize: 12, fontFamily: 'monospace' }}>{log.ip_address || '—'}</td>

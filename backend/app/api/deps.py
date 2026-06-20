@@ -22,6 +22,7 @@ def get_client_ip(request: Request) -> str:
 SENSITIVE_AUDIT_ACTIONS = {
     "change_role", "change_status", "change_subscription", "toggle_price_tracker",
     "reset_trader_password", "resolve_payment", "admin_login", "employee_login",
+    "denied_action",
 }
 
 
@@ -149,9 +150,18 @@ async def get_current_trader_id(
 async def get_admin_trader(
     request: Request,
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ) -> Trader:
-    """Ensure current user is an admin. Enforces IP allowlist if configured."""
+    """Ensure current user is an admin. Enforces IP allowlist if configured. Denied attempts by
+    staff (e.g. an employee trying an admin-only action) are recorded + alerted."""
     if not trader.is_admin:
+        # Log/alert only for staff probing admin-only endpoints (a plain trader hitting these is
+        # browser noise, not a security event).
+        if (trader.role or "") in ("employee", "admin"):
+            await write_audit_log(
+                db, trader, "denied_action", ip_address=get_client_ip(request),
+                detail=f"denied admin action: {request.method} {request.url.path}",
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
@@ -164,6 +174,10 @@ async def get_admin_trader(
         allowed = [ip.strip() for ip in allowed_ips_raw.split(",") if ip.strip()]
         client_ip = get_client_ip(request)
         if allowed and client_ip not in allowed:
+            await write_audit_log(
+                db, trader, "denied_action", ip_address=client_ip,
+                detail=f"admin IP not authorised: {request.method} {request.url.path}",
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied: your IP is not authorised for admin access",
