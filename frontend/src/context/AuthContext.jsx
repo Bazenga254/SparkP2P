@@ -62,6 +62,13 @@ export function AuthProvider({ children }) {
       getProfile()
         .then((res) => {
           setUser(res.data);
+          // Keep the fingerprint sign-in token fresh so biometric login always works (even after
+          // logging out or restarting the phone), for native users who enabled it.
+          try {
+            if (isNativeApp() && localStorage.getItem('bio_enabled') === '1') {
+              localStorage.setItem('bio_token', token);
+            }
+          } catch (_) { /* ignore */ }
           setLoading(false);
         })
         .catch(() => {

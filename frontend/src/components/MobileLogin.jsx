@@ -110,7 +110,8 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
   return (
     <div className="mlogin">
       <div className="mlogin-topbar">
-        <button className="mlogin-icon-btn" onClick={() => (isLock ? notYou() : navigate('/'))} aria-label="Back">
+        {/* Back never logs out — it just leaves the screen; the session + fingerprint sign-in stay. */}
+        <button className="mlogin-icon-btn" onClick={() => navigate('/')} aria-label="Back">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         </button>
         <div className="mlogin-brand">
