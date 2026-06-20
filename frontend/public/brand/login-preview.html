@@ -34,6 +34,10 @@
   .mlogin-eye svg { width:20px; height:20px; }
   .mlogin-forgot { text-align:right; margin:2px 2px 16px; }
   .mlogin-submit { width:100%; padding:15px; border:none; border-radius:13px; background:linear-gradient(135deg,#FFC85A,#F5A623); color:#1a1206; font-size:16px; font-weight:800; box-shadow:0 12px 30px rgba(245,166,35,.3); }
+  .mlogin-submit-row { display:flex; gap:11px; align-items:stretch; }
+  .mlogin-submit-row .mlogin-submit { flex:1; width:auto; }
+  .mlogin-bio-inline { flex:0 0 auto; width:54px; border-radius:13px; background:rgba(245,166,35,.12); border:1.5px solid rgba(245,166,35,.45); color:#F5A623; display:flex; align-items:center; justify-content:center; }
+  .mlogin-bio-inline svg { width:27px; height:27px; }
   .mlogin-create { text-align:center; margin-top:18px; font-size:13.5px; color:#93a0b4; }
   .mlogin-google { width:100%; box-sizing:border-box; margin-top:14px; padding:14px; border-radius:13px; background:#fff; color:#1f2430; border:1px solid #e2e6ee; font-size:14.5px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:9px; }
   .mlogin-or { display:flex; align-items:center; gap:13px; margin:20px 4px 16px; color:#6b7688; font-size:12.5px; }
@@ -68,11 +72,9 @@
           </div>
           <div class="mlogin-input-wrap"><input class="mlogin-input" type="password" placeholder="Password" value="************"/><button class="mlogin-eye"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
           <div class="mlogin-forgot"><button class="mlogin-link">Forgot Password?</button></div>
-          <button class="mlogin-submit">Login</button>
-          <div class="mlogin-or"><span>or</span></div>
-          <div class="mlogin-bio">
-            <button class="mlogin-bio-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 11c-1.5 0-2.5 1-2.5 3s.5 4 1 5"/><path d="M7 18c-.5-1.5-.7-3-.5-5 .3-2.7 2.4-4.5 5.5-4.5s5.2 1.8 5.5 4.5c.1 1 .1 2 0 3"/><path d="M4.5 14c-.2-1.5-.2-3 .2-4.5C5.6 5.8 8.4 4 12 4s6.4 1.8 7.3 5.5"/><path d="M12 14v3c0 1.5.3 2.7.7 3.5"/></svg></button>
-            <div class="mlogin-bio-label">Tap to login</div>
+          <div class="mlogin-submit-row">
+            <button class="mlogin-submit">Login</button>
+            <button class="mlogin-bio-inline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 11c-1.5 0-2.5 1-2.5 3s.5 4 1 5"/><path d="M7 18c-.5-1.5-.7-3-.5-5 .3-2.7 2.4-4.5 5.5-4.5s5.2 1.8 5.5 4.5c.1 1 .1 2 0 3"/><path d="M4.5 14c-.2-1.5-.2-3 .2-4.5C5.6 5.8 8.4 4 12 4s6.4 1.8 7.3 5.5"/><path d="M12 14v3c0 1.5.3 2.7.7 3.5"/></svg></button>
           </div>
         </div>
         <div class="mlogin-version">SparkP2P · v2.0.0</div>
