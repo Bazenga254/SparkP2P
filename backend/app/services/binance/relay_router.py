@@ -21,6 +21,7 @@ _PRESENCE_WINDOW = 70.0    # a desktop counts as "connected" if it polled within
 _job_queues: dict[int, asyncio.Queue] = {}   # trader_id -> pending jobs
 _job_futures: dict[str, asyncio.Future] = {}  # job_id -> awaiting result
 _last_poll: dict[int, float] = {}             # trader_id -> last poll time (presence)
+_last_ip: dict[int, str] = {}                 # trader_id -> source IP of the trader's relay device
 
 
 class RelayOffline(Exception):
@@ -37,6 +38,12 @@ def _queue(trader_id: int) -> asyncio.Queue:
 
 def is_connected(trader_id: int) -> bool:
     return (time.time() - _last_poll.get(trader_id, 0)) < _PRESENCE_WINDOW
+
+
+def last_ip(trader_id: int) -> str:
+    """The source IP of the trader's relay device (their real connection IP), captured from their
+    long-poll. Empty if they've never connected since the backend started."""
+    return _last_ip.get(trader_id, "")
 
 
 async def execute(trader_id: int, path: str, params: dict, body: dict, headers: dict, method: str = "POST") -> dict:
@@ -58,9 +65,11 @@ async def execute(trader_id: int, path: str, params: dict, body: dict, headers: 
     return result.get("body")
 
 
-async def next_job(trader_id: int, wait: float = 25.0):
+async def next_job(trader_id: int, wait: float = 25.0, client_ip: str = ""):
     """Desktop long-poll: return the next job for this trader, or None if none within `wait`."""
     _last_poll[trader_id] = time.time()
+    if client_ip:
+        _last_ip[trader_id] = client_ip
     try:
         return await asyncio.wait_for(_queue(trader_id).get(), timeout=wait)
     except asyncio.TimeoutError:

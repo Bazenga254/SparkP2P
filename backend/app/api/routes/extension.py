@@ -18,7 +18,7 @@ from collections import deque
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -810,7 +810,7 @@ class RelayResultRequest(BaseModel):
 
 
 @router.get("/relay/poll")
-async def relay_poll(trader_id: int = Depends(get_current_trader_id)):
+async def relay_poll(request: Request, trader_id: int = Depends(get_current_trader_id)):
     """Desktop long-polls here. Returns the next signed Binance job for THIS trader to execute on
     its own IP, or {job: None} if none arrives within the wait window. The desktop must pin the
     host to Binance and only forward the returned path/params/body/headers.
@@ -818,7 +818,8 @@ async def relay_poll(trader_id: int = Depends(get_current_trader_id)):
     Auth is token-only (no DB) so the 25s wait does NOT hold a pool connection — otherwise every
     online trader polling back-to-back pins a connection and exhausts the DB pool."""
     from app.services.binance import relay_router
-    job = await relay_router.next_job(trader_id, wait=25.0)
+    from app.api.deps import get_client_ip
+    job = await relay_router.next_job(trader_id, wait=25.0, client_ip=get_client_ip(request))
     return job or {"job": None}
 
 

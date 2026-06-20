@@ -512,6 +512,7 @@ async def get_trader_detail(
         "telegram_connected": bool(trader.telegram_chat_id),
         "telegram_notify_scope": trader.telegram_notify_scope or 'both',
         "relay_connected": _relaymod.is_connected(trader.id),
+        "relay_ip": _relaymod.last_ip(trader.id),
         "pending_orders_count": int(getattr(trader, "pending_orders_count", 0) or 0),
         "last_web_active": (trader.last_web_active or trader.last_login).isoformat() if (trader.last_web_active or trader.last_login) else None,
         "total_trades": max(trader.total_trades or 0, live_trades),

@@ -2068,6 +2068,11 @@ export default function Admin() {
                             })()}
                             <span title={t.telegram_connected ? `Telegram connected${t.telegram_notify_scope && t.telegram_notify_scope !== 'both' ? ` (${t.telegram_notify_scope} alerts)` : ''}` : 'Telegram not connected'} className={`chip ${t.telegram_connected ? 'chip--pos' : 'chip--neg'}`}>{t.telegram_connected ? 'Telegram ✓' : 'Telegram ✗'}</span>
                             <span title={t.relay_connected ? 'Relay connected — Binance calls run from this trader’s own IP' : 'Relay not connected'} className={`chip ${t.relay_connected ? 'chip--pos' : ''}`}>{t.relay_connected ? 'Relay ✓' : 'Relay ✗'}</span>
+                            {t.relay_ip && (
+                              <span title={t.relay_connected ? "Trader's live relay IP (their real connection)" : "Trader's last-known relay IP"} className="chip" style={{ fontFamily: 'monospace' }}>
+                                🌐 {t.relay_ip}
+                              </span>
+                            )}
                             <span className={`chip ${seen.online ? 'chip--pos' : ''}`}><span className="dot" style={{ background: seen.online ? 'var(--pos)' : 'var(--text-3)' }} />{seen.online ? seen.label : `Last seen ${seen.label}`}</span>
                           </div>
                         </div>
