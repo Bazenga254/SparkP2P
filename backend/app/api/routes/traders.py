@@ -1804,6 +1804,21 @@ async def change_password(
     return {"message": "Password changed successfully", "cooldown_until": cooldown_until}
 
 
+@router.get("/my-bot-logs")
+async def my_bot_logs(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """The signed-in trader's own activity log (newest first) — server-side account events plus
+    any desktop-pushed lines, persisted in the DB so it survives restarts."""
+    from app.models.bot_log import BotLog
+    rows = (await db.execute(
+        select(BotLog).where(BotLog.trader_id == trader.id)
+        .order_by(BotLog.created_at.desc()).limit(200)
+    )).scalars().all()
+    return [{"level": r.level, "message": r.message, "time": r.time} for r in rows]
+
+
 @router.get("/my-permissions")
 async def get_my_permissions(trader: Trader = Depends(get_current_trader)):
     """Returns the current employee's permissions (for role-based UI rendering)."""

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -1256,21 +1256,25 @@ export default function Dashboard() {
     };
   }, [scanning]);
 
-  // Bot activity logs — only available in Electron desktop app
+  // Activity logs — pull the server-side log (account events like sign-ins, password changes,
+  // API-key problems + any desktop-pushed lines) so it's complete on web AND mobile. On the
+  // desktop, also stream live local entries straight in and persist them to the server.
   useEffect(() => {
-    if (!window.sparkp2p?.getLogs) return;
-    window.sparkp2p.getLogs().then(logs => setBotLogs(logs || []));
-    window.sparkp2p.onLog(entry => {
-      setBotLogs(prev => {
-        const next = [...prev, entry];
-        return next.length > 400 ? next.slice(-400) : next;
+    const loadServer = () => getMyBotLogs()
+      .then(r => setBotLogs((r.data || []).slice().reverse()))   // server is newest-first; view is chronological
+      .catch(() => {});
+    loadServer();
+    const iv = setInterval(loadServer, 30000);
+    if (window.sparkp2p?.onLog) {
+      window.sparkp2p.onLog(entry => {
+        setBotLogs(prev => {
+          const next = [...prev, entry];
+          return next.length > 400 ? next.slice(-400) : next;
+        });
+        if (entry && entry.message) postBotLog({ level: entry.level || 'info', message: String(entry.message), time: entry.time || new Date().toISOString() }).catch(() => {});
       });
-      // Also push the log to the backend so admins can see this trader's bot activity (the
-      // desktop app only sends logs to this dashboard via IPC, not to the server). Fire-and-forget.
-      if (entry && entry.message) postBotLog({ level: entry.level || 'info', message: String(entry.message), time: entry.time || new Date().toISOString() }).catch(() => {});
-      // New-order refresh is handled by the binance-orders effect (auto-refreshes every 20s
-      // with the active filter). Refetching here would overwrite the filter with stale state.
-    });
+    }
+    return () => clearInterval(iv);
   }, []);
 
   useEffect(() => {
