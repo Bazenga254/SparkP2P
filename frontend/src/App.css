@@ -6287,7 +6287,8 @@ body {
     gap: 8px !important;
   }
   .adm-dash-online-btn {
-    display: none !important;
+    padding: 6px 11px !important;
+    font-size: 12px !important;
   }
   /* Earnings inner sub-stats: 2-col instead of 3-col */
   .adm-earn-stats {
