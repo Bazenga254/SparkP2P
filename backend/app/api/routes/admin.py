@@ -216,11 +216,8 @@ async def list_traders(
 
     from app.services.binance import relay_router as _relay  # per-trader relay presence (v1.9.2+)
 
-    await write_audit_log(
-        db, admin, "list_traders",
-        ip_address=get_client_ip(request),
-        detail=f"limit={limit} offset={offset} status={status}",
-    )
+    # NOTE: viewing the traders list is not audited — the dashboard auto-polls it every ~30s, which
+    # used to flood the audit log. Only meaningful actions (logins, changes, denials, etc.) are kept.
 
     return [
         {

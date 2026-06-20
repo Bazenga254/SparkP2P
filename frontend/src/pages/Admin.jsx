@@ -195,6 +195,7 @@ export default function Admin() {
   const [mobMoreOpen, setMobMoreOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [auditLogs, setAuditLogs] = useState([]);
+  const [auditImportantOnly, setAuditImportantOnly] = useState(true);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditPage, setAuditPage] = useState(1);
   const AUDIT_PER_PAGE = 30;
@@ -3415,18 +3416,29 @@ export default function Admin() {
                 {/* Audit Logs */}
                 <div className="adm-card">
                   <div className="adm-card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <h3>Audit Log — Admin Access to Sensitive Data</h3>
-                    <button onClick={() => { setAuditLogs([]); setAuditLoading(false); }} style={{ background: 'none', border: '1px solid #374151', color: '#9ca3af', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>
-                      Refresh
-                    </button>
+                    <h3>Audit Log — Staff Activity</h3>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={() => { setAuditImportantOnly(v => !v); setAuditPage(1); }}
+                        style={{ background: auditImportantOnly ? 'rgba(245,158,11,0.15)' : 'none', border: `1px solid ${auditImportantOnly ? '#f59e0b' : '#374151'}`, color: auditImportantOnly ? '#f59e0b' : '#9ca3af', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
+                        {auditImportantOnly ? '★ Important only' : 'Show all'}
+                      </button>
+                      <button onClick={() => { setAuditLogs([]); setAuditLoading(false); }} style={{ background: 'none', border: '1px solid #374151', color: '#9ca3af', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>
+                        Refresh
+                      </button>
+                    </div>
                   </div>
                   {auditLoading ? (
                     <div style={{ padding: 24, color: '#9ca3af', textAlign: 'center' }}>Loading...</div>
-                  ) : auditLogs.length === 0 ? (
-                    <div style={{ padding: 24, color: '#6b7280', textAlign: 'center', fontSize: 13 }}>No audit logs yet. Logs are recorded when admins/employees view trader data.</div>
                   ) : (() => {
-                    const totalPages = Math.ceil(auditLogs.length / AUDIT_PER_PAGE);
-                    const pageLogs = auditLogs.slice((auditPage - 1) * AUDIT_PER_PAGE, auditPage * AUDIT_PER_PAGE);
+                    const ROUTINE = ['list_traders', 'view_trader_detail'];
+                    const shown = auditImportantOnly ? auditLogs.filter(l => !ROUTINE.includes(l.action)) : auditLogs;
+                    if (shown.length === 0) return (
+                      <div style={{ padding: 24, color: '#6b7280', textAlign: 'center', fontSize: 13 }}>
+                        {auditImportantOnly ? 'No staff actions yet — logins, changes, password resets, payments and denied attempts will appear here.' : 'No audit logs yet.'}
+                      </div>
+                    );
+                    const totalPages = Math.ceil(shown.length / AUDIT_PER_PAGE);
+                    const pageLogs = shown.slice((auditPage - 1) * AUDIT_PER_PAGE, auditPage * AUDIT_PER_PAGE);
                     return (
                       <>
                         <div style={{ overflowX: 'auto' }}>
@@ -3460,7 +3472,7 @@ export default function Admin() {
                         {totalPages > 1 && (
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
                             <span style={{ fontSize: 12, color: '#6b7280' }}>
-                              Showing {(auditPage - 1) * AUDIT_PER_PAGE + 1}–{Math.min(auditPage * AUDIT_PER_PAGE, auditLogs.length)} of {auditLogs.length} entries
+                              Showing {(auditPage - 1) * AUDIT_PER_PAGE + 1}–{Math.min(auditPage * AUDIT_PER_PAGE, shown.length)} of {shown.length} entries
                             </span>
                             <div style={{ display: 'flex', gap: 6 }}>
                               <button onClick={() => setAuditPage(p => Math.max(1, p - 1))} disabled={auditPage === 1}
