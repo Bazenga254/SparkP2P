@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>SparkP2P · Create Account (reference)</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#0e1117; --card:#151a23; --line:#232a36;
+    --amber:#f59e0b; --amber-soft:rgba(245,158,11,.12); --amber-line:rgba(245,158,11,.45);
+    --txt:#f4f6fb; --muted:#9aa4b2; --faint:#6b7480; --good:#34d399; --bad:#f87171;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:
+      radial-gradient(120% 60% at 50% -10%, rgba(245,158,11,.16), transparent 60%),
+      var(--bg);
+    color:var(--txt);
+    font-family:-apple-system,"Segoe UI",Roboto,Inter,system-ui,sans-serif;
+    display:flex;justify-content:center;
+  }
+  .phone{width:100%;max-width:430px;min-height:100vh;display:flex;flex-direction:column;
+    padding:18px 22px 26px;position:relative}
+
+  /* header */
+  .top{display:flex;align-items:center;gap:12px;margin:6px 0 18px}
+  .back{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);
+    background:rgba(255,255,255,.03);display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .back svg{width:18px;height:18px;stroke:var(--amber)}
+  .top h1{font-size:19px;font-weight:700;margin:0;color:var(--amber);letter-spacing:.2px}
+  .brand{margin-left:auto;display:flex;align-items:center;gap:7px;opacity:.95}
+  .brand img{width:26px;height:26px;border-radius:7px}
+  .brand span{font-weight:800;font-size:14px}
+
+  /* progress */
+  .step-label{font-size:12.5px;color:var(--muted);font-weight:600;margin-bottom:9px;letter-spacing:.3px}
+  .bars{display:flex;gap:7px;margin-bottom:22px}
+  .bars i{flex:1;height:4px;border-radius:4px;background:#212835;transition:.35s}
+  .bars i.on{background:var(--amber)}
+  .bars i.done{background:var(--amber);opacity:.55}
+
+  /* hint banner */
+  .hint{background:var(--card);border-left:3px solid var(--amber);border-radius:10px;
+    padding:13px 15px;font-size:13px;line-height:1.5;color:#cfd6e0;margin-bottom:22px}
+  .hint b{color:var(--amber)}
+
+  /* fields */
+  .field{margin-bottom:18px}
+  .field label{display:block;font-size:13.5px;font-weight:700;margin-bottom:9px}
+  .field .sub{font-size:11.5px;color:var(--faint);margin-top:7px}
+  .inp{width:100%;height:54px;border-radius:13px;border:1px solid var(--line);
+    background:var(--panel);color:var(--txt);font-size:15px;padding:0 16px;outline:none;transition:.2s}
+  .inp::placeholder{color:#586070}
+  .inp:focus{border-color:var(--amber-line);box-shadow:0 0 0 3px var(--amber-soft)}
+  textarea.inp{height:auto;padding:14px 16px;resize:none}
+
+  .row{display:flex;gap:10px}
+  .cc{display:flex;align-items:center;gap:8px;height:54px;padding:0 14px;border-radius:13px;
+    border:1px solid var(--line);background:var(--panel);font-weight:700;font-size:15px;cursor:pointer;flex-shrink:0}
+  .cc small{color:var(--muted);font-weight:500}
+  .with-btn{position:relative}
+  .with-btn .inp{padding-right:84px}
+  .ibtn{position:absolute;right:8px;top:8px;height:38px;padding:0 14px;border-radius:9px;border:none;
+    background:var(--amber-soft);color:var(--amber);font-weight:700;font-size:13px;cursor:pointer}
+
+  /* otp */
+  .otp{display:flex;gap:9px;justify-content:space-between}
+  .otp i{flex:1;height:56px;border-radius:13px;border:1px solid var(--line);background:var(--panel);
+    display:grid;place-items:center;font-size:22px;font-weight:700}
+  .otp i.fill{border-color:var(--amber-line);color:var(--amber)}
+
+  /* password rules */
+  .rules{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;margin:4px 0 6px}
+  .rule{font-size:11.5px;color:var(--faint);display:flex;align-items:center;gap:6px}
+  .rule.ok{color:var(--good)}
+  .rule b{font-size:12px}
+
+  /* select */
+  select.inp{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' fill='none' stroke='%239aa4b2' stroke-width='2'><path d='M5 8l5 5 5-5'/></svg>");
+    background-repeat:no-repeat;background-position:right 14px center}
+
+  /* terms */
+  .check{display:flex;gap:11px;align-items:flex-start;font-size:13px;color:var(--muted);line-height:1.55;margin-top:4px}
+  .check input{width:19px;height:19px;accent-color:var(--amber);margin-top:1px;flex-shrink:0}
+  .check a{color:var(--amber);font-weight:600;text-decoration:underline}
+
+  /* footer */
+  .grow{flex:1}
+  .cta{height:56px;border-radius:14px;border:none;width:100%;background:var(--amber);color:#10131a;
+    font-size:16px;font-weight:800;cursor:pointer;margin-top:18px;transition:.2s;
+    box-shadow:0 10px 26px -8px rgba(245,158,11,.55)}
+  .cta:disabled{background:#2a313d;color:#5b636f;box-shadow:none;cursor:default}
+  .alt{text-align:center;font-size:13px;color:var(--muted);margin-top:16px}
+  .alt b{color:var(--amber);cursor:pointer}
+  .ghost{height:52px;border-radius:13px;border:1px solid var(--line);background:transparent;color:var(--txt);
+    width:100%;font-size:14.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;margin-top:14px}
+  .ordiv{display:flex;align-items:center;gap:12px;color:var(--faint);font-size:12px;margin:18px 0 2px}
+  .ordiv:before,.ordiv:after{content:"";flex:1;height:1px;background:var(--line)}
+
+  .pane{display:none;animation:in .3s ease}
+  .pane.show{display:block}
+  @keyframes in{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:none}}
+  h2.stitle{font-size:23px;font-weight:800;margin:0 0 4px}
+  p.ssub{font-size:13.5px;color:var(--muted);margin:0 0 20px}
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="top">
+    <div class="back" onclick="go(-1)"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></div>
+    <h1>Let’s get started</h1>
+    <div class="brand"><img src="/spark-icon.svg" alt=""><span>SparkP2P</span></div>
+  </div>
+
+  <div class="step-label" id="stepLabel">Step 1 of 5</div>
+  <div class="bars" id="bars">
+    <i class="on"></i><i></i><i></i><i></i><i></i>
+  </div>
+
+  <!-- STEP 1: Identity -->
+  <div class="pane show" data-step="0">
+    <h2 class="stitle">Your name</h2>
+    <p class="ssub">This is what buyers see during payment verification.</p>
+    <div class="hint">Enter your full name <b>exactly as it appears on your Binance KYC</b>. It’s shown to buyers when you verify their P2P payment.</div>
+    <div class="field">
+      <label>Full Name (as on Binance KYC)</label>
+      <input class="inp" placeholder="JOE ANTONY WANDABWA" style="text-transform:uppercase">
+    </div>
+  </div>
+
+  <!-- STEP 2: Contact -->
+  <div class="pane" data-step="1">
+    <h2 class="stitle">How we reach you</h2>
+    <p class="ssub">We’ll use these for OTPs, alerts and M-Pesa.</p>
+    <div class="hint">We’ll send a one-time code to confirm your email and phone. Use your <b>M-Pesa registered number</b>.</div>
+    <div class="field">
+      <label>Phone Number</label>
+      <div class="row">
+        <div class="cc">🇰🇪 +254 <small>▾</small></div>
+        <input class="inp" inputmode="tel" placeholder="712345678">
+      </div>
+      <div class="sub">M-Pesa registered number</div>
+    </div>
+    <div class="field">
+      <label>Email Address</label>
+      <div class="with-btn">
+        <input class="inp" type="email" placeholder="you@example.com">
+        <button class="ibtn">Verify</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 3: Verify email OTP -->
+  <div class="pane" data-step="2">
+    <h2 class="stitle">Verify your email</h2>
+    <p class="ssub">Enter the 6-digit code we sent to your inbox.</p>
+    <div class="hint">Didn’t get it? Check spam, or tap <b>Resend</b> below. The code expires in 10 minutes.</div>
+    <div class="otp">
+      <i class="fill">4</i><i class="fill">9</i><i class="fill">2</i><i>·</i><i>·</i><i>·</i>
+    </div>
+    <p class="alt" style="margin-top:22px">Didn’t receive it? <b>Resend code</b></p>
+  </div>
+
+  <!-- STEP 4: Password -->
+  <div class="pane" data-step="3">
+    <h2 class="stitle">Secure your account</h2>
+    <p class="ssub">Pick a strong password you don’t use anywhere else.</p>
+    <div class="field">
+      <label>Password</label>
+      <div class="with-btn">
+        <input class="inp" type="password" placeholder="Create a strong password" value="Spark99!!">
+        <button class="ibtn">Show</button>
+      </div>
+    </div>
+    <div class="rules">
+      <div class="rule ok"><b>✓</b> 8+ characters</div>
+      <div class="rule ok"><b>✓</b> 2 uppercase</div>
+      <div class="rule ok"><b>✓</b> 2 lowercase</div>
+      <div class="rule ok"><b>✓</b> 2 numbers</div>
+      <div class="rule"><b>✗</b> 2 special chars</div>
+    </div>
+    <div class="field" style="margin-top:14px">
+      <label>Confirm Password</label>
+      <input class="inp" type="password" placeholder="Re-enter your password">
+    </div>
+  </div>
+
+  <!-- STEP 5: Security + terms -->
+  <div class="pane" data-step="4">
+    <h2 class="stitle">Almost done</h2>
+    <p class="ssub">One recovery question, then you’re in.</p>
+    <div class="field">
+      <label>Security Question</label>
+      <select class="inp">
+        <option>What was the name of your first pet?</option>
+        <option>What is your mother’s maiden name?</option>
+        <option>What city were you born in?</option>
+      </select>
+      <div class="sub" style="color:var(--bad)">Can’t be changed later — choose carefully.</div>
+    </div>
+    <div class="field">
+      <label>Security Answer</label>
+      <input class="inp" placeholder="Your answer (case-insensitive)">
+    </div>
+    <div class="field">
+      <label>Referral Code <span style="color:var(--faint);font-weight:500">(optional)</span></label>
+      <input class="inp" placeholder="Enter referral code if you have one">
+    </div>
+    <label class="check">
+      <input type="checkbox" checked>
+      <span>I have read and agree to the <a>Terms &amp; Conditions</a> and accept the risks of automated P2P trading.</span>
+    </label>
+  </div>
+
+  <div class="grow"></div>
+
+  <button class="cta" id="cta" onclick="go(1)">Continue</button>
+
+  <!-- google + signin only relevant on first step -->
+  <div id="firstExtras">
+    <div class="ordiv">or</div>
+    <button class="ghost">
+      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+      Sign up with Google
+    </button>
+    <p class="alt">Already have an account? <b>Sign in</b></p>
+  </div>
+</div>
+
+<script>
+  let step=Math.max(0,Math.min(4, parseInt(new URLSearchParams(location.search).get('step')||'0',10))); const last=4;
+  const panes=[...document.querySelectorAll('.pane')];
+  const bars=[...document.querySelectorAll('#bars i')];
+  function render(){
+    panes.forEach(p=>p.classList.toggle('show', +p.dataset.step===step));
+    bars.forEach((b,i)=>{b.className = i<step?'done':i===step?'on':''});
+    document.getElementById('stepLabel').textContent=`Step ${step+1} of 5`;
+    document.getElementById('cta').textContent = step===last ? 'Create Account' : 'Continue';
+    document.getElementById('firstExtras').style.display = step===0 ? 'block':'none';
+    window.scrollTo(0,0);
+  }
+  function go(d){
+    if(d===1 && step===last){ alert('🎉 (mockup) Account created — this is just the visual reference.'); return; }
+    step=Math.max(0,Math.min(last,step+d));
+    render();
+  }
+  render();
+</script>
+</body>
+</html>

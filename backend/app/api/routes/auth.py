@@ -1,4 +1,5 @@
 import re
+import time
 import random
 import secrets
 from datetime import datetime, timezone, timedelta
@@ -7,7 +8,7 @@ from urllib.parse import urlencode
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -520,14 +521,74 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = "https://sparkp2p.com/api/auth/google/callback"
 
-_google_states: dict[str, bool] = {}
+# state -> {"platform": "app"|"web", "sid": <nonce>}. The mobile app passes ?platform=app&sid=<nonce>
+# so the callback can stash the result under that nonce for the app to poll (see /google/result).
+# Browser→app deep links proved unreliable (Chrome blocks redirects to custom schemes), so the app
+# polls instead — it never has to be "handed back" by the browser.
+_google_states: dict[str, dict] = {}
+
+# sid -> {google_token, name, id, role, needs_profile, ts}. Short-lived; the app polls then we drop it.
+_app_oauth_results: dict[str, dict] = {}
+_APP_OAUTH_TTL = 300  # seconds
+
+# Custom-scheme deep link the Android app also registers (best-effort instant return; the poll is
+# the reliable path).
+APP_OAUTH_SCHEME = "com.sparkp2p.app://auth"
+
+
+def _oauth_redirect(platform: str, sid: str, params: dict):
+    """Deliver the OAuth result. Web → redirect to /login. App → stash the result under `sid` for
+    the app's poller to pick up, and render a friendly "you can return to the app" page (which also
+    best-effort tries the deep link, but the app's poll is what actually completes the login)."""
+    qs = urlencode(params)
+    if platform != "app":
+        return RedirectResponse(f"/login?{qs}")
+
+    if sid:
+        _app_oauth_results[sid] = {**params, "ts": time.time()}
+        cutoff = time.time() - _APP_OAUTH_TTL
+        for k in [k for k, v in _app_oauth_results.items() if v.get("ts", 0) < cutoff]:
+            _app_oauth_results.pop(k, None)
+
+    deep = f"{APP_OAUTH_SCHEME}?{qs}"
+    intent = f"intent://auth?{qs}#Intent;scheme=com.sparkp2p.app;package=com.sparkp2p.app;end"
+    html = f"""<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SparkP2P</title>
+<style>
+  body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;text-align:center;
+    padding:28px;background:#0b0e14;color:#f4f6fb;font-family:-apple-system,'Segoe UI',Roboto,sans-serif}}
+  .c{{max-width:340px}} h1{{font-size:21px;margin:0 0 8px}} p{{color:#9aa4b2;font-size:14px;line-height:1.5}}
+  .btn{{display:inline-block;margin-top:22px;background:#f59e0b;color:#10131a;font-weight:800;font-size:16px;
+    padding:16px 30px;border-radius:14px;text-decoration:none}}
+  .spin{{width:34px;height:34px;border:3px solid #232a36;border-top-color:#f59e0b;border-radius:50%;
+    margin:0 auto 18px;animation:s 1s linear infinite}} @keyframes s{{to{{transform:rotate(360deg)}}}}
+</style></head><body><div class="c">
+  <div class="spin"></div>
+  <h1>You&rsquo;re signed in</h1>
+  <p>Return to the SparkP2P app — it&rsquo;ll finish logging you in automatically. You can close this tab.</p>
+  <a class="btn" href="{deep}">Return to SparkP2P</a>
+</div><script>
+  try {{ window.location.replace("{intent}"); }} catch (e) {{}}
+</script></body></html>"""
+    return HTMLResponse(html)
+
+
+@router.get("/google/result")
+async def google_oauth_result(sid: str):
+    """Native app poller: returns the stored OAuth result for this sid once ready, else pending."""
+    res = _app_oauth_results.pop(sid, None)
+    if not res:
+        return {"pending": True}
+    res.pop("ts", None)
+    return res
 
 
 @router.get("/google")
-async def google_login():
+async def google_login(platform: str = None, sid: str = None):
     """Redirect user to Google OAuth consent screen."""
     state = secrets.token_urlsafe(32)
-    _google_states[state] = True
+    _google_states[state] = {"platform": "app" if platform == "app" else "web", "sid": sid or ""}
 
     params = urlencode({
         "client_id": GOOGLE_CLIENT_ID,
@@ -544,13 +605,15 @@ async def google_login():
 @router.get("/google/callback")
 async def google_callback(code: str = None, state: str = None, error: str = None, db: AsyncSession = Depends(get_db)):
     """Google redirects here after login. Exchange code for user info, login or register."""
+    st = _google_states.pop(state, None) if state else None
+    platform = st["platform"] if st else None
+    sid = st["sid"] if st else None
+
     if error:
-        return RedirectResponse(f"/login?error={error}")
+        return _oauth_redirect(platform or "web", sid, {"error": error})
 
-    if not code or not state or state not in _google_states:
-        return RedirectResponse("/login?error=invalid_state")
-
-    _google_states.pop(state, None)
+    if not code or not state or st is None:
+        return _oauth_redirect("web", None, {"error": "invalid_state"})
 
     # Exchange code for tokens
     async with httpx.AsyncClient() as client:
@@ -564,7 +627,7 @@ async def google_callback(code: str = None, state: str = None, error: str = None
 
     if token_resp.status_code != 200:
         logger.error(f"Google token exchange failed: {token_resp.text}")
-        return RedirectResponse("/login?error=token_exchange_failed")
+        return _oauth_redirect(platform, sid, {"error": "token_exchange_failed"})
 
     tokens = token_resp.json()
     access_token = tokens.get("access_token")
@@ -576,14 +639,14 @@ async def google_callback(code: str = None, state: str = None, error: str = None
         })
 
     if user_resp.status_code != 200:
-        return RedirectResponse("/login?error=user_info_failed")
+        return _oauth_redirect(platform, sid, {"error": "user_info_failed"})
 
     google_user = user_resp.json()
     email = google_user.get("email", "").lower()
     name = google_user.get("name", "")
 
     if not email:
-        return RedirectResponse("/login?error=no_email")
+        return _oauth_redirect(platform, sid, {"error": "no_email"})
 
     # Check if user exists
     result = await db.execute(select(Trader).where(Trader.email == email))
@@ -621,5 +684,11 @@ async def google_callback(code: str = None, state: str = None, error: str = None
     # Check if profile is incomplete (Google users need a real phone number)
     needs_profile = not trader.phone or trader.phone == "" or trader.phone.startswith("g_")
 
-    # Redirect with token — frontend handles profile completion
-    return RedirectResponse(f"/login?google_token={token}&name={trader.full_name}&id={trader.id}&role={trader.role or 'trader'}&needs_profile={'1' if needs_profile else '0'}")
+    # Hand the session back to wherever login started (app polls via sid, or web /login).
+    return _oauth_redirect(platform, sid, {
+        "google_token": token,
+        "name": trader.full_name,
+        "id": trader.id,
+        "role": trader.role or "trader",
+        "needs_profile": "1" if needs_profile else "0",
+    })

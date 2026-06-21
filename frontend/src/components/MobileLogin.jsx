@@ -5,6 +5,7 @@ import { login as apiLogin } from '../services/api';
 import { isNative } from '../mobile/relayAgent';
 import { bioAuthenticate, bioAvailable, bioEnabled } from '../mobile/biometric';
 import { startSmsOtp } from '../mobile/smsOtp';
+import { startGoogleLogin } from '../mobile/oauth';
 import OtpInput from './OtpInput';
 
 const APP_VER = '2.0.0';
@@ -95,7 +96,7 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
     } finally { setLoading(false); }
   };
 
-  const googleLogin = () => { window.location.href = `${import.meta.env.VITE_API_URL || ''}/api/auth/google`; };
+  const googleLogin = () => { startGoogleLogin(); };
 
   const notYou = () => {
     localStorage.removeItem('remembered_name');

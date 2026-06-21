@@ -9,7 +9,13 @@ import MobileLogin from './MobileLogin';
 export default function BiometricGate({ children }) {
   const native = isNative();
   const hasToken = () => !!localStorage.getItem('token');
-  const [locked, setLocked] = useState(() => native && bioEnabled() && hasToken());
+  // While a Google login is being completed (google_token in the URL), do NOT lock — Login.jsx must
+  // mount to consume that token. Otherwise the gate renders its own lock screen, swallows the token,
+  // and the Google sign-in silently fails (you bounce back to login).
+  const finishingOAuth = () => {
+    try { return new URLSearchParams(window.location.search).has('google_token'); } catch (_) { return false; }
+  };
+  const [locked, setLocked] = useState(() => native && bioEnabled() && hasToken() && !finishingOAuth());
 
   // Re-lock when the app returns to the foreground — but only after a grace period away, so a
   // quick switch out and back (e.g. to copy an OTP) doesn't force a fingerprint every time.
@@ -31,7 +37,7 @@ export default function BiometricGate({ children }) {
   }, [native]);
 
   // ── Locked screen — CIC-style entry (fingerprint resume + password fallback) ──
-  if (native && bioEnabled() && locked && hasToken()) {
+  if (native && bioEnabled() && locked && hasToken() && !finishingOAuth()) {
     return <MobileLogin mode="lock" onUnlock={() => setLocked(false)} />;
   }
 

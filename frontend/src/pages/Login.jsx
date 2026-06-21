@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { login, register, sendVerificationCode, validateReferralCode } from '../services/api';
 import { isNative } from '../mobile/relayAgent';
 import MobileLogin from '../components/MobileLogin';
+import RegisterWizard from '../components/RegisterWizard';
 
 const PASSWORD_RULES = [
   { label: 'At least 8 characters', test: (p) => p.length >= 8 },
@@ -308,6 +309,18 @@ export default function Login() {
   // to the full form below.
   if (isNative() && !isRegister && !googleProfile) {
     return <MobileLogin mode="login" onRegister={() => { setIsRegister(true); setError(''); }} />;
+  }
+
+  // Stepped, dark "Create Account" wizard (mobile + desktop). Google sign-up still routes
+  // through the googleProfile completion flow below, so only gate on plain registration.
+  if (isRegister && !googleProfile) {
+    return (
+      <RegisterWizard
+        referralCode={referralCode}
+        referralName={referralName}
+        onSignIn={() => { setIsRegister(false); setError(''); setCodeSent(false); }}
+      />
+    );
   }
 
   return (

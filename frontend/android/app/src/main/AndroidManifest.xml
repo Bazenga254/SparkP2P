@@ -22,6 +22,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- OAuth deep link: Google sign-in finishes in a Custom Tab, then the backend
+                 redirects to com.sparkp2p.app://auth?... which Android routes back into this app
+                 (handled by @capacitor/app appUrlOpen in deepLink.js). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.sparkp2p.app" android:host="auth" />
+            </intent-filter>
+
         </activity>
 
         <provider
