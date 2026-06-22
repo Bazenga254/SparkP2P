@@ -529,6 +529,9 @@ async def detect_binance_name(
     trader.binance_nickname = nick
     if p2p_tier:
         trader.binance_p2p_tier = p2p_tier
+        # Keep the merchant badge in sync with the reliable P2P medal (see save_binance_api_key).
+        if p2p_tier in ("gold", "silver", "bronze"):
+            trader.binance_merchant_tier = p2p_tier
     await db.commit()
     return {"nickname": nick, "tier": p2p_tier}
 

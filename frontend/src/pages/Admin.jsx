@@ -1916,9 +1916,10 @@ export default function Admin() {
                             {t.role === 'admin' && <span style={{ background: 'rgba(245,158,11,0.18)', color: '#f59e0b', fontSize: 9, padding: '1px 5px', borderRadius: 3, fontWeight: 700, flexShrink: 0 }}>YOU</span>}
                             {isSystem && <span style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontSize: 9, padding: '1px 5px', borderRadius: 3, fontWeight: 700, flexShrink: 0 }}>SYSTEM</span>}
                             {t.binance_api_key_saved && !t.binance_api_key_invalid && (() => {
-                              const c = { gold: '#f59e0b', silver: '#cbd5e1', bronze: '#d97757' }[(t.binance_merchant_tier || '').toLowerCase()];
+                              const mt = (t.binance_merchant_tier || t.binance_p2p_tier || '').toLowerCase();
+                              const c = { gold: '#f59e0b', silver: '#cbd5e1', bronze: '#d97757' }[mt];
                               if (!c) return null;
-                              return <svg title={`${t.binance_merchant_tier} merchant`} width="13" height="13" viewBox="0 0 24 24" fill={c} stroke={c} strokeWidth="1" strokeLinejoin="round" style={{ flexShrink: 0 }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>;
+                              return <svg title={`${mt} merchant`} width="13" height="13" viewBox="0 0 24 24" fill={c} stroke={c} strokeWidth="1" strokeLinejoin="round" style={{ flexShrink: 0 }}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>;
                             })()}
                             {t.binance_api_key_saved && t.binance_api_key_invalid && <span title="Binance rejects this key — trader must reconnect" style={{ background: 'rgba(239,68,68,0.18)', color: '#ef4444', fontSize: 9, padding: '1px 5px', borderRadius: 3, fontWeight: 700, flexShrink: 0 }}>⚠ KEY</span>}
                             {!t.binance_api_key_invalid && (
@@ -2025,7 +2026,7 @@ export default function Admin() {
             };
             const tierLabel = t.tier === 'standard' ? 'Free' : t.tier === 'pro_max' ? 'Starter Pro Max' : t.tier === 'pro' ? 'Starter Pro' : t.tier === 'starter' ? 'Starter' : (t.tier || 'Free');
             const MT = { gold: { l: 'Gold Merchant', c: 'var(--gold)' }, silver: { l: 'Silver Merchant', c: '#cbd5e1' }, bronze: { l: 'Bronze Merchant', c: '#d97757' } };
-            const merchant = (t.binance_api_key_saved && !t.binance_api_key_invalid) ? MT[(t.binance_merchant_tier || '').toLowerCase()] : null;
+            const merchant = (t.binance_api_key_saved && !t.binance_api_key_invalid) ? MT[(t.binance_merchant_tier || t.binance_p2p_tier || '').toLowerCase()] : null;
             const seen = fmtLastSeen(t.last_seen_at, t.last_web_active || t.last_login);
 
             return (
