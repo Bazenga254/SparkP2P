@@ -293,28 +293,27 @@ async def transfer(
 
 async def mpesa_business_transfer(
     payer_account_id: str,
-    business_number: str,         # M-Pesa Paybill or Till/BuyGoods number
+    business_number: str,         # M-Pesa Paybill or Till/BuyGoods number (payeeShortCode)
     amount: float,
-    account_number: str = "",     # account reference (Paybill only; omit for Till/BuyGoods)
-    is_paybill: bool = True,      # True = Paybill, False = Till / Buy Goods
+    account_number: str = "",     # payeeReferenceNumber — required for Paybill, omitted for Till
+    is_paybill: bool = True,      # payType: True->0 (Paybill), False->1 (Till / Buy Goods)
     remark: str = "",
 ) -> dict:
     """M-Pesa Paybill / Till (B2B) — TTID0005 via /trans/v2/applyForMpesaBusinessTransfer.
     Follow with send_otp(txId) -> confirm_otp(txId, otp), then poll getTransResult.
-
-    NOTE: the param NAMES below are a best-effort modeled on applyForTransfer + standard M-Pesa B2B.
-    Confirm them against Choice Bank's 'API Details' page. A wrong field name makes Choice Bank
-    REJECT the request (returns a non-'00000' code, no money moves) — it does not misroute funds."""
+    Fields per Choice Bank API Details: payerAccountId, payeeShortCode, payType (0=Paybill,
+    1=Till/BuyGoods), payeeReferenceNumber (account number when payType=0), amount (KES),
+    description (message to beneficiary, ≤100 chars). Returns { txId } on code 00000."""
     params: dict = {
         "payerAccountId": payer_account_id,
-        "businessNumber": business_number,
-        "currency":       "KES",
-        "amount":         f"{float(amount):.2f}",
-        "businessType":   "PAYBILL" if is_paybill else "TILL",
-        "remark":         remark or "SparkP2P payment",
+        "payeeShortCode": business_number,
+        "payType":        0 if is_paybill else 1,
+        "amount":         round(float(amount), 2),
     }
-    if account_number:
-        params["accountNumber"] = account_number
+    if is_paybill and account_number:
+        params["payeeReferenceNumber"] = account_number
+    if remark:
+        params["description"] = remark[:100]
     return await _post("/trans/v2/applyForMpesaBusinessTransfer", params)
 
 
