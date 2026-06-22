@@ -191,5 +191,8 @@ export const cbWithdrawToMpesaInitiate = (amount) => api.post("/traders/cb-withd
 // Payments Hub — Send Money to any M-Pesa number (OTP-confirmed)
 export const cbSendMoneyInitiate = (body) => api.post('/choice/pay/send-money/initiate', body);
 export const cbSendMoneyConfirm = (otp) => api.post('/choice/pay/send-money/confirm', { otp });
+// Payments Hub — M-Pesa Paybill / Till (OTP-confirmed)
+export const cbPaybillInitiate = (body) => api.post('/choice/pay/paybill/initiate', body);
+export const cbPaybillConfirm = (otp) => api.post('/choice/pay/paybill/confirm', { otp });
 export const kycCreateSession = () => api.post('/kyc/session');
 export default api;

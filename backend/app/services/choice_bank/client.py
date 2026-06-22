@@ -291,6 +291,33 @@ async def transfer(
     return await _post("/trans/v2/applyForTransfer", params)
 
 
+async def mpesa_business_transfer(
+    payer_account_id: str,
+    business_number: str,         # M-Pesa Paybill or Till/BuyGoods number
+    amount: float,
+    account_number: str = "",     # account reference (Paybill only; omit for Till/BuyGoods)
+    is_paybill: bool = True,      # True = Paybill, False = Till / Buy Goods
+    remark: str = "",
+) -> dict:
+    """M-Pesa Paybill / Till (B2B) — TTID0005 via /trans/v2/applyForMpesaBusinessTransfer.
+    Follow with send_otp(txId) -> confirm_otp(txId, otp), then poll getTransResult.
+
+    NOTE: the param NAMES below are a best-effort modeled on applyForTransfer + standard M-Pesa B2B.
+    Confirm them against Choice Bank's 'API Details' page. A wrong field name makes Choice Bank
+    REJECT the request (returns a non-'00000' code, no money moves) — it does not misroute funds."""
+    params: dict = {
+        "payerAccountId": payer_account_id,
+        "businessNumber": business_number,
+        "currency":       "KES",
+        "amount":         f"{float(amount):.2f}",
+        "businessType":   "PAYBILL" if is_paybill else "TILL",
+        "remark":         remark or "SparkP2P payment",
+    }
+    if account_number:
+        params["accountNumber"] = account_number
+    return await _post("/trans/v2/applyForMpesaBusinessTransfer", params)
+
+
 async def large_domestic_interbank_transfer(
     payer_account_id:    str,
     beneficiary_bank_code: str,

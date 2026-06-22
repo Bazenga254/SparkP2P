@@ -925,3 +925,88 @@ async def send_money_confirm(body: SendMoneyConfirm, trader: Trader = Depends(ge
         pass
     return {"status": "success", "tx_id": pending["tx_id"], "amount": pending["amount"]}
 
+
+# ── Payments Hub — M-Pesa Paybill / Till (B2B), OTP-confirmed ─────────────────
+# Same shape as Send Money but via mpesa_business_transfer (TTID0005). Field names in the client
+# call are best-effort pending Choice Bank's API Details — a wrong name is REJECTED (no money moves).
+
+class PaybillInitiate(BaseModel):
+    business_number: str
+    amount: float
+    account_number: str = ""   # required for Paybill; blank for Till / Buy Goods
+    is_paybill: bool = True
+
+
+class PaybillConfirm(BaseModel):
+    otp: str
+
+
+_pending_paybill: dict[int, dict] = {}
+
+
+@router.post("/choice/pay/paybill/initiate")
+async def paybill_initiate(body: PaybillInitiate, trader: Trader = Depends(get_current_trader)):
+    """Step 1: pay an M-Pesa Paybill or Till from the trader's Choice Bank account; OTP is sent to
+    the trader's registered phone."""
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+    biz = (body.business_number or "").strip()
+    if not biz.isdigit() or not (5 <= len(biz) <= 7):
+        raise HTTPException(status_code=400, detail="Enter a valid Paybill or Till number")
+    acct = (body.account_number or "").strip()
+    if body.is_paybill and not acct:
+        raise HTTPException(status_code=400, detail="Enter the account number for this Paybill")
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="Enter a valid amount")
+    if body.amount > 250000:
+        raise HTTPException(status_code=400, detail="M-Pesa payments are limited to KES 250,000 per transaction")
+
+    try:
+        result = await choice.mpesa_business_transfer(
+            payer_account_id=trader.choice_account_id,
+            business_number=biz,
+            amount=body.amount,
+            account_number=acct,
+            is_paybill=body.is_paybill,
+            remark="SparkP2P paybill",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Payment initiation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Payment rejected"))
+
+    tx_id = (result.get("data") or {}).get("txId") or ""
+    if not tx_id:
+        raise HTTPException(status_code=502, detail="No transaction ID returned")
+
+    try:
+        await choice.send_otp(tx_id)
+    except Exception as exc:
+        logger.warning(f"[ChoiceBank] paybill sendOtp failed: {exc}")
+
+    _pending_paybill[trader.id] = {"tx_id": tx_id, "amount": body.amount, "biz": biz, "acct": acct, "is_paybill": body.is_paybill}
+    return {"status": "otp_sent", "message": "Enter the OTP Choice Bank sent to your registered phone to confirm this payment."}
+
+
+@router.post("/choice/pay/paybill/confirm")
+async def paybill_confirm(body: PaybillConfirm, trader: Trader = Depends(get_current_trader)):
+    """Step 2: confirm the OTP to release the Paybill/Till payment."""
+    pending = _pending_paybill.get(trader.id)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending payment. Please start again.")
+    try:
+        result = await choice.confirm_otp(pending["tx_id"], body.otp.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OTP confirmation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired OTP"))
+
+    _pending_paybill.pop(trader.id, None)
+    try:
+        from app.api.routes.telegram import notify_trader
+        _dest = f"Paybill {pending['biz']} acc {pending['acct']}" if pending["is_paybill"] else f"Till {pending['biz']}"
+        await notify_trader(trader, f"\U0001F9FE KES {pending['amount']:,.0f} paid via Choice Bank to {_dest}\nRef: {pending['tx_id']}")
+    except Exception:
+        pass
+    return {"status": "success", "tx_id": pending["tx_id"], "amount": pending["amount"]}
+

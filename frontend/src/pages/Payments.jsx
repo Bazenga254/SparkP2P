@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { choiceGetBalance, cbSendMoneyInitiate, cbSendMoneyConfirm } from '../services/api';
+import { choiceGetBalance, cbSendMoneyInitiate, cbSendMoneyConfirm, cbPaybillInitiate, cbPaybillConfirm } from '../services/api';
 
 const fmtKES = (n) => 'KES ' + Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -29,7 +29,7 @@ const SECTIONS = {
       { key: 'airtel',    label: 'Send to Airtel',     icon: 'mpesa',    bg: '#dc2626', ready: false },
     ]},
     { title: 'Buy Goods & Pay Bills', items: [
-      { key: 'paybill',   label: 'M-PESA Paybill',     icon: 'paybill',  bg: '#15803d', ready: false },
+      { key: 'paybill',   label: 'M-PESA Paybill',     icon: 'paybill',  bg: '#15803d', ready: true },
       { key: 'buygoods',  label: 'M-PESA Buy Goods',   icon: 'buygoods', bg: '#15803d', ready: false },
       { key: 'airtime',   label: 'Buy Airtime',        icon: 'airtime',  bg: '#0e7490', ready: false },
     ]},
@@ -94,6 +94,8 @@ export default function Payments() {
       <div className="pm-sheet">
         {active === 'send' ? (
           <SendMoney onDone={() => { setActive(null); loadBalance(); }} onCancel={() => setActive(null)} />
+        ) : active === 'paybill' ? (
+          <Paybill onDone={() => { setActive(null); loadBalance(); }} onCancel={() => setActive(null)} />
         ) : (
           <>
             <div className="pm-tabs">
@@ -188,6 +190,89 @@ function SendMoney({ onDone, onCancel }) {
             <input className="pm-inp" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="Enter the code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Send ${fmtKES(amount)}`}</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Paybill({ onDone, onCancel }) {
+  const [step, setStep] = useState('form');
+  const [isPaybill, setIsPaybill] = useState(true);
+  const [biz, setBiz] = useState('');
+  const [acct, setAcct] = useState('');
+  const [amount, setAmount] = useState('');
+  const [otp, setOtp] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+
+  const validForm = /^\d{5,7}$/.test(biz.trim()) && (!isPaybill || acct.trim().length > 0) && Number(amount) > 0;
+
+  const initiate = async () => {
+    setError(''); setBusy(true);
+    try {
+      const res = await cbPaybillInitiate({ business_number: biz.trim(), amount: Number(amount), account_number: acct.trim(), is_paybill: isPaybill });
+      setInfo(res.data?.message || 'OTP sent to your registered phone.');
+      setStep('otp');
+    } catch (e) { setError(e.response?.data?.detail || 'Could not start the payment. Please try again.'); }
+    finally { setBusy(false); }
+  };
+  const confirm = async () => {
+    setError(''); setBusy(true);
+    try { await cbPaybillConfirm(otp.trim()); setStep('done'); }
+    catch (e) { setError(e.response?.data?.detail || 'OTP confirmation failed.'); }
+    finally { setBusy(false); }
+  };
+
+  if (step === 'done') return (
+    <div className="pm-flow pm-success">
+      <div style={{ fontSize: 56 }}>✅</div>
+      <h2>Payment sent</h2>
+      <p>{fmtKES(amount)} paid to {isPaybill ? `Paybill ${biz} (acc ${acct})` : `Till ${biz}`}.</p>
+      <button className="pm-btn" onClick={onDone}>Done</button>
+    </div>
+  );
+
+  return (
+    <div className="pm-flow">
+      <div className="pm-flow-head">
+        <button className="pm-flow-back" onClick={step === 'otp' ? () => setStep('form') : onCancel}>← Back</button>
+        <h2>Pay Paybill / Till</h2>
+      </div>
+      {step === 'form' && (
+        <>
+          <div className="pm-field">
+            <label>Payment type</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[[true, 'Paybill'], [false, 'Till / Buy Goods']].map(([v, l]) => (
+                <button key={l} type="button" onClick={() => setIsPaybill(v)}
+                  style={{ flex: 1, height: 46, borderRadius: 11, cursor: 'pointer', fontWeight: 700, fontSize: 13.5,
+                    border: isPaybill === v ? '1px solid #f59e0b' : '1px solid #20262f',
+                    background: isPaybill === v ? 'rgba(245,158,11,.12)' : '#0a0d12',
+                    color: isPaybill === v ? '#f59e0b' : '#9aa4b2' }}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div className="pm-field"><label>{isPaybill ? 'Paybill number' : 'Till / Buy Goods number'}</label>
+            <input className="pm-inp" inputMode="numeric" placeholder="e.g. 247247" value={biz} onChange={(e) => setBiz(e.target.value.replace(/\D/g, ''))} /></div>
+          {isPaybill && (
+            <div className="pm-field"><label>Account number</label>
+              <input className="pm-inp" placeholder="e.g. your account / phone" value={acct} onChange={(e) => setAcct(e.target.value)} /></div>
+          )}
+          <div className="pm-field"><label>Amount (KES)</label>
+            <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></div>
+          {error && <div className="pm-error">{error}</div>}
+          <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
+        </>
+      )}
+      {step === 'otp' && (
+        <>
+          <p className="pm-otpinfo">{info}</p>
+          <div className="pm-field"><label>OTP code</label>
+            <input className="pm-inp" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="Enter the code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
+          {error && <div className="pm-error">{error}</div>}
+          <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Pay ${fmtKES(amount)}`}</button>
         </>
       )}
     </div>
