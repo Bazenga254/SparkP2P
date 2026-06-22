@@ -2375,6 +2375,13 @@ export default function Admin() {
                             </div>
                           )}
                         </div>
+                        {/* Set / extend the expiry date+time without having to switch plan. For a free
+                            trader, pick a plan via the Tier dropdown above (which opens the same picker). */}
+                        <button
+                          onClick={() => setTierGrant({ traderId: t.id, tier: (t.tier && t.tier !== 'standard') ? t.tier : 'starter' })}
+                          style={{ marginTop: 12, width: '100%', padding: '11px', borderRadius: 10, border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.10)', color: '#f59e0b', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                          📅 {t.subscription_expires_at ? 'Change / extend expiry date' : 'Grant a subscription'}
+                        </button>
                         <div className="limit-grid">
                           {[
                             ['Trades today', t.daily_trade_unlimited, t.daily_trade_used, t.daily_trade_limit, 'var(--info)'],
