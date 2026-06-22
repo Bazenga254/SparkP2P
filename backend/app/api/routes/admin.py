@@ -953,16 +953,30 @@ async def update_trader_price_tracker(
 async def update_trader_tier(
     trader_id: int,
     tier: str,
+    expires_at: str = "",   # optional ISO 8601 expiry (e.g. 2026-12-31T20:00:00Z). Default: +30 days.
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update trader's subscription tier. Creates/updates subscription accordingly."""
+    """Update trader's subscription tier. Creates/updates subscription accordingly.
+    Admins may grant any duration by passing expires_at (date + time the plan should lapse)."""
     from app.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
     from app.services.plans import plan_price
     from datetime import timedelta
 
     if tier not in ("standard", "starter", "pro", "pro_max"):
         raise HTTPException(status_code=400, detail="Invalid tier")
+
+    # Resolve the requested expiry (admin can grant 1mo / 3mo / 1yr / any date+time).
+    _custom_exp = None
+    if expires_at.strip():
+        try:
+            _custom_exp = datetime.fromisoformat(expires_at.strip().replace("Z", "+00:00"))
+            if _custom_exp.tzinfo is None:
+                _custom_exp = _custom_exp.replace(tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid expires_at — use ISO 8601 (YYYY-MM-DDTHH:MM:SSZ)")
+        if _custom_exp <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="Expiry must be in the future")
 
     result = await db.execute(select(Trader).where(Trader.id == trader_id))
     trader = result.scalar_one_or_none()
@@ -984,15 +998,17 @@ async def update_trader_tier(
 
         now = datetime.now(timezone.utc)
         plan_amount = plan_price(SubscriptionPlan(tier))   # central config (3k/5k/10k)
+        exp = _custom_exp or (now + timedelta(days=30))
 
         if existing_sub:
             # Update existing subscription. Mark as ADMIN_GRANT so an admin tier change NEVER
             # counts as subscription revenue (revenue excludes ADMIN_GRANT).
             existing_sub.plan = SubscriptionPlan(tier)
             existing_sub.amount = plan_amount
+            existing_sub.status = SubscriptionStatus.ACTIVE   # re-activate if it had lapsed
             existing_sub.mpesa_transaction_id = "ADMIN_GRANT"
             existing_sub.started_at = now
-            existing_sub.expires_at = now + timedelta(days=30)
+            existing_sub.expires_at = exp
         else:
             # Create new subscription (admin-granted — excluded from revenue).
             sub = Subscription(
@@ -1001,7 +1017,7 @@ async def update_trader_tier(
                 status=SubscriptionStatus.ACTIVE,
                 amount=plan_amount,
                 started_at=now,
-                expires_at=now + timedelta(days=30),
+                expires_at=exp,
                 mpesa_transaction_id="ADMIN_GRANT",
             )
             db.add(sub)
@@ -1010,7 +1026,7 @@ async def update_trader_tier(
         from app.services.email import send_subscription_activated
         send_subscription_activated(
             trader.email, trader.full_name, tier,
-            (now + timedelta(days=30)).strftime("%B %d, %Y"),
+            exp.strftime("%B %d, %Y"),
         )
     else:
         # Downgrade to free — expire any active subscription

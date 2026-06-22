@@ -14,13 +14,14 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, or_
 
 from app.core.config import settings
 from app.core.database import async_session
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.trader import Trader
 from app.services.enforcement import wipe_bot_config
+from app.services.plans import active_plan
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,31 @@ async def subscription_enforcer():
                         else:
                             logger.warning(f"[Enforcer] subscription {sub.id} expired (trader exempt/missing)")
                     await db.commit()
+
+                # Self-healing sweep: wipe any non-exempt trader who is currently locked (no active
+                # plan) yet still carries live bot config — covers never-subscribed / cancelled
+                # accounts that have no ACTIVE->EXPIRED transition to catch above.
+                candidates = (await db.execute(
+                    select(Trader).where(
+                        Trader.billing_exempt.is_(False),
+                        or_(
+                            Trader.auto_release_enabled.is_(True),
+                            Trader.auto_pay_enabled.is_(True),
+                            Trader.cf_filters_enabled.is_(True),
+                            Trader.price_tracker_enabled.is_(True),
+                            Trader.pm_enabled.is_(True),
+                            Trader.dd_enabled.is_(True),
+                        ),
+                    )
+                )).scalars().all()
+                wiped = 0
+                for tr in candidates:
+                    if await active_plan(db, tr.id) is None:
+                        wipe_bot_config(tr)
+                        wiped += 1
+                if wiped:
+                    await db.commit()
+                    logger.warning(f"[Enforcer] swept {wiped} locked account(s) — config wiped")
         except Exception as e:
             logger.error(f"[Enforcer] error: {e}")
         await asyncio.sleep(_INTERVAL)

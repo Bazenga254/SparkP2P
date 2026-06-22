@@ -57,6 +57,20 @@ const PROFIT_METRICS = {
   price:  { label: 'Price',  color: '#a78bfa', neg: '#a78bfa', fmt: (v) => 'KES ' + (v || 0).toFixed(2),       axis: (v) => (v || 0).toFixed(2) },
 };
 
+function SubscriptionLock({ onUnlock, title = 'Your subscription has expired', sub = 'Renew your plan to unlock this.' }) {
+  return (
+    <div style={{ maxWidth: 460, margin: '60px auto', textAlign: 'center', background: 'linear-gradient(180deg,#161a26,#10131c)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 18, padding: '36px 28px', boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+      <div style={{ fontSize: 46, marginBottom: 8 }}>🔒</div>
+      <h2 style={{ color: '#fff', fontSize: 20, margin: '0 0 8px' }}>{title}</h2>
+      <p style={{ color: '#9aa4b2', fontSize: 13.5, margin: '0 0 22px', lineHeight: 1.5 }}>{sub}</p>
+      <button onClick={onUnlock}
+        style={{ background: '#f59e0b', color: '#1a1205', border: 'none', borderRadius: 12, padding: '13px 26px', fontWeight: 800, fontSize: 14.5, cursor: 'pointer' }}>
+        Click here to subscribe →
+      </button>
+    </div>
+  );
+}
+
 function ProfitPage() {
   const [view, setView] = useState('week');     // week | month | year (range preset)
   const [offset, setOffset] = useState(0);       // 0 = current, -1 = previous period…
@@ -1863,7 +1877,7 @@ export default function Dashboard() {
             { key: 'orders',        icon: List,            label: 'Orders'        },
             { key: 'transactions',  icon: ArrowRightLeft,  label: 'Transactions'  },
             { key: 'profit',        icon: BarChart2,       label: 'Profit'        },
-            ...(profile?.price_tracker_enabled ? [{ key: 'pricetracker', icon: TrendingUp, label: 'Price Tracker' }] : []),
+            ...((profile?.price_tracker_enabled && !rateLimit?.locked) ? [{ key: 'pricetracker', icon: TrendingUp, label: 'Price Tracker' }] : []),
             { key: 'logs',          icon: Activity,        label: 'Logs'          },
           ].map(({ key, icon: Icon, label }) => (
             <button key={key}
@@ -2194,11 +2208,18 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Spread Calculator */}
-            <SpreadCalculator orderStats={stats?.today} profile={profile} cbWithdrawBank={cbWithdrawBank} />
+            {/* Margin calculator + profit — hidden entirely while the subscription is inactive */}
+            {rateLimit?.locked ? (
+              <SubscriptionLock onUnlock={() => setActiveTab('credits')} sub="Your subscription is inactive, so the margin calculator and profit are hidden. Renew to unlock them." />
+            ) : (
+              <>
+                {/* Spread Calculator */}
+                <SpreadCalculator orderStats={stats?.today} profile={profile} cbWithdrawBank={cbWithdrawBank} />
 
-            {/* Profit Tracker — daily/weekly/monthly accumulation with history */}
-            <ProfitTracker />
+                {/* Profit Tracker — daily/weekly/monthly accumulation with history */}
+                <ProfitTracker />
+              </>
+            )}
 
             {/* Affiliate Quick-Action Card */}
             {affiliateData !== null && (
@@ -2511,10 +2532,15 @@ export default function Dashboard() {
         {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} initialSection={settingsInitialSection} />}
 
         {/* ── Profit Tab ── */}
-        {activeTab === 'profit' && <ProfitPage />}
+        {activeTab === 'profit' && (rateLimit?.locked
+          ? <SubscriptionLock onUnlock={() => setActiveTab('credits')} sub="Your profit statistics are hidden while your subscription is inactive. Renew to see them again." />
+          : <ProfitPage />)}
 
         {/* ── Price Tracker Tab (admin-gated) ── */}
-        {activeTab === 'pricetracker' && (
+        {activeTab === 'pricetracker' && rateLimit?.locked && (
+          <SubscriptionLock onUnlock={() => setActiveTab('credits')} sub="The Price Tracker is unavailable while your subscription is inactive. Renew to unlock it." />
+        )}
+        {activeTab === 'pricetracker' && !rateLimit?.locked && (
           profile?.price_tracker_enabled ? (
             <div>
               <div style={{ display: 'flex', gap: 10, marginBottom: 18, overflowX: 'auto', paddingBottom: 2 }}>
@@ -4540,7 +4566,7 @@ export default function Dashboard() {
           >
             <div style={{ width: 36, height: 4, background: '#374151', borderRadius: 2, margin: '12px auto 8px' }} />
             {[
-              ...(profile?.price_tracker_enabled ? [{ key: 'pricetracker', label: 'Price Tracker', icon: TrendingUp }] : []),
+              ...((profile?.price_tracker_enabled && !rateLimit?.locked) ? [{ key: 'pricetracker', label: 'Price Tracker', icon: TrendingUp }] : []),
               { key: 'profit',       label: 'Profit',      icon: BarChart2   },
               { key: 'logs',         label: 'Bot Logs',    icon: Activity    },
               { key: 'configure',    label: 'Configure',   icon: SlidersHorizontal },

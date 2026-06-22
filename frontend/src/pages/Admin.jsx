@@ -86,6 +86,67 @@ function CbBalancePoller({ traderId, onData }) {
 }
 
 
+// Admin duration picker for granting / extending a paid subscription. Admin picks a quick
+// duration (1/3/6/12 months) or a custom date+time; expiry is sent to the backend as ISO UTC.
+function TierGrantModal({ grant, onCancel, onApply }) {
+  const tierLabel = grant.tier === 'pro_max' ? 'Starter Pro Max' : grant.tier === 'pro' ? 'Starter Pro' : 'Starter';
+  const [mode, setMode] = useState('quick');
+  const [custom, setCustom] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const fromMonths = (n) => { const d = new Date(); d.setMonth(d.getMonth() + n); return d; };
+  const fmt = (d) => d.toLocaleString('en-KE', { dateStyle: 'medium', timeStyle: 'short' });
+  const apply = async (expiryDate) => {
+    if (!expiryDate || isNaN(expiryDate.getTime())) return;
+    setBusy(true);
+    try { await onApply(grant.traderId, grant.tier, expiryDate.toISOString()); }
+    catch (e) { alert(e?.response?.data?.detail || 'Could not grant subscription.'); setBusy(false); }
+  };
+  const QUICK = [['1 month', 1], ['3 months', 3], ['6 months', 6], ['1 year', 12]];
+  const ov = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 };
+  const card = { background: '#1a1d2e', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 16, padding: 26, width: '100%', maxWidth: 440, boxShadow: '0 20px 60px rgba(0,0,0,0.5)' };
+  const tabBtn = (on) => ({ flex: 1, padding: '8px 0', borderRadius: 9, border: on ? '1px solid #f59e0b' : '1px solid #2a3142', background: on ? 'rgba(245,158,11,0.12)' : '#0e1320', color: on ? '#f59e0b' : '#9aa4b2', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' });
+
+  return (
+    <div style={ov} onClick={onCancel}>
+      <div style={card} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: 0, color: '#fff', fontSize: 18 }}>Grant {tierLabel}</h3>
+        <p style={{ color: '#9aa4b2', fontSize: 12.5, margin: '6px 0 16px' }}>Choose how long this subscription stays active. It expires at the exact date &amp; time you pick.</p>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <button style={tabBtn(mode === 'quick')} onClick={() => setMode('quick')}>Quick</button>
+          <button style={tabBtn(mode === 'custom')} onClick={() => setMode('custom')}>Custom date</button>
+        </div>
+        {mode === 'quick' ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {QUICK.map(([l, n]) => {
+              const d = fromMonths(n);
+              return (
+                <button key={l} disabled={busy} onClick={() => apply(d)}
+                  style={{ padding: '12px 10px', borderRadius: 11, border: '1px solid #2a3142', background: '#0e1320', color: '#e5e7eb', cursor: 'pointer', textAlign: 'left' }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{l}</div>
+                  <div style={{ fontSize: 10.5, color: '#7d8794', marginTop: 3 }}>until {fmt(d)}</div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <>
+            <label style={{ display: 'block', color: '#9aa4b2', fontSize: 11.5, marginBottom: 6 }}>Expiry date &amp; time</label>
+            <input type="datetime-local" value={custom} onChange={e => setCustom(e.target.value)}
+              style={{ width: '100%', padding: '11px 12px', borderRadius: 10, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 14, colorScheme: 'dark' }} />
+            <button disabled={!custom || busy} onClick={() => apply(new Date(custom))}
+              style={{ width: '100%', marginTop: 14, padding: '12px', borderRadius: 11, border: 'none', background: (!custom || busy) ? '#3a3f4d' : '#f59e0b', color: (!custom || busy) ? '#9aa4b2' : '#1a1205', fontWeight: 800, fontSize: 14, cursor: (!custom || busy) ? 'default' : 'pointer' }}>
+              {busy ? 'Granting…' : `Grant until ${custom ? fmt(new Date(custom)) : '…'}`}
+            </button>
+          </>
+        )}
+        <button onClick={onCancel} style={{ width: '100%', marginTop: 10, padding: '10px', borderRadius: 10, border: '1px solid #2a3142', background: 'transparent', color: '#9aa4b2', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+
 export default function Admin() {
   const { logout } = useAuth();
   const navigate = useNavigate();
@@ -261,6 +322,7 @@ export default function Admin() {
   const [traderBotFilter, setTraderBotFilter] = useState('all');
   const [traderSort, setTraderSort] = useState('volume');
   const [traderDrop, setTraderDrop] = useState(null); // { type, id }
+  const [tierGrant, setTierGrant] = useState(null); // { traderId, tier } — open the duration picker
 
   // Employees
   const [employees, setEmployees] = useState([]);
@@ -927,9 +989,23 @@ export default function Admin() {
     loadData();
   };
 
+  // Paid tiers open a duration picker (admin chooses how long the plan lasts); 'standard'
+  // (downgrade to free) applies immediately.
   const handleTierChange = async (traderId, newTier) => {
+    if (newTier && newTier !== 'standard') {
+      setTierGrant({ traderId, tier: newTier });
+      return;
+    }
     await updateTraderTier(traderId, newTier);
     loadData();
+  };
+
+  // Apply a paid grant with the chosen expiry (ISO). Called from the duration modal.
+  const applyTierGrant = async (traderId, tier, expiresAtISO) => {
+    await updateTraderTier(traderId, tier, expiresAtISO);
+    setTierGrant(null);
+    loadData();
+    refreshTraderDetail(traderId);
   };
 
   const handleRoleChange = async (traderId, newRole) => {
@@ -1057,6 +1133,15 @@ export default function Admin() {
 
   return (
     <div className="adm-layout">
+
+      {/* ── Grant / Extend Subscription (duration picker) ── */}
+      {tierGrant && (
+        <TierGrantModal
+          grant={tierGrant}
+          onCancel={() => setTierGrant(null)}
+          onApply={applyTierGrant}
+        />
+      )}
 
       {/* ── Pause Bot 3FA Modal ── */}
       {showPauseModal && (
