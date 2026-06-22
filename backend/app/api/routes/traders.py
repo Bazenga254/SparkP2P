@@ -682,6 +682,10 @@ async def profit_breakdown(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
+    # Subscription gate: profit stats are hidden when the plan is expired (locked).
+    from app.services.enforcement import subscription_locked
+    if await subscription_locked(db, trader):
+        return {"locked": True, "reason": "subscription_expired"}
     # P and L for today from the central Orders table (orders tracked while bot online).
     # Centralized: admin reads the same Orders so figures always match.
     from app.models.order import Order, OrderStatus
@@ -725,6 +729,9 @@ async def profit_history(
     - granularity=month -> the whole month's total
     Returns the period's accumulated totals + a label + prev/next anchors for ‹ › navigation.
     Nothing is deleted — every past day/week/month stays reachable via navigation."""
+    from app.services.enforcement import subscription_locked
+    if await subscription_locked(db, trader):
+        return {"locked": True, "reason": "subscription_expired"}
     from app.models.order import Order, OrderStatus
     from app.services.tracking import compute_pnl_daily
     from datetime import date as _date
@@ -799,6 +806,9 @@ async def profit_series(
     at the chosen granularity, each carrying every metric so the frontend can chart Profit,
     Volume, Spread or Price: {key,label,net,gross,fees,volume,trades,spread,price,buy_rate,
     sell_rate}. Same cost-basis method as everywhere else."""
+    from app.services.enforcement import subscription_locked
+    if await subscription_locked(db, trader):
+        return {"locked": True, "reason": "subscription_expired"}
     from app.models.order import Order, OrderStatus
     from app.services.tracking import compute_pnl_daily
     from datetime import date as _date
@@ -3427,12 +3437,20 @@ async def get_rate_limit(
     reached' countdown when exhausted."""
     from app.services.rate_limits import trade_rate_status, tg_rate_status
     from app.services.plans import active_plan, plan_label
+    from app.services.enforcement import billing_active
     plan = await active_plan(db, trader.id)
     trades = await trade_rate_status(db, trader)
     telegram = tg_rate_status(plan, trader)
+    active = await billing_active(db, trader)
+    # locked = subscription expired (everything paid is off). daily_trade_blocked = subscribed but
+    # today's trade cap is reached (only new trades are blocked; rest of the app stays usable).
     return {
         "plan": plan.value if plan else None,
         "plan_label": plan_label(plan),
         "trades": trades,
         "telegram": telegram,
+        "billing_active": active,
+        "locked": (not active),
+        "exempt": bool(getattr(trader, "billing_exempt", False)),
+        "daily_trade_blocked": bool(active and not trades.get("allowed", True)),
     }

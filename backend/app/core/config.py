@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # route each trader's calls through their OWN desktop (app must be running). Default shared.
     RELAY_MODE: str = "shared"
 
+    # Subscription enforcement master switch. OFF by default so the feature can ship without
+    # locking out any current trader. When True, traders without an active plan (and not
+    # billing_exempt) are locked: bot stops, no notifications, profit/price-tracker hidden, and
+    # the enforcer wipes their bot config to zero. Flip on only once legit traders have plans
+    # or are marked exempt.
+    ENFORCEMENT_ENABLED: bool = False
+
     # Claude AI
     ANTHROPIC_API_KEY: str = ""
 

@@ -57,6 +57,13 @@ async def send_trader_message(trader, message: str, reply_markup=None, reply_to=
     # unlimited). Once over cap, skip silently until the 03:00 EAT reset.
     tid = getattr(trader, "id", None)
     if tid is not None:
+        # Subscription gate: no notifications at all when the plan is expired (locked).
+        try:
+            from app.services.enforcement import notifications_allowed
+            if not await notifications_allowed(tid):
+                return None
+        except Exception:
+            pass
         try:
             from app.services.rate_limits import consume_tg_alert
             if not await consume_tg_alert(tid):

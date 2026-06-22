@@ -79,6 +79,10 @@ class Trader(Base):
     cb_withdrawal_account_name = Column(String(100), nullable=True)   # account holder name
     cb_withdrawal_changed_at   = Column(DateTime(timezone=True),  nullable=True)   # last save timestamp (48h cooldown anchor)
 
+    # Billing enforcement: exempt accounts (admins/test/grandfathered) bypass subscription gating
+    # and are never locked out / config-wiped on expiry.
+    billing_exempt = Column(Boolean, default=False, server_default="false")
+
     # Trading config
     auto_release_enabled = Column(Boolean, default=True)
     auto_pay_enabled = Column(Boolean, default=True)  # Buy side auto-payment

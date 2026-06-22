@@ -410,6 +410,9 @@ async def lifespan(app: FastAPI):
     # Squad Mode — live coordinated team pricing (relay-gated, every 90s).
     from app.services import squad_pricing
     squad_pricing_task = asyncio.create_task(squad_pricing.start())
+    # Subscription enforcer — lock + wipe config when a plan expires (every 5 min).
+    from app.services.subscription_enforcer import subscription_enforcer
+    enforcer_task = asyncio.create_task(subscription_enforcer())
     yield
     # Shutdown
     order_poller.stop()
@@ -421,6 +424,7 @@ async def lifespan(app: FastAPI):
     kyc_task.cancel()
     filter_task.cancel()
     price_monitor_task.cancel()
+    enforcer_task.cancel()
     autoprice_task.cancel()
     market_history_task.cancel()
     market_flow_task.cancel()

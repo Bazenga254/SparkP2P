@@ -548,6 +548,13 @@ async def get_pending_actions(
     """
     actions: list[dict] = []
 
+    # Subscription gate: no auto buy/sell/release when the plan is expired (locked) or the daily
+    # trade cap is reached. Returns no actions so the bot stays idle. Choice Bank is unaffected.
+    from app.services.enforcement import can_auto_trade
+    _allowed, _reason = await can_auto_trade(db, trader)
+    if not _allowed:
+        return {"actions": [], "locked": _reason}
+
     # Sell side: payment received, needs release — only if mode allows sell automation
     sell_automated = (trader.bot_trade_mode or 'both') in ('both', 'sell_only')
     if sell_automated:
