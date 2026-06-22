@@ -80,6 +80,8 @@ export const internalTransfer = (recipient, amount) => api.post('/traders/wallet
 
 // Orders
 export const getOrders = (params = {}) => api.get('/orders', { params });
+// Export orders to .xlsx. range: 24h|7d|30d|1y|all (24h = since 3AM EAT). type: all|incoming|outgoing.
+export const exportOrders = (range, type) => api.get('/orders/export', { params: { range, type }, responseType: 'blob' });
 export const getOrderStats = () => api.get('/orders/stats');
 export const createOrder = (data) => api.post('/orders', data);
 
@@ -186,5 +188,8 @@ export const cbWithdrawToBank = (otp, amount) => api.post('/traders/cb-withdraw-
 export const cbWithdrawInitiate = (amount) => api.post('/traders/cb-withdraw-to-bank/initiate', { amount });
 export const cbWithdrawToMpesa = (otp, amount) => api.post("/traders/cb-withdraw-to-bank", { otp, amount });
 export const cbWithdrawToMpesaInitiate = (amount) => api.post("/traders/cb-withdraw-to-mpesa/initiate", { amount });
+// Payments Hub — Send Money to any M-Pesa number (OTP-confirmed)
+export const cbSendMoneyInitiate = (body) => api.post('/choice/pay/send-money/initiate', body);
+export const cbSendMoneyConfirm = (otp) => api.post('/choice/pay/send-money/confirm', { otp });
 export const kycCreateSession = () => api.post('/kyc/session');
 export default api;

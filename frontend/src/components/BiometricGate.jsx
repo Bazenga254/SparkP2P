@@ -15,7 +15,13 @@ export default function BiometricGate({ children }) {
   const finishingOAuth = () => {
     try { return new URLSearchParams(window.location.search).has('google_token'); } catch (_) { return false; }
   };
-  const [locked, setLocked] = useState(() => native && bioEnabled() && hasToken() && !finishingOAuth());
+  // Don't lock during the in-app KYC flow: capturing ID/selfie photos backgrounds the app (camera),
+  // and re-locking mid-verification would dump the user back to "sign in" and lose their progress.
+  const onVerifyRoute = () => {
+    try { const p = window.location.pathname; return p.startsWith('/kyc/') || p.startsWith('/verify-kyc'); } catch (_) { return false; }
+  };
+  const skipLock = () => finishingOAuth() || onVerifyRoute();
+  const [locked, setLocked] = useState(() => native && bioEnabled() && hasToken() && !skipLock());
 
   // Re-lock when the app returns to the foreground — but only after a grace period away, so a
   // quick switch out and back (e.g. to copy an OTP) doesn't force a fingerprint every time.
@@ -27,7 +33,7 @@ export default function BiometricGate({ children }) {
       if (document.visibilityState === 'hidden') {
         hiddenAt = Date.now();
       } else if (document.visibilityState === 'visible') {
-        if (bioEnabled() && hasToken() && hiddenAt && (Date.now() - hiddenAt) > GRACE_MS) {
+        if (bioEnabled() && hasToken() && hiddenAt && (Date.now() - hiddenAt) > GRACE_MS && !onVerifyRoute()) {
           setLocked(true);
         }
       }
@@ -37,7 +43,7 @@ export default function BiometricGate({ children }) {
   }, [native]);
 
   // ── Locked screen — CIC-style entry (fingerprint resume + password fallback) ──
-  if (native && bioEnabled() && locked && hasToken() && !finishingOAuth()) {
+  if (native && bioEnabled() && locked && hasToken() && !skipLock()) {
     return <MobileLogin mode="lock" onUnlock={() => setLocked(false)} />;
   }
 

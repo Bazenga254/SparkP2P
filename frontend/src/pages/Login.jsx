@@ -3,6 +3,7 @@ import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { login, register, sendVerificationCode, validateReferralCode } from '../services/api';
 import { isNative } from '../mobile/relayAgent';
+import { bioEnabled } from '../mobile/biometric';
 import MobileLogin from '../components/MobileLogin';
 import RegisterWizard from '../components/RegisterWizard';
 
@@ -77,10 +78,16 @@ export default function Login() {
 
       if (needsProfile) {
         // Show profile completion form
-        setGoogleProfile({ token: googleToken, name, id, role });
+        setGoogleProfile({ token: googleToken, name, id, role, email: searchParams.get('email') || '' });
         setProfileForm({ full_name: name.toUpperCase(), phone: '' });
       } else {
+        // Mirror the email/password login so the greeting shows the name and the biometric lock
+        // screen recognises the user (otherwise it looks like a fresh logout with no name).
         loginUser(googleToken, { id, full_name: name, role });
+        if (name) localStorage.setItem('remembered_name', name);
+        const gEmail = searchParams.get('email') || '';
+        if (gEmail) localStorage.setItem('remembered_email', gEmail);
+        if (isNative() && bioEnabled()) localStorage.setItem('bio_token', googleToken);
         navigate('/dashboard');
       }
     }
@@ -171,6 +178,9 @@ export default function Login() {
       });
       if (res.ok) {
         loginUser(googleProfile.token, { id: googleProfile.id, full_name: profileForm.full_name, role: googleProfile.role });
+        if (profileForm.full_name) localStorage.setItem('remembered_name', profileForm.full_name);
+        if (googleProfile.email) localStorage.setItem('remembered_email', googleProfile.email);
+        if (isNative() && bioEnabled()) localStorage.setItem('bio_token', googleProfile.token);
         navigate('/dashboard');
       } else {
         const data = await res.json();

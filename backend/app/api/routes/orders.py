@@ -1,7 +1,9 @@
+import io
 import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import select, func
@@ -120,6 +122,98 @@ async def list_orders(
     orders = result.scalars().all()
 
     return [_order_to_response(o) for o in orders]
+
+
+# Time ranges for the export. "24h" = the current trading day (since 03:00 EAT = 00:00 UTC); the
+# larger ranges count back that many days from the same 03:00 boundary, so every range honours the
+# 3 AM account-day reset the rest of the app uses.
+_EXPORT_RANGES = {"24h": 0, "7d": 7, "30d": 30, "1y": 365}
+_EAT = timezone(timedelta(hours=3))
+
+
+@router.get("/export")
+async def export_orders(
+    period: str = Query("all", alias="range"),   # 24h | 7d | 30d | 1y | all
+    kind: str = Query("all", alias="type"),      # all | incoming | outgoing
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export the trader's orders (incoming + outgoing) to an .xlsx file, filtered by time range and
+    type. 24h respects the 3 AM EAT trading-day boundary. (Param names avoid shadowing range()/type().)"""
+    start = None
+    if period != "all":
+        if period not in _EXPORT_RANGES:
+            raise HTTPException(status_code=400, detail="Invalid range")
+        start = trading_day_start() - timedelta(days=_EXPORT_RANGES[period])
+
+    q = select(Order).where(Order.trader_id == trader.id)
+    if start is not None:
+        q = q.where(Order.created_at >= start)
+    if kind == "incoming":
+        q = q.where(Order.side == OrderSide.SELL)
+    elif kind == "outgoing":
+        q = q.where(Order.side == OrderSide.BUY)
+    q = q.order_by(Order.created_at.desc())
+    orders = (await db.execute(q)).scalars().all()
+
+    import xlsxwriter
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    ws = wb.add_worksheet("Orders")
+
+    f_hdr = wb.add_format({"bold": True, "bg_color": "#0E1117", "font_color": "#FFFFFF", "border": 1, "align": "center", "valign": "vcenter"})
+    f_txt = wb.add_format({"border": 1})
+    f_in = wb.add_format({"border": 1, "font_color": "#059669", "bold": True})
+    f_out = wb.add_format({"border": 1, "font_color": "#D97706", "bold": True})
+    f_num = wb.add_format({"border": 1, "num_format": "#,##0.00"})
+    f_kes = wb.add_format({"border": 1, "num_format": "#,##0.00"})
+    f_tot = wb.add_format({"bold": True, "border": 1, "num_format": "#,##0.00", "bg_color": "#F3F4F6"})
+    f_totlbl = wb.add_format({"bold": True, "border": 1, "bg_color": "#F3F4F6"})
+
+    headers = ["Type", "Amount (KES)", "Crypto", "Currency", "Rate", "Status", "Reference", "Counterparty", "Time (EAT)"]
+    widths = [11, 16, 12, 9, 10, 14, 24, 22, 21]
+    for c, h in enumerate(headers):
+        ws.write(0, c, h, f_hdr)
+        ws.set_column(c, c, widths[c])
+    ws.freeze_panes(1, 0)
+
+    total_kes = 0.0
+    total_crypto = 0.0
+    r = 1
+    for o in orders:
+        is_in = (o.side == OrderSide.SELL)
+        kes = float(o.fiat_amount or 0)
+        crypto = float(o.crypto_amount or 0)
+        total_kes += kes
+        total_crypto += crypto
+        ws.write_string(r, 0, "Incoming" if is_in else "Outgoing", f_in if is_in else f_out)
+        ws.write_number(r, 1, kes, f_kes)
+        ws.write_number(r, 2, crypto, f_num)
+        ws.write_string(r, 3, o.crypto_currency or "USDT", f_txt)
+        ws.write_number(r, 4, float(o.exchange_rate or 0), f_num)
+        ws.write_string(r, 5, (o.status.value if o.status else ""), f_txt)
+        # reference written as text so Excel doesn't mangle the long order number into 2.28E+19
+        ws.write_string(r, 6, str(o.binance_order_number or o.account_reference or ""), f_txt)
+        ws.write_string(r, 7, o.counterparty_name or "", f_txt)
+        ws.write_string(r, 8, o.created_at.astimezone(_EAT).strftime("%Y-%m-%d %H:%M:%S") if o.created_at else "", f_txt)
+        r += 1
+
+    # Totals row
+    ws.write_string(r, 0, f"TOTAL ({len(orders)})", f_totlbl)
+    ws.write_number(r, 1, total_kes, f_tot)
+    ws.write_number(r, 2, total_crypto, f_tot)
+    for c in range(3, len(headers)):
+        ws.write_string(r, c, "", f_totlbl)
+
+    wb.close()
+    buf.seek(0)
+    stamp = datetime.now(_EAT).strftime("%Y%m%d-%H%M")
+    fname = f"sparkp2p-orders-{period}-{kind}-{stamp}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @router.get("/stats")

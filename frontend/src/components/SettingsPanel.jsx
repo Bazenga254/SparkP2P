@@ -367,11 +367,15 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
     setKycLinkLoading(true);
     try {
       const res = await kycCreateSession();
-      const url = `${window.location.origin}/verify-kyc?t=${res.data.token}`;
-      if (window.sparkp2p?.openExternal) {
-        window.sparkp2p.openExternal(url);
+      const token = res.data.token;
+      if (isNative()) {
+        // In-app: go straight to the mobile KYC flow. No external browser → no biometric lock /
+        // "sign in again", and we skip /verify-kyc (a desktop→phone QR bridge that's pointless here).
+        navigate(`/kyc/${token}`);
       } else {
-        window.open(url, '_blank');
+        const url = `${window.location.origin}/verify-kyc?t=${token}`;
+        if (window.sparkp2p?.openExternal) window.sparkp2p.openExternal(url);
+        else window.open(url, '_blank');
       }
       setShowKycGate(false);
     } catch {

@@ -831,3 +831,97 @@ async def get_bank_codes():
     result = await choice.get_bank_codes()
     return result.get("data") or result
 
+
+# ── Payments Hub — user-facing "Send Money" (OTP-confirmed) ───────────────────
+# Mirrors the proven withdraw-to-M-Pesa flow (transfer → sendOtp → confirmOperation) but lets the
+# trader send to ANY M-Pesa number, not just their own settlement phone.
+
+class SendMoneyInitiate(BaseModel):
+    payee_phone: str
+    amount: float
+    payee_name: str = ""
+    remark: str = ""
+
+
+class SendMoneyConfirm(BaseModel):
+    otp: str
+
+
+_pending_send_money: dict[int, dict] = {}
+
+
+def _normalize_msisdn(phone: str) -> str:
+    p = (phone or "").strip().replace(" ", "")
+    if p.startswith("+254"):
+        p = p[4:]
+    elif p.startswith("254"):
+        p = p[3:]
+    elif p.startswith("0"):
+        p = p[1:]
+    return p
+
+
+@router.post("/choice/pay/send-money/initiate")
+async def send_money_initiate(body: SendMoneyInitiate, trader: Trader = Depends(get_current_trader)):
+    """Step 1: start a Choice Bank → M-Pesa transfer to an arbitrary number; OTP is sent to the
+    trader's registered phone."""
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+    phone = _normalize_msisdn(body.payee_phone)
+    if len(phone) != 9 or not phone.isdigit() or phone[0] not in ("7", "1"):
+        raise HTTPException(status_code=400, detail="Enter a valid Kenyan phone number (e.g. 0712345678)")
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="Enter a valid amount")
+    if body.amount > 250000:
+        raise HTTPException(status_code=400, detail="M-Pesa transfers are limited to KES 250,000 per transaction")
+
+    try:
+        result = await choice.transfer(
+            payer_account_id=trader.choice_account_id,
+            payee_account_id=phone,
+            amount=body.amount,
+            payee_bank_code="M-PESA",
+            payee_name=body.payee_name or "",
+            remark=body.remark or "SparkP2P send money",
+            notify_mobile=phone,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Transfer initiation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Transfer rejected"))
+
+    tx_id = (result.get("data") or {}).get("txId") or ""
+    if not tx_id:
+        raise HTTPException(status_code=502, detail="No transaction ID returned")
+
+    try:
+        await choice.send_otp(tx_id)
+    except Exception as exc:
+        logger.warning(f"[ChoiceBank] send-money sendOtp failed: {exc}")
+
+    _pending_send_money[trader.id] = {"tx_id": tx_id, "amount": body.amount, "phone": phone, "name": body.payee_name}
+    return {"status": "otp_sent", "message": "Enter the OTP Choice Bank sent to your registered phone to confirm this transfer."}
+
+
+@router.post("/choice/pay/send-money/confirm")
+async def send_money_confirm(body: SendMoneyConfirm, trader: Trader = Depends(get_current_trader)):
+    """Step 2: confirm the OTP to release the transfer."""
+    pending = _pending_send_money.get(trader.id)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending transfer. Please start again.")
+    try:
+        result = await choice.confirm_otp(pending["tx_id"], body.otp.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OTP confirmation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired OTP"))
+
+    _pending_send_money.pop(trader.id, None)
+    try:
+        from app.api.routes.telegram import notify_trader
+        _to = pending.get("name") or ("0" + pending["phone"])
+        await notify_trader(trader, f"\U0001F4E4 KES {pending['amount']:,.0f} sent via Choice Bank to {_to}\nRef: {pending['tx_id']}")
+    except Exception:
+        pass
+    return {"status": "success", "tx_id": pending["tx_id"], "amount": pending["amount"]}
+

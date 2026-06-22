@@ -17,7 +17,7 @@ const PENDING_TTL = 5 * 60 * 1000; // 5 min
 let _browser = null; // @capacitor/browser ref, so we can close the Custom Tab on success
 
 function finish(d) {
-  // d = { google_token, name, id, role, needs_profile }
+  // d = { google_token, name, email, id, role, needs_profile }
   localStorage.removeItem(PENDING_KEY);
   localStorage.removeItem(PENDING_TS);
   try { if (_browser) _browser.close(); } catch (_) { /* tab may be gone */ }
@@ -30,6 +30,7 @@ function finish(d) {
   const q = new URLSearchParams({
     google_token: d.google_token,
     name: d.name || '',
+    email: d.email || '',
     id: d.id != null ? String(d.id) : '',
     role: d.role || 'trader',
     needs_profile: needsProfile ? '1' : '0',

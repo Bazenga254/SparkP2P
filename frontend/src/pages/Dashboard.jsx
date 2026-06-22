@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import { kycCreateSession } from '../services/api';
 import SupportChat from '../components/SupportChat';
@@ -791,6 +791,9 @@ export default function Dashboard() {
   const [ordersHasMore, setOrdersHasMore] = useState(true);
   const ORDERS_PER_PAGE = 20;
   const [ordersFilter, setOrdersFilter] = useState('all'); // 'all' | 'incoming' | 'outgoing'
+  const [exportRange, setExportRange] = useState('7d');  // 24h | 7d | 30d | 1y | all
+  const [exportType, setExportType] = useState('all');   // all | incoming | outgoing
+  const [exporting, setExporting] = useState(false);
   const [showTierModal, setShowTierModal] = useState(false);
   const [tierModalSelection, setTierModalSelection] = useState('');
   const [tierModalSaving, setTierModalSaving] = useState(false);
@@ -2019,13 +2022,16 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="card wallet-mini-card">
+              <div className="card wallet-mini-card"
+                onClick={() => { if (profile?.choice_account_id) navigate('/payments'); }}
+                style={profile?.choice_account_id ? { cursor: 'pointer' } : undefined}
+                title={profile?.choice_account_id ? 'Open Payments' : undefined}>
                 <div className="wallet-mini-header">
                   <span style={{ fontSize: 17 }}>🏦</span>
                   <span>Choice Bank</span>
                   {profile?.choice_account_id && (
                     <button
-                      onClick={async () => { setCbBalanceLoading(true); try { const r = await choiceGetBalance(profile.id); setCbDashBalance(r.data); } catch {} finally { setCbBalanceLoading(false); } }}
+                      onClick={async (e) => { e.stopPropagation(); setCbBalanceLoading(true); try { const r = await choiceGetBalance(profile.id); setCbDashBalance(r.data); } catch {} finally { setCbBalanceLoading(false); } }}
                       style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center' }}
                       title="Refresh balance"
                     >
@@ -2033,12 +2039,13 @@ export default function Dashboard() {
                     </button>
                   )}
                   <button
-                    onClick={() => setShowBalance(v => !v)}
+                    onClick={(e) => { e.stopPropagation(); setShowBalance(v => !v); }}
                     style={{ marginLeft: profile?.choice_account_id ? 0 : 'auto', background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center' }}
                     title={showBalance ? 'Hide balance' : 'Show balance'}
                   >
                     {showBalance ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
+                  {profile?.choice_account_id && <ChevronRight size={16} style={{ marginLeft: 'auto', color: '#f59e0b' }} />}
                 </div>
 
                 {profile?.choice_account_id ? (
@@ -2053,13 +2060,14 @@ export default function Dashboard() {
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button
-                        onClick={() => { setCbDepositMsg(''); setCbDepositAmount(''); setCbDepositPhone(profile?.phone || ''); setShowCbDepositModal(true); }}
+                        onClick={(e) => { e.stopPropagation(); setCbDepositMsg(''); setCbDepositAmount(''); setCbDepositPhone(profile?.phone || ''); setShowCbDepositModal(true); }}
                         style={{ flex: 1, padding: '10px 0', borderRadius: 9, border: 'none', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
                       >
                         ➕ Deposit
                       </button>
                       <button
-                        onClick={async () => {
+                        onClick={async (e) => {
+                          e.stopPropagation();
                           setCbWithdrawMsg(''); setCbWithdrawAmount(''); setCbWithdrawOtp('');
                           setCbWithdrawOtpSent(false);
                           try { const r = await getCbWithdrawalBank(); setCbWithdrawBank(r.data); } catch { setCbWithdrawBank(null); }
@@ -2069,6 +2077,9 @@ export default function Dashboard() {
                       >
                         ↗️ Withdraw
                       </button>
+                    </div>
+                    <div style={{ marginTop: 10, fontSize: 12, color: '#f59e0b', fontWeight: 600, textAlign: 'center' }}>
+                      Click here for more →
                     </div>
                   </>
                 ) : (
@@ -2346,6 +2357,33 @@ export default function Dashboard() {
             setOrdersPage(p);
           };
 
+          const handleExportOrders = async () => {
+            setExporting(true);
+            try {
+              const res = await exportOrders(exportRange, exportType);
+              const blobUrl = URL.createObjectURL(res.data);
+              const a = document.createElement('a');
+              a.href = blobUrl;
+              a.download = `sparkp2p-orders-${exportRange}-${exportType}.xlsx`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(blobUrl);
+            } catch (e) {
+              alert('Could not export orders. Please try again.');
+            } finally {
+              setExporting(false);
+            }
+          };
+
+          const RANGE_OPTS = [
+            { key: '24h', label: '24 hours' },
+            { key: '7d',  label: '7 days' },
+            { key: '30d', label: '30 days' },
+            { key: '1y',  label: '1 year' },
+            { key: 'all', label: 'All time' },
+          ];
+
           const incomingCount = orders.filter(o => o.side === 'sell').length;
           const outgoingCount = orders.filter(o => o.side === 'buy').length;
 
@@ -2371,6 +2409,38 @@ export default function Dashboard() {
                   <span style={{ fontSize: 12, color: '#10b981' }}>↓ Incoming = buyers pay you (sell orders)</span>
                   <span style={{ fontSize: 12, color: '#3b82f6' }}>↑ Outgoing = you pay sellers (buy orders)</span>
                 </div>
+              </div>
+
+              {/* Export to Excel */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+                background: '#0e1117', border: '1px solid #1f2937', borderRadius: 10, padding: '12px 14px', marginBottom: 18 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span style={{ fontSize: 15 }}>📊</span> Export to Excel
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <label style={{ fontSize: 11, color: '#6b7280' }}>Period</label>
+                  <select value={exportRange} onChange={e => setExportRange(e.target.value)}
+                    style={{ background: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: 7, padding: '7px 10px', fontSize: 13, cursor: 'pointer' }}>
+                    {RANGE_OPTS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                  </select>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <label style={{ fontSize: 11, color: '#6b7280' }}>Type</label>
+                  <select value={exportType} onChange={e => setExportType(e.target.value)}
+                    style={{ background: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: 7, padding: '7px 10px', fontSize: 13, cursor: 'pointer' }}>
+                    <option value="all">Incoming + Outgoing</option>
+                    <option value="incoming">Incoming only</option>
+                    <option value="outgoing">Outgoing only</option>
+                  </select>
+                </div>
+                <button onClick={handleExportOrders} disabled={exporting}
+                  style={{ padding: '8px 18px', borderRadius: 8, border: 'none', cursor: exporting ? 'not-allowed' : 'pointer',
+                    fontWeight: 700, fontSize: 13, background: exporting ? '#374151' : '#10b981', color: '#fff', display: 'flex', alignItems: 'center', gap: 7 }}>
+                  {exporting ? 'Preparing…' : '⬇ Download .xlsx'}
+                </button>
+                <span style={{ fontSize: 11, color: '#6b7280' }}>
+                  Day resets at 3:00 AM EAT — “24 hours” = today’s trading day.
+                </span>
               </div>
 
               <table className="data-table">

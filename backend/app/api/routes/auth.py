@@ -688,6 +688,7 @@ async def google_callback(code: str = None, state: str = None, error: str = None
     return _oauth_redirect(platform, sid, {
         "google_token": token,
         "name": trader.full_name,
+        "email": trader.email,
         "id": trader.id,
         "role": trader.role or "trader",
         "needs_profile": "1" if needs_profile else "0",
