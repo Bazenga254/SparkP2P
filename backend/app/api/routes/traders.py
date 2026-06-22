@@ -1624,6 +1624,11 @@ async def save_binance_api_key(
             trader.binance_nickname = nick
         if p2p_tier:
             trader.binance_p2p_tier = p2p_tier
+            # The public P2P medal (from vipLevel) is the RELIABLE Gold/Silver/Bronze signal. The
+            # EP-7 probe above is fragile — it can fail with 187049 on a valid merchant's ad — so
+            # trust the detected tier for the merchant badge instead of relying only on EP-7.
+            if p2p_tier in ("gold", "silver", "bronze"):
+                trader.binance_merchant_tier = p2p_tier
     except Exception:
         pass
 
