@@ -7289,3 +7289,13 @@ body {
 .pm-success{text-align:center}
 .pm-success h2{font-size:22px;margin:8px 0 6px}
 .pm-success p{color:#8b95a3;font-size:14px;margin:0 0 20px}
+
+/* Payments Hub — use the width on desktop (mobile stays 2-up) */
+@media (min-width:820px){
+  .pm-sheet{max-width:1040px;padding-left:28px;padding-right:28px}
+  .pm-cards{grid-template-columns:repeat(3,1fr);gap:14px}
+}
+@media (min-width:1240px){
+  .pm-sheet{max-width:1240px}
+  .pm-cards{grid-template-columns:repeat(4,1fr)}
+}
