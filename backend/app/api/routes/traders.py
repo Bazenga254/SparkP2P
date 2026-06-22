@@ -1555,7 +1555,10 @@ async def save_binance_api_key(
 ):
     """Save Binance API key + secret (encrypted). Verifies via EP-4, probes EP-7 for Gold Merchant tier."""
     from app.core.security import encrypt_data
-    from app.services.binance.sapi_client import get_merchant_ads, push_counterparty_filters, relay_trader
+    from app.services.binance.sapi_client import (
+        verify_api_credentials, push_counterparty_filters, relay_trader,
+        BinanceApiError, friendly_binance_error,
+    )
     relay_trader.set(trader.id)   # route via this trader's desktop in per_trader mode
 
     if not data.api_key.strip() or not data.api_secret.strip():
@@ -1571,9 +1574,13 @@ async def save_binance_api_key(
             detail="Your relay isn't online yet. Turn on the relay on your phone (or open the SparkP2P desktop app), wait until it shows online, then try again.",
         )
 
-    # Verify credentials work before saving (EP-4)
+    # Verify credentials actually WORK before saving (EP-4). verify_api_credentials() raises on a
+    # Binance error envelope (e.g. -1022 = secret doesn't match the key) so we reject loudly with a
+    # clear message instead of silently 'saving' a broken key that pulls no data.
     try:
-        ads = await get_merchant_ads(data.api_key.strip(), data.api_secret.strip())
+        ads = await verify_api_credentials(data.api_key.strip(), data.api_secret.strip())
+    except BinanceApiError as e:
+        raise HTTPException(status_code=400, detail=friendly_binance_error(e.code, e.msg))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not verify API credentials: {e}")
 

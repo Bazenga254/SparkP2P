@@ -183,6 +183,57 @@ async def get_merchant_ads(api_key: str, api_secret: str) -> list:
     return ads
 
 
+# Binance c2c success code is the string "000000"; anything else (e.g. -1022, -2008) is an error.
+_BINANCE_OK_CODES = (None, "000000", "00000", "0", 0, 200, "200")
+
+_BINANCE_ERR_FRIENDLY = {
+    "-1022": "Your API secret doesn't match the key. Re-copy BOTH the API Key and Secret from Binance and try again.",
+    "-2008": "This API key is invalid or was deleted on Binance. Create a new key and reconnect.",
+    "-2014": "The API key format is invalid. Re-copy it exactly from Binance.",
+    "-2015": "Invalid API key, IP, or permissions. Make sure the key has Reading enabled and isn't restricted to other IPs.",
+    "-1021": "The clock on the relay machine is out of sync. Fix its date/time and reconnect.",
+}
+
+
+class BinanceApiError(Exception):
+    """Binance returned an error envelope (e.g. -1022 bad signature). Carries code + message so the
+    connect/test flow can show a clear, actionable reason instead of silently 'succeeding'."""
+    def __init__(self, code, msg):
+        self.code = code
+        self.msg = msg
+        super().__init__(f"Binance error {code}: {msg}")
+
+
+def friendly_binance_error(code, msg) -> str:
+    return _BINANCE_ERR_FRIENDLY.get(str(code), f"Binance rejected the request (code {code}): {msg}")
+
+
+def _binance_envelope_error(data):
+    """Return (code, msg) if the response is a Binance error envelope, else None."""
+    if not isinstance(data, dict):
+        return None
+    code = data.get("code")
+    if code in _BINANCE_OK_CODES:
+        return None
+    return code, (data.get("msg") or data.get("message") or "unknown error")
+
+
+async def verify_api_credentials(api_key: str, api_secret: str) -> list:
+    """EP-4 ad fetch that RAISES BinanceApiError on a Binance error envelope (bad signature/key/etc).
+    Used by the connect/test-connection flow so a mismatched secret fails loudly with a clear
+    message — unlike get_merchant_ads(), which returns [] on error (kept that way for the background
+    pollers that must not crash). Returns the ads list on success (may be empty if no active ads)."""
+    params = _base_params()
+    params["signature"] = _sign(api_secret, params)
+    data = await _post("/sapi/v1/c2c/ads/listWithPagination", api_key, params, {"page": 1, "rows": 50})
+    err = _binance_envelope_error(data)
+    if err:
+        logger.warning(f"[Binance verify] error {err[0]}: {err[1]}")
+        raise BinanceApiError(err[0], err[1])
+    raw = data.get("data", [])
+    return raw.get("content", []) if isinstance(raw, dict) else raw
+
+
 async def get_counterparty_statistic(api_key: str, api_secret: str, order_number: str) -> dict:
     """EP-19: query counterparty trade statistics for a given order.
 
