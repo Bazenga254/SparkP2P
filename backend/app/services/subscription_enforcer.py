@@ -57,6 +57,18 @@ async def subscription_enforcer():
                                 f"[Enforcer] subscription {sub.id} expired for trader {trader.id} "
                                 f"({trader.email}) — locked + config wiped"
                             )
+                            # Disconnection-day SMS.
+                            try:
+                                from app.services.billing import account_number
+                                from app.services.plans import plan_price
+                                from app.services.sms import sms_subscription_disconnected
+                                if trader.phone:
+                                    sms_subscription_disconnected(
+                                        trader.phone, trader.full_name, plan_price(sub.plan),
+                                        account_number(trader.id), settings.SUBSCRIPTION_PAYBILL,
+                                    )
+                            except Exception as _e:
+                                logger.warning(f"[Enforcer] disconnect SMS failed for {trader.id}: {_e}")
                         else:
                             logger.warning(f"[Enforcer] subscription {sub.id} expired (trader exempt/missing)")
                     await db.commit()

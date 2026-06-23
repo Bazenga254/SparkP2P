@@ -86,6 +86,62 @@ function CbBalancePoller({ traderId, onData }) {
 }
 
 
+// Admin SMS composer — send a custom message to one customer or broadcast to everyone.
+function AdminSmsModal({ target, onClose }) {
+  const [msg, setMsg] = useState('');
+  const [broadcast, setBroadcast] = useState(!!target.broadcast);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const send = async () => {
+    setBusy(true); setError('');
+    try {
+      const body = broadcast ? { message: msg, broadcast: true } : { message: msg, trader_id: target.traderId };
+      const r = await api.post('/admin/sms/send', body);
+      setResult(r.data);
+    } catch (e) { setError(e?.response?.data?.detail || 'Failed to send SMS.'); }
+    finally { setBusy(false); }
+  };
+  const ov = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 };
+  const card = { background: '#1a1d2e', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 16, padding: 24, width: '100%', maxWidth: 460, boxShadow: '0 20px 60px rgba(0,0,0,0.5)' };
+  return (
+    <div style={ov} onClick={onClose}>
+      <div style={card} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: 0, color: '#fff', fontSize: 18 }}>Send SMS</h3>
+        <p style={{ color: '#9aa4b2', fontSize: 12.5, margin: '6px 0 14px' }}>
+          {broadcast ? 'This message goes to ALL customers with a phone number.' : `To ${target.name || 'this customer'}.`}
+        </p>
+        {result ? (
+          <>
+            <div style={{ color: '#10b981', fontSize: 14, marginBottom: 14 }}>✅ Sent {result.sent} / {result.total}{result.failed ? ` · ${result.failed} failed` : ''}</div>
+            <button onClick={onClose} style={{ width: '100%', padding: 11, borderRadius: 10, border: 'none', background: '#f59e0b', color: '#1a1205', fontWeight: 800, cursor: 'pointer' }}>Done</button>
+          </>
+        ) : (
+          <>
+            {target.traderId && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#9aa4b2', fontSize: 12.5, marginBottom: 10, cursor: 'pointer' }}>
+                <input type="checkbox" checked={broadcast} onChange={e => setBroadcast(e.target.checked)} />
+                Send to ALL customers instead (broadcast)
+              </label>
+            )}
+            <textarea value={msg} onChange={e => setMsg(e.target.value)} rows={5} maxLength={800} placeholder="Type your message…"
+              style={{ width: '100%', padding: 12, borderRadius: 10, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 13.5, resize: 'vertical', boxSizing: 'border-box' }} />
+            <div style={{ textAlign: 'right', color: '#6b7280', fontSize: 11, marginTop: 4 }}>{msg.length}/800</div>
+            {error && <div style={{ color: '#ef4444', fontSize: 12.5, marginTop: 6 }}>{error}</div>}
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={onClose} style={{ flex: 1, padding: 11, borderRadius: 10, border: '1px solid #2a3142', background: 'transparent', color: '#9aa4b2', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+              <button disabled={!msg.trim() || busy} onClick={send}
+                style={{ flex: 2, padding: 11, borderRadius: 10, border: 'none', background: (!msg.trim() || busy) ? '#3a3f4d' : (broadcast ? '#ef4444' : '#f59e0b'), color: (!msg.trim() || busy) ? '#9aa4b2' : (broadcast ? '#fff' : '#1a1205'), fontWeight: 800, cursor: (!msg.trim() || busy) ? 'default' : 'pointer' }}>
+                {busy ? 'Sending…' : (broadcast ? 'Send to everyone' : 'Send SMS')}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Admin duration picker for granting / extending a paid subscription. Admin picks a quick
 // duration (1/3/6/12 months) or a custom date+time; expiry is sent to the backend as ISO UTC.
 function TierGrantModal({ grant, onCancel, onApply }) {
@@ -323,6 +379,7 @@ export default function Admin() {
   const [traderSort, setTraderSort] = useState('volume');
   const [traderDrop, setTraderDrop] = useState(null); // { type, id }
   const [tierGrant, setTierGrant] = useState(null); // { traderId, tier } — open the duration picker
+  const [smsTarget, setSmsTarget] = useState(null); // { traderId?, name?, broadcast? } — open SMS composer
 
   // Employees
   const [employees, setEmployees] = useState([]);
@@ -1143,6 +1200,9 @@ export default function Admin() {
         />
       )}
 
+      {/* ── Send custom SMS (individual / broadcast) ── */}
+      {smsTarget && <AdminSmsModal target={smsTarget} onClose={() => setSmsTarget(null)} />}
+
       {/* ── Pause Bot 3FA Modal ── */}
       {showPauseModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
@@ -1889,6 +1949,10 @@ export default function Admin() {
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => setSmsTarget({ broadcast: true })} title="Send SMS to all customers"
+                      style={{ height: 34, padding: '0 12px', background: '#111827', border: '0.5px solid #374151', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#60a5fa', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+                      💬 SMS all
+                    </button>
                     <button onClick={exportCSV} title="Export CSV"
                       style={{ width: 34, height: 34, background: '#111827', border: '0.5px solid #374151', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#9ca3af', flexShrink: 0 }}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -2377,11 +2441,24 @@ export default function Admin() {
                         </div>
                         {/* Set / extend the expiry date+time without having to switch plan. For a free
                             trader, pick a plan via the Tier dropdown above (which opens the same picker). */}
-                        <button
-                          onClick={() => setTierGrant({ traderId: t.id, tier: (t.tier && t.tier !== 'standard') ? t.tier : 'starter' })}
-                          style={{ marginTop: 12, width: '100%', padding: '11px', borderRadius: 10, border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.10)', color: '#f59e0b', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
-                          📅 {t.subscription_expires_at ? 'Change / extend expiry date' : 'Grant a subscription'}
-                        </button>
+                        {t.account_number && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, padding: '9px 12px', borderRadius: 9, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)' }}>
+                            <span style={{ color: '#9aa4b2', fontSize: 12 }}>Paybill account no.</span>
+                            <b style={{ color: '#f59e0b', fontSize: 14, letterSpacing: 0.5 }}>{t.account_number}</b>
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                          <button
+                            onClick={() => setTierGrant({ traderId: t.id, tier: (t.tier && t.tier !== 'standard') ? t.tier : 'starter' })}
+                            style={{ flex: 1, padding: '11px', borderRadius: 10, border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.10)', color: '#f59e0b', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>
+                            📅 {t.subscription_expires_at ? 'Change / extend expiry' : 'Grant subscription'}
+                          </button>
+                          <button
+                            onClick={() => setSmsTarget({ traderId: t.id, name: t.full_name })}
+                            style={{ flex: 1, padding: '11px', borderRadius: 10, border: '1px solid #2a3142', background: 'rgba(59,130,246,0.10)', color: '#60a5fa', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>
+                            💬 Send SMS
+                          </button>
+                        </div>
                         <div className="limit-grid">
                           {[
                             ['Trades today', t.daily_trade_unlimited, t.daily_trade_used, t.daily_trade_limit, 'var(--info)'],

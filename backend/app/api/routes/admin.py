@@ -18,6 +18,7 @@ from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.message_template import MessageTemplate
 from app.api.deps import get_admin_trader, get_employee_or_admin, get_client_ip, write_audit_log
 from app.services.message_templates import seed_default_templates, refresh_template_cache
+from app.services.billing import account_number
 
 logger = logging.getLogger(__name__)
 
@@ -509,6 +510,7 @@ async def get_trader_detail(
         "binance_api_key_invalid": bool(trader.binance_api_key_invalid),
         "binance_merchant_tier": (trader.binance_merchant_tier or None),
         "binance_p2p_tier": (trader.binance_p2p_tier or None),
+        "account_number": account_number(trader.id),   # SPK<id> — Paybill account for subscriptions
         "binance_api_key_saved": bool(trader.binance_api_key),
         "price_tracker_enabled": bool(getattr(trader, "price_tracker_enabled", False)),
         "telegram_connected": bool(trader.telegram_chat_id),
@@ -1061,6 +1063,57 @@ async def update_trader_im_account(
     trader.settlement_account = account.strip() or None
     await db.commit()
     return {"status": "updated", "trader_id": trader_id, "im_account": trader.settlement_account}
+
+
+class AdminSmsRequest(BaseModel):
+    message: str
+    trader_id: int | None = None
+    broadcast: bool = False
+
+
+@router.post("/sms/send")
+async def admin_send_sms(
+    data: AdminSmsRequest,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a custom SMS to one trader (trader_id) or to all traders (broadcast=true) — outages,
+    payment details, announcements. Uses the same Advanta sender as the rest of the app."""
+    from app.services.sms import send_sms
+    msg = (data.message or "").strip()
+    if not msg:
+        raise HTTPException(status_code=400, detail="Message is required")
+    if len(msg) > 800:
+        raise HTTPException(status_code=400, detail="Message is too long (max 800 chars)")
+
+    if data.broadcast:
+        traders = (await db.execute(
+            select(Trader).where(Trader.phone.isnot(None), Trader.phone != "")
+        )).scalars().all()
+        targets = [t.phone for t in traders if t.phone]
+    elif data.trader_id:
+        t = (await db.execute(select(Trader).where(Trader.id == data.trader_id))).scalar_one_or_none()
+        if not t or not t.phone:
+            raise HTTPException(status_code=400, detail="Trader not found or has no phone number")
+        targets = [t.phone]
+    else:
+        raise HTTPException(status_code=400, detail="Specify a trader_id or set broadcast=true")
+
+    sent = failed = 0
+    for ph in targets:
+        try:
+            if send_sms(ph, msg):
+                sent += 1
+            else:
+                failed += 1
+        except Exception:
+            failed += 1
+    try:
+        await write_audit_log(db, admin, "send_sms",
+                              detail=f"custom SMS — sent={sent} failed={failed} broadcast={data.broadcast}")
+    except Exception:
+        pass
+    return {"sent": sent, "failed": failed, "total": len(targets)}
 
 
 @router.get("/orders/disputed")

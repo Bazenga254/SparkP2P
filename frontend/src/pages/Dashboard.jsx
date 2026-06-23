@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
@@ -847,6 +847,9 @@ export default function Dashboard() {
   const [creditPolling, setCreditPolling] = useState(false);
   const [creditCheckoutId, setCreditCheckoutId] = useState(null);
   const [creditMsg, setCreditMsg] = useState(null);
+  // Manual Paybill + Pay-with-Choice-Bank
+  const [payInfo, setPayInfo] = useState(null);
+  const [choicePay, setChoicePay] = useState(null); // { plan, step:'otp'|'done', otp, busy, error, info }
   const [botLogs, setBotLogs] = useState([]);
   const logsEndRef = useRef(null);
   const [txnTab, setTxnTab] = useState('deposits');
@@ -1000,6 +1003,31 @@ export default function Dashboard() {
     const id = setInterval(() => setRlNow(Date.now()), 1000);
     return () => { clearInterval(poll); clearInterval(id); };
   }, []);
+
+  // Paybill + account number for manual / Choice Bank payment (loaded once).
+  useEffect(() => {
+    if (!localStorage.getItem('token')) return;
+    getPaymentInfo().then(r => setPayInfo(r.data)).catch(() => {});
+  }, []);
+
+  const startChoicePay = async (plan) => {
+    setChoicePay({ plan, step: 'init', busy: true, error: '', otp: '' });
+    try {
+      const r = await payChoiceInitiate(plan);
+      setChoicePay({ plan, step: 'otp', busy: false, error: '', otp: '', info: r.data?.message });
+    } catch (e) {
+      setChoicePay({ plan, step: 'init', busy: false, error: e.response?.data?.detail || 'Could not start the payment.', otp: '' });
+    }
+  };
+  const confirmChoicePay = async () => {
+    setChoicePay(c => ({ ...c, busy: true, error: '' }));
+    try {
+      await payChoiceConfirm(choicePay.otp);
+      setChoicePay(c => ({ ...c, step: 'done', busy: false }));
+    } catch (e) {
+      setChoicePay(c => ({ ...c, busy: false, error: e.response?.data?.detail || 'OTP confirmation failed.' }));
+    }
+  };
 
   const loadData = async () => {
     if (!localStorage.getItem('token')) return;
@@ -3417,6 +3445,66 @@ export default function Dashboard() {
                   <div className="hint">Make sure the number is registered to your Safaricom line and has sufficient balance before subscribing.</div>
                 </div>
               </div>
+
+              {/* Manual Paybill + Pay with Choice Bank */}
+              {payInfo && (
+                <div className="card reveal d3" style={{ marginTop: 16, padding: 18 }}>
+                  <div className="tag" style={{ marginBottom: 12 }}>OTHER WAYS TO PAY</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 14 }}>
+                    {/* Manual M-Pesa Paybill */}
+                    <div style={{ background: '#0e1320', border: '1px solid #20262f', borderRadius: 12, padding: 16 }}>
+                      <div style={{ fontWeight: 800, color: '#fff', fontSize: 14, marginBottom: 4 }}>📲 Pay manually via M-PESA</div>
+                      <div style={{ color: '#9aa4b2', fontSize: 12, marginBottom: 12 }}>Lipa na M-PESA → Pay Bill. Your subscription activates automatically once paid.</div>
+                      {[['Paybill number', payInfo.paybill], ['Account number', payInfo.account_number]].map(([k, v]) => (
+                        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderTop: '1px solid #1a2030' }}>
+                          <span style={{ color: '#7d8794', fontSize: 12 }}>{k}</span>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <b style={{ color: '#f59e0b', fontSize: 15, letterSpacing: 0.5 }}>{v}</b>
+                            <button onClick={() => { navigator.clipboard?.writeText(String(v)); }} title="Copy"
+                              style={{ background: 'none', border: '1px solid #2a3142', borderRadius: 6, color: '#9aa4b2', fontSize: 10, padding: '3px 7px', cursor: 'pointer' }}>Copy</button>
+                          </span>
+                        </div>
+                      ))}
+                      <div style={{ color: '#6b7280', fontSize: 11, marginTop: 10 }}>Enter the amount for your plan (KES 3,000 / 5,000 / 10,000).</div>
+                    </div>
+
+                    {/* Pay with Choice Bank */}
+                    <div style={{ background: '#0e1320', border: '1px solid #20262f', borderRadius: 12, padding: 16 }}>
+                      <div style={{ fontWeight: 800, color: '#fff', fontSize: 14, marginBottom: 4 }}>🏦 Pay with Choice Bank</div>
+                      {!payInfo.has_choice_account ? (
+                        <div style={{ color: '#9aa4b2', fontSize: 12 }}>Verify your Choice Bank account first to pay directly from your wallet.</div>
+                      ) : choicePay?.step === 'done' ? (
+                        <div style={{ color: '#10b981', fontSize: 13 }}>✅ Payment sent from your Choice Bank wallet. Your subscription will activate shortly.</div>
+                      ) : choicePay?.step === 'otp' ? (
+                        <>
+                          <div style={{ color: '#9aa4b2', fontSize: 12, marginBottom: 8 }}>{choicePay.info || 'Enter the OTP sent to your phone.'}</div>
+                          <input inputMode="numeric" autoComplete="one-time-code" placeholder="OTP code" value={choicePay.otp}
+                            onChange={e => setChoicePay(c => ({ ...c, otp: e.target.value.replace(/\D/g, '') }))}
+                            style={{ width: '100%', padding: '10px 12px', borderRadius: 9, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 14 }} />
+                          {choicePay.error && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>{choicePay.error}</div>}
+                          <button disabled={!choicePay.otp || choicePay.busy} onClick={confirmChoicePay}
+                            style={{ width: '100%', marginTop: 10, padding: 11, borderRadius: 9, border: 'none', background: (!choicePay.otp || choicePay.busy) ? '#3a3f4d' : '#10b981', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                            {choicePay.busy ? 'Confirming…' : 'Confirm payment'}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ color: '#9aa4b2', fontSize: 12, marginBottom: 10 }}>Deduct the plan fee straight from your Choice Bank wallet.</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                            {payInfo.plans.map(p => (
+                              <button key={p.key} disabled={choicePay?.busy} onClick={() => startChoicePay(p.key)}
+                                style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderRadius: 9, border: '1px solid #2a3142', background: '#0a0d14', color: '#e5e7eb', cursor: 'pointer', fontSize: 13 }}>
+                                <span>{p.label}</span><b style={{ color: '#f59e0b' }}>KES {p.price.toLocaleString()}</b>
+                              </button>
+                            ))}
+                          </div>
+                          {choicePay?.error && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>{choicePay.error}</div>}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="plans-head reveal d3">
                 <div className="eyebrow">Subscription Plans</div>

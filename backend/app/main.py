@@ -413,6 +413,9 @@ async def lifespan(app: FastAPI):
     # Subscription enforcer — lock + wipe config when a plan expires (every 5 min).
     from app.services.subscription_enforcer import subscription_enforcer
     enforcer_task = asyncio.create_task(subscription_enforcer())
+    # Subscription reminders — 5-day / 3-day pre-expiry SMS (hourly).
+    from app.services.subscription_reminder import subscription_reminder
+    reminder_task = asyncio.create_task(subscription_reminder())
     yield
     # Shutdown
     order_poller.stop()
@@ -425,6 +428,7 @@ async def lifespan(app: FastAPI):
     filter_task.cancel()
     price_monitor_task.cancel()
     enforcer_task.cancel()
+    reminder_task.cancel()
     autoprice_task.cancel()
     market_history_task.cancel()
     market_flow_task.cancel()

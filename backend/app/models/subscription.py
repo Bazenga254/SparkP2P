@@ -34,6 +34,10 @@ class Subscription(Base):
     mpesa_transaction_id = Column(String(50), nullable=True)
     mpesa_checkout_id = Column(String(100), nullable=True)
 
+    # Expiry-reminder idempotency — set when the 5-day / 3-day SMS has been sent for this period.
+    reminder_5d_sent = Column(Boolean, default=False, server_default="false")
+    reminder_3d_sent = Column(Boolean, default=False, server_default="false")
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     @property

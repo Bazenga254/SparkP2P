@@ -75,7 +75,8 @@ async def initiate_subscription(
     await db.refresh(subscription)
 
     # Send STK Push
-    account_ref = f"SparkP2P-Sub-{subscription.id}"
+    from app.services.billing import account_number as _acct
+    account_ref = _acct(trader.id)   # SPK<id> — unified across STK / manual / Choice Bank
     try:
         result = await mpesa_client.stk_push(
             phone=data.phone,
@@ -217,7 +218,8 @@ async def renew_subscription(
     await db.refresh(subscription)
 
     # Send STK Push
-    account_ref = f"SparkP2P-Sub-{subscription.id}"
+    from app.services.billing import account_number as _acct
+    account_ref = _acct(trader.id)   # SPK<id> — unified across STK / manual / Choice Bank
     try:
         result = await mpesa_client.stk_push(
             phone=data.phone,
@@ -241,6 +243,99 @@ async def renew_subscription(
         subscription.status = SubscriptionStatus.EXPIRED
         await db.commit()
         raise HTTPException(status_code=500, detail=f"Failed to send STK Push: {str(e)}")
+
+
+class ChoicePayRequest(BaseModel):
+    plan: str
+
+
+class OtpConfirmRequest(BaseModel):
+    otp: str
+
+
+_pending_choice_sub: dict[int, dict] = {}
+
+
+@router.get("/payment-info")
+async def payment_info(trader: Trader = Depends(get_current_trader)):
+    """Manual-payment details for the Subscribe page: Paybill + the trader's unique account number,
+    the plan price list, and whether they have a Choice Bank wallet to pay from."""
+    from app.core.config import settings
+    from app.services.billing import account_number
+    return {
+        "paybill": settings.SUBSCRIPTION_PAYBILL,
+        "account_number": account_number(trader.id),
+        "plans": [{"key": p.value, "label": cfg["label"], "price": cfg["price"]} for p, cfg in PLAN_CONFIG.items()],
+        "has_choice_account": bool(trader.choice_account_id),
+    }
+
+
+@router.post("/pay-choice/initiate")
+async def pay_choice_initiate(
+    data: ChoicePayRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pay a plan straight from the trader's Choice Bank wallet — a Choice->Paybill B2B transfer to
+    SUBSCRIPTION_PAYBILL with their SPK account number. Activation happens via the C2B confirmation
+    when the money lands on the Paybill (same path as manual/STK)."""
+    from app.core.config import settings
+    from app.services.billing import account_number
+    from app.services.choice_bank import client as choice
+    try:
+        plan = SubscriptionPlan(data.plan.lower())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid plan.")
+    if plan not in PLAN_PRICES:
+        raise HTTPException(status_code=400, detail="That plan is not available.")
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked. Verify Choice Bank first.")
+    amount = PLAN_PRICES[plan]
+    acct = account_number(trader.id)
+    try:
+        result = await choice.mpesa_business_transfer(
+            payer_account_id=trader.choice_account_id,
+            business_number=settings.SUBSCRIPTION_PAYBILL,
+            amount=amount,
+            account_number=acct,
+            is_paybill=True,
+            remark=f"SparkP2P {plan.value} subscription",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not start the payment: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Payment rejected by Choice Bank"))
+    tx_id = (result.get("data") or {}).get("txId") or ""
+    if not tx_id:
+        raise HTTPException(status_code=502, detail="No transaction ID returned")
+    try:
+        await choice.send_otp(tx_id)
+    except Exception as exc:
+        logger.warning(f"[Sub] Choice pay sendOtp failed: {exc}")
+    _pending_choice_sub[trader.id] = {"tx_id": tx_id, "plan": plan.value, "amount": amount}
+    return {"status": "otp_sent", "message": "Enter the OTP sent to your phone to confirm payment from your Choice Bank wallet."}
+
+
+@router.post("/pay-choice/confirm")
+async def pay_choice_confirm(
+    body: OtpConfirmRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Confirm the OTP to release the Choice Bank payment. The subscription then activates when the
+    Paybill C2B confirmation arrives."""
+    from app.services.choice_bank import client as choice
+    pending = _pending_choice_sub.get(trader.id)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending payment. Please start again.")
+    try:
+        result = await choice.confirm_otp(pending["tx_id"], body.otp.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OTP confirmation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired OTP"))
+    _pending_choice_sub.pop(trader.id, None)
+    return {"status": "success", "message": "Payment sent from your Choice Bank wallet. Your subscription will activate shortly."}
 
 
 @router.get("/admin/all")

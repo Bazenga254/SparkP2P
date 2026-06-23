@@ -134,6 +134,9 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
     sender_name = f"{data.get('FirstName', '')} {data.get('MiddleName', '')} {data.get('LastName', '')}".strip()
     txn_id = data.get("TransID", "")
 
+    from app.services.billing import parse_account_number, activate_subscription_payment
+    _sub_trader_id = parse_account_number(bill_ref)
+
     # Route based on account reference prefix
     # P2PT0001         → direct wallet deposit (new format, no hyphens — I&M compatible)
     # P2P-T0001        → direct wallet deposit (legacy format, still accepted)
@@ -188,6 +191,13 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
             await _credit_wallet_deposit(trader_id, amount, txn_id, phone, sender_name, db)
         except (ValueError, IndexError):
             logger.error(f"Invalid deposit reference: {bill_ref}")
+    elif _sub_trader_id is not None:
+        # SparkP2P subscription payment — account number SPK<trader id>. Covers manual Paybill,
+        # STK, and Choice Bank B2B (all land here). Auto-activates/extends + SMS.
+        try:
+            await activate_subscription_payment(db, _sub_trader_id, amount, txn_id, source="paybill")
+        except Exception as e:
+            logger.error(f"Subscription activation failed for {bill_ref} (amount {amount}): {e}")
     else:
         # Not a P2P payment — forward to existing website handler if needed
         logger.info(f"Non-P2P payment received: ref={bill_ref}, amount={amount}")

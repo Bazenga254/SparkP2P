@@ -240,6 +240,45 @@ def sms_session_disconnected(phone: str) -> bool:
     return send_sms(phone, msg)
 
 
+def sms_subscription_reminder(phone: str, name: str, plan_label: str, expires: str,
+                              amount, acct: str, days: int, paybill: str) -> bool:
+    """Pre-expiry reminder. days=5 is gentle; days<=3 warns about bot reconfiguration."""
+    first = (name or "").strip().split(" ")[0] or "Customer"
+    if days <= 3:
+        msg = (f"Dear {first}, your SparkP2P bot will be DISCONNECTED on {expires}. "
+               f"If it disconnects you must reconfigure the bot from scratch. Avoid this — pay "
+               f"KES {int(amount):,} via M-Pesa Paybill {paybill}, Account {acct}, or from your "
+               f"Choice Bank wallet in the app. - SparkP2P")
+    else:
+        msg = (f"Dear {first}, your SparkP2P {plan_label} subscription expires on {expires}. "
+               f"To keep your bot running, pay KES {int(amount):,} via M-Pesa Paybill {paybill}, "
+               f"Account {acct}, or instantly from your Choice Bank wallet in the app. - SparkP2P")
+    return send_sms(phone, msg)
+
+
+def sms_subscription_disconnected(phone: str, name: str, amount, acct: str, paybill: str) -> bool:
+    """Sent on the day the subscription lapses and the bot is disconnected."""
+    first = (name or "").strip().split(" ")[0] or "Customer"
+    msg = (f"Dear {first}, your SparkP2P service has been DISCONNECTED due to non-payment and your "
+           f"bot settings have been reset. To restore service, pay KES {int(amount):,} via M-Pesa "
+           f"Paybill {paybill}, Account {acct}, or from your Choice Bank wallet, then log in to "
+           f"reconfigure your bot. - SparkP2P")
+    return send_sms(phone, msg)
+
+
+def sms_subscription_renewed(phone: str, name: str, plan_label: str, expires: str, was_disconnected: bool) -> bool:
+    """Confirm a renewal/activation. If they were disconnected, prompt them to reconfigure."""
+    first = (name or "").strip().split(" ")[0] or "Customer"
+    if was_disconnected:
+        msg = (f"Dear {first}, your SparkP2P {plan_label} subscription has been RENEWED and is valid "
+               f"until {expires}. As your service had been disconnected, please log in to reconfigure "
+               f"your bot to your specific settings. - SparkP2P")
+    else:
+        msg = (f"Dear {first}, your SparkP2P {plan_label} subscription has been renewed and is now "
+               f"valid until {expires}. Thank you for trading with us. - SparkP2P")
+    return send_sms(phone, msg)
+
+
 def sms_subscription_activated(phone: str, plan: str, expires: str) -> bool:
     """Notify trader of subscription activation."""
     tpl = get_cached_template("sms_subscription_activated")

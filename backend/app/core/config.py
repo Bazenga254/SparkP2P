@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     # or are marked exempt.
     ENFORCEMENT_ENABLED: bool = False
 
+    # Subscription payments — production M-Pesa Paybill that receives plan payments. Each trader
+    # pays with a unique account number SPK<6-digit id>; the C2B confirmation auto-activates.
+    SUBSCRIPTION_PAYBILL: str = "4041355"
+
     # Claude AI
     ANTHROPIC_API_KEY: str = ""
 
