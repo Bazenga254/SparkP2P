@@ -850,9 +850,9 @@ export default function Dashboard() {
   // Manual Paybill + Pay-with-Choice-Bank
   const [payInfo, setPayInfo] = useState(null);
   const [choicePay, setChoicePay] = useState(null); // { plan, step:'otp'|'done', otp, busy, error, info }
-  const [depositAmount, setDepositAmount] = useState('');
-  const [depositSending, setDepositSending] = useState(false);
-  const [depositMsg, setDepositMsg] = useState(null); // { type:'ok'|'err', text }
+  const [subDepAmount, setSubDepAmount] = useState('');
+  const [subDepSending, setSubDepSending] = useState(false);
+  const [subDepMsg, setSubDepMsg] = useState(null); // { type:'ok'|'err', text }
   const [botLogs, setBotLogs] = useState([]);
   const logsEndRef = useRef(null);
   const [txnTab, setTxnTab] = useState('deposits');
@@ -1014,20 +1014,20 @@ export default function Dashboard() {
   }, []);
 
   const handleDepositStk = async () => {
-    const amt = Number(depositAmount);
-    if (!amt || amt < 10) { setDepositMsg({ type: 'err', text: 'Enter at least KES 10.' }); return; }
-    if (!creditPhone.trim()) { setDepositMsg({ type: 'err', text: 'Enter your M-Pesa number above first.' }); return; }
-    setDepositSending(true); setDepositMsg(null);
+    const amt = Number(subDepAmount);
+    if (!amt || amt < 10) { setSubDepMsg({ type: 'err', text: 'Enter at least KES 10.' }); return; }
+    if (!creditPhone.trim()) { setSubDepMsg({ type: 'err', text: 'Enter your M-Pesa number above first.' }); return; }
+    setSubDepSending(true); setSubDepMsg(null);
     try {
       const r = await subscriptionDepositInitiate(amt, creditPhone.trim());
-      setDepositMsg({ type: 'ok', text: r.data?.message || 'STK Push sent — enter your PIN. It will be added to your balance.' });
-      setDepositAmount('');
+      setSubDepMsg({ type: 'ok', text: r.data?.message || 'STK Push sent — enter your PIN. It will be added to your balance.' });
+      setSubDepAmount('');
       // Balance updates via the callback — refresh a few times.
       let n = 0;
       const iv = setInterval(async () => { n++; try { const p = await getPaymentInfo(); setPayInfo(p.data); } catch {} if (n >= 6) clearInterval(iv); }, 5000);
     } catch (e) {
-      setDepositMsg({ type: 'err', text: e.response?.data?.detail || 'Could not send the STK push.' });
-    } finally { setDepositSending(false); }
+      setSubDepMsg({ type: 'err', text: e.response?.data?.detail || 'Could not send the STK push.' });
+    } finally { setSubDepSending(false); }
   };
 
   const startChoicePay = async (plan) => {
@@ -3467,15 +3467,15 @@ export default function Dashboard() {
                   <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #20262f' }}>
                     <label style={{ display: 'block', color: '#9aa4b2', fontSize: 11.5, marginBottom: 6 }}>Or deposit any amount toward your balance</label>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <input type="tel" inputMode="numeric" placeholder="Amount (KES)" value={depositAmount}
-                        onChange={e => setDepositAmount(e.target.value.replace(/[^\d]/g, ''))}
+                      <input type="tel" inputMode="numeric" placeholder="Amount (KES)" value={subDepAmount}
+                        onChange={e => setSubDepAmount(e.target.value.replace(/[^\d]/g, ''))}
                         style={{ flex: 1, padding: '11px 12px', borderRadius: 10, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 14, minWidth: 0 }} />
-                      <button onClick={handleDepositStk} disabled={depositSending}
-                        style={{ padding: '11px 16px', borderRadius: 10, border: 'none', background: depositSending ? '#3a3f4d' : '#f59e0b', color: depositSending ? '#9aa4b2' : '#1a1205', fontWeight: 800, fontSize: 13, cursor: depositSending ? 'default' : 'pointer', whiteSpace: 'nowrap' }}>
-                        {depositSending ? 'Sending…' : 'STK Push'}
+                      <button onClick={handleDepositStk} disabled={subDepSending}
+                        style={{ padding: '11px 16px', borderRadius: 10, border: 'none', background: subDepSending ? '#3a3f4d' : '#f59e0b', color: subDepSending ? '#9aa4b2' : '#1a1205', fontWeight: 800, fontSize: 13, cursor: subDepSending ? 'default' : 'pointer', whiteSpace: 'nowrap' }}>
+                        {subDepSending ? 'Sending…' : 'STK Push'}
                       </button>
                     </div>
-                    {depositMsg && <div style={{ marginTop: 8, fontSize: 12, color: depositMsg.type === 'ok' ? '#10b981' : '#ef4444' }}>{depositMsg.text}</div>}
+                    {subDepMsg && <div style={{ marginTop: 8, fontSize: 12, color: subDepMsg.type === 'ok' ? '#10b981' : '#ef4444' }}>{subDepMsg.text}</div>}
                   </div>
                 </div>
               </div>
