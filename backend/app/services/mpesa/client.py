@@ -33,7 +33,7 @@ class MpesaClient:
             f"{self.consumer_key}:{self.consumer_secret}".encode()
         ).decode()
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=20) as client:
             response = await client.get(
                 f"{self.base_url}/oauth/v1/generate?grant_type=client_credentials",
                 headers={"Authorization": f"Basic {credentials}"},
@@ -49,7 +49,9 @@ class MpesaClient:
     async def _make_request(self, endpoint: str, payload: dict) -> dict:
         """Make authenticated request to Daraja API."""
         token = await self._get_access_token()
-        async with httpx.AsyncClient() as client:
+        # Daraja (especially STK push) can take 10-20s to respond; the default 5s timeout would
+        # raise ReadTimeout even though the STK prompt was already delivered — a false failure.
+        async with httpx.AsyncClient(timeout=40) as client:
             response = await client.post(
                 f"{self.base_url}{endpoint}",
                 json=payload,
