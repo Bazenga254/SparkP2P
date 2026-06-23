@@ -61,26 +61,33 @@ async def initiate_subscription(
     if plan not in PLAN_PRICES:
         raise HTTPException(status_code=400, detail="That plan is not available. Use 'starter', 'pro', or 'pro_max'.")
 
-    amount = PLAN_PRICES[plan]
+    # Charge only the difference after the prepaid subscription balance.
+    from app.services.billing import account_number as _acct, credit_subscription_payment
+    price = PLAN_PRICES[plan]
+    balance = float(trader.subscription_balance or 0)
+    due = max(0, price - balance)
+    if due <= 0:
+        # Balance already covers the plan — activate straight away, no STK needed.
+        await credit_subscription_payment(db, trader.id, 0.0, source="balance", target_plan=plan)
+        return {"status": "activated", "message": f"{plan.value.replace('_', ' ').title()} activated from your balance."}
 
-    # Create pending subscription
+    # Create pending subscription (amount = the charged difference)
     subscription = Subscription(
         trader_id=trader.id,
         plan=plan,
         status=SubscriptionStatus.PENDING,
-        amount=amount,
+        amount=due,
     )
     db.add(subscription)
     await db.commit()
     await db.refresh(subscription)
 
-    # Send STK Push
-    from app.services.billing import account_number as _acct
+    # Send STK Push for the difference
     account_ref = _acct(trader.id)   # SPK<id> — unified across STK / manual / Choice Bank
     try:
         result = await mpesa_client.stk_push(
             phone=data.phone,
-            amount=amount,
+            amount=due,
             account_reference=account_ref,
             description=f"{plan.value.title()} Plan",
         )
@@ -94,7 +101,8 @@ async def initiate_subscription(
             "status": "pending",
             "subscription_id": subscription.id,
             "checkout_request_id": checkout_id,
-            "message": f"STK Push sent to {data.phone}. Enter your M-Pesa PIN to complete payment.",
+            "amount_charged": due,
+            "message": f"STK Push of KES {due:,.0f} sent to {data.phone}. Enter your M-Pesa PIN to complete payment.",
         }
     except Exception as e:
         logger.error(f"STK Push failed for subscription {subscription.id}: {e}")
@@ -129,29 +137,27 @@ async def subscription_callback(request: Request, db: AsyncSession = Depends(get
         return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
     if result_code == 0:
-        # Payment successful
-        now = datetime.now(timezone.utc)
-        subscription.status = SubscriptionStatus.ACTIVE
-        subscription.started_at = now
-        subscription.expires_at = now + timedelta(days=30)
-
-        # Extract M-Pesa receipt number from callback metadata
+        # Payment successful — credit the paid amount to the balance, then activate the chosen plan
+        # if it's now covered (handles the prepaid-balance / pay-the-difference flow).
         metadata = body.get("CallbackMetadata", {}).get("Item", [])
+        receipt = ""
+        amount_paid = float(subscription.amount or 0)
         for item in metadata:
             if item.get("Name") == "MpesaReceiptNumber":
-                subscription.mpesa_transaction_id = item.get("Value")
-                break
-
-        # Update trader tier based on plan
-        trader_result = await db.execute(
-            select(Trader).where(Trader.id == subscription.trader_id)
-        )
-        trader = trader_result.scalar_one_or_none()
-        if trader:
-            trader.tier = PLAN_TIERS.get(subscription.plan, "standard")
-
-        await db.commit()
-        logger.info(f"Subscription {subscription.id} activated for trader {subscription.trader_id}")
+                receipt = item.get("Value")
+            elif item.get("Name") == "Amount":
+                try:
+                    amount_paid = float(item.get("Value") or amount_paid)
+                except (TypeError, ValueError):
+                    pass
+        # This pending row was just the payment intent — the unified credit creates/extends the
+        # real active subscription and deducts the plan price from the balance.
+        subscription.status = SubscriptionStatus.CANCELLED
+        subscription.mpesa_transaction_id = receipt or subscription.mpesa_transaction_id
+        from app.services.billing import credit_subscription_payment
+        await credit_subscription_payment(db, subscription.trader_id, amount_paid, txn_id=receipt,
+                                          source="stk", target_plan=subscription.plan)
+        logger.info(f"STK payment for trader {subscription.trader_id}: credited {amount_paid}, plan {subscription.plan}")
     else:
         # Payment failed
         subscription.status = SubscriptionStatus.EXPIRED
@@ -262,10 +268,15 @@ async def payment_info(trader: Trader = Depends(get_current_trader)):
     the plan price list, and whether they have a Choice Bank wallet to pay from."""
     from app.core.config import settings
     from app.services.billing import account_number
+    balance = float(trader.subscription_balance or 0)
     return {
         "paybill": settings.SUBSCRIPTION_PAYBILL,
         "account_number": account_number(trader.id),
-        "plans": [{"key": p.value, "label": cfg["label"], "price": cfg["price"]} for p, cfg in PLAN_CONFIG.items()],
+        "balance": balance,
+        "plans": [{
+            "key": p.value, "label": cfg["label"], "price": cfg["price"],
+            "due": max(0, cfg["price"] - balance),   # what's left to pay after the balance
+        } for p, cfg in PLAN_CONFIG.items()],
         "has_choice_account": bool(trader.choice_account_id),
     }
 
@@ -290,13 +301,20 @@ async def pay_choice_initiate(
         raise HTTPException(status_code=400, detail="That plan is not available.")
     if not trader.choice_account_id:
         raise HTTPException(status_code=400, detail="No Choice Bank account linked. Verify Choice Bank first.")
-    amount = PLAN_PRICES[plan]
+    from app.services.billing import credit_subscription_payment
+    price = PLAN_PRICES[plan]
+    balance = float(trader.subscription_balance or 0)
+    due = max(0, price - balance)
+    if due <= 0:
+        # Balance already covers it — activate from balance, no Choice payment needed.
+        await credit_subscription_payment(db, trader.id, 0.0, source="balance", target_plan=plan)
+        return {"status": "activated", "message": f"{plan.value.replace('_', ' ').title()} activated from your balance."}
     acct = account_number(trader.id)
     try:
         result = await choice.mpesa_business_transfer(
             payer_account_id=trader.choice_account_id,
             business_number=settings.SUBSCRIPTION_PAYBILL,
-            amount=amount,
+            amount=due,
             account_number=acct,
             is_paybill=True,
             remark=f"SparkP2P {plan.value} subscription",
@@ -312,7 +330,7 @@ async def pay_choice_initiate(
         await choice.send_otp(tx_id)
     except Exception as exc:
         logger.warning(f"[Sub] Choice pay sendOtp failed: {exc}")
-    _pending_choice_sub[trader.id] = {"tx_id": tx_id, "plan": plan.value, "amount": amount}
+    _pending_choice_sub[trader.id] = {"tx_id": tx_id, "plan": plan.value, "amount": due}
     return {"status": "otp_sent", "message": "Enter the OTP sent to your phone to confirm payment from your Choice Bank wallet."}
 
 

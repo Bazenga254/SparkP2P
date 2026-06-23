@@ -256,6 +256,16 @@ def sms_subscription_reminder(phone: str, name: str, plan_label: str, expires: s
     return send_sms(phone, msg)
 
 
+def sms_subscription_deposit(phone: str, name: str, amount, balance, due, plan_label: str,
+                             acct: str, paybill: str) -> bool:
+    """Confirm a partial deposit that hasn't yet activated a plan ('pay slowly')."""
+    first = (name or "").strip().split(" ")[0] or "Customer"
+    msg = (f"Dear {first}, we received KES {int(amount):,}. Your SparkP2P balance is now "
+           f"KES {int(balance):,}. Pay KES {int(due):,} more to activate {plan_label} via M-PESA "
+           f"Paybill {paybill}, Account {acct}, or from your Choice Bank wallet. - SparkP2P")
+    return send_sms(phone, msg)
+
+
 def sms_subscription_disconnected(phone: str, name: str, amount, acct: str, paybill: str) -> bool:
     """Sent on the day the subscription lapses and the bot is disconnected."""
     first = (name or "").strip().split(" ")[0] or "Customer"

@@ -82,6 +82,9 @@ class Trader(Base):
     # Billing enforcement: exempt accounts (admins/test/grandfathered) bypass subscription gating
     # and are never locked out / config-wiped on expiry.
     billing_exempt = Column(Boolean, default=False, server_default="false")
+    # Prepaid subscription balance (KES) — accumulates partial Paybill payments; a plan activates
+    # when the balance covers its price (the price is then deducted). Lets users "pay slowly".
+    subscription_balance = Column(Float, default=0.0, server_default="0")
 
     # Trading config
     auto_release_enabled = Column(Boolean, default=True)

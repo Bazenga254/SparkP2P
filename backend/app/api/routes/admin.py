@@ -511,6 +511,7 @@ async def get_trader_detail(
         "binance_merchant_tier": (trader.binance_merchant_tier or None),
         "binance_p2p_tier": (trader.binance_p2p_tier or None),
         "account_number": account_number(trader.id),   # SPK<id> — Paybill account for subscriptions
+        "subscription_balance": float(trader.subscription_balance or 0),
         "binance_api_key_saved": bool(trader.binance_api_key),
         "price_tracker_enabled": bool(getattr(trader, "price_tracker_enabled", False)),
         "telegram_connected": bool(trader.telegram_chat_id),

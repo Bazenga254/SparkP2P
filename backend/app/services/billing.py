@@ -41,26 +41,62 @@ def plan_for_amount(amount):
     return None
 
 
-async def activate_subscription_payment(db, trader_id: int, amount: float, txn_id: str = "", source: str = "mpesa"):
-    """Activate or extend a trader's subscription from a confirmed payment, then SMS them.
+def _highest_affordable(balance: float):
+    """The most expensive plan whose price the balance can cover, or None."""
+    best = None
+    best_price = -1
+    for plan, cfg in PLAN_CONFIG.items():
+        price = float(cfg["price"])
+        if balance + 0.01 >= price and price > best_price:
+            best, best_price = plan, price
+    return best
 
-    Renewing early (still active) extends from the current expiry; renewing after disconnection
-    starts a fresh 30-day period from now and the SMS tells them to reconfigure their bot.
-    Returns the SubscriptionPlan applied, or None if the amount matched no plan / trader missing.
+
+async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id: str = "",
+                                      source: str = "mpesa", target_plan=None):
+    """Credit a payment to the trader's prepaid subscription balance, then activate a plan if the
+    balance covers it.
+
+    target_plan set (STK / Choice / activate-from-balance): activate exactly that plan when the
+    balance covers its price. target_plan None (manual Paybill): activate the highest plan the
+    balance can now afford. When nothing is activated yet, the money sits in the balance ("pay
+    slowly") and a deposit SMS is sent. Returns the activated SubscriptionPlan, or None.
     """
-    plan = plan_for_amount(amount)
-    if plan is None:
-        logger.warning(f"[Billing] payment {amount} for trader {trader_id} matches no plan price — ignored")
-        return None
     trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
     if not trader:
-        logger.error(f"[Billing] payment for unknown trader {trader_id} (ref amount {amount})")
+        logger.error(f"[Billing] payment for unknown trader {trader_id} (amount {amount})")
         return None
 
-    now = datetime.now(timezone.utc)
-    # Was the trader entitled BEFORE this payment? If not, they were disconnected (reconfigure).
-    was_active = (await active_plan(db, trader_id)) is not None
+    balance = float(trader.subscription_balance or 0) + float(amount or 0)
 
+    if target_plan is not None:
+        price = float(PLAN_CONFIG[target_plan]["price"])
+        plan = target_plan if balance + 0.01 >= price else None
+    else:
+        plan = _highest_affordable(balance)
+
+    if plan is None:
+        # Still accumulating — hold the money and tell them where they stand.
+        trader.subscription_balance = balance
+        await db.commit()
+        try:
+            from app.services.sms import sms_subscription_deposit
+            nxt = _highest_affordable(0)  # cheapest plan
+            cheapest = min(PLAN_CONFIG.values(), key=lambda c: c["price"])
+            due = max(0, float(cheapest["price"]) - balance)
+            if trader.phone:
+                sms_subscription_deposit(trader.phone, trader.full_name, amount, balance,
+                                         due, cheapest["label"], account_number(trader_id),
+                                         _paybill())
+        except Exception as e:
+            logger.warning(f"[Billing] deposit SMS failed for trader {trader_id}: {e}")
+        logger.warning(f"[Billing] trader {trader_id} +{amount} -> balance {balance} (no plan yet)")
+        return None
+
+    # Activate / extend the plan; deduct its price from the balance.
+    price = float(PLAN_CONFIG[plan]["price"])
+    now = datetime.now(timezone.utc)
+    was_active = (await active_plan(db, trader_id)) is not None
     latest = (await db.execute(
         select(Subscription).where(Subscription.trader_id == trader_id).order_by(Subscription.created_at.desc())
     )).scalars().first()
@@ -71,7 +107,7 @@ async def activate_subscription_payment(db, trader_id: int, amount: float, txn_i
 
     if still_active:
         latest.plan = plan
-        latest.amount = float(amount)
+        latest.amount = price
         latest.expires_at = new_exp
         latest.mpesa_transaction_id = txn_id or latest.mpesa_transaction_id
         latest.reminder_5d_sent = False
@@ -79,13 +115,12 @@ async def activate_subscription_payment(db, trader_id: int, amount: float, txn_i
     else:
         db.add(Subscription(
             trader_id=trader_id, plan=plan, status=SubscriptionStatus.ACTIVE,
-            amount=float(amount), started_at=now, expires_at=new_exp,
-            mpesa_transaction_id=txn_id or None,
+            amount=price, started_at=now, expires_at=new_exp, mpesa_transaction_id=txn_id or None,
         ))
     trader.tier = plan.value
+    trader.subscription_balance = max(0.0, balance - price)
     await db.commit()
 
-    # Notify
     try:
         from app.services.sms import sms_subscription_renewed
         exp_str = new_exp.astimezone(timezone(timedelta(hours=3))).strftime("%d %b %Y")
@@ -94,5 +129,14 @@ async def activate_subscription_payment(db, trader_id: int, amount: float, txn_i
         logger.warning(f"[Billing] renewal SMS failed for trader {trader_id}: {e}")
 
     logger.warning(f"[Billing] trader {trader_id} {plan.value} activated via {source} until {new_exp} "
-                   f"(was_active={was_active})")
+                   f"(balance left {trader.subscription_balance}, was_active={was_active})")
     return plan
+
+
+def _paybill():
+    return settings.SUBSCRIPTION_PAYBILL
+
+
+# Backwards-compatible alias (manual Paybill C2B path).
+async def activate_subscription_payment(db, trader_id: int, amount: float, txn_id: str = "", source: str = "mpesa"):
+    return await credit_subscription_payment(db, trader_id, amount, txn_id, source, target_plan=None)

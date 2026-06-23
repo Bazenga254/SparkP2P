@@ -3446,6 +3446,19 @@ export default function Dashboard() {
                 </div>
               </div>
 
+              {/* Subscription balance (prepaid — pay slowly) */}
+              {payInfo && payInfo.balance > 0 && (
+                <div className="card reveal d3" style={{ marginTop: 16, padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.06)' }}>
+                  <div>
+                    <div style={{ color: '#9aa4b2', fontSize: 12, fontWeight: 600 }}>SUBSCRIPTION BALANCE</div>
+                    <div style={{ color: '#10b981', fontSize: 22, fontWeight: 800 }}>KES {payInfo.balance.toLocaleString()}</div>
+                  </div>
+                  <div style={{ color: '#7d8794', fontSize: 11.5, textAlign: 'right', maxWidth: 220 }}>
+                    Money you've paid so far. Top up to a plan price and it activates automatically — the amounts below already subtract this.
+                  </div>
+                </div>
+              )}
+
               {/* Manual Paybill + Pay with Choice Bank */}
               {payInfo && (
                 <div className="card reveal d3" style={{ marginTop: 16, padding: 18 }}>
@@ -3491,12 +3504,20 @@ export default function Dashboard() {
                         <>
                           <div style={{ color: '#9aa4b2', fontSize: 12, marginBottom: 10 }}>Deduct the plan fee straight from your Choice Bank wallet.</div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                            {payInfo.plans.map(p => (
-                              <button key={p.key} disabled={choicePay?.busy} onClick={() => startChoicePay(p.key)}
-                                style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderRadius: 9, border: '1px solid #2a3142', background: '#0a0d14', color: '#e5e7eb', cursor: 'pointer', fontSize: 13 }}>
-                                <span>{p.label}</span><b style={{ color: '#f59e0b' }}>KES {p.price.toLocaleString()}</b>
-                              </button>
-                            ))}
+                            {payInfo.plans.map(p => {
+                              const due = p.due != null ? p.due : p.price;
+                              const discounted = due < p.price;
+                              return (
+                                <button key={p.key} disabled={choicePay?.busy} onClick={() => startChoicePay(p.key)}
+                                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: 9, border: '1px solid #2a3142', background: '#0a0d14', color: '#e5e7eb', cursor: 'pointer', fontSize: 13 }}>
+                                  <span>{p.label}</span>
+                                  <span style={{ textAlign: 'right' }}>
+                                    <b style={{ color: '#10b981' }}>KES {due.toLocaleString()}</b>
+                                    {discounted && <span style={{ color: '#6b7280', fontSize: 10.5, marginLeft: 6, textDecoration: 'line-through' }}>{p.price.toLocaleString()}</span>}
+                                  </span>
+                                </button>
+                              );
+                            })}
                           </div>
                           {choicePay?.error && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>{choicePay.error}</div>}
                         </>
