@@ -21,6 +21,11 @@ class TransactionType(str, enum.Enum):
     INTERNAL_TRANSFER_IN = "internal_transfer_in"    # Received from another SparkP2P user
     DAILY_VOLUME_FEE = "daily_volume_fee"            # 0.05% daily trading volume fee
     IM_SWEEP = "im_sweep"                            # Auto-sweep: M-Pesa paybill → I&M Bank
+    SUBSCRIPTION_DEPOSIT = "subscription_deposit"    # Paybill payment toward subscription balance
+    SUBSCRIPTION_CHARGE = "subscription_charge"      # Plan price deducted from subscription balance
+    CHOICE_SEND = "choice_send"                      # Choice Bank → M-Pesa send money
+    CHOICE_PAYBILL = "choice_paybill"                # Choice Bank → M-Pesa Paybill/Till
+    CHOICE_WITHDRAWAL = "choice_withdrawal"          # Choice Bank → bank / M-Pesa withdrawal
 
 
 class Wallet(Base):

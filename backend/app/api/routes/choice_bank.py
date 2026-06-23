@@ -904,7 +904,8 @@ async def send_money_initiate(body: SendMoneyInitiate, trader: Trader = Depends(
 
 
 @router.post("/choice/pay/send-money/confirm")
-async def send_money_confirm(body: SendMoneyConfirm, trader: Trader = Depends(get_current_trader)):
+async def send_money_confirm(body: SendMoneyConfirm, trader: Trader = Depends(get_current_trader),
+                             db: AsyncSession = Depends(get_db)):
     """Step 2: confirm the OTP to release the transfer."""
     pending = _pending_send_money.get(trader.id)
     if not pending:
@@ -917,9 +918,17 @@ async def send_money_confirm(body: SendMoneyConfirm, trader: Trader = Depends(ge
         raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired OTP"))
 
     _pending_send_money.pop(trader.id, None)
+    _to = pending.get("name") or ("0" + pending["phone"])
+    try:
+        from app.services.ledger import record_activity
+        from app.models.wallet import TransactionType as _TT
+        await record_activity(db, trader.id, _TT.CHOICE_SEND, -float(pending["amount"]),
+                              f"Sent to {_to} via Choice Bank", mpesa_receipt=pending["tx_id"])
+        await db.commit()
+    except Exception:
+        pass
     try:
         from app.api.routes.telegram import notify_trader
-        _to = pending.get("name") or ("0" + pending["phone"])
         await notify_trader(trader, f"\U0001F4E4 KES {pending['amount']:,.0f} sent via Choice Bank to {_to}\nRef: {pending['tx_id']}")
     except Exception:
         pass
@@ -989,7 +998,8 @@ async def paybill_initiate(body: PaybillInitiate, trader: Trader = Depends(get_c
 
 
 @router.post("/choice/pay/paybill/confirm")
-async def paybill_confirm(body: PaybillConfirm, trader: Trader = Depends(get_current_trader)):
+async def paybill_confirm(body: PaybillConfirm, trader: Trader = Depends(get_current_trader),
+                          db: AsyncSession = Depends(get_db)):
     """Step 2: confirm the OTP to release the Paybill/Till payment."""
     pending = _pending_paybill.get(trader.id)
     if not pending:
@@ -1002,9 +1012,17 @@ async def paybill_confirm(body: PaybillConfirm, trader: Trader = Depends(get_cur
         raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired OTP"))
 
     _pending_paybill.pop(trader.id, None)
+    _dest = f"Paybill {pending['biz']} acc {pending['acct']}" if pending["is_paybill"] else f"Till {pending['biz']}"
+    try:
+        from app.services.ledger import record_activity
+        from app.models.wallet import TransactionType as _TT
+        await record_activity(db, trader.id, _TT.CHOICE_PAYBILL, -float(pending["amount"]),
+                              f"Paid {_dest} via Choice Bank", mpesa_receipt=pending["tx_id"])
+        await db.commit()
+    except Exception:
+        pass
     try:
         from app.api.routes.telegram import notify_trader
-        _dest = f"Paybill {pending['biz']} acc {pending['acct']}" if pending["is_paybill"] else f"Till {pending['biz']}"
         await notify_trader(trader, f"\U0001F9FE KES {pending['amount']:,.0f} paid via Choice Bank to {_dest}\nRef: {pending['tx_id']}")
     except Exception:
         pass

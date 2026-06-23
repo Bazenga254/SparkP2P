@@ -2836,6 +2836,14 @@ async def cb_withdraw_to_bank(
         remarks=_remarks,
         status=PaymentStatus.PENDING,
     ))
+    # Ledger row so the withdrawal shows in Recent Activity.
+    try:
+        from app.services.ledger import record_activity
+        from app.models.wallet import TransactionType as _TT
+        await record_activity(db, trader.id, _TT.CHOICE_WITHDRAWAL, -float(amount),
+                              f"Withdrawal to {_tg_dest}", status="pending", mpesa_receipt=tx_id)
+    except Exception:
+        pass
     await db.commit()
 
     try:

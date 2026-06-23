@@ -75,9 +75,16 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
     else:
         plan = _highest_affordable(balance)
 
+    from app.services.ledger import record_activity
+    from app.models.wallet import TransactionType as _TT
+
     if plan is None:
         # Still accumulating — hold the money and tell them where they stand.
         trader.subscription_balance = balance
+        if float(amount or 0) > 0:
+            await record_activity(db, trader_id, _TT.SUBSCRIPTION_DEPOSIT, float(amount),
+                                  f"Subscription deposit via {source}", balance_after=balance,
+                                  mpesa_receipt=txn_id)
         await db.commit()
         try:
             from app.services.sms import sms_subscription_deposit
@@ -119,6 +126,14 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
         ))
     trader.tier = plan.value
     trader.subscription_balance = max(0.0, balance - price)
+    # Ledger: record the incoming payment (if any) then the plan charge.
+    if float(amount or 0) > 0:
+        await record_activity(db, trader_id, _TT.SUBSCRIPTION_DEPOSIT, float(amount),
+                              f"Subscription deposit via {source}", balance_after=balance,
+                              mpesa_receipt=txn_id)
+    await record_activity(db, trader_id, _TT.SUBSCRIPTION_CHARGE, -price,
+                          f"{plan_label(plan)} subscription activated",
+                          balance_after=trader.subscription_balance)
     await db.commit()
 
     try:

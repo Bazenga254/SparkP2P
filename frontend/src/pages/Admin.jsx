@@ -2447,6 +2447,10 @@ export default function Admin() {
                             <b style={{ color: '#f59e0b', fontSize: 14, letterSpacing: 0.5 }}>{t.account_number}</b>
                           </div>
                         )}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)' }}>
+                          <span style={{ color: '#9aa4b2', fontSize: 12 }}>Subscription (Paybill) balance</span>
+                          <b style={{ color: '#10b981', fontSize: 15 }}>KES {Number(t.subscription_balance || 0).toLocaleString()}</b>
+                        </div>
                         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                           <button
                             onClick={() => setTierGrant({ traderId: t.id, tier: (t.tier && t.tier !== 'standard') ? t.tier : 'starter' })}
