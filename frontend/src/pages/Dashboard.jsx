@@ -75,6 +75,7 @@ function ProfitPage() {
   const [view, setView] = useState('week');     // week | month | year (range preset)
   const [offset, setOffset] = useState(0);       // 0 = current, -1 = previous period…
   const [metric, setMetric] = useState('net');   // net | volume | spread | price
+  const [asset, setAsset] = useState('ALL');     // ALL | USDT | USDC | BTC …
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -109,12 +110,12 @@ function ProfitPage() {
 
   useEffect(() => {
     let cancel = false; setLoading(true);
-    api.get('/traders/profit-series', { params: { bucket, start, end } })
+    api.get('/traders/profit-series', { params: { bucket, start, end, asset } })
       .then(r => { if (!cancel) setData(r.data); })
       .catch(() => { if (!cancel) setData(null); })
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
-  }, [bucket, start, end]);
+  }, [bucket, start, end, asset]);
 
   const rows = data?.rows || [];
   const total = data?.total || {};
@@ -152,7 +153,17 @@ function ProfitPage() {
             <span style={{ fontWeight: 700, fontSize: 15, color: '#e5e7eb', minWidth: 150, textAlign: 'center' }}>{rangeLabel}{isCurrent ? ' · now' : ''}</span>
             <button onClick={() => !isCurrent && setOffset(o => o + 1)} disabled={isCurrent} style={navBtn(isCurrent)}>›</button>
           </div>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            {(data?.assets?.length > 1) && (
+              <div style={{ display: 'flex', gap: 4, marginRight: 8, paddingRight: 8, borderRight: '1px solid var(--border)' }}>
+                {['ALL', ...data.assets].map(a => (
+                  <button key={a} onClick={() => setAsset(a)}
+                    style={{ ...tabBtn(asset === a), fontSize: 11, color: asset === a ? '#f59e0b' : '#9ca3af', borderColor: asset === a ? '#f59e0b' : 'var(--border)', background: asset === a ? '#f59e0b22' : 'transparent' }}>
+                    {a === 'ALL' ? 'All coins' : a}
+                  </button>
+                ))}
+              </div>
+            )}
             {Object.entries(PROFIT_METRICS).map(([k, m]) => (
               <button key={k} onClick={() => setMetric(k)}
                 style={{ ...tabBtn(metric === k), borderColor: metric === k ? m.color : 'var(--border)',

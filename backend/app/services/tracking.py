@@ -1137,7 +1137,8 @@ def compute_pnl_daily(orders, fee_per_usdt=0.25):
     for o in orders:
         by_asset[(o.crypto_currency or "USDT").upper()].append(o)
 
-    out = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0})
+    out = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0,
+                               "buy_usdt": 0.0, "buy_kes": 0.0, "sell_usdt": 0.0, "sell_kes": 0.0})
     for _asset, _orders in by_asset.items():
         day = defaultdict(lambda: {"buy_u": 0.0, "buy_k": 0.0, "sell_u": 0.0, "sell_k": 0.0,
                                    "volume": 0.0, "trades": 0})
@@ -1174,6 +1175,10 @@ def compute_pnl_daily(orders, fee_per_usdt=0.25):
             t["net"] += gross - fees
             t["volume"] += d["volume"]
             t["trades"] += d["trades"]
+            t["buy_usdt"] += d["buy_u"]
+            t["buy_kes"] += d["buy_k"]
+            t["sell_usdt"] += d["sell_u"]
+            t["sell_kes"] += d["sell_k"]
     for dk, d in out.items():
         d["gross"] = round(d["gross"], 2)
         d["fees"] = round(d["fees"], 2)

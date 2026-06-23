@@ -799,6 +799,7 @@ async def profit_series(
     bucket: str = "day",     # day | week | month  — the size of each bar
     start: str = "",         # range start (YYYY-MM-DD); default depends on bucket
     end: str = "",           # range end (YYYY-MM-DD); default today
+    asset: str = "",         # filter to one coin (USDT/USDC/BTC…); "" or "ALL" = all coins
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
@@ -819,6 +820,13 @@ async def profit_series(
             Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
         )
     )).scalars().all()
+    # Coins the trader has actually traded (for the filter dropdown), most-traded first.
+    from collections import Counter as _Counter
+    _counts = _Counter((o.crypto_currency or "USDT").upper() for o in rows)
+    assets = [a for a, _ in _counts.most_common()]
+    _sel = (asset or "").upper()
+    if _sel and _sel != "ALL":
+        rows = [o for o in rows if (o.crypto_currency or "USDT").upper() == _sel]
     _fee = trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25
     daily = compute_pnl_daily(rows, fee_per_usdt=_fee)
 
@@ -895,6 +903,7 @@ async def profit_series(
             out.append({"key": f"{day_str} {hk}", "label": f"{hk}:00", **metrics(items)})
         return {"bucket": bucket, "start": day_str, "end": day_str, "rows": out,
                 "total": metrics(list(hourly.values())),
+                "assets": assets, "asset": _sel or "ALL",
                 "range": {"min": (sorted(daily)[0] if daily else None), "max": (sorted(daily)[-1] if daily else None)}}
     elif bucket == "month":
         cur = s.replace(day=1)
@@ -924,6 +933,7 @@ async def profit_series(
         "start": s.isoformat(), "end": e.isoformat(),
         "rows": out,
         "total": metrics([v for k, v in daily.items() if s.isoformat() <= k <= e.isoformat()]),
+        "assets": assets, "asset": _sel or "ALL",
         "range": {"min": keys[0] if keys else None, "max": keys[-1] if keys else None},
     }
 
