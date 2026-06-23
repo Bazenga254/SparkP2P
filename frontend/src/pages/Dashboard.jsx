@@ -3446,18 +3446,23 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Subscription balance (prepaid — pay slowly) */}
-              {payInfo && payInfo.balance > 0 && (
-                <div className="card reveal d3" style={{ marginTop: 16, padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.06)' }}>
-                  <div>
-                    <div style={{ color: '#9aa4b2', fontSize: 12, fontWeight: 600 }}>SUBSCRIPTION BALANCE</div>
-                    <div style={{ color: '#10b981', fontSize: 22, fontWeight: 800 }}>KES {payInfo.balance.toLocaleString()}</div>
+              {/* Subscription balance (prepaid — pay slowly). Always shown so it's easy to find. */}
+              {payInfo && (() => {
+                const hasBal = payInfo.balance > 0;
+                return (
+                  <div className="card reveal d3" style={{ marginTop: 16, padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: `1px solid ${hasBal ? 'rgba(16,185,129,0.3)' : '#20262f'}`, background: hasBal ? 'rgba(16,185,129,0.06)' : 'transparent' }}>
+                    <div>
+                      <div style={{ color: '#9aa4b2', fontSize: 12, fontWeight: 600 }}>SUBSCRIPTION BALANCE</div>
+                      <div style={{ color: hasBal ? '#10b981' : '#e5e7eb', fontSize: 22, fontWeight: 800 }}>KES {(payInfo.balance || 0).toLocaleString()}</div>
+                    </div>
+                    <div style={{ color: '#7d8794', fontSize: 11.5, textAlign: 'right', maxWidth: 230 }}>
+                      {hasBal
+                        ? "Money you've paid so far. Top up to a plan price and it activates automatically — the amounts below already subtract this."
+                        : 'Pay any amount to Paybill 4041355 (account below) and it builds up here until it covers a plan — then activates automatically.'}
+                    </div>
                   </div>
-                  <div style={{ color: '#7d8794', fontSize: 11.5, textAlign: 'right', maxWidth: 220 }}>
-                    Money you've paid so far. Top up to a plan price and it activates automatically — the amounts below already subtract this.
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Manual Paybill + Pay with Choice Bank */}
               {payInfo && (
