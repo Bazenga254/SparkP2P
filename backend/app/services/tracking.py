@@ -1071,30 +1071,35 @@ def compute_pnl(orders, fee_per_usdt=0.25):
         return {"orders": len(os), "usdt": round(usdt, 2), "kes": round(kes, 2),
                 "avg_rate": round(kes / usdt, 2) if usdt else 0.0}
 
-    # Cumulative cost-basis: replay chronologically; each sell books realized profit
-    # against the running weighted-average buy cost. Booked profit never changes, so the
-    # daily figure only grows as you trade (no retroactive re-averaging / fluctuation).
-    _chron = sorted(orders, key=lambda o: (o.created_at, o.id))
-    _inv_usdt = 0.0
-    _inv_cost = 0.0
+    # Cumulative cost-basis PER ASSET: replay chronologically within each coin so a different
+    # coin's inventory never pollutes another's average cost. Each sell books realized profit
+    # against that asset's running weighted-average buy cost.
+    from collections import defaultdict as _dd
+    _by_asset = _dd(list)
+    for _o in orders:
+        _by_asset[(_o.crypto_currency or "USDT").upper()].append(_o)
     _realized = 0.0
-    for _o in _chron:
-        _u = float(_o.crypto_amount or 0)
-        _k = float(_o.fiat_amount or 0)
-        if _o.side == OrderSide.BUY:
-            _inv_usdt += _u
-            _inv_cost += _k
-        else:
-            _avg = (_inv_cost / _inv_usdt) if _inv_usdt > 0 else ((_k / _u) if _u else 0)
-            _rate = (_k / _u) if _u else 0
-            _realized += _u * (_rate - _avg)
-            _draw = min(_u, _inv_usdt)
-            if _inv_usdt > 0:
-                _inv_cost -= _avg * _draw
-                _inv_usdt -= _draw
-                if _inv_usdt < 0.0001:
-                    _inv_usdt = 0.0
-                    _inv_cost = 0.0
+    for _aorders in _by_asset.values():
+        _chron = sorted(_aorders, key=lambda o: (o.created_at, o.id))
+        _inv_usdt = 0.0
+        _inv_cost = 0.0
+        for _o in _chron:
+            _u = float(_o.crypto_amount or 0)
+            _k = float(_o.fiat_amount or 0)
+            if _o.side == OrderSide.BUY:
+                _inv_usdt += _u
+                _inv_cost += _k
+            else:
+                _avg = (_inv_cost / _inv_usdt) if _inv_usdt > 0 else ((_k / _u) if _u else 0)
+                _rate = (_k / _u) if _u else 0
+                _realized += _u * (_rate - _avg)
+                _draw = min(_u, _inv_usdt)
+                if _inv_usdt > 0:
+                    _inv_cost -= _avg * _draw
+                    _inv_usdt -= _draw
+                    if _inv_usdt < 0.0001:
+                        _inv_usdt = 0.0
+                        _inv_cost = 0.0
     b = _side(buys)
     s = _side(sells)
     spread = round(s["avg_rate"] - b["avg_rate"], 4) if (b["avg_rate"] and s["avg_rate"]) else 0.0
@@ -1125,43 +1130,56 @@ def compute_pnl_daily(orders, fee_per_usdt=0.25):
     by the trading day (boundary comes from the central source of truth, app.core.trading_day)."""
     from collections import defaultdict
     from app.core.trading_day import trading_day_key
-    day = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0,
-                               "buy_usdt": 0.0, "buy_kes": 0.0, "sell_usdt": 0.0, "sell_kes": 0.0})
+    # Partition by asset FIRST: each coin (USDT / USDC / BTC …) has its own buy/sell rate, so they
+    # must never share an average. Mixing e.g. a 0.02 BTC buy (huge KES, tiny units) into the USDT
+    # pool would wildly distort the average buy rate and fabricate large fake losses.
+    by_asset = defaultdict(list)
     for o in orders:
-        u = float(o.crypto_amount or 0)
-        k = float(o.fiat_amount or 0)
-        dkey = trading_day_key(o.created_at)
-        d = day[dkey]
-        d["volume"] += k
-        d["trades"] += 1
-        if o.side == OrderSide.BUY:
-            d["buy_usdt"] += u
-            d["buy_kes"] += k
-        else:
-            d["sell_usdt"] += u
-            d["sell_kes"] += k
-    # Per-day spread profit: each day stands on its own — gross = revenue from the USDT you
-    # SOLD that day, minus what that USDT cost you to BUY at the day's average buy rate (carried
-    # forward when a day has no buys). This is stable and intuitive (no coupling to ancient
-    # history), unlike a global cost-basis replay which made one day's profit depend on months
-    # of earlier inventory.
-    last_buy_rate = None
-    for dk in sorted(day.keys()):
-        d = day[dk]
-        if d["buy_usdt"] > 0:
-            br = d["buy_kes"] / d["buy_usdt"]
-            last_buy_rate = br
-        elif last_buy_rate is not None:
-            br = last_buy_rate
-        else:
-            br = (d["sell_kes"] / d["sell_usdt"]) if d["sell_usdt"] else 0.0
-        gross = d["sell_kes"] - d["sell_usdt"] * br
-        fees = fee_per_usdt * d["sell_usdt"]   # flat both-sides Binance fee on USDT sold
-        d["gross"] = round(gross, 2)
-        d["fees"] = round(fees, 2)
-        d["net"] = round(gross - fees, 2)
+        by_asset[(o.crypto_currency or "USDT").upper()].append(o)
+
+    out = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0})
+    for _asset, _orders in by_asset.items():
+        day = defaultdict(lambda: {"buy_u": 0.0, "buy_k": 0.0, "sell_u": 0.0, "sell_k": 0.0,
+                                   "volume": 0.0, "trades": 0})
+        for o in _orders:
+            u = float(o.crypto_amount or 0)
+            k = float(o.fiat_amount or 0)
+            d = day[trading_day_key(o.created_at)]
+            d["volume"] += k
+            d["trades"] += 1
+            if o.side == OrderSide.BUY:
+                d["buy_u"] += u
+                d["buy_k"] += k
+            else:
+                d["sell_u"] += u
+                d["sell_k"] += k
+        # Per-day spread profit for THIS asset: gross = revenue from units sold that day minus what
+        # they cost at the day's average buy rate (carried forward on no-buy days). Summed across
+        # assets into the per-day totals.
+        last_buy_rate = None
+        for dk in sorted(day.keys()):
+            d = day[dk]
+            if d["buy_u"] > 0:
+                br = d["buy_k"] / d["buy_u"]
+                last_buy_rate = br
+            elif last_buy_rate is not None:
+                br = last_buy_rate
+            else:
+                br = (d["sell_k"] / d["sell_u"]) if d["sell_u"] else 0.0
+            gross = d["sell_k"] - d["sell_u"] * br
+            fees = fee_per_usdt * d["sell_u"]   # flat both-sides Binance fee on units sold
+            t = out[dk]
+            t["gross"] += gross
+            t["fees"] += fees
+            t["net"] += gross - fees
+            t["volume"] += d["volume"]
+            t["trades"] += d["trades"]
+    for dk, d in out.items():
+        d["gross"] = round(d["gross"], 2)
+        d["fees"] = round(d["fees"], 2)
+        d["net"] = round(d["net"], 2)
         d["volume"] = round(d["volume"], 2)
-    return dict(day)
+    return dict(out)
 
 
 def today_realized_pnl(all_orders, fee_per_usdt=0.25):
