@@ -315,12 +315,23 @@ _pending_choice_sub: dict[int, dict] = {}
 
 
 @router.get("/payment-info")
-async def payment_info(trader: Trader = Depends(get_current_trader)):
+async def payment_info(trader: Trader = Depends(get_current_trader),
+                       db: AsyncSession = Depends(get_db)):
     """Manual-payment details for the Subscribe page: Paybill + the trader's unique account number,
-    the plan price list, and whether they have a Choice Bank wallet to pay from."""
+    the plan price list, current-plan expiry, and whether they have a Choice Bank wallet to pay."""
     from app.core.config import settings
     from app.services.billing import account_number
+    from app.services.plans import plan_label
     balance = float(trader.subscription_balance or 0)
+    # Latest active subscription — for the expiry + days-remaining display.
+    sub = (await db.execute(
+        select(Subscription).where(
+            Subscription.trader_id == trader.id,
+            Subscription.status == SubscriptionStatus.ACTIVE,
+        ).order_by(Subscription.started_at.desc())
+    )).scalars().first()
+    expires_at = sub.expires_at.isoformat() if (sub and sub.expires_at) else None
+    cur_label = plan_label(sub.plan) if sub else None
     return {
         "paybill": settings.SUBSCRIPTION_PAYBILL,
         "account_number": account_number(trader.id),
@@ -330,6 +341,8 @@ async def payment_info(trader: Trader = Depends(get_current_trader)):
             "due": max(0, cfg["price"] - balance),   # what's left to pay after the balance
         } for p, cfg in PLAN_CONFIG.items()],
         "has_choice_account": bool(trader.choice_account_id),
+        "current_plan_label": cur_label,
+        "expires_at": expires_at,
     }
 
 

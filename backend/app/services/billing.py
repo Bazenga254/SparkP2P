@@ -88,12 +88,16 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
         await db.commit()
         try:
             from app.services.sms import sms_subscription_deposit
-            nxt = _highest_affordable(0)  # cheapest plan
-            cheapest = min(PLAN_CONFIG.values(), key=lambda c: c["price"])
-            due = max(0, float(cheapest["price"]) - balance)
+            from app.models.subscription import SubscriptionPlan as _SP
+            # Reference the plan the trader is ON (their tier), not just the cheapest — a Pro Max
+            # user topping up should hear about Pro Max. Free users fall back to the cheapest plan.
+            _tier_map = {"starter": _SP.STARTER, "pro": _SP.PRO, "pro_max": _SP.PRO_MAX}
+            target = _tier_map.get((trader.tier or "").lower())
+            cfg = PLAN_CONFIG[target] if target else min(PLAN_CONFIG.values(), key=lambda c: c["price"])
+            due = max(0, float(cfg["price"]) - balance)
             if trader.phone:
                 sms_subscription_deposit(trader.phone, trader.full_name, amount, balance,
-                                         due, cheapest["label"], account_number(trader_id),
+                                         due, cfg["label"], account_number(trader_id),
                                          _paybill())
         except Exception as e:
             logger.warning(f"[Billing] deposit SMS failed for trader {trader_id}: {e}")

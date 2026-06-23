@@ -3454,6 +3454,20 @@ export default function Dashboard() {
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
                     Daily limits reset at <b>3:00 AM (EAT)</b>
                   </div>
+                  {payInfo?.expires_at && (() => {
+                    const exp = new Date(payInfo.expires_at);
+                    const days = Math.ceil((exp - Date.now()) / 86400000);
+                    const dateStr = exp.toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' });
+                    return (
+                      <div className="reset" style={{ marginTop: 8 }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={days <= 3 ? '#ef4444' : 'var(--amber)'} strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                        Expires <b>{dateStr}</b>
+                        <span style={{ marginLeft: 6, color: days <= 3 ? '#ef4444' : '#10b981', fontWeight: 700 }}>
+                          · {days >= 0 ? `${days} day${days === 1 ? '' : 's'} left` : 'expired'}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div className="card mpesa reveal d3">
                   <div className="tag">M-PESA NUMBER FOR PAYMENT</div>
