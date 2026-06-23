@@ -150,14 +150,18 @@ async def subscription_callback(request: Request, db: AsyncSession = Depends(get
                     amount_paid = float(item.get("Value") or amount_paid)
                 except (TypeError, ValueError):
                     pass
+        # A plain top-up deposit (marker "DEPOSIT") has no target plan — it just accumulates;
+        # a plan purchase targets that plan. Capture the marker before we overwrite the field.
+        is_deposit = (subscription.mpesa_transaction_id == "DEPOSIT")
+        target = None if is_deposit else subscription.plan
         # This pending row was just the payment intent — the unified credit creates/extends the
         # real active subscription and deducts the plan price from the balance.
         subscription.status = SubscriptionStatus.CANCELLED
-        subscription.mpesa_transaction_id = receipt or subscription.mpesa_transaction_id
+        subscription.mpesa_transaction_id = receipt or (None if is_deposit else subscription.mpesa_transaction_id)
         from app.services.billing import credit_subscription_payment
         await credit_subscription_payment(db, subscription.trader_id, amount_paid, txn_id=receipt,
-                                          source="stk", target_plan=subscription.plan)
-        logger.info(f"STK payment for trader {subscription.trader_id}: credited {amount_paid}, plan {subscription.plan}")
+                                          source="stk", target_plan=target)
+        logger.info(f"STK payment for trader {subscription.trader_id}: credited {amount_paid}, deposit={is_deposit}")
     else:
         # Payment failed
         subscription.status = SubscriptionStatus.EXPIRED
@@ -247,6 +251,54 @@ async def renew_subscription(
     except Exception as e:
         logger.error(f"STK Push failed for renewal {subscription.id}: {e}")
         subscription.status = SubscriptionStatus.EXPIRED
+        await db.commit()
+        raise HTTPException(status_code=500, detail=f"Failed to send STK Push: {str(e)}")
+
+
+class DepositRequest(BaseModel):
+    phone: str
+    amount: float
+
+
+@router.post("/deposit/initiate")
+async def initiate_deposit(
+    data: DepositRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """STK-push a CUSTOM amount toward the subscription balance ('pay slowly'). No plan is chosen —
+    the money accumulates in the balance and a plan activates once it's covered."""
+    amt = float(data.amount or 0)
+    if amt < 10:
+        raise HTTPException(status_code=400, detail="Minimum deposit is KES 10")
+    if amt > 250000:
+        raise HTTPException(status_code=400, detail="M-Pesa payments are limited to KES 250,000")
+
+    from app.services.billing import account_number as _acct
+    # Pending row marked "DEPOSIT" so the STK callback credits the balance with no target plan.
+    sub = Subscription(
+        trader_id=trader.id, plan=SubscriptionPlan.STARTER, status=SubscriptionStatus.PENDING,
+        amount=amt, mpesa_transaction_id="DEPOSIT",
+    )
+    db.add(sub)
+    await db.commit()
+    await db.refresh(sub)
+    try:
+        result = await mpesa_client.stk_push(
+            phone=data.phone, amount=amt, account_reference=_acct(trader.id),
+            description="Subscription deposit",
+        )
+        sub.mpesa_checkout_id = result.get("CheckoutRequestID")
+        await db.commit()
+        return {
+            "status": "pending",
+            "checkout_request_id": result.get("CheckoutRequestID"),
+            "amount": amt,
+            "message": f"STK Push of KES {amt:,.0f} sent to {data.phone}. Enter your M-Pesa PIN — it'll be added to your balance.",
+        }
+    except Exception as e:
+        logger.error(f"Deposit STK Push failed for trader {trader.id}: {e}")
+        sub.status = SubscriptionStatus.EXPIRED
         await db.commit()
         raise HTTPException(status_code=500, detail=f"Failed to send STK Push: {str(e)}")
 

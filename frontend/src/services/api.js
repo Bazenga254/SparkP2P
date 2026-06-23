@@ -89,6 +89,7 @@ export const createOrder = (data) => api.post('/orders', data);
 export const initiateSubscription = (plan, phone) => api.post('/subscriptions/initiate', { plan, phone });
 export const getSubscriptionStatus = () => api.get('/subscriptions/status');
 export const getPaymentInfo = () => api.get('/subscriptions/payment-info');
+export const subscriptionDepositInitiate = (amount, phone) => api.post('/subscriptions/deposit/initiate', { amount, phone });
 export const payChoiceInitiate = (plan) => api.post('/subscriptions/pay-choice/initiate', { plan });
 export const payChoiceConfirm = (otp) => api.post('/subscriptions/pay-choice/confirm', { otp });
 export const adminSendSms = (body) => api.post('/admin/sms/send', body);
