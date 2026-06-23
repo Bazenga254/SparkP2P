@@ -853,39 +853,29 @@ async def stk_push_callback(request: Request, db: AsyncSession = Depends(get_db)
         sub = result.scalar_one_or_none()
         if sub:
             if result_code == 0:
-                now = datetime.now(tz.utc)
-                sub.status = SubscriptionStatus.ACTIVE
-                sub.started_at = now
-                sub.expires_at = now + timedelta(days=30)
-
-                # Extract receipt number
+                # Credit the AMOUNT PAID to the subscription balance; a plan activates only when
+                # the balance covers it. "DEPOSIT"-marked rows are plain top-ups (no target plan);
+                # a plan-purchase targets that plan. credit_subscription_payment is idempotent by
+                # receipt, so the parallel C2B confirmation for the same payment is ignored.
                 metadata = body.get("CallbackMetadata", {}).get("Item", [])
+                receipt = ""
+                amount_paid = float(sub.amount or 0)
                 for item in metadata:
                     if item.get("Name") == "MpesaReceiptNumber":
-                        sub.mpesa_transaction_id = item.get("Value")
-                        break
-
-                # Update trader tier
-                trader_result = await db.execute(
-                    select(Trader).where(Trader.id == sub.trader_id)
-                )
-                trader = trader_result.scalar_one_or_none()
-                if trader:
-                    from app.models.subscription import SubscriptionPlan
-                    tier_map = {"starter": "standard", "pro": "pro"}
-                    trader.tier = tier_map.get(sub.plan.value, "standard")
-
-                await db.commit()
-                logger.info(f"Subscription {sub.id} activated via STK callback")
-
-                # Send activation email
-                if trader:
-                    from app.services.email import send_subscription_activated
-                    send_subscription_activated(
-                        trader.email, trader.full_name,
-                        sub.plan.value,
-                        sub.expires_at.strftime("%B %d, %Y") if sub.expires_at else "30 days",
-                    )
+                        receipt = item.get("Value")
+                    elif item.get("Name") == "Amount":
+                        try:
+                            amount_paid = float(item.get("Value") or amount_paid)
+                        except (TypeError, ValueError):
+                            pass
+                is_deposit = (sub.mpesa_transaction_id == "DEPOSIT")
+                target = None if is_deposit else sub.plan
+                sub.status = SubscriptionStatus.CANCELLED
+                sub.mpesa_transaction_id = receipt or (None if is_deposit else sub.mpesa_transaction_id)
+                from app.services.billing import credit_subscription_payment
+                await credit_subscription_payment(db, sub.trader_id, amount_paid, txn_id=receipt,
+                                                  source="stk", target_plan=target)
+                logger.info(f"STK callback: trader {sub.trader_id} credited {amount_paid} (deposit={is_deposit})")
             else:
                 sub.status = SubscriptionStatus.EXPIRED
                 await db.commit()

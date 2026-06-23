@@ -67,6 +67,20 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
         logger.error(f"[Billing] payment for unknown trader {trader_id} (amount {amount})")
         return None
 
+    # Idempotency: an STK-to-Paybill payment fires BOTH the STK callback and the C2B confirmation
+    # with the same M-Pesa receipt. Process it once — skip if we already recorded this receipt.
+    if txn_id:
+        from app.models.wallet import WalletTransaction
+        dup = (await db.execute(
+            select(WalletTransaction).where(
+                WalletTransaction.trader_id == trader_id,
+                WalletTransaction.mpesa_receipt == txn_id,
+            ).limit(1)
+        )).scalars().first()
+        if dup:
+            logger.info(f"[Billing] payment {txn_id} already processed for trader {trader_id} — skipped")
+            return None
+
     balance = float(trader.subscription_balance or 0) + float(amount or 0)
 
     if target_plan is not None:
