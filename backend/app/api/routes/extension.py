@@ -1345,24 +1345,26 @@ async def _process_reported_sell_order(
     # the funds directly in their Choice account AND auto-matches the order (the Choice webhook
     # matches the pending SELL order by trader + amount, then auto-releases). Fall back to the
     # central M-Pesa paybill + P2P account ref for traders without a Choice account.
+    # Sent as 4 SEPARATE chat messages so the buyer can copy each value cleanly: intro, paybill,
+    # account number, account name. `message` keeps the combined blob for backward-compat with
+    # older desktop builds that only read a single `message`.
     if trader.choice_account_number:
-        message = (
-            f"Hi! Please send KES {amount:,.0f} via M-Pesa to:\n"
-            f"Paybill Number: {settings.CHOICE_BANK_PAYBILL}\n"
-            f"Account Number: {trader.choice_account_number}\n"
-            f"Account Name: {trader.full_name}\n\n"
-            f"Once payment is received, your crypto will be released automatically. Thank you!"
-        )
+        messages = [
+            f"Hi! Please send KES {amount:,.0f} via M-Pesa to the Paybill below. Your crypto is released automatically once payment is received 👇",
+            f"Paybill Number: {settings.CHOICE_BANK_PAYBILL}",
+            f"Account Number: {trader.choice_account_number}",
+            f"Account Name: {trader.full_name}",
+        ]
     else:
-        message = (
-            f"Hi! Please send KES {amount:,.0f} to:\n"
-            f"M-Pesa Paybill: {settings.MPESA_SHORTCODE}\n"
-            f"Account Number: {display_account}\n"
-            f"Account Holder: {trader.full_name}\n\n"
-            f"You will receive a confirmation message once payment is received. "
-            f"Your crypto will be released automatically."
-        )
-    return {"action": "send_message", "order_number": order_number, "message": message, "buyer_nickname": order_data.buyerNickname or "", "fiat_amount": float(order_data.totalPrice or 0)}
+        messages = [
+            f"Hi! Please send KES {amount:,.0f} via M-Pesa to the Paybill below. Your crypto is released automatically once payment is received 👇",
+            f"M-Pesa Paybill: {settings.MPESA_SHORTCODE}",
+            f"Account Number: {display_account}",
+            f"Account Holder: {trader.full_name}",
+        ]
+    return {"action": "send_message", "order_number": order_number, "messages": messages,
+            "message": "\n".join(messages), "buyer_nickname": order_data.buyerNickname or "",
+            "fiat_amount": float(order_data.totalPrice or 0)}
 
 
 async def _process_reported_buy_order(

@@ -8194,8 +8194,18 @@ Method selection rules:
           }
         }
 
-        await sendChatMessage(page, action.message || '');
-        console.log(`[SparkP2P] Message sent: ${(action.message || '').substring(0, 60)}`);
+        // Send each detail as its own chat message (intro, paybill, account no., name) so the
+        // buyer can copy each value cleanly. Falls back to the single combined message.
+        const outMsgs = Array.isArray(action.messages) && action.messages.length
+          ? action.messages
+          : [action.message || ''];
+        for (let i = 0; i < outMsgs.length; i++) {
+          const m = outMsgs[i];
+          if (!m) continue;
+          await sendChatMessage(page, m);
+          console.log(`[SparkP2P] Message ${i + 1}/${outMsgs.length} sent: ${m.substring(0, 60)}`);
+          if (i < outMsgs.length - 1) await new Promise(r => setTimeout(r, 1000 + Math.random() * 800));  // human-like gap
+        }
       }
 
     } else if (type === 'screenshot') {
