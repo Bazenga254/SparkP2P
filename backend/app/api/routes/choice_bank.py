@@ -255,6 +255,17 @@ async def _handle_transaction_result(params: dict, raw: dict):
             await db.commit()
             return
 
+        # Idempotency: Choice Bank retries the 0002 webhook several times. If this tx_id is already
+        # recorded for the trader, skip — the unique constraint would otherwise throw and the credit
+        # was already applied on the first delivery.
+        if tx_id:
+            existing = (await db.execute(
+                select(Payment).where(Payment.mpesa_transaction_id == tx_id)
+            )).scalar_one_or_none()
+            if existing:
+                logger.info(f"[ChoiceBank] 0002 inbound: duplicate webhook txId={tx_id} (Payment {existing.id}) — skipping")
+                return
+
         # Find trader's pending SELL order (most recent first)
         order_result = await db.execute(
             select(Order).where(
