@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { isNative } from '../mobile/relayAgent';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import { kycCreateSession } from '../services/api';
@@ -2043,11 +2044,17 @@ export default function Dashboard() {
               <div onClick={async () => {
                 try {
                   const res = await kycCreateSession();
-                  const url = `${window.location.origin}/verify-kyc?t=${res.data.token}`;
-                  if (window.sparkp2p && window.sparkp2p.openExternal) {
-                    window.sparkp2p.openExternal(url);
+                  const token = res.data.token;
+                  if (isNative()) {
+                    // Mobile app: go straight into the in-app KYC form (no desktop→phone QR bridge).
+                    navigate(`/kyc/${token}`);
                   } else {
-                    window.open(url, '_blank');
+                    const url = `${window.location.origin}/verify-kyc?t=${token}`;
+                    if (window.sparkp2p && window.sparkp2p.openExternal) {
+                      window.sparkp2p.openExternal(url);
+                    } else {
+                      window.open(url, '_blank');
+                    }
                   }
                 } catch {
                   setSettingsInitialSection('bank');
