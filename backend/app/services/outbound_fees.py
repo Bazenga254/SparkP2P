@@ -53,7 +53,7 @@ def mpesa_markup(amount: float) -> int:
 
 
 def pesalink_markup(amount: float) -> int:
-    return 10
+    return 15
 
 
 def outbound_markup(channel: str, amount: float) -> int:
@@ -93,13 +93,13 @@ def airtel_markup(amount: float) -> int:
     return _bracket(amount, _AIRTEL_B2C_MARKUP)
 
 
-# Product keys used across the breakdown + invoice.
+# Product keys used across the breakdown + invoice. RTGS/EFT/SWIFT are excluded — Choice Bank
+# does not add (and therefore does not remit) a markup on those rails.
 PRODUCTS = {
     "B2C":      "M-Pesa B2C",
     "B2B":      "M-Pesa B2B (Paybill/Till)",
     "PESALINK": "PesaLink / Bank",
     "AIRTEL":   "Airtel Money",
-    "RTGS":     "RTGS Transfer",
 }
 
 

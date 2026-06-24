@@ -2338,6 +2338,8 @@ async def _compute_outbound_breakdown(db, start=None, end=None):
         select(Payment.amount, Payment.fee, Payment.transaction_type, Payment.destination_type).where(*pw)
     )).all():
         prod = categorize(p.transaction_type, p.destination_type)
+        if prod not in prods:   # RTGS/EFT/SWIFT carry no markup — excluded
+            continue
         amt = float(p.amount or 0)
         d = prods[prod]; d["count"] += 1; d["volume"] += amt
         d["gross"] += float(p.fee or 0); d["markup"] += product_markup(prod, amt)
@@ -2349,6 +2351,8 @@ async def _compute_outbound_breakdown(db, start=None, end=None):
         select(Order.fiat_amount, Order.choice_fee, Order.seller_payment_method).where(*ow)
     )).all():
         prod = categorize("", "", o.seller_payment_method)
+        if prod not in prods:
+            continue
         amt = float(o.fiat_amount or 0)
         d = prods[prod]; d["count"] += 1; d["volume"] += amt
         d["gross"] += float(o.choice_fee or 0); d["markup"] += product_markup(prod, amt)
