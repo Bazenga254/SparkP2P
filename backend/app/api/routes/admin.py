@@ -155,10 +155,19 @@ async def admin_dashboard(
     )
     internal_count, internal_volume = result.one()
 
+    # KYC pending — traders who submitted Choice Bank onboarding awaiting review/approval.
+    result = await db.execute(
+        select(func.count(Trader.id)).where(
+            or_(Trader.choice_kyc_status.like('pending%'), Trader.choice_kyc_status.like('onboarding%'))
+        )
+    )
+    kyc_pending = result.scalar() or 0
+
     return {
         "traders": {
             "total": total_traders,
             "active": active_traders,
+            "total_unverified": kyc_pending,
         },
         "today": {
             "orders": today_orders,

@@ -15,6 +15,18 @@ _token_store: dict = {}
 TOKEN_TTL = 1800  # 30 minutes
 
 
+def _pdf_to_jpeg_b64(pdf_b64: str) -> str:
+    """Render the first page of a base64 PDF to a base64 JPEG. Choice Bank's production onboarding
+    rejects PDF media ('content type does not support PDF'), so KRA certs uploaded as PDF (the
+    iTax download) are flattened to an image here."""
+    import base64
+    import fitz  # PyMuPDF
+    raw = base64.b64decode(pdf_b64)
+    doc = fitz.open(stream=raw, filetype="pdf")
+    pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2))   # 2x for legibility
+    return base64.b64encode(pix.tobytes("jpeg")).decode()
+
+
 def _make_token(trader_id: int) -> str:
     now = time.time()
     expired = [k for k, v in list(_token_store.items()) if v["exp"] < now]
@@ -126,11 +138,20 @@ async def submit_mobile_kyc(token: str, body: MobileKycBody, db: AsyncSession = 
     trader.choice_kyc_status = "pending:" + onboarding_id
     await db.commit()
 
+    # Choice production rejects PDF media — flatten a PDF KRA cert to a JPEG image first.
+    kra_b64, kra_ct = body.kra_cert_b64, body.kra_cert_content_type
+    if "pdf" in (kra_ct or "").lower():
+        try:
+            kra_b64 = _pdf_to_jpeg_b64(body.kra_cert_b64)
+            kra_ct = "image"
+        except Exception as e:
+            raise HTTPException(400, "Could not process the KRA PDF — please upload a photo instead: " + str(e))
+
     for upload_args in [
         ("KYCF00001", body.front_photo_b64, "image"),
         ("KYCF00002", body.back_photo_b64, "image"),
         ("KYCF00006", body.selfie_b64, "image"),
-        ("KYCF00009", body.kra_cert_b64, body.kra_cert_content_type),
+        ("KYCF00009", kra_b64, kra_ct),
     ]:
         media_type, b64, ct = upload_args
         upload_res = await choice.upload_kyc_media(onboarding_id, media_type, b64, ct)
