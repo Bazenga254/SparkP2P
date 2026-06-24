@@ -154,6 +154,7 @@ const lastDeficitSent = {}; // orderNumber → deficit amount last messaged â�
 const sellApprovalRequestedOrders = new Set(); // sell orderNums where Telegram approval request was sent
 const sellApprovedOrders = new Set();           // sell orderNums approved by merchant via Telegram
 const sellRejectedOrders = new Set();           // sell orderNums rejected or timed-out by merchant
+const sellRejectionMsgSent = new Set();         // sell orderNums where the polite cancel request was already sent
 const sellPayInstructSentOrders = new Set();    // sell orderNums where payment instructions sent to buyer
 const lastSellDeficitMsg = {};                  // orderNum → KES deficit last sent to buyer (dedup)
 let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for monitorActiveOrder compat)
@@ -3558,7 +3559,9 @@ async function idleScan(page) {
         console.log(`[SparkP2P] Order ${order.orderNumber} countdown: ${Math.floor(countdown / 60)}:${String(countdown % 60).padStart(2, '0')} (${countdown}s remaining)`);
       }
 
-      const nearExpiry = countdown !== null && countdown <= 120; // â‰¤ 2 minutes
+      // Never self-cancel a REJECTED sell order — a seller-initiated cancel hurts our completion
+      // rate. We asked the buyer to cancel; otherwise let Binance expire it (counts against buyer).
+      const nearExpiry = countdown !== null && countdown <= 120 && !sellRejectedOrders.has(order.orderNumber); // â‰¤ 2 minutes
 
       if (nearExpiry) {
         console.log(`[SparkP2P] â° Order ${order.orderNumber} is about to expire (${countdown}s left) â€” cancelling`);
@@ -3608,33 +3611,24 @@ async function idleScan(page) {
           console.log(`[SparkP2P] Order ${order.orderNumber} â€” could not find Cancel button, will retry next cycle`);
         }
       } else if (sellRejectedOrders.has(order.orderNumber)) {
-        // Merchant rejected this order — send rejection message and cancel
-        console.log(`[SparkP2P] Order ${order.orderNumber} — rejected by merchant via Telegram, cancelling`);
-        await sendBinanceChatMessage(page, `Sorry, I am unable to proceed with this order at this time. Please try again or contact support.`).catch(() => {});
-        await new Promise(r => setTimeout(r, 1500));
-        const _rejCancel = await page.evaluate(() => {
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-          while (walker.nextNode()) {
-            const el = walker.currentNode;
-            if (el.tagName !== 'BUTTON') continue;
-            const t = (el.textContent || '').trim().toLowerCase();
-            if (t === 'cancel order' || t === 'cancel') { el.click(); return true; }
-          }
-          return false;
-        });
-        if (_rejCancel) {
-          await new Promise(r => setTimeout(r, 2000));
-          await page.evaluate(() => {
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-            while (walker.nextNode()) {
-              const el = walker.currentNode;
-              if (el.tagName !== 'BUTTON') continue;
-              const t = (el.textContent || '').trim().toLowerCase();
-              if (t === 'confirm' || t === 'yes') { el.click(); return true; }
-            }
-          });
+        // Merchant rejected this SELL order. We do NOT cancel it ourselves — a seller-initiated
+        // cancellation hurts our completion rate. Instead, send a polite, professional message
+        // (once) asking the buyer to cancel, then let the order ride: the buyer cancels, or
+        // Binance expires it at the payment deadline (which counts against the buyer, not us).
+        if (!sellRejectionMsgSent.has(order.orderNumber)) {
+          const rejMsg =
+            `Hello, and thank you for your order. I sincerely apologize, but I am currently ` +
+            `experiencing a temporary issue with my bank and I am unable to complete this ` +
+            `transaction at the moment. To save you time, kindly cancel this order so you can ` +
+            `trade with another merchant without any delay. I am very sorry for the inconvenience ` +
+            `and truly appreciate your understanding. Thank you.`;
+          await sendBinanceChatMessage(page, rejMsg).catch(() => {});
+          sellRejectionMsgSent.add(order.orderNumber);
+          console.log(`[SparkP2P] Order ${order.orderNumber} — rejected (sell): sent polite cancel request, NOT self-cancelling`);
+          sendBotLog('info', `Sell order ${order.orderNumber} rejected — asked buyer to cancel (no seller-side cancel)`);
+        } else {
+          console.log(`[SparkP2P] Order ${order.orderNumber} — rejected (sell): awaiting buyer cancel / expiry (silent)`);
         }
-        sellRejectedOrders.delete(order.orderNumber);
 
       } else if (!sellApprovalRequestedOrders.has(order.orderNumber)) {
         // ── STEP 1: First time seeing this order — request Telegram approval ──
