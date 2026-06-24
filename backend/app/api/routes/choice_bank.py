@@ -964,6 +964,29 @@ class PaybillConfirm(BaseModel):
 _pending_paybill: dict[int, dict] = {}
 
 
+@router.get("/choice/pay/lookup-shortcode")
+async def lookup_shortcode(code: str, trader: Trader = Depends(get_current_trader)):
+    """Confirmation-of-payee for an M-Pesa Paybill/Till — returns the registered business name so
+    the user can confirm before paying. (Individual phone numbers are NOT lookupable — M-Pesa only
+    exposes business shortcode names.) accountType=1, bankCode=M-PESA per Choice's validateAccount."""
+    c = (code or "").strip()
+    if not c.isdigit() or not (5 <= len(c) <= 7):
+        raise HTTPException(status_code=400, detail="Enter a valid Paybill or Till number")
+    try:
+        r = await choice._post("/account/validateAccount", {"accountId": c, "accountType": 1, "bankCode": "M-PESA"})
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Name check unavailable: {exc}")
+    code_ = r.get("code")
+    if code_ == "10001":
+        raise HTTPException(status_code=503, detail="Name check is busy — please try again")
+    if code_ != "00000":
+        raise HTTPException(status_code=404, detail="No name found for this number — check it's correct")
+    name = ((r.get("data") or {}).get("accountName") or "").strip()
+    if not name:
+        raise HTTPException(status_code=404, detail="No name returned — verify the number")
+    return {"name": name, "code": c}
+
+
 @router.post("/choice/pay/paybill/initiate")
 async def paybill_initiate(body: PaybillInitiate, trader: Trader = Depends(get_current_trader)):
     """Step 1: pay an M-Pesa Paybill or Till from the trader's Choice Bank account; OTP is sent to

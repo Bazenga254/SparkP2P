@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { choiceGetBalance, cbSendMoneyInitiate, cbSendMoneyConfirm, cbPaybillInitiate, cbPaybillConfirm } from '../services/api';
+import { choiceGetBalance, cbSendMoneyInitiate, cbSendMoneyConfirm, cbPaybillInitiate, cbPaybillConfirm, cbLookupShortcode } from '../services/api';
 
 const fmtKES = (n) => 'KES ' + Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -206,8 +206,29 @@ function Paybill({ onDone, onCancel }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [payee, setPayee] = useState({ status: 'idle', name: '' }); // idle|checking|ok|fail
 
-  const validForm = /^\d{5,7}$/.test(biz.trim()) && (!isPaybill || acct.trim().length > 0) && Number(amount) > 0;
+  // Confirmation-of-payee: look up the Paybill/Till business name as the user types (debounced).
+  useEffect(() => {
+    const code = biz.trim();
+    if (!/^\d{5,7}$/.test(code)) { setPayee({ status: 'idle', name: '' }); return; }
+    let cancel = false;
+    setPayee({ status: 'checking', name: '' });
+    const t = setTimeout(async () => {
+      try {
+        const r = await cbLookupShortcode(code);
+        if (!cancel) setPayee({ status: 'ok', name: r.data?.name || '' });
+      } catch (e) {
+        if (!cancel) setPayee({ status: 'fail', name: e.response?.data?.detail || 'Could not verify this number' });
+      }
+    }, 600);
+    return () => { cancel = true; clearTimeout(t); };
+  }, [biz]);
+
+  // Paybill must be name-verified before sending (reliable lookup); Till shows the name if found
+  // but isn't blocked on it.
+  const validForm = /^\d{5,7}$/.test(biz.trim()) && (!isPaybill || acct.trim().length > 0)
+    && Number(amount) > 0 && (!isPaybill || payee.status === 'ok');
 
   const initiate = async () => {
     setError(''); setBusy(true);
@@ -255,7 +276,23 @@ function Paybill({ onDone, onCancel }) {
             </div>
           </div>
           <div className="pm-field"><label>{isPaybill ? 'Paybill number' : 'Till / Buy Goods number'}</label>
-            <input className="pm-inp" inputMode="numeric" placeholder="e.g. 247247" value={biz} onChange={(e) => setBiz(e.target.value.replace(/\D/g, ''))} /></div>
+            <input className="pm-inp" inputMode="numeric" placeholder="e.g. 247247" value={biz} onChange={(e) => setBiz(e.target.value.replace(/\D/g, ''))} />
+            {/* Confirmation of payee — verify the registered name before paying */}
+            {payee.status === 'checking' && (
+              <div style={{ marginTop: 6, fontSize: 12.5, color: '#9aa4b2' }}>⏳ Verifying name…</div>
+            )}
+            {payee.status === 'ok' && (
+              <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.3)' }}>
+                <span style={{ color: '#9aa4b2', fontSize: 11.5 }}>Paying to</span>
+                <div style={{ color: '#10b981', fontWeight: 800, fontSize: 14.5 }}>✓ {payee.name}</div>
+              </div>
+            )}
+            {payee.status === 'fail' && (
+              <div style={{ marginTop: 6, fontSize: 12.5, color: isPaybill ? '#ef4444' : '#d97706' }}>
+                ⚠️ {payee.name}{!isPaybill && ' — you can still proceed for Till payments.'}
+              </div>
+            )}
+          </div>
           {isPaybill && (
             <div className="pm-field"><label>Account number</label>
               <input className="pm-inp" placeholder="e.g. your account / phone" value={acct} onChange={(e) => setAcct(e.target.value)} /></div>
