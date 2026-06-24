@@ -110,8 +110,8 @@ def categorize(transaction_type: str = "", destination_type: str = "", method: s
         return "B2B"
     if "airtel" in s:
         return "AIRTEL"
-    if "rtgs" in s:
-        return "RTGS"
+    if "rtgs" in s or "eft" in s or "swift" in s:
+        return "EXCLUDED"   # no markup on these rails — skipped from the revenue breakdown
     if "mpesa" in s or "m-pesa" in s:
         return "B2C"
     return "PESALINK"   # bank / PesaLink transfers
