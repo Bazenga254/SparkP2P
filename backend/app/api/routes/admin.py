@@ -2321,6 +2321,171 @@ async def revenue_breakdown(
 
 # ── Subscription Revenue ───────────────────────────────────────────────────────
 
+async def _compute_outbound_breakdown(db, start=None, end=None):
+    """Per-product outbound revenue: for each product (B2C/B2B/PesaLink/Airtel/RTGS) sum txn count,
+    volume, gross fee charged, and OUR markup (revenue Choice Bank remits monthly)."""
+    from app.services.outbound_fees import categorize, product_markup, PRODUCTS
+    from app.models.order import OrderSide as _OS
+    prods = {k: {"count": 0, "volume": 0.0, "gross": 0.0, "markup": 0.0} for k in PRODUCTS}
+
+    # Count every real outbound transfer (not failed); the markup is computed from the published
+    # tariff by product + amount — Choice Bank withholds it per their schedule regardless of whether
+    # we stored a fee on the row. gross uses the recorded fee where present (else 0, informational).
+    pw = [Payment.direction == PaymentDirection.OUTBOUND, Payment.status != PaymentStatus.FAILED]
+    if start: pw.append(Payment.created_at >= start)
+    if end:   pw.append(Payment.created_at < end)
+    for p in (await db.execute(
+        select(Payment.amount, Payment.fee, Payment.transaction_type, Payment.destination_type).where(*pw)
+    )).all():
+        prod = categorize(p.transaction_type, p.destination_type)
+        amt = float(p.amount or 0)
+        d = prods[prod]; d["count"] += 1; d["volume"] += amt
+        d["gross"] += float(p.fee or 0); d["markup"] += product_markup(prod, amt)
+
+    ow = [Order.side == _OS.BUY, Order.choice_fee > 0]
+    if start: ow.append(Order.created_at >= start)
+    if end:   ow.append(Order.created_at < end)
+    for o in (await db.execute(
+        select(Order.fiat_amount, Order.choice_fee, Order.seller_payment_method).where(*ow)
+    )).all():
+        prod = categorize("", "", o.seller_payment_method)
+        amt = float(o.fiat_amount or 0)
+        d = prods[prod]; d["count"] += 1; d["volume"] += amt
+        d["gross"] += float(o.choice_fee or 0); d["markup"] += product_markup(prod, amt)
+
+    rows = []; tot = {"count": 0, "volume": 0.0, "gross": 0.0, "markup": 0.0}
+    for k, label in PRODUCTS.items():
+        d = prods[k]
+        rows.append({"key": k, "label": label, "count": d["count"], "volume": round(d["volume"], 2),
+                     "gross": round(d["gross"], 2), "choice_keeps": round(d["gross"] - d["markup"], 2),
+                     "markup": round(d["markup"], 2)})
+        for f in tot: tot[f] += d[f]
+    tot = {f: round(v, 2) for f, v in tot.items()}
+    tot["choice_keeps"] = round(tot["gross"] - tot["markup"], 2)
+    return {"products": rows, "total": tot}
+
+
+def _month_range(month_str):
+    y, m = map(int, month_str.split("-")[:2])
+    start = datetime(y, m, 1, tzinfo=timezone.utc)
+    end = datetime(y + (1 if m == 12 else 0), 1 if m == 12 else m + 1, 1, tzinfo=timezone.utc)
+    return start, end
+
+
+@router.get("/revenue/outbound-breakdown")
+async def outbound_revenue_breakdown(
+    period: str = Query("all"),   # today | week | month | all
+    month: str = Query(""),        # YYYY-MM (overrides period — used by the invoice)
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-product outbound-fee revenue breakdown (our markup), for the Expenses → Revenue table."""
+    now = datetime.now(timezone.utc)
+    if month.strip():
+        start, end = _month_range(month.strip())
+        label = start.strftime("%B %Y")
+    else:
+        start = {"today": trading_day_start(now), "week": now - timedelta(days=7),
+                 "month": now - timedelta(days=30)}.get(period)
+        end = None; label = {"today": "Today", "week": "Last 7 days", "month": "Last 30 days"}.get(period, "All time")
+    data = await _compute_outbound_breakdown(db, start, end)
+    return {**data, "period": period, "month": month or None, "label": label}
+
+
+@router.get("/invoice/choice")
+async def choice_bank_invoice(
+    month: str = Query(...),   # YYYY-MM
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a branded PDF invoice to Choice Microfinance Bank for the month's markup revenue."""
+    import io
+    from pathlib import Path
+    from fastapi import Response
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_RIGHT, TA_LEFT
+
+    start, end = _month_range(month)
+    data = await _compute_outbound_breakdown(db, start, end)
+    period_label = start.strftime("%B %Y")
+    inv_no = f"SFS-{start.strftime('%Y%m')}"
+    today = datetime.now(timezone.utc).strftime("%d %b %Y")
+
+    BRAND = colors.HexColor("#1F3864"); AMBER = colors.HexColor("#f59e0b")
+    GREY = colors.HexColor("#6b7280"); LIGHT = colors.HexColor("#F2F5FA")
+    ss = getSampleStyleSheet()
+    h_company = ParagraphStyle("co", parent=ss["Normal"], fontName="Helvetica-Bold", fontSize=15, textColor=BRAND, leading=20, spaceAfter=2)
+    small = ParagraphStyle("sm", parent=ss["Normal"], fontSize=8.5, textColor=GREY, leading=12)
+    lbl = ParagraphStyle("lbl", parent=ss["Normal"], fontName="Helvetica-Bold", fontSize=8.5, textColor=GREY)
+    body = ParagraphStyle("bd", parent=ss["Normal"], fontSize=9.5, leading=13)
+    inv_title = ParagraphStyle("it", parent=ss["Normal"], fontName="Helvetica-Bold", fontSize=26, textColor=BRAND, alignment=TA_RIGHT)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18*mm, rightMargin=18*mm, topMargin=16*mm, bottomMargin=16*mm)
+    story = []
+    logo_path = Path(__file__).resolve().parents[2] / "static" / "spark_freelance_logo.png"
+    logo = Image(str(logo_path), width=26*mm, height=26*mm) if logo_path.exists() else Paragraph("", body)
+    head = Table([[logo, Paragraph("INVOICE", inv_title)]], colWidths=[28*mm, None])
+    head.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE")]))
+    story += [head, Spacer(1, 4)]
+    story += [Paragraph("SPARK FREELANCE SOLUTIONS", h_company),
+              Paragraph("Outbound transaction-fee markup remittance", small), Spacer(1, 10)]
+
+    meta = Table([
+        [Paragraph("BILL TO", lbl), Paragraph("INVOICE NO.", lbl), Paragraph("INVOICE DATE", lbl), Paragraph("BILLING PERIOD", lbl)],
+        [Paragraph("Choice Microfinance Bank", body), Paragraph(inv_no, body), Paragraph(today, body), Paragraph(period_label, body)],
+    ], colWidths=[None, 32*mm, 32*mm, 36*mm])
+    meta.setStyle(TableStyle([("BOTTOMPADDING",(0,0),(-1,0),2), ("TOPPADDING",(0,1),(-1,1),0)]))
+    story += [meta, Spacer(1, 14)]
+
+    rows = [["#", "Product / Channel", "Transactions", "Volume (KES)", "Amount Due (KES)"]]
+    i = 0
+    for p in data["products"]:
+        if p["count"] == 0 and p["markup"] == 0:
+            continue
+        i += 1
+        rows.append([str(i), p["label"], f"{p['count']:,}", f"{p['volume']:,.0f}", f"{p['markup']:,.2f}"])
+    if i == 0:
+        rows.append(["", "No outbound transactions in this period", "", "", "0.00"])
+    total = data["total"]["markup"]
+    rows.append(["", "", "", "TOTAL DUE", f"KES {total:,.2f}"])
+
+    tbl = Table(rows, colWidths=[10*mm, None, 28*mm, 32*mm, 36*mm])
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), BRAND), ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"), ("FONTSIZE", (0,0), (-1,-1), 9),
+        ("ALIGN", (2,0), (-1,-1), "RIGHT"), ("ALIGN", (0,0), (0,-1), "CENTER"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-2), [colors.white, LIGHT]),
+        ("LINEBELOW", (0,0), (-1,-2), 0.4, colors.HexColor("#D9E1F2")),
+        ("BACKGROUND", (0,-1), (-1,-1), colors.HexColor("#E2EFDA")),
+        ("FONTNAME", (3,-1), (-1,-1), "Helvetica-Bold"), ("TEXTCOLOR", (4,-1), (4,-1), BRAND),
+        ("FONTSIZE", (4,-1), (4,-1), 11), ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+    ]))
+    story += [tbl, Spacer(1, 16)]
+
+    remit = Table([
+        [Paragraph("REMIT PAYMENT TO", lbl)],
+        [Paragraph("Account Name: <b>SPARK FREELANCE SOLUTIONS</b><br/>"
+                   "Bank: Choice Microfinance Bank &nbsp;·&nbsp; Branch: Riverside Square<br/>"
+                   "Account No.: <b>46011000015688-KES</b>", body)],
+    ], colWidths=[None])
+    remit.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),LIGHT), ("BOX",(0,0),(-1,-1),0.5,colors.HexColor("#D9E1F2")),
+                               ("LEFTPADDING",(0,0),(-1,-1),10),("RIGHTPADDING",(0,0),(-1,-1),10),
+                               ("TOPPADDING",(0,0),(-1,-1),8),("BOTTOMPADDING",(0,0),(-1,-1),8)]))
+    story += [remit, Spacer(1, 14)]
+    story += [Paragraph("This invoice covers the markup portion of outbound transaction fees collected by Choice "
+                        "Microfinance Bank on behalf of Spark Freelance Solutions during the billing period, "
+                        "remitted monthly per the BaaS agreement. Generated by SparkP2P.", small)]
+    doc.build(story)
+    buf.seek(0)
+    return Response(content=buf.read(), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{inv_no}_ChoiceBank_Invoice.pdf"'})
+
+
 @router.get("/revenue/subscriptions")
 async def revenue_subscriptions(
     period: str = Query("all"),   # today | week | month | all

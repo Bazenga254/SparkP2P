@@ -364,6 +364,9 @@ export default function Admin() {
   const [revPlan, setRevPlan] = useState('all');
   const [revPage, setRevPage] = useState(1);
   const [revLoading, setRevLoading] = useState(false);
+  const [obBreakdown, setObBreakdown] = useState(null);  // per-product outbound revenue
+  const [invoiceMonth, setInvoiceMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [invoiceBusy, setInvoiceBusy] = useState(false);
   const [expSubView, setExpSubView] = useState('revenue');
 
   // Auto-Sweeps (M-Pesa paybill → I&M Bank)
@@ -757,7 +760,21 @@ export default function Admin() {
     } catch (err) {
       console.error('Revenue breakdown error:', err);
     }
+    api.get('/admin/revenue/outbound-breakdown', { params: { period } })
+      .then(r => setObBreakdown(r.data)).catch(() => {});
     setRevLoading(false);
+  };
+
+  const handleGenerateInvoice = async () => {
+    setInvoiceBusy(true);
+    try {
+      const r = await api.get('/admin/invoice/choice', { params: { month: invoiceMonth }, responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = `SFS-${invoiceMonth.replace('-', '')}_ChoiceBank_Invoice.pdf`;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    } catch (e) { alert('Could not generate the invoice.'); }
+    finally { setInvoiceBusy(false); }
   };
 
   const handleAdminFileSelect = async (ticketId, e) => {
@@ -4679,6 +4696,53 @@ export default function Admin() {
                   <div style={{ fontSize: 12, color: '#6b7280', textAlign: 'right' }}>
                     Withheld by Choice Bank, remitted monthly<br/>
                     Gross fees charged: {fmtKES(revBreakdown?.summary?.outbound_gross ?? 0)}
+                  </div>
+                </div>
+
+                {/* Per-product outbound revenue breakdown + Choice Bank invoice */}
+                <div className="adm-card" style={{ marginBottom: 16, padding: 0, overflow: 'hidden' }}>
+                  <div className="adm-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h3>Revenue by Product (Our Markup)</h3>
+                    <span style={{ fontSize: 11, color: '#6b7280' }}>{obBreakdown?.label || ''}</span>
+                  </div>
+                  <table className="adm-table" style={{ width: '100%', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ color: '#6b7280', textAlign: 'left' }}>
+                        <th style={{ padding: '8px 14px' }}>Product / Channel</th>
+                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Transactions</th>
+                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Volume</th>
+                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Choice keeps</th>
+                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Our markup</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(obBreakdown?.products || []).map(p => (
+                        <tr key={p.key} style={{ borderTop: '1px solid #1f2937', opacity: p.count ? 1 : 0.45 }}>
+                          <td style={{ padding: '9px 14px', color: '#e5e7eb', fontWeight: 600 }}>{p.label}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{p.count.toLocaleString()}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{fmtKES(p.volume)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#6b7280' }}>{fmtKES(p.choice_keeps)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#3b82f6', fontWeight: 700 }}>{fmtKES(p.markup)}</td>
+                        </tr>
+                      ))}
+                      <tr style={{ borderTop: '2px solid #2a3142', background: 'rgba(59,130,246,0.06)' }}>
+                        <td style={{ padding: '10px 14px', fontWeight: 800, color: '#fff' }}>Total</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{(obBreakdown?.total?.count ?? 0).toLocaleString()}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{fmtKES(obBreakdown?.total?.volume ?? 0)}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#9ca3af' }}>{fmtKES(obBreakdown?.total?.choice_keeps ?? 0)}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#3b82f6', fontWeight: 800 }}>{fmtKES(obBreakdown?.total?.markup ?? 0)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  {/* Monthly invoice generator */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderTop: '1px solid #1f2937', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12.5, color: '#9ca3af', fontWeight: 600 }}>📄 Generate Choice Bank invoice for</span>
+                    <input type="month" value={invoiceMonth} onChange={e => setInvoiceMonth(e.target.value)}
+                      style={{ padding: '7px 10px', borderRadius: 8, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 13, colorScheme: 'dark' }} />
+                    <button onClick={handleGenerateInvoice} disabled={invoiceBusy}
+                      style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: invoiceBusy ? '#3a3f4d' : '#f59e0b', color: invoiceBusy ? '#9aa4b2' : '#1a1205', fontWeight: 800, fontSize: 13, cursor: invoiceBusy ? 'default' : 'pointer' }}>
+                      {invoiceBusy ? 'Generating…' : 'Download Invoice (PDF)'}
+                    </button>
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>

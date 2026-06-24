@@ -61,3 +61,68 @@ def outbound_markup(channel: str, amount: float) -> int:
     if (channel or "").upper() == "MPESA":
         return mpesa_markup(amount)
     return pesalink_markup(amount)
+
+
+# ── Per-product tariff (for the admin revenue breakdown + Choice Bank invoice) ─────────────────
+# Each product has its own Choice Bank base cost + our markup, by amount bracket (KES), taken from
+# the combined charges sheet. markup = our revenue (what Choice Bank remits to us monthly).
+
+def _bracket(amount, table):
+    """table = list of (upper_inclusive, value); last entry's upper can be float('inf')."""
+    a = float(amount or 0)
+    for upper, val in table:
+        if a <= upper:
+            return val
+    return table[-1][1]
+
+# M-Pesa B2B (Paybill / Till / BuyGoods) — markup by amount bracket.
+_B2B_MARKUP = [(49,1),(100,2),(500,3),(1000,6),(1500,8),(2500,11),(3500,13),(5000,17),(7500,20),
+               (10000,23),(15000,27),(20000,29),(25000,32),(30000,34),(35000,38),(40000,45),
+               (45000,46),(50000,48),(1000000,49),(3500000,50),(4500000,52),(5500000,54),(float("inf"),56)]
+# Airtel B2C markup
+_AIRTEL_B2C_MARKUP = [(100,0),(1500,2),(2500,3),(3500,4),(5000,4),(7500,5),(10000,5),(20000,6),
+                      (25000,6),(40000,6),(float("inf"),6)]
+_RTGS_KES_MARKUP = 100   # flat per-transfer markup (KES RTGS)
+
+
+def mpesa_b2b_markup(amount: float) -> int:
+    return _bracket(amount, _B2B_MARKUP)
+
+
+def airtel_markup(amount: float) -> int:
+    return _bracket(amount, _AIRTEL_B2C_MARKUP)
+
+
+# Product keys used across the breakdown + invoice.
+PRODUCTS = {
+    "B2C":      "M-Pesa B2C",
+    "B2B":      "M-Pesa B2B (Paybill/Till)",
+    "PESALINK": "PesaLink / Bank",
+    "AIRTEL":   "Airtel Money",
+    "RTGS":     "RTGS Transfer",
+}
+
+
+def categorize(transaction_type: str = "", destination_type: str = "", method: str = "") -> str:
+    """Map a transaction's stored fields to a product key."""
+    s = " ".join(str(x or "").lower() for x in (transaction_type, destination_type, method))
+    if "paybill" in s or "till" in s or "buygoods" in s or "b2b" in s:
+        return "B2B"
+    if "airtel" in s:
+        return "AIRTEL"
+    if "rtgs" in s:
+        return "RTGS"
+    if "mpesa" in s or "m-pesa" in s:
+        return "B2C"
+    return "PESALINK"   # bank / PesaLink transfers
+
+
+def product_markup(product: str, amount: float) -> int:
+    """Our markup (revenue) for one transaction of a given product."""
+    p = (product or "").upper()
+    if p == "B2C":      return mpesa_markup(amount)
+    if p == "B2B":      return mpesa_b2b_markup(amount)
+    if p == "PESALINK": return pesalink_markup(amount)
+    if p == "AIRTEL":   return airtel_markup(amount)
+    if p == "RTGS":     return _RTGS_KES_MARKUP
+    return 0
