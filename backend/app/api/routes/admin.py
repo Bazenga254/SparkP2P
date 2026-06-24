@@ -2370,10 +2370,15 @@ async def _compute_outbound_breakdown(db, start=None, end=None):
     for k, label in PRODUCTS.items():
         d = prods[k]
         rows.append({"key": k, "label": label, "count": d["count"], "volume": round(d["volume"], 2),
-                     "gross": round(d["gross"], 2), "choice_keeps": round(d["gross"] - d["markup"], 2),
+                     # choice_fee = the ACTUAL fee Choice Bank charged (captured from each transaction);
+                     # markup = OUR cut (what Choice remits once they apply our pricing). Separate now
+                     # because Choice has not implemented our tariff yet.
+                     "choice_fee": round(d["gross"], 2), "gross": round(d["gross"], 2),
+                     "choice_keeps": round(d["gross"] - d["markup"], 2),
                      "markup": round(d["markup"], 2)})
         for f in tot: tot[f] += d[f]
     tot = {f: round(v, 2) for f, v in tot.items()}
+    tot["choice_fee"]   = tot["gross"]
     tot["choice_keeps"] = round(tot["gross"] - tot["markup"], 2)
     return {"products": rows, "total": tot}
 

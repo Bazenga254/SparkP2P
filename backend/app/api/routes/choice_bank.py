@@ -125,6 +125,12 @@ async def _handle_transaction_result(params: dict, raw: dict):
         amount  = float(params.get("amount") or 0)
     except (TypeError, ValueError):
         amount  = 0.0
+    try:
+        fee_amount = abs(float(params.get("feeAmount") or params.get("totalFee") or 0))
+    except (TypeError, ValueError):
+        fee_amount = 0.0
+    from app.services.outbound_fees import channel_from_txtype
+    _channel = channel_from_txtype(tx_type)   # e.g. "M-Pesa Paybill" -> categorizes as B2B
 
     sender_name  = (params.get("extInfo") or {}).get("counterpartyName") or \
                    params.get("oppoAccountName") or ""
@@ -167,8 +173,13 @@ async def _handle_transaction_result(params: dict, raw: dict):
                             _existing.status = PaymentStatus.COMPLETED
                             if tx_id:
                                 _existing.mpesa_receipt_number = tx_id
+                            # Capture Choice Bank's ACTUAL fee + the channel (for accurate reconciliation)
+                            if fee_amount:
+                                _existing.fee = fee_amount
+                            if _channel and not _existing.destination_type:
+                                _existing.destination_type = _channel
                             await _db.commit()
-                            logger.info(f"[ChoiceBank] 0002: Payment {_existing.id} PENDING->COMPLETED")
+                            logger.info(f"[ChoiceBank] 0002: Payment {_existing.id} PENDING->COMPLETED, fee={fee_amount}, channel={_channel}")
                         elif _tx_failed:
                             _existing.status = PaymentStatus.FAILED
                             await _db.commit()
@@ -180,7 +191,9 @@ async def _handle_transaction_result(params: dict, raw: dict):
                             direction=PaymentDirection.OUTBOUND,
                             mpesa_transaction_id=tx_id or f"cb_out_{_trader.id}_{amount}",
                             transaction_type="CHOICE_OUTBOUND",
+                            destination_type=_channel,
                             amount=amount,
+                            fee=fee_amount,
                             phone=sender_phone,
                             destination=sender_phone or sender_name,
                             sender_name=sender_name,

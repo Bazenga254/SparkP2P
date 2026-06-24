@@ -4711,7 +4711,7 @@ export default function Admin() {
                         <th style={{ padding: '8px 14px' }}>Product / Channel</th>
                         <th style={{ padding: '8px 14px', textAlign: 'right' }}>Transactions</th>
                         <th style={{ padding: '8px 14px', textAlign: 'right' }}>Volume</th>
-                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Choice keeps</th>
+                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Choice fee (actual)</th>
                         <th style={{ padding: '8px 14px', textAlign: 'right' }}>Our markup</th>
                       </tr>
                     </thead>
@@ -4721,7 +4721,7 @@ export default function Admin() {
                           <td style={{ padding: '9px 14px', color: '#e5e7eb', fontWeight: 600 }}>{p.label}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{p.count.toLocaleString()}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{fmtKES(p.volume)}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#6b7280' }}>{fmtKES(p.choice_keeps)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{fmtKES(p.choice_fee)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', color: '#3b82f6', fontWeight: 700 }}>{fmtKES(p.markup)}</td>
                         </tr>
                       ))}
@@ -4729,7 +4729,7 @@ export default function Admin() {
                         <td style={{ padding: '10px 14px', fontWeight: 800, color: '#fff' }}>Total</td>
                         <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{(obBreakdown?.total?.count ?? 0).toLocaleString()}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{fmtKES(obBreakdown?.total?.volume ?? 0)}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#9ca3af' }}>{fmtKES(obBreakdown?.total?.choice_keeps ?? 0)}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{fmtKES(obBreakdown?.total?.choice_fee ?? 0)}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'right', color: '#3b82f6', fontWeight: 800 }}>{fmtKES(obBreakdown?.total?.markup ?? 0)}</td>
                       </tr>
                     </tbody>

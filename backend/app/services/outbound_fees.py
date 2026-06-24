@@ -103,6 +103,25 @@ PRODUCTS = {
 }
 
 
+# Choice Bank txType -> a human channel string that categorize() understands. txType is the most
+# reliable product signal on the 0002 webhook (destination fields are often blank).
+_TXTYPE_CHANNEL = {
+    "TTID0001": "M-Pesa",          # Withdraw to M-PESA (B2C)
+    "TTID0025": "M-Pesa",          # M-Pesa IMT (B2C-style)
+    "TTID0027": "M-Pesa",          # M-Pesa send
+    "TTID0005": "M-Pesa Paybill",  # Paybill / Till (B2B)
+    "TTID0006": "M-Pesa Paybill",  # Utility payment (B2B-style)
+    "TTID0024": "Airtel Money",    # Airtel B2C
+    "TTID0002": "Bank/PesaLink",   # Transfer out to bank
+    "TTID0009": "Bank/PesaLink",   # PesaLink
+}
+
+
+def channel_from_txtype(tx_type: str) -> str:
+    """Map a Choice Bank txType code to a channel string (fed into categorize)."""
+    return _TXTYPE_CHANNEL.get((tx_type or "").upper(), "")
+
+
 def categorize(transaction_type: str = "", destination_type: str = "", method: str = "") -> str:
     """Map a transaction's stored fields to a product key."""
     s = " ".join(str(x or "").lower() for x in (transaction_type, destination_type, method))
