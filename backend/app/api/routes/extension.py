@@ -1341,15 +1341,27 @@ async def _process_reported_sell_order(
 
     # Tell extension to send payment instructions via chat.
     # buyer_nickname is included so the bot can run DD screening before sending.
-    paybill = settings.MPESA_SHORTCODE
-    message = (
-        f"Hi! Please send KES {amount:,.0f} to:\n"
-        f"M-Pesa Paybill: {paybill}\n"
-        f"Account Number: {display_account}\n"
-        f"Account Holder: {trader.full_name}\n\n"
-        f"You will receive a confirmation message once payment is received. "
-        f"Your crypto will be released automatically."
-    )
+    # Prefer Choice Bank: paying to the Choice paybill + the trader's Choice account number lands
+    # the funds directly in their Choice account AND auto-matches the order (the Choice webhook
+    # matches the pending SELL order by trader + amount, then auto-releases). Fall back to the
+    # central M-Pesa paybill + P2P account ref for traders without a Choice account.
+    if trader.choice_account_number:
+        message = (
+            f"Hi! Please send KES {amount:,.0f} via M-Pesa to:\n"
+            f"Paybill Number: {settings.CHOICE_BANK_PAYBILL}\n"
+            f"Account Number: {trader.choice_account_number}\n"
+            f"Account Name: {trader.full_name}\n\n"
+            f"Once payment is received, your crypto will be released automatically. Thank you!"
+        )
+    else:
+        message = (
+            f"Hi! Please send KES {amount:,.0f} to:\n"
+            f"M-Pesa Paybill: {settings.MPESA_SHORTCODE}\n"
+            f"Account Number: {display_account}\n"
+            f"Account Holder: {trader.full_name}\n\n"
+            f"You will receive a confirmation message once payment is received. "
+            f"Your crypto will be released automatically."
+        )
     return {"action": "send_message", "order_number": order_number, "message": message, "buyer_nickname": order_data.buyerNickname or "", "fiat_amount": float(order_data.totalPrice or 0)}
 
 
