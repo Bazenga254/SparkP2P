@@ -1159,6 +1159,7 @@ async def connect_binance(
     # Encrypt and store credentials
     trader.binance_cookies = encrypt_data(json.dumps(data.cookies))
     trader.binance_csrf_token = encrypt_data(data.csrf_token)
+    trader.binance_session_expired = False   # fresh login — clear the reconnect banner
     if data.bnc_uuid:
         trader.binance_bnc_uuid = encrypt_data(data.bnc_uuid)
     if data.totp_secret:

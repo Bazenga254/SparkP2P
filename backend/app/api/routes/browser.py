@@ -141,6 +141,7 @@ async def login_stream(websocket: WebSocket, token: str = Query(default=None), m
                                 trader.binance_cookies_full = encrypt_data(json.dumps(cookies))
                                 cookie_dict = {c["name"]: c["value"] for c in cookies}
                                 trader.binance_cookies = encrypt_data(json.dumps(cookie_dict))
+                                trader.binance_session_expired = False   # fresh login — clear the reconnect banner
                                 csrf = cookie_dict.get("csrftoken", "")
                                 if csrf:
                                     trader.binance_csrf_token = encrypt_data(csrf)
@@ -318,6 +319,7 @@ async def login_save(
     # Save to DB
     trader.binance_cookies_full = encrypt_data(json.dumps(cookies))
     trader.binance_cookies = encrypt_data(json.dumps(cookie_dict))
+    trader.binance_session_expired = False   # fresh login — clear the reconnect banner
 
     csrf = cookie_dict.get("csrftoken", "")
     if csrf:
