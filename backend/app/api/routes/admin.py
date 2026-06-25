@@ -3134,8 +3134,9 @@ class ReleaseProbeRequest(BaseModel):
     # action: "check" (read-only EP-12, default), "release" (EP-20, moves crypto),
     #         "mark_paid" (EP-17), "cancel" (EP-9). Anything other than "check" is a REAL action.
     action: str = "check"
-    auth_type: str = None   # for release, if 2FA is required
-    code: str = None        # for release, the 2FA code
+    auth_type: str = None   # for release, if 2FA is required (e.g. Binance's authType value)
+    code: str = None        # for release, an explicit 2FA code (overrides use_totp)
+    use_totp: bool = False  # for release, auto-generate the code from the trader's stored TOTP secret
 
 
 @router.post("/diag/c2c-release-check")
@@ -3167,7 +3168,25 @@ async def diag_c2c_release_check(
         # The read-only eligibility check is always safe and informative — run it every time.
         out["check_if_can_release"] = await S.check_if_can_release(api_key, api_secret, ono)
         if body.action == "release":
-            out["release_coin"] = await S.release_coin(api_key, api_secret, ono, auth_type=body.auth_type, code=body.code)
+            code = body.code
+            if body.use_totp and not code:
+                import pyotp
+                sec = None
+                for f in ("binance_2fa_secret", "totp_secret"):
+                    v = getattr(trader, f, None)
+                    if v:
+                        try:
+                            sec = decrypt_data(v)
+                            out["totp_source"] = f
+                            break
+                        except Exception:
+                            pass
+                if sec:
+                    code = pyotp.TOTP(sec).now()
+                    out["totp_used"] = True
+                else:
+                    out["totp_used"] = False
+            out["release_coin"] = await S.release_coin(api_key, api_secret, ono, auth_type=body.auth_type, code=code)
         elif body.action == "mark_paid":
             out["mark_order_as_paid"] = await S.mark_order_as_paid(api_key, api_secret, ono)
         elif body.action == "cancel":
