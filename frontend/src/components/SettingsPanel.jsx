@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, getTotpSetup, verifyAndSaveTotp, removeTotp, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank, verifyBankAccount } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, saveBinance2fa, getTotpSetup, verifyAndSaveTotp, removeTotp, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank, verifyBankAccount } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -143,6 +143,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   // Binance verification method — pre-populate from profile
   const [verifyMethod, setVerifyMethod] = useState(profile?.binance_verify_method || 'none');
   const [verifyInput, setVerifyInput] = useState('');
+  const [verifyCode, setVerifyCode] = useState('');   // current Binance 6-digit code, to confirm the secret
   const [verifySaved, setVerifySaved] = useState(
     !!(profile?.binance_verify_method && profile.binance_verify_method !== 'none')
   );
@@ -878,27 +879,37 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                   <input type="password" placeholder="TOTP Secret Key (e.g. JBSWY3DPEHPK3PXP)"
                     value={verifyInput.trim()} onChange={e => setVerifyInput(e.target.value)}
                     style={{ width: '100%', boxSizing: 'border-box', letterSpacing: 2, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, color: '#fff', padding: '8px 12px', fontSize: 13 }} />
+                  {verifyMethod === 'totp' && (
+                    <input inputMode="numeric" maxLength={6} placeholder="Current 6-digit code from Binance"
+                      value={verifyCode} onChange={e => setVerifyCode(e.target.value.replace(/\D/g, ''))}
+                      style={{ width: '100%', boxSizing: 'border-box', letterSpacing: 3, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, color: '#fff', padding: '8px 12px', fontSize: 13 }} />
+                  )}
                   <div style={{ display: 'flex', gap: 6 }}>
                     {verifySaved && (
-                      <button onClick={() => setVerifyInput('')}
+                      <button onClick={() => { setVerifyInput(''); setVerifyCode(''); }}
                         style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>
                         Cancel
                       </button>
                     )}
-                    <button disabled={!verifyInput.trim() || loading}
+                    <button disabled={!verifyInput.trim() || (verifyMethod === 'totp' && verifyCode.length !== 6) || loading}
                       onClick={async () => {
                         const val = verifyInput.trim(); setLoading(true);
                         try {
-                          await updateVerification({ verify_method: 'totp', totp_secret: val, fund_password: null });
-                          setVerifySaved(true); setVerifyInput('');
+                          if (verifyMethod === 'totp') {
+                            // Verify the code matches the secret server-side BEFORE saving (rejects a wrong key).
+                            await saveBinance2fa(val, verifyCode.trim());
+                          } else {
+                            await updateVerification({ verify_method: verifyMethod, totp_secret: val, fund_password: null });
+                          }
+                          setVerifySaved(true); setVerifyInput(''); setVerifyCode('');
                           if (window.sparkp2p?.isDesktop) window.sparkp2p.setTotpSecret(val);
-                        } catch (e) { showMsg('Failed to save verification method'); }
+                        } catch (e) { showMsg(e.response?.data?.detail || 'Failed to save verification method'); }
                         setLoading(false);
                       }}
                       style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: 'none',
                         background: verifyInput.trim() ? '#f59e0b' : '#374151',
                         color: verifyInput.trim() ? '#000' : '#6b7280', fontWeight: 700, fontSize: 13, cursor: verifyInput.trim() ? 'pointer' : 'not-allowed' }}>
-                      {loading ? 'Saving...' : 'Set up'}
+                      {loading ? 'Verifying…' : 'Set up'}
                     </button>
                   </div>
                 </div>

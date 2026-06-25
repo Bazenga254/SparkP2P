@@ -51,6 +51,7 @@ export const getProfile = () => api.get('/traders/me');
 export const connectBinance = (data) => api.post('/traders/connect-binance', data);
 export const updateSettlement = (data) => api.put('/traders/settlement', data);
 export const updateVerification = (data) => api.put('/traders/verification', data);
+export const saveBinance2fa = (secret, code) => api.post('/traders/binance-2fa/save', { secret, code });
 export const updateTradingConfig = (data) => api.put('/traders/trading-config', data);
 export const saveBinanceApiKey = (data) => api.put('/traders/binance-api-key', data);
 export const deleteBinanceApiKey = () => api.delete('/traders/binance-api-key');

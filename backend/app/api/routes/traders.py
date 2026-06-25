@@ -3210,6 +3210,38 @@ class SetupTotpVerifyRequest(BaseModel):
     code: str     # 6-digit code user entered from Google Authenticator
 
 
+class SaveBinance2faRequest(BaseModel):
+    secret: str   # the trader's EXISTING Binance Google Authenticator base32 secret
+    code: str     # a current 6-digit code from their Binance app, to prove the secret is correct
+
+
+@router.post("/binance-2fa/save")
+async def save_binance_2fa(
+    data: SaveBinance2faRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Store the trader's EXISTING Binance 2FA secret (so the bot can release crypto via the API
+    hands-free), but ONLY after proving it's the right secret: we check it generates the code they
+    just read off their Binance Authenticator. This stops a wrong/mismatched key being saved silently
+    (which previously failed only later, at release time)."""
+    import pyotp, base64
+    secret = (data.secret or "").strip().replace(" ", "").upper()
+    if not secret:
+        raise HTTPException(status_code=400, detail="Paste your Binance 2FA secret key.")
+    try:
+        base64.b32decode(secret, casefold=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="That isn't a valid 2FA secret. Copy the Base32 key (letters A–Z and digits 2–7) from Binance → Security → Authenticator App → View Key.")
+    if not pyotp.TOTP(secret).verify((data.code or "").strip(), valid_window=1):
+        raise HTTPException(status_code=400, detail="The code doesn't match that secret. Re-check the key and enter the CURRENT 6-digit code from your BINANCE Authenticator (not the SparkP2P one).")
+    from app.core.security import encrypt_data
+    trader.binance_2fa_secret = encrypt_data(secret)
+    trader.binance_verify_method = "totp"
+    await db.commit()
+    return {"success": True, "message": "Binance 2FA verified and linked — the bot can now auto-release your crypto."}
+
+
 @router.get("/setup-totp")
 async def get_totp_setup(trader: Trader = Depends(get_current_trader)):
     """Generate a new TOTP secret and return the otpauth URI for QR code display."""
