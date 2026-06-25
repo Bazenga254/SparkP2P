@@ -439,6 +439,33 @@ app.whenReady().then(() => {
 const BINANCE_API_BASE = 'https://api.binance.com';
 let relayAgentRunning = false;
 
+// Execute a relay job with Node's http/https — unlike Electron's main-process fetch (Chromium),
+// this sends the Cookie header, which is required for cookie-authenticated Binance calls (chat).
+function relayNodeRequest(urlObj, method, headers, bodyObj) {
+  return new Promise((resolve) => {
+    const mod = urlObj.protocol === 'http:' ? require('http') : require('https');
+    const data = (bodyObj !== null && bodyObj !== undefined) ? JSON.stringify(bodyObj) : null;
+    const h = { ...headers };
+    if (data && !Object.keys(h).some(k => k.toLowerCase() === 'content-length')) {
+      h['Content-Length'] = Buffer.byteLength(data);
+    }
+    const opts = {
+      method, hostname: urlObj.hostname,
+      port: urlObj.port || (urlObj.protocol === 'http:' ? 80 : 443),
+      path: urlObj.pathname + urlObj.search, headers: h,
+    };
+    const req = mod.request(opts, (res) => {
+      let chunks = '';
+      res.on('data', (c) => { chunks += c; });
+      res.on('end', () => { try { resolve(JSON.parse(chunks)); } catch { resolve(chunks); } });
+    });
+    req.on('error', (e) => resolve({ code: 'RELAY_EXEC_ERROR', msg: String(e && e.message ? e.message : e) }));
+    req.setTimeout(20000, () => { try { req.destroy(); } catch {} resolve({ code: 'RELAY_EXEC_ERROR', msg: 'timeout' }); });
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
 async function startRelayAgent() {
   if (relayAgentRunning) return;
   relayAgentRunning = true;
@@ -455,7 +482,7 @@ async function startRelayAgent() {
 
     let respBody = null;
     try {
-      const url = new URL((job.host || BINANCE_API_BASE) + job.path);   // host override (e.g. c2c.binance.com for cookie chat-send)
+      const url = new URL((job.host || BINANCE_API_BASE) + job.path);   // host override (e.g. p2p.binance.com for cookie chat-send)
       const params = job.params || {};
       for (const k of Object.keys(params)) url.searchParams.set(k, String(params[k]));
       const headers = {};
@@ -463,12 +490,9 @@ async function startRelayAgent() {
         if (/^x-relay-/i.test(k)) continue;   // relay-only headers don't go to Binance
         headers[k] = v;
       }
-      const br = await fetch(url.toString(), {
-        method: job.method || 'POST',
-        headers,
-        body: (job.body !== null && job.body !== undefined) ? JSON.stringify(job.body) : undefined,
-      });
-      try { respBody = await br.json(); } catch { respBody = null; }
+      // Use Node's https (NOT Electron's Chromium fetch, which silently strips the Cookie header)
+      // so cookie-authenticated calls actually carry the session.
+      respBody = await relayNodeRequest(url, job.method || 'POST', headers, job.body);
     } catch (e) {
       respBody = { code: 'RELAY_EXEC_ERROR', msg: String(e && e.message ? e.message : e) };
     }
