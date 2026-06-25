@@ -161,6 +161,7 @@ let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for
 let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
 let botTradeMode = 'both';      // 'both' | 'buy_only' | 'sell_only' — fetched from backend on start
 let ddEnabled = false;          // Counterparty screening on/off
+let botFullAuto = false;        // Strict full-auto: auto-reject failed orders, no manual approval
 let ddMin30d = 20;              // Tier 1: minimum 30-day trade count
 let ddMinAll = 0;               // Tier 2: minimum all-time trade count (0 = off)
 let ddAutoCancelNew = false;    // Auto-cancel accounts with <5 all-time trades
@@ -3167,6 +3168,7 @@ async function idleScan(page) {
           botTradeMode = newMode;
         }
         ddEnabled       = modeData.dd_enabled        || false;
+        botFullAuto     = modeData.bot_full_auto      || false;
         ddMin30d        = modeData.dd_min_30d_trades  || 20;
         ddMinAll        = modeData.dd_min_all_trades  || 0;
         ddAutoCancelNew = modeData.dd_auto_cancel_new || false;
@@ -3651,15 +3653,44 @@ async function idleScan(page) {
           },
           buyer_stats: _buyerStats || {},
         };
-        const _approvalRes = await fetch(`${API_BASE}/telegram/request-approval`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify(_approvalBody),
-        }).catch(() => null);
-        sellApprovalRequestedOrders.add(order.orderNumber);
-        const _approvalOk = _approvalRes?.ok ? (await _approvalRes.json().catch(() => ({}))).ok : false;
-        console.log(`[SparkP2P] Telegram approval request sent for ${order.orderNumber}: ${_approvalOk ? 'OK' : 'FAILED'}`);
-        sendBotLog('info', `Sell order ${order.orderNumber} — waiting for Telegram approval`);
+        if (botFullAuto) {
+          // Strict full-auto: screen here and auto-decide — no manual approval card.
+          const _s = _buyerStats || {};
+          const _ret = _s.tradedBefore === true;
+          let _ff = null;
+          if (!_ret) {
+            if (ddEnabled) {
+              if (ddAutoCancelNew && _s.trades_all != null && _s.trades_all < 5) _ff = `brand-new account (${_s.trades_all} trades)`;
+              if (!_ff && ddMin30d > 0 && _s.trades_30d != null && _s.trades_30d < ddMin30d) _ff = `low 30-day trades (${_s.trades_30d}/${ddMin30d})`;
+              if (!_ff && ddMinAll > 0 && _s.trades_all != null && _s.trades_all < ddMinAll) _ff = `low all-time trades (${_s.trades_all}/${ddMinAll})`;
+            }
+            if (cfEnabled) {
+              if (!_ff && cfMin30d > 0 && _s.trades_30d != null && _s.trades_30d < cfMin30d) _ff = `insufficient 30-day trades (${_s.trades_30d}/${cfMin30d})`;
+              if (!_ff && cfMinAll > 0 && _s.trades_all != null && _s.trades_all < cfMinAll) _ff = `insufficient all-time trades (${_s.trades_all}/${cfMinAll})`;
+            }
+          }
+          sellApprovalRequestedOrders.add(order.orderNumber);
+          if (_ff) {
+            sellRejectedOrders.add(order.orderNumber);
+            sendBotLog('info', `Sell order ${order.orderNumber} auto-rejected (full-auto) — ${_ff}`);
+            await fetch(`${API_BASE}/ext/notify-trader`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ message: `🤖 Auto-rejected sell order ${order.orderNumber} (KES ${(order.totalPrice || 0).toLocaleString()}) — failed screening: ${_ff}. A polite cancel message was sent.` }) }).catch(() => {});
+            console.log(`[SparkP2P] FULL-AUTO idleScan auto-reject ${order.orderNumber} — ${_ff}`);
+          } else {
+            sellApprovedOrders.add(order.orderNumber);   // STEP 3 sends the payment details
+            sendBotLog('info', `Sell order ${order.orderNumber} auto-approved (full-auto) — passed screening`);
+            console.log(`[SparkP2P] FULL-AUTO idleScan auto-approve ${order.orderNumber}`);
+          }
+        } else {
+          const _approvalRes = await fetch(`${API_BASE}/telegram/request-approval`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify(_approvalBody),
+          }).catch(() => null);
+          sellApprovalRequestedOrders.add(order.orderNumber);
+          const _approvalOk = _approvalRes?.ok ? (await _approvalRes.json().catch(() => ({}))).ok : false;
+          console.log(`[SparkP2P] Telegram approval request sent for ${order.orderNumber}: ${_approvalOk ? 'OK' : 'FAILED'}`);
+          sendBotLog('info', `Sell order ${order.orderNumber} — waiting for Telegram approval`);
+        }
 
       } else if (!sellApprovedOrders.has(order.orderNumber)) {
         // ── STEP 2: Poll Telegram approval status ──
@@ -8181,7 +8212,20 @@ Method selection rules:
 
             if (failReason) {
               console.log(`[SparkP2P] Screening FAILED: ${action.buyer_nickname} -- ${failReason}`);
-              // Route through full Telegram approval flow with advisory — merchant decides YES/NO
+              if (botFullAuto) {
+                // Strict full-auto: auto-reject with NO manual approval. Flagging the order rejected
+                // makes the idleScan send the polite cancel message (sell = never self-cancel).
+                sellRejectedOrders.add(order_number);
+                sendBotLog('info', `Sell order ${order_number} auto-rejected (full-auto) — ${failReason}`);
+                await fetch(`${API_BASE}/ext/notify-trader`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                  body: JSON.stringify({ message: `🤖 Auto-rejected sell order ${order_number} (KES ${(action.fiat_amount || 0).toLocaleString()}) — buyer failed screening: ${failReason}. A polite cancel message was sent.` }),
+                }).catch(() => {});
+                console.log(`[SparkP2P] FULL-AUTO auto-reject ${order_number} — ${failReason}`);
+                return;
+              }
+              // Manual mode: route through the Telegram approval flow — merchant decides YES/NO
               if (!sellApprovalRequestedOrders.has(order_number)) {
                 const cfApprovalBody = {
                   order: {
