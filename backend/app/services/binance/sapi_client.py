@@ -360,24 +360,66 @@ async def release_coin(api_key: str, api_secret: str, order_number: str,
     return await _post("/sapi/v1/c2c/orderMatch/releaseCoin", api_key, params, body)
 
 
+def _cookie_str_for_host(trader, host: str) -> str:
+    """Build the Cookie header for a specific Binance host using the FULL captured cookie set,
+    selecting only cookies whose domain applies to that host (just like the browser does). The flat
+    name->value dict can't do this — the P2P session token p20t exists per-domain (www/p2p), so a
+    c2c.binance.com call must NOT borrow the wrong-domain token. Falls back to the flat dict."""
+    import json
+    from app.core.security import decrypt_data
+    full = getattr(trader, "binance_cookies_full", None)
+    if full:
+        try:
+            cookies = json.loads(decrypt_data(full))
+            if isinstance(cookies, list):
+                parts = []
+                for c in cookies:
+                    name, val = c.get("name"), c.get("value")
+                    dom = (c.get("domain") or "").lstrip(".")
+                    if not name or not dom:
+                        continue
+                    if host == dom or host.endswith("." + dom):   # cookie applies to this host
+                        parts.append(f"{name}={val}")
+                if parts:
+                    return "; ".join(parts)
+        except Exception:
+            pass
+    d = json.loads(decrypt_data(trader.binance_cookies))
+    return "; ".join(f"{k}={v}" for k, v in d.items())
+
+
+def _cookie_headers(trader, host: str = "p2p.binance.com") -> dict:
+    """Full Binance web-API header set (matching the logged-in browser) for cookie-authed calls.
+    Missing any of these (esp. C2ctype / Bnc-Uuid / Clienttype) or sending wrong-domain cookies
+    makes Binance reply 100002002 'check if you are logged in' even with fresh cookies."""
+    from app.core.security import decrypt_data
+    csrf = decrypt_data(trader.binance_csrf_token) if getattr(trader, "binance_csrf_token", None) else ""
+    bnc_uuid = decrypt_data(trader.binance_bnc_uuid) if getattr(trader, "binance_bnc_uuid", None) else ""
+    h = {
+        "Cookie": _cookie_str_for_host(trader, host),
+        "Csrftoken": csrf,
+        "Clienttype": "web",
+        "C2ctype": "c2c_web",
+        "Bnc-Location": "KE",
+        "Bnc-Time-Zone": "Africa/Nairobi",
+        "Content-Type": "application/json",
+        "Accept": "*/*",
+        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+        "User-Agent": getattr(_cfg, "BINANCE_DEFAULT_USER_AGENT", None) or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    }
+    if bnc_uuid:
+        h["Bnc-Uuid"] = bnc_uuid
+    return h
+
+
 async def check_cookie_session(trader) -> bool:
     """Proactive cookie health: True if the trader's stored Binance session is still valid, False if
     expired. Lightweight cookie-auth call (user/profile) routed through their relay. Raises
     RelayOffline if the device isn't reachable (caller should skip, not alarm)."""
-    import json
-    from app.core.security import decrypt_data
     from app.services.binance import relay_router
     if not getattr(trader, "binance_cookies", None):
         return False
-    cookies = json.loads(decrypt_data(trader.binance_cookies))
-    csrf = decrypt_data(trader.binance_csrf_token) if getattr(trader, "binance_csrf_token", None) else ""
-    bnc_uuid = decrypt_data(trader.binance_bnc_uuid) if getattr(trader, "binance_bnc_uuid", None) else ""
-    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
-    headers = {
-        "Cookie": cookie_str, "Csrftoken": csrf, "clientType": "web",
-        "Content-Type": "application/json", "Bnc-Uuid": bnc_uuid,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    }
+    headers = _cookie_headers(trader)
     body = {"userNo": trader.binance_uid or ""}
     result = await relay_router.execute(
         trader.id, "/bapi/c2c/v2/friendly/c2c/user/profile",
@@ -396,25 +438,14 @@ async def send_chat_via_relay(trader, order_number: str, message: str) -> dict:
     cookies, routed through their device's relay (cookie auth + residential IP). This is the one
     thing the official API can't do — the API key handles everything else. Returns the raw response.
     Raises ValueError('NO_BINANCE_SESSION') if cookies are missing/expired (trader must re-login)."""
-    import json
-    from app.core.security import decrypt_data
     from app.services.binance import relay_router
     if not getattr(trader, "binance_cookies", None) or not getattr(trader, "binance_csrf_token", None):
         raise ValueError("NO_BINANCE_SESSION")
-    cookies = json.loads(decrypt_data(trader.binance_cookies))
-    csrf = decrypt_data(trader.binance_csrf_token)
-    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
-    headers = {
-        "Cookie": cookie_str,
-        "Csrftoken": csrf,
-        "clientType": "web",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    }
+    headers = _cookie_headers(trader, host="p2p.binance.com")
     body = {"orderNumber": str(order_number), "message": message, "msgType": 1}
     result = await relay_router.execute(
         trader.id, "/bapi/c2c/v2/private/c2c/chat/send-message",
-        {}, body, headers, method="POST", host="https://c2c.binance.com",
+        {}, body, headers, method="POST", host="https://p2p.binance.com",
     )
     # Expired cookies -> surface as NO_BINANCE_SESSION so the caller fires the re-login nudge.
     if isinstance(result, dict):
