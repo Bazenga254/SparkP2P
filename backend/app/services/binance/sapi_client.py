@@ -359,6 +359,20 @@ async def release_coin(api_key: str, api_secret: str, order_number: str,
     return await _post("/sapi/v1/c2c/orderMatch/releaseCoin", api_key, params, body)
 
 
+async def mark_order_as_paid(api_key: str, api_secret: str, order_number: str) -> dict:
+    """EP-17: markOrderAsPaid — on a BUY order, tell the seller we've paid. Returns RAW response."""
+    params = _base_params()
+    params["signature"] = _sign(api_secret, params)
+    return await _post("/sapi/v1/c2c/orderMatch/markOrderAsPaid", api_key, params, {"orderNumber": order_number})
+
+
+async def cancel_order(api_key: str, api_secret: str, order_number: str) -> dict:
+    """EP-9: cancelOrder. Returns RAW response."""
+    params = _base_params()
+    params["signature"] = _sign(api_secret, params)
+    return await _post("/sapi/v1/c2c/orderMatch/cancelOrder", api_key, params, {"orderNumber": order_number})
+
+
 async def get_order_identity(api_key: str, api_secret: str, order_number: str) -> dict:
     """EP-13 (lean): just the counterparty identity + headline order facts, used to
     match a counterparty across past orders (history nicknames are masked, so we key

@@ -3131,9 +3131,11 @@ async def inspect_order_detail(
 class ReleaseProbeRequest(BaseModel):
     trader_id: int
     order_number: str
-    do_release: bool = False   # if True, ACTUALLY calls releaseCoin (moves crypto) — use with care
-    auth_type: str = None
-    code: str = None
+    # action: "check" (read-only EP-12, default), "release" (EP-20, moves crypto),
+    #         "mark_paid" (EP-17), "cancel" (EP-9). Anything other than "check" is a REAL action.
+    action: str = "check"
+    auth_type: str = None   # for release, if 2FA is required
+    code: str = None        # for release, the 2FA code
 
 
 @router.post("/diag/c2c-release-check")
@@ -3142,11 +3144,13 @@ async def diag_c2c_release_check(
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Phase-1 probe: does the official Binance release family work for this account, or is it
-    deprecated/whitelist-only (per Binance's dev forum)? Runs EP-12 checkIfCanReleaseCoin (READ-ONLY)
-    and returns the raw envelope. Only runs the real EP-20 releaseCoin if do_release=true."""
+    """Phase-1 probe harness for the official Binance order-action endpoints, routed via the trader's
+    relay. action='check' (default) runs EP-12 checkIfCanReleaseCoin (READ-ONLY); 'release' (EP-20),
+    'mark_paid' (EP-17) and 'cancel' (EP-9) perform the REAL action. Returns the raw Binance envelope
+    so we can see whether the family works for this account and what (if any) 2FA it demands."""
     from app.core.security import decrypt_data
-    from app.services.binance.sapi_client import check_if_can_release, release_coin, relay_trader
+    from app.services.binance import sapi_client as S
+    from app.services.binance.sapi_client import relay_trader
 
     trader = (await db.execute(select(Trader).where(Trader.id == body.trader_id))).scalar_one_or_none()
     if not trader:
@@ -3157,18 +3161,19 @@ async def diag_c2c_release_check(
     relay_trader.set(trader.id)   # route via this trader's desktop/phone (per_trader mode)
     api_key = decrypt_data(trader.binance_api_key)
     api_secret = decrypt_data(trader.binance_api_secret)
-
-    out = {"trader_id": trader.id, "order_number": body.order_number}
+    ono = body.order_number
+    out = {"trader_id": trader.id, "order_number": ono, "action": body.action}
     try:
-        out["check_if_can_release"] = await check_if_can_release(api_key, api_secret, body.order_number)
+        # The read-only eligibility check is always safe and informative — run it every time.
+        out["check_if_can_release"] = await S.check_if_can_release(api_key, api_secret, ono)
+        if body.action == "release":
+            out["release_coin"] = await S.release_coin(api_key, api_secret, ono, auth_type=body.auth_type, code=body.code)
+        elif body.action == "mark_paid":
+            out["mark_order_as_paid"] = await S.mark_order_as_paid(api_key, api_secret, ono)
+        elif body.action == "cancel":
+            out["cancel_order"] = await S.cancel_order(api_key, api_secret, ono)
     except Exception as e:
-        out["check_if_can_release_error"] = str(e)
-    if body.do_release:
-        try:
-            out["release_coin"] = await release_coin(api_key, api_secret, body.order_number,
-                                                     auth_type=body.auth_type, code=body.code)
-        except Exception as e:
-            out["release_coin_error"] = str(e)
+        out["error"] = str(e)
     return out
 
 
