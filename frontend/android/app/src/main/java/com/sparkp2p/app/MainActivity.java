@@ -35,6 +35,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SparkRelayPlugin.class);
         registerPlugin(BiometricAuthPlugin.class);
         registerPlugin(SmsOtpPlugin.class);
+        registerPlugin(BinanceChatPlugin.class);
         super.onCreate(savedInstanceState);
         handler.postDelayed(watcher, 3000);
     }

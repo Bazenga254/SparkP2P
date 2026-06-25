@@ -34,6 +34,13 @@
 
         </activity>
 
+        <!-- Visible Binance web login for mobile chat-send (BinanceChatPlugin) -->
+        <activity
+            android:name=".BinanceLoginActivity"
+            android:exported="false"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:theme="@style/AppTheme" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

@@ -5,6 +5,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
 import RelayConnectStatus from './RelayConnectStatus';
+import BinanceChatTest from './BinanceChatTest';
 import { isNative } from '../mobile/relayAgent';
 import { bioAvailable, bioAuthenticate, bioEnabled, setBioEnabled } from '../mobile/biometric';
 import '@smile_identity/smart-camera-web';
@@ -1221,6 +1222,9 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
 
           {/* ── Biometric unlock (native app only) ──────────── */}
           <BiometricSetting />
+
+          {/* ── Mobile chat-send test (native app only) ──────── */}
+          <BinanceChatTest />
 
           {/* ── Profile Details ─────────────────────────────── */}
           <div className="card" style={{ marginBottom: 0 }}>
