@@ -98,6 +98,8 @@ class Trader(Base):
     # Full-auto mode: when True, the bot strictly enforces screening with NO manual Telegram
     # approval — orders that pass are auto-processed, orders that fail are auto-rejected (excuse).
     bot_full_auto = Column(Boolean, default=False)
+    # True when the stored Binance cookie session has expired — drives the in-app "Reconnect" banner.
+    binance_session_expired = Column(Boolean, default=False)
 
     # Counterparty due diligence / screening
     dd_enabled = Column(Boolean, default=False)

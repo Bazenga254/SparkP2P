@@ -166,6 +166,7 @@ class TraderProfileResponse(BaseModel):
     batch_threshold: int = 50000
     dd_enabled: bool = False
     bot_full_auto: bool = False
+    binance_session_expired: bool = False
     dd_min_30d_trades: int = 20
     dd_min_all_trades: int = 0
     dd_auto_cancel_new: bool = False
@@ -1065,6 +1066,7 @@ async def get_profile(
         bot_trade_mode=trader.bot_trade_mode or 'both',
         dd_enabled=bool(trader.dd_enabled),
         bot_full_auto=bool(trader.bot_full_auto),
+        binance_session_expired=bool(trader.binance_session_expired),
         dd_min_30d_trades=trader.dd_min_30d_trades or 20,
         dd_min_all_trades=trader.dd_min_all_trades or 0,
         dd_auto_cancel_new=bool(trader.dd_auto_cancel_new),

@@ -49,6 +49,15 @@ async def cookie_health_poller():
                 except Exception:
                     continue   # relay timeout/error — skip, try next sweep
                 now = time.time()
+                # Persist the flag so the dashboard "Reconnect" banner appears/disappears.
+                if bool(t.binance_session_expired) == (not valid):
+                    pass  # already in the right state
+                else:
+                    async with async_session() as db2:
+                        tt = (await db2.execute(select(Trader).where(Trader.id == t.id))).scalar_one_or_none()
+                        if tt:
+                            tt.binance_session_expired = not valid
+                            await db2.commit()
                 if valid:
                     _last_notified.pop(t.id, None)   # healthy again — reset
                     continue

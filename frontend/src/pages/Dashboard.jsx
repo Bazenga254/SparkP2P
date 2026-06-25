@@ -1596,6 +1596,22 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Binance session expired — reconnect so the bot can keep sending chat to buyers/sellers */}
+      {profile?.binance_session_expired && (
+        <div className="setup-banner" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)' }}>
+          <span className="setup-banner-icon">🔐</span>
+          <div className="setup-banner-body">
+            <div className="setup-banner-title">Binance session expired — reconnect to keep trading</div>
+            <div className="setup-banner-desc">
+              Your Binance login has expired, so the bot can't send payment details or messages to your buyers and sellers. Reconnect now — it takes under a minute.
+            </div>
+          </div>
+          <button className="setup-banner-btn" onClick={() => { setSettingsInitialSection('binance'); setActiveTab('settings'); }}>
+            Reconnect Binance
+          </button>
+        </div>
+      )}
+
       {/* Setup incomplete banner */}
       {showSetupBanner && (
         <div className="setup-banner">
