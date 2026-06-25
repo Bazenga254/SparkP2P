@@ -16,8 +16,8 @@ from app.models.trader import Trader
 
 logger = logging.getLogger(__name__)
 
-_CHECK_EVERY = 1800           # 30 min between sweeps
-_RENOTIFY_AFTER = 3 * 3600    # re-remind every 3h while still expired
+_CHECK_EVERY = 60             # 1 min between sweeps — catch expiry fast so no order falls in a gap
+_RENOTIFY_AFTER = 3 * 3600    # re-remind every 3h while still expired (the sweep is 1 min; the nudge is rate-limited)
 _last_notified: dict[int, float] = {}   # trader_id -> last re-login nudge time
 
 RELOGIN_MSG = (
