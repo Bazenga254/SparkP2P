@@ -360,6 +360,37 @@ async def release_coin(api_key: str, api_secret: str, order_number: str,
     return await _post("/sapi/v1/c2c/orderMatch/releaseCoin", api_key, params, body)
 
 
+async def check_cookie_session(trader) -> bool:
+    """Proactive cookie health: True if the trader's stored Binance session is still valid, False if
+    expired. Lightweight cookie-auth call (user/profile) routed through their relay. Raises
+    RelayOffline if the device isn't reachable (caller should skip, not alarm)."""
+    import json
+    from app.core.security import decrypt_data
+    from app.services.binance import relay_router
+    if not getattr(trader, "binance_cookies", None):
+        return False
+    cookies = json.loads(decrypt_data(trader.binance_cookies))
+    csrf = decrypt_data(trader.binance_csrf_token) if getattr(trader, "binance_csrf_token", None) else ""
+    bnc_uuid = decrypt_data(trader.binance_bnc_uuid) if getattr(trader, "binance_bnc_uuid", None) else ""
+    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+    headers = {
+        "Cookie": cookie_str, "Csrftoken": csrf, "clientType": "web",
+        "Content-Type": "application/json", "Bnc-Uuid": bnc_uuid,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    }
+    body = {"userNo": trader.binance_uid or ""}
+    result = await relay_router.execute(
+        trader.id, "/bapi/c2c/v2/friendly/c2c/user/profile",
+        {}, body, headers, method="POST", host="https://p2p.binance.com",
+    )
+    if isinstance(result, dict):
+        code = str(result.get("code") or "")
+        msg = str(result.get("message") or "").lower()
+        if code == "100002001" or "login status expired" in msg or "log in again" in msg:
+            return False
+    return True   # any non-expiry response means the session authenticated fine
+
+
 async def send_chat_via_relay(trader, order_number: str, message: str) -> dict:
     """Cookie-hybrid chat-send: send a Binance P2P chat message using the trader's STORED browser
     cookies, routed through their device's relay (cookie auth + residential IP). This is the one

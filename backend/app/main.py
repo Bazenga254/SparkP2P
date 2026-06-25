@@ -390,6 +390,9 @@ async def lifespan(app: FastAPI):
     # Start buy-release monitor — Telegram the trader when a paid buy order isn't released in 10 min.
     from app.services.buy_release_monitor import buy_release_monitor
     buy_release_task = asyncio.create_task(buy_release_monitor())
+    # Start cookie-session health monitor — nudge merchants to reconnect Binance when cookies expire.
+    from app.services.cookie_health import cookie_health_poller
+    cookie_health_task = asyncio.create_task(cookie_health_poller())
     # Start KYC reconciliation poller — auto-captures Choice Bank approvals that land
     # after the trader leaves the onboarding page (every 5 min).
     from app.services.kyc_poller import kyc_status_poller
