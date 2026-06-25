@@ -410,13 +410,25 @@ async def _handle_transaction_result(params: dict, raw: dict):
         total_received = float(total_result.scalar() or 0)
 
         if total_received < order.fiat_amount - 5:
-            # Still partial — log and wait for the next payment
+            # Still partial — alert the merchant and wait for the balance (no release yet).
+            deficit = order.fiat_amount - total_received
             logger.info(
                 f"[ChoiceBank] PARTIAL: {tx_id} → order {order.binance_order_number} "
                 f"KES {amount} received, KES {total_received:.2f} total so far "
                 f"(need KES {order.fiat_amount:.2f})"
             )
             await db.commit()
+            try:
+                from app.api.routes.telegram import notify_trader
+                _tg = (
+                    "⚠️ Underpayment on order " + (order.binance_order_number or "") + chr(10) +
+                    "Received KES " + f"{total_received:,.0f}" + " of KES " + f"{order.fiat_amount:,.0f}" +
+                    " (short KES " + f"{deficit:,.0f}" + ")." + chr(10) +
+                    "Crypto NOT released — waiting for the balance."
+                )
+                await notify_trader(trader, _tg)
+            except Exception as _e:
+                logger.warning(f"[ChoiceBank] partial-payment notify failed: {_e}")
             return
 
         # Full amount reached — mark order as payment received

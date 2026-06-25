@@ -387,6 +387,9 @@ async def lifespan(app: FastAPI):
     # Start while-online order tracking poller (every 30s, all online traders)
     from app.services.tracking import tracking_poller
     tracking_task = asyncio.create_task(tracking_poller())
+    # Start buy-release monitor — Telegram the trader when a paid buy order isn't released in 10 min.
+    from app.services.buy_release_monitor import buy_release_monitor
+    buy_release_task = asyncio.create_task(buy_release_monitor())
     # Start KYC reconciliation poller — auto-captures Choice Bank approvals that land
     # after the trader leaves the onboarding page (every 5 min).
     from app.services.kyc_poller import kyc_status_poller
