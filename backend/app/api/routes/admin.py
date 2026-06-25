@@ -3126,6 +3126,27 @@ async def inspect_order_detail(
 
     return {"order_number": data.order_number, "trader_id": trader.id, "raw": raw}
 
+# ── Diagnostics: does the relay forward the Cookie header? ─────────────────────
+
+@router.post("/diag/relay-echo")
+async def diag_relay_echo(body: dict, admin: Trader = Depends(get_admin_trader)):
+    """Relay a GET to httpbin.org/headers with a test Cookie, through the trader's device, to see
+    whether the Cookie header survives the relay agent's HTTP client (Electron fetch may strip it)."""
+    from app.services.binance import relay_router
+    tid = int(body.get("trader_id", 1))
+    try:
+        r = await relay_router.execute(tid, "/headers", {}, None,
+                                       {"Cookie": "sparktest=HELLO123", "X-Probe": "yes"},
+                                       method="GET", host="https://httpbin.org")
+        if isinstance(r, dict):
+            echoed = r.get("headers", {})
+            return {"type": "dict", "cookie_seen": echoed.get("Cookie", "*** STRIPPED ***"),
+                    "xprobe_seen": echoed.get("X-Probe", "absent")}
+        return {"type": type(r).__name__, "raw": str(r)[:600]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ── Diagnostics: cookie-hybrid chat send ──────────────────────────────────────
 
 class ChatSendProbeRequest(BaseModel):
