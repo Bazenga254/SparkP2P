@@ -3016,16 +3016,18 @@ export default function Dashboard() {
                         </div>
                         <div>
                           <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 700 }}>Choice Bank · Kenya</div>
-                          <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>Connected · paybill active</div>
+                          <div style={{ color: '#6b7280', fontSize: 12, marginTop: 2 }}>{profile?.choice_account_number ? 'Connected · paybill active' : 'Verification pending'}</div>
                         </div>
                       </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: '#10b981', background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)', padding: '3px 10px', borderRadius: 20 }}>Verified</span>
+                      {profile?.choice_account_number
+                        ? <span style={{ fontSize: 11, fontWeight: 700, color: '#10b981', background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)', padding: '3px 10px', borderRadius: 20 }}>Verified</span>
+                        : <span style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', padding: '3px 10px', borderRadius: 20 }}>Pending</span>}
                     </div>
 
                     {/* Fields */}
                     {[
                       { label: 'PAYBILL NUMBER',  value: profile?.choice_paybill || '444174',                                                key: 'pb' },
-                      { label: 'ACCOUNT NUMBER',  value: profile?.choice_account_number || profile?.choice_account_id || '—',                key: 'ac' },
+                      { label: 'ACCOUNT NUMBER',  value: profile?.choice_account_number || 'Pending verification',                          key: 'ac' },
                       { label: 'ACCOUNT NAME',    value: profile?.full_name || '—',                                                          key: 'nm' },
                     ].map(({ label, value, key: ck }) => (
                       <div key={ck} style={{ marginBottom: 14 }}>
