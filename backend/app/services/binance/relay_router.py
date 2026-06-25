@@ -46,15 +46,16 @@ def last_ip(trader_id: int) -> str:
     return _last_ip.get(trader_id, "")
 
 
-async def execute(trader_id: int, path: str, params: dict, body: dict, headers: dict, method: str = "POST") -> dict:
-    """Enqueue a signed Binance request for the trader's desktop and await its response.
-    Returns the parsed JSON body. Raises RelayOffline on timeout."""
+async def execute(trader_id: int, path: str, params: dict, body: dict, headers: dict, method: str = "POST", host: str = None) -> dict:
+    """Enqueue a Binance request for the trader's desktop/phone and await its response. `host`
+    overrides the default api.binance.com base — e.g. https://c2c.binance.com for cookie-auth chat
+    sends. Returns the parsed JSON body. Raises RelayOffline on timeout."""
     job_id = uuid.uuid4().hex
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
     _job_futures[job_id] = fut
     await _queue(trader_id).put({
         "job_id": job_id, "method": method, "path": path,
-        "params": params, "body": body, "headers": headers,
+        "params": params, "body": body, "headers": headers, "host": host,
     })
     try:
         result = await asyncio.wait_for(fut, timeout=_RESULT_TIMEOUT)

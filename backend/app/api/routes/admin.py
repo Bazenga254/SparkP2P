@@ -3126,6 +3126,34 @@ async def inspect_order_detail(
 
     return {"order_number": data.order_number, "trader_id": trader.id, "raw": raw}
 
+# ── Diagnostics: cookie-hybrid chat send ──────────────────────────────────────
+
+class ChatSendProbeRequest(BaseModel):
+    trader_id: int
+    order_number: str
+    message: str = "Test message from SparkP2P"
+
+
+@router.post("/diag/chat-send")
+async def diag_chat_send(
+    body: ChatSendProbeRequest,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cookie-hybrid probe: send a chat message to a Binance order using the trader's STORED cookies,
+    routed through their device's relay. Confirms the one thing the API can't do works end-to-end."""
+    from app.services.binance.sapi_client import send_chat_via_relay
+    trader = (await db.execute(select(Trader).where(Trader.id == body.trader_id))).scalar_one_or_none()
+    if not trader:
+        raise HTTPException(404, "Trader not found")
+    out = {"trader_id": trader.id, "order_number": body.order_number}
+    try:
+        out["result"] = await send_chat_via_relay(trader, body.order_number, body.message)
+    except Exception as e:
+        out["error"] = str(e)
+    return out
+
+
 # ── Diagnostics: can we release crypto via the official API? ───────────────────
 
 class ReleaseProbeRequest(BaseModel):

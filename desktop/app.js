@@ -455,7 +455,7 @@ async function startRelayAgent() {
 
     let respBody = null;
     try {
-      const url = new URL(BINANCE_API_BASE + job.path);
+      const url = new URL((job.host || BINANCE_API_BASE) + job.path);   // host override (e.g. c2c.binance.com for cookie chat-send)
       const params = job.params || {};
       for (const k of Object.keys(params)) url.searchParams.set(k, String(params[k]));
       const headers = {};

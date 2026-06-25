@@ -355,8 +355,36 @@ async def release_coin(api_key: str, api_secret: str, order_number: str,
     if auth_type:
         body["authType"] = auth_type
     if code:
-        body["code"] = code
+        # Binance expects the Google Authenticator code under googleVerifyCode (error -9000 otherwise)
+        body["googleVerifyCode"] = code
     return await _post("/sapi/v1/c2c/orderMatch/releaseCoin", api_key, params, body)
+
+
+async def send_chat_via_relay(trader, order_number: str, message: str) -> dict:
+    """Cookie-hybrid chat-send: send a Binance P2P chat message using the trader's STORED browser
+    cookies, routed through their device's relay (cookie auth + residential IP). This is the one
+    thing the official API can't do — the API key handles everything else. Returns the raw response.
+    Raises ValueError('NO_BINANCE_SESSION') if cookies are missing/expired (trader must re-login)."""
+    import json
+    from app.core.security import decrypt_data
+    from app.services.binance import relay_router
+    if not getattr(trader, "binance_cookies", None) or not getattr(trader, "binance_csrf_token", None):
+        raise ValueError("NO_BINANCE_SESSION")
+    cookies = json.loads(decrypt_data(trader.binance_cookies))
+    csrf = decrypt_data(trader.binance_csrf_token)
+    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+    headers = {
+        "Cookie": cookie_str,
+        "Csrftoken": csrf,
+        "clientType": "web",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    }
+    body = {"orderNumber": str(order_number), "message": message, "msgType": 1}
+    return await relay_router.execute(
+        trader.id, "/bapi/c2c/v2/private/c2c/chat/send-message",
+        {}, body, headers, method="POST", host="https://c2c.binance.com",
+    )
 
 
 async def mark_order_as_paid(api_key: str, api_secret: str, order_number: str) -> dict:

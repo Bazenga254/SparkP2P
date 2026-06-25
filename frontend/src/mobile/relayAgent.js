@@ -82,7 +82,7 @@ const nativeHttp = async (opts) => {
 async function executeJob(job, token) {
   let respBody = null;
   try {
-    const u = new URL(BINANCE + job.path);
+    const u = new URL((job.host || BINANCE) + job.path);   // host override (e.g. c2c.binance.com for cookie chat-send)
     for (const k of Object.keys(job.params || {})) u.searchParams.set(k, String(job.params[k]));
     const headers = {};
     for (const [k, v] of Object.entries(job.headers || {})) { if (/^x-relay-/i.test(k)) continue; headers[k] = v; }
