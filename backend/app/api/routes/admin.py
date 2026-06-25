@@ -3126,6 +3126,52 @@ async def inspect_order_detail(
 
     return {"order_number": data.order_number, "trader_id": trader.id, "raw": raw}
 
+# ── Diagnostics: can we release crypto via the official API? ───────────────────
+
+class ReleaseProbeRequest(BaseModel):
+    trader_id: int
+    order_number: str
+    do_release: bool = False   # if True, ACTUALLY calls releaseCoin (moves crypto) — use with care
+    auth_type: str = None
+    code: str = None
+
+
+@router.post("/diag/c2c-release-check")
+async def diag_c2c_release_check(
+    body: ReleaseProbeRequest,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Phase-1 probe: does the official Binance release family work for this account, or is it
+    deprecated/whitelist-only (per Binance's dev forum)? Runs EP-12 checkIfCanReleaseCoin (READ-ONLY)
+    and returns the raw envelope. Only runs the real EP-20 releaseCoin if do_release=true."""
+    from app.core.security import decrypt_data
+    from app.services.binance.sapi_client import check_if_can_release, release_coin, relay_trader
+
+    trader = (await db.execute(select(Trader).where(Trader.id == body.trader_id))).scalar_one_or_none()
+    if not trader:
+        raise HTTPException(404, "Trader not found")
+    if not trader.binance_api_key or not trader.binance_api_secret:
+        raise HTTPException(400, "Trader has no Binance API key/secret on file")
+
+    relay_trader.set(trader.id)   # route via this trader's desktop/phone (per_trader mode)
+    api_key = decrypt_data(trader.binance_api_key)
+    api_secret = decrypt_data(trader.binance_api_secret)
+
+    out = {"trader_id": trader.id, "order_number": body.order_number}
+    try:
+        out["check_if_can_release"] = await check_if_can_release(api_key, api_secret, body.order_number)
+    except Exception as e:
+        out["check_if_can_release_error"] = str(e)
+    if body.do_release:
+        try:
+            out["release_coin"] = await release_coin(api_key, api_secret, body.order_number,
+                                                     auth_type=body.auth_type, code=body.code)
+        except Exception as e:
+            out["release_coin_error"] = str(e)
+    return out
+
+
 # ── KYC Admin Routes — append to admin.py ─────────────────────────────────────
 
 @router.get("/kyc/traders")

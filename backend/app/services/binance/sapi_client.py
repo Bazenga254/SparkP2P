@@ -331,6 +331,34 @@ async def get_order_payment_details(api_key: str, api_secret: str, order_number:
     }
 
 
+async def check_if_can_release(api_key: str, api_secret: str, order_number: str) -> dict:
+    """EP-12: checkIfCanReleaseCoin — READ-ONLY eligibility probe (moves no crypto). Used to test
+    whether the official release endpoints are alive for this account: a normal Binance envelope
+    means the family works; a 'deprecated'/forbidden/404 means we must use the cookie path instead.
+    Returns the RAW Binance response so the caller can inspect code/msg."""
+    params = _base_params()
+    params["signature"] = _sign(api_secret, params)
+    return await _post(
+        "/sapi/v1/c2c/orderMatch/checkIfCanReleaseCoin",
+        api_key, params, {"orderNumber": order_number},
+    )
+
+
+async def release_coin(api_key: str, api_secret: str, order_number: str,
+                       auth_type: str = None, code: str = None) -> dict:
+    """EP-20: releaseCoin — release crypto to the buyer on a paid SELL order. May require a 2FA
+    code (authType + code) depending on the account; we pass them through only when provided so we
+    can discover the requirement from Binance's error. Returns the RAW response."""
+    params = _base_params()
+    params["signature"] = _sign(api_secret, params)
+    body = {"orderNumber": order_number}
+    if auth_type:
+        body["authType"] = auth_type
+    if code:
+        body["code"] = code
+    return await _post("/sapi/v1/c2c/orderMatch/releaseCoin", api_key, params, body)
+
+
 async def get_order_identity(api_key: str, api_secret: str, order_number: str) -> dict:
     """EP-13 (lean): just the counterparty identity + headline order facts, used to
     match a counterparty across past orders (history nicknames are masked, so we key
