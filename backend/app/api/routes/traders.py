@@ -76,6 +76,7 @@ class TradingConfigRequest(BaseModel):
     batch_threshold: Optional[int] = None
     bot_trade_mode: Optional[str] = None  # 'both' | 'buy_only' | 'sell_only'
     dd_enabled: Optional[bool] = None
+    bot_full_auto: Optional[bool] = None
     dd_min_30d_trades: Optional[int] = None
     dd_min_all_trades: Optional[int] = None
     dd_auto_cancel_new: Optional[bool] = None
@@ -164,6 +165,7 @@ class TraderProfileResponse(BaseModel):
     batch_settlement_enabled: bool = True
     batch_threshold: int = 50000
     dd_enabled: bool = False
+    bot_full_auto: bool = False
     dd_min_30d_trades: int = 20
     dd_min_all_trades: int = 0
     dd_auto_cancel_new: bool = False
@@ -1062,6 +1064,7 @@ async def get_profile(
         batch_threshold=trader.batch_threshold or 50000,
         bot_trade_mode=trader.bot_trade_mode or 'both',
         dd_enabled=bool(trader.dd_enabled),
+        bot_full_auto=bool(trader.bot_full_auto),
         dd_min_30d_trades=trader.dd_min_30d_trades or 20,
         dd_min_all_trades=trader.dd_min_all_trades or 0,
         dd_auto_cancel_new=bool(trader.dd_auto_cancel_new),
@@ -1422,6 +1425,8 @@ async def update_trading_config(
         trader.bot_trade_mode = data.bot_trade_mode
     if data.dd_enabled is not None:
         trader.dd_enabled = data.dd_enabled
+    if data.bot_full_auto is not None:
+        trader.bot_full_auto = data.bot_full_auto
     if data.dd_min_30d_trades is not None:
         trader.dd_min_30d_trades = data.dd_min_30d_trades
     if data.dd_min_all_trades is not None:

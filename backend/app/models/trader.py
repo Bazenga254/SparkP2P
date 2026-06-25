@@ -95,6 +95,9 @@ class Trader(Base):
 
     # Bot trade mode: 'both' | 'buy_only' | 'sell_only'
     bot_trade_mode = Column(String(20), default='both')
+    # Full-auto mode: when True, the bot strictly enforces screening with NO manual Telegram
+    # approval — orders that pass are auto-processed, orders that fail are auto-rejected (excuse).
+    bot_full_auto = Column(Boolean, default=False)
 
     # Counterparty due diligence / screening
     dd_enabled = Column(Boolean, default=False)

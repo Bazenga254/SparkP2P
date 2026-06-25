@@ -895,6 +895,7 @@ export default function Dashboard() {
   const [configSaved, setConfigSaved] = useState(false);
   const configSavedAt = useRef(0);
   const [ddEnabled, setDdEnabled] = useState(false);
+  const [botFullAuto, setBotFullAuto] = useState(false);
   const [ddMin30d, setDdMin30d] = useState(20);
   const [ddMinAll, setDdMinAll] = useState(0);
   const [ddAutoCancelNew, setDdAutoCancelNew] = useState(false);
@@ -1077,7 +1078,7 @@ export default function Dashboard() {
       // NOTE: Orders are NOT fetched here — the dedicated binance-orders effect (keyed on
       // activeTab/ordersFilter/ordersPage) owns the Orders list so the filter never gets
       // overwritten by a background loadData refresh.
-      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); setTgNotifyScope(p.telegram_notify_scope || 'both'); setCfEnabled(p.cf_filters_enabled || false); setCfAllTradesMin(String(p.cf_all_trades_min ?? 0)); setCfAllTradesMinAll(String(p.cf_all_trades_min_all ?? 0)); setCfMaxPayMins(String(p.cf_max_pay_mins ?? 0)); setCfMaxReleaseMins(String(p.cf_max_release_mins ?? 0)); setBinanceFeePerUsdt(String(p.binance_fee_per_usdt ?? 0.25)); } }
+      if (results[0].status === 'fulfilled') { const p = results[0].value.data; setProfile(p); if (!p.binance_merchant_tier) setShowTierModal(true); if (Date.now() - configSavedAt.current > 30000) { setBotTradeMode(p.bot_trade_mode || 'both'); setDdEnabled(p.dd_enabled || false); setBotFullAuto(p.bot_full_auto || false); setDdMin30d(p.dd_min_30d_trades ?? 20); setDdMinAll(p.dd_min_all_trades ?? 0); setDdAutoCancelNew(p.dd_auto_cancel_new || false); setTgApprovalEnabled(p.telegram_approval_enabled || false); setTgConnectedForConfig(p.telegram_connected || false); setTgNotifyScope(p.telegram_notify_scope || 'both'); setCfEnabled(p.cf_filters_enabled || false); setCfAllTradesMin(String(p.cf_all_trades_min ?? 0)); setCfAllTradesMinAll(String(p.cf_all_trades_min_all ?? 0)); setCfMaxPayMins(String(p.cf_max_pay_mins ?? 0)); setCfMaxReleaseMins(String(p.cf_max_release_mins ?? 0)); setBinanceFeePerUsdt(String(p.binance_fee_per_usdt ?? 0.25)); } }
       if (results[1].status === 'fulfilled') setWallet(results[1].value.data);
       if (results[2].status === 'fulfilled') setStats(results[2].value.data);
       if (results[3].status === 'fulfilled') setTransactions(results[3].value.data);
@@ -2766,7 +2767,7 @@ export default function Dashboard() {
                 onClick={async () => {
                   setSavingConfig(true);
                   try {
-                    const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0, telegram_notify_scope: tgNotifyScope, binance_fee_per_usdt: parseFloat(binanceFeePerUsdt) || 0.25 });
+                    const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, bot_full_auto: botFullAuto, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0, telegram_notify_scope: tgNotifyScope, binance_fee_per_usdt: parseFloat(binanceFeePerUsdt) || 0.25 });
                     configSavedAt.current = Date.now();
                     setConfigSaved(true);
                     setTimeout(() => { setConfigSaved(false); }, 1500);
@@ -2839,6 +2840,26 @@ export default function Dashboard() {
                 <div style={{ marginTop: 12, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '12px 14px' }}>
                   <div style={{ color: '#f59e0b', fontSize: 13, fontWeight: 700, marginBottom: 4 }}>⚠ Telegram not connected</div>
                   <p style={{ margin: 0, color: '#9ca3af', fontSize: 12, lineHeight: 1.5 }}>Connect it in <strong style={{ color: '#e5e7eb' }}>Telegram Notifications</strong> just below.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Full automation (strict) — auto-decide every order, no manual approval */}
+            <div style={{ background: '#0d1117', border: '0.5px solid #1f2937', borderRadius: 10, padding: '14px 16px', marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: '#e5e7eb', fontSize: 14, fontWeight: 600 }}>Fully automate trades (strict)</div>
+                  <div style={{ color: '#6b7280', fontSize: 12, marginTop: 3 }}>The bot decides every order itself — no Telegram approval. Meets your screening → processed automatically; fails any check → auto-rejected with a polite cancel message.</div>
+                </div>
+                <div onClick={() => setBotFullAuto(v => !v)}
+                  style={{ width: 44, height: 24, borderRadius: 12, background: botFullAuto ? '#f59e0b' : '#374151', cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0, marginLeft: 20 }}>
+                  <div style={{ position: 'absolute', top: 4, left: botFullAuto ? 22 : 4, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+                </div>
+              </div>
+              {botFullAuto && (
+                <div style={{ marginTop: 12, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 8, padding: '10px 14px' }}>
+                  <div style={{ color: '#10b981', fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Full automation active</div>
+                  <div style={{ color: '#9ca3af', fontSize: 12, lineHeight: 1.5 }}>Every order is processed or rejected automatically against your screening criteria — you won't be asked to approve. Orders that fail get the polite cancel-request message; orders that pass are processed straight away.</div>
                 </div>
               )}
             </div>
@@ -4396,7 +4417,7 @@ export default function Dashboard() {
               onClick={async () => {
                 setSavingConfig(true);
                 try {
-                  const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0, telegram_notify_scope: tgNotifyScope, binance_fee_per_usdt: parseFloat(binanceFeePerUsdt) || 0.25 });
+                  const res = await api.put('/traders/trading-config', { bot_trade_mode: botTradeMode, dd_enabled: ddEnabled, bot_full_auto: botFullAuto, dd_min_30d_trades: ddMin30d, dd_min_all_trades: ddMinAll, cf_filters_enabled: cfEnabled, cf_all_trades_min: parseInt(cfAllTradesMin) || 0, cf_all_trades_min_all: parseInt(cfAllTradesMinAll) || 0, cf_max_pay_mins: parseInt(cfMaxPayMins) || 0, cf_max_release_mins: parseInt(cfMaxReleaseMins) || 0, telegram_notify_scope: tgNotifyScope, binance_fee_per_usdt: parseFloat(binanceFeePerUsdt) || 0.25 });
                   configSavedAt.current = Date.now();
                   setConfigSaved(true);
                   setTimeout(() => { setConfigSaved(false); if (showConfigModal) setShowConfigModal(false); }, 1500);
