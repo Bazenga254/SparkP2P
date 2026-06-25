@@ -381,10 +381,17 @@ async def send_chat_via_relay(trader, order_number: str, message: str) -> dict:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     }
     body = {"orderNumber": str(order_number), "message": message, "msgType": 1}
-    return await relay_router.execute(
+    result = await relay_router.execute(
         trader.id, "/bapi/c2c/v2/private/c2c/chat/send-message",
         {}, body, headers, method="POST", host="https://c2c.binance.com",
     )
+    # Expired cookies -> surface as NO_BINANCE_SESSION so the caller fires the re-login nudge.
+    if isinstance(result, dict):
+        _code = str(result.get("code") or "")
+        _msg = str(result.get("message") or "").lower()
+        if _code == "100002001" or "login status expired" in _msg or "log in again" in _msg:
+            raise ValueError("NO_BINANCE_SESSION")
+    return result
 
 
 async def mark_order_as_paid(api_key: str, api_secret: str, order_number: str) -> dict:
