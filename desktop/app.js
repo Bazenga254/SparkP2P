@@ -3698,22 +3698,41 @@ async function idleScan(page) {
           _lowerPage.includes('ncba') || _lowerPage.includes('dtb') || _lowerPage.includes('diamond trust');
         const _isMpesa = !_isPesaLink;
 
-        let _payInstructions = '';
+        // Choice Bank production paybill (was a stale hardcoded 4007199). Sent as separate, easy-to-
+        // copy messages: intro, paybill, account number — matching the approved-buyer path.
+        const _PAYBILL = '444174';
+        let _payMsgs = [];
         if (_isPesaLink) {
-          _payInstructions = `Hello! Please send KES ${_orderAmount.toLocaleString()} via PesaLink to:\n\n🏦 Bank: Choice Microfinance Bank\n📋 Account Number: ${_choiceAccNum}\n\nOnce you've sent the payment, please share your bank transfer confirmation here and I will release your crypto immediately. Thank you!`;
+          _payMsgs = [
+            `Hello! Please send KES ${_orderAmount.toLocaleString()} via PesaLink to Choice Microfinance Bank 👇`,
+            `Bank: Choice Microfinance Bank`,
+            `Account Number: ${_choiceAccNum}`,
+            `Once sent, share your bank confirmation here and I'll release your crypto. Thank you!`,
+          ];
         } else if (_isMpesa && _orderAmount > 250000) {
-          // M-Pesa limit is 250K — split into two transactions
-          const _firstTx = 250000;
-          const _secondTx = _orderAmount - _firstTx;
-          _payInstructions = `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa in two separate transactions:\n\n1️⃣ First transaction — Send KES 250,000 to:\n📱 Paybill: 4007199\n📋 Account Number: ${_choiceAccNum}\n\n2️⃣ Second transaction — Send KES ${_secondTx.toLocaleString()} to the same:\n📱 Paybill: 4007199\n📋 Account Number: ${_choiceAccNum}\n\nAfter sending both, please click "I've Sent Payment" and I will release your crypto immediately. Thank you!`;
+          // M-Pesa per-transaction limit is 250K — buyer pays in two transactions to the same paybill.
+          const _secondTx = _orderAmount - 250000;
+          _payMsgs = [
+            `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa in TWO transactions to the Paybill below 👇`,
+            `Paybill Number: ${_PAYBILL}`,
+            `Account Number: ${_choiceAccNum}`,
+            `1️⃣ Send KES 250,000 first, then 2️⃣ send KES ${_secondTx.toLocaleString()} to the same Paybill + account. Then tap "I've Sent Payment". Thank you!`,
+          ];
         } else {
-          _payInstructions = `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa to:\n\n📱 Paybill: 4007199\n📋 Account Number: ${_choiceAccNum}\n\nAfter sending, please click "I've Sent Payment" and I will release your crypto automatically. Thank you!`;
+          _payMsgs = [
+            `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa to the Paybill below. Your crypto is released automatically once payment is received 👇`,
+            `Paybill Number: ${_PAYBILL}`,
+            `Account Number: ${_choiceAccNum}`,
+          ];
         }
 
         if (_choiceAccNum) {
-          await sendBinanceChatMessage(page, _payInstructions);
+          for (let i = 0; i < _payMsgs.length; i++) {
+            await sendBinanceChatMessage(page, _payMsgs[i]);
+            if (i < _payMsgs.length - 1) await new Promise(r => setTimeout(r, 1000 + Math.random() * 800));  // human-like gap
+          }
           sellPayInstructSentOrders.add(order.orderNumber);
-          console.log(`[SparkP2P] Order ${order.orderNumber} — payment instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'})`);
+          console.log(`[SparkP2P] Order ${order.orderNumber} — payment instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'}, ${_payMsgs.length} msgs, paybill ${_PAYBILL})`);
         } else {
           console.log(`[SparkP2P] Order ${order.orderNumber} — Choice Bank account number not set, cannot send instructions`);
         }
