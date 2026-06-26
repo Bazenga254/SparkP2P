@@ -8471,7 +8471,9 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, name, amou
 
   const data = await res.json();
   console.log('[SparkP2P] Choice Bank payment success txId=' + (data.transaction_id || 'n/a'));
-  return { success: true, referenceId: data.transaction_id || '', screenshot: null };
+  // receipt_image is a generated payment-confirmation PNG (base64) — Choice is API-only, so the
+  // backend renders the proof we upload to Binance instead of screenshotting a (non-existent) page.
+  return { success: true, referenceId: data.transaction_id || '', screenshot: data.receipt_image || null };
 }
 
 // BUY ORDER â€” I&M PAYMENT EXECUTION

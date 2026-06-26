@@ -2733,10 +2733,26 @@ async def choice_pay(
     db.add(payment)
     await db.commit()
 
+    # Generate the proof receipt image (Choice is API-only — no page to screenshot). The desktop
+    # uploads this to Binance before clicking "Transferred, notify seller".
+    receipt_b64 = ""
+    try:
+        from app.services.payment_receipt import generate_receipt
+        receipt_b64 = generate_receipt(
+            amount=data.amount,
+            payee_name=data.payee_name,
+            payee_account=data.payee_account_id,
+            ref=tx_id or remark,
+            method="Bank Transfer" if data.bank_code else "M-Pesa",
+        )
+    except Exception as e:
+        logger.warning(f"choice-pay receipt generation failed: {e}")
+
     return {
         "success": True,
         "transaction_id": tx_id,
         "amount": data.amount,
         "payee": data.payee_account_id,
         "remark": remark,
+        "receipt_image": receipt_b64,
     }
