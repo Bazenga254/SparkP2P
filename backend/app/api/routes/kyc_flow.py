@@ -148,22 +148,14 @@ async def submit_mobile_kyc(token: str, body: MobileKycBody, db: AsyncSession = 
     trader.choice_kyc_status = "pending:" + onboarding_id
     await db.commit()
 
-    # Choice production rejects PDF media — flatten a PDF KRA cert to a JPEG image first.
-    kra_b64, kra_ct = body.kra_cert_b64, body.kra_cert_content_type
-    if "pdf" in (kra_ct or "").lower():
-        try:
-            kra_b64 = _pdf_to_jpeg_b64(body.kra_cert_b64)
-            kra_ct = "image"
-        except Exception as e:
-            raise HTTPException(400, "Could not process the KRA PDF — please upload a photo instead: " + str(e))
-
-    for upload_args in [
+    # Choice's current-account KYC documents are ONLY: ID front (KYCF00001), ID back (KYCF00002),
+    # selfie (KYCF00006). The KRA is the `kraPin` TEXT in submitOnboardingRequest — Choice has no
+    # KRA-cert document type (uploading KYCF00009 -> error 13230 "invalid media type"), so we don't.
+    for media_type, b64, ct in [
         ("KYCF00001", body.front_photo_b64, "image"),
         ("KYCF00002", body.back_photo_b64, "image"),
         ("KYCF00006", body.selfie_b64, "image"),
-        ("KYCF00009", kra_b64, kra_ct),
     ]:
-        media_type, b64, ct = upload_args
         upload_res = await choice.upload_kyc_media(onboarding_id, media_type, b64, ct)
         if upload_res.get("code") != "00000":
             raise HTTPException(400, "Failed to upload " + media_type + ": " + upload_res.get("msg", "Upload error"))
