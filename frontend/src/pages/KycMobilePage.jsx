@@ -380,7 +380,7 @@ export default function KycMobilePage() {
 
   // Step 2: Contact & ID
   if (step === 'contact') {
-    const ok = form.mobile && form.idNumber && form.address;
+    const ok = form.mobile && form.idNumber && form.address && form.email && /^\S+@\S+\.\S+$/.test(form.email);
     return (
       <div style={S.wrap}>
         <div style={S.header}><ProgressBar step={step} /></div>
@@ -391,10 +391,13 @@ export default function KycMobilePage() {
           <Field label="National ID Number" value={form.idNumber} onChange={setField('idNumber')} required />
           <SelectField label="Gender" value={form.gender} onChange={setField('gender')} required
             options={[{ value: '1', label: 'Male' }, { value: '0', label: 'Female' }]} />
-          <Field label="Email Address" value={form.email} onChange={setField('email')} type="email" placeholder="Optional" />
+          <Field label="Email Address" value={form.email} onChange={setField('email')} required type="email" placeholder="Same email as your Binance account" />
+          <div style={{ color: '#9ca3af', fontSize: 11.5, marginTop: -8, marginBottom: 12, lineHeight: 1.5 }}>
+            ⚠️ Use the <strong>same email as your Binance account</strong> — Choice sends transaction OTPs here, and the bot reads them to automate your payouts.
+          </div>
           <Field label="Physical Address" value={form.address} onChange={setField('address')} required placeholder="e.g. Westlands, Nairobi" />
           <MsgBox msg={msg} />
-          <button onClick={() => { if (!ok) { setMsg({ text: 'Please fill Phone, ID Number, and Physical Address.' }); return; } setMsg(null); setStep('financial'); }} style={S.nextBtn(!ok)}>
+          <button onClick={() => { if (!ok) { setMsg({ text: 'Please fill Phone, ID Number, a valid Email, and Physical Address.' }); return; } setMsg(null); setStep('financial'); }} style={S.nextBtn(!ok)}>
             Continue &#8594;
           </button>
         </div>

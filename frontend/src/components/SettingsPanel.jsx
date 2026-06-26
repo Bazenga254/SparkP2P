@@ -2221,9 +2221,12 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
         };
 
         const handleSubmit = async () => {
-          const { firstName, lastName, mobile, idNumber, birthday, gender } = cbForm;
+          const { firstName, lastName, mobile, idNumber, birthday, gender, email } = cbForm;
           if (!firstName || !lastName || !mobile || !idNumber || !birthday) {
             setCbMsg({ type: 'error', text: 'Please fill in all required fields.' }); return;
+          }
+          if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
+            setCbMsg({ type: 'error', text: 'A valid email is required — use the same email as your Binance account (the bot reads OTPs from it).' }); return;
           }
           if (!cbFiles.front || !cbFiles.back || !cbFiles.selfie) {
             setCbMsg({ type: 'error', text: 'Please upload ID front, ID back, and selfie.' }); return;

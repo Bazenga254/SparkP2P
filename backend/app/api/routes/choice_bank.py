@@ -602,6 +602,9 @@ async def onboard_wallet(body: WalletOnboardRequest, db: AsyncSession = Depends(
     Initiate wallet account creation for a trader.
     Returns onboardingRequestId — use it for OTP confirmation and status polling.
     """
+    _email = (body.email or "").strip()
+    if not _email or "@" not in _email or "." not in _email.split("@")[-1]:
+        raise HTTPException(status_code=400, detail="A valid email is required — use the same email as your Binance account.")
     result = await choice.create_wallet_account(
         user_id=str(body.trader_id),
         first_name=body.first_name,

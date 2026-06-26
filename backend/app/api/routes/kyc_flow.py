@@ -103,7 +103,14 @@ async def submit_mobile_kyc(token: str, body: MobileKycBody, db: AsyncSession = 
     if not trader:
         raise HTTPException(404, "Trader not found.")
     if trader.choice_account_id:
+        logger.warning(f"[KYC] submit trader={tid}: already has choice_account_id={trader.choice_account_id} — OTP SKIPPED (already_verified)")
         return {"status": "already_verified", "account_number": trader.choice_account_number}
+
+    # Email is mandatory — it's the channel Choice verifies + sends transaction OTPs to, which the bot
+    # reads to automate payouts. Must be the same email used for Binance (so one inbox holds both OTPs).
+    _email = (body.email or "").strip()
+    if not _email or "@" not in _email or "." not in _email.split("@")[-1]:
+        raise HTTPException(400, "A valid email address is required — use the same email as your Binance account.")
 
     result = await choice.create_current_account(
         user_id=str(tid),
@@ -167,12 +174,13 @@ async def submit_mobile_kyc(token: str, body: MobileKycBody, db: AsyncSession = 
     # email OTP can't be sent.
     otp_channel = "email"
     otp_res = await choice.send_otp(onboarding_id, "EMAIL")
+    logger.warning(f"[KYC] {onboarding_id} sendOtp(EMAIL) -> code={otp_res.get('code')} msg={otp_res.get('msg') or otp_res.get('message')}")
     if otp_res.get("code") != "00000":
-        logger.warning(f"[KYC] EMAIL OTP failed ({otp_res.get('msg')}) — falling back to SMS for {onboarding_id}")
         otp_channel = "sms"
-        otp_res = await choice.send_otp(onboarding_id, "SMS")
-        if otp_res.get("code") != "00000":
-            raise HTTPException(400, "Documents submitted but OTP failed: " + otp_res.get("msg", "OTP error"))
+        sms_res = await choice.send_otp(onboarding_id, "SMS")
+        logger.warning(f"[KYC] {onboarding_id} EMAIL failed; sendOtp(SMS) -> code={sms_res.get('code')} msg={sms_res.get('msg') or sms_res.get('message')}")
+        if sms_res.get("code") != "00000":
+            raise HTTPException(400, "Documents submitted but OTP failed: " + sms_res.get("msg", "OTP error"))
 
     return {"onboardingRequestId": onboarding_id, "otp_channel": otp_channel}
 
