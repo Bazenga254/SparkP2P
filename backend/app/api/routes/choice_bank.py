@@ -628,7 +628,17 @@ async def onboard_wallet(body: WalletOnboardRequest, db: AsyncSession = Depends(
         trader.choice_kyc_status = f"onboarding:{onboarding_id}"
         await db.commit()
 
-    return {"onboardingRequestId": onboarding_id}
+    # Verify the EMAIL during onboarding (otpType=EMAIL) so the registered email becomes verified —
+    # required for each later transaction's sendOtp(EMAIL), which the bot reads from the same inbox.
+    # SMS fallback so onboarding never breaks if the email OTP can't be sent.
+    otp_channel = "email"
+    otp_res = await choice.send_otp(onboarding_id, "EMAIL")
+    if (otp_res or {}).get("code") != "00000":
+        logger.warning(f"[ChoiceBank] wallet EMAIL OTP failed ({(otp_res or {}).get('msg')}) — SMS fallback for {onboarding_id}")
+        otp_channel = "sms"
+        await choice.send_otp(onboarding_id, "SMS")
+
+    return {"onboardingRequestId": onboarding_id, "otp_channel": otp_channel}
 
 
 @router.post("/choice/onboard/current")

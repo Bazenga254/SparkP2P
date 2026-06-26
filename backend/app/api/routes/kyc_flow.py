@@ -1,6 +1,9 @@
 from app.core.config import settings
 import secrets
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -158,11 +161,20 @@ async def submit_mobile_kyc(token: str, body: MobileKycBody, db: AsyncSession = 
         if upload_res.get("code") != "00000":
             raise HTTPException(400, "Failed to upload " + media_type + ": " + upload_res.get("msg", "Upload error"))
 
-    otp_res = await choice.send_otp(onboarding_id)
+    # Verify the EMAIL during onboarding (otpType=EMAIL) so the registered email becomes verified —
+    # this is what later lets each transaction use sendOtp(EMAIL), so the bot can read OTPs straight
+    # from the same Gmail inbox (no SMS, no phone). Fall back to SMS so onboarding never breaks if the
+    # email OTP can't be sent.
+    otp_channel = "email"
+    otp_res = await choice.send_otp(onboarding_id, "EMAIL")
     if otp_res.get("code") != "00000":
-        raise HTTPException(400, "Documents submitted but OTP failed: " + otp_res.get("msg", "OTP error"))
+        logger.warning(f"[KYC] EMAIL OTP failed ({otp_res.get('msg')}) — falling back to SMS for {onboarding_id}")
+        otp_channel = "sms"
+        otp_res = await choice.send_otp(onboarding_id, "SMS")
+        if otp_res.get("code") != "00000":
+            raise HTTPException(400, "Documents submitted but OTP failed: " + otp_res.get("msg", "OTP error"))
 
-    return {"onboardingRequestId": onboarding_id}
+    return {"onboardingRequestId": onboarding_id, "otp_channel": otp_channel}
 
 
 class OtpBody(BaseModel):

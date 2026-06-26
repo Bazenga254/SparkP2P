@@ -87,19 +87,28 @@ async def get_bank_codes() -> dict:
 
 # ── OTP ───────────────────────────────────────────────────────────────────────
 
-async def send_otp(onboarding_request_id: str) -> dict:
-    """Trigger OTP SMS for the given onboarding request."""
+async def send_otp(business_id: str, otp_type: str = "SMS") -> dict:
+    """Trigger an OTP for an operation (txId / onboardingRequestId). otpType ("SMS"|"EMAIL") selects
+    the channel AND verifies it — sending EMAIL during onboarding is what marks the registered email
+    as verified, which a later transaction's sendOtp(EMAIL) requires."""
     return await _post("/common/sendOtp", {
-        "businessId": onboarding_request_id,
-        "otpType": "SMS",
+        "businessId": business_id,
+        "otpType": otp_type,
     })
 
 
+async def resend_otp(business_id: str, otp_type: str = "SMS") -> dict:
+    """Re-send an OTP if the first didn't arrive (onboarding / account / transaction operations)."""
+    return await _post("/common/resendOtp", {
+        "businessId": business_id,
+        "otpType": otp_type,
+    })
 
-async def confirm_otp(onboarding_request_id: str, otp: str) -> dict:
-    """Confirm OTP. businessId is the onboardingRequestId."""
+
+async def confirm_otp(business_id: str, otp: str) -> dict:
+    """Confirm an OTP. businessId is the txId / onboardingRequestId the OTP was sent for."""
     return await _post("/common/confirmOperation", {
-        "businessId": onboarding_request_id,
+        "businessId": business_id,
         "otpCode": otp,
     })
 
