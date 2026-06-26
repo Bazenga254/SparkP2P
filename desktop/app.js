@@ -4243,6 +4243,12 @@ Method selection rules:
         }
       }
       // Payment succeeded â€” store details and switch back to Binance
+      // Payment failed / insufficient balance — do NOT tell the seller anything or click Transferred.
+      if (!imResult.success) {
+        console.log(`[SparkP2P] ⛔ Buy ${order.orderNumber} NOT paid (success=false) — skipping seller message & Transferred`);
+        continue;
+      }
+
       buyOrderDetailsMap[order.orderNumber] = {
         sellerName: paymentDetails.name,
         amount: paymentDetails.amount,
@@ -8048,6 +8054,12 @@ Method selection rules:
           }
         }
       }
+      // Payment failed / insufficient balance — do NOT tell the seller anything or click Transferred.
+      if (!imResult.success) {
+        console.log(`[SparkP2P] ⛔ Buy ${order_number} NOT paid (success=false) — skipping seller message & Transferred`);
+        return;
+      }
+
       buyOrderDetailsMap[order_number] = {
         sellerName: paymentDetails.name,
         amount: paymentDetails.amount,

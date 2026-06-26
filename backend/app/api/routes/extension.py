@@ -2571,6 +2571,22 @@ async def choice_payment_received(
 
 # ── Buy order pre-payment Telegram notification ───────────────────────────────
 
+async def _choice_balance(trader) -> float | None:
+    """Live Choice Bank balance (KES) for the trader's sub-account, or None if unavailable.
+    Used to block BUY-order payouts the trader can't actually fund."""
+    acct = getattr(trader, "choice_account_id", None)
+    if not acct:
+        return None
+    try:
+        from app.services.choice_bank import client as choice_client
+        result = await choice_client.get_account_details(acct)
+        data = result.get("data") or {}
+        bal = data.get("balance")
+        return float(bal) if bal is not None else None
+    except Exception:
+        return None
+
+
 class NotifyBuyPaymentRequest(BaseModel):
     order_number: str
     seller_name: str = ""
@@ -2597,6 +2613,20 @@ async def notify_buy_payment(
     amt_str = f"KES {int(data.amount):,}"
     name = data.verified_name or data.seller_name or "Unknown"
     verified_tag = " ✅" if data.verified_name else ""
+
+    # Balance pre-check — never announce/attempt a payout the trader can't fund.
+    bal = await _choice_balance(trader)
+    if bal is not None and bal < data.amount:
+        shortfall = data.amount - bal
+        await notify_trader(trader, (
+            f"⚠️ SparkP2P — Insufficient Choice balance\n\n"
+            f"Cannot pay {amt_str} for order ...{data.order_number[-12:]}.\n"
+            f"💰 Choice balance: KES {bal:,.0f}\n"
+            f"➕ Top up at least KES {shortfall:,.0f} more.\n\n"
+            f"Order was NOT processed and the seller was NOT told you paid. "
+            f"Top up your Choice account so future orders go through."
+        ))
+        return {"ok": False, "insufficient": True, "balance": bal, "needed": data.amount}
 
     if data.method in ("im_bank", "other_bank"):
         bank = data.bank_name or "Bank"
@@ -2646,6 +2676,16 @@ async def choice_pay(
         )
 
     from app.services.choice_bank.client import transfer
+
+    # Hard balance gate — never move money the trader doesn't have (prevents a failed transfer that
+    # leaves the seller falsely told "paid" and the order auto-cancelling).
+    bal = await _choice_balance(trader)
+    if bal is not None and bal < data.amount:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Insufficient Choice balance: KES {bal:,.0f} available, "
+                    f"KES {data.amount:,.0f} needed. Top up your Choice account."),
+        )
 
     remark = data.remark or f"SparkP2P BUY {data.order_number[-12:]}"
     result = await transfer(
