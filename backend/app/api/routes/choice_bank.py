@@ -716,6 +716,61 @@ async def confirm_onboarding_otp(body: OtpConfirmRequest, db: AsyncSession = Dep
     return {"status": "confirmed"}
 
 
+# ── Close account (so the trader can re-onboard fresh — e.g. to get the email verified) ──────────
+_pending_close: dict[int, str] = {}   # trader_id -> applicationId awaiting OTP confirmation
+
+
+class CloseAccountInitiate(BaseModel):
+    closure_reason: str = "Account holder circumstances have changed"
+
+
+class CloseAccountConfirm(BaseModel):
+    otp: str
+
+
+@router.post("/choice/account/close/initiate")
+async def close_account_initiate(body: CloseAccountInitiate, trader: Trader = Depends(get_current_trader)):
+    """Step 1: request closure of the trader's Choice account. Blocks if funds remain (withdraw first).
+    Sends an OTP (SMS, since the email may be unverified) to validate; Choice staff then manually
+    review/approve. Closing the LAST account lets the trader re-onboard fresh (email-verified)."""
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+    # Safeguard — never close an account that still holds funds.
+    try:
+        det = await choice.get_account_details(trader.choice_account_id)
+        bal = float((det.get("data") or {}).get("balance") or 0)
+    except Exception:
+        bal = 0.0
+    if bal > 1:
+        raise HTTPException(status_code=400,
+            detail=f"Withdraw your balance first — KES {bal:,.0f} remaining. Empty the account, then close it.")
+    r = await choice.close_individual_account(trader.choice_account_id, body.closure_reason, "SMS")
+    if r.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=r.get("msg", "Account closure request failed"))
+    app_id = (r.get("data") or {}).get("applicationId") or ""
+    if not app_id:
+        raise HTTPException(status_code=502, detail="No applicationId returned by Choice")
+    _pending_close[trader.id] = app_id
+    return {"status": "otp_sent", "applicationId": app_id,
+            "message": "Enter the OTP sent to your phone to confirm the closure request."}
+
+
+@router.post("/choice/account/close/confirm")
+async def close_account_confirm(body: CloseAccountConfirm, trader: Trader = Depends(get_current_trader)):
+    """Step 2: confirm the OTP. After this, Choice staff review the closure; the result arrives via
+    callback. Once approved, the trader re-onboards (now with the email-verification step)."""
+    app_id = _pending_close.get(trader.id)
+    if not app_id:
+        raise HTTPException(status_code=400, detail="No pending closure request. Start again.")
+    r = await choice.confirm_otp(app_id, body.otp.strip())
+    if r.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=r.get("msg", "Invalid or expired OTP"))
+    _pending_close.pop(trader.id, None)
+    return {"status": "submitted",
+            "message": "Closure submitted. Choice will review and approve; result arrives via callback. "
+                       "Once closed, re-onboard for a fresh, email-verified account."}
+
+
 @router.get("/choice/onboard/status/{onboarding_request_id}")
 async def check_onboarding_status(onboarding_request_id: str, trader_id: int, db: AsyncSession = Depends(get_db)):
     """

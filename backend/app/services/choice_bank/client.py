@@ -106,10 +106,22 @@ async def resend_otp(business_id: str, otp_type: str = "SMS") -> dict:
 
 
 async def confirm_otp(business_id: str, otp: str) -> dict:
-    """Confirm an OTP. businessId is the txId / onboardingRequestId the OTP was sent for."""
+    """Confirm an OTP. businessId is the txId / onboardingRequestId / applicationId the OTP was for."""
     return await _post("/common/confirmOperation", {
         "businessId": business_id,
         "otpCode": otp,
+    })
+
+
+async def close_individual_account(account_id: str, closure_reason: str, otp_type: str = "SMS") -> dict:
+    """Close a BaaS Wallet/Current account. An OTP is sent to validate the request; then Choice staff
+    manually review and approve/reject, with the result delivered via callback. Returns
+    { applicationId } — confirm the OTP against that applicationId. Closing the customer's LAST
+    account sets their onboarding to ACCOUNT_CLOSED, so a fresh KYC onboarding is required to reopen."""
+    return await _post("/account/closeIndividualAccount", {
+        "accountId":     account_id,
+        "closureReason": closure_reason,
+        "otpType":       otp_type,
     })
 
 
