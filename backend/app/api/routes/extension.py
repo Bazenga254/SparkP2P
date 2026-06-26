@@ -2585,6 +2585,34 @@ async def choice_payment_received(
     }
 
 
+# ── SMS-OTP relay: the phone's SmsReceiver posts incoming OTP texts here ───────
+
+import re as _re
+import time as _time
+
+# trader_id -> {otp, sender, ts}. Latest OTP the phone relayed; a pending payout reads it to confirm.
+_received_sms_otp: dict[int, dict] = {}
+
+
+class SmsOtpData(BaseModel):
+    sender: str = ""
+    body: str = ""
+
+
+@router.post("/sms-otp")
+async def receive_sms_otp(data: SmsOtpData, trader: Trader = Depends(get_current_trader)):
+    """The sideloaded app's SMS reader forwards incoming code-bearing SMS here. We log sender+body (to
+    learn the exact Choice OTP format) and stash the extracted 6-digit code so a pending Choice payout
+    can confirm the operation with it (the channel that actually works — email can't be verified)."""
+    body = data.body or ""
+    m = _re.search(r"(?<!\d)(\d{6})(?!\d)", body)
+    otp = m.group(1) if m else None
+    logger.warning(f"[SMS-OTP] trader={trader.id} sender={data.sender!r} body={body[:120]!r} -> otp={otp}")
+    if otp:
+        _received_sms_otp[trader.id] = {"otp": otp, "sender": data.sender, "ts": _time.time()}
+    return {"ok": True, "otp_seen": bool(otp)}
+
+
 # ── Buy order pre-payment Telegram notification ───────────────────────────────
 
 async def _choice_balance(trader) -> float | None:

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { isNative } from '../mobile/relayAgent';
 import { hasBinanceChat, openBinanceLogin, binanceChatStatus, sendBinanceChat, binanceChatLogout, checkBinanceAuth } from '../mobile/binanceChat';
+import { hasChoiceSms, requestSmsPermission, smsPermissionStatus } from '../mobile/choiceSms';
 
 // Phase-1 test panel for mobile chat-send (BinanceChatPlugin). Lets the merchant log into Binance
 // inside the app, confirm the session, and manually send a test message to an order — proving the
@@ -13,6 +14,7 @@ export default function BinanceChatTest() {
   const [msg, setMsg] = useState('Hello — test message from SparkP2P mobile.');
   const [result, setResult] = useState('');
   const [busy, setBusy] = useState(false);
+  const [smsGranted, setSmsGranted] = useState(false);
 
   useEffect(() => {
     if (native) return;
@@ -23,6 +25,10 @@ export default function BinanceChatTest() {
 
   const refresh = async () => { const s = await binanceChatStatus(); setLoggedIn(!!s.loggedIn); };
   useEffect(() => { if (native) refresh(); }, [native]);
+
+  const refreshSms = async () => { const s = await smsPermissionStatus(); setSmsGranted(!!s.granted); };
+  useEffect(() => { if (native && hasChoiceSms()) refreshSms(); }, [native]);
+  const grantSms = async () => { await requestSmsPermission(); setTimeout(refreshSms, 1500); };
 
   if (!native || !hasBinanceChat()) return null;
 
@@ -79,6 +85,22 @@ export default function BinanceChatTest() {
       </button>
 
       {result && <div style={{ fontSize: 11.5, color: '#d1d5db', marginTop: 10, wordBreak: 'break-word', fontFamily: 'monospace' }}>{result}</div>}
+
+      {hasChoiceSms() && (
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#fbbf24', marginBottom: 4 }}>📩 Choice SMS-OTP reader</div>
+          <div style={{ fontSize: 11.5, color: '#9ca3af', lineHeight: 1.5, marginBottom: 10 }}>
+            Lets the app read Choice Bank transaction OTPs from SMS and confirm payouts automatically.
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 9, height: 9, borderRadius: '50%', background: smsGranted ? '#10b981' : '#f59e0b' }} />
+            <span style={{ fontSize: 12.5, color: smsGranted ? '#6ee7b7' : '#fbbf24', fontWeight: 600, flex: 1 }}>
+              {smsGranted ? 'SMS permission granted' : 'SMS permission needed'}
+            </span>
+            {!smsGranted && <button type="button" onClick={grantSms} style={btn}>Grant SMS permission</button>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
