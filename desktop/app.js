@@ -621,6 +621,49 @@ function createMainWindow() {
   // Disable cache so frontend updates are always picked up immediately
   mainWindow.webContents.session.clearCache().catch(() => {});
 
+  // ── "Continue with Google" → open the user's SYSTEM browser (where they're already signed in)
+  // instead of an in-app window. Mirrors the mobile flow: open /api/auth/google?platform=app&sid=…
+  // externally, poll /api/auth/google/result, then load /login?google_token=… back into the app.
+  const _origin = (DASHBOARD_URL.match(/^https?:\/\/[^/]+/) || ['https://sparkp2p.com'])[0];
+  const isGoogleOAuthTrigger = (u) => {
+    if (!u) return false;
+    // our own external call already carries platform=app, and the result poll is a fetch (not a nav)
+    if (/\/api\/auth\/google(\b|\/|\?)/.test(u) && !u.includes('platform=app') && !u.includes('/google/result')) return true;
+    try { if (/(^|\.)accounts\.google\.com$/.test(new URL(u).hostname)) return true; } catch {}
+    return false;
+  };
+  let _googleOAuthInFlight = false;
+  const startExternalGoogleOAuth = () => {
+    if (_googleOAuthInFlight) return;
+    _googleOAuthInFlight = true;
+    const sid = (() => { try { return require('crypto').randomUUID(); } catch { return Date.now() + '' + Math.random().toString(36).slice(2); } })();
+    shell.openExternal(`${_origin}/api/auth/google?platform=app&sid=${encodeURIComponent(sid)}`);
+    console.log('[SparkP2P] Google sign-in opened in your browser — waiting for you to choose an account…');
+    let tries = 0;
+    const poll = setInterval(async () => {
+      tries++;
+      if (tries > 150 || !mainWindow || mainWindow.isDestroyed()) { clearInterval(poll); _googleOAuthInFlight = false; return; }
+      try {
+        const r = await fetch(`${_origin}/api/auth/google/result?sid=${encodeURIComponent(sid)}`);
+        if (r.ok) {
+          const d = await r.json().catch(() => null);
+          if (d && d.google_token) {
+            clearInterval(poll); _googleOAuthInFlight = false;
+            console.log('[SparkP2P] Google sign-in complete — logging in');
+            mainWindow.loadURL(`${_origin}/login?google_token=${encodeURIComponent(d.google_token)}`);
+          }
+        }
+      } catch {}
+    }, 2000);
+  };
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isGoogleOAuthTrigger(url)) { startExternalGoogleOAuth(); return { action: 'deny' }; }
+    return { action: 'allow' };
+  });
+  mainWindow.webContents.on('will-navigate', (e, url) => {
+    if (isGoogleOAuthTrigger(url)) { e.preventDefault(); startExternalGoogleOAuth(); }
+  });
+
   const loadDashboard = (attempt = 1) => {
     mainWindow.loadURL(DASHBOARD_URL + '?v=' + Date.now()).catch(() => {});
   };
