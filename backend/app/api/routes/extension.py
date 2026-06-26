@@ -664,6 +664,20 @@ async def verify_payment(
                         "reason": f"already_used: M-Pesa code {code} is from a transaction that predates this order. Ask buyer to send a new payment.",
                         "mpesa_receipt": code,
                     }
+                # Amount gate — a genuine code is NOT enough; the payment must cover the order
+                # (whole-figure, cents ignored). Prevents releasing a large order for a small real payment.
+                if data.fiat_amount and int(direct_payment.amount) < int(data.fiat_amount):
+                    logger.warning(
+                        f"M-Pesa code {code} underpaid: KES {direct_payment.amount} < order KES {data.fiat_amount} "
+                        f"for {data.binance_order_number}"
+                    )
+                    return {
+                        "verified": False,
+                        "reason": (f"underpaid: this M-Pesa payment was KES {direct_payment.amount:,.0f} but the order "
+                                   f"is KES {data.fiat_amount:,.0f}. Ask the buyer to pay the difference."),
+                        "mpesa_receipt": code,
+                        "amount_received": direct_payment.amount,
+                    }
                 logger.info(f"M-Pesa code {code} matched directly in Payment table for order {data.binance_order_number}")
                 # Lock this payment to the order so it can never be reused for another order
                 if direct_payment.order_id is None:
@@ -694,7 +708,8 @@ async def verify_payment(
         amount_result = await db.execute(
             select(Payment).where(
                 Payment.trader_id == trader.id,
-                Payment.amount.between(data.fiat_amount - amount_tolerance, data.fiat_amount + amount_tolerance),
+                # Whole-figure: lower bound = floored order amount (no underpayment), small over-tolerance to still match.
+                Payment.amount.between(int(data.fiat_amount), data.fiat_amount + amount_tolerance),
                 Payment.created_at >= time_floor,
                 Payment.direction == PaymentDirection.INBOUND,
                 or_(Payment.order_id.is_(None), Payment.order_id == order.id),
@@ -2560,7 +2575,8 @@ async def choice_payment_received(
         )
     )
     total_paid = float(total_result.scalar() or 0)
-    received = total_paid >= order.fiat_amount - 5
+    # Whole-figure match: ignore cents only, NO underpayment slack (was amount - 5 KES).
+    received = int(total_paid) >= int(order.fiat_amount)
     return {
         "received": received,
         "total_paid": total_paid,
