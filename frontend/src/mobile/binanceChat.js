@@ -27,6 +27,15 @@ export async function binanceChatStatus() {
   catch (_) { return { loggedIn: false, native: true }; }
 }
 
+// SAFE login check — loads the merchant's own ads page (no order placed) to verify the WebView
+// session is recognized. Resolves { ok, detail } where detail starts LOGGED_IN / LOGGED_OUT.
+export async function checkBinanceAuth() {
+  const p = plugin();
+  if (!p) return { ok: false, detail: 'not native' };
+  try { return await p.checkAuth(); }
+  catch (e) { return { ok: false, detail: String(e && e.message ? e.message : e) }; }
+}
+
 // Send a chat message to an order. Resolves { ok, detail }.
 export async function sendBinanceChat(orderNumber, message) {
   const p = plugin();

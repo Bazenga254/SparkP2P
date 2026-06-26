@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { isNative } from '../mobile/relayAgent';
-import { hasBinanceChat, openBinanceLogin, binanceChatStatus, sendBinanceChat, binanceChatLogout } from '../mobile/binanceChat';
+import { hasBinanceChat, openBinanceLogin, binanceChatStatus, sendBinanceChat, binanceChatLogout, checkBinanceAuth } from '../mobile/binanceChat';
 
 // Phase-1 test panel for mobile chat-send (BinanceChatPlugin). Lets the merchant log into Binance
 // inside the app, confirm the session, and manually send a test message to an order — proving the
@@ -35,6 +35,14 @@ export default function BinanceChatTest() {
     setBusy(false);
   };
 
+  const check = async () => {
+    setBusy(true); setResult('Checking login (no order placed)…');
+    const r = await checkBinanceAuth();
+    const li = (r.detail || '').startsWith('LOGGED_IN');
+    setResult((li ? '✅ ' : '⚠️ ') + (r.detail || JSON.stringify(r)));
+    setBusy(false);
+  };
+
   return (
     <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(245,166,35,0.30)', borderRadius: 12, padding: 14, marginBottom: 14 }}>
       <div style={{ fontSize: 14, fontWeight: 700, color: '#fbbf24', marginBottom: 4 }}>📱 Mobile chat-send (test)</div>
@@ -57,6 +65,10 @@ export default function BinanceChatTest() {
         </button>
         {loggedIn && <button type="button" onClick={async () => { await binanceChatLogout(); refresh(); }} style={{ ...miniBtn, padding: '10px 12px' }}>Log out</button>}
       </div>
+
+      <button type="button" onClick={check} disabled={busy} style={{ ...btn, width: '100%', marginBottom: 10, background: 'rgba(16,185,129,0.18)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.4)' }}>
+        {busy ? 'Working…' : '1. Check login (safe — no order)'}
+      </button>
 
       <input value={order} onChange={(e) => setOrder(e.target.value)} placeholder="Order number"
         style={input} inputMode="numeric" />

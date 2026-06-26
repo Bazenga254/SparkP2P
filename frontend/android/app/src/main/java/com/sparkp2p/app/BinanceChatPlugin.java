@@ -44,6 +44,7 @@ public class BinanceChatPlugin extends Plugin {
     private WebView sender;
     private FrameLayout overlay;
     private PluginCall pending;
+    private String pendingAction = "send";   // "send" | "auth"
     private boolean injected;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -79,12 +80,10 @@ public class BinanceChatPlugin extends Plugin {
         final String msg = call.getString("message", "");
         if (order.isEmpty() || msg.isEmpty()) { call.reject("orderNumber and message required"); return; }
         if (pending != null) { call.reject("busy: another send in progress"); return; }
-        pending = call;
-        injected = false;
-
+        pending = call; pendingAction = "send"; injected = false;
         ui.post(() -> {
             try {
-                attachOverlay();
+                attachOverlay("SparkP2P — sending message…");
                 ui.postDelayed(() -> finishIfPending("TIMEOUT"), TIMEOUT_MS);
                 sender.loadUrl(ORDER_URL + order);
             } catch (Exception e) {
@@ -93,14 +92,31 @@ public class BinanceChatPlugin extends Plugin {
         });
     }
 
-    private void attachOverlay() {
+    // SAFE login check — loads the merchant's own P2P ads page (requires login, places NOTHING) to
+    // tell us whether the WebView session is actually recognized, without risking an order.
+    @PluginMethod
+    public void checkAuth(PluginCall call) {
+        if (pending != null) { call.reject("busy"); return; }
+        pending = call; pendingAction = "auth"; injected = false;
+        ui.post(() -> {
+            try {
+                attachOverlay("SparkP2P — checking login (no order)…");
+                ui.postDelayed(() -> finishIfPending("AUTH_TIMEOUT"), TIMEOUT_MS);
+                sender.loadUrl("https://p2p.binance.com/en/myAds");
+            } catch (Exception e) {
+                finishIfPending("ERR:" + e.getMessage());
+            }
+        });
+    }
+
+    private void attachOverlay(String headerText) {
         Activity act = getActivity();
         ViewGroup content = act.findViewById(android.R.id.content);
         overlay = new FrameLayout(act);
         overlay.setBackgroundColor(0xFF0B0E14);
 
         TextView hdr = new TextView(act);
-        hdr.setText("SparkP2P — sending message…");
+        hdr.setText(headerText);
         hdr.setTextColor(0xFFF5A623);
         hdr.setTextSize(13);
         hdr.setPadding(28, 36, 28, 16);
@@ -121,10 +137,15 @@ public class BinanceChatPlugin extends Plugin {
         sender.setBackgroundColor(Color.WHITE);
         sender.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) {
-                if (url == null || !url.contains("fiatOrderDetail")) return;
-                if (injected) return;
-                injected = true;
-                ui.postDelayed(BinanceChatPlugin.this::doType, RENDER_WAIT_MS);
+                if (injected || pending == null) return;
+                if ("send".equals(pendingAction)) {
+                    if (url == null || !url.contains("fiatOrderDetail")) return;   // wait for the order page
+                    injected = true;
+                    ui.postDelayed(BinanceChatPlugin.this::doType, RENDER_WAIT_MS);
+                } else {   // auth check — inject once the page (or its login redirect) settles
+                    injected = true;
+                    ui.postDelayed(BinanceChatPlugin.this::doAuthCheck, RENDER_WAIT_MS);
+                }
             }
         });
 
@@ -162,6 +183,22 @@ public class BinanceChatPlugin extends Plugin {
         sender.evaluateJavascript(SEND_JS + "()", sendResult ->
             finishIfPending("typed=" + typeResult + " send=" + unquote(sendResult)));
     }
+
+    private void doAuthCheck() {
+        if (pending == null || sender == null) return;
+        sender.evaluateJavascript(AUTH_JS, r -> finishIfPending(unquote(r)));
+    }
+
+    // Reports whether the loaded page is logged in (no login form/iframe/redirect) — definitive,
+    // order-free signal for whether the WebView session is recognized.
+    private static final String AUTH_JS =
+        "(function(){try{var ifr=document.querySelectorAll('iframe');var loginIf=false;var ifs='';" +
+        "for(var i=0;i<ifr.length;i++){var src=ifr[i].src||'same';if(src.indexOf('accounts.binance')>=0&&src.indexOf('login')>=0)loginIf=true;ifs+='['+src.replace('https://','').slice(0,20)+']';}" +
+        "var pw=document.querySelectorAll('input[type=password]').length;var url=location.href;" +
+        "var onLogin=url.indexOf('/login')>=0||url.indexOf('accounts.binance')>=0;" +
+        "var ls=-1;try{ls=Object.keys(localStorage).length;}catch(e){}" +
+        "var verdict=(onLogin||loginIf||pw>0)?'LOGGED_OUT':'LOGGED_IN';" +
+        "return verdict+' url='+url.replace('https://','').slice(0,40)+' pw'+pw+' ls'+ls+' if'+ifr.length+ifs;}catch(e){return 'ERR:'+(e&&e.message?e.message:e);}})()";
 
     private void finishIfPending(String result) {
         PluginCall c = pending;
