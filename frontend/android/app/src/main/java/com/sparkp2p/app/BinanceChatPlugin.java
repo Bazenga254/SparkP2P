@@ -32,10 +32,12 @@ import org.json.JSONObject;
 @CapacitorPlugin(name = "BinanceChat")
 public class BinanceChatPlugin extends Plugin {
 
-    private static final String DESKTOP_UA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+    // MUST match BinanceLoginActivity's UA — Binance binds the session to the device/UA fingerprint,
+    // so a different UA here makes the order page treat us as logged-out (embeds a login iframe).
+    private static final String UA =
+        "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
     private static final String ORDER_URL = "https://p2p.binance.com/en/fiatOrderDetail?orderNo=";
-    private static final long RENDER_WAIT_MS = 6000;   // let the chat panel render after page load
+    private static final long RENDER_WAIT_MS = 7000;   // let auth + the chat panel render after page load
     private static final long TYPE_TO_SEND_MS = 800;
     private static final long TIMEOUT_MS = 40000;
 
@@ -110,7 +112,7 @@ public class BinanceChatPlugin extends Plugin {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
-        s.setUserAgentString(DESKTOP_UA);
+        s.setUserAgentString(UA);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         CookieManager cm = CookieManager.getInstance();
