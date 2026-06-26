@@ -19,6 +19,8 @@ from app.models.trader import Trader
 logger = logging.getLogger(__name__)
 
 DELAY_MINUTES = 10          # alert once the seller is this many minutes late releasing
+MAX_AGE_MINUTES = 60        # stop alerting once the order is this old — by now it's resolved/cancelled
+                            # or the trader has long since seen it (also caps restart re-spam)
 _CHECK_EVERY = 60           # seconds between scans
 _notified: set[int] = set()  # order ids already alerted (in-memory; resets on restart)
 
@@ -28,7 +30,9 @@ async def buy_release_monitor():
     logger.info("[BuyReleaseMonitor] started (%d-min threshold)", DELAY_MINUTES)
     while True:
         try:
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=DELAY_MINUTES)
+            now = datetime.now(timezone.utc)
+            cutoff = now - timedelta(minutes=DELAY_MINUTES)
+            floor = now - timedelta(minutes=MAX_AGE_MINUTES)
             async with async_session() as db:
                 rows = (await db.execute(
                     select(Order).where(
@@ -36,6 +40,7 @@ async def buy_release_monitor():
                         Order.status == OrderStatus.PAYMENT_SENT,
                         Order.payment_sent_at.isnot(None),
                         Order.payment_sent_at <= cutoff,
+                        Order.payment_sent_at >= floor,   # don't nag dead/old orders forever
                     )
                 )).scalars().all()
 
