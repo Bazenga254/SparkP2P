@@ -179,25 +179,30 @@ public class BinanceChatPlugin extends Plugin {
         return s.replace("\\\"", "\"").replace("\\\\", "\\").replace("\\n", " ");
     }
 
-    // ── Ported chat-send DOM logic from desktop/app.js. On no input, returns rich diagnostics. ──
+    // ── Iframe-aware chat-send (ported from desktop). The order chat box lives in an iframe, so we
+    //    search the main doc AND every same-origin iframe. On no input, returns rich diagnostics. ──
+    private static final String SEARCH_FN =
+        "function searchDoc(doc){var sels=['textarea[placeholder*=\"message\" i]','textarea[placeholder*=\"enter\" i]','input[placeholder*=\"message\" i]','textarea'];" +
+        "for(var i=0;i<sels.length;i++){var c=doc.querySelectorAll(sels[i]);for(var j=0;j<c.length;j++){var el=c[j];if(el.offsetParent!==null&&!el.disabled&&!el.readOnly)return{el:el,ce:false,doc:doc};}}" +
+        "var eds=doc.querySelectorAll('div[contenteditable=\"true\"]');for(var k=0;k<eds.length;k++){if(eds[k].offsetParent!==null)return{el:eds[k],ce:true,doc:doc};}return null;}" +
+        "function find(){var f=searchDoc(document);if(f)return f;var ifr=document.querySelectorAll('iframe');" +
+        "for(var i=0;i<ifr.length;i++){try{var d=ifr[i].contentDocument||(ifr[i].contentWindow&&ifr[i].contentWindow.document);if(d){var ff=searchDoc(d);if(ff)return ff;}}catch(e){}}return null;}";
+
     private static final String TYPE_JS =
-        "(function(msg){try{" +
-        "function find(){var sels=['textarea[placeholder*=\"message\" i]','textarea[placeholder*=\"enter\" i]','input[placeholder*=\"message\" i]','textarea'];" +
-        "for(var i=0;i<sels.length;i++){var c=document.querySelectorAll(sels[i]);for(var j=0;j<c.length;j++){var el=c[j];if(el.offsetParent!==null&&!el.disabled&&!el.readOnly)return{el:el,ce:false};}}" +
-        "var eds=document.querySelectorAll('div[contenteditable=\"true\"]');for(var k=0;k<eds.length;k++){if(eds[k].offsetParent!==null)return{el:eds[k],ce:true};}return null;}" +
+        "(function(msg){try{" + SEARCH_FN +
         "var f=find();" +
-        "if(!f){return 'NOINPUT url='+location.href.slice(0,90)+' title='+document.title.slice(0,40)+' ta='+document.querySelectorAll('textarea').length+' inp='+document.querySelectorAll('input').length+' ce='+document.querySelectorAll('[contenteditable=\"true\"]').length+' if='+document.querySelectorAll('iframe').length;}" +
+        "if(!f){var diag='NOINPUT ta'+document.querySelectorAll('textarea').length+' ce'+document.querySelectorAll('[contenteditable=\"true\"]').length+' inp'+document.querySelectorAll('input').length+' | ';" +
+        "var ifr=document.querySelectorAll('iframe');for(var i=0;i<ifr.length;i++){var info;try{var d=ifr[i].contentDocument;info=d?('ta'+d.querySelectorAll('textarea').length+'.ce'+d.querySelectorAll('[contenteditable=\"true\"]').length+'.inp'+d.querySelectorAll('input').length):'null';}catch(e){info='XORIGIN';}diag+='if['+(ifr[i].src||'same').replace('https://','').slice(0,28)+'='+info+'] ';}return diag;}" +
         "var input=f.el;input.focus();" +
-        "if(f.ce){input.textContent='';input.dispatchEvent(new Event('input',{bubbles:true}));document.execCommand('insertText',false,msg);input.dispatchEvent(new InputEvent('input',{bubbles:true,data:msg}));}" +
-        "else{var proto=input.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;var d=Object.getOwnPropertyDescriptor(proto,'value');var set=d&&d.set;if(set)set.call(input,msg);else input.value=msg;input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));}" +
+        "if(f.ce){input.textContent='';input.dispatchEvent(new Event('input',{bubbles:true}));f.doc.execCommand('insertText',false,msg);input.dispatchEvent(new InputEvent('input',{bubbles:true,data:msg}));}" +
+        "else{var win=input.ownerDocument.defaultView;var proto=input.tagName==='TEXTAREA'?win.HTMLTextAreaElement.prototype:win.HTMLInputElement.prototype;var d=Object.getOwnPropertyDescriptor(proto,'value');var set=d&&d.set;if(set)set.call(input,msg);else input.value=msg;input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));}" +
         "return 'TYPED';}catch(e){return 'ERR:'+(e&&e.message?e.message:e);}})";
 
     private static final String SEND_JS =
-        "(function(){try{" +
-        "var sels=['textarea[placeholder*=\"message\" i]','textarea[placeholder*=\"enter\" i]','input[placeholder*=\"message\" i]','textarea','div[contenteditable=\"true\"]'];" +
-        "var input=null;for(var i=0;i<sels.length;i++){var c=document.querySelectorAll(sels[i]);for(var j=0;j<c.length;j++){if(c[j].offsetParent!==null&&!c[j].disabled){input=c[j];break;}}if(input)break;}" +
-        "var container=input?input.parentElement:document.body;" +
+        "(function(){try{" + SEARCH_FN +
+        "var f=find();if(!f)return 'NO_INPUT2';var input=f.el;" +
+        "var container=input.parentElement;" +
         "for(var n=0;n<8&&container;n++){var btns=container.querySelectorAll('button[type=\"submit\"], button:not([disabled])');for(var b=0;b<btns.length;b++){if(btns[b].offsetParent!==null){btns[b].click();return 'SENT';}}container=container.parentElement;}" +
-        "var all=document.querySelectorAll('button[type=\"submit\"]');for(var a=0;a<all.length;a++){if(all[a].offsetParent!==null){all[a].click();return 'SENT';}}" +
-        "if(input){input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));return 'ENTER';}return 'NO_BTN';}catch(e){return 'ERR:'+(e&&e.message?e.message:e);}})";
+        "var all=f.doc.querySelectorAll('button[type=\"submit\"]');for(var a=0;a<all.length;a++){if(all[a].offsetParent!==null){all[a].click();return 'SENT';}}" +
+        "input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));return 'ENTER';}catch(e){return 'ERR:'+(e&&e.message?e.message:e);}})";
 }
