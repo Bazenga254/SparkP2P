@@ -48,7 +48,10 @@ public class SmsReceiver extends BroadcastReceiver {
                 body.append(sms.getMessageBody());
             }
             String text = body.toString();
-            if (text.isEmpty() || !CODE.matcher(text).find()) return;   // only code-bearing SMS
+            String snd = sender == null ? "" : sender.toLowerCase();
+            // Only forward Choice Bank OTP texts — never the user's other SMS (privacy + noise).
+            if (!snd.contains("choice")) return;
+            if (text.isEmpty() || !CODE.matcher(text).find()) return;
             relay(context, sender, text);
         } catch (Exception ignored) {}
     }

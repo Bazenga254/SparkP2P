@@ -2605,7 +2605,8 @@ async def receive_sms_otp(data: SmsOtpData, trader: Trader = Depends(get_current
     learn the exact Choice OTP format) and stash the extracted 6-digit code so a pending Choice payout
     can confirm the operation with it (the channel that actually works — email can't be verified)."""
     body = data.body or ""
-    m = _re.search(r"(?<!\d)(\d{6})(?!\d)", body)
+    # Choice format: "Verification code 2402. This code expires in 10 minutes." (4-digit code).
+    m = _re.search(r"[Vv]erification code[:\s]*(\d{3,8})", body) or _re.search(r"(?<!\d)(\d{4,8})(?!\d)", body)
     otp = m.group(1) if m else None
     logger.warning(f"[SMS-OTP] trader={trader.id} sender={data.sender!r} body={body[:120]!r} -> otp={otp}")
     if otp:
