@@ -1,11 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { choiceGetBalance, cbSendMoneyInitiate, cbSendMoneyConfirm, cbPaybillInitiate, cbPaybillConfirm, cbLookupShortcode } from '../services/api';
+import {
+  choiceGetBalance,
+  cbSendMoneyInitiate, cbSendMoneyConfirm,
+  cbPaybillInitiate, cbPaybillConfirm, cbLookupShortcode,
+  cbGetBanks, cbLookupBankAccount,
+  cbBankTransferInitiate, cbBankTransferConfirm,
+  cbRtgsInitiate, cbRtgsConfirm,
+  cbMpesaToBank,
+} from '../services/api';
 
 const fmtKES = (n) => 'KES ' + Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// ── White line icons (sit inside the round coloured chips) ──────────────────
 const ICON = {
   mpesa:    <><rect x="7" y="3" width="10" height="18" rx="2" /><path d="M11 18h2" /></>,
   airtime:  <><path d="M12 19a7 7 0 0 0 0-14" opacity=".5" /><path d="M12 15a3 3 0 0 0 0-6" /><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" /></>,
@@ -19,9 +26,9 @@ const ICON = {
   pesalink: <path d="M8 4v12m0 0l-3-3m3 3l3-3M16 20V8m0 0l-3 3m3-3l3 3" />,
   globe:    <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></>,
   send:     <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />,
+  deposit:  <><path d="M12 3v12m0 0l-4-4m4 4l4-4" /><path d="M3 19h18" /></>,
 };
 
-// Brand-recognisable chip colours; the THEME (header/tabs/buttons) is SparkP2P amber.
 const SECTIONS = {
   mobile: [
     { title: 'Send Money', items: [
@@ -45,11 +52,11 @@ const SECTIONS = {
   ],
   bank: [
     { title: 'Transfers', items: [
-      { key: 'own',       label: 'To Own Account',     icon: 'person',   bg: '#f59e0b', ready: false },
-      { key: 'other',     label: 'To Other Accounts',  icon: 'people',   bg: '#f59e0b', ready: false },
-      { key: 'pesalink',  label: 'PesaLink',           icon: 'pesalink', bg: '#2563eb', ready: false },
-      { key: 'mp2bank',   label: 'M-Pesa to Bank',     icon: 'mpesa',    bg: '#16a34a', ready: false },
-      { key: 'rtgs',      label: 'RTGS',               icon: 'globe',    bg: '#16a34a', ready: false },
+      { key: 'own',       label: 'To Own Account',     icon: 'person',   bg: '#f59e0b', ready: true },
+      { key: 'other',     label: 'To Other Accounts',  icon: 'people',   bg: '#f59e0b', ready: true },
+      { key: 'pesalink',  label: 'PesaLink',           icon: 'pesalink', bg: '#2563eb', ready: true },
+      { key: 'mp2bank',   label: 'M-Pesa to Bank',     icon: 'deposit',  bg: '#16a34a', ready: true },
+      { key: 'rtgs',      label: 'RTGS',               icon: 'globe',    bg: '#16a34a', ready: true },
     ]},
     { title: 'International', items: [
       { key: 'swift',     label: 'SWIFT',              icon: 'globe',    bg: '#2563eb', ready: false },
@@ -71,12 +78,15 @@ export default function Payments() {
       .then((r) => { const d = r.data || {}; setBalance(d.balance ?? d.available ?? d.kes ?? d.availableBalance ?? null); })
       .catch(() => {});
   };
-  useEffect(() => { loadBalance(); }, [user?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadBalance(); }, [user?.id]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const onItem = (it) => {
     if (!it.ready) { setToast(`${it.label} — coming soon`); setTimeout(() => setToast(''), 2200); return; }
     setActive(it.key);
   };
+
+  const done = () => { setActive(null); loadBalance(); };
+  const cancel = () => setActive(null);
 
   return (
     <div className="pm">
@@ -93,9 +103,19 @@ export default function Payments() {
 
       <div className="pm-sheet">
         {active === 'send' ? (
-          <SendMoney onDone={() => { setActive(null); loadBalance(); }} onCancel={() => setActive(null)} />
+          <SendMoney onDone={done} onCancel={cancel} />
         ) : active === 'paybill' ? (
-          <Paybill onDone={() => { setActive(null); loadBalance(); }} onCancel={() => setActive(null)} />
+          <Paybill onDone={done} onCancel={cancel} />
+        ) : active === 'own' ? (
+          <BankTransfer type="own" title="To Own Account" onDone={done} onCancel={cancel} />
+        ) : active === 'other' ? (
+          <BankTransfer type="other" title="To Other Accounts" onDone={done} onCancel={cancel} />
+        ) : active === 'pesalink' ? (
+          <BankTransfer type="pesalink" title="PesaLink Transfer" onDone={done} onCancel={cancel} />
+        ) : active === 'mp2bank' ? (
+          <MpesaToBank onDone={done} onCancel={cancel} />
+        ) : active === 'rtgs' ? (
+          <RTGSTransfer onDone={done} onCancel={cancel} />
         ) : (
           <>
             <div className="pm-tabs">
@@ -127,6 +147,359 @@ export default function Payments() {
     </div>
   );
 }
+
+// ── Reusable bank selector ────────────────────────────────────────────────────
+
+function BankSelector({ value, onChange }) {
+  const [banks, setBanks] = useState([]);
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    cbGetBanks()
+      .then((r) => setBanks(r.data || []))
+      .catch(() => setBanks([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filtered = banks.filter((b) => b.name.toLowerCase().includes(query.toLowerCase()) || b.code.includes(query));
+
+  const select = (b) => { onChange(b); setQuery(b.name); setOpen(false); };
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <input
+        className="pm-inp"
+        placeholder={loading ? 'Loading banks…' : 'Search bank…'}
+        value={query}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => { setQuery(e.target.value); onChange(null); setOpen(true); }}
+      />
+      {open && filtered.length > 0 && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+          background: '#12161d', border: '1px solid #20262f', borderRadius: 11,
+          maxHeight: 220, overflowY: 'auto', marginTop: 4, boxShadow: '0 8px 32px rgba(0,0,0,.5)',
+        }}>
+          {filtered.map((b) => (
+            <button key={b.code} type="button" onClick={() => select(b)}
+              style={{ display: 'block', width: '100%', padding: '10px 14px', background: 'none',
+                border: 'none', textAlign: 'left', cursor: 'pointer', color: '#e2e8f0', fontSize: 13.5,
+                borderBottom: '1px solid #1a2030' }}>
+              <span style={{ color: '#9aa4b2', fontSize: 11.5, marginRight: 8 }}>{b.code}</span>{b.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {value && (
+        <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.3)' }}>
+          <span style={{ color: '#9aa4b2', fontSize: 11.5 }}>Selected bank</span>
+          <div style={{ color: '#10b981', fontWeight: 800, fontSize: 14 }}>✓ {value.name}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── BankTransfer (own / other / pesalink) ─────────────────────────────────────
+
+function BankTransfer({ type, title, onDone, onCancel }) {
+  const isInternal = type === 'own';
+  const [step, setStep] = useState('form');
+  const [bank, setBank] = useState(null);
+  const [account, setAccount] = useState('');
+  const [beneficiaryName, setBeneficiaryName] = useState('');
+  const [amount, setAmount] = useState('');
+  const [remark, setRemark] = useState('');
+  const [otp, setOtp] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+  const [payee, setPayee] = useState({ status: 'idle', name: '' });
+
+  // Confirmation-of-payee lookup
+  useEffect(() => {
+    const acc = account.trim();
+    if (!acc || (!isInternal && !bank)) { setPayee({ status: 'idle', name: '' }); return; }
+    let cancel = false;
+    setPayee({ status: 'checking', name: '' });
+    const t = setTimeout(async () => {
+      try {
+        const r = await cbLookupBankAccount(acc, bank?.code || '');
+        if (!cancel) {
+          setBeneficiaryName(r.data?.name || '');
+          setPayee({ status: 'ok', name: r.data?.name || '' });
+        }
+      } catch (e) {
+        if (!cancel) setPayee({ status: 'fail', name: e.response?.data?.detail || 'Could not verify account' });
+      }
+    }, 700);
+    return () => { cancel = true; clearTimeout(t); };
+  }, [account, bank, isInternal]);
+
+  const validForm = account.trim().length > 0 && beneficiaryName.trim().length > 0
+    && (isInternal || !!bank) && Number(amount) > 0;
+
+  const initiate = async () => {
+    setError(''); setBusy(true);
+    try {
+      const res = await cbBankTransferInitiate({
+        beneficiary_account: account.trim(),
+        beneficiary_name: beneficiaryName.trim(),
+        bank_code: bank?.code || '',
+        bank_name: bank?.name || '',
+        amount: Number(amount),
+        remark: remark.trim(),
+      });
+      setInfo(res.data?.message || 'OTP sent.');
+      setStep('otp');
+    } catch (e) { setError(e.response?.data?.detail || 'Could not start transfer. Try again.'); }
+    finally { setBusy(false); }
+  };
+
+  const confirm = async () => {
+    setError(''); setBusy(true);
+    try { await cbBankTransferConfirm(otp.trim()); setStep('done'); }
+    catch (e) { setError(e.response?.data?.detail || 'OTP confirmation failed.'); }
+    finally { setBusy(false); }
+  };
+
+  if (step === 'done') return (
+    <div className="pm-flow pm-success">
+      <div style={{ fontSize: 56 }}>✅</div>
+      <h2>Transfer sent</h2>
+      <p>{fmtKES(amount)} transferred to {beneficiaryName}{bank ? ` (${bank.name})` : ''}.</p>
+      <button className="pm-btn" onClick={onDone}>Done</button>
+    </div>
+  );
+
+  return (
+    <div className="pm-flow">
+      <div className="pm-flow-head">
+        <button className="pm-flow-back" onClick={step === 'otp' ? () => setStep('form') : onCancel}>← Back</button>
+        <h2>{title}</h2>
+      </div>
+      {step === 'form' && (
+        <>
+          {!isInternal && (
+            <div className="pm-field"><label>Destination bank</label>
+              <BankSelector value={bank} onChange={setBank} />
+            </div>
+          )}
+          <div className="pm-field"><label>Account number</label>
+            <input className="pm-inp" placeholder={isInternal ? 'Choice Bank account number' : 'Bank account number'} value={account}
+              onChange={(e) => setAccount(e.target.value.trim())} />
+            {payee.status === 'checking' && <div style={{ marginTop: 6, fontSize: 12.5, color: '#9aa4b2' }}>⏳ Verifying account…</div>}
+            {payee.status === 'ok' && (
+              <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.3)' }}>
+                <span style={{ color: '#9aa4b2', fontSize: 11.5 }}>Account holder</span>
+                <div style={{ color: '#10b981', fontWeight: 800, fontSize: 14.5 }}>✓ {payee.name}</div>
+              </div>
+            )}
+            {payee.status === 'fail' && <div style={{ marginTop: 6, fontSize: 12.5, color: '#d97706' }}>⚠️ {payee.name} — you can still enter the name manually</div>}
+          </div>
+          <div className="pm-field"><label>Beneficiary name</label>
+            <input className="pm-inp" placeholder="Account holder name" value={beneficiaryName}
+              onChange={(e) => setBeneficiaryName(e.target.value)} />
+          </div>
+          <div className="pm-field"><label>Amount (KES)</label>
+            <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount}
+              onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} />
+            {!isInternal && <div style={{ marginTop: 5, fontSize: 12, color: '#6b7280' }}>Max KES 999,999 via PesaLink. Use RTGS for larger amounts.</div>}
+          </div>
+          <div className="pm-field"><label>Remark <span style={{ color: '#6b7280' }}>(optional)</span></label>
+            <input className="pm-inp" placeholder="e.g. Rent payment" value={remark} onChange={(e) => setRemark(e.target.value)} />
+          </div>
+          {error && <div className="pm-error">{error}</div>}
+          <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
+        </>
+      )}
+      {step === 'otp' && (
+        <>
+          <p className="pm-otpinfo">{info}</p>
+          <div className="pm-field"><label>OTP code</label>
+            <input className="pm-inp" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="Enter the code"
+              value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
+          {error && <div className="pm-error">{error}</div>}
+          <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Transfer ${fmtKES(amount)}`}</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── RTGSTransfer ──────────────────────────────────────────────────────────────
+
+function RTGSTransfer({ onDone, onCancel }) {
+  const [step, setStep] = useState('form');
+  const [bank, setBank] = useState(null);
+  const [account, setAccount] = useState('');
+  const [beneficiaryName, setBeneficiaryName] = useState('');
+  const [amount, setAmount] = useState('');
+  const [purpose, setPurpose] = useState('');
+  const [remark, setRemark] = useState('');
+  const [otp, setOtp] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+
+  const validForm = !!bank && account.trim().length > 0 && beneficiaryName.trim().length > 0 && Number(amount) > 0;
+
+  const initiate = async () => {
+    setError(''); setBusy(true);
+    try {
+      const res = await cbRtgsInitiate({
+        beneficiary_account: account.trim(),
+        beneficiary_name: beneficiaryName.trim(),
+        bank_code: bank?.code || '',
+        bank_name: bank?.name || '',
+        amount: Number(amount),
+        payment_purpose: purpose.trim() || 'SparkP2P transfer',
+        remark: remark.trim(),
+      });
+      setInfo(res.data?.message || 'OTP sent.');
+      setStep('otp');
+    } catch (e) { setError(e.response?.data?.detail || 'Could not start RTGS transfer. Try again.'); }
+    finally { setBusy(false); }
+  };
+
+  const confirm = async () => {
+    setError(''); setBusy(true);
+    try { await cbRtgsConfirm(otp.trim()); setStep('done'); }
+    catch (e) { setError(e.response?.data?.detail || 'OTP confirmation failed.'); }
+    finally { setBusy(false); }
+  };
+
+  if (step === 'done') return (
+    <div className="pm-flow pm-success">
+      <div style={{ fontSize: 56 }}>✅</div>
+      <h2>RTGS transfer sent</h2>
+      <p>{fmtKES(amount)} to {beneficiaryName} at {bank?.name}. Real-time settlement.</p>
+      <button className="pm-btn" onClick={onDone}>Done</button>
+    </div>
+  );
+
+  return (
+    <div className="pm-flow">
+      <div className="pm-flow-head">
+        <button className="pm-flow-back" onClick={step === 'otp' ? () => setStep('form') : onCancel}>← Back</button>
+        <h2>RTGS Transfer</h2>
+      </div>
+      {step === 'form' && (
+        <>
+          <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', marginBottom: 18 }}>
+            <div style={{ color: '#f59e0b', fontWeight: 700, fontSize: 13 }}>Real-Time Gross Settlement</div>
+            <div style={{ color: '#9aa4b2', fontSize: 12.5, marginTop: 3 }}>Instant interbank transfers — no amount limit. Processed immediately during banking hours.</div>
+          </div>
+          <div className="pm-field"><label>Destination bank</label>
+            <BankSelector value={bank} onChange={setBank} />
+          </div>
+          <div className="pm-field"><label>Account number</label>
+            <input className="pm-inp" placeholder="Beneficiary bank account number" value={account}
+              onChange={(e) => setAccount(e.target.value.trim())} />
+          </div>
+          <div className="pm-field"><label>Beneficiary name</label>
+            <input className="pm-inp" placeholder="Full name on the account" value={beneficiaryName}
+              onChange={(e) => setBeneficiaryName(e.target.value)} />
+          </div>
+          <div className="pm-field"><label>Amount (KES)</label>
+            <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount}
+              onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} />
+          </div>
+          <div className="pm-field"><label>Payment purpose <span style={{ color: '#6b7280' }}>(optional)</span></label>
+            <input className="pm-inp" placeholder="e.g. Invoice payment" value={purpose} onChange={(e) => setPurpose(e.target.value)} />
+          </div>
+          <div className="pm-field"><label>Message to beneficiary <span style={{ color: '#6b7280' }}>(optional)</span></label>
+            <input className="pm-inp" placeholder="Note for the recipient" value={remark} onChange={(e) => setRemark(e.target.value)} />
+          </div>
+          {error && <div className="pm-error">{error}</div>}
+          <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
+        </>
+      )}
+      {step === 'otp' && (
+        <>
+          <p className="pm-otpinfo">{info}</p>
+          <div className="pm-field"><label>OTP code</label>
+            <input className="pm-inp" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="Enter the code"
+              value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
+          {error && <div className="pm-error">{error}</div>}
+          <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Send ${fmtKES(amount)} via RTGS`}</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── MpesaToBank ───────────────────────────────────────────────────────────────
+
+function MpesaToBank({ onDone, onCancel }) {
+  const [step, setStep] = useState('form');
+  const [phone, setPhone] = useState('');
+  const [amount, setAmount] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+
+  const validForm = /^(0?7|0?1|7|1)\d{8}$/.test(phone.replace(/\s/g, '')) && Number(amount) > 0;
+
+  const submit = async () => {
+    setError(''); setBusy(true);
+    try {
+      const res = await cbMpesaToBank({ mobile: phone.trim(), amount: Math.round(Number(amount)) });
+      setInfo(res.data?.message || 'STK push sent — check your phone.');
+      setStep('pending');
+    } catch (e) { setError(e.response?.data?.detail || 'STK push failed. Try again.'); }
+    finally { setBusy(false); }
+  };
+
+  if (step === 'pending') return (
+    <div className="pm-flow pm-success">
+      <div style={{ fontSize: 56 }}>📱</div>
+      <h2>Check your phone</h2>
+      <p style={{ textAlign: 'center', lineHeight: 1.6 }}>{info}</p>
+      <p style={{ color: '#6b7280', fontSize: 13, textAlign: 'center', marginTop: 8 }}>
+        Your Choice Bank balance will update once M-Pesa confirms the payment.
+      </p>
+      <button className="pm-btn" onClick={onDone} style={{ marginTop: 24 }}>Done</button>
+    </div>
+  );
+
+  return (
+    <div className="pm-flow">
+      <div className="pm-flow-head">
+        <button className="pm-flow-back" onClick={onCancel}>← Back</button>
+        <h2>M-Pesa to Bank</h2>
+      </div>
+      <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(22,163,74,0.08)', border: '1px solid rgba(22,163,74,0.25)', marginBottom: 18 }}>
+        <div style={{ color: '#16a34a', fontWeight: 700, fontSize: 13 }}>Deposit from M-Pesa</div>
+        <div style={{ color: '#9aa4b2', fontSize: 12.5, marginTop: 3 }}>We'll send an M-Pesa prompt to your phone. Approve it to deposit funds into your Choice Bank account.</div>
+      </div>
+      <div className="pm-field"><label>M-Pesa phone number</label>
+        <input className="pm-inp" inputMode="tel" placeholder="07XX XXX XXX" value={phone}
+          onChange={(e) => setPhone(e.target.value)} />
+      </div>
+      <div className="pm-field"><label>Amount (KES)</label>
+        <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount}
+          onChange={(e) => setAmount(e.target.value.replace(/[^\d]/g, ''))} />
+        <div style={{ marginTop: 5, fontSize: 12, color: '#6b7280' }}>Max KES 150,000 per transaction.</div>
+      </div>
+      {error && <div className="pm-error">{error}</div>}
+      <button className="pm-btn" disabled={!validForm || busy} onClick={submit}>
+        {busy ? 'Sending prompt…' : 'Deposit via M-Pesa'}
+      </button>
+    </div>
+  );
+}
+
+// ── SendMoney ─────────────────────────────────────────────────────────────────
 
 function SendMoney({ onDone, onCancel }) {
   const [step, setStep] = useState('form');
@@ -196,6 +569,8 @@ function SendMoney({ onDone, onCancel }) {
   );
 }
 
+// ── Paybill ───────────────────────────────────────────────────────────────────
+
 function Paybill({ onDone, onCancel }) {
   const [step, setStep] = useState('form');
   const [isPaybill, setIsPaybill] = useState(true);
@@ -206,9 +581,8 @@ function Paybill({ onDone, onCancel }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
-  const [payee, setPayee] = useState({ status: 'idle', name: '' }); // idle|checking|ok|fail
+  const [payee, setPayee] = useState({ status: 'idle', name: '' });
 
-  // Confirmation-of-payee: look up the Paybill/Till business name as the user types (debounced).
   useEffect(() => {
     const code = biz.trim();
     if (!/^\d{5,7}$/.test(code)) { setPayee({ status: 'idle', name: '' }); return; }
@@ -225,8 +599,6 @@ function Paybill({ onDone, onCancel }) {
     return () => { cancel = true; clearTimeout(t); };
   }, [biz]);
 
-  // Paybill must be name-verified before sending (reliable lookup); Till shows the name if found
-  // but isn't blocked on it.
   const validForm = /^\d{5,7}$/.test(biz.trim()) && (!isPaybill || acct.trim().length > 0)
     && Number(amount) > 0 && (!isPaybill || payee.status === 'ok');
 
@@ -277,10 +649,7 @@ function Paybill({ onDone, onCancel }) {
           </div>
           <div className="pm-field"><label>{isPaybill ? 'Paybill number' : 'Till / Buy Goods number'}</label>
             <input className="pm-inp" inputMode="numeric" placeholder="e.g. 247247" value={biz} onChange={(e) => setBiz(e.target.value.replace(/\D/g, ''))} />
-            {/* Confirmation of payee — verify the registered name before paying */}
-            {payee.status === 'checking' && (
-              <div style={{ marginTop: 6, fontSize: 12.5, color: '#9aa4b2' }}>⏳ Verifying name…</div>
-            )}
+            {payee.status === 'checking' && <div style={{ marginTop: 6, fontSize: 12.5, color: '#9aa4b2' }}>⏳ Verifying name…</div>}
             {payee.status === 'ok' && (
               <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.3)' }}>
                 <span style={{ color: '#9aa4b2', fontSize: 11.5 }}>Paying to</span>

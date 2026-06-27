@@ -1163,3 +1163,291 @@ async def paybill_confirm(body: PaybillConfirm, trader: Trader = Depends(get_cur
         pass
     return {"status": "success", "tx_id": pending["tx_id"], "amount": pending["amount"]}
 
+
+# ── Payments Hub — bank list & account name lookup ────────────────────────────
+
+@router.get("/choice/banks")
+async def list_banks(trader: Trader = Depends(get_current_trader)):
+    """Clean bank-code list for PesaLink/RTGS dropdowns."""
+    result = await choice.get_bank_codes()
+    data = result.get("data") or result
+    if not isinstance(data, list):
+        return []
+    banks = []
+    for b in data:
+        code = str(b.get("bankCode") or b.get("code") or b.get("bankId") or "").strip()
+        name = (b.get("bankName") or b.get("name") or b.get("bank_name") or "").strip()
+        if code and name:
+            banks.append({"code": code, "name": name})
+    return sorted(banks, key=lambda x: x["name"])
+
+
+@router.get("/choice/pay/lookup-account")
+async def lookup_bank_account(
+    account_id: str, bank_code: str = "", trader: Trader = Depends(get_current_trader)
+):
+    """Confirmation-of-payee for PesaLink (external) or internal Choice account."""
+    acc = (account_id or "").strip()
+    if not acc:
+        raise HTTPException(status_code=400, detail="Enter an account number")
+    try:
+        params: dict = {"accountId": acc}
+        if bank_code:
+            params["accountType"] = 4
+            params["bankCode"] = bank_code
+        else:
+            params["accountType"] = 0
+        r = await choice._post("/account/validateAccount", params)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Name check unavailable: {exc}")
+    if r.get("code") == "10001":
+        raise HTTPException(status_code=503, detail="Name check is busy — try again")
+    if r.get("code") != "00000":
+        raise HTTPException(status_code=404, detail="Account not found — check the details")
+    name = ((r.get("data") or {}).get("accountName") or "").strip()
+    if not name:
+        raise HTTPException(status_code=404, detail="No name returned — verify the account number")
+    return {"name": name, "account_id": acc}
+
+
+# ── Payments Hub — PesaLink / To Other Accounts / To Own Account ──────────────
+
+class BankTransferBody(BaseModel):
+    beneficiary_account: str
+    beneficiary_name: str
+    bank_code: str = ""          # empty for internal Choice-to-Choice transfer
+    bank_name: str = ""
+    amount: float
+    remark: str = ""
+
+
+_pending_bank_transfer: dict[int, dict] = {}
+
+
+@router.post("/choice/pay/bank-transfer/initiate")
+async def bank_transfer_initiate(body: BankTransferBody, trader: Trader = Depends(get_current_trader)):
+    """PesaLink to external bank OR internal Choice-to-Choice. OTP to email (SMS fallback)."""
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+    acc = (body.beneficiary_account or "").strip()
+    if not acc:
+        raise HTTPException(status_code=400, detail="Enter the beneficiary account number")
+    if not (body.beneficiary_name or "").strip():
+        raise HTTPException(status_code=400, detail="Enter the beneficiary name")
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="Enter a valid amount")
+    if body.bank_code and body.amount > 999999:
+        raise HTTPException(status_code=400, detail="PesaLink is limited to KES 999,999. Use RTGS for larger amounts.")
+
+    try:
+        result = await choice.transfer(
+            payer_account_id=trader.choice_account_id,
+            payee_account_id=acc,
+            amount=body.amount,
+            payee_bank_code=body.bank_code or "",
+            payee_name=(body.beneficiary_name or "").strip(),
+            remark=body.remark or "SparkP2P bank transfer",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Transfer initiation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Transfer rejected"))
+
+    tx_id = (result.get("data") or {}).get("txId") or ""
+    if not tx_id:
+        raise HTTPException(status_code=502, detail="No transaction ID returned")
+
+    otp_channel = "EMAIL"
+    try:
+        otp_res = await choice.send_otp(tx_id, otp_type="EMAIL")
+        if otp_res.get("code") != "00000":
+            await choice.send_otp(tx_id, otp_type="SMS")
+            otp_channel = "SMS"
+    except Exception as exc:
+        logger.warning(f"[ChoiceBank] bank-transfer sendOtp failed: {exc}")
+
+    label = (f"{body.bank_name} {acc}").strip() if body.bank_code else f"Choice account {acc}"
+    _pending_bank_transfer[trader.id] = {
+        "tx_id": tx_id, "amount": body.amount,
+        "beneficiary": (body.beneficiary_name or "").strip(), "label": label,
+    }
+    msg = ("Check your email for a 4-digit code from Choice Bank to confirm this transfer."
+           if otp_channel == "EMAIL" else
+           "Enter the OTP Choice Bank sent to your registered phone to confirm this transfer.")
+    return {"status": "otp_sent", "message": msg}
+
+
+@router.post("/choice/pay/bank-transfer/confirm")
+async def bank_transfer_confirm(
+    body: SendMoneyConfirm, trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)
+):
+    """Confirm OTP for PesaLink / internal transfer."""
+    pending = _pending_bank_transfer.get(trader.id)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending transfer. Please start again.")
+    try:
+        result = await choice.confirm_otp(pending["tx_id"], body.otp.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OTP confirmation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired OTP"))
+
+    _pending_bank_transfer.pop(trader.id, None)
+    try:
+        from app.services.ledger import record_activity
+        from app.models.wallet import TransactionType as _TT
+        await record_activity(db, trader.id, _TT.CHOICE_BANK_TRANSFER, -float(pending["amount"]),
+                              f"Transfer to {pending['beneficiary']} ({pending['label']}) via Choice Bank",
+                              mpesa_receipt=pending["tx_id"])
+        await db.commit()
+    except Exception:
+        pass
+    try:
+        from app.api.routes.telegram import notify_trader
+        await notify_trader(trader, f"\U0001F3E6 KES {pending['amount']:,.0f} sent to {pending['beneficiary']} ({pending['label']})\nRef: {pending['tx_id']}")
+    except Exception:
+        pass
+    return {"status": "success", "tx_id": pending["tx_id"], "amount": pending["amount"]}
+
+
+# ── Payments Hub — RTGS ────────────────────────────────────────────────────────
+
+class RtgsInitiateBody(BaseModel):
+    beneficiary_account: str
+    beneficiary_name: str
+    bank_code: str
+    bank_name: str
+    amount: float
+    payment_purpose: str = "SparkP2P transfer"
+    remark: str = ""
+
+
+_pending_rtgs: dict[int, dict] = {}
+
+
+@router.post("/choice/pay/rtgs/initiate")
+async def rtgs_initiate(body: RtgsInitiateBody, trader: Trader = Depends(get_current_trader)):
+    """Initiate a domestic RTGS interbank transfer. OTP sent to email (SMS fallback)."""
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="Enter a valid amount")
+    if not (body.bank_code or "").strip():
+        raise HTTPException(status_code=400, detail="Select a destination bank")
+    if not (body.beneficiary_account or "").strip():
+        raise HTTPException(status_code=400, detail="Enter the beneficiary account number")
+    if not (body.beneficiary_name or "").strip():
+        raise HTTPException(status_code=400, detail="Enter the beneficiary name")
+
+    try:
+        result = await choice.large_domestic_interbank_transfer(
+            payer_account_id=trader.choice_account_id,
+            beneficiary_bank_code=body.bank_code.strip(),
+            beneficiary_bank_name=body.bank_name.strip(),
+            beneficiary_account_id=body.beneficiary_account.strip(),
+            beneficiary_name=body.beneficiary_name.strip(),
+            amount=body.amount,
+            payment_channel="RTGS",
+            payment_purpose=body.payment_purpose or "SparkP2P transfer",
+            message_to_beneficiary=body.remark or "",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"RTGS initiation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "RTGS transfer rejected"))
+
+    app_id = (result.get("data") or {}).get("applicationId") or ""
+    if not app_id:
+        raise HTTPException(status_code=502, detail="No application ID returned")
+
+    otp_channel = "EMAIL"
+    try:
+        otp_res = await choice.send_otp(app_id, otp_type="EMAIL")
+        if otp_res.get("code") != "00000":
+            await choice.send_otp(app_id, otp_type="SMS")
+            otp_channel = "SMS"
+    except Exception as exc:
+        logger.warning(f"[ChoiceBank] RTGS sendOtp failed: {exc}")
+
+    _pending_rtgs[trader.id] = {
+        "app_id": app_id, "amount": body.amount,
+        "beneficiary": body.beneficiary_name.strip(),
+        "bank": body.bank_name.strip(),
+        "account": body.beneficiary_account.strip(),
+    }
+    msg = ("Check your email for a 4-digit code from Choice Bank to confirm this RTGS transfer."
+           if otp_channel == "EMAIL" else
+           "Enter the OTP Choice Bank sent to your registered phone to confirm this RTGS transfer.")
+    return {"status": "otp_sent", "message": msg}
+
+
+@router.post("/choice/pay/rtgs/confirm")
+async def rtgs_confirm(
+    body: SendMoneyConfirm, trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)
+):
+    """Confirm OTP for an RTGS transfer."""
+    pending = _pending_rtgs.get(trader.id)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending RTGS transfer. Please start again.")
+    try:
+        result = await choice.confirm_otp(pending["app_id"], body.otp.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OTP confirmation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired OTP"))
+
+    _pending_rtgs.pop(trader.id, None)
+    try:
+        from app.services.ledger import record_activity
+        from app.models.wallet import TransactionType as _TT
+        await record_activity(db, trader.id, _TT.CHOICE_RTGS, -float(pending["amount"]),
+                              f"RTGS to {pending['beneficiary']} at {pending['bank']} (acc {pending['account']})",
+                              mpesa_receipt=pending["app_id"])
+        await db.commit()
+    except Exception:
+        pass
+    try:
+        from app.api.routes.telegram import notify_trader
+        await notify_trader(trader, f"\U0001F3DB RTGS KES {pending['amount']:,.0f} to {pending['beneficiary']} at {pending['bank']}\nRef: {pending['app_id']}")
+    except Exception:
+        pass
+    return {"status": "success", "application_id": pending["app_id"], "amount": pending["amount"]}
+
+
+# ── Payments Hub — M-Pesa to Bank (STK Push deposit) ──────────────────────────
+
+class MpesaToBankBody(BaseModel):
+    mobile: str
+    amount: int   # KES whole number for STK push
+
+
+@router.post("/choice/pay/mpesa-to-bank")
+async def mpesa_to_bank_deposit(body: MpesaToBankBody, trader: Trader = Depends(get_current_trader)):
+    """Trigger M-Pesa STK push to deposit funds into the trader's Choice Bank account."""
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+    phone = _normalize_msisdn(body.mobile)
+    if len(phone) != 9 or not phone.isdigit() or phone[0] not in ("7", "1"):
+        raise HTTPException(status_code=400, detail="Enter a valid Kenyan M-Pesa number")
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="Enter a valid amount")
+    if body.amount > 150000:
+        raise HTTPException(status_code=400, detail="M-Pesa deposits are limited to KES 150,000 per transaction")
+
+    msisdn = "254" + phone
+    try:
+        result = await choice.deposit_from_mpesa(
+            account_id=trader.choice_account_id,
+            mobile=msisdn,
+            amount=int(body.amount),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"STK push failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "STK push rejected"))
+
+    return {
+        "status": "stk_sent",
+        "message": f"Check your phone for an M-Pesa prompt. Enter your M-Pesa PIN to deposit KES {body.amount:,} into your Choice Bank account.",
+    }
+

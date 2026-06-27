@@ -201,5 +201,13 @@ export const cbSendMoneyConfirm = (otp) => api.post('/choice/pay/send-money/conf
 export const cbLookupShortcode = (code) => api.get('/choice/pay/lookup-shortcode', { params: { code } });
 export const cbPaybillInitiate = (body) => api.post('/choice/pay/paybill/initiate', body);
 export const cbPaybillConfirm = (otp) => api.post('/choice/pay/paybill/confirm', { otp });
+// Payments Hub — Bank transfers (PesaLink / internal / RTGS / M-Pesa deposit)
+export const cbGetBanks = () => api.get('/choice/banks');
+export const cbLookupBankAccount = (account_id, bank_code = '') => api.get('/choice/pay/lookup-account', { params: { account_id, bank_code } });
+export const cbBankTransferInitiate = (body) => api.post('/choice/pay/bank-transfer/initiate', body);
+export const cbBankTransferConfirm = (otp) => api.post('/choice/pay/bank-transfer/confirm', { otp });
+export const cbRtgsInitiate = (body) => api.post('/choice/pay/rtgs/initiate', body);
+export const cbRtgsConfirm = (otp) => api.post('/choice/pay/rtgs/confirm', { otp });
+export const cbMpesaToBank = (body) => api.post('/choice/pay/mpesa-to-bank', body);
 export const kycCreateSession = () => api.post('/kyc/session');
 export default api;

@@ -26,6 +26,9 @@ class TransactionType(str, enum.Enum):
     CHOICE_SEND = "choice_send"                      # Choice Bank → M-Pesa send money
     CHOICE_PAYBILL = "choice_paybill"                # Choice Bank → M-Pesa Paybill/Till
     CHOICE_WITHDRAWAL = "choice_withdrawal"          # Choice Bank → bank / M-Pesa withdrawal
+    CHOICE_BANK_TRANSFER = "choice_bank_transfer"    # Choice Bank → external bank via PesaLink
+    CHOICE_RTGS = "choice_rtgs"                      # Choice Bank → large domestic RTGS transfer
+    CHOICE_DEPOSIT = "choice_deposit"                # M-Pesa STK push → Choice Bank deposit
 
 
 class Wallet(Base):
