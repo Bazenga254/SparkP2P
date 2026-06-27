@@ -180,6 +180,23 @@ async def confirm_mobile_otp(token: str, body: OtpBody, db: AsyncSession = Depen
     return {"status": "confirmed"}
 
 
+class ResendOtpBody(BaseModel):
+    onboarding_request_id: str
+
+
+@router.post("/kyc/resend-otp/{token}")
+async def resend_kyc_otp(token: str, body: ResendOtpBody):
+    _decode_token(token)
+    # Try email first, fall back to SMS
+    result = await choice.resend_otp(body.onboarding_request_id, "EMAIL")
+    if result.get("code") != "00000":
+        result = await choice.resend_otp(body.onboarding_request_id, "SMS")
+    if result.get("code") != "00000":
+        raise HTTPException(400, result.get("msg", "Could not resend OTP"))
+    channel = "email" if result.get("code") == "00000" else "sms"
+    return {"status": "sent", "channel": channel}
+
+
 class UploadDocsBody(BaseModel):
     onboarding_request_id: str
     front_photo_b64: str

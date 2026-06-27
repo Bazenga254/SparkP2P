@@ -354,6 +354,16 @@ export default function KycMobilePage() {
         <button onClick={handleOtp} disabled={submitting} style={S.nextBtn(submitting)}>
           {submitting ? 'Verifying...' : 'Confirm OTP'}
         </button>
+        <button onClick={async () => {
+          if (!requestId) return;
+          setMsg({ text: 'Resending...', color: '#f59e0b' });
+          try {
+            await axios.post(`${API}/kyc/resend-otp/${token}`, { onboarding_request_id: requestId });
+            setMsg({ text: 'Code resent — check your email (and SMS as backup).' });
+          } catch { setMsg({ text: 'Could not resend. Please wait a moment and try again.' }); }
+        }} disabled={submitting} style={{ marginTop: 12, background: 'none', border: 'none', color: '#6b7280', fontSize: 13, cursor: 'pointer', textDecoration: 'underline' }}>
+          Didn't get the code? Resend
+        </button>
       </div>
       <style>{'@keyframes spin{to{transform:rotate(360deg)}} *{box-sizing:border-box}'}</style>
     </div>
