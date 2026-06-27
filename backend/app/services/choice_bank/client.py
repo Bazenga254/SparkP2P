@@ -113,15 +113,17 @@ async def confirm_otp(business_id: str, otp: str) -> dict:
     })
 
 
-async def close_individual_account(account_id: str, closure_reason: str, otp_type: str = "SMS") -> dict:
-    """Close a BaaS Wallet/Current account. An OTP is sent to validate the request; then Choice staff
-    manually review and approve/reject, with the result delivered via callback. Returns
-    { applicationId } — confirm the OTP against that applicationId. Closing the customer's LAST
-    account sets their onboarding to ACCOUNT_CLOSED, so a fresh KYC onboarding is required to reopen."""
+async def close_individual_account(account_id: str, closure_reason="9", otp_type: str = "sms") -> dict:
+    """Close a BaaS Wallet/Current account. An OTP validates the request; then Choice staff manually
+    review/approve (result via callback). Returns { applicationId } — confirm the OTP against it.
+    Closing the customer's LAST account sets onboarding to ACCOUNT_CLOSED, enabling a fresh KYC reopen.
+    NOTE: closureReason must be an ARRAY of reason CODES ('1'..'10', e.g. 9 = 'similar account /
+    opening a similar account'), and otpType must be lowercase ('sms'/'email')."""
+    reasons = closure_reason if isinstance(closure_reason, list) else [str(closure_reason)]
     return await _post("/account/closeIndividualAccount", {
         "accountId":     account_id,
-        "closureReason": closure_reason,
-        "otpType":       otp_type,
+        "closureReason": reasons,
+        "otpType":       (otp_type or "sms").lower(),
     })
 
 
