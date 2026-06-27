@@ -3438,6 +3438,32 @@ async def admin_choice_platform_float(
     return {"total": total, "trader_count": len(traders_with_cb), "cached": False}
 
 
+@router.get("/choice/account-status/{account_id}")
+async def admin_choice_account_status(
+    account_id: str,
+    admin: Trader = Depends(get_admin_trader),
+):
+    """Check the live status of any Choice Bank account ID. Returns closed/open/unknown."""
+    from app.services.choice_bank import client as _cb
+    r = await _cb.get_account_details(account_id)
+    code = r.get("code")
+    if code == "13000":
+        return {"account_id": account_id, "status": "closed", "detail": "Account does not exist — closure approved by Choice Bank."}
+    if code == "00000":
+        d = r.get("data") or {}
+        return {
+            "account_id": account_id,
+            "status": "open",
+            "account_status": d.get("accountStatus"),
+            "abnormal_status": d.get("abnormalStatus"),
+            "freeze_status": d.get("freezeStatus"),
+            "balance": d.get("balance"),
+            "currency": d.get("currency"),
+            "account_name": d.get("accountName"),
+        }
+    return {"account_id": account_id, "status": "unknown", "code": code, "msg": r.get("msg")}
+
+
 # ── Expenses CRUD ──────────────────────────────────────────────────────────────
 class ExpenseCreate(BaseModel):
     description: str
