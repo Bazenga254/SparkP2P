@@ -85,6 +85,8 @@ async def kyc_status_poller():
                     logger.warning("[KYC-poller] check failed for trader %s: %s", tid, e)
                     continue
 
+                profile_check = int(kd.get("profileCheck") or 0)
+
                 if status == 3:  # Passed
                     try:
                         st = await choice.get_onboarding_status(oid)
@@ -101,13 +103,13 @@ async def kyc_status_poller():
                             await db.commit()
                             logger.info("[KYC-poller] trader %s APPROVED -> account %s", tid, aid)
                             await _notify_approved(t, aid)
-                elif status == 4:  # Rejected
+                elif status == 4 or profile_check == 3:  # Rejected OR profile check Declined
                     async with async_session() as db:
                         t = await db.get(Trader, tid)
                         if t and (t.choice_kyc_status or "") != "rejected":
                             t.choice_kyc_status = "rejected"
                             await db.commit()
-                            logger.info("[KYC-poller] trader %s rejected", tid)
+                            logger.info("[KYC-poller] trader %s rejected (status=%s profileCheck=%s)", tid, status, profile_check)
                 # status 1 (Submitted), 2 (Processing), 9 (Manual Review) -> stay pending
         except Exception as e:
             logger.error("[KYC-poller] loop error: %s", e)

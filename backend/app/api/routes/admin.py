@@ -3326,6 +3326,19 @@ async def admin_get_kyc_live_status(
     except (ValueError, TypeError):
         pass
 
+    # Auto-update DB when live check reveals a terminal state so badge refreshes immediately.
+    if status_int == 3:  # Passed → approved
+        aid = status_data.get("accountId") or ""
+        if (trader.choice_kyc_status or "") != "approved":
+            trader.choice_account_id = aid or onboarding_id
+            trader.choice_account_number = aid
+            trader.choice_kyc_status = "approved"
+            await db.commit()
+    elif status_int == 4 or profile_int == 3:  # Rejected or profile check Declined
+        if (trader.choice_kyc_status or "") != "rejected":
+            trader.choice_kyc_status = "rejected"
+            await db.commit()
+
     return {
         "trader_id": trader_id,
         "trader_name": trader.full_name,
