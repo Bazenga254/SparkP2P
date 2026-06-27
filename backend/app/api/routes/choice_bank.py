@@ -203,25 +203,20 @@ async def _handle_transaction_result(params: dict, raw: dict):
                         ))
                         await _db.commit()
                     elif _tx_failed and tx_id:
-                        # No PENDING record (e.g. test/direct API call) — record as FAILED for idempotency
-                        _db.add(Payment(
-                            trader_id=_trader.id,
-                            direction=PaymentDirection.OUTBOUND,
-                            mpesa_transaction_id=tx_id,
-                            transaction_type="CHOICE_OUTBOUND",
-                            amount=amount,
-                            remarks=f"CB outbound failed - txType {tx_type} (no app record)",
-                            status=PaymentStatus.FAILED,
-                            raw_callback=raw,
-                        ))
-                        await _db.commit()
+                        # No PENDING record — Choice Bank notified us about a failure for a
+                        # transaction we have no record of (e.g. direct API call or timing issue).
+                        # Just log it; don't create a ghost record that pollutes Unmatched Withdrawals.
+                        logger.warning(f"[ChoiceBank] Outbound FAILED with no app record: txId={tx_id}, txType={tx_type}, KES {amount} — logged only")
 
                     from app.api.routes.telegram import notify_trader
                     if _tx_success:
                         _tg = "ok KES " + f"{amount:,.0f}" + " withdrawal COMPLETED" + chr(10) + "Ref: " + (tx_id or "N/A")
-                    elif _tx_failed:
+                    elif _tx_failed and _existing:
+                        # Only alert on failures that had a known PENDING record
                         _refund_note = " (20 credits refunded)" if _credits_refunded else ""
                         _tg = "fail KES " + f"{amount:,.0f}" + " withdrawal FAILED" + _refund_note + chr(10) + "Ref: " + (tx_id or "N/A")
+                    elif _tx_failed:
+                        _tg = None
                     else:
                         _tg = None
                     if _tg:
