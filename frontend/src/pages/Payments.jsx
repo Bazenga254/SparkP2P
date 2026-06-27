@@ -600,7 +600,7 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
             )}
             {isMpesa && payee.status === 'ok' && payee.name && (
               <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.3)' }}>
-                <span style={{ color: '#9aa4b2', fontSize: 11.5 }}>Sending to (Hakikisha)</span>
+                <span style={{ color: '#9aa4b2', fontSize: 11.5 }}>Name verified</span>
                 <div style={{ color: '#10b981', fontWeight: 800, fontSize: 14.5 }}>✓ {payee.name}</div>
               </div>
             )}
