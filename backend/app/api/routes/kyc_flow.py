@@ -89,11 +89,11 @@ class MobileKycBody(BaseModel):
     kra_pin: str
     employment_status: str
     monthly_income: str
-    front_photo_b64: str
-    back_photo_b64: str
-    selfie_b64: str
-    kra_cert_b64: str
-    kra_cert_content_type: str = "image"  # "image" or "pdf"
+    front_photo_b64: str = ""   # documents now uploaded after OTP confirm via /kyc/upload-docs
+    back_photo_b64: str = ""
+    selfie_b64: str = ""
+    kra_cert_b64: str = ""
+    kra_cert_content_type: str = "image"
 
 
 @router.post("/kyc/submit/{token}")
@@ -148,22 +148,11 @@ async def submit_mobile_kyc(token: str, body: MobileKycBody, db: AsyncSession = 
     trader.choice_kyc_status = "pending:" + onboarding_id
     await db.commit()
 
-    # Choice's current-account KYC documents are ONLY: ID front (KYCF00001), ID back (KYCF00002),
-    # selfie (KYCF00006). The KRA is the `kraPin` TEXT in submitOnboardingRequest — Choice has no
-    # KRA-cert document type (uploading KYCF00009 -> error 13230 "invalid media type"), so we don't.
-    for media_type, b64, ct in [
-        ("KYCF00001", body.front_photo_b64, "image"),
-        ("KYCF00002", body.back_photo_b64, "image"),
-        ("KYCF00006", body.selfie_b64, "image"),
-    ]:
-        upload_res = await choice.upload_kyc_media(onboarding_id, media_type, b64, ct)
-        if upload_res.get("code") != "00000":
-            raise HTTPException(400, "Failed to upload " + media_type + ": " + upload_res.get("msg", "Upload error"))
-
-    # Verify the EMAIL during onboarding (otpType=EMAIL) so the registered email becomes verified —
-    # this is what later lets each transaction use sendOtp(EMAIL), so the bot can read OTPs straight
-    # from the same Gmail inbox (no SMS, no phone). Fall back to SMS so onboarding never breaks if the
-    # email OTP can't be sent.
+    # Verify the EMAIL in its OPEN WINDOW — RIGHT AFTER submit, BEFORE any document upload. Choice
+    # starts reviewing once documents are in, which closes the OTP window (13211 "under review").
+    # Confirmed working end-to-end (send -> deliver -> confirmOperation = verified). Documents are
+    # uploaded later, after the user confirms this code, via /kyc/upload-docs. SMS fallback so
+    # onboarding never breaks if email OTP can't be sent.
     otp_channel = "email"
     otp_res = await choice.send_otp(onboarding_id, "EMAIL")
     logger.warning(f"[KYC] {onboarding_id} sendOtp(EMAIL) -> code={otp_res.get('code')} msg={otp_res.get('msg') or otp_res.get('message')}")
@@ -189,6 +178,29 @@ async def confirm_mobile_otp(token: str, body: OtpBody, db: AsyncSession = Depen
     if result.get("code") != "00000":
         raise HTTPException(400, result.get("msg", "OTP verification failed"))
     return {"status": "confirmed"}
+
+
+class UploadDocsBody(BaseModel):
+    onboarding_request_id: str
+    front_photo_b64: str
+    back_photo_b64: str
+    selfie_b64: str
+
+
+@router.post("/kyc/upload-docs/{token}")
+async def upload_kyc_docs(token: str, body: UploadDocsBody, db: AsyncSession = Depends(get_db)):
+    """Upload the KYC documents AFTER the email OTP is confirmed — so the email OTP fires in its open
+    window (right after submit, before review). Choice current-account docs: ID front/back + selfie."""
+    _decode_token(token)
+    for media_type, b64 in [
+        ("KYCF00001", body.front_photo_b64),
+        ("KYCF00002", body.back_photo_b64),
+        ("KYCF00006", body.selfie_b64),
+    ]:
+        upload_res = await choice.upload_kyc_media(body.onboarding_request_id, media_type, b64, "image")
+        if upload_res.get("code") != "00000":
+            raise HTTPException(400, "Failed to upload " + media_type + ": " + upload_res.get("msg", "Upload error"))
+    return {"status": "uploaded"}
 
 
 @router.get("/kyc/poll/{token}/{onboarding_id}")

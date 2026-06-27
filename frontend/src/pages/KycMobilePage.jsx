@@ -264,28 +264,31 @@ export default function KycMobilePage() {
         kra_pin: form.kraPin,
         employment_status: form.employmentStatus,
         monthly_income: form.monthlyIncome,
-        kra_cert_b64: files.kra,
-        kra_cert_content_type: kraContentType,
-        front_photo_b64: files.front,
-        back_photo_b64: files.back,
-        selfie_b64: files.selfie,
       });
       if (res.data.status === 'already_verified') { setStep('done'); return; }
       setRequestId(res.data.onboardingRequestId);
-      setStep('otp');
+      setStep('otp');   // email OTP already sent; documents upload after it's confirmed
     } catch (e) {
       setMsg({ text: (e.response && e.response.data && e.response.data.detail) || 'Submission failed. Please try again.' });
     } finally { setSubmitting(false); }
   };
 
   const handleOtp = async () => {
-    if (!otp.trim()) { setMsg({ text: 'Please enter the OTP.' }); return; }
+    if (!otp.trim()) { setMsg({ text: 'Please enter the code from your email.' }); return; }
     setSubmitting(true); setMsg(null);
     try {
+      // 1) Confirm the email OTP (this verifies the email — its window is open before any uploads).
       await axios.post(`${API}/kyc/otp/${token}`, { onboarding_request_id: requestId, otp: otp.trim() });
+      // 2) Email verified — NOW upload the documents and let Choice review.
+      await axios.post(`${API}/kyc/upload-docs/${token}`, {
+        onboarding_request_id: requestId,
+        front_photo_b64: files.front,
+        back_photo_b64: files.back,
+        selfie_b64: files.selfie,
+      });
       setStep('polling'); // polling useEffect takes over from here
     } catch (e) {
-      setMsg({ text: (e.response && e.response.data && e.response.data.detail) || 'OTP failed. Please try again.' });
+      setMsg({ text: (e.response && e.response.data && e.response.data.detail) || 'Verification failed. Please try again.' });
     } finally { setSubmitting(false); }
   };
 
@@ -343,9 +346,9 @@ export default function KycMobilePage() {
     <div style={S.wrap}>
       <div style={S.header}><div style={{ color: '#fff', fontSize: 18, fontWeight: 800, paddingBottom: 16 }}>Enter OTP</div></div>
       <div style={S.body}>
-        <StepTitle icon="&#128241;" title="Confirm your phone" sub="Enter the 6-digit code sent to your registered phone number." />
+        <StepTitle icon="&#9993;" title="Verify your email" sub="Choice Bank emailed you a verification code. Enter it here (check the same email you use for Binance)." />
         <MsgBox msg={msg} />
-        <label style={S.lbl}>OTP Code</label>
+        <label style={S.lbl}>Verification Code</label>
         <input type="tel" maxLength={6} value={otp} onChange={e => setOtp(e.target.value)}
           style={{ ...S.inp, fontSize: 30, letterSpacing: 14, textAlign: 'center', fontWeight: 800 }} placeholder="------" />
         <button onClick={handleOtp} disabled={submitting} style={S.nextBtn(submitting)}>
