@@ -945,6 +945,7 @@ class SendMoneyInitiate(BaseModel):
     amount: float
     payee_name: str = ""
     remark: str = ""
+    network: str = "mpesa"   # "mpesa" or "airtel"
 
 
 class SendMoneyConfirm(BaseModel):
@@ -976,15 +977,18 @@ async def send_money_initiate(body: SendMoneyInitiate, trader: Trader = Depends(
         raise HTTPException(status_code=400, detail="Enter a valid Kenyan phone number (e.g. 0712345678)")
     if body.amount <= 0:
         raise HTTPException(status_code=400, detail="Enter a valid amount")
-    if body.amount > 250000:
-        raise HTTPException(status_code=400, detail="M-Pesa transfers are limited to KES 250,000 per transaction")
+    network = (body.network or "mpesa").lower()
+    bank_code = "AIRTEL" if network == "airtel" else "M-PESA"
+    limit = 70000 if network == "airtel" else 250000
+    if body.amount > limit:
+        raise HTTPException(status_code=400, detail=f"{'Airtel' if network == 'airtel' else 'M-Pesa'} transfers are limited to KES {limit:,} per transaction")
 
     try:
         result = await choice.transfer(
             payer_account_id=trader.choice_account_id,
             payee_account_id=phone,
             amount=body.amount,
-            payee_bank_code="M-PESA",
+            payee_bank_code=bank_code,
             payee_name=body.payee_name or "",
             remark=body.remark or "SparkP2P send money",
             notify_mobile=phone,
@@ -1170,16 +1174,45 @@ async def paybill_confirm(body: PaybillConfirm, trader: Trader = Depends(get_cur
 async def list_banks(trader: Trader = Depends(get_current_trader)):
     """Clean bank-code list for PesaLink/RTGS dropdowns."""
     result = await choice.get_bank_codes()
-    data = result.get("data") or result
-    if not isinstance(data, list):
+    # API returns { data: { bankCodeList: [...] } }
+    raw = result.get("data") or result
+    if isinstance(raw, dict):
+        raw = raw.get("bankCodeList") or []
+    if not isinstance(raw, list):
         return []
     banks = []
-    for b in data:
+    for b in raw:
         code = str(b.get("bankCode") or b.get("code") or b.get("bankId") or "").strip()
         name = (b.get("bankName") or b.get("name") or b.get("bank_name") or "").strip()
-        if code and name:
+        # Exclude mobile money and internal codes from the bank selector
+        if code and name and code not in ("M-PESA", "AIRTEL"):
             banks.append({"code": code, "name": name})
     return sorted(banks, key=lambda x: x["name"])
+
+
+@router.get("/choice/pay/lookup-mpesa-name")
+async def lookup_mpesa_name(phone: str, trader: Trader = Depends(get_current_trader)):
+    """Hakikisha-style name lookup for a personal M-Pesa number (accountType=3).
+    Returns the masked subscriber name registered on M-Pesa (e.g. 'JOHN D****** M******')."""
+    p = _normalize_msisdn(phone)
+    if len(p) != 9 or not p.isdigit() or p[0] not in ("7", "1"):
+        raise HTTPException(status_code=400, detail="Enter a valid Kenyan phone number")
+    try:
+        r = await choice._post("/account/validateAccount", {
+            "accountId": p,
+            "accountType": 3,
+            "bankCode": "M-PESA",
+        })
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Name check unavailable: {exc}")
+    if r.get("code") == "10000":
+        raise HTTPException(status_code=404, detail="Number not found on M-Pesa")
+    if r.get("code") != "00000":
+        raise HTTPException(status_code=404, detail="Could not verify this number")
+    name = ((r.get("data") or {}).get("accountName") or "").strip()
+    if not name:
+        raise HTTPException(status_code=404, detail="No name returned for this number")
+    return {"name": name, "phone": p}
 
 
 @router.get("/choice/pay/lookup-account")

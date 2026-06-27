@@ -5,7 +5,7 @@ import {
   choiceGetBalance,
   cbSendMoneyInitiate, cbSendMoneyConfirm,
   cbPaybillInitiate, cbPaybillConfirm, cbLookupShortcode,
-  cbGetBanks, cbLookupBankAccount,
+  cbGetBanks, cbLookupBankAccount, cbLookupMpesaName,
   cbBankTransferInitiate, cbBankTransferConfirm,
   cbRtgsInitiate, cbRtgsConfirm,
   cbMpesaToBank,
@@ -29,25 +29,35 @@ const ICON = {
   deposit:  <><path d="M12 3v12m0 0l-4-4m4 4l4-4" /><path d="M3 19h18" /></>,
 };
 
+const UTILITY_SERVICES = {
+  kplc_tok:  { name: 'KPLC Tokens',    paybill: '888880', acctLabel: 'Meter number',    acctHint: 'e.g. 01234567890' },
+  kplc_post: { name: 'KPLC Post Paid', paybill: '888882', acctLabel: 'Account number',  acctHint: 'e.g. 0123456789' },
+  dstv:      { name: 'DSTV',           paybill: '444001', acctLabel: 'Customer number', acctHint: 'e.g. 1234567890' },
+  gotv:      { name: 'GOtv',           paybill: '444400', acctLabel: 'Customer number', acctHint: 'e.g. 1234567890' },
+  startimes: { name: 'StarTimes',      paybill: '290290', acctLabel: 'Smart card no.',  acctHint: 'e.g. 1234567890' },
+  zuku:      { name: 'Zuku',           paybill: '303030', acctLabel: 'Account number',  acctHint: 'e.g. 1234567890' },
+  water:     { name: 'Nairobi Water',  paybill: '444700', acctLabel: 'Account number',  acctHint: 'e.g. 1234567890' },
+};
+
 const SECTIONS = {
   mobile: [
     { title: 'Send Money', items: [
       { key: 'send',      label: 'Send to M-Pesa',     icon: 'send',     bg: '#16a34a', ready: true },
-      { key: 'airtel',    label: 'Send to Airtel',     icon: 'mpesa',    bg: '#dc2626', ready: false },
+      { key: 'airtel',    label: 'Send to Airtel',     icon: 'mpesa',    bg: '#dc2626', ready: true },
     ]},
     { title: 'Buy Goods & Pay Bills', items: [
       { key: 'paybill',   label: 'M-PESA Paybill',     icon: 'paybill',  bg: '#15803d', ready: true },
-      { key: 'buygoods',  label: 'M-PESA Buy Goods',   icon: 'buygoods', bg: '#15803d', ready: false },
+      { key: 'buygoods',  label: 'M-PESA Buy Goods',   icon: 'buygoods', bg: '#15803d', ready: true },
       { key: 'airtime',   label: 'Buy Airtime',        icon: 'airtime',  bg: '#0e7490', ready: false },
     ]},
     { title: 'Utility Bills', items: [
-      { key: 'kplc_tok',  label: 'KPLC Tokens',        icon: 'bulb',     bg: '#1d4ed8', ready: false },
-      { key: 'kplc_post', label: 'KPLC Post Paid',     icon: 'bulb',     bg: '#1d4ed8', ready: false },
-      { key: 'dstv',      label: 'DSTV',               icon: 'tv',       bg: '#0b3d91', ready: false },
-      { key: 'gotv',      label: 'GOtv',               icon: 'tv',       bg: '#ea580c', ready: false },
-      { key: 'startimes', label: 'StarTimes',          icon: 'tv',       bg: '#2563eb', ready: false },
-      { key: 'zuku',      label: 'Zuku',               icon: 'tv',       bg: '#7c3aed', ready: false },
-      { key: 'water',     label: 'Nairobi Water',      icon: 'water',    bg: '#0891b2', ready: false },
+      { key: 'kplc_tok',  label: 'KPLC Tokens',        icon: 'bulb',     bg: '#1d4ed8', ready: true },
+      { key: 'kplc_post', label: 'KPLC Post Paid',     icon: 'bulb',     bg: '#1d4ed8', ready: true },
+      { key: 'dstv',      label: 'DSTV',               icon: 'tv',       bg: '#0b3d91', ready: true },
+      { key: 'gotv',      label: 'GOtv',               icon: 'tv',       bg: '#ea580c', ready: true },
+      { key: 'startimes', label: 'StarTimes',          icon: 'tv',       bg: '#2563eb', ready: true },
+      { key: 'zuku',      label: 'Zuku',               icon: 'tv',       bg: '#7c3aed', ready: true },
+      { key: 'water',     label: 'Nairobi Water',      icon: 'water',    bg: '#0891b2', ready: true },
     ]},
   ],
   bank: [
@@ -103,9 +113,15 @@ export default function Payments() {
 
       <div className="pm-sheet">
         {active === 'send' ? (
-          <SendMoney onDone={done} onCancel={cancel} />
+          <SendMoney network="mpesa" onDone={done} onCancel={cancel} />
+        ) : active === 'airtel' ? (
+          <SendMoney network="airtel" onDone={done} onCancel={cancel} />
         ) : active === 'paybill' ? (
           <Paybill onDone={done} onCancel={cancel} />
+        ) : active === 'buygoods' ? (
+          <Paybill defaultTill onDone={done} onCancel={cancel} />
+        ) : UTILITY_SERVICES[active] ? (
+          <UtilityBill service={active} onDone={done} onCancel={cancel} />
         ) : active === 'own' ? (
           <BankTransfer type="own" title="To Own Account" onDone={done} onCancel={cancel} />
         ) : active === 'other' ? (
@@ -499,29 +515,57 @@ function MpesaToBank({ onDone, onCancel }) {
   );
 }
 
-// ── SendMoney ─────────────────────────────────────────────────────────────────
+// ── SendMoney (M-Pesa + Airtel, with Hakikisha name lookup for M-Pesa) ─────────
 
-function SendMoney({ onDone, onCancel }) {
+function SendMoney({ network = 'mpesa', onDone, onCancel }) {
+  const isMpesa = network === 'mpesa';
+  const title = isMpesa ? 'Send to M-Pesa' : 'Send to Airtel';
+  const limit = isMpesa ? 250000 : 70000;
+
   const [step, setStep] = useState('form');
   const [phone, setPhone] = useState('');
   const [amount, setAmount] = useState('');
-  const [name, setName] = useState('');
   const [otp, setOtp] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [payee, setPayee] = useState({ status: 'idle', name: '' }); // Hakikisha
 
-  const validForm = /^(0?7|0?1|7|1)\d{8}$/.test(phone.replace(/\s/g, '')) && Number(amount) > 0;
+  const rawPhone = phone.replace(/\s/g, '');
+  const validPhone = /^(0?7|0?1|7|1)\d{8}$/.test(rawPhone);
+  const validForm = validPhone && Number(amount) > 0 && Number(amount) <= limit;
+
+  // Hakikisha: live name lookup for M-Pesa numbers as user types
+  useEffect(() => {
+    if (!isMpesa || !validPhone) { setPayee({ status: 'idle', name: '' }); return; }
+    let cancel = false;
+    setPayee({ status: 'checking', name: '' });
+    const t = setTimeout(async () => {
+      try {
+        const r = await cbLookupMpesaName(rawPhone);
+        if (!cancel) setPayee({ status: 'ok', name: r.data?.name || '' });
+      } catch {
+        if (!cancel) setPayee({ status: 'fail', name: '' });
+      }
+    }, 700);
+    return () => { cancel = true; clearTimeout(t); };
+  }, [rawPhone, isMpesa, validPhone]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const initiate = async () => {
     setError(''); setBusy(true);
     try {
-      const res = await cbSendMoneyInitiate({ payee_phone: phone.trim(), amount: Number(amount), payee_name: name.trim() });
-      setInfo(res.data?.message || 'OTP sent to your registered phone.');
+      const res = await cbSendMoneyInitiate({
+        payee_phone: phone.trim(),
+        amount: Number(amount),
+        payee_name: payee.name || '',
+        network,
+      });
+      setInfo(res.data?.message || 'OTP sent.');
       setStep('otp');
     } catch (e) { setError(e.response?.data?.detail || 'Could not start the transfer. Please try again.'); }
     finally { setBusy(false); }
   };
+
   const confirm = async () => {
     setError(''); setBusy(true);
     try { await cbSendMoneyConfirm(otp.trim()); setStep('done'); }
@@ -533,7 +577,7 @@ function SendMoney({ onDone, onCancel }) {
     <div className="pm-flow pm-success">
       <div style={{ fontSize: 56 }}>✅</div>
       <h2>Money sent</h2>
-      <p>{fmtKES(amount)} is on its way to {name || ('0' + phone.replace(/^0/, ''))}.</p>
+      <p>{fmtKES(amount)} is on its way to {payee.name || phone}.</p>
       <button className="pm-btn" onClick={onDone}>Done</button>
     </div>
   );
@@ -542,16 +586,33 @@ function SendMoney({ onDone, onCancel }) {
     <div className="pm-flow">
       <div className="pm-flow-head">
         <button className="pm-flow-back" onClick={step === 'otp' ? () => setStep('form') : onCancel}>← Back</button>
-        <h2>Send to M-Pesa</h2>
+        <h2>{title}</h2>
       </div>
       {step === 'form' && (
         <>
-          <div className="pm-field"><label>Recipient phone (M-Pesa)</label>
-            <input className="pm-inp" inputMode="tel" placeholder="07XX XXX XXX" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+          <div className="pm-field">
+            <label>Recipient phone ({isMpesa ? 'M-Pesa' : 'Airtel Money'})</label>
+            <input className="pm-inp" inputMode="tel" placeholder="07XX XXX XXX" value={phone}
+              onChange={(e) => setPhone(e.target.value)} />
+            {/* Hakikisha name lookup */}
+            {isMpesa && payee.status === 'checking' && (
+              <div style={{ marginTop: 6, fontSize: 12.5, color: '#9aa4b2' }}>⏳ Verifying name…</div>
+            )}
+            {isMpesa && payee.status === 'ok' && payee.name && (
+              <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.3)' }}>
+                <span style={{ color: '#9aa4b2', fontSize: 11.5 }}>Sending to (Hakikisha)</span>
+                <div style={{ color: '#10b981', fontWeight: 800, fontSize: 14.5 }}>✓ {payee.name}</div>
+              </div>
+            )}
+            {isMpesa && payee.status === 'fail' && (
+              <div style={{ marginTop: 6, fontSize: 12.5, color: '#d97706' }}>⚠️ Could not verify name — check the number is correct</div>
+            )}
+          </div>
           <div className="pm-field"><label>Amount (KES)</label>
-            <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></div>
-          <div className="pm-field"><label>Recipient name <span style={{ color: '#6b7280' }}>(optional)</span></label>
-            <input className="pm-inp" placeholder="e.g. John Doe" value={name} onChange={(e) => setName(e.target.value)} /></div>
+            <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount}
+              onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} />
+            <div style={{ marginTop: 5, fontSize: 12, color: '#6b7280' }}>Max {fmtKES(limit)} per transaction.</div>
+          </div>
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
         </>
@@ -560,7 +621,8 @@ function SendMoney({ onDone, onCancel }) {
         <>
           <p className="pm-otpinfo">{info}</p>
           <div className="pm-field"><label>OTP code</label>
-            <input className="pm-inp" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="Enter the code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
+            <input className="pm-inp" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="Enter the code"
+              value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Send ${fmtKES(amount)}`}</button>
         </>
@@ -571,9 +633,9 @@ function SendMoney({ onDone, onCancel }) {
 
 // ── Paybill ───────────────────────────────────────────────────────────────────
 
-function Paybill({ onDone, onCancel }) {
+function Paybill({ onDone, onCancel, defaultTill = false }) {
   const [step, setStep] = useState('form');
-  const [isPaybill, setIsPaybill] = useState(true);
+  const [isPaybill, setIsPaybill] = useState(!defaultTill);
   const [biz, setBiz] = useState('');
   const [acct, setAcct] = useState('');
   const [amount, setAmount] = useState('');
@@ -677,6 +739,89 @@ function Paybill({ onDone, onCancel }) {
           <p className="pm-otpinfo">{info}</p>
           <div className="pm-field"><label>OTP code</label>
             <input className="pm-inp" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="Enter the code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
+          {error && <div className="pm-error">{error}</div>}
+          <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Pay ${fmtKES(amount)}`}</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── UtilityBill (KPLC, DSTV, GOtv, StarTimes, Zuku, Nairobi Water) ───────────
+
+function UtilityBill({ service, onDone, onCancel }) {
+  const cfg = UTILITY_SERVICES[service];
+  const [step, setStep] = useState('form');
+  const [acct, setAcct] = useState('');
+  const [amount, setAmount] = useState('');
+  const [otp, setOtp] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+
+  const validForm = acct.trim().length > 0 && Number(amount) > 0;
+
+  const initiate = async () => {
+    setError(''); setBusy(true);
+    try {
+      const res = await cbPaybillInitiate({
+        business_number: cfg.paybill,
+        amount: Number(amount),
+        account_number: acct.trim(),
+        is_paybill: true,
+      });
+      setInfo(res.data?.message || 'OTP sent to your registered phone.');
+      setStep('otp');
+    } catch (e) { setError(e.response?.data?.detail || 'Could not start payment. Try again.'); }
+    finally { setBusy(false); }
+  };
+
+  const confirm = async () => {
+    setError(''); setBusy(true);
+    try { await cbPaybillConfirm(otp.trim()); setStep('done'); }
+    catch (e) { setError(e.response?.data?.detail || 'OTP confirmation failed.'); }
+    finally { setBusy(false); }
+  };
+
+  if (step === 'done') return (
+    <div className="pm-flow pm-success">
+      <div style={{ fontSize: 56 }}>✅</div>
+      <h2>Payment sent</h2>
+      <p>{fmtKES(amount)} paid to {cfg.name} ({cfg.acctLabel.toLowerCase()}: {acct}).</p>
+      <button className="pm-btn" onClick={onDone}>Done</button>
+    </div>
+  );
+
+  return (
+    <div className="pm-flow">
+      <div className="pm-flow-head">
+        <button className="pm-flow-back" onClick={step === 'otp' ? () => setStep('form') : onCancel}>← Back</button>
+        <h2>{cfg.name}</h2>
+      </div>
+      {step === 'form' && (
+        <>
+          <div style={{ padding: '9px 13px', borderRadius: 9, background: '#12161d', border: '1px solid #20262f', marginBottom: 16 }}>
+            <span style={{ color: '#6b7280', fontSize: 12 }}>Paybill </span>
+            <span style={{ color: '#e2e8f0', fontWeight: 700 }}>{cfg.paybill}</span>
+          </div>
+          <div className="pm-field"><label>{cfg.acctLabel}</label>
+            <input className="pm-inp" inputMode="numeric" placeholder={cfg.acctHint} value={acct}
+              onChange={(e) => setAcct(e.target.value.trim())} />
+          </div>
+          <div className="pm-field"><label>Amount (KES)</label>
+            <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount}
+              onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} />
+          </div>
+          {error && <div className="pm-error">{error}</div>}
+          <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
+        </>
+      )}
+      {step === 'otp' && (
+        <>
+          <p className="pm-otpinfo">{info}</p>
+          <div className="pm-field"><label>OTP code</label>
+            <input className="pm-inp" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="Enter the code"
+              value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Pay ${fmtKES(amount)}`}</button>
         </>

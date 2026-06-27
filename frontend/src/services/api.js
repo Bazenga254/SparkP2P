@@ -203,6 +203,7 @@ export const cbPaybillInitiate = (body) => api.post('/choice/pay/paybill/initiat
 export const cbPaybillConfirm = (otp) => api.post('/choice/pay/paybill/confirm', { otp });
 // Payments Hub — Bank transfers (PesaLink / internal / RTGS / M-Pesa deposit)
 export const cbGetBanks = () => api.get('/choice/banks');
+export const cbLookupMpesaName = (phone) => api.get('/choice/pay/lookup-mpesa-name', { params: { phone } });
 export const cbLookupBankAccount = (account_id, bank_code = '') => api.get('/choice/pay/lookup-account', { params: { account_id, bank_code } });
 export const cbBankTransferInitiate = (body) => api.post('/choice/pay/bank-transfer/initiate', body);
 export const cbBankTransferConfirm = (otp) => api.post('/choice/pay/bank-transfer/confirm', { otp });
