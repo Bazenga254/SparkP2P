@@ -5057,7 +5057,7 @@ async function readEmailOTPviaIMAP(sentAfterMs = Date.now() - 120000) {
 
     if (!emailText) { console.log('[SparkP2P] Gmail IMAP: empty email body'); return null; }
 
-    // Extract 6-digit code â€” prefer line near "code", "verification", "otp"
+    // Extract 6-digit code — prefer line near “code”, “verification”, “otp”
     const lines = emailText.split(/[\r\n]+/);
     let code = null;
     for (const line of lines) {
@@ -5076,6 +5076,58 @@ async function readEmailOTPviaIMAP(sentAfterMs = Date.now() - 120000) {
     return null;
   } catch (e) {
     console.error('[SparkP2P] Gmail IMAP error:', e.message?.substring(0, 80));
+    if (client) await client.logout().catch(() => {});
+    return null;
+  }
+}
+
+// Read a Choice Bank transaction OTP (4-digit) from Gmail via IMAP.
+// Polls every 8s for up to 8 minutes — well inside Choice's 10-minute OTP window.
+async function readChoiceOTPviaIMAP(sentAfterMs = Date.now()) {
+  const POLL_MS = 8000;
+  const MAX_WAIT = 480000; // 8 minutes
+  const deadline = Date.now() + MAX_WAIT;
+  console.log('[SparkP2P] Waiting for Choice Bank OTP email (IMAP)...');
+  while (Date.now() < deadline) {
+    const code = await _imapSearch({ sender: 'choice-bank.co', digits: 4, sentAfterMs });
+    if (code) { console.log(`[SparkP2P] Choice Bank OTP: ${code}`); return code; }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise(r => setTimeout(r, Math.min(POLL_MS, remaining)));
+  }
+  console.log('[SparkP2P] Choice Bank OTP: timed out waiting for email');
+  return null;
+}
+
+async function _imapSearch({ sender, digits, sentAfterMs }) {
+  const creds = loadGmailCredentials();
+  if (!creds || !creds.email || !creds.appPassword) return null;
+  let client = null;
+  try {
+    const { ImapFlow } = require('imapflow');
+    client = new ImapFlow({ host: 'imap.gmail.com', port: 993, secure: true, auth: { user: creds.email, pass: creds.appPassword }, logger: false });
+    await client.connect();
+    await client.mailboxOpen('INBOX');
+    const uids = await client.search({ from: sender, since: new Date(sentAfterMs - 60000) }, { uid: true });
+    if (!uids || uids.length === 0) { await client.logout(); return null; }
+    let emailText = '';
+    for await (const msg of client.fetch(String(uids[uids.length - 1]), { bodyParts: ['TEXT'], uid: true })) {
+      const part = msg.bodyParts?.get('text') || msg.bodyParts?.get('TEXT') || msg.bodyParts?.get('1');
+      if (part) emailText = Buffer.isBuffer(part) ? part.toString('utf8') : String(part);
+    }
+    await client.logout();
+    if (!emailText) return null;
+    const re = new RegExp(`\\b(\\d{${digits}})\\b`);
+    const lines = emailText.split(/[\r\n]+/);
+    for (const line of lines) {
+      const l = line.toLowerCase();
+      if (l.includes('verif') || l.includes('code') || l.includes('otp')) {
+        const m = line.match(re); if (m) return m[1];
+      }
+    }
+    const m = emailText.match(re); return m ? m[1] : null;
+  } catch (e) {
+    console.error('[SparkP2P] IMAP search error:', e.message?.substring(0, 80));
     if (client) await client.logout().catch(() => {});
     return null;
   }
@@ -8513,9 +8565,38 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, name, amou
   }
 
   const data = await res.json();
+
+  // OTP required — read the emailed 4-digit code via IMAP then confirm
+  if (data.status === 'otp_required') {
+    console.log('[SparkP2P] Choice Bank OTP required for transfer applicationId=' + data.application_id);
+    const sentAt = Date.now();
+    const otp = await readChoiceOTPviaIMAP(sentAt);
+    if (!otp) throw new Error('Choice Bank OTP email did not arrive within 8 minutes. Transfer cancelled.');
+
+    const confirmRes = await fetch(API_BASE + '/ext/choice-confirm-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({
+        application_id: data.application_id,
+        otp,
+        order_number: orderNumber,
+        amount: data.amount,
+        payee_account_id: data.payee,
+        payee_name: name || '',
+        bank_code: bankCode || '',
+        remark: data.remark || '',
+      }),
+    });
+    if (!confirmRes.ok) {
+      const err = await confirmRes.json().catch(function() { return {}; });
+      throw new Error(err.detail || 'Choice Bank OTP confirmation failed HTTP ' + confirmRes.status);
+    }
+    const confirmed = await confirmRes.json();
+    console.log('[SparkP2P] Choice Bank OTP confirmed — txId=' + (confirmed.transaction_id || 'n/a'));
+    return { success: true, referenceId: confirmed.transaction_id || '', screenshot: confirmed.receipt_image || null };
+  }
+
   console.log('[SparkP2P] Choice Bank payment success txId=' + (data.transaction_id || 'n/a'));
-  // receipt_image is a generated payment-confirmation PNG (base64) — Choice is API-only, so the
-  // backend renders the proof we upload to Binance instead of screenshotting a (non-existent) page.
   return { success: true, referenceId: data.transaction_id || '', screenshot: data.receipt_image || null };
 }
 

@@ -2748,31 +2748,82 @@ async def choice_pay(
 
     tx_data = result.get("data") or {}
     tx_id = tx_data.get("txId") or tx_data.get("externalTxId") or ""
+    application_id = tx_data.get("applicationId") or ""
 
+    # If Choice requires OTP confirmation, return otp_required so the desktop can read
+    # the email OTP via IMAP and confirm it via /ext/choice-confirm-otp.
+    if application_id and not tx_id:
+        return {
+            "status": "otp_required",
+            "application_id": application_id,
+            "order_number": data.order_number,
+            "amount": data.amount,
+            "payee": data.payee_account_id,
+            "payee_name": data.payee_name,
+            "remark": remark,
+        }
+
+    # OTP-free path (tx_id returned immediately — merchant whitelisted or small amount)
+    return await _finalise_choice_payment(
+        trader=trader, db=db, tx_id=tx_id, amount=data.amount,
+        payee_account_id=data.payee_account_id, payee_name=data.payee_name,
+        order_number=data.order_number, remark=remark, bank_code=data.bank_code,
+    )
+
+
+class ChoiceConfirmOtpRequest(BaseModel):
+    application_id: str
+    otp: str
+    order_number: str
+    amount: float
+    payee_account_id: str
+    payee_name: str = ""
+    bank_code: str = ""
+    remark: str = ""
+
+
+@router.post("/choice-confirm-otp")
+async def choice_confirm_otp(
+    data: ChoiceConfirmOtpRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Confirm a Choice Bank transfer OTP read from Gmail. Called by desktop after readChoiceOTPviaIMAP."""
+    from app.services.choice_bank.client import confirm_otp
+    result = await confirm_otp(data.application_id, data.otp)
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "OTP confirmation failed"))
+    tx_data = result.get("data") or {}
+    tx_id = tx_data.get("txId") or tx_data.get("externalTxId") or data.application_id
+    return await _finalise_choice_payment(
+        trader=trader, db=db, tx_id=tx_id, amount=data.amount,
+        payee_account_id=data.payee_account_id, payee_name=data.payee_name,
+        order_number=data.order_number, remark=data.remark, bank_code=data.bank_code,
+    )
+
+
+async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_id,
+                                    payee_name, order_number, remark, bank_code):
+    """Record the payment in DB and generate a receipt image after OTP is confirmed."""
     payment = Payment(
         trader_id=trader.id,
         direction=PaymentDirection.OUTBOUND,
         status=PaymentStatus.COMPLETED,
-        amount=data.amount,
+        amount=amount,
         transaction_type="CHOICE_OUTBOUND",
-        phone=data.payee_account_id,
+        phone=payee_account_id,
         mpesa_transaction_id=tx_id or None,
-        remarks=f"BUY {data.order_number[-12:]}: {data.payee_name}",
+        remarks=f"BUY {order_number[-12:]}: {payee_name}",
     )
     db.add(payment)
     await db.commit()
 
-    # Generate the proof receipt image (Choice is API-only — no page to screenshot). The desktop
-    # uploads this to Binance before clicking "Transferred, notify seller".
     receipt_b64 = ""
     try:
         from app.services.payment_receipt import generate_receipt
         receipt_b64 = generate_receipt(
-            amount=data.amount,
-            payee_name=data.payee_name,
-            payee_account=data.payee_account_id,
-            ref=tx_id or remark,
-            method="Bank Transfer" if data.bank_code else "M-Pesa",
+            amount=amount, payee_name=payee_name, payee_account=payee_account_id,
+            ref=tx_id or remark, method="Bank Transfer" if bank_code else "M-Pesa",
         )
     except Exception as e:
         logger.warning(f"choice-pay receipt generation failed: {e}")
@@ -2780,8 +2831,8 @@ async def choice_pay(
     return {
         "success": True,
         "transaction_id": tx_id,
-        "amount": data.amount,
-        "payee": data.payee_account_id,
+        "amount": amount,
+        "payee": payee_account_id,
         "remark": remark,
         "receipt_image": receipt_b64,
     }
