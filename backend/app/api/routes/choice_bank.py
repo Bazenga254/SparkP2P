@@ -998,13 +998,21 @@ async def send_money_initiate(body: SendMoneyInitiate, trader: Trader = Depends(
     if not tx_id:
         raise HTTPException(status_code=502, detail="No transaction ID returned")
 
+    otp_channel = "EMAIL"
     try:
-        await choice.send_otp(tx_id)
+        otp_res = await choice.send_otp(tx_id, otp_type="EMAIL")
+        if otp_res.get("code") != "00000":
+            # Email not verified — fall back to SMS
+            await choice.send_otp(tx_id, otp_type="SMS")
+            otp_channel = "SMS"
     except Exception as exc:
         logger.warning(f"[ChoiceBank] send-money sendOtp failed: {exc}")
 
+    msg = ("Check your email for a 4-digit code from Choice Bank and enter it below to confirm this transfer."
+           if otp_channel == "EMAIL" else
+           "Enter the OTP Choice Bank sent to your registered phone to confirm this transfer.")
     _pending_send_money[trader.id] = {"tx_id": tx_id, "amount": body.amount, "phone": phone, "name": body.payee_name}
-    return {"status": "otp_sent", "message": "Enter the OTP Choice Bank sent to your registered phone to confirm this transfer."}
+    return {"status": "otp_sent", "message": msg}
 
 
 @router.post("/choice/pay/send-money/confirm")
