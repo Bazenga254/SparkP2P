@@ -8,10 +8,55 @@ import {
   cbGetBanks, cbLookupBankAccount, cbLookupMpesaName,
   cbBankTransferInitiate, cbBankTransferConfirm,
   cbRtgsInitiate, cbRtgsConfirm,
-  cbMpesaToBank,
+  cbMpesaToBank, cbResendOtp,
 } from '../services/api';
 
 const fmtKES = (n) => 'KES ' + Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ── OTP resend timer — shows countdown then "Resend OTP" link ─────────────────
+function OtpResend({ flow }) {
+  const [secs, setSecs] = useState(60);
+  const [status, setStatus] = useState('idle'); // idle | sending | sent | error
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    if (secs <= 0) return;
+    const t = setTimeout(() => setSecs(s => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [secs]);
+
+  const resend = async () => {
+    setStatus('sending'); setMsg('');
+    try {
+      const r = await cbResendOtp(flow);
+      setMsg(r.data?.message || 'New OTP sent.');
+      setStatus('sent');
+      setSecs(60);
+    } catch (e) {
+      setMsg(e.response?.data?.detail || 'Could not resend. Please try again.');
+      setStatus('error');
+    }
+  };
+
+  if (secs > 0) return (
+    <div style={{ marginTop: 10, fontSize: 12.5, color: '#6b7280', textAlign: 'center' }}>
+      Resend OTP in <span style={{ color: '#9aa4b2', fontWeight: 600 }}>{secs}s</span>
+    </div>
+  );
+
+  return (
+    <div style={{ marginTop: 10, textAlign: 'center' }}>
+      {status === 'sending' && <span style={{ fontSize: 12.5, color: '#9aa4b2' }}>Resending…</span>}
+      {status === 'sent'    && <span style={{ fontSize: 12.5, color: '#10b981' }}>✓ {msg}</span>}
+      {status === 'error'   && <span style={{ fontSize: 12.5, color: '#ef4444' }}>{msg}</span>}
+      {status !== 'sending' && (
+        <button onClick={resend} style={{ background: 'none', border: 'none', color: '#f59e0b', fontSize: 13, cursor: 'pointer', textDecoration: 'underline', padding: 0, marginTop: status === 'error' ? 6 : 0 }}>
+          {status === 'sent' ? 'Resend again' : "Didn't get the OTP? Resend"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 const ICON = {
   mpesa:    <><rect x="7" y="3" width="10" height="18" rx="2" /><path d="M11 18h2" /></>,
@@ -346,6 +391,7 @@ function BankTransfer({ type, title, onDone, onCancel }) {
               value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Transfer ${fmtKES(amount)}`}</button>
+          <OtpResend flow="bank_transfer" />
         </>
       )}
     </div>
@@ -448,6 +494,7 @@ function RTGSTransfer({ onDone, onCancel }) {
               value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Send ${fmtKES(amount)} via RTGS`}</button>
+          <OtpResend flow="rtgs" />
         </>
       )}
     </div>
@@ -625,6 +672,7 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
               value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Send ${fmtKES(amount)}`}</button>
+          <OtpResend flow="send_money" />
         </>
       )}
     </div>
@@ -741,6 +789,7 @@ function Paybill({ onDone, onCancel, defaultTill = false }) {
             <input className="pm-inp" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="Enter the code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Pay ${fmtKES(amount)}`}</button>
+          <OtpResend flow="paybill" />
         </>
       )}
     </div>
@@ -824,6 +873,7 @@ function UtilityBill({ service, onDone, onCancel }) {
               value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></div>
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Pay ${fmtKES(amount)}`}</button>
+          <OtpResend flow="paybill" />
         </>
       )}
     </div>

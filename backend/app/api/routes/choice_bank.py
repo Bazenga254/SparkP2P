@@ -1442,6 +1442,39 @@ async def rtgs_confirm(
     return {"status": "success", "application_id": pending["app_id"], "amount": pending["amount"]}
 
 
+# ── Payments Hub — Generic OTP resend ─────────────────────────────────────────
+
+class ResendOtpBody(BaseModel):
+    flow: str  # "send_money" | "paybill" | "bank_transfer" | "rtgs"
+
+@router.post("/choice/pay/resend-otp")
+async def resend_payment_otp(body: ResendOtpBody, trader: Trader = Depends(get_current_trader)):
+    """Re-send the OTP for a pending payment flow. Caller provides the flow name."""
+    _flow_map = {
+        "send_money":    _pending_send_money,
+        "paybill":       _pending_paybill,
+        "bank_transfer": _pending_bank_transfer,
+        "rtgs":          _pending_rtgs,
+    }
+    store = _flow_map.get(body.flow)
+    if store is None:
+        raise HTTPException(status_code=400, detail="Unknown flow")
+    pending = store.get(trader.id)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending transaction — please start over")
+    tx_id = pending.get("tx_id") or pending.get("app_id")
+    if not tx_id:
+        raise HTTPException(status_code=400, detail="Missing transaction reference")
+    try:
+        await choice.resend_otp(tx_id, otp_type="EMAIL")
+    except Exception:
+        try:
+            await choice.resend_otp(tx_id, otp_type="SMS")
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Could not resend OTP: {e}")
+    return {"message": "A new OTP has been sent to your email."}
+
+
 # ── Payments Hub — M-Pesa to Bank (STK Push deposit) ──────────────────────────
 
 class MpesaToBankBody(BaseModel):

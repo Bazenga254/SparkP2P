@@ -210,5 +210,6 @@ export const cbBankTransferConfirm = (otp) => api.post('/choice/pay/bank-transfe
 export const cbRtgsInitiate = (body) => api.post('/choice/pay/rtgs/initiate', body);
 export const cbRtgsConfirm = (otp) => api.post('/choice/pay/rtgs/confirm', { otp });
 export const cbMpesaToBank = (body) => api.post('/choice/pay/mpesa-to-bank', body);
+export const cbResendOtp = (flow) => api.post('/choice/pay/resend-otp', { flow });
 export const kycCreateSession = () => api.post('/kyc/session');
 export default api;
