@@ -17,6 +17,9 @@ export default function KycVerifyPage() {
 
   useEffect(() => {
     if (!token) { setError('No token found. Please click "Set up" from the SparkP2P app again.'); return; }
+    // If already on a mobile device, skip the QR code and go straight to the form.
+    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    if (isMobile) { window.location.replace(mobileUrl); return; }
     axios.get(`${API}/kyc/validate/${token}`)
       .then(r => { if (r.data.verified) { setVerified(true); } else { setTrader(r.data); } })
       .catch(() => setError('This link is invalid or has expired. Please click "Set up" in the SparkP2P app to get a new link.'));
