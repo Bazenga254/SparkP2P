@@ -5359,7 +5359,7 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
   console.log(`[SparkP2P] Choice OTP: waiting 25s for Choice Bank email to arrive (payment initiated at ${new Date(sentAfterMs).toLocaleTimeString()})...`);
   await new Promise(r => setTimeout(r, 25000)); // Choice Bank emails take 10-35s
 
-  const POLL_MS = 8000;
+  const POLL_MS = 4000;
   const MAX_WAIT = 120000; // 2 minutes total (25s already spent above)
   const deadline = Date.now() + MAX_WAIT;
 
@@ -5403,7 +5403,7 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
           await gmailPage.goto(inboxUrl, { waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {});
         });
       }
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 1200));
 
       // Read all inbox rows: sender name + subject + timestamp
       const rows = await gmailPage.evaluate(() => {
