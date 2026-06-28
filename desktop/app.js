@@ -980,7 +980,6 @@ async function connectPuppeteer() {
       { name: 'Binance',    domains: ['binance.com'],                            maxTabs: 1        },
       { name: 'Gmail',      domains: ['mail.google.com'],                        maxTabs: 1        },
       { name: 'GoogleAuth', domains: ['accounts.google.com', 'google.com'],      maxTabs: Infinity }, // OAuth popups — Binance and Gmail both open these
-      { name: 'I&M Bank',   domains: ['imbank.com', 'imbank.co.ke', 'im.co.ke'], maxTabs: 1       },
       { name: 'M-Pesa',     domains: ['org.ke.m-pesa.com'],                       maxTabs: 1       },
     ];
 
@@ -10902,33 +10901,23 @@ function startImKeepAlive() {
   imKeepAliveTimer = setInterval(async () => {
     if (!imPage || imPage.isClosed()) {
       imPage = null;
-      if (traderImAccount && pollerRunning && !connectingIm) {
-        console.log('[SparkP2P] I&M tab closed — auto-reopening...');
-        connectIm().catch(() => {});
-      }
       return;
     }
     try {
       const url = imPage.url();
 
-      // Detect session expiry â€” login/QR page means we've been logged out
+      // Detect session expiry — clear the page reference but do NOT auto-reopen
       if (url.includes('/openid-connect/') || url.includes('/auth/realms/') ||
           url.includes('login') || url.includes('Login') ||
           !url.includes('imbank.com')) {
-        console.log('[SparkP2P] I&M session expired â€” auto-reconnecting...');
         imPage = null;
         if (imKeepAliveTimer) { clearInterval(imKeepAliveTimer); imKeepAliveTimer = null; }
-        // Clear backend connected flag
         if (token) {
           await fetch(`${API_BASE}/traders/disconnect-im`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}` },
           }).catch(() => {});
         }
-        // Auto-reconnect â€” re-opens the I&M tab and waits for QR scan
-        console.log('[SparkP2P] I&M auto-reconnect triggered â€” opening login page');
-        sendBotLog('warning', 'I&M Bank session expired — reconnecting');
-        await connectIm().catch(() => {});
         return;
       }
 
@@ -12482,10 +12471,6 @@ async function recoverSessions() {
     } catch (e) {
       console.log('[SparkP2P] I&M tab refresh failed:', e.message);
     }
-  } else if (traderImAccount && pollerRunning) {
-    // I&M tab missing (crashed or never opened) — re-open it
-    console.log('[SparkP2P] I&M tab missing after reconnect — re-opening...');
-    connectIm().catch(() => {});
   }
 
   // Reconcile Binance order state before resuming automation.
