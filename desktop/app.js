@@ -1926,6 +1926,27 @@ async function readWalletPage(page, url, walletType) {
   return balances.map(b => ({ asset: b.asset, free: b.available, locked: b.locked, total: b.total, wallet: walletType }));
 }
 
+let _walletScanRunning = false;
+
+function scheduleWalletScan() {
+  // Fire-and-forget: scan wallets in the background after an order completes.
+  // Opens a NEW browser tab so it never hijacks the main order-navigation page.
+  if (_walletScanRunning || !browser || !token) return;
+  _walletScanRunning = true;
+  (async () => {
+    try {
+      const scanPage = await browser.newPage();
+      const balances = await scanWalletBalances(scanPage);
+      await uploadBalances(balances);
+      await scanPage.close().catch(() => {});
+    } catch (e) {
+      console.warn('[SparkP2P] Background wallet scan failed:', e.message?.substring(0, 60));
+    } finally {
+      _walletScanRunning = false;
+    }
+  })();
+}
+
 async function scanWalletBalances(page) {
   const fundingBals = await readWalletPage(page, 'https://www.binance.com/en/my/wallet/funding', 'Funding');
   const spotBals = await readWalletPage(page, 'https://www.binance.com/en/my/wallet/account/overview', 'Spot');
@@ -2082,8 +2103,9 @@ async function readOrders(activeOnly = false) {
     if (!page) { _ordersTabOpen = false; return { sell: [], buy: [], cancelled: [], completed_buy: [] }; }
 
     // â”€â”€ Step 1: Read active/ongoing orders (tab=0) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 2500));
+    // domcontentloaded is enough — we only need DOM text, not full network idle
+    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
 
     const activeText = await page.evaluate(() => document.body.innerText).catch(() => '');
 
@@ -3247,15 +3269,12 @@ async function idleScan(page) {
     } catch (_) {}
   }
 
-  // â”€â”€ Step 1: Check active orders FIRST â€” skip wallet scan if an order needs attention â”€â”€
+  // â”€â”€ Step 1: Check active orders FIRST â€” readOrders navigates to tab=0 itself â”€â”€
   console.log('[SparkP2P] Step 1: Checking active orders (tab=0)...');
-  await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
-    { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-  await new Promise(r => setTimeout(r, 3000));
   if (pauseNavigation) return;
 
-  // Read active orders only â€” skip history scan so the page stays on tab=0
-  // and goes straight to order details without bouncing through cancelled/completed tabs.
+  // Read active orders only â€” skip history scan so the page goes straight to order details.
+  // readOrders() handles the navigation; we don't navigate here to avoid a duplicate goto.
   const orders = await readOrders(true); // activeOnly=true
   stats.orders = orders.sell.length + orders.buy.length;
   console.log(`[SparkP2P] Orders found: ${orders.sell.length} sell, ${orders.buy.length} buy`);
@@ -3966,8 +3985,7 @@ async function idleScan(page) {
       removePaidOrder(orderNum);
       if (activeBuyOrderNumber === orderNum) activeBuyOrderNumber = null;
       stats.actions++;
-      const balances = await scanWalletBalances(page);
-      await uploadBalances(balances);
+      scheduleWalletScan(); // background — doesn't block next poll
 
     // â”€â”€ Dispute / expired after we paid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // "appeal" text appears normally on Binance after payment confirmed â€” only treat it as
@@ -4462,9 +4480,7 @@ Method selection rules:
 
   if (allActiveNums.length === 0) {
     console.log('[SparkP2P] No active orders â€” staying idle');
-    // Stay on the orders page — bot polls from here
-    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
-      { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    // readOrders() at the start of the next poll will navigate to tab=0 — no need to pre-navigate here
   }
   }  // end buy orders block
 }
@@ -4593,8 +4609,7 @@ async function monitorActiveOrder(page) {
       }).catch(() => {});
       codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
-      const balances = await scanWalletBalances(page);
-      await uploadBalances(balances);
+      scheduleWalletScan(); // background — doesn't block next poll
       return;
     }
 
@@ -4656,8 +4671,7 @@ async function monitorActiveOrder(page) {
         await releaseWithVision(page, orderNum, {});
         codeFallbackAskedForOrder = null;
         activeOrderNumber = null; activeOrderFiatAmount = 0;
-        const balances = await scanWalletBalances(page);
-        await uploadBalances(balances);
+        scheduleWalletScan(); // background — doesn't block next poll
         return;
       } else {
         // Ask buyer for code once, then wait
@@ -4709,8 +4723,7 @@ async function monitorActiveOrder(page) {
       }).catch(() => {});
       codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
-      const balances = await scanWalletBalances(page);
-      await uploadBalances(balances);
+      scheduleWalletScan(); // background — doesn't block next poll
       return;
     }
 
