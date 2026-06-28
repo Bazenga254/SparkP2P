@@ -41,6 +41,7 @@ async def buy_release_monitor():
                         Order.payment_sent_at.isnot(None),
                         Order.payment_sent_at <= cutoff,
                         Order.payment_sent_at >= floor,   # don't nag dead/old orders forever
+                        Order.settled_at.is_(None),       # skip if _complete_buy_order already ran
                     )
                 )).scalars().all()
 

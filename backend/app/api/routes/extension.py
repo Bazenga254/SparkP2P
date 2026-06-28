@@ -333,8 +333,11 @@ async def report_payment_sent(
 
     if data.success:
         _already_sent = order.status == OrderStatus.PAYMENT_SENT
-        order.status = OrderStatus.PAYMENT_SENT
-        order.payment_sent_at = datetime.now(timezone.utc)
+        # Never downgrade a COMPLETED/RELEASED order back to PAYMENT_SENT.
+        # This happens when a payment retry succeeds after the order was already marked done.
+        if order.status not in (OrderStatus.COMPLETED, OrderStatus.RELEASED):
+            order.status = OrderStatus.PAYMENT_SENT
+            order.payment_sent_at = datetime.now(timezone.utc)
         # Buy order = outbound payment to the seller via Choice Bank. Choice Bank withholds the KES
         # fee on its side (debits amount + fee from the trader's account) and remits our markup
         # monthly — so no credit charge here. Record the fee once for reconciliation.
