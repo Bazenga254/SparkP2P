@@ -6234,56 +6234,22 @@ async function sendChatMessage(page, message) {
 
     await new Promise(r => setTimeout(r, 400));
 
-    // â”€â”€ Step 2: Send the message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    if (visionTyped) {
-      // After Vision click, keyboard focus is real — Enter sends directly
-      await page.keyboard.press('Enter');
-    } else {
-      const sendClicked = await page.evaluate(() => {
-        const selectors = [
-          'textarea[placeholder*=”message” i]',
-          'textarea[placeholder*=”enter” i]',
-          'input[placeholder*=”message” i]',
-          'textarea',
-          'div[contenteditable=”true”]',
-        ];
-        let input = null;
-        for (const sel of selectors) {
-          const candidates = document.querySelectorAll(sel);
-          for (const el of candidates) {
-            if (el.offsetParent !== null && !el.disabled) { input = el; break; }
-          }
-          if (input) break;
+    // Step 2: Send — refocus the chat input then press Enter.
+    // Binance P2P contenteditable does not have a type="submit" button, so
+    // button-click is unreliable. Refocus + Enter is definitive on all paths.
+    await page.evaluate(() => {
+      const sels = [
+        'textarea[placeholder*="message" i]', 'textarea[placeholder*="enter" i]',
+        'input[placeholder*="message" i]', 'textarea', 'div[contenteditable="true"]',
+      ];
+      for (const sel of sels) {
+        for (const el of document.querySelectorAll(sel)) {
+          if (el.offsetParent !== null && !el.disabled) { el.focus(); return; }
         }
-        let container = input ? input.parentElement : document.body;
-        for (let i = 0; i < 8 && container; i++) {
-          const btns = container.querySelectorAll('button[type=”submit”], button:not([disabled])');
-          for (const btn of btns) {
-            if (btn.offsetParent !== null) { btn.click(); return true; }
-          }
-          container = container.parentElement;
-        }
-        const allBtns = document.querySelectorAll('button[type=”submit”]');
-        for (const btn of allBtns) {
-          if (btn.offsetParent !== null) { btn.click(); return true; }
-        }
-        return false;
-      }).catch(() => false);
-
-      if (!sendClicked) {
-        // Refocus via DOM then Enter
-        await page.evaluate(() => {
-          const sels = ['textarea[placeholder*=”message” i]', 'textarea[placeholder*=”enter” i]',
-            'input[placeholder*=”message” i]', 'textarea', 'div[contenteditable=”true”]'];
-          for (const sel of sels) {
-            for (const el of document.querySelectorAll(sel)) {
-              if (el.offsetParent !== null && !el.disabled) { el.focus(); return; }
-            }
-          }
-        }).catch(() => {});
-        await page.keyboard.press('Enter');
       }
-    }
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 150));
+    await page.keyboard.press('Enter');
 
     await new Promise(r => setTimeout(r, 1000));
     console.log(`[SparkP2P] âœ… Message sent: “${message.substring(0, 60)}”`);
