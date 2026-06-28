@@ -3045,6 +3045,7 @@ async def choice_confirm_otp(
 async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_id,
                                     payee_name, order_number, remark, bank_code):
     """Record the payment in DB and generate a receipt image after OTP is confirmed."""
+    _dest_type = "Bank Transfer" if bank_code else "M-Pesa"
     payment = Payment(
         trader_id=trader.id,
         direction=PaymentDirection.OUTBOUND,
@@ -3052,6 +3053,9 @@ async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_i
         amount=amount,
         transaction_type="CHOICE_OUTBOUND",
         phone=payee_account_id,
+        destination=payee_account_id,
+        destination_type=_dest_type,
+        sender_name=payee_name,
         mpesa_transaction_id=tx_id or None,
         remarks=f"BUY {order_number[-12:]}: {payee_name}",
     )
