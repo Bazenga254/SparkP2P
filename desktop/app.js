@@ -96,19 +96,29 @@ function removePaidOrder(orderNum) {
   } catch (e) {}
 }
 
-// ── Persistent buy-order state — greeting and approval tracking survive restarts ──
-const buyOrderStateFile = path.join(logDir, 'buy_order_state.json');
-function _loadBuyOrderState() {
-  try { return JSON.parse(fs.readFileSync(buyOrderStateFile, 'utf8')); } catch(e) { return { greetingSent: [], approvalRequested: [] }; }
+// ── Unified per-order flag store — every boolean survives bot restarts ──────────
+// Tracks: greetingSent, approvalRequested, paymentFailed, postPaymentMsgSent,
+//         markPaidDone, reminderSent — keyed by orderNumber.
+const orderFlagsFile = path.join(logDir, 'order_flags.json');
+function _loadOrderFlags() {
+  try { return JSON.parse(fs.readFileSync(orderFlagsFile, 'utf8')); } catch(e) { return {}; }
 }
-function _saveBuyOrderState() {
+function _saveOrderFlag(orderNum, flag, value) {
   try {
-    fs.writeFileSync(buyOrderStateFile, JSON.stringify({
-      greetingSent: [...buyGreetingSentOrders],
-      approvalRequested: [...buyApprovalRequestedOrders],
-    }, null, 2));
-  } catch(e) { console.error('[SparkP2P] Could not save buy order state:', e.message); }
+    const store = _loadOrderFlags();
+    if (!store[orderNum]) store[orderNum] = {};
+    store[orderNum][flag] = value;
+    fs.writeFileSync(orderFlagsFile, JSON.stringify(store, null, 2));
+  } catch(e) { console.error('[SparkP2P] Could not save order flag:', e.message); }
 }
+function _removeOrderFlags(orderNum) {
+  try {
+    const store = _loadOrderFlags();
+    delete store[orderNum];
+    fs.writeFileSync(orderFlagsFile, JSON.stringify(store, null, 2));
+  } catch(e) {}
+}
+
 
 // ── Persistent reported-completed-buy store — prevents duplicate SMS across restarts ──
 const reportedCompletedFile = path.join(logDir, 'reported_completed.json');
@@ -205,6 +215,7 @@ const reportedCompletedBuyOrders = new Set();  // order numbers already sent as 
 const reportedCompletedSellOrders = new Set(); // order numbers already sent as completed_sell_order_numbers — prevents duplicate SMS
 const buyGreetingSentOrders = new Set();    // orderNums where greeting was already sent
 const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent KSh..." was already sent
+const markPaidDoneOrders = new Set();          // orderNums where EP-17 mark-paid was already called — skip on restart
 // Restore paid orders from disk on startup (survives bot restarts)
 {
   const _paidOnDisk = loadPaidOrders();
@@ -223,12 +234,17 @@ const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent K
   if (_nums.length) console.log(`[SparkP2P] Restored ${_nums.length} paid order(s) from disk: ${_nums.join(', ')}`);
 }
 // Restore buy order state (greeting sent + approval requested) from disk on startup
-{
-  const _bos = _loadBuyOrderState();
-  (_bos.greetingSent || []).forEach(n => buyGreetingSentOrders.add(n));
-  (_bos.approvalRequested || []).forEach(n => buyApprovalRequestedOrders.add(n));
-  if (_bos.greetingSent?.length) console.log(`[SparkP2P] Restored buy greeting state for ${_bos.greetingSent.length} order(s)`);
-}
+  const _flags = _loadOrderFlags();
+  Object.entries(_flags).forEach(([num, f]) => {
+    if (f.greetingSent)        buyGreetingSentOrders.add(num);
+    if (f.approvalRequested)   buyApprovalRequestedOrders.add(num);
+    if (f.paymentFailed)       imPaymentFailedOrders.add(num);
+    if (f.postPaymentMsgSent)  buyPostPaymentMsgSentOrders.add(num);
+    if (f.markPaidDone)        markPaidDoneOrders.add(num);
+    if (f.reminderSent)        buyReminderSentOrders.add(num);
+  });
+  const _restored = Object.keys(_flags).length;
+  if (_restored) console.log(`[SparkP2P] Restored order flags for ${_restored} order(s) from disk`);
 // Restore completed buy orders from disk — prevents duplicate SMS when bot restarts
 {
   const _completedOnDisk = loadReportedCompleted();
@@ -3422,7 +3438,7 @@ async function idleScan(page) {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ order_number: order.orderNumber, success: true }),
       }).catch(() => {});
-      delete orderFirstSeenAt[order.orderNumber];
+      delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
       orderReminderSent.delete(order.orderNumber);
       delete orderLastBotReplyAt[order.orderNumber];
       codeFallbackAskedOrders.delete(order.orderNumber);
@@ -3523,7 +3539,7 @@ async function idleScan(page) {
         activeOrderFiatAmount = 0;
         verifiedOrders.delete(order.orderNumber);
         orderChatHistory.delete(order.orderNumber);
-        delete orderFirstSeenAt[order.orderNumber];
+        delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
         codeFallbackAskedOrders.delete(order.orderNumber);
       delete partialPayments[order.orderNumber];
       delete lastDeficitSent[order.orderNumber];
@@ -3576,7 +3592,7 @@ async function idleScan(page) {
             }
             // Cleanup
             verifiedOrders.delete(order.orderNumber);
-            delete orderFirstSeenAt[order.orderNumber];
+            delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
             codeFallbackAskedOrders.delete(order.orderNumber);
             delete partialPayments[order.orderNumber];
             delete lastDeficitSent[order.orderNumber];
@@ -3621,7 +3637,7 @@ async function idleScan(page) {
       await releaseWithVision(page, order.orderNumber, {});
       activeOrderNumber = null;
       activeOrderFiatAmount = 0;
-      delete orderFirstSeenAt[order.orderNumber];
+      delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
       codeFallbackAskedOrders.delete(order.orderNumber);
       delete partialPayments[order.orderNumber];
       delete lastDeficitSent[order.orderNumber];
@@ -3695,7 +3711,7 @@ async function idleScan(page) {
           });
           await new Promise(r => setTimeout(r, 1000));
           await takeScreenshot(`cancel_expired_${order.orderNumber}`, page);
-          delete orderFirstSeenAt[order.orderNumber];
+          delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
           orderReminderSent.delete(order.orderNumber);
       delete orderLastBotReplyAt[order.orderNumber];
           codeFallbackAskedOrders.delete(order.orderNumber);
@@ -3901,7 +3917,7 @@ async function idleScan(page) {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [order.orderNumber] }),
       }).catch(() => {});
-      delete orderFirstSeenAt[order.orderNumber];
+      delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
       orderReminderSent.delete(order.orderNumber);
       delete orderLastBotReplyAt[order.orderNumber];
       sellApprovalRequestedOrders.delete(order.orderNumber);
@@ -3989,7 +4005,7 @@ async function idleScan(page) {
         console.warn(`[SparkP2P] report-buy-completed failed for ${orderNum} — reconcile will retry`);
         sendBotLog('warn', `Buy order ${orderNum} completion report failed — will retry automatically`);
       }
-      delete orderFirstSeenAt[orderNum];
+      delete orderFirstSeenAt[orderNum]; _removeOrderFlags(orderNum);
       delete buyPaymentSentAt[orderNum];
       buyReminderSentOrders.delete(orderNum);
       delete buyOrderDetailsMap[orderNum];
@@ -4062,7 +4078,7 @@ async function idleScan(page) {
         await sendBinanceChatMessage(page,
           `Hi, just a friendly reminder — I sent the payment ${minsWaiting} minutes ago. Could you please release the crypto when you get a chance? Thank you! 😊`
         );
-        buyReminderSentOrders.add(order.orderNumber);
+        buyReminderSentOrders.add(order.orderNumber);; _saveOrderFlag(order.orderNumber, 'reminderSent', true);
       }
       if (details.sellerName && anthropicApiKey) {
         await respondToBuyOrderChat(page, details);
@@ -4394,7 +4410,7 @@ Method selection rules:
               buyApproved = true;
               console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram not linked, auto-approving payment`);
             } else {
-              buyApprovalRequestedOrders.add(order.orderNumber); _saveBuyOrderState();
+              buyApprovalRequestedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'approvalRequested', true);
               sendBotLog('info', `Buy order ${order.orderNumber} — waiting for Telegram payment approval`);
               console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram approval sent immediately, bot on order page`);
             }
@@ -4412,7 +4428,7 @@ Method selection rules:
               buyApproved = true;
               sendBotLog('success', `Buy order ${order.orderNumber} — approved, executing payment`);
             } else if (approvalStatus === 'rejected') {
-              imPaymentFailedOrders.add(order.orderNumber);
+              imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
               sendBotLog('warning', `Buy order ${order.orderNumber} — payment declined on Telegram. Cancelling via API.`);
               // EP-9: cancel order via SAPI — no DOM clicking needed
               await fetch(`${API_BASE}/ext/cancel-order`, {
@@ -4421,10 +4437,10 @@ Method selection rules:
                 body: JSON.stringify({ order_number: order.orderNumber }),
               }).catch(() => null);
               console.log(`[SparkP2P] Buy order ${order.orderNumber} — cancelled via API (Telegram declined)`);
-              delete orderFirstSeenAt[order.orderNumber];
+              delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
               continue;
             } else if (approvalStatus === 'timeout') {
-              imPaymentFailedOrders.add(order.orderNumber);
+              imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
               sendBotLog('warning', `Buy order ${order.orderNumber} — Telegram approval timed out (20 min). Order will expire.`);
               continue;
             } else {
@@ -4437,7 +4453,7 @@ Method selection rules:
 
           // ── Step 2: Send greeting NOW (after approval, not before) ──
           if (!buyGreetingSentOrders.has(order.orderNumber)) {
-            buyGreetingSentOrders.add(order.orderNumber); _saveBuyOrderState();
+            buyGreetingSentOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'greetingSent', true);
             let greetMsg = '';
             if (method === 'mpesa') {
               greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! 🙏`;
@@ -4462,7 +4478,7 @@ Method selection rules:
             }
           } catch(e) {
             console.error("[SparkP2P] Choice Bank payment failed for " + order.orderNumber + ": " + e.message);
-            imPaymentFailedOrders.add(order.orderNumber);
+            imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
             await fetch(API_BASE + "/ext/report-buy-expired", { method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
               body: JSON.stringify({ order_number: order.orderNumber, seller_name: paymentDetails.name,
@@ -4516,25 +4532,30 @@ Method selection rules:
           postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`;
         }
         const postMsgSent = await sendBinanceChatMessage(page, postPayMsg);
-        if (postMsgSent) buyPostPaymentMsgSentOrders.add(order.orderNumber);
+        if (postMsgSent) { buyPostPaymentMsgSentOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'postPaymentMsgSent', true); }
         else console.log(`[SparkP2P] ⚠️ Post-payment message not sent for ${order.orderNumber} — will retry next cycle`);
       }
 
 
       // EP-17: mark order as paid via SAPI — replaces DOM "Transferred" button clicking.
-      // Much more reliable: no page navigation, no modal handling, no screenshot upload needed.
-      const markPaidRes = await fetch(`${API_BASE}/ext/mark-paid`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ order_number: order.orderNumber }),
-      }).catch(() => null);
-      const markPaidOk = markPaidRes?.ok ? (await markPaidRes.json().catch(() => ({}))).ok : false;
-      if (markPaidOk) {
-        console.log(`[SparkP2P] ✅ EP-17 mark-paid success for ${order.orderNumber} — seller notified via API`);
+      // Skip if already called in a previous bot session (state persisted in order_flags.json).
+      if (markPaidDoneOrders.has(order.orderNumber)) {
+        console.log(`[SparkP2P] EP-17 already done for ${order.orderNumber} — skipping (restored from disk)`);
       } else {
-        console.log(`[SparkP2P] ⚠️ EP-17 mark-paid failed for ${order.orderNumber} — order still tracked, seller will see payment`);
+        const markPaidRes = await fetch(`${API_BASE}/ext/mark-paid`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ order_number: order.orderNumber }),
+        }).catch(() => null);
+        const markPaidOk = markPaidRes?.ok ? (await markPaidRes.json().catch(() => ({}))).ok : false;
+        if (markPaidOk) {
+          markPaidDoneOrders.add(order.orderNumber);
+          _saveOrderFlag(order.orderNumber, 'markPaidDone', true);
+          console.log(`[SparkP2P] ✅ EP-17 mark-paid success for ${order.orderNumber} — seller notified via API`);
+        } else {
+          console.log(`[SparkP2P] ⚠️ EP-17 mark-paid failed for ${order.orderNumber} — will retry next cycle`);
+        }
       }
-
       // Send receipt screenshot in chat if we have one
       if (imResult.screenshot) {
         await sendImageInBinanceChat(page, imResult.screenshot).catch(() => {});
@@ -8192,7 +8213,7 @@ Method selection rules:
       const isSplitNeeded = !isBankTransfer && Math.floor(paymentDetails.amount) > MPESA_MAX;
 
       if (!buyGreetingSentOrders.has(order_number)) {
-        buyGreetingSentOrders.add(order_number); _saveBuyOrderState();
+        buyGreetingSentOrders.add(order_number); _saveOrderFlag(order_number, 'greetingSent', true);
         const method = (paymentDetails.method || 'mpesa').toLowerCase();
         let greetMsg = '';
         const firstName = paymentDetails.name.split(' ')[0];
@@ -8262,7 +8283,7 @@ Method selection rules:
               buyApproved2 = true;
               console.log(`[SparkP2P] Buy ${order_number} — Telegram not linked, auto-approving payment`);
             } else {
-              buyApprovalRequestedOrders.add(order_number); _saveBuyOrderState();
+              buyApprovalRequestedOrders.add(order_number); _saveOrderFlag(order_number, 'approvalRequested', true);
               sendBotLog('info', `Buy order ${order_number} — waiting for Telegram payment approval`);
               return; // come back next poll cycle
             }
@@ -8278,7 +8299,7 @@ Method selection rules:
               buyApproved2 = true;
               sendBotLog('success', `Buy order ${order_number} — approved, executing payment`);
             } else if (approvalStatus2 === 'rejected') {
-              imPaymentFailedOrders.add(order_number);
+              imPaymentFailedOrders.add(order_number); _saveOrderFlag(order_number, 'paymentFailed', true);
               sendBotLog('warning', `Buy order ${order_number} — payment declined on Telegram. Sending excuse to seller.`);
               if (!buyDeclineMsgSent.has(order_number)) {
                 buyDeclineMsgSent.add(order_number);
@@ -8287,7 +8308,7 @@ Method selection rules:
               }
               return;
             } else if (approvalStatus2 === 'timeout') {
-              imPaymentFailedOrders.add(order_number);
+              imPaymentFailedOrders.add(order_number); _saveOrderFlag(order_number, 'paymentFailed', true);
               sendBotLog('warning', `Buy order ${order_number} — Telegram approval timed out. Order will expire.`);
               return;
             } else {
@@ -8309,7 +8330,7 @@ Method selection rules:
             }
           } catch(e) {
             console.error("[SparkP2P] Choice Bank payment failed for " + order_number + ": " + e.message);
-            imPaymentFailedOrders.add(order_number);
+            imPaymentFailedOrders.add(order_number); _saveOrderFlag(order_number, 'paymentFailed', true);
             await fetch(API_BASE + "/ext/report-buy-expired", {
               method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
               body: JSON.stringify({ order_number, seller_name: paymentDetails.name, amount: paymentDetails.amount,
@@ -8346,7 +8367,7 @@ Method selection rules:
 
       // Step 4: Send post-payment chat message (once only â€" guard against retries)
       if (!buyPostPaymentMsgSentOrders.has(order_number)) {
-        buyPostPaymentMsgSentOrders.add(order_number);
+        buyPostPaymentMsgSentOrders.add(order_number); _saveOrderFlag(order_number, 'postPaymentMsgSent', true);
         const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
         const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
         const chatMsg = `Hello ${paymentDetails.name.split(' ')[0]}, I have sent KSh ${paymentDetails.amount.toLocaleString()} to your ${paymentDetails.method === 'mpesa' ? 'M-Pesa' : 'account'} (${paymentDetails.phone || paymentDetails.account_number || ''}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`;
