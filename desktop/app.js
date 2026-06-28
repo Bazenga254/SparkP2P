@@ -236,22 +236,37 @@ const telegramApprovedOrders = new Set();      // orderNums where Telegram appro
 }
 // Restore buy order state (greeting sent + approval requested) from disk on startup
   const _flags = _loadOrderFlags();
+  const _recoveredOrders = [];
   Object.entries(_flags).forEach(([num, f]) => {
     if (f.greetingSent)        buyGreetingSentOrders.add(num);
     if (f.approvalRequested)   buyApprovalRequestedOrders.add(num);
     if (f.telegramApproved)    telegramApprovedOrders.add(num);
-    if (f.paymentFailed)       imPaymentFailedOrders.add(num);
     if (f.postPaymentMsgSent)  buyPostPaymentMsgSentOrders.add(num);
     if (f.markPaidDone)        markPaidDoneOrders.add(num);
     if (f.reminderSent)        buyReminderSentOrders.add(num);
+    if (f.paymentFailed) {
+      if (!f.markPaidDone && !f.postPaymentMsgSent) {
+        // Soft failure (Telegram approval window expired) — payment never went through.
+        // Auto-recover: clear the failed + stale approval flags so bot re-requests.
+        _saveOrderFlag(num, 'paymentFailed', false);
+        _saveOrderFlag(num, 'approvalRequested', false);
+        buyApprovalRequestedOrders.delete(num);
+        _recoveredOrders.push(num);
+      } else {
+        imPaymentFailedOrders.add(num); // Real failure (payment went through but something else failed)
+      }
+    }
   });
   const _restored = Object.keys(_flags).length;
   if (_restored) {
     const _steps = Object.entries(_flags).map(([n, f]) => {
-      const flags = Object.keys(f).filter(k => f[k]).join(',');
-      return `${n.slice(-8)}:[${flags}]`;
+      const activeFlags = Object.keys(f).filter(k => f[k]).join(',') || 'recovering';
+      return `${n.slice(-8)}:[${activeFlags}]`;
     }).join(' ');
     console.log(`[SparkP2P] Restored order flags for ${_restored} order(s): ${_steps}`);
+  }
+  if (_recoveredOrders.length) {
+    console.log(`[SparkP2P] Auto-recovered ${_recoveredOrders.length} order(s) from Telegram-timeout soft failure — will re-request approval`);
   }
 // Restore completed buy orders from disk — prevents duplicate SMS when bot restarts
 {
@@ -3314,8 +3329,17 @@ async function idleScan(page) {
   for (const num of allActiveNums) {
     if (!orderFirstSeenAt[num]) {
       orderFirstSeenAt[num] = Date.now();
-      console.log(`[SparkP2P] New order detected: ${num}`);
-      sendBotLog('info', `New order detected: ${num}`);
+      // Check if we have flags for this order (means it's an ongoing order, not brand new)
+      const _existingFlags = _loadOrderFlags()[num];
+      const _hasFlags = _existingFlags && Object.values(_existingFlags).some(Boolean);
+      if (_hasFlags) {
+        const _flagList = Object.keys(_existingFlags).filter(k => _existingFlags[k]).join(',');
+        console.log(`[SparkP2P] Resuming in-progress buy order: ${num} (restored: ${_flagList})`);
+        sendBotLog('info', `Resuming buy order: ${num}`);
+      } else {
+        console.log(`[SparkP2P] New order detected: ${num}`);
+        sendBotLog('info', `New order detected: ${num}`);
+      }
     }
   }
   for (const num of Object.keys(orderFirstSeenAt)) {
@@ -4457,8 +4481,12 @@ Method selection rules:
               delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
               continue;
             } else if (approvalStatus === 'timeout') {
-              imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
-              sendBotLog('warning', `Buy order ${order.orderNumber} — Telegram approval timed out (20 min). Order will expire.`);
+              // Telegram response window expired — but the Binance order is still active (hours remaining).
+              // Don't permanently fail. Clear the stale request so we re-request approval next cycle.
+              buyApprovalRequestedOrders.delete(order.orderNumber);
+              _saveOrderFlag(order.orderNumber, 'approvalRequested', false);
+              sendBotLog('warning', `Buy order ${order.orderNumber} — Telegram approval window closed (no response in 20 min). Re-requesting...`);
+              console.log(`[SparkP2P] Buy ${order.orderNumber} — approval window expired, cleared flag, will re-request next cycle`);
               continue;
             } else {
               // Still pending — come back next poll cycle
