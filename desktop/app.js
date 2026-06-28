@@ -5300,22 +5300,19 @@ async function readEmailOTPviaIMAP(sentAfterMs = Date.now() - 120000) {
 async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
   if (!browser) { console.log('[SparkP2P] Choice OTP: browser not open'); return null; }
 
-  // Open or reuse existing Gmail tab
   if (!gmailPage || gmailPage.isClosed()) {
     console.log('[SparkP2P] Choice OTP: opening Gmail tab...');
     await openGmailTab();
   }
   if (!gmailPage) { console.log('[SparkP2P] Choice OTP: could not open Gmail tab'); return null; }
 
-  // Precise search: sender + subject both known. Falls back to broader search if
-  // Choice Bank ever changes their sending domain.
   const searchUrl = 'https://mail.google.com/mail/u/0/#search/from%3Anotify%40choice-bank.co+subject%3A%22Transaction+OTP%22+newer_than%3A1h';
+  const fallbackUrl = 'https://mail.google.com/mail/u/0/#search/subject%3A%22Transaction+OTP%22+newer_than%3A1h';
 
-  console.log('[SparkP2P] Waiting for Choice Bank OTP email in Gmail (10-35s expected)...');
+  console.log(`[SparkP2P] Waiting for Choice Bank OTP email newer than ${new Date(sentAfterMs).toLocaleTimeString()} (10-35s expected)...`);
 
-  // Poll every 5s for up to 60s — covers the 10-35s delay the user observed
   const POLL_MS = 5000;
-  const MAX_WAIT = 60000;
+  const MAX_WAIT = 90000; // 90s — covers delayed Choice Bank emails
   const deadline = Date.now() + MAX_WAIT;
 
   while (Date.now() < deadline) {
@@ -5324,49 +5321,93 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
       await gmailPage.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {});
       await new Promise(r => setTimeout(r, 2000));
 
-      // Check if any email row exists
-      let hasRow = await gmailPage.evaluate(() => !!document.querySelector('tr.zA'));
-      if (!hasRow) {
-        // Fallback: broaden search in case sender domain ever changes
-        await gmailPage.goto(
-          'https://mail.google.com/mail/u/0/#search/subject%3A%22Transaction+OTP%22+newer_than%3A1h',
-          { waitUntil: 'domcontentloaded', timeout: 10000 }
-        ).catch(() => {});
+      let emails = await gmailPage.evaluate(() => {
+        const rows = document.querySelectorAll('tr.zA');
+        return Array.from(rows).map((row, idx) => {
+          const timeEl = row.querySelector('td.xW span, [data-tooltip], .xW');
+          return {
+            idx,
+            timeText: timeEl?.getAttribute('data-tooltip') || timeEl?.title || timeEl?.innerText || '',
+          };
+        });
+      });
+
+      // Fallback search if no results
+      if (emails.length === 0) {
+        await gmailPage.goto(fallbackUrl, { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
         await new Promise(r => setTimeout(r, 1500));
-        hasRow = await gmailPage.evaluate(() => !!document.querySelector('tr.zA'));
+        emails = await gmailPage.evaluate(() => {
+          const rows = document.querySelectorAll('tr.zA');
+          return Array.from(rows).map((row, idx) => {
+            const timeEl = row.querySelector('td.xW span, [data-tooltip], .xW');
+            return { idx, timeText: timeEl?.getAttribute('data-tooltip') || timeEl?.title || timeEl?.innerText || '' };
+          });
+        });
       }
-      if (!hasRow) {
+
+      if (emails.length === 0) {
         const waitedSec = Math.round((Date.now() - (deadline - MAX_WAIT)) / 1000);
         console.log(`[SparkP2P] Choice OTP: no email yet (${waitedSec}s elapsed) — retrying in 5s...`);
         await new Promise(r => setTimeout(r, POLL_MS));
         continue;
       }
 
-      // Click the most recent (first) email row
-      await gmailPage.evaluate(() => { const row = document.querySelector('tr.zA'); if (row) row.click(); });
+      // Find the most recent email that arrived AFTER the payment was initiated.
+      // Gmail email list tooltip: "Sun, Jun 29, 2026, 12:03 AM (2 minutes ago)"
+      let targetIdx = null;
+      for (const email of emails) {
+        let emailTime = null;
+        if (email.timeText) {
+          // Strip the relative part "(X minutes ago)" before parsing
+          const cleaned = email.timeText.replace(/\s*\(.*?\)\s*$/, '').trim();
+          try { emailTime = new Date(cleaned).getTime(); } catch (_) {}
+        }
+        if (emailTime && !isNaN(emailTime)) {
+          if (emailTime >= sentAfterMs - 5000) { // 5s buffer for clock skew
+            console.log(`[SparkP2P] Choice OTP: found qualifying email (sent ${new Date(emailTime).toLocaleTimeString()})`);
+            targetIdx = email.idx;
+            break;
+          } else {
+            console.log(`[SparkP2P] Choice OTP: email at ${new Date(emailTime).toLocaleTimeString()} is OLDER than payment start ${new Date(sentAfterMs).toLocaleTimeString()} — skipping stale OTP`);
+          }
+        } else {
+          // Can't parse timestamp — accept the first email (only if no other emails qualify)
+          if (targetIdx === null) targetIdx = email.idx;
+        }
+      }
+
+      if (targetIdx === null) {
+        const waitedSec = Math.round((Date.now() - (deadline - MAX_WAIT)) / 1000);
+        console.log(`[SparkP2P] Choice OTP: no NEW email yet (${waitedSec}s elapsed) — waiting for fresh OTP...`);
+        await new Promise(r => setTimeout(r, POLL_MS));
+        continue;
+      }
+
+      // Click the qualifying email
+      const clicked = await gmailPage.evaluate((idx) => {
+        const rows = document.querySelectorAll('tr.zA');
+        if (rows[idx]) { rows[idx].click(); return true; }
+        return false;
+      }, targetIdx);
+
+      if (!clicked) { await new Promise(r => setTimeout(r, POLL_MS)); continue; }
       await new Promise(r => setTimeout(r, 2000));
 
-      // Read the email sender + body via DOM (no Vision needed — we just need digits)
       const emailData = await gmailPage.evaluate(() => {
-        // Sender shown in the open email header
         const senderEl = document.querySelector('[email]') || document.querySelector('.gD');
         const sender = senderEl ? (senderEl.getAttribute('email') || senderEl.textContent) : '';
-
-        // Full email body text
         const bodyEl = document.querySelector('.a3s.aiL') || document.querySelector('.gs .ii.gt') || document.querySelector('[data-message-id] .ii');
         const body = bodyEl ? bodyEl.innerText : document.body.innerText;
         return { sender, body };
       });
 
       console.log(`[SparkP2P] Choice OTP: reading email from "${emailData.sender}"`);
-
       const code = _extractChoiceOTP(emailData.body);
       if (code) {
         console.log(`[SparkP2P] ✅ Choice Bank OTP extracted: ${code}`);
         return code;
       }
-
-      console.log('[SparkP2P] Choice OTP: email found but OTP not extracted — retrying in 5s...');
+      console.log('[SparkP2P] Choice OTP: OTP not found in email body — retrying in 5s...');
       console.log('[SparkP2P] Email preview:', emailData.body.substring(0, 200).replace(/\s+/g, ' '));
     } catch (e) {
       console.log('[SparkP2P] Choice OTP Gmail read error:', e.message?.substring(0, 80));
@@ -5374,7 +5415,7 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
     await new Promise(r => setTimeout(r, POLL_MS));
   }
 
-  console.log('[SparkP2P] ❌ Choice Bank OTP: not found in Gmail after 60s');
+  console.log('[SparkP2P] ❌ Choice Bank OTP: no new email in Gmail after 90s');
   return null;
 }
 
