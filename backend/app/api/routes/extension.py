@@ -1641,6 +1641,89 @@ async def get_order_detail(
     }
 
 
+# ─── Order action endpoints (SAPI — HMAC signed, relay-routed) ───────────────
+
+def _sapi_creds(trader: Trader):
+    """Return (api_key, api_secret) or raise HTTPException if not set."""
+    from app.core.security import decrypt_data
+    if not trader.binance_api_key or not trader.binance_api_secret:
+        raise HTTPException(status_code=400, detail="no_api_key")
+    return decrypt_data(trader.binance_api_key), decrypt_data(trader.binance_api_secret)
+
+
+class OrderActionRequest(BaseModel):
+    order_number: str
+
+
+@router.post("/mark-paid")
+async def mark_order_paid(
+    data: OrderActionRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """EP-17: mark a BUY order as paid after sending money to the seller."""
+    from app.services.binance.sapi_client import mark_order_as_paid, relay_trader
+    api_key, api_secret = _sapi_creds(trader)
+    relay_trader.set(trader.id)
+    try:
+        resp = await mark_order_as_paid(api_key, api_secret, data.order_number)
+        ok = resp.get("code") == "000000" or resp.get("success") is True
+        return {"ok": ok, "raw": resp}
+    except Exception as e:
+        logger.warning("mark-paid failed for %s: %s", data.order_number, e)
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/cancel-order")
+async def cancel_binance_order(
+    data: OrderActionRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """EP-9: cancel an order (called when trader declines via Telegram)."""
+    from app.services.binance.sapi_client import cancel_order, relay_trader
+    api_key, api_secret = _sapi_creds(trader)
+    relay_trader.set(trader.id)
+    try:
+        resp = await cancel_order(api_key, api_secret, data.order_number)
+        ok = resp.get("code") == "000000" or resp.get("success") is True
+        return {"ok": ok, "raw": resp}
+    except Exception as e:
+        logger.warning("cancel-order failed for %s: %s", data.order_number, e)
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/release-coin")
+async def release_coin_endpoint(
+    data: OrderActionRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """EP-20: release crypto to buyer on a SELL order after payment confirmed."""
+    from app.services.binance.sapi_client import release_coin, relay_trader
+    api_key, api_secret = _sapi_creds(trader)
+    relay_trader.set(trader.id)
+    try:
+        resp = await release_coin(api_key, api_secret, data.order_number)
+        ok = resp.get("code") == "000000" or resp.get("success") is True
+        if ok:
+            # Update our DB record
+            result = await db.execute(
+                select(Order).where(
+                    Order.trader_id == trader.id,
+                    Order.binance_order_number == data.order_number,
+                )
+            )
+            order = result.scalar_one_or_none()
+            if order:
+                order.status = OrderStatus.COMPLETED
+                await db.commit()
+        return {"ok": ok, "raw": resp}
+    except Exception as e:
+        logger.warning("release-coin failed for %s: %s", data.order_number, e)
+        return {"ok": False, "error": str(e)}
+
+
 # ─── I&M Bank withdrawal job queue ───────────────────────────────────────────
 
 def _current_sweep_window_start() -> datetime:

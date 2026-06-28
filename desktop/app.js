@@ -3478,8 +3478,24 @@ async function idleScan(page) {
 
         // 3. Vision handles: modal checkbox → Confirm Release → security verification
         // skipNavigation=true â€" we're already on the order page with the modal open.
-        // Navigating away would close the modal and lose the state.
-        await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [vd.code], bankRefs: [] } }, { skipNavigation: true });
+        // EP-20: try API release first — if it succeeds, skip Vision entirely
+        let _apiReleased = false;
+        try {
+          const _rlRes = await fetch(`${API_BASE}/ext/release-coin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ order_number: order.orderNumber }),
+          }).catch(() => null);
+          if (_rlRes?.ok) {
+            const _rlData = await _rlRes.json().catch(() => ({}));
+            _apiReleased = _rlData.ok === true;
+            if (_apiReleased) console.log(`[SparkP2P] ✅ EP-20 API release success for ${order.orderNumber} — no Vision needed`);
+            else console.log(`[SparkP2P] EP-20 release returned ok=false for ${order.orderNumber} — falling back to Vision`);
+          }
+        } catch(_e) {}
+        if (!_apiReleased) {
+          await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [vd.code], bankRefs: [] } }, { skipNavigation: true });
+        }
 
         // Cleanup
         activeOrderNumber = null;
@@ -3890,11 +3906,16 @@ async function idleScan(page) {
     if (pauseNavigation) break;
     console.log(`[SparkP2P] Checking buy order ${order.orderNumber}`);
 
-    await page.goto(
-      `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
-      { waitUntil: 'domcontentloaded', timeout: 15000 }
-    ).catch(() => {});
-    await new Promise(r => setTimeout(r, 3000));
+    // Only navigate to order page if not already there — keeps the bot parked on the active order.
+    const targetOrderUrl = `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`;
+    const currentUrl = page.url();
+    if (!currentUrl.includes(order.orderNumber)) {
+      await page.goto(targetOrderUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 3000));
+    } else {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 1500));
+    }
     if (pauseNavigation) break;
 
     await dismissBinanceModals(page);
@@ -4371,12 +4392,15 @@ Method selection rules:
               sendBotLog('success', `Buy order ${order.orderNumber} — approved, executing payment`);
             } else if (approvalStatus === 'rejected') {
               imPaymentFailedOrders.add(order.orderNumber);
-              sendBotLog('warning', `Buy order ${order.orderNumber} — payment declined on Telegram. Sending excuse to seller.`);
-              if (!buyDeclineMsgSent.has(order.orderNumber)) {
-                buyDeclineMsgSent.add(order.orderNumber);
-                const buyDeclineMsg = `Hello, and thank you for your listing. I sincerely apologize, but I am currently experiencing a temporary technical issue with my payment system and I am unable to complete this payment at this time. I kindly request that you cancel this order on your end so you can continue trading without any delay. I am truly sorry for the inconvenience and I genuinely appreciate your patience and understanding.`;
-                await sendBinanceChatMessage(page, buyDeclineMsg).catch(() => {});
-              }
+              sendBotLog('warning', `Buy order ${order.orderNumber} — payment declined on Telegram. Cancelling via API.`);
+              // EP-9: cancel order via SAPI — no DOM clicking needed
+              await fetch(`${API_BASE}/ext/cancel-order`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ order_number: order.orderNumber }),
+              }).catch(() => null);
+              console.log(`[SparkP2P] Buy order ${order.orderNumber} — cancelled via API (Telegram declined)`);
+              delete orderFirstSeenAt[order.orderNumber];
               continue;
             } else if (approvalStatus === 'timeout') {
               imPaymentFailedOrders.add(order.orderNumber);
@@ -4475,57 +4499,24 @@ Method selection rules:
         else console.log(`[SparkP2P] ⚠️ Post-payment message not sent for ${order.orderNumber} — will retry next cycle`);
       }
 
-      // Check if already in "Pending the Seller to Release" state
-      const alreadyPending2 = await page.evaluate(() => {
-        const body = document.body.innerText || '';
-        return body.toLowerCase().includes('pending the seller to release') ||
-               body.toLowerCase().includes('seller to release');
-      }).catch(() => false);
-      if (alreadyPending2) {
-        console.log(`[SparkP2P] âœ… Order ${order.orderNumber} already in "Pending Seller Release" â€" skipping upload & Transferred`);
+
+      // EP-17: mark order as paid via SAPI — replaces DOM "Transferred" button clicking.
+      // Much more reliable: no page navigation, no modal handling, no screenshot upload needed.
+      const markPaidRes = await fetch(`${API_BASE}/ext/mark-paid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number: order.orderNumber }),
+      }).catch(() => null);
+      const markPaidOk = markPaidRes?.ok ? (await markPaidRes.json().catch(() => ({}))).ok : false;
+      if (markPaidOk) {
+        console.log(`[SparkP2P] ✅ EP-17 mark-paid success for ${order.orderNumber} — seller notified via API`);
+      } else {
+        console.log(`[SparkP2P] ⚠️ EP-17 mark-paid failed for ${order.orderNumber} — order still tracked, seller will see payment`);
       }
 
-      // Upload payment proof + handle confirmation
-      let proofConfirmed = alreadyPending2;
-      if (!alreadyPending2 && imResult.screenshot) {
-        await new Promise(r => setTimeout(r, 1500));
-        const uploadResult = await uploadPaymentProofToBinance(page, imResult.screenshot);
-        proofConfirmed = uploadResult.confirmed;
-      }
-
-      // If upload didn't complete confirmation, fall back to "Transferred, notify seller"
-      if (!proofConfirmed) {
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          await dismissBinanceModals(page);
-          await new Promise(r => setTimeout(r, 2000));
-          const nowPending2 = await page.evaluate(() =>
-            (document.body.innerText || '').toLowerCase().includes('seller to release')
-          ).catch(() => false);
-          if (nowPending2) { console.log(`[SparkP2P] âœ… Page moved to "Pending Release"`); break; }
-          const clicked = await clickButton(page, 'transferred', 'notify seller', 'transferred, notify seller', 'payment done', 'i have paid');
-          if (clicked) {
-            await new Promise(r => setTimeout(r, 2500));
-            await page.evaluate(() => {
-              const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
-              checkboxes.forEach(cb => { if (!cb.checked) cb.click(); });
-            }).catch(() => {});
-            await new Promise(r => setTimeout(r, 800));
-            await clickButton(page, 'confirm', 'yes');
-            await new Promise(r => setTimeout(r, 2000));
-            await handleSecurityVerification(page);
-            break;
-          }
-          if (attempt < 3) {
-            await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-            await new Promise(r => setTimeout(r, 3000));
-          }
-        }
-      }
-
-      // Send I&M receipt in Binance chat if modal upload didn't confirm
-      if (imResult.screenshot && !proofConfirmed) {
-        console.log('[SparkP2P] Modal upload did not confirm — sending I&M receipt in Binance chat');
-        await sendImageInBinanceChat(page, imResult.screenshot).catch(e => console.log('[SparkP2P] Chat receipt error:', e.message?.substring(0, 60)));
+      // Send receipt screenshot in chat if we have one
+      if (imResult.screenshot) {
+        await sendImageInBinanceChat(page, imResult.screenshot).catch(() => {});
       }
 
       await takeScreenshot(`buy_paid_${order.orderNumber}`, page);
