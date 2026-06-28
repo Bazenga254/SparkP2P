@@ -5450,24 +5450,43 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
       }, targetIdx);
 
       if (!clicked) { await new Promise(r => setTimeout(r, POLL_MS)); continue; }
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 2500)); // wait for thread to load
+
+      // Gmail threads all "Transaction OTP" emails together. After clicking the thread
+      // row, Gmail auto-expands the last-READ message — NOT the newest one. We must
+      // explicitly click the last .gs block (newest message) to expand it.
+      await gmailPage.evaluate(() => {
+        const msgs = Array.from(document.querySelectorAll('.gs'));
+        if (msgs.length > 0) {
+          const lastMsg = msgs[msgs.length - 1];
+          // Click to expand if body is not yet visible
+          if (!lastMsg.querySelector('.a3s.aiL')) lastMsg.click();
+        }
+      }).catch(() => {});
+      await new Promise(r => setTimeout(r, 1500));
 
       const emailData = await gmailPage.evaluate(() => {
         const senderEl = document.querySelector('[email]') || document.querySelector('.gD');
         const sender = senderEl ? (senderEl.getAttribute('email') || senderEl.textContent) : '';
-        const bodyEl = document.querySelector('.a3s.aiL') || document.querySelector('.gs .ii.gt') || document.querySelector('[data-message-id] .ii');
-        const body = bodyEl ? bodyEl.innerText : document.body.innerText;
-        return { sender, body };
+        // Use the LAST expanded body — in a thread, that's the newest message
+        const allBodies = document.querySelectorAll('.a3s.aiL');
+        const bodyEl = allBodies.length > 0 ? allBodies[allBodies.length - 1] : null;
+        const body = bodyEl ? bodyEl.innerText : '';
+        return { sender, body, msgCount: allBodies.length };
       });
 
-      console.log(`[SparkP2P] Choice OTP: reading email from "${emailData.sender}"`);
+      console.log(`[SparkP2P] Choice OTP: thread has ${emailData.msgCount} message(s), reading newest from "${emailData.sender}"`);
+      if (!emailData.body) {
+        console.log('[SparkP2P] Choice OTP: email body empty — retrying in 8s...');
+        await new Promise(r => setTimeout(r, POLL_MS)); continue;
+      }
       const code = _extractChoiceOTP(emailData.body);
       if (code) {
         console.log(`[SparkP2P] ✅ Choice Bank OTP extracted: ${code}`);
         return code;
       }
-      console.log('[SparkP2P] Choice OTP: OTP not found in email body — retrying in 5s...');
-      console.log('[SparkP2P] Email preview:', emailData.body.substring(0, 200).replace(/\s+/g, ' '));
+      console.log('[SparkP2P] Choice OTP: code not found in newest message — retrying in 8s...');
+      console.log('[SparkP2P] Body preview:', emailData.body.substring(0, 200).replace(/\s+/g, ' '));
     } catch (e) {
       console.log('[SparkP2P] Choice OTP Gmail read error:', e.message?.substring(0, 80));
     }
