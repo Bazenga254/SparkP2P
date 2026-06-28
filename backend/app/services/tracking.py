@@ -998,6 +998,15 @@ async def track_trader(db, trader) -> int:
                 await db.execute(_sql_text3(
                     "UPDATE counterparty_trades SET status = :s WHERE order_number = :o"
                 ), {"s": _cur, "o": str(ono)})
+                # Also flip the Order row so buy_release_monitor doesn't fire a false
+                # "Crypto not released" alert. The desktop bot calls report-buy-completed
+                # too, but there's a race window where the poller sees COMPLETED before
+                # the bot's API call arrives. Update now so the monitor query is consistent.
+                if _tt == "BUY" and _cur == "COMPLETED":
+                    await db.execute(_sql_text3(
+                        "UPDATE orders SET status = 'completed', settled_at = NOW() "
+                        "WHERE binance_order_number = :o AND status NOT IN ('completed','released')"
+                    ), {"o": str(ono)})
                 await db.commit()   # release the lock before the (network) Telegram send below
                 # Respect the merchant's notification scope — don't announce the outcome of an
                 # order type they've muted (e.g. a BUY order's 'completed' when scope = sell).
