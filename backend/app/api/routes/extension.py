@@ -1506,6 +1506,63 @@ async def counterparty_stats(
     }
 
 
+@router.get("/active-orders")
+async def get_active_orders(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Fetch active Binance P2P orders via stored session credentials.
+
+    Desktop bot calls this instead of querying Binance directly from the
+    browser — decouples order detection from the Puppeteer page state.
+    Returns combined BUY + SELL active orders in a normalised format.
+    """
+    if not trader.binance_cookies:
+        return {"ok": False, "error": "no_session", "orders": []}
+
+    try:
+        from app.services.binance.client import BinanceP2PClient
+        client = BinanceP2PClient.from_trader(trader)
+
+        # Fetch both sides concurrently
+        import asyncio
+        sell_raw, buy_raw = await asyncio.gather(
+            client.get_pending_orders("SELL"),
+            client.get_pending_orders("BUY"),
+            return_exceptions=True,
+        )
+    except Exception as e:
+        logger.warning("active-orders session fetch failed for trader %s: %s", trader.id, e)
+        return {"ok": False, "error": str(e), "orders": []}
+
+    orders = []
+    for raw, side in ((sell_raw, "SELL"), (buy_raw, "BUY")):
+        if isinstance(raw, Exception) or not isinstance(raw, list):
+            continue
+        for o in raw:
+            order_number = str(o.get("orderNumber") or o.get("orderId") or "")
+            if len(order_number) < 15:
+                continue
+            fiat   = float(o.get("totalPrice") or o.get("fiatAmount") or 0)
+            crypto = float(o.get("amount") or o.get("cryptoAmount") or 0)
+            price  = float(o.get("unitPrice") or o.get("price") or 0)
+            counterparty = (
+                o.get("buyerNickname") or o.get("sellerNickname")
+                or o.get("counterPartyNickName") or ""
+            )
+            orders.append({
+                "orderNumber": order_number,
+                "tradeType": side,
+                "totalPrice": fiat,
+                "amount": crypto,
+                "price": price,
+                "asset": "USDT",
+                "status": "Pending Payment",
+                "counterparty": counterparty,
+            })
+
+    return {"ok": True, "orders": orders}
+
+
 # ─── I&M Bank withdrawal job queue ───────────────────────────────────────────
 
 def _current_sweep_window_start() -> datetime:

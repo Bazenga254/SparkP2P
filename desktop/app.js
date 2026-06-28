@@ -2025,50 +2025,24 @@ async function readOrders(activeOnly = false) {
     const page = await getPage();
     if (!page) { _ordersTabOpen = false; return { sell: [], buy: [], cancelled: [], completed_buy: [] }; }
 
-    // Step 1: Read active orders — API-first (instant, no render wait).
-    // DOM fallback if API fails (session issue) with 3s wait for React render.
+    // Step 1: Read active orders — backend API first (uses stored session, independent of
+    // Puppeteer browser state), then DOM fallback with 3s wait for React render.
     let sell = [], buy = [];
 
-    // Try Binance internal API first — uses browser cookies, works from any page
+    // Primary: call backend /ext/active-orders — backend holds the trader's Binance session
+    // credentials independently of the Puppeteer browser, so this works even after reconnects.
     try {
-      const apiOrders = await page.evaluate(async () => {
-        const tryFetch = async (statusList) => {
-          try {
-            const res = await fetch('https://p2p.binance.com/bapi/c2c/v2/private/c2c/order-match/order-list', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              credentials: 'include',
-              body: JSON.stringify({ page: 1, rows: 20, orderStatusList: statusList }),
-            });
-            if (!res.ok) return null;
-            const d = await res.json();
-            return (d && d.code === '000000') ? (d.data || []) : null;
-          } catch(_) { return null; }
-        };
-        // Try common status codes for "processing" orders (varies across API versions)
-        return await tryFetch([11, 12]) || await tryFetch([0, 1, 2]) || await tryFetch([]) || null;
+      const resp = await fetch(`${API_BASE}/ext/active-orders`, {
+        headers: { 'Authorization': `Bearer ${token}` },
       }).catch(() => null);
-
-      if (Array.isArray(apiOrders)) {
-        for (const o of apiOrders) {
-          const orderNumber = String(o.orderNumber || o.orderId || '');
-          if (orderNumber.length < 15) continue;
-          const st = String(o.orderStatus || o.status || '');
-          // Skip completed/cancelled
-          if (/^(3|4|5|completed|cancelled|canceled)/i.test(st)) continue;
-          const tradeType = (o.tradeType || '').toUpperCase();
-          if (tradeType !== 'BUY' && tradeType !== 'SELL') continue;
-          const fiat = parseFloat(o.totalPrice || o.sourceAmount || o.fiatAmount || 0);
-          const crypto = parseFloat(o.amount || o.cryptoAmount || 0);
-          const price = parseFloat(o.unitPrice || o.price || 0);
-          const status = 'Pending Payment';
-          const counterparty = o.buyerNickname || o.sellerNickname || o.counterPartyNickName || '';
-          const order = { orderNumber, tradeType, totalPrice: fiat, amount: crypto, price, asset: 'USDT', status, counterparty };
-          if (tradeType === 'SELL') sell.push(order);
-          else buy.push(order);
-        }
-        if (sell.length > 0 || buy.length > 0) {
-          console.log(`[SparkP2P] API order read: ${buy.length} buy, ${sell.length} sell`);
+      if (resp && resp.ok) {
+        const data = await resp.json().catch(() => null);
+        if (data && data.ok && Array.isArray(data.orders) && data.orders.length > 0) {
+          for (const o of data.orders) {
+            if ((o.tradeType || '') === 'SELL') sell.push(o);
+            else buy.push(o);
+          }
+          console.log(`[SparkP2P] Backend API order read: ${buy.length} buy, ${sell.length} sell`);
         }
       }
     } catch(_) {}
