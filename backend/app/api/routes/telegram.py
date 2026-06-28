@@ -5,6 +5,7 @@ import time
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -189,29 +190,40 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             ap = _pending_approvals.get(order_number)
 
             if ap:
-                if action == "approve":
+                is_buy = ap.get("type") == "buy"
+
+                if action in ("approve", "buy_approve"):
                     ap["status"] = "approved"
                     await _tg_send("answerCallbackQuery", {
                         "callback_query_id": cb_id,
-                        "text": "✅ Approved — payment details will be sent to buyer",
+                        "text": "✅ Approved — payment will be sent now" if is_buy else "✅ Approved — payment details sent to buyer",
                     })
                     if ap.get("message_id"):
+                        edit_text = (
+                            f"✅ APPROVED — PAYING NOW\n\nOrder ...{order_number[-12:]}\n"
+                            f"Sending {ap.get('amount_str','')} to {ap.get('dest','')}"
+                        ) if is_buy else f"✅ APPROVED\n\nOrder {order_number}\nPayment details sent to buyer."
                         await _tg_send("editMessageText", {
                             "chat_id": ap["chat_id"],
                             "message_id": ap["message_id"],
-                            "text": f"✅ APPROVED\n\nOrder {order_number}\nPayment details sent to buyer.",
+                            "text": edit_text,
                         })
-                elif action == "reject":
+
+                elif action in ("reject", "buy_decline"):
                     ap["status"] = "rejected"
                     await _tg_send("answerCallbackQuery", {
                         "callback_query_id": cb_id,
-                        "text": "❌ Rejected — excuse message will be sent to buyer",
+                        "text": "❌ Declined — payment cancelled" if is_buy else "❌ Rejected — excuse message sent to buyer",
                     })
                     if ap.get("message_id"):
+                        edit_text = (
+                            f"❌ DECLINED — PAYMENT CANCELLED\n\nOrder ...{order_number[-12:]}\n"
+                            f"No money sent. Order will expire."
+                        ) if is_buy else f"❌ REJECTED\n\nOrder {order_number}\nExcuse message sent. Order will cancel in 15 min."
                         await _tg_send("editMessageText", {
                             "chat_id": ap["chat_id"],
                             "message_id": ap["message_id"],
-                            "text": f"❌ REJECTED\n\nOrder {order_number}\nExcuse message sent. Order will cancel in 15 min.",
+                            "text": edit_text,
                         })
             else:
                 await _tg_send("answerCallbackQuery", {
@@ -449,3 +461,79 @@ async def check_approval_status(
         return {"status": "timeout"}
 
     return {"status": ap["status"]}
+
+
+# ── Send approval request for a BUY order payment ───────────────────────────
+
+class BuyApprovalRequest(BaseModel):
+    order_number: str
+    seller_name: str = ""
+    amount: float
+    method: str = "mpesa"          # mpesa | im_bank | other_bank
+    phone: str = ""
+    account_number: str = ""
+    bank_name: str = ""
+    choice_balance: float = 0.0
+
+
+@router.post("/request-buy-approval")
+async def request_buy_approval(
+    data: BuyApprovalRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """
+    Send a Telegram APPROVE / DECLINE prompt to the trader before executing a BUY
+    order payment from Choice Bank. The desktop bot polls /approval-status and only
+    calls /ext/choice-pay once it receives 'approved'.
+    If Telegram is not connected, returns ok=True with auto_approved=True so the bot
+    falls through to the existing auto-pay behaviour.
+    """
+    if not trader.telegram_chat_id:
+        # Telegram not linked — let payment proceed automatically
+        return {"ok": True, "auto_approved": True}
+
+    if data.method in ("im_bank", "other_bank"):
+        dest = f"{data.bank_name or 'Bank'} a/c {data.account_number or '?'}"
+    else:
+        dest = f"M-Pesa {data.phone or '?'}"
+
+    amt_str = f"KES {int(data.amount):,}"
+    bal_str = f"KES {int(data.choice_balance):,}" if data.choice_balance else "unknown"
+    name = data.seller_name or "Unknown seller"
+
+    text = (
+        f"🤖 SparkBot — BUY Order Payment\n\n"
+        f"💸 Amount:  {amt_str}\n"
+        f"👤 Seller:  {name}\n"
+        f"📍 To:      {dest}\n"
+        f"📋 Order:   ...{data.order_number[-12:]}\n"
+        f"💰 Balance: {bal_str}\n\n"
+        f"Approve this payment?"
+    )
+    keyboard = {"inline_keyboard": [[
+        {"text": "✅ APPROVE", "callback_data": f"buy_approve:{data.order_number}"},
+        {"text": "❌ DECLINE", "callback_data": f"buy_decline:{data.order_number}"},
+    ]]}
+
+    resp = await _tg_send("sendMessage", {
+        "chat_id": trader.telegram_chat_id,
+        "text": text,
+        "reply_markup": keyboard,
+    })
+
+    msg_id = None
+    if resp and resp.get("ok"):
+        msg_id = resp.get("result", {}).get("message_id")
+
+    _pending_approvals[data.order_number] = {
+        "chat_id": trader.telegram_chat_id,
+        "message_id": msg_id,
+        "status": "pending",
+        "trader_id": trader.id,
+        "created_at": time.time(),
+        "type": "buy",
+        "amount_str": amt_str,
+        "dest": dest,
+    }
+
+    return {"ok": True, "auto_approved": False, "message_id": msg_id}

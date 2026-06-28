@@ -154,6 +154,7 @@ const lastDeficitSent = {}; // orderNumber → deficit amount last messaged â�
 const sellApprovalRequestedOrders = new Set(); // sell orderNums where Telegram approval request was sent
 const sellApprovedOrders = new Set();           // sell orderNums approved by merchant via Telegram
 const sellRejectedOrders = new Set();           // sell orderNums rejected or timed-out by merchant
+const buyApprovalRequestedOrders = new Set();   // buy orderNums where Telegram approval has been requested
 const sellRejectionMsgSent = new Set();         // sell orderNums where the polite cancel request was already sent
 const sellPayInstructSentOrders = new Set();    // sell orderNums where payment instructions sent to buyer
 const lastSellDeficitMsg = {};                  // orderNum → KES deficit last sent to buyer (dedup)
@@ -4255,13 +4256,70 @@ Method selection rules:
         let verifiedName = "";
 
         if (!imNameMismatchAborted) {
-          fetch(API_BASE + "/ext/notify-buy-payment", { method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-            body: JSON.stringify({ order_number: order.orderNumber, seller_name: paymentDetails.name,
-              amount: paymentDetails.amount, method: method, phone: paymentDetails.phone||"",
-              account_number: paymentDetails.account_number||"", bank_name: paymentDetails.bank_name||"", verified_name: verifiedName })
-          }).catch(function(){});
+          // ── Step 1: Request Telegram approval before touching Choice Bank ──
+          // Get current Choice balance for the notification
+          let choiceBal = 0;
+          try {
+            const balRes = await fetch(`${API_BASE}/choice/balance/${traderChoiceAccountId}`, { headers: { 'Authorization': 'Bearer ' + token } }).catch(() => null);
+            if (balRes && balRes.ok) { const bd = await balRes.json(); choiceBal = bd.balance || 0; }
+          } catch(_e) {}
 
+          let buyApproved = false;
+          if (!buyApprovalRequestedOrders.has(order.orderNumber)) {
+            const approvalRes = await fetch(API_BASE + '/telegram/request-buy-approval', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+              body: JSON.stringify({
+                order_number: order.orderNumber,
+                seller_name: verifiedName || paymentDetails.name,
+                amount: paymentDetails.amount,
+                method: method,
+                phone: paymentDetails.phone || '',
+                account_number: paymentDetails.account_number || '',
+                bank_name: paymentDetails.bank_name || '',
+                choice_balance: choiceBal,
+              }),
+            }).catch(() => null);
+            const approvalData = approvalRes?.ok ? await approvalRes.json().catch(() => ({})) : {};
+            if (approvalData.auto_approved) {
+              // Telegram not linked — proceed automatically
+              buyApproved = true;
+              console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram not linked, auto-approving payment`);
+            } else {
+              buyApprovalRequestedOrders.add(order.orderNumber);
+              sendBotLog('info', `Buy order ${order.orderNumber} — waiting for Telegram payment approval`);
+              console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram approval request sent, waiting...`);
+            }
+          } else {
+            // Already requested — poll the status
+            const statusRes = await fetch(
+              `${API_BASE}/telegram/approval-status?order_number=${encodeURIComponent(order.orderNumber)}`,
+              { headers: { 'Authorization': 'Bearer ' + token } }
+            ).catch(() => null);
+            const statusData = statusRes?.ok ? await statusRes.json().catch(() => ({})) : {};
+            const approvalStatus = statusData.status || 'pending';
+            console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram approval status: ${approvalStatus}`);
+
+            if (approvalStatus === 'approved') {
+              buyApproved = true;
+              sendBotLog('success', `Buy order ${order.orderNumber} — approved, executing payment`);
+            } else if (approvalStatus === 'rejected') {
+              imPaymentFailedOrders.add(order.orderNumber);
+              sendBotLog('warning', `Buy order ${order.orderNumber} — payment declined by you on Telegram. Order will expire.`);
+              continue;
+            } else if (approvalStatus === 'timeout') {
+              imPaymentFailedOrders.add(order.orderNumber);
+              sendBotLog('warning', `Buy order ${order.orderNumber} — Telegram approval timed out (20 min). Order will expire.`);
+              continue;
+            } else {
+              // Still pending — come back next poll cycle
+              continue;
+            }
+          }
+
+          if (!buyApproved) continue;
+
+          // ── Step 2: Execute the Choice Bank payment ──
           try {
             imResult = await executeChoicePayment({
               phone: paymentDetails.phone, accountNumber: paymentDetails.account_number,
@@ -8121,12 +8179,64 @@ Method selection rules:
         let verifiedName = "";
 
         if (!imNameMismatchAborted) {
-          fetch(API_BASE + "/ext/notify-buy-payment", { method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-            body: JSON.stringify({ order_number, seller_name: paymentDetails.name, amount: paymentDetails.amount,
-              method: payMethod, phone: paymentDetails.phone||"", account_number: paymentDetails.account_number||"",
-              bank_name: paymentDetails.bank_name||"", verified_name: verifiedName })
-          }).catch(function(){});
+          // ── Step 1: Request Telegram approval before touching Choice Bank ──
+          let choiceBal2 = 0;
+          try {
+            const balRes2 = await fetch(`${API_BASE}/choice/balance/${traderChoiceAccountId}`, { headers: { 'Authorization': 'Bearer ' + token } }).catch(() => null);
+            if (balRes2 && balRes2.ok) { const bd2 = await balRes2.json(); choiceBal2 = bd2.balance || 0; }
+          } catch(_e2) {}
+
+          let buyApproved2 = false;
+          if (!buyApprovalRequestedOrders.has(order_number)) {
+            const approvalRes2 = await fetch(API_BASE + '/telegram/request-buy-approval', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+              body: JSON.stringify({
+                order_number,
+                seller_name: verifiedName || paymentDetails.name,
+                amount: paymentDetails.amount,
+                method: payMethod,
+                phone: paymentDetails.phone || '',
+                account_number: paymentDetails.account_number || '',
+                bank_name: paymentDetails.bank_name || '',
+                choice_balance: choiceBal2,
+              }),
+            }).catch(() => null);
+            const approvalData2 = approvalRes2?.ok ? await approvalRes2.json().catch(() => ({})) : {};
+            if (approvalData2.auto_approved) {
+              buyApproved2 = true;
+              console.log(`[SparkP2P] Buy ${order_number} — Telegram not linked, auto-approving payment`);
+            } else {
+              buyApprovalRequestedOrders.add(order_number);
+              sendBotLog('info', `Buy order ${order_number} — waiting for Telegram payment approval`);
+              return; // come back next poll cycle
+            }
+          } else {
+            const statusRes2 = await fetch(
+              `${API_BASE}/telegram/approval-status?order_number=${encodeURIComponent(order_number)}`,
+              { headers: { 'Authorization': 'Bearer ' + token } }
+            ).catch(() => null);
+            const statusData2 = statusRes2?.ok ? await statusRes2.json().catch(() => ({})) : {};
+            const approvalStatus2 = statusData2.status || 'pending';
+            console.log(`[SparkP2P] Buy ${order_number} — Telegram approval status: ${approvalStatus2}`);
+            if (approvalStatus2 === 'approved') {
+              buyApproved2 = true;
+              sendBotLog('success', `Buy order ${order_number} — approved, executing payment`);
+            } else if (approvalStatus2 === 'rejected') {
+              imPaymentFailedOrders.add(order_number);
+              sendBotLog('warning', `Buy order ${order_number} — payment declined on Telegram. Order will expire.`);
+              return;
+            } else if (approvalStatus2 === 'timeout') {
+              imPaymentFailedOrders.add(order_number);
+              sendBotLog('warning', `Buy order ${order_number} — Telegram approval timed out. Order will expire.`);
+              return;
+            } else {
+              return; // still pending — retry next cycle
+            }
+          }
+          if (!buyApproved2) return;
+
+          // ── Step 2: Execute the Choice Bank payment ──
           try {
             imResult = await executeChoicePayment({
               phone: paymentDetails.phone, accountNumber: paymentDetails.account_number,
