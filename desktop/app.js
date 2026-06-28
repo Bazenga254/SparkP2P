@@ -4046,6 +4046,44 @@ async function idleScan(page) {
     } else {
       // Payment not yet sent -- screen seller first (DD), then extract details and pay
       let sellerStats = null; // hoisted so Telegram advisory block can read stats from first cycle
+
+      // Primary: get order detail + seller stats from backend API (uses stored session,
+      // independent of Puppeteer browser state). Skips DOM/Vision for payment extraction.
+      try {
+        const detailRes = await fetch(`${API_BASE}/ext/order-detail?order_number=${order.orderNumber}`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        }).catch(() => null);
+        if (detailRes && detailRes.ok) {
+          const detail = await detailRes.json().catch(() => null);
+          if (detail && detail.ok) {
+            if (detail.phone || detail.account_number) {
+              buyPaymentDetailsCache[order.orderNumber] = {
+                method: detail.method || 'mpesa',
+                phone: detail.phone || null,
+                account_number: detail.account_number || null,
+                bank_name: detail.bank_name || null,
+                amount: detail.fiat_amount,
+                name: detail.counterparty_name || '',
+                reference: order.orderNumber,
+                network: /airtel/i.test(detail.method || '') ? 'airtel' : 'safaricom',
+                _source: 'backend_api',
+              };
+              console.log(`[SparkP2P] Backend detail: ${detail.method}, ${detail.phone || detail.account_number}, ${detail.counterparty_name}`);
+            }
+            if (detail.trades_30d != null || detail.trades_all != null) {
+              sellerStats = {
+                trades_30d: detail.trades_30d,
+                trades_all: detail.trades_all,
+                completionRate: detail.completion_rate || '',
+                avgPayMins: detail.avg_pay_mins,
+                avgReleaseMins: null,
+                accountAgeDays: detail.account_age_days,
+              };
+            }
+          }
+        }
+      } catch(_) {}
+
       if (!orderFirstSeenAt[order.orderNumber] && ddEnabled) {
         const sellerNick = order.counterparty || '';
         sellerStats = await fetchCounterpartyStats(page, order.orderNumber, 'seller');

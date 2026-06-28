@@ -1563,6 +1563,84 @@ async def get_active_orders(
     return {"ok": True, "orders": orders}
 
 
+@router.get("/order-detail")
+async def get_order_detail(
+    order_number: str,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Return full order detail including payment info via stored session credentials.
+
+    Desktop bot calls this to get phone/name/method after detecting a new order,
+    replacing DOM/Vision scraping for payment detail extraction.
+    """
+    if not trader.binance_cookies:
+        return {"ok": False, "error": "no_session"}
+
+    try:
+        from app.services.binance.client import BinanceP2PClient
+        client = BinanceP2PClient.from_trader(trader)
+        d = await client.get_order_detail(order_number)
+    except Exception as e:
+        logger.warning("order-detail failed for %s: %s", order_number, e)
+        return {"ok": False, "error": str(e)}
+
+    if not d:
+        return {"ok": False, "error": "empty_response"}
+
+    # Extract payment details from payInfo array
+    pay_info = d.get("payInfo") or d.get("tradePayInfo") or d.get("sellerPayInfo") or []
+    pi = pay_info[0] if isinstance(pay_info, list) and pay_info else {}
+
+    method_raw = str(pi.get("payMethodName") or pi.get("payType") or "").lower()
+    if "i" in method_raw and "m" in method_raw and "bank" in method_raw:
+        method = "im_bank"
+    elif any(k in method_raw for k in ("mpesa", "m-pesa", "safaricom")):
+        method = "mpesa"
+    elif any(k in method_raw for k in ("equity", "kcb", "coop", "bank", "pesalink")):
+        method = "other_bank"
+    else:
+        method = "mpesa"
+
+    fields = pi.get("fields") or []
+    def _fv(key):
+        for f in fields:
+            if key in str(f.get("identifier") or f.get("fieldName") or "").lower():
+                return str(f.get("value") or f.get("fieldValue") or "").strip()
+        return ""
+
+    phone          = _fv("phone") or _fv("mobile") or _fv("number")
+    account_number = _fv("account") or _fv("card")
+    bank_name      = _fv("bank") or pi.get("payMethodName") or ""
+
+    # Counterparty info
+    cp = d.get("counterPartyUserInfoVo") or d.get("sellerInfo") or {}
+    name          = cp.get("nickName") or d.get("sellerNickname") or d.get("buyerNickname") or ""
+    trades_30d    = cp.get("lastMonthOrderNum") or cp.get("tradeCount30d")
+    trades_all    = cp.get("orderCount") or cp.get("tradeCountTotal")
+    rate_raw      = cp.get("monthFinishRate") or cp.get("completionRate")
+    completion    = f"{float(rate_raw)*100:.1f}%" if rate_raw is not None else ""
+    reg_days      = cp.get("registerDays")
+    avg_pay_secs  = cp.get("avgPayTime")
+    avg_pay_mins  = round(float(avg_pay_secs) / 60, 1) if avg_pay_secs else None
+
+    fiat_amount   = float(d.get("totalPrice") or d.get("fiatAmount") or 0)
+
+    return {
+        "ok": True,
+        "method": method,
+        "phone": phone or None,
+        "account_number": account_number or None,
+        "bank_name": bank_name or None,
+        "fiat_amount": fiat_amount,
+        "counterparty_name": name,
+        "trades_30d": trades_30d,
+        "trades_all": trades_all,
+        "completion_rate": completion,
+        "account_age_days": reg_days,
+        "avg_pay_mins": avg_pay_mins,
+    }
+
+
 # ─── I&M Bank withdrawal job queue ───────────────────────────────────────────
 
 def _current_sweep_window_start() -> datetime:
