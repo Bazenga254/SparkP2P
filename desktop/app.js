@@ -156,6 +156,7 @@ const sellApprovedOrders = new Set();           // sell orderNums approved by me
 const sellRejectedOrders = new Set();           // sell orderNums rejected or timed-out by merchant
 const buyApprovalRequestedOrders = new Set();   // buy orderNums where Telegram approval has been requested
 const buyDeclineMsgSent = new Set();            // buy orderNums where the polite excuse was sent to seller
+const buyPaymentDetailsCache = {};              // orderNum → paymentDetails extracted from Binance API
 const sellRejectionMsgSent = new Set();         // sell orderNums where the polite cancel request was already sent
 const sellPayInstructSentOrders = new Set();    // sell orderNums where payment instructions sent to buyer
 const lastSellDeficitMsg = {};                  // orderNum → KES deficit last sent to buyer (dedup)
@@ -3051,8 +3052,41 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
           } catch (_) {}
         }
 
+        // ── Payment details from the same trade/get API response ──
+        // d.payInfo is an array: [{payMethodName, fields: [{identifier, value}]}]
+        // d.tradePayInfo — alternate field name on some Binance versions
+        let paymentDetails = null;
+        try {
+          const payInfoArr = d.payInfo || d.tradePayInfo || d.sellerPayInfo || [];
+          const pi = Array.isArray(payInfoArr) ? payInfoArr[0] : null;
+          if (pi) {
+            const methodRaw = (pi.payMethodName || pi.payType || '').toString().toLowerCase();
+            const method = /i\s*&?\s*m\s*bank/i.test(methodRaw) ? 'im_bank'
+              : /mpesa|m-pesa|safaricom/i.test(methodRaw) ? 'mpesa'
+              : /airtel/i.test(methodRaw) ? 'mpesa'  // Airtel uses phone too
+              : /bank|equity|kcb|co.op|absa|stanbic|dtb|ncba|cooperative/i.test(methodRaw) ? 'other_bank'
+              : 'mpesa';
+            const fields = Array.isArray(pi.fields) ? pi.fields : [];
+            const fv = (id) => {
+              const f = fields.find(f => (f.identifier || f.fieldName || '').toLowerCase().includes(id));
+              return (f?.value || f?.fieldValue || '').trim();
+            };
+            const phone = fv('phone') || fv('mobile') || fv('number');
+            const name = fv('name') || (d.sellerRealName) || (d.buyer?.nickName) || '';
+            const accountNumber = fv('account') || fv('card') || '';
+            const bankName = fv('bank') || pi.payMethodName || '';
+            const amount = d.totalPrice ?? d.fiatAmount ?? d.amount ?? null;
+            const network = /airtel/i.test(methodRaw) ? 'airtel' : 'safaricom';
+            if (amount && (phone || accountNumber)) {
+              paymentDetails = { method, phone: phone || null, name, amount, network,
+                account_number: accountNumber || null, bank_name: bankName || null,
+                reference: null, _source: 'api' };
+            }
+          }
+        } catch(_) {}
+
         return {
-          trades_30d, trades_all,
+          trades_30d, trades_all, paymentDetails,
           // Full profile fields for Telegram approval message
           allTimeTrades: trades_all,
           buyTrades: buy_trades,
@@ -3998,9 +4032,10 @@ async function idleScan(page) {
 
     } else {
       // Payment not yet sent -- screen seller first (DD), then extract details and pay
+      let sellerStats = null; // hoisted so Telegram advisory block can read stats from first cycle
       if (!orderFirstSeenAt[order.orderNumber] && ddEnabled) {
         const sellerNick = order.counterparty || '';
-        const sellerStats = await fetchCounterpartyStats(page, order.orderNumber, 'seller');
+        sellerStats = await fetchCounterpartyStats(page, order.orderNumber, 'seller');
         const sellerReturning = await checkReturningBuyer(sellerNick);
 
         if (sellerReturning) {
@@ -4021,14 +4056,22 @@ async function idleScan(page) {
           }
           console.log(`[SparkP2P] DD: seller ${sellerNick} passed (30d: ${sellerStats.trades_30d ?? 'n/a'}, all: ${sellerStats.trades_all ?? 'n/a'})`);
         }
+        // Cache payment details extracted from the Binance API (same trade/get call used for DD)
+        if (sellerStats?.paymentDetails) {
+          buyPaymentDetailsCache[order.orderNumber] = sellerStats.paymentDetails;
+          console.log(`[SparkP2P] API extracted payment details for ${order.orderNumber}: method=${sellerStats.paymentDetails.method}, phone=${sellerStats.paymentDetails.phone}, acct=${sellerStats.paymentDetails.account_number}`);
+        }
       }
       if (!orderFirstSeenAt[order.orderNumber]) {
         orderFirstSeenAt[order.orderNumber] = Date.now();
       }
 
-      // Extract payment details from the order page we are already on
-      // L1: DOM extraction first — reliable for phone/name/amount without Vision OCR errors
-      let paymentDetails = null;
+      // Payment details — use Binance API result (cached from DD) first; fall back to DOM/Vision
+      let paymentDetails = buyPaymentDetailsCache[order.orderNumber] || null;
+      if (paymentDetails) {
+        console.log(`[SparkP2P] Using API-sourced payment details for ${order.orderNumber} (${paymentDetails._source || 'api'})`);
+      }
+      if (!paymentDetails) {
       try {
         paymentDetails = await page.evaluate(() => {
           const getText = (labelRegex) => {
@@ -4110,7 +4153,8 @@ async function idleScan(page) {
       } catch (_) {}
 
       // L2: Vision fallback — only if DOM extraction missed both phone and bank account details
-      if (anthropicApiKey && !paymentDetails?.account_number && (!paymentDetails?.phone || !paymentDetails?.amount)) {
+      // (skipped entirely when API payment details are already cached)
+      if (!paymentDetails && anthropicApiKey && !paymentDetails?.account_number && (!paymentDetails?.phone || !paymentDetails?.amount)) {
         console.log('[SparkP2P] L1 DOM extraction incomplete — falling back to Vision OCR');
         const domPhone = paymentDetails?.phone || null; // preserve DOM phone if Vision overwrites
         const paySS = await page.screenshot({ encoding: 'base64' }).catch(() => null);
@@ -4156,6 +4200,7 @@ Method selection rules:
           }
         }
       }
+      } // end: if (!paymentDetails from API cache)
 
       const _localPm = (paymentDetails?.method || 'mpesa').toLowerCase();
       const _localIsBank = _localPm === 'im_bank' || _localPm === 'other_bank';
