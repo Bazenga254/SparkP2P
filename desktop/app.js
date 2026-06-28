@@ -2074,6 +2074,40 @@ async function readOrders(activeOnly = false) {
       }
     }
 
+    // API fallback: if DOM returned nothing, call Binance order-list directly.
+    // Handles error/loading state after reconnect — uses browser cookies, no extra auth.
+    if (sell.length === 0 && buy.length === 0) {
+      try {
+        const apiOrders = await page.evaluate(async () => {
+          const res = await fetch('https://p2p.binance.com/bapi/c2c/v2/private/c2c/order-match/order-list', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ page: 1, rows: 20, orderStatusList: [11, 12, 3] }),
+          });
+          if (!res.ok) return null;
+          const d = await res.json();
+          return d?.data || null;
+        }).catch(() => null);
+        if (Array.isArray(apiOrders) && apiOrders.length > 0) {
+          console.log(`[SparkP2P] DOM empty — API fallback found ${apiOrders.length} active order(s)`);
+          for (const o of apiOrders) {
+            const orderNumber = String(o.orderNumber || o.orderId || '');
+            if (orderNumber.length < 15) continue;
+            const tradeType = (o.tradeType || '').toUpperCase();
+            const fiat = parseFloat(o.totalPrice || o.sourceAmount || o.fiatAmount || 0);
+            const crypto = parseFloat(o.amount || o.cryptoAmount || 0);
+            const price = parseFloat(o.unitPrice || o.price || 0);
+            const status = o.orderStatus === 11 ? 'Pending Payment' : 'In Progress';
+            const counterparty = o.buyerNickname || o.sellerNickname || o.counterPartyNickName || '';
+            const order = { orderNumber, tradeType, totalPrice: fiat, amount: crypto, price, asset: 'USDT', status, counterparty };
+            if (tradeType === 'SELL') sell.push(order);
+            else buy.push(order);
+          }
+        }
+      } catch (_) {}
+    }
+
     // â"€â"€ Step 2: Read recently cancelled orders (tab=1, Cancelled filter) â"€â"€â"€
     // Skip history scan when activeOnly=true â€" avoids page bouncing when
     // active orders are already detected and need immediate attention.
@@ -13532,5 +13566,4 @@ ipcMain.handle('manual-mpesa-sweep', async (_, amount) => {
   const result = await executeMpesaSweep({ sweep_id: 'manual', amount: amt, reference: 'Manual-' + Date.now() });
   return { ok: result?.success !== false, error: result?.error || null };
 });
-
 
