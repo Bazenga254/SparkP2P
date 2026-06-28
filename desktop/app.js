@@ -5248,139 +5248,102 @@ async function readEmailOTPviaIMAP(sentAfterMs = Date.now() - 120000) {
   }
 }
 
-// Read a Choice Bank transaction OTP from Gmail via IMAP.
-// Tries multiple known Choice Bank sender domains; falls back to scanning all recent
-// emails if none match. Logs clearly so you can see exactly why it fails.
-async function readChoiceOTPviaIMAP(sentAfterMs = Date.now()) {
-  const POLL_MS = 8000;
-  const MAX_WAIT = 480000; // 8 minutes
+// Read Choice Bank OTP from the Gmail tab already open in Chrome.
+// Much faster and more reliable than IMAP — uses the same tab-based approach
+// as Binance security code reading. Waits up to 60s (emails arrive in 10-35s).
+async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
+  if (!browser) { console.log('[SparkP2P] Choice OTP: browser not open'); return null; }
+
+  // Open or reuse existing Gmail tab
+  if (!gmailPage || gmailPage.isClosed()) {
+    console.log('[SparkP2P] Choice OTP: opening Gmail tab...');
+    await openGmailTab();
+  }
+  if (!gmailPage) { console.log('[SparkP2P] Choice OTP: could not open Gmail tab'); return null; }
+
+  // Gmail search that catches any OTP/verification email from Choice Bank
+  // arriving in the last hour — deliberately broad so we don't rely on knowing
+  // the exact sender domain.
+  const searchUrl = 'https://mail.google.com/mail/u/0/#search/subject%3Aotp+OR+subject%3Averification+OR+from%3Achoice+newer_than%3A1h';
+
+  console.log('[SparkP2P] Waiting for Choice Bank OTP email in Gmail (10-35s expected)...');
+
+  // Poll every 5s for up to 60s — covers the 10-35s delay the user observed
+  const POLL_MS = 5000;
+  const MAX_WAIT = 60000;
   const deadline = Date.now() + MAX_WAIT;
 
-  // Check credentials upfront so we fail fast with a clear message instead of
-  // silently polling for 8 minutes and timing out.
-  const creds = loadGmailCredentials();
-  if (!creds || !creds.email || !creds.appPassword) {
-    console.log('[SparkP2P] ⚠️ Choice Bank OTP: Gmail IMAP credentials not configured — go to Settings and add your Gmail + App Password');
-    sendBotLog('warning', 'Choice Bank OTP: Gmail IMAP not configured. Add Gmail credentials in Settings to auto-read OTP.');
-    return null;
-  }
-  console.log(`[SparkP2P] Waiting for Choice Bank OTP email via IMAP (account: ${creds.email})...`);
-
   while (Date.now() < deadline) {
-    const code = await _choiceImapSearch(creds, sentAfterMs);
-    if (code) { console.log(`[SparkP2P] ✅ Choice Bank OTP found: ${code}`); return code; }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    await new Promise(r => setTimeout(r, Math.min(POLL_MS, remaining)));
+    try {
+      await gmailPage.bringToFront();
+      await gmailPage.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Check if any email row exists
+      const hasRow = await gmailPage.evaluate(() => !!document.querySelector('tr.zA'));
+      if (!hasRow) {
+        const waitedSec = Math.round((Date.now() - (deadline - MAX_WAIT)) / 1000);
+        console.log(`[SparkP2P] Choice OTP: no email yet (${waitedSec}s elapsed) — retrying in 5s...`);
+        await new Promise(r => setTimeout(r, POLL_MS));
+        continue;
+      }
+
+      // Click the most recent (first) email row
+      await gmailPage.evaluate(() => { const row = document.querySelector('tr.zA'); if (row) row.click(); });
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Read the email sender + body via DOM (no Vision needed — we just need digits)
+      const emailData = await gmailPage.evaluate(() => {
+        // Sender shown in the open email header
+        const senderEl = document.querySelector('[email]') || document.querySelector('.gD');
+        const sender = senderEl ? (senderEl.getAttribute('email') || senderEl.textContent) : '';
+
+        // Full email body text
+        const bodyEl = document.querySelector('.a3s.aiL') || document.querySelector('.gs .ii.gt') || document.querySelector('[data-message-id] .ii');
+        const body = bodyEl ? bodyEl.innerText : document.body.innerText;
+        return { sender, body };
+      });
+
+      console.log(`[SparkP2P] Choice OTP: reading email from "${emailData.sender}"`);
+
+      const code = _extractChoiceOTP(emailData.body);
+      if (code) {
+        console.log(`[SparkP2P] ✅ Choice Bank OTP extracted: ${code}`);
+        return code;
+      }
+
+      console.log('[SparkP2P] Choice OTP: email found but OTP not extracted — retrying in 5s...');
+      console.log('[SparkP2P] Email preview:', emailData.body.substring(0, 200).replace(/\s+/g, ' '));
+    } catch (e) {
+      console.log('[SparkP2P] Choice OTP Gmail read error:', e.message?.substring(0, 80));
+    }
+    await new Promise(r => setTimeout(r, POLL_MS));
   }
-  console.log('[SparkP2P] ❌ Choice Bank OTP: timed out after 8 min — email may be going to a different address, or Gmail App Password is wrong');
-  sendBotLog('warning', 'Choice Bank OTP email not found after 8 min. Check that your Gmail matches the email registered with Choice Bank, and that your App Password is correct.');
+
+  console.log('[SparkP2P] ❌ Choice Bank OTP: not found in Gmail after 60s');
   return null;
 }
 
-async function _choiceImapSearch(creds, sentAfterMs) {
-  // Known Choice Bank OTP sender domains — try each in order.
-  const SENDERS = ['choice-bank.co', 'choicemicrofinance', 'choicebank', 'noreply'];
-  let client = null;
-  try {
-    const { ImapFlow } = require('imapflow');
-    client = new ImapFlow({ host: 'imap.gmail.com', port: 993, secure: true, auth: { user: creds.email, pass: creds.appPassword }, logger: false });
-    await client.connect();
-    await client.mailboxOpen('INBOX');
-    const since = new Date(sentAfterMs - 90000); // 90s buffer in case email is slightly older
-
-    // Pass 1: try each known sender domain
-    for (const sender of SENDERS) {
-      const uids = await client.search({ from: sender, since }, { uid: true });
-      if (uids && uids.length > 0) {
-        console.log(`[SparkP2P] IMAP: found ${uids.length} email(s) from '${sender}' — scanning for OTP`);
-        const code = await _extractOtpFromUid(client, uids[uids.length - 1]);
-        if (code) { await client.logout(); return code; }
-      }
-    }
-
-    // Pass 2: fallback — scan all recent emails for OTP patterns (Choice Bank keyword in body)
-    const allUids = await client.search({ since }, { uid: true });
-    if (allUids && allUids.length > 0) {
-      console.log(`[SparkP2P] IMAP: sender search missed — scanning ${allUids.length} recent email(s) for Choice Bank OTP`);
-      // Check the 5 most recent emails to avoid reading entire inbox
-      const toCheck = allUids.slice(-5);
-      for (const uid of toCheck.reverse()) {
-        const code = await _extractOtpFromUid(client, uid, ['choice', 'otp', 'transaction code', 'verification code']);
-        if (code) { await client.logout(); return code; }
-      }
-    }
-
-    await client.logout();
-    return null;
-  } catch (e) {
-    console.error('[SparkP2P] IMAP search error:', e.message?.substring(0, 100));
-    if (client) await client.logout().catch(() => {});
-    return null;
-  }
-}
-
-// Extract a 4-6 digit OTP from a single email UID. If requiredKeywords is provided,
-// at least one must appear in the email body for the extraction to run.
-async function _extractOtpFromUid(client, uid, requiredKeywords = null) {
-  let emailText = '';
-  for await (const msg of client.fetch(String(uid), { bodyParts: ['TEXT'], envelope: true, uid: true })) {
-    const part = msg.bodyParts?.get('text') || msg.bodyParts?.get('TEXT') || msg.bodyParts?.get('1');
-    if (part) emailText = Buffer.isBuffer(part) ? part.toString('utf8') : String(part);
-    if (!emailText && msg.envelope) {
-      // Log the from address so we can add it as a known sender
-      const from = (msg.envelope.from || [])[0];
-      if (from) console.log(`[SparkP2P] IMAP fallback: checking email from ${from.address || from.mailbox}`);
-    }
-  }
-  if (!emailText) return null;
-  const lower = emailText.toLowerCase();
-  if (requiredKeywords && !requiredKeywords.some(k => lower.includes(k))) return null;
-  // Try lines containing OTP keywords first, then full body
-  const re = /\b(\d{4,6})\b/;
-  const lines = emailText.split(/[\r\n]+/);
+// Extract a 4-6 digit OTP from the email body text.
+// Prioritises lines containing OTP-related keywords, falls back to any digit sequence.
+function _extractChoiceOTP(text) {
+  if (!text) return null;
+  const lines = text.split(/[\r\n]+/);
+  // Priority: lines with OTP keywords
   for (const line of lines) {
     const l = line.toLowerCase();
-    if (l.includes('otp') || l.includes('verif') || l.includes('code') || l.includes('transaction')) {
-      const m = line.match(re); if (m) return m[1];
+    if (l.includes('otp') || l.includes('code') || l.includes('verif') || l.includes('pin') || l.includes('passcode')) {
+      const m = line.match(/\b(\d{4,6})\b/);
+      if (m) return m[1];
     }
   }
-  const m = emailText.match(re); return m ? m[1] : null;
+  // Fallback: any 4-6 digit sequence in the whole body
+  const m = text.match(/\b(\d{4,6})\b/);
+  return m ? m[1] : null;
 }
 
-async function _imapSearch({ sender, digits, sentAfterMs }) {
-  const creds = loadGmailCredentials();
-  if (!creds || !creds.email || !creds.appPassword) return null;
-  let client = null;
-  try {
-    const { ImapFlow } = require('imapflow');
-    client = new ImapFlow({ host: 'imap.gmail.com', port: 993, secure: true, auth: { user: creds.email, pass: creds.appPassword }, logger: false });
-    await client.connect();
-    await client.mailboxOpen('INBOX');
-    const uids = await client.search({ from: sender, since: new Date(sentAfterMs - 60000) }, { uid: true });
-    if (!uids || uids.length === 0) { await client.logout(); return null; }
-    let emailText = '';
-    for await (const msg of client.fetch(String(uids[uids.length - 1]), { bodyParts: ['TEXT'], uid: true })) {
-      const part = msg.bodyParts?.get('text') || msg.bodyParts?.get('TEXT') || msg.bodyParts?.get('1');
-      if (part) emailText = Buffer.isBuffer(part) ? part.toString('utf8') : String(part);
-    }
-    await client.logout();
-    if (!emailText) return null;
-    const re = new RegExp(`\\b(\\d{${digits}})\\b`);
-    const lines = emailText.split(/[\r\n]+/);
-    for (const line of lines) {
-      const l = line.toLowerCase();
-      if (l.includes('verif') || l.includes('code') || l.includes('otp')) {
-        const m = line.match(re); if (m) return m[1];
-      }
-    }
-    const m = emailText.match(re); return m ? m[1] : null;
-  } catch (e) {
-    console.error('[SparkP2P] IMAP search error:', e.message?.substring(0, 80));
-    if (client) await client.logout().catch(() => {});
-    return null;
-  }
-}
+// Keep old name as alias so any other callers still work
+const readChoiceOTPviaIMAP = readChoiceOTPviaGmail;
 
 
 // â"€â"€ Vision-based Gmail OTP reader â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
