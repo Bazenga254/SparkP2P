@@ -371,6 +371,7 @@ async def report_message_sent(
 
 class ReportBuyCompletedRequest(BaseModel):
     order_number: str
+    notify: bool = True  # False when bot restarted mid-order or completion detected offline
 
 
 @router.post("/report-buy-completed")
@@ -406,7 +407,7 @@ async def report_buy_completed(
             f"in unexpected status {order.status}"
         )
 
-    await _complete_buy_order(order, trader, db)
+    await _complete_buy_order(order, trader, db, notify=data.notify)
     await db.commit()
 
     return {"status": "ok"}

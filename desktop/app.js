@@ -3883,10 +3883,14 @@ async function idleScan(page) {
         buyLower.includes('order completed') || buyLower.includes('crypto received')) {
       console.log(`[SparkP2P] âœ… Buy order ${order.orderNumber} COMPLETED â€” crypto received!`);
       const orderNum = order.orderNumber;
+      // Only notify if this bot session actually sent the payment.
+      // If buyPaymentSentAt is not set (bot restarted mid-order or order completed offline),
+      // notify=false so no Telegram/SMS fires for a stale completion.
+      const paidThisSession = !!buyPaymentSentAt[orderNum];
       const buyCompRes = await fetch(`${API_BASE}/ext/report-buy-completed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ order_number: orderNum }),
+        body: JSON.stringify({ order_number: orderNum, notify: paidThisSession }),
       }).catch(e => { console.error('[SparkP2P] report-buy-completed failed:', e.message); return null; });
       if (buyCompRes?.ok) {
         // Only block reconcile/idleScan from re-reporting once backend confirmed receipt
