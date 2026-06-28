@@ -4557,14 +4557,27 @@ Method selection rules:
               savePaidOrder(order.orderNumber, { referenceId: imResult.referenceId||"" });
             }
           } catch(e) {
-            console.error("[SparkP2P] Choice Bank payment failed for " + order.orderNumber + ": " + e.message);
-            imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
-            await fetch(API_BASE + "/ext/report-buy-expired", { method: "POST",
-              headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-              body: JSON.stringify({ order_number: order.orderNumber, seller_name: paymentDetails.name,
-                amount: paymentDetails.amount, minutes_waited: 0,
-                reason: "Choice Bank payment failed: " + e.message + ". Please complete manually." })
-            }).catch(function(){});
+            const _errMsg = e.message || 'Unknown error';
+            console.error("[SparkP2P] Choice Bank payment error for " + order.orderNumber + ": " + _errMsg);
+
+            // Determine if this is a hard failure (balance/account) or a soft/OTP failure
+            const _isHardFailure = /insufficient|balance|invalid account|not found|account.*block|cannot transfer/i.test(_errMsg);
+
+            if (_isHardFailure) {
+              // Permanent failure — mark and report
+              imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
+              sendBotLog('error', `❌ Choice Bank payment failed (${_errMsg}) — reporting to Telegram`);
+              await fetch(API_BASE + "/ext/report-buy-expired", { method: "POST",
+                headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+                body: JSON.stringify({ order_number: order.orderNumber, seller_name: paymentDetails.name,
+                  amount: paymentDetails.amount, minutes_waited: 0,
+                  reason: "Choice Bank payment failed: " + _errMsg + ". Please complete manually." })
+              }).catch(function(){});
+            } else {
+              // Soft failure (wrong OTP, network, timeout) — log visibly and retry next cycle
+              // telegramApprovedOrders still has this order so next poll goes straight to payment
+              sendBotLog('warning', `⚠️ Choice Bank payment attempt failed (${_errMsg}) — will retry next cycle`);
+            }
           }
         }
       }
