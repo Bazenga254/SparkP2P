@@ -2025,87 +2025,92 @@ async function readOrders(activeOnly = false) {
     const page = await getPage();
     if (!page) { _ordersTabOpen = false; return { sell: [], buy: [], cancelled: [], completed_buy: [] }; }
 
-    // â"€â"€ Step 1: Read active/ongoing orders (tab=0) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-    // domcontentloaded is enough — we only need DOM text, not full network idle
-    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 1000));
-
-    const activeText = await page.evaluate(() => document.body.innerText).catch(() => '');
-
+    // Step 1: Read active orders — API-first (instant, no render wait).
+    // DOM fallback if API fails (session issue) with 3s wait for React render.
     let sell = [], buy = [];
-    if (activeText && !activeText.includes('No records') && !activeText.includes('No data')) {
-      const seenActive = new Set();
-      const activeOrderPattern = /\b(\d{18,20})\b/g;
-      let am;
-      while ((am = activeOrderPattern.exec(activeText)) !== null) {
-        const orderNumber = am[1];
-        if (seenActive.has(orderNumber)) continue;
-        const ctxStart = Math.max(0, am.index - 600);
-        const ctxEnd   = Math.min(activeText.length, am.index + 200);
-        const ctx = activeText.slice(ctxStart, ctxEnd);
-        if (/\b(Completed|Cancelled|Canceled)\b/i.test(ctx)) continue;
-        const statusMatch = ctx.match(/\b(Pending Payment|Pending|Paid|Appeal)\b/i);
-        if (!statusMatch) continue;
-        const typeMatch = ctx.match(/\b(Buy|Sell)\b/i);
-        if (!typeMatch) continue;
-        const tradeType = typeMatch[1].toUpperCase();
-        const usdtMatch = ctx.match(/([\d,]+\.?\d*)\s*USDT/);
-        const crypto = usdtMatch ? parseFloat(usdtMatch[1].replace(/,/g, '')) : 0;
-        // Use the first KES value >= 1000 to avoid picking up the per-unit rate (e.g. 128.52 KES/USDT)
-        const kesValues = [...ctx.matchAll(/([\d,]+\.?\d*)\s*KES/g)].map(m => parseFloat(m[1].replace(/,/g, '')));
-        const fiat = kesValues.find(v => v >= 1000) || kesValues[0] || 0;
-        const priceGuesses = [...ctx.matchAll(/\b(1[0-9]{2}\.\d{1,4})\b/g)].map(pg => parseFloat(pg[1]));
-        const price = priceGuesses.find(p => p >= 100 && p <= 200) || (crypto > 0 ? fiat / crypto : 0);
-        seenActive.add(orderNumber);
-        const order = {
-          orderNumber,
-          tradeType,
-          totalPrice: fiat,
-          amount: crypto,
-          price,
-          asset: 'USDT',
-          status: statusMatch[1],
-          counterparty: '',
+
+    // Try Binance internal API first — uses browser cookies, works from any page
+    try {
+      const apiOrders = await page.evaluate(async () => {
+        const tryFetch = async (statusList) => {
+          try {
+            const res = await fetch('https://p2p.binance.com/bapi/c2c/v2/private/c2c/order-match/order-list', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ page: 1, rows: 20, orderStatusList: statusList }),
+            });
+            if (!res.ok) return null;
+            const d = await res.json();
+            return (d && d.code === '000000') ? (d.data || []) : null;
+          } catch(_) { return null; }
         };
-        if (order.orderNumber.length >= 15) {
+        // Try common status codes for "processing" orders (varies across API versions)
+        return await tryFetch([11, 12]) || await tryFetch([0, 1, 2]) || await tryFetch([]) || null;
+      }).catch(() => null);
+
+      if (Array.isArray(apiOrders)) {
+        for (const o of apiOrders) {
+          const orderNumber = String(o.orderNumber || o.orderId || '');
+          if (orderNumber.length < 15) continue;
+          const st = String(o.orderStatus || o.status || '');
+          // Skip completed/cancelled
+          if (/^(3|4|5|completed|cancelled|canceled)/i.test(st)) continue;
+          const tradeType = (o.tradeType || '').toUpperCase();
+          if (tradeType !== 'BUY' && tradeType !== 'SELL') continue;
+          const fiat = parseFloat(o.totalPrice || o.sourceAmount || o.fiatAmount || 0);
+          const crypto = parseFloat(o.amount || o.cryptoAmount || 0);
+          const price = parseFloat(o.unitPrice || o.price || 0);
+          const status = 'Pending Payment';
+          const counterparty = o.buyerNickname || o.sellerNickname || o.counterPartyNickName || '';
+          const order = { orderNumber, tradeType, totalPrice: fiat, amount: crypto, price, asset: 'USDT', status, counterparty };
           if (tradeType === 'SELL') sell.push(order);
           else buy.push(order);
         }
+        if (sell.length > 0 || buy.length > 0) {
+          console.log(`[SparkP2P] API order read: ${buy.length} buy, ${sell.length} sell`);
+        }
       }
-    }
+    } catch(_) {}
 
-    // API fallback: if DOM returned nothing, call Binance order-list directly.
-    // Handles error/loading state after reconnect — uses browser cookies, no extra auth.
+    // DOM fallback: navigate to the orders list page and parse text
     if (sell.length === 0 && buy.length === 0) {
-      try {
-        const apiOrders = await page.evaluate(async () => {
-          const res = await fetch('https://p2p.binance.com/bapi/c2c/v2/private/c2c/order-match/order-list', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ page: 1, rows: 20, orderStatusList: [11, 12, 3] }),
-          });
-          if (!res.ok) return null;
-          const d = await res.json();
-          return d?.data || null;
-        }).catch(() => null);
-        if (Array.isArray(apiOrders) && apiOrders.length > 0) {
-          console.log(`[SparkP2P] DOM empty — API fallback found ${apiOrders.length} active order(s)`);
-          for (const o of apiOrders) {
-            const orderNumber = String(o.orderNumber || o.orderId || '');
-            if (orderNumber.length < 15) continue;
-            const tradeType = (o.tradeType || '').toUpperCase();
-            const fiat = parseFloat(o.totalPrice || o.sourceAmount || o.fiatAmount || 0);
-            const crypto = parseFloat(o.amount || o.cryptoAmount || 0);
-            const price = parseFloat(o.unitPrice || o.price || 0);
-            const status = o.orderStatus === 11 ? 'Pending Payment' : 'In Progress';
-            const counterparty = o.buyerNickname || o.sellerNickname || o.counterPartyNickName || '';
-            const order = { orderNumber, tradeType, totalPrice: fiat, amount: crypto, price, asset: 'USDT', status, counterparty };
+      await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 3000)); // 3s for React to render orders
+      const activeText = await page.evaluate(() => document.body.innerText).catch(() => '');
+      if (activeText && !activeText.includes('No records') && !activeText.includes('No data')) {
+        const seenActive = new Set();
+        const activeOrderPattern = /\b(\d{18,20})\b/g;
+        let am;
+        while ((am = activeOrderPattern.exec(activeText)) !== null) {
+          const orderNumber = am[1];
+          if (seenActive.has(orderNumber)) continue;
+          const ctxStart = Math.max(0, am.index - 600);
+          const ctxEnd   = Math.min(activeText.length, am.index + 200);
+          const ctx = activeText.slice(ctxStart, ctxEnd);
+          if (/\b(Completed|Cancelled|Canceled)\b/i.test(ctx)) continue;
+          const statusMatch = ctx.match(/\b(Pending Payment|Pending|Paid|Appeal)\b/i);
+          if (!statusMatch) continue;
+          const typeMatch = ctx.match(/\b(Buy|Sell)\b/i);
+          if (!typeMatch) continue;
+          const tradeType = typeMatch[1].toUpperCase();
+          const usdtMatch = ctx.match(/([\d,]+\.?\d*)\s*USDT/);
+          const crypto = usdtMatch ? parseFloat(usdtMatch[1].replace(/,/g, '')) : 0;
+          const kesValues = [...ctx.matchAll(/([\d,]+\.?\d*)\s*KES/g)].map(m => parseFloat(m[1].replace(/,/g, '')));
+          const fiat = kesValues.find(v => v >= 1000) || kesValues[0] || 0;
+          const priceGuesses = [...ctx.matchAll(/\b(1[0-9]{2}\.\d{1,4})\b/g)].map(pg => parseFloat(pg[1]));
+          const price = priceGuesses.find(p => p >= 100 && p <= 200) || (crypto > 0 ? fiat / crypto : 0);
+          seenActive.add(orderNumber);
+          const order = { orderNumber, tradeType, totalPrice: fiat, amount: crypto, price, asset: 'USDT', status: statusMatch[1], counterparty: '' };
+          if (order.orderNumber.length >= 15) {
             if (tradeType === 'SELL') sell.push(order);
             else buy.push(order);
           }
         }
-      } catch (_) {}
+      }
+      if (sell.length > 0 || buy.length > 0) {
+        console.log(`[SparkP2P] DOM order read: ${buy.length} buy, ${sell.length} sell`);
+      }
     }
 
     // â"€â"€ Step 2: Read recently cancelled orders (tab=1, Cancelled filter) â"€â"€â"€
@@ -13566,4 +13571,3 @@ ipcMain.handle('manual-mpesa-sweep', async (_, amount) => {
   const result = await executeMpesaSweep({ sweep_id: 'manual', amount: amt, reference: 'Manual-' + Date.now() });
   return { ok: result?.success !== false, error: result?.error || null };
 });
-
