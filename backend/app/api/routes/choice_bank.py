@@ -1,8 +1,9 @@
+import asyncio
 import hashlib
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Request, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -289,9 +290,9 @@ async def _handle_transaction_result(params: dict, raw: dict):
                 f"[ChoiceBank] No pending SELL order for trader {trader.id} "
                 f"({trader.full_name}) — checking for pending deposit or saving as unmatched"
             )
-            # Try to match a pending CHOICE_DEPOSIT STK push (same trader, same amount, last 60 min)
+            # Try to match a pending CHOICE_DEPOSIT STK push (same trader, same amount, last 24 h)
             from datetime import timedelta
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=60)
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
             pending_dep = (await db.execute(
                 select(Payment).where(
                     Payment.trader_id == trader.id,
@@ -822,9 +823,31 @@ def _normalize_mobile(raw: str) -> str:
     return raw
 
 
+async def _reconcile_deposit(account_id: str, payment_id: int, amount: float, bal_before: float):
+    """Wait 3 min then check if Choice Bank balance went up — if so, mark deposit COMPLETED."""
+    await asyncio.sleep(180)
+    try:
+        async with async_session() as _db:
+            p = await _db.get(Payment, payment_id)
+            if not p or p.status != PaymentStatus.PENDING:
+                return
+            bal_result = await choice.get_account_details(account_id)
+            bal_now = float((bal_result.get("data") or {}).get("balance") or 0)
+            if bal_now >= bal_before + amount - 5:  # 5 KES tolerance
+                p.status = PaymentStatus.COMPLETED
+                p.remarks = (p.remarks or "") + " [balance-verified]"
+                await _db.commit()
+                logger.info(f"[ChoiceDeposit] Reconciled payment {payment_id}: balance {bal_before}→{bal_now}")
+            else:
+                logger.warning(f"[ChoiceDeposit] Balance check failed for payment {payment_id}: before={bal_before}, now={bal_now}, expected ≥{bal_before + amount}")
+    except Exception as e:
+        logger.warning(f"[ChoiceDeposit] Reconcile error for payment {payment_id}: {e}")
+
+
 @router.post("/choice/deposit")
 async def stk_push_deposit(
     body: DepositRequest,
+    background_tasks: BackgroundTasks,
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
@@ -839,10 +862,19 @@ async def stk_push_deposit(
     if len(mobile) != 9 or not mobile.isdigit():
         raise HTTPException(status_code=400, detail="Invalid phone number — enter a valid Kenyan number")
 
+    # Snapshot balance before STK so reconciliation can verify the deposit landed
+    bal_before = 0.0
+    try:
+        bal_res = await choice.get_account_details(trader.choice_account_id)
+        bal_before = float((bal_res.get("data") or {}).get("balance") or 0)
+    except Exception:
+        pass
+
     result = await choice.deposit_from_mpesa(trader.choice_account_id, mobile, body.amount)
     tx_id = result.get("data", {}).get("txId") or result.get("txId") or ""
 
     # Log the initiated deposit so it appears in the merchant's transaction history
+    payment_id = None
     try:
         p = Payment(
             trader_id=trader.id,
@@ -857,8 +889,16 @@ async def stk_push_deposit(
         )
         db.add(p)
         await db.commit()
+        await db.refresh(p)
+        payment_id = p.id
     except Exception as _log_err:
         logger.warning(f"Failed to log deposit to payments: {_log_err}")
+
+    # After 3 min, check if balance increased and auto-confirm if so
+    if payment_id:
+        background_tasks.add_task(
+            _reconcile_deposit, trader.choice_account_id, payment_id, float(body.amount), bal_before
+        )
 
     return {"txId": tx_id, "status": "stk_sent"}
 
