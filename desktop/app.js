@@ -111,7 +111,7 @@ function saveReportedCompleted(numSet) {
 
 const CDP_PORT = 9222;
 const POLL_INTERVAL_ACTIVE = 60000; // 1 minute â€" cycle through all active orders
-const POLL_INTERVAL_IDLE   = 15000; // 15 seconds â€" no orders, scan faster
+const POLL_INTERVAL_IDLE   = 5000;  // 15 seconds â€" no orders, scan faster
 
 let mainWindow = null;
 let tray = null;
