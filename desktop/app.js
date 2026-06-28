@@ -5387,11 +5387,22 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
     return null;
   }
 
+  let _firstGmailNav = true;
   while (Date.now() < deadline) {
     try {
       await gmailPage.bringToFront();
-      // Navigate to inbox — always loads reliably, Choice Bank thread sits at the top
-      await gmailPage.goto(inboxUrl, { waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {});
+      if (_firstGmailNav) {
+        // First iteration: full navigation to inbox
+        await gmailPage.goto(inboxUrl, { waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {});
+        _firstGmailNav = false;
+      } else {
+        // Subsequent iterations: reload to force Gmail to fetch new emails from server.
+        // goto('#inbox') when already on Gmail is a SPA no-op — new emails won't appear.
+        await gmailPage.reload({ waitUntil: 'domcontentloaded', timeout: 12000 }).catch(async () => {
+          // If reload fails (e.g. navigated away), fall back to goto
+          await gmailPage.goto(inboxUrl, { waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {});
+        });
+      }
       await new Promise(r => setTimeout(r, 2000));
 
       // Read all inbox rows: sender name + subject + timestamp
@@ -5484,6 +5495,10 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
     } catch (e) {
       console.log('[SparkP2P] Choice OTP Gmail read error:', e.message?.substring(0, 80));
     }
+    // Navigate back to inbox before reloading — after clicking a thread we are on
+    // the thread view, and reload() would reload that thread instead of fetching new emails.
+    await gmailPage.goto(inboxUrl, { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+    _firstGmailNav = false; // next iteration will reload (not goto) to get fresh inbox
     await new Promise(r => setTimeout(r, POLL_MS));
   }
 
