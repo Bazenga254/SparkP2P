@@ -96,6 +96,20 @@ function removePaidOrder(orderNum) {
   } catch (e) {}
 }
 
+// ── Persistent buy-order state — greeting and approval tracking survive restarts ──
+const buyOrderStateFile = path.join(logDir, 'buy_order_state.json');
+function _loadBuyOrderState() {
+  try { return JSON.parse(fs.readFileSync(buyOrderStateFile, 'utf8')); } catch(e) { return { greetingSent: [], approvalRequested: [] }; }
+}
+function _saveBuyOrderState() {
+  try {
+    fs.writeFileSync(buyOrderStateFile, JSON.stringify({
+      greetingSent: [...buyGreetingSentOrders],
+      approvalRequested: [...buyApprovalRequestedOrders],
+    }, null, 2));
+  } catch(e) { console.error('[SparkP2P] Could not save buy order state:', e.message); }
+}
+
 // ── Persistent reported-completed-buy store — prevents duplicate SMS across restarts ──
 const reportedCompletedFile = path.join(logDir, 'reported_completed.json');
 function loadReportedCompleted() {
@@ -207,6 +221,13 @@ const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent K
     }
   });
   if (_nums.length) console.log(`[SparkP2P] Restored ${_nums.length} paid order(s) from disk: ${_nums.join(', ')}`);
+}
+// Restore buy order state (greeting sent + approval requested) from disk on startup
+{
+  const _bos = _loadBuyOrderState();
+  (_bos.greetingSent || []).forEach(n => buyGreetingSentOrders.add(n));
+  (_bos.approvalRequested || []).forEach(n => buyApprovalRequestedOrders.add(n));
+  if (_bos.greetingSent?.length) console.log(`[SparkP2P] Restored buy greeting state for ${_bos.greetingSent.length} order(s)`);
 }
 // Restore completed buy orders from disk — prevents duplicate SMS when bot restarts
 {
@@ -4373,7 +4394,7 @@ Method selection rules:
               buyApproved = true;
               console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram not linked, auto-approving payment`);
             } else {
-              buyApprovalRequestedOrders.add(order.orderNumber);
+              buyApprovalRequestedOrders.add(order.orderNumber); _saveBuyOrderState();
               sendBotLog('info', `Buy order ${order.orderNumber} — waiting for Telegram payment approval`);
               console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram approval sent immediately, bot on order page`);
             }
@@ -4416,7 +4437,7 @@ Method selection rules:
 
           // ── Step 2: Send greeting NOW (after approval, not before) ──
           if (!buyGreetingSentOrders.has(order.orderNumber)) {
-            buyGreetingSentOrders.add(order.orderNumber);
+            buyGreetingSentOrders.add(order.orderNumber); _saveBuyOrderState();
             let greetMsg = '';
             if (method === 'mpesa') {
               greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! 🙏`;
@@ -8171,7 +8192,7 @@ Method selection rules:
       const isSplitNeeded = !isBankTransfer && Math.floor(paymentDetails.amount) > MPESA_MAX;
 
       if (!buyGreetingSentOrders.has(order_number)) {
-        buyGreetingSentOrders.add(order_number);
+        buyGreetingSentOrders.add(order_number); _saveBuyOrderState();
         const method = (paymentDetails.method || 'mpesa').toLowerCase();
         let greetMsg = '';
         const firstName = paymentDetails.name.split(' ')[0];
@@ -8241,7 +8262,7 @@ Method selection rules:
               buyApproved2 = true;
               console.log(`[SparkP2P] Buy ${order_number} — Telegram not linked, auto-approving payment`);
             } else {
-              buyApprovalRequestedOrders.add(order_number);
+              buyApprovalRequestedOrders.add(order_number); _saveBuyOrderState();
               sendBotLog('info', `Buy order ${order_number} — waiting for Telegram payment approval`);
               return; // come back next poll cycle
             }

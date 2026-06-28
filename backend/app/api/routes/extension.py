@@ -2952,11 +2952,17 @@ async def choice_pay(
         )
 
     remark = data.remark or f"SparkP2P BUY {data.order_number[-12:]}"
+    # M-Pesa B2C requires payeeBankCode="M-PESA"; without it Choice Bank treats the
+    # transfer as internal and returns success without actually routing via M-Pesa.
+    effective_bank_code = data.bank_code
+    if not effective_bank_code and data.payee_account_id.isdigit() and len(data.payee_account_id) == 9:
+        effective_bank_code = "M-PESA"
+    logger.info(f"[ChoiceBank] BUY payment: KES {data.amount} → {data.payee_account_id} ({effective_bank_code or 'internal'})")
     result = await transfer(
         payer_account_id=trader.choice_account_id,
         payee_account_id=data.payee_account_id,
         amount=data.amount,
-        payee_bank_code=data.bank_code,
+        payee_bank_code=effective_bank_code,
         payee_name=data.payee_name,
         remark=remark,
     )
