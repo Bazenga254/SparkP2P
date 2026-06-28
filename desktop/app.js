@@ -5309,11 +5309,40 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
   const searchUrl = 'https://mail.google.com/mail/u/0/#search/from%3Anotify%40choice-bank.co+subject%3A%22Transaction+OTP%22+newer_than%3A1h';
   const fallbackUrl = 'https://mail.google.com/mail/u/0/#search/subject%3A%22Transaction+OTP%22+newer_than%3A1h';
 
-  console.log(`[SparkP2P] Waiting for Choice Bank OTP email newer than ${new Date(sentAfterMs).toLocaleTimeString()} (10-35s expected)...`);
+  console.log(`[SparkP2P] Choice OTP: waiting 25s for Choice Bank email to arrive (payment initiated at ${new Date(sentAfterMs).toLocaleTimeString()})...`);
+  await new Promise(r => setTimeout(r, 25000)); // Choice Bank emails take 10-35s
 
-  const POLL_MS = 5000;
-  const MAX_WAIT = 90000; // 90s — covers delayed Choice Bank emails
+  const POLL_MS = 8000;
+  const MAX_WAIT = 120000; // 2 minutes total (25s already spent above)
   const deadline = Date.now() + MAX_WAIT;
+
+  // Helper: parse Gmail's various time formats into a ms timestamp.
+  // Gmail shows: full tooltip "Sun, Jun 29, 2026, 12:03 AM (11 minutes ago)"
+  //              or just "HH:MM" for today in the list cell innerText
+  function _parseGmailTime(rawText) {
+    if (!rawText) return null;
+    // Strip trailing relative portion "(X minutes ago)"
+    const stripped = rawText.replace(/\s*\(.*?\)\s*$/, '').trim();
+    // Try direct parse first (works for full date strings)
+    let t = new Date(stripped).getTime();
+    if (!isNaN(t)) return t;
+    // Fallback: HH:MM or H:MM format means it's from today
+    const hhmm = stripped.match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
+    if (hhmm) {
+      const now = new Date();
+      let h = parseInt(hhmm[1], 10);
+      const m = parseInt(hhmm[2], 10);
+      const ampm = (hhmm[3] || '').toUpperCase();
+      if (ampm === 'PM' && h < 12) h += 12;
+      if (ampm === 'AM' && h === 12) h = 0;
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0, 0);
+      // If the parsed time is in the future, assume it was yesterday
+      if (d.getTime() > Date.now() + 60000) d.setDate(d.getDate() - 1);
+      t = d.getTime();
+      if (!isNaN(t)) return t;
+    }
+    return null;
+  }
 
   while (Date.now() < deadline) {
     try {
@@ -5324,11 +5353,10 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
       let emails = await gmailPage.evaluate(() => {
         const rows = document.querySelectorAll('tr.zA');
         return Array.from(rows).map((row, idx) => {
-          const timeEl = row.querySelector('td.xW span, [data-tooltip], .xW');
-          return {
-            idx,
-            timeText: timeEl?.getAttribute('data-tooltip') || timeEl?.title || timeEl?.innerText || '',
-          };
+          // Gmail stores full datetime in title of the time span
+          const timeSpan = row.querySelector('td.xW span');
+          const timeText = timeSpan?.title || timeSpan?.getAttribute('data-tooltip') || timeSpan?.innerText || '';
+          return { idx, timeText };
         });
       });
 
@@ -5339,46 +5367,41 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
         emails = await gmailPage.evaluate(() => {
           const rows = document.querySelectorAll('tr.zA');
           return Array.from(rows).map((row, idx) => {
-            const timeEl = row.querySelector('td.xW span, [data-tooltip], .xW');
-            return { idx, timeText: timeEl?.getAttribute('data-tooltip') || timeEl?.title || timeEl?.innerText || '' };
+            const timeSpan = row.querySelector('td.xW span');
+            const timeText = timeSpan?.title || timeSpan?.getAttribute('data-tooltip') || timeSpan?.innerText || '';
+            return { idx, timeText };
           });
         });
       }
 
       if (emails.length === 0) {
         const waitedSec = Math.round((Date.now() - (deadline - MAX_WAIT)) / 1000);
-        console.log(`[SparkP2P] Choice OTP: no email yet (${waitedSec}s elapsed) — retrying in 5s...`);
+        console.log(`[SparkP2P] Choice OTP: no email found in search (${waitedSec}s) — retrying in 8s...`);
         await new Promise(r => setTimeout(r, POLL_MS));
         continue;
       }
 
-      // Find the most recent email that arrived AFTER the payment was initiated.
-      // Gmail email list tooltip: "Sun, Jun 29, 2026, 12:03 AM (2 minutes ago)"
+      // Find the NEWEST email that arrived AFTER sentAfterMs.
+      // Never accept an email we can't verify is newer — wait instead.
       let targetIdx = null;
       for (const email of emails) {
-        let emailTime = null;
-        if (email.timeText) {
-          // Strip the relative part "(X minutes ago)" before parsing
-          const cleaned = email.timeText.replace(/\s*\(.*?\)\s*$/, '').trim();
-          try { emailTime = new Date(cleaned).getTime(); } catch (_) {}
-        }
-        if (emailTime && !isNaN(emailTime)) {
-          if (emailTime >= sentAfterMs - 5000) { // 5s buffer for clock skew
-            console.log(`[SparkP2P] Choice OTP: found qualifying email (sent ${new Date(emailTime).toLocaleTimeString()})`);
+        const emailTime = _parseGmailTime(email.timeText);
+        if (emailTime !== null) {
+          if (emailTime >= sentAfterMs - 10000) { // 10s buffer for clock skew
+            console.log(`[SparkP2P] Choice OTP: found qualifying email sent at ${new Date(emailTime).toLocaleTimeString()}`);
             targetIdx = email.idx;
             break;
           } else {
-            console.log(`[SparkP2P] Choice OTP: email at ${new Date(emailTime).toLocaleTimeString()} is OLDER than payment start ${new Date(sentAfterMs).toLocaleTimeString()} — skipping stale OTP`);
+            console.log(`[SparkP2P] Choice OTP: email at ${new Date(emailTime).toLocaleTimeString()} predates payment (${new Date(sentAfterMs).toLocaleTimeString()}) — skipping`);
           }
         } else {
-          // Can't parse timestamp — accept the first email (only if no other emails qualify)
-          if (targetIdx === null) targetIdx = email.idx;
+          console.log(`[SparkP2P] Choice OTP: could not parse email time "${email.timeText}" — skipping to be safe`);
         }
       }
 
       if (targetIdx === null) {
         const waitedSec = Math.round((Date.now() - (deadline - MAX_WAIT)) / 1000);
-        console.log(`[SparkP2P] Choice OTP: no NEW email yet (${waitedSec}s elapsed) — waiting for fresh OTP...`);
+        console.log(`[SparkP2P] Choice OTP: no new OTP email yet (${waitedSec}s elapsed) — retrying in 8s...`);
         await new Promise(r => setTimeout(r, POLL_MS));
         continue;
       }
