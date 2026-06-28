@@ -613,7 +613,7 @@ export default function Landing() {
               </div>
               <h3>Windows</h3>
               <p>Windows 10 / 11 &nbsp;·&nbsp; 64-bit</p>
-              <a href="/api/download/latest" className="land-download-btn">
+              <a href="/api/download/latest" download="SparkP2P-Setup.exe" className="land-download-btn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                 </svg>
@@ -628,8 +628,8 @@ export default function Landing() {
                 </svg>
               </div>
               <h3>Android</h3>
-              <p>Phone &amp; tablet &nbsp;·&nbsp; APK</p>
-              <a href="/api/download/android" className="land-download-btn">
+              <p>Phone &amp; tablet &nbsp;·&nbsp; APK sideload</p>
+              <a href="/api/download/android" download="SparkP2P.apk" className="land-download-btn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                 </svg>
