@@ -1623,7 +1623,24 @@ async function unlockChromeBrowser() {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 async function connectBinance() {
-  if (connectingBinance || pollerRunning) return; // Already connecting or running
+  // If bot is already running, Re-connect just navigates to P2P orders page
+  if (pollerRunning) {
+    try {
+      const _bp = await getPage();
+      if (_bp) {
+        const _cur = _bp.url();
+        if (!_cur.includes('fiatOrder')) {
+          await _bp.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+          console.log('[SparkP2P] Re-connect: navigated to P2P orders page');
+        } else {
+          await _bp.reload({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+          console.log('[SparkP2P] Re-connect: reloaded P2P orders page');
+        }
+      }
+    } catch(_) {}
+    return;
+  }
+  if (connectingBinance) return;
   connectingBinance = true;
 
   // Always do a clean Chrome relaunch — this restores saved session cookies just like
@@ -5405,12 +5422,13 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
       for (const email of emails) {
         const emailTime = _parseGmailTime(email.timeText);
         if (emailTime !== null) {
-          if (emailTime >= sentAfterMs - 10000) { // 10s buffer for clock skew
+          if (emailTime >= sentAfterMs - 90000) { // 90s buffer: Gmail shows minute precision only,
+            // and sentAt is recorded BEFORE the HTTP call so the email always arrives after sentAt
             console.log(`[SparkP2P] Choice OTP: found qualifying email sent at ${new Date(emailTime).toLocaleTimeString()}`);
             targetIdx = email.idx;
             break;
           } else {
-            console.log(`[SparkP2P] Choice OTP: email at ${new Date(emailTime).toLocaleTimeString()} predates payment (${new Date(sentAfterMs).toLocaleTimeString()}) — skipping`);
+            console.log(`[SparkP2P] Choice OTP: email at ${new Date(emailTime).toLocaleTimeString()} is more than 90s before payment start (${new Date(sentAfterMs).toLocaleTimeString()}) — skipping stale OTP`);
           }
         } else {
           console.log(`[SparkP2P] Choice OTP: could not parse email time "${email.timeText}" — skipping to be safe`);
@@ -8921,6 +8939,10 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, name, amou
   const amountRounded = Math.round(parseFloat(amount) * 100) / 100;
   console.log('[SparkP2P] Choice Bank payment: KSh ' + amountRounded + ' -> ' + name + ' (' + payeeId + ')');
 
+  // Record time BEFORE the HTTP call — the backend calls send_otp() inside /ext/choice-pay,
+  // so the OTP email is sent before this timestamp, not after.
+  const sentAt = Date.now();
+
   const res = await fetch(API_BASE + '/ext/choice-pay', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
@@ -8944,7 +8966,6 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, name, amou
   // OTP required — read the emailed 4-digit code via IMAP then confirm
   if (data.status === 'otp_required') {
     console.log('[SparkP2P] Choice Bank OTP required for transfer applicationId=' + data.application_id);
-    const sentAt = Date.now();
     const otp = await readChoiceOTPviaIMAP(sentAt);
     if (!otp) throw new Error('Choice Bank OTP email did not arrive within 8 minutes. Transfer cancelled.');
 
