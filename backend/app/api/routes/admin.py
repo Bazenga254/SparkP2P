@@ -2331,15 +2331,11 @@ async def revenue_breakdown(
 # ── Subscription Revenue ───────────────────────────────────────────────────────
 
 async def _compute_outbound_breakdown(db, start=None, end=None):
-    """Per-product outbound revenue: for each product (B2C/B2B/PesaLink/Airtel/RTGS) sum txn count,
-    volume, gross fee charged, and OUR markup (revenue Choice Bank remits monthly)."""
-    from app.services.outbound_fees import categorize, product_markup, PRODUCTS
+    """Per-product outbound revenue: count, volume, CB fee, our markup, and total charged."""
+    from app.services.outbound_fees import categorize, product_markup, product_cb_fee, PRODUCTS
     from app.models.order import OrderSide as _OS
-    prods = {k: {"count": 0, "volume": 0.0, "gross": 0.0, "markup": 0.0} for k in PRODUCTS}
+    prods = {k: {"count": 0, "volume": 0.0, "cb_fee": 0.0, "markup": 0.0} for k in PRODUCTS}
 
-    # Count every real outbound transfer (not failed); the markup is computed from the published
-    # tariff by product + amount — Choice Bank withholds it per their schedule regardless of whether
-    # we stored a fee on the row. gross uses the recorded fee where present (else 0, informational).
     pw = [Payment.direction == PaymentDirection.OUTBOUND, Payment.status != PaymentStatus.FAILED]
     if start: pw.append(Payment.created_at >= start)
     if end:   pw.append(Payment.created_at < end)
@@ -2347,11 +2343,11 @@ async def _compute_outbound_breakdown(db, start=None, end=None):
         select(Payment.amount, Payment.fee, Payment.transaction_type, Payment.destination_type).where(*pw)
     )).all():
         prod = categorize(p.transaction_type, p.destination_type)
-        if prod not in prods:   # RTGS/EFT/SWIFT carry no markup — excluded
+        if prod not in prods:
             continue
-        amt = float(p.amount or 0)
+        amt = abs(float(p.amount or 0))
         d = prods[prod]; d["count"] += 1; d["volume"] += amt
-        d["gross"] += float(p.fee or 0); d["markup"] += product_markup(prod, amt)
+        d["cb_fee"] += product_cb_fee(prod, amt); d["markup"] += product_markup(prod, amt)
 
     ow = [Order.side == _OS.BUY, Order.choice_fee > 0]
     if start: ow.append(Order.created_at >= start)
@@ -2362,24 +2358,19 @@ async def _compute_outbound_breakdown(db, start=None, end=None):
         prod = categorize("", "", o.seller_payment_method)
         if prod not in prods:
             continue
-        amt = float(o.fiat_amount or 0)
+        amt = abs(float(o.fiat_amount or 0))
         d = prods[prod]; d["count"] += 1; d["volume"] += amt
-        d["gross"] += float(o.choice_fee or 0); d["markup"] += product_markup(prod, amt)
+        d["cb_fee"] += product_cb_fee(prod, amt); d["markup"] += product_markup(prod, amt)
 
-    rows = []; tot = {"count": 0, "volume": 0.0, "gross": 0.0, "markup": 0.0}
+    rows = []; tot = {"count": 0, "volume": 0.0, "cb_fee": 0.0, "markup": 0.0}
     for k, label in PRODUCTS.items():
         d = prods[k]
+        cb = round(d["cb_fee"], 2); mk = round(d["markup"], 2)
         rows.append({"key": k, "label": label, "count": d["count"], "volume": round(d["volume"], 2),
-                     # choice_fee = the ACTUAL fee Choice Bank charged (captured from each transaction);
-                     # markup = OUR cut (what Choice remits once they apply our pricing). Separate now
-                     # because Choice has not implemented our tariff yet.
-                     "choice_fee": round(d["gross"], 2), "gross": round(d["gross"], 2),
-                     "choice_keeps": round(d["gross"] - d["markup"], 2),
-                     "markup": round(d["markup"], 2)})
-        for f in tot: tot[f] += d[f]
+                     "cb_fee": cb, "markup": mk, "total_fee": round(cb + mk, 2)})
+        for f in ("count", "volume", "cb_fee", "markup"): tot[f] += d[f]
     tot = {f: round(v, 2) for f, v in tot.items()}
-    tot["choice_fee"]   = tot["gross"]
-    tot["choice_keeps"] = round(tot["gross"] - tot["markup"], 2)
+    tot["total_fee"] = round(tot["cb_fee"] + tot["markup"], 2)
     return {"products": rows, "total": tot}
 
 

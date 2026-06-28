@@ -360,7 +360,7 @@ export default function Admin() {
 
   // Revenue breakdown
   const [revBreakdown, setRevBreakdown] = useState(null);
-  const [revPeriod, setRevPeriod] = useState('all');
+  const [revPeriod, setRevPeriod] = useState('today');
   const [revPlan, setRevPlan] = useState('all');
   const [revPage, setRevPage] = useState(1);
   const [revLoading, setRevLoading] = useState(false);
@@ -966,7 +966,7 @@ export default function Admin() {
     if (activeTab === 'paybill') { loadSubData('plans', 'all', 1); }
     if (activeTab === 'survey') { loadSurveyResponses(); }
     if (activeTab === 'kyc') { adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {}); }
-    if (activeTab === 'expenses') { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); loadRevenueBreakdown('all', 'all', 1); setExpSubView('revenue'); }
+    if (activeTab === 'expenses') { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); loadRevenueBreakdown('today', 'all', 1); setExpSubView('revenue'); }
     if (activeTab === 'settings') { loadEmployees(); }
     if (activeTab === 'affiliates') { loadAffiliates(); }
   }, [activeTab]);
@@ -4660,7 +4660,7 @@ export default function Admin() {
               {/* Period + Plan filters */}
                 <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
                   <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                    {[['all','All Time'], ['month','This Month'], ['week','This Week'], ['today','Today']].map(([val, label]) => (
+                    {[['today','Today'], ['week','This Week'], ['month','This Month'], ['all','All Time']].map(([val, label]) => (
                       <button key={val} onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1); }}
                         style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
                           background: revPeriod === val ? '#f59e0b' : 'transparent', color: revPeriod === val ? '#000' : '#9ca3af' }}>
@@ -4702,7 +4702,7 @@ export default function Admin() {
                 {/* Per-product outbound revenue breakdown + Choice Bank invoice */}
                 <div className="adm-card" style={{ marginBottom: 16, padding: 0, overflow: 'hidden' }}>
                   <div className="adm-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h3>Revenue by Product (Our Markup)</h3>
+                    <h3>Revenue by Product</h3>
                     <span style={{ fontSize: 11, color: '#6b7280' }}>{obBreakdown?.label || ''}</span>
                   </div>
                   <table className="adm-table" style={{ width: '100%', fontSize: 13 }}>
@@ -4711,8 +4711,9 @@ export default function Admin() {
                         <th style={{ padding: '8px 14px' }}>Product / Channel</th>
                         <th style={{ padding: '8px 14px', textAlign: 'right' }}>Transactions</th>
                         <th style={{ padding: '8px 14px', textAlign: 'right' }}>Volume</th>
-                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Choice fee (actual)</th>
-                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Our markup</th>
+                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Choice Bank charges</th>
+                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Our markup (Spark AI)</th>
+                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Total charged</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -4721,16 +4722,18 @@ export default function Admin() {
                           <td style={{ padding: '9px 14px', color: '#e5e7eb', fontWeight: 600 }}>{p.label}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{p.count.toLocaleString()}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{fmtKES(p.volume)}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{fmtKES(p.choice_fee)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{fmtKES(p.cb_fee)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', color: '#3b82f6', fontWeight: 700 }}>{fmtKES(p.markup)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#10b981', fontWeight: 700 }}>{fmtKES(p.total_fee)}</td>
                         </tr>
                       ))}
                       <tr style={{ borderTop: '2px solid #2a3142', background: 'rgba(59,130,246,0.06)' }}>
                         <td style={{ padding: '10px 14px', fontWeight: 800, color: '#fff' }}>Total</td>
                         <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{(obBreakdown?.total?.count ?? 0).toLocaleString()}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{fmtKES(obBreakdown?.total?.volume ?? 0)}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{fmtKES(obBreakdown?.total?.choice_fee ?? 0)}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{fmtKES(obBreakdown?.total?.cb_fee ?? 0)}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'right', color: '#3b82f6', fontWeight: 800 }}>{fmtKES(obBreakdown?.total?.markup ?? 0)}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#10b981', fontWeight: 800 }}>{fmtKES(obBreakdown?.total?.total_fee ?? 0)}</td>
                       </tr>
                     </tbody>
                   </table>
