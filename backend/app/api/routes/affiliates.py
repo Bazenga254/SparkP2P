@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-COMMISSION_RATE = 0.10          # 10% of order fee goes to affiliate
+COMMISSION_RATE = 0.20          # 20% of subscription price goes to affiliate
 MIN_PAYOUT_BALANCE = 5000.0    # KES — minimum to trigger Friday payout
 
 
@@ -350,21 +350,21 @@ async def admin_affiliate_stats(
     }
 
 
-# ── Commission crediting (called by settlement engine) ────────────────────────
+# ── Commission crediting (called by billing engine on subscription activation) ─
 
 async def credit_affiliate_commission(
     db: AsyncSession,
-    order_id: int,
     trader_id: int,
     referred_by_code: Optional[str],
-    platform_fee: float,
-    settlement_fee: float,
+    subscription_price: float,
+    plan_label: str = "",
 ):
-    """Credit 10% of total order fees to the referring affiliate. Safe to call even if no referrer."""
+    """Credit 20% of subscription price to the referring affiliate.
+    Called when a referred trader activates or renews a paid plan.
+    Safe to call even if there is no referrer."""
     if not referred_by_code:
         return
-    total_fee = platform_fee + settlement_fee
-    if total_fee <= 0:
+    if subscription_price <= 0:
         return
 
     aff_result = await db.execute(
@@ -377,14 +377,14 @@ async def credit_affiliate_commission(
     if not aff:
         return
 
-    commission = round(total_fee * COMMISSION_RATE, 2)
+    commission = round(subscription_price * COMMISSION_RATE, 2)
     week_start = _week_start()
 
     earning = AffiliateEarning(
         affiliate_id=aff.id,
         referred_trader_id=trader_id,
-        order_id=order_id,
-        order_fee=round(total_fee, 2),
+        order_id=None,
+        order_fee=round(subscription_price, 2),
         commission=commission,
         week_start=week_start,
     )
@@ -395,7 +395,7 @@ async def credit_affiliate_commission(
 
     logger.info(
         f"[Affiliate] Credited KES {commission} to affiliate {aff.referral_code} "
-        f"for order {order_id} (fee={total_fee})"
+        f"for {plan_label} subscription by trader {trader_id} (price={subscription_price})"
     )
 
 

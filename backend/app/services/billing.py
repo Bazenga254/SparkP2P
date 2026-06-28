@@ -154,6 +154,19 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
                           balance_after=trader.subscription_balance)
     await db.commit()
 
+    # Credit 20% of the subscription price to the referring affiliate (if any)
+    try:
+        from app.api.routes.affiliates import credit_affiliate_commission
+        await credit_affiliate_commission(
+            db, trader_id,
+            referred_by_code=trader.referred_by_code,
+            subscription_price=price,
+            plan_label=plan_label(plan),
+        )
+        await db.commit()
+    except Exception as _e:
+        logger.warning(f"[Billing] affiliate commission failed for trader {trader_id}: {_e}")
+
     try:
         from app.services.sms import sms_subscription_renewed
         exp_str = new_exp.astimezone(timezone(timedelta(hours=3))).strftime("%d %b %Y")
