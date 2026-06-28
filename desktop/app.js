@@ -7,13 +7,13 @@ const puppeteer = require('puppeteer-core');
 const aiScanner = require('./ai-scanner');
 let autoUpdater = null; // lazy-loaded inside checkForUpdates() after app is ready
 
-// â”€â”€ Local control server on port 9223 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Lets the Settings panel pause/resume via fetch() â€” works even in packaged app
+// â"€â"€ Local control server on port 9223 â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// Lets the Settings panel pause/resume via fetch() â€" works even in packaged app
 http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
   if (req.url === '/activity' && req.method === 'POST') {
-    // Chrome page detected mouse/keyboard activity â€” reset the pause inactivity timer
+    // Chrome page detected mouse/keyboard activity â€" reset the pause inactivity timer
     resetPauseTimerOnActivity();
     res.end(JSON.stringify({ ok: true }));
     return;
@@ -26,7 +26,7 @@ http.createServer(async (req, res) => {
     // Attach activity listeners to all open Chrome pages so mouse movement resets the timer
     const pages = browser ? await browser.pages().catch(() => []) : [];
     for (const p of pages) attachActivityListenerToPage(p);
-    console.log('[SparkP2P] Bot PAUSED â€” Chrome unlocked for manual use, auto-resume in 3 minutes');
+    console.log('[SparkP2P] Bot PAUSED â€" Chrome unlocked for manual use, auto-resume in 3 minutes');
     sendBotLog('warning', 'Bot paused — Chrome unlocked for manual use');
     res.end(JSON.stringify({ ok: true, paused: true }));
   } else if (req.url === '/resume') {
@@ -34,7 +34,7 @@ http.createServer(async (req, res) => {
     clearPauseInactivityTimer();
     await lockChromeBrowser().catch(() => {}); // Bot takes Chrome back
     mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed"))').catch(() => {});
-    console.log('[SparkP2P] Bot RESUMED â€” Chrome locked back to bot');
+    console.log('[SparkP2P] Bot RESUMED â€" Chrome locked back to bot');
     sendBotLog('success', 'Bot resumed — Chrome locked back to bot');
     res.end(JSON.stringify({ ok: true, paused: false }));
   } else if (req.url === '/status') {
@@ -52,8 +52,8 @@ http.createServer(async (req, res) => {
   console.log('[SparkP2P] Local control server on http://127.0.0.1:9223');
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    // Another instance is already running â€” kill it and retry after 2s
-    console.log('[SparkP2P] Port 9223 in use â€” killing old instance and retrying...');
+    // Another instance is already running â€" kill it and retry after 2s
+    console.log('[SparkP2P] Port 9223 in use â€" killing old instance and retrying...');
     const { exec } = require('child_process');
     const killCmd = process.platform === 'win32'
       ? 'for /f "tokens=5" %a in (\'netstat -aon ^| findstr :9223\') do taskkill /F /PID %a'
@@ -64,7 +64,7 @@ http.createServer(async (req, res) => {
   }
 });
 
-// Logging â€” use app data folder when packaged, __dirname when dev
+// Logging â€" use app data folder when packaged, __dirname when dev
 const logDir = app.isPackaged ? path.join(process.env.APPDATA || process.env.HOME, 'sparkp2p') : __dirname;
 try { fs.mkdirSync(logDir, { recursive: true }); } catch (e) {}
 const logFile = path.join(logDir, 'sparkp2p.log');
@@ -76,7 +76,7 @@ console.error = (...a) => { fs.appendFileSync(logFile, `[${new Date().toISOStrin
 const API_BASE = 'https://sparkp2p.com/api';
 const DASHBOARD_URL = 'https://sparkp2p.com/dashboard';
 
-// â”€â”€ Persistent paid-orders store â€” survives bot restarts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Persistent paid-orders store â€" survives bot restarts â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const paidOrdersFile = path.join(logDir, 'paid_orders.json');
 function loadPaidOrders() {
   try { return JSON.parse(fs.readFileSync(paidOrdersFile, 'utf8')); } catch (e) { return {}; }
@@ -110,8 +110,8 @@ function saveReportedCompleted(numSet) {
 }
 
 const CDP_PORT = 9222;
-const POLL_INTERVAL_ACTIVE = 60000; // 1 minute â€” cycle through all active orders
-const POLL_INTERVAL_IDLE   = 15000; // 15 seconds â€” no orders, scan faster
+const POLL_INTERVAL_ACTIVE = 60000; // 1 minute â€" cycle through all active orders
+const POLL_INTERVAL_IDLE   = 15000; // 15 seconds â€" no orders, scan faster
 
 let mainWindow = null;
 let tray = null;
@@ -121,13 +121,13 @@ let browser = null;
 let pollerRunning = false;
 let pollTimer = null;
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
-let traderPin = null;    // Binance fund/trading password â€” stored in memory only
-let totpSecret = null;   // Google Authenticator base32 secret â€” stored in memory only
-let traderAccountNumber = null; // e.g. "P2PT0001" â€” used in paybill payment replies
+let traderPin = null;    // Binance fund/trading password â€" stored in memory only
+let totpSecret = null;   // Google Authenticator base32 secret â€" stored in memory only
+let traderAccountNumber = null; // e.g. "P2PT0001" â€" used in paybill payment replies
 let traderChoiceAccountNumber = null; // Choice Bank account number (e.g. CMB00001) — shown to buyers for PesaLink
 let traderChoiceAccountId = null;     // Choice Bank internal account ID — used as payer for BUY transfers
-let traderPhoneNumber = null;  // Trader's own phone number â€” included in buy greeting message
-let traderImAccount = null;    // Trader's I&M settlement account number â€” used to select debit account
+let traderPhoneNumber = null;  // Trader's own phone number â€" included in buy greeting message
+let traderImAccount = null;    // Trader's I&M settlement account number â€" used to select debit account
 const DEV_UNLOCK = false; // true = no CSS overlay on browser tabs
 const DEV_FORCE_NAME_MISMATCH = false; // true = simulate name mismatch (TEST ONLY)
 const BOT_DISABLED = false; // set to true to disable automation
@@ -143,14 +143,14 @@ let overlayPositionTimer = null; // Interval that keeps overlay synced to Chrome
 let overlayActive = false;      // True only while overlay should be visible — guards against async race re-show
 let _criClient = null;           // Persistent chrome-remote-interface connection for window bounds
 let chromeProcess = null; // Child process reference for killing Chrome on quit
-let chromeGeneration = 0; // Incremented each launch â€” old exit handlers check this to avoid nuking new connections
+let chromeGeneration = 0; // Incremented each launch â€" old exit handlers check this to avoid nuking new connections
 const codeFallbackAskedOrders = new Set(); // Order numbers we've already asked buyer to type M-Pesa code (avoid spamming)
-const svAuthDoneOrders = new Set(); // Orders where Auth App (TOTP) step completed â€” next SV targets Email
-const verifiedOrders = new Map(); // orderNumber → { code, totalPrice } â€” verified on first visit, released on second visit
-const partialPayments = {}; // orderNumber → [{code, amount}] â€” accumulates payments across polls for consolidation
+const svAuthDoneOrders = new Set(); // Orders where Auth App (TOTP) step completed â€" next SV targets Email
+const verifiedOrders = new Map(); // orderNumber → { code, totalPrice } â€" verified on first visit, released on second visit
+const partialPayments = {}; // orderNumber → [{code, amount}] â€" accumulates payments across polls for consolidation
 const orderChatHistory = new Map(); // orderNumber → [{role, content}] — per-order AI conversation history
 const _chatMonitorExposed = new WeakSet(); // Puppeteer page objects that have had exposeFunction registered
-const lastDeficitSent = {}; // orderNumber → deficit amount last messaged â€” prevents spamming same deficit twice
+const lastDeficitSent = {}; // orderNumber → deficit amount last messaged â€" prevents spamming same deficit twice
 const sellApprovalRequestedOrders = new Set(); // sell orderNums where Telegram approval request was sent
 const sellApprovedOrders = new Set();           // sell orderNums approved by merchant via Telegram
 const sellRejectedOrders = new Set();           // sell orderNums rejected or timed-out by merchant
@@ -178,14 +178,14 @@ let loggedOutStrikes = 0;      // Consecutive failed isLoggedIn() checks before 
 let activeOrderNumber = null;     // Sell order currently being released (guards auto-cancel protection)
 let activeOrderFiatAmount = 0;    // KES amount of the sell order being released
 let activeBuyOrderNumber = null;  // Last buy order processed (kept for compat)
-// Per-order tracking dictionaries â€” supports multiple concurrent orders
-const orderFirstSeenAt = {};        // { orderNum: timestamp } â€” when we first detected this order
+// Per-order tracking dictionaries â€" supports multiple concurrent orders
+const orderFirstSeenAt = {};        // { orderNum: timestamp } â€" when we first detected this order
 const orderReminderSent = new Set(); // sell orderNums where we already sent the 1-min "Hi, are you there?" reminder
 const orderLastBotReplyAt = {};      // orderNum → timestamp (ms) of last bot reply in awaiting state (for buyer-question detection)
-const buyPaymentSentAt = {};        // { orderNum: timestamp } â€” when I&M payment was sent for this buy order
+const buyPaymentSentAt = {};        // { orderNum: timestamp } â€" when I&M payment was sent for this buy order
 const buyReminderSentOrders = new Set(); // buy orderNums where we sent the 10-min reminder to seller
-const buyOrderDetailsMap = {};       // { orderNum: { sellerName, amount, phone, method } } â€” for chat/dispute
-const imPaymentDoneMap = {};         // { orderNum: { screenshot, referenceId } } â€” I&M payment done, skip on retry
+const buyOrderDetailsMap = {};       // { orderNum: { sellerName, amount, phone, method } } â€" for chat/dispute
+const imPaymentDoneMap = {};         // { orderNum: { screenshot, referenceId } } â€" I&M payment done, skip on retry
 const imPaymentFailedOrders = new Set(); // orderNums where I&M payment failed all retries — skip until order clears
 const reportedCompletedBuyOrders = new Set();  // order numbers already sent as completed_buy_order_numbers — prevents duplicate SMS
 const reportedCompletedSellOrders = new Set(); // order numbers already sent as completed_sell_order_numbers — prevents duplicate SMS
@@ -214,9 +214,9 @@ const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent K
   _completedOnDisk.forEach(n => reportedCompletedBuyOrders.add(n));
   if (_completedOnDisk.length) console.log(`[SparkP2P] Restored ${_completedOnDisk.length} completed buy order(s) from disk (duplicate SMS guard)`);
 }
-let buyPaymentScreenshot = null;  // Base64 screenshot of I&M success â€” uploaded to Binance chat
-let gmailPage = null;          // Persistent Gmail tab â€” opened alongside Binance, kept alive
-let imPage = null;             // Persistent I&M Bank tab â€” new tab in the main Binance browser
+let buyPaymentScreenshot = null;  // Base64 screenshot of I&M success â€" uploaded to Binance chat
+let gmailPage = null;          // Persistent Gmail tab â€" opened alongside Binance, kept alive
+let imPage = null;             // Persistent I&M Bank tab â€" new tab in the main Binance browser
 let connectingIm = false;      // Prevents concurrent connectIm() calls
 let imWithdrawalRunning = false; // Prevents concurrent withdrawal executions
 let mpesaOrgPage = null;       // Persistent M-PESA org portal tab
@@ -252,7 +252,7 @@ function startPauseInactivityTimer() {
   clearPauseInactivityTimer();
   pauseInactivityTimer = setTimeout(async () => {
     if (!pauseNavigation) return; // already resumed
-    console.log('[SparkP2P] 3 minute pause elapsed â€” auto-resuming and locking all screens');
+    console.log('[SparkP2P] 3 minute pause elapsed â€" auto-resuming and locking all screens');
     pauseNavigation = false;
     await lockChromeBrowser().catch(() => {});
     mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed", { detail: { reason: "inactivity" } }))').catch(() => {});
@@ -286,7 +286,7 @@ function attachActivityListenerToPage(page) {
 }
 const SESSION_GRACE_MS = 30 * 60 * 1000; // 30 min grace period before re-login is allowed
 const LOGOUT_STRIKES_NEEDED = 3;          // Require 3 consecutive failures before declaring session lost
-// Load .env file for API keys â€” check app data folder and app directory
+// Load .env file for API keys â€" check app data folder and app directory
 try {
   const envPath = app.isPackaged
     ? path.join(process.env.APPDATA || process.env.HOME, 'sparkp2p', '.env')
@@ -304,7 +304,7 @@ let anthropicApiKey = process.env.ANTHROPIC_API_KEY || null;
 // Persist token to disk so it survives app restarts
 const TOKEN_FILE = path.join(app.getPath('userData'), 'session.json');
 
-// Persist Anthropic API key to disk â€” survives restarts without needing backend fetch
+// Persist Anthropic API key to disk â€" survives restarts without needing backend fetch
 const ANTHROPIC_KEY_FILE = path.join(app.getPath('userData'), 'anthropic_key.json');
 function saveAnthropicKey(key) {
   try { fs.writeFileSync(ANTHROPIC_KEY_FILE, JSON.stringify({ key }), 'utf8'); } catch (_) {}
@@ -317,8 +317,8 @@ function loadAnthropicKey() {
 }
 loadAnthropicKey(); // Load immediately on startup
 
-// â”€â”€ I&M Bank PIN â€” stored ONLY on this device using OS-level encryption â”€â”€
-// â”€â”€ Session cookie persistence for I&M and M-Pesa portals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ I&M Bank PIN â€" stored ONLY on this device using OS-level encryption â"€â"€
+// â"€â"€ Session cookie persistence for I&M and M-Pesa portals â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Saves session cookies to disk after login so reconnects don't require re-login
 const IM_COOKIES_FILE = path.join(app.getPath('userData'), 'im_session.json');
 const MPESA_COOKIES_FILE = path.join(app.getPath('userData'), 'mpesa_session.json');
@@ -401,7 +401,7 @@ function clearGmailCredentials() {
   } catch (e) {}
 }
 
-// Load PIN on startup (after app is ready â€” safeStorage requires app to be ready)
+// Load PIN on startup (after app is ready â€" safeStorage requires app to be ready)
 app.whenReady().then(() => loadImPin());
 function saveTokenToDisk(t) {
   try { fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token: t, savedAt: Date.now() })); } catch (e) {}
@@ -510,7 +510,7 @@ async function startRelayAgent() {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// AUTO-UPDATE â€” checks GitHub Releases for new versions
+// AUTO-UPDATE â€" checks GitHub Releases for new versions
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 let updateReadyToInstall = false;
@@ -672,7 +672,7 @@ function createMainWindow() {
   };
 
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-    // -3 = ERR_ABORTED â€” fires on normal SPA navigations, ignore it
+    // -3 = ERR_ABORTED â€" fires on normal SPA navigations, ignore it
     // Also ignore failures on data: URLs (our own retry page)
     if (errorCode === -3) return;
     if (validatedURL && validatedURL.startsWith('data:')) return;
@@ -753,7 +753,7 @@ function createMainWindow() {
     }
   });
   mainWindow.webContents.on('did-navigate-in-page', captureToken);
-  // Also poll for token every 5 seconds (catches SPA login) â€” cleared on window destroy
+  // Also poll for token every 5 seconds (catches SPA login) â€" cleared on window destroy
   const captureInterval = setInterval(captureToken, 5000);
   mainWindow.once('destroyed', () => { clearInterval(captureInterval); clearInterval(lockCheckInterval); });
 
@@ -761,36 +761,36 @@ function createMainWindow() {
   function injectLockOverlay() {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     const script = '(function(){'
-      + 'if(document.getElementById(“sp2p-lock”))return;'
-      + 'var el=document.createElement(“div”);'
-      + 'el.id=”sp2p-lock”;'
-      + 'el.style.cssText=”position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(6,6,18,0.90);backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif”;'
-      + 'el.innerHTML=\'<div style=”background:#0f1623;border:1px solid #1f2937;border-radius:20px;padding:48px 40px;text-align:center;max-width:380px;width:90%;box-shadow:0 32px 80px rgba(0,0,0,0.85)”>'
-      + '<div style=”font-size:56px;margin-bottom:12px”>🔒</div>'
-      + '<div style=”font-size:22px;font-weight:700;color:#f59e0b;margin-bottom:8px”>Session Locked</div>'
-      + '<div style=”font-size:13px;color:#6b7280;margin-bottom:28px;line-height:1.6”>5 minutes of inactivity.<br>Enter your Google Authenticator<br>code to resume.</div>'
-      + '<input id=”sp2p-lock-code” type=”text” inputmode=”numeric” maxlength=”6” placeholder=”000000” autocomplete=”one-time-code” style=”width:100%;padding:16px;font-size:28px;letter-spacing:12px;text-align:center;background:#1f2937;border:2px solid #374151;border-radius:12px;color:#fff;outline:none;box-sizing:border-box;margin-bottom:8px”>'
-      + '<div id=”sp2p-lock-err” style=”min-height:20px;font-size:13px;color:#ef4444;margin-bottom:12px”></div>'
-      + '<button id=”sp2p-lock-btn” style=”width:100%;padding:14px;background:#f59e0b;color:#000;font-weight:700;font-size:16px;border:none;border-radius:12px;cursor:pointer”>Unlock</button>'
-      + '<div style=”margin-top:20px;font-size:11px;color:#2d3748”>SparkP2P — Automated P2P Trading</div>'
+      + 'if(document.getElementById("sp2p-lock"))return;'
+      + 'var el=document.createElement("div");'
+      + 'el.id="sp2p-lock";'
+      + 'el.style.cssText="position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(6,6,18,0.90);backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";'
+      + 'el.innerHTML=\'<div style="background:#0f1623;border:1px solid #1f2937;border-radius:20px;padding:48px 40px;text-align:center;max-width:380px;width:90%;box-shadow:0 32px 80px rgba(0,0,0,0.85)">'
+      + '<div style="font-size:56px;margin-bottom:12px">🔒</div>'
+      + '<div style="font-size:22px;font-weight:700;color:#f59e0b;margin-bottom:8px">Session Locked</div>'
+      + '<div style="font-size:13px;color:#6b7280;margin-bottom:28px;line-height:1.6">5 minutes of inactivity.<br>Enter your Google Authenticator<br>code to resume.</div>'
+      + '<input id="sp2p-lock-code" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" style="width:100%;padding:16px;font-size:28px;letter-spacing:12px;text-align:center;background:#1f2937;border:2px solid #374151;border-radius:12px;color:#fff;outline:none;box-sizing:border-box;margin-bottom:8px">'
+      + '<div id="sp2p-lock-err" style="min-height:20px;font-size:13px;color:#ef4444;margin-bottom:12px"></div>'
+      + '<button id="sp2p-lock-btn" style="width:100%;padding:14px;background:#f59e0b;color:#000;font-weight:700;font-size:16px;border:none;border-radius:12px;cursor:pointer">Unlock</button>'
+      + '<div style="margin-top:20px;font-size:11px;color:#2d3748">SparkP2P — Automated P2P Trading</div>'
       + '</div>\';'
       + 'document.body.appendChild(el);'
-      + 'var inp=document.getElementById(“sp2p-lock-code”);'
-      + 'var btn=document.getElementById(“sp2p-lock-btn”);'
-      + 'var err=document.getElementById(“sp2p-lock-err”);'
+      + 'var inp=document.getElementById("sp2p-lock-code");'
+      + 'var btn=document.getElementById("sp2p-lock-btn");'
+      + 'var err=document.getElementById("sp2p-lock-err");'
       + 'inp.focus();'
       + 'function tryUnlock(){'
-      +   'var code=inp.value.replace(/[^0-9]/g,””);'
-      +   'if(code.length!==6){err.textContent=”Enter the 6-digit code from Google Authenticator”;return;}'
-      +   'btn.disabled=true;btn.textContent=”Verifying…”;err.textContent=””;'
+      +   'var code=inp.value.replace(/[^0-9]/g,"");'
+      +   'if(code.length!==6){err.textContent="Enter the 6-digit code from Google Authenticator";return;}'
+      +   'btn.disabled=true;btn.textContent="Verifying…";err.textContent="";'
       +   'window.sparkp2p.verifyLockTotp(code).then(function(ok){'
       +     'if(ok){el.remove();}'
-      +     'else{err.textContent=”Incorrect code — try again”;inp.value=””;inp.focus();btn.disabled=false;btn.textContent=”Unlock”;}'
-      +   '}).catch(function(){err.textContent=”Verification error — try again”;btn.disabled=false;btn.textContent=”Unlock”;});'
+      +     'else{err.textContent="Incorrect code — try again";inp.value="";inp.focus();btn.disabled=false;btn.textContent="Unlock";}'
+      +   '}).catch(function(){err.textContent="Verification error — try again";btn.disabled=false;btn.textContent="Unlock";});'
       + '}'
-      + 'btn.addEventListener(“click”,tryUnlock);'
-      + 'inp.addEventListener(“keydown”,function(e){if(e.key===”Enter”)tryUnlock();});'
-      + 'inp.addEventListener(“input”,function(){inp.value=inp.value.replace(/[^0-9]/g,””);if(inp.value.length===6)tryUnlock();});'
+      + 'btn.addEventListener("click",tryUnlock);'
+      + 'inp.addEventListener("keydown",function(e){if(e.key==="Enter")tryUnlock();});'
+      + 'inp.addEventListener("input",function(){inp.value=inp.value.replace(/[^0-9]/g,"");if(inp.value.length===6)tryUnlock();});'
       + '})();';
     mainWindow.webContents.executeJavaScript(script).catch(() => {});
   }
@@ -807,7 +807,7 @@ function createMainWindow() {
     }
   }, 30000); // check every 30 seconds
 
-  // Intercept WebSocket remote browser â€” open Chrome instead (only if not already connecting/connected)
+  // Intercept WebSocket remote browser â€" open Chrome instead (only if not already connecting/connected)
   mainWindow.webContents.session.webRequest.onBeforeRequest(
     { urls: ['wss://sparkp2p.com/api/browser/login-stream*', 'ws://*/api/browser/login-stream*'] },
     (_, cb) => { cb({ cancel: true }); if (!connectingBinance && !pollerRunning) connectBinance(); }
@@ -837,7 +837,7 @@ function createTray() {
             scanningInProgress = false; // force-exit any running cycle immediately
             await unlockChromeBrowser();
             startPauseInactivityTimer();
-            console.log('[SparkP2P] Bot PAUSED via tray â€” Chrome unlocked for manual use');
+            console.log('[SparkP2P] Bot PAUSED via tray â€" Chrome unlocked for manual use');
           }
           tray.setContextMenu(buildTrayMenu());
         },
@@ -849,7 +849,7 @@ function createTray() {
     tray.setContextMenu(buildTrayMenu());
     tray.on('double-click', () => mainWindow.show());
 
-    // Global shortcut Ctrl+Shift+P â€” pause/resume bot from anywhere
+    // Global shortcut Ctrl+Shift+P â€" pause/resume bot from anywhere
     globalShortcut.register('CommandOrControl+Shift+P', async () => {
       if (pauseNavigation) {
         pauseNavigation = false;
@@ -861,7 +861,7 @@ function createTray() {
         scanningInProgress = false; // force-exit any running cycle immediately
         await unlockChromeBrowser();
         startPauseInactivityTimer();
-        console.log('[SparkP2P] Bot PAUSED via shortcut â€” Chrome unlocked for manual use');
+        console.log('[SparkP2P] Bot PAUSED via shortcut â€" Chrome unlocked for manual use');
       }
       tray.setContextMenu(buildTrayMenu());
     });
@@ -869,9 +869,9 @@ function createTray() {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// CHROME â€” Launch once, keep open forever.
+// CHROME â€" Launch once, keep open forever.
 // User logs in once. Session stays alive.
-// Bot reads the page like a human â€” no API hacking.
+// Bot reads the page like a human â€" no API hacking.
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 function findChrome() {
@@ -885,7 +885,7 @@ function findChrome() {
 
 async function killChromeOnPort(port) {
   try {
-    // Parse netstat output directly (no shell pipe needed â€” works without shell:true)
+    // Parse netstat output directly (no shell pipe needed â€" works without shell:true)
     const out = execSync('netstat -ano', { encoding: 'utf8' });
     const pids = new Set();
     for (const line of out.split('\n')) {
@@ -910,7 +910,7 @@ async function launchChrome(url) {
   const chrome = findChrome();
   if (!chrome) { console.error('Chrome not found'); return false; }
 
-  // Bump generation FIRST â€” any exit handler from a previous Chrome will see a stale generation
+  // Bump generation FIRST â€" any exit handler from a previous Chrome will see a stale generation
   // and skip the browser.disconnect() call that would nuke our new connection
   chromeGeneration++;
   const myGeneration = chromeGeneration;
@@ -945,7 +945,7 @@ async function launchChrome(url) {
     chromeProcess = null;
     // Puppeteer fires 'disconnected' automatically when Chrome exits.
     // Give it 2 seconds; if it hasn't fired, manually trigger cleanup so
-    // the overlay is dismissed and the UI shows “Binance Disconnected”.
+    // the overlay is dismissed and the UI shows "Binance Disconnected".
     setTimeout(() => {
       if (!browser) return; // 'disconnected' already fired — nothing to do
       console.log('[SparkP2P] Chrome exit: forcing cleanup (Puppeteer disconnect event did not fire)');
@@ -961,7 +961,7 @@ async function launchChrome(url) {
         scanningInProgress = false;
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.show();
-          mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“binance-disconnected”))').catch(() => {});
+          mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("binance-disconnected"))').catch(() => {});
         }
       }, 1000);
     }, 2000);
@@ -1108,9 +1108,9 @@ async function connectPuppeteer() {
     });
     // Log what pages are visible
     const pages = await browser.pages().catch(() => []);
-    console.log(`[SparkP2P] Puppeteer connected â€” ${pages.length} page(s): ${pages.map(p => p.url().substring(0, 50)).join(' | ')}`);
+    console.log(`[SparkP2P] Puppeteer connected â€" ${pages.length} page(s): ${pages.map(p => p.url().substring(0, 50)).join(' | ')}`);
     if (!browser) return false;
-    // Zoom setup deferred â€” done after login detected to avoid triggering Chrome exit
+    // Zoom setup deferred â€" done after login detected to avoid triggering Chrome exit
     return true;
   } catch (e) {
     console.error('[SparkP2P] Puppeteer connect error:', e.message?.substring(0, 60));
@@ -1120,7 +1120,7 @@ async function connectPuppeteer() {
 
 // Per-page CDP sessions so Binance and I&M zoom sessions don't collide
 const _zoomSessions = new WeakMap();
-let _zoomSession = null; // kept for legacy references â€” mirrors last setZoom80 call
+let _zoomSession = null; // kept for legacy references â€" mirrors last setZoom80 call
 
 // Device-type zoom level: 0.5 for laptops, 0.8 for desktops/TVs
 let _deviceZoomLevel = null;
@@ -1130,7 +1130,7 @@ async function getDeviceZoomLevel() {
   try {
     // Battery presence = laptop (most reliable check on Windows)
     const { execSync } = require('child_process');
-    const out = execSync('powershell -NoProfile -Command “(Get-WmiObject -Class Win32_Battery | Measure-Object).Count”', { timeout: 5000, windowsHide: true }).toString().trim();
+    const out = execSync('powershell -NoProfile -Command "(Get-WmiObject -Class Win32_Battery | Measure-Object).Count"', { timeout: 5000, windowsHide: true }).toString().trim();
     if (parseInt(out) > 0) {
       _deviceZoomLevel = 0.5;
       console.log('[SparkP2P] Device: laptop detected (battery found) — zoom 50%');
@@ -1236,7 +1236,7 @@ async function onGmailConfirmed() {
   console.log('[SparkP2P] Gmail login confirmed! Syncing cookies...');
   await syncCookies();
   mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("gmail-connected"))').catch(() => {});
-  // Wait for Gmail to finish loading before locking â€” injecting too early lets Gmail's own JS remove the overlay
+  // Wait for Gmail to finish loading before locking â€" injecting too early lets Gmail's own JS remove the overlay
   if (gmailPage && !gmailPage.isClosed()) {
     console.log('[SparkP2P] Waiting for Gmail to finish loading before locking...');
     await gmailPage.waitForNetworkIdle({ idleTime: 800, timeout: 4000 }).catch(() => {});
@@ -1258,8 +1258,8 @@ async function onGmailConfirmed() {
   const setup = await checkSetupComplete();
   if (setup.complete && !pollerRunning) {
     pauseNavigation = false;
-    mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“setup-complete”))').catch(() => {});
-    console.log('[SparkP2P] All connections established â€” starting bot');
+    mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
+    console.log('[SparkP2P] All connections established â€" starting bot');
     await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
     startPoller();
   }
@@ -1276,9 +1276,9 @@ async function openGmailTab() {
       gmailPage.on('close', () => { gmailPage = null; });
       // Vision-verify the existing tab
       const loggedIn = await verifyGmailWithVision(existing);
-      console.log(`[SparkP2P] Gmail tab found â€” ${loggedIn ? 'confirmed logged in' : 'on login page'}`);
+      console.log(`[SparkP2P] Gmail tab found â€" ${loggedIn ? 'confirmed logged in' : 'on login page'}`);
       if (loggedIn) { await onGmailConfirmed(); return true; }
-      // Not logged in â€” start polling for login
+      // Not logged in â€" start polling for login
       startGmailLoginPoller();
       return false;
     }
@@ -1287,9 +1287,9 @@ async function openGmailTab() {
     await gmailPage.goto('https://mail.google.com/mail/u/0/#inbox', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     gmailPage.on('close', () => { gmailPage = null; });
     const loggedIn = await verifyGmailWithVision(gmailPage);
-    console.log(`[SparkP2P] Gmail tab opened â€” ${loggedIn ? 'confirmed logged in' : 'needs login'}`);
+    console.log(`[SparkP2P] Gmail tab opened â€" ${loggedIn ? 'confirmed logged in' : 'needs login'}`);
     if (loggedIn) { await onGmailConfirmed(); return true; }
-    // Not logged in â€” poll until user signs in
+    // Not logged in â€" poll until user signs in
     startGmailLoginPoller();
     return false;
   } catch (e) {
@@ -1347,7 +1347,7 @@ async function isLoggedIn() {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// BROWSER LOCK â€” Block user input on Chrome after login
+// BROWSER LOCK â€" Block user input on Chrome after login
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 async function injectLockOverlay(page) {
@@ -1368,12 +1368,12 @@ async function injectLockOverlay(page) {
           'z-index:2147483647',
         ].join('!important;') + '!important';
 
-        // Build badge with createElement â€” no innerHTML so Trusted Types (Gmail CSP) can't block it
+        // Build badge with createElement â€" no innerHTML so Trusted Types (Gmail CSP) can't block it
         const badge = document.createElement('div');
         badge.style.cssText = 'position:fixed;bottom:16px;right:16px;display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(0,0,0,0.82);border:1px solid rgba(245,158,11,0.5);border-radius:20px;backdrop-filter:blur(4px);pointer-events:none';
         const icon = document.createElement('span');
         icon.style.fontSize = '14px';
-        icon.textContent = '\uD83D\uDD12'; // ðŸ”'
+        icon.textContent = '\uD83D\uDD12'; // ðŸ"'
         const label = document.createElement('span');
         label.style.cssText = 'color:#f59e0b;font-size:12px;font-weight:600;font-family:-apple-system,sans-serif';
         label.textContent = 'SparkP2P Bot Active';
@@ -1386,7 +1386,7 @@ async function injectLockOverlay(page) {
          'keydown','keyup','keypress','wheel','scroll','touchstart','touchend'
         ].forEach(t => dlg.addEventListener(t, block, true));
         dlg.close = () => {};
-        // Append to DOM first, THEN showModal() â€” dialog must be in document before showModal
+        // Append to DOM first, THEN showModal() â€" dialog must be in document before showModal
         document.documentElement.appendChild(dlg);
         dlg.showModal();
       };
@@ -1447,13 +1447,13 @@ async function getChromeBounds() {
 function createOverlayWindow() {
   if (overlayWindow && !overlayWindow.isDestroyed()) return;
   const html = `<!DOCTYPE html>
-<html><head><meta charset=”utf-8”><style>
+<html><head><meta charset="utf-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;background:transparent;overflow:hidden;cursor:not-allowed;user-select:none;-webkit-app-region:no-drag}
 #badge{position:fixed;bottom:20px;right:20px;display:flex;align-items:center;gap:8px;padding:8px 16px;background:rgba(0,0,0,0.85);border:1px solid rgba(245,158,11,0.6);border-radius:20px;backdrop-filter:blur(8px);pointer-events:none}
 .icon{font-size:15px}.label{color:#f59e0b;font-size:12px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,sans-serif;white-space:nowrap}
 </style></head><body>
-<div id=”badge”><span class=”icon”>🔒</span><span class=”label”>SparkP2P Bot Active</span></div>
+<div id="badge"><span class="icon">🔒</span><span class="label">SparkP2P Bot Active</span></div>
 </body></html>`;
   overlayWindow = new BrowserWindow({
     x: 0, y: 0, width: 1024, height: 768,
@@ -1550,7 +1550,7 @@ async function unlockChromeBrowser() {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// CONNECT BINANCE â€” Open Chrome, wait for login, start bot
+// CONNECT BINANCE â€" Open Chrome, wait for login, start bot
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 async function connectBinance() {
@@ -1563,17 +1563,17 @@ async function connectBinance() {
   await launchChrome('https://accounts.binance.com/en/login');
   await connectPuppeteer();
   if (!browser) {
-    console.error('[SparkP2P] Could not connect to Chrome â€” try clicking Connect Binance again');
+    console.error('[SparkP2P] Could not connect to Chrome â€" try clicking Connect Binance again');
     connectingBinance = false;
     return;
   }
-  console.log('[SparkP2P] Puppeteer OK â€” checking login state immediately');
+  console.log('[SparkP2P] Puppeteer OK â€" checking login state immediately');
   if (await isLoggedIn()) {
-    console.log('[SparkP2P] Session already restored â€” starting bot');
+    console.log('[SparkP2P] Session already restored â€" starting bot');
     await onLoginDetected();
     return;
   }
-  console.log('[SparkP2P] Not logged in yet â€” waiting for login...');
+  console.log('[SparkP2P] Not logged in yet â€" waiting for login...');
 
   let attempts = 0;
   let detected = false; // Guard against duplicate login detection
@@ -1610,7 +1610,7 @@ async function onLoginDetected() {
 
   if (token) {
     fetch(`${API_BASE}/ext/heartbeat`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
-    // Reset portal connection flags â€” they reflect live sessions, not persistent state
+    // Reset portal connection flags â€" they reflect live sessions, not persistent state
     fetch(`${API_BASE}/traders/disconnect-im`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
     fetch(`${API_BASE}/traders/disconnect-mpesa-portal`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
     // Determine if this trader is an admin — controls M-PESA portal auto-open
@@ -1627,8 +1627,8 @@ async function onLoginDetected() {
 
   await fetchAndApplyCredentials();
 
-  // Close extra tabs â€” keep Binance page and Chrome internal pages (chrome://)
-  // IMPORTANT: pages[0] is not always Binance â€” Chrome internal popups can be index 0
+  // Close extra tabs â€" keep Binance page and Chrome internal pages (chrome://)
+  // IMPORTANT: pages[0] is not always Binance â€" Chrome internal popups can be index 0
   const _pages = await browser.pages().catch(() => []);
   const _binancePage = _pages.find(p => p.url().includes('binance.com'))
     || _pages.find(p => !p.url().startsWith('chrome://') && p.url() !== 'about:blank');
@@ -1733,7 +1733,7 @@ function notifySetupIncomplete(missing) {
   mainWindow.webContents.executeJavaScript(
     `window.dispatchEvent(new CustomEvent("setup-incomplete", { detail: ${detail} }))`
   ).catch(() => {});
-  console.log(`[SparkP2P] Bot paused â€” missing connections: ${missing.join(', ')}`);
+  console.log(`[SparkP2P] Bot paused â€" missing connections: ${missing.join(', ')}`);
   sendBotLog('warning', `Setup incomplete — waiting for: ${missing.join(', ')}`);
 }
 
@@ -1743,22 +1743,22 @@ async function tryAutoStart() {
 
   await fetchAndApplyCredentials(); // Load TOTP/PIN from backend
 
-  // Try to connect to an existing Chrome on port 9222 â€” no launch delay
+  // Try to connect to an existing Chrome on port 9222 â€" no launch delay
   try {
     if (await connectPuppeteer()) {
       if (await isLoggedIn()) {
-        console.log('[SparkP2P] Auto-connected to existing Chrome â€” starting bot');
+        console.log('[SparkP2P] Auto-connected to existing Chrome â€" starting bot');
         connectingBinance = true; // onLoginDetected() expects this to be true so it can reset it
         await onLoginDetected();
         return;
       }
-      // Connected but not on Binance â€” disconnect cleanly
+      // Connected but not on Binance â€" disconnect cleanly
       try { await browser.disconnect(); } catch(e) {}
       browser = null;
     }
   } catch (e) {}
 
-  console.log('[SparkP2P] No active Binance session â€” click Connect Binance to start');
+  console.log('[SparkP2P] No active Binance session â€" click Connect Binance to start');
   sendBotLog('warning', 'No active Binance session — click Connect Binance to start');
 }
 
@@ -1766,7 +1766,7 @@ function checkInactivityTimeout() {
   if (!pollerRunning) return;
   const elapsed = Date.now() - lastActiveTime;
   if (elapsed > INACTIVITY_TIMEOUT) {
-    console.log('[SparkP2P] 6 hours inactive â€” logging out for security');
+    console.log('[SparkP2P] 6 hours inactive â€" logging out for security');
     stopPoller();
     if (browser) {
       browser.close().catch(() => {});
@@ -1786,7 +1786,7 @@ setInterval(checkInactivityTimeout, 5 * 60 * 1000);
 // Sync cookies (Binance + Gmail) to VPS every 1 minute
 setInterval(() => { if (pollerRunning) syncCookies(); }, 60 * 1000);
 
-// Silently refresh JWT every 20 minutes â€” prevents session expiry without re-login
+// Silently refresh JWT every 20 minutes â€" prevents session expiry without re-login
 setInterval(async () => {
   if (!token) return;
   try {
@@ -1805,7 +1805,7 @@ setInterval(async () => {
             `localStorage.setItem("token", ${JSON.stringify(data.access_token)})`
           ).catch(() => {});
         }
-        console.log('[SparkP2P] Token refreshed â€” session extended 30 days');
+        console.log('[SparkP2P] Token refreshed â€" session extended 30 days');
         sendBotLog('info', 'Session refreshed — login extended');
       }
     }
@@ -1813,7 +1813,7 @@ setInterval(async () => {
 }, 20 * 60 * 1000);
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// INITIAL SCAN â€” First thing after login:
+// INITIAL SCAN â€" First thing after login:
 // 1. Profile page → get username
 // 2. Funding wallet → get funding USDT balance
 // 3. Spot wallet → get spot USDT balance
@@ -1824,7 +1824,7 @@ setInterval(async () => {
 async function verifyTraderIdentity(page) {
   if (!token) return;
   try {
-    // Navigate to P2P My Ads â€” payment methods here show the real account holder name
+    // Navigate to P2P My Ads â€" payment methods here show the real account holder name
     await page.goto('https://p2p.binance.com/en/advertise/post-new?side=SELL&tradeType=SELL', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 4000));
 
@@ -1930,8 +1930,8 @@ async function resumeInProgressOrders() {
     const releaseAction = (actions || []).find(a => a.action === 'release' && a.order_number);
     if (!releaseAction) { console.log('[SparkP2P] No in-progress orders to resume'); return; }
 
-    // Set activeOrderNumber â€” the poll cycle will route to monitorActiveOrder automatically
-    console.log(`[SparkP2P] ðŸ”„ Will resume order ${releaseAction.order_number} on first poll`);
+    // Set activeOrderNumber â€" the poll cycle will route to monitorActiveOrder automatically
+    console.log(`[SparkP2P] ðŸ"„ Will resume order ${releaseAction.order_number} on first poll`);
     activeOrderNumber = releaseAction.order_number;
     activeOrderFiatAmount = releaseAction.fiat_amount || 0;
   } catch (e) {
@@ -1957,7 +1957,7 @@ async function syncCookies() {
       full.push({ name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure, httpOnly: c.httpOnly });
     }
 
-    // Gmail cookies â€” read directly from gmailPage tab (most reliable)
+    // Gmail cookies â€" read directly from gmailPage tab (most reliable)
     let gmailCookies = null;
     try {
       const gp = gmailPage && !gmailPage.isClosed() ? gmailPage : null;
@@ -1969,10 +1969,10 @@ async function syncCookies() {
             name: c.name, value: c.value, domain: c.domain, path: c.path,
             secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite || 'no_restriction',
           }));
-          console.log(`[SparkP2P] Gmail session detected â€” ${gmailCookies.length} cookies captured`);
+          console.log(`[SparkP2P] Gmail session detected â€" ${gmailCookies.length} cookies captured`);
         }
       }
-    } catch (e) { /* gmailPage not ready â€” skip */ }
+    } catch (e) { /* gmailPage not ready â€" skip */ }
 
     const syncRes = await fetch(`${API_BASE}/traders/connect-binance`, {
       method: 'POST',
@@ -1992,7 +1992,7 @@ async function syncCookies() {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// PAGE READER â€” Read data from Binance pages like a human
+// PAGE READER â€" Read data from Binance pages like a human
 // Navigate → Wait → Read DOM → Report to VPS
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
@@ -2015,7 +2015,7 @@ let _ordersTabOpen = false;
 // Use this when active orders are present so the page navigates directly
 // to order details without bouncing through history tabs first.
 async function readOrders(activeOnly = false) {
-  // IMPORTANT: Use DOM text â€” NOT screenshots â€” for orders.
+  // IMPORTANT: Use DOM text â€" NOT screenshots â€" for orders.
   // GPT Vision OCR misreads 18-20 digit order numbers causing duplicate DB records.
   // DOM text gives exact digits straight from the HTML.
   if (!browser || _ordersTabOpen) return { sell: [], buy: [], cancelled: [], completed_buy: [] };
@@ -2025,7 +2025,7 @@ async function readOrders(activeOnly = false) {
     const page = await getPage();
     if (!page) { _ordersTabOpen = false; return { sell: [], buy: [], cancelled: [], completed_buy: [] }; }
 
-    // â”€â”€ Step 1: Read active/ongoing orders (tab=0) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step 1: Read active/ongoing orders (tab=0) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     // domcontentloaded is enough — we only need DOM text, not full network idle
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 1000));
@@ -2074,11 +2074,11 @@ async function readOrders(activeOnly = false) {
       }
     }
 
-    // â”€â”€ Step 2: Read recently cancelled orders (tab=1, Cancelled filter) â”€â”€â”€
-    // Skip history scan when activeOnly=true â€” avoids page bouncing when
+    // â"€â"€ Step 2: Read recently cancelled orders (tab=1, Cancelled filter) â"€â"€â"€
+    // Skip history scan when activeOnly=true â€" avoids page bouncing when
     // active orders are already detected and need immediate attention.
     if (activeOnly) {
-      console.log('[SparkP2P] readOrders: activeOnly mode â€” skipping tab=1 history scan');
+      console.log('[SparkP2P] readOrders: activeOnly mode â€" skipping tab=1 history scan');
       _ordersTabOpen = false;
       return { sell, buy, cancelled: [], completed_buy: [] };
     }
@@ -2107,8 +2107,8 @@ async function readOrders(activeOnly = false) {
       }
     }
 
-    // â”€â”€ Step 3: Read recently completed BUY orders (tab=1, Completed filter) â”€â”€
-    // We're still on tab=1 â€” click the "Completed" filter to find completed buy orders
+    // â"€â"€ Step 3: Read recently completed BUY orders (tab=1, Completed filter) â"€â"€
+    // We're still on tab=1 â€" click the "Completed" filter to find completed buy orders
     let completed_buy = [];
     await page.evaluate(() => {
       const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
@@ -2238,7 +2238,7 @@ async function readAccountData() {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// TRADING POLLER â€” Reads pages, reports to VPS, takes actions
+// TRADING POLLER â€" Reads pages, reports to VPS, takes actions
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 function scheduleNextPoll(delayMs) {
@@ -2278,7 +2278,7 @@ function stopPoller() {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// STEP 1 â€” Vision-directed M-Pesa screenshot extraction
+// STEP 1 â€" Vision-directed M-Pesa screenshot extraction
 //
 // Flow:
 //  1. Take full-page screenshot
@@ -2291,7 +2291,7 @@ function stopPoller() {
 async function findAndReadPaymentScreenshot(page) {
   if (!anthropicApiKey) return null;
   try {
-    // â”€â”€ Step 1: Scroll chat panel to bottom via DOM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step 1: Scroll chat panel to bottom via DOM â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     console.log('[Screenshot] Scrolling chat to bottom...');
     await page.evaluate(() => {
       // Try to find the chat scroll container and scroll it to the bottom
@@ -2304,7 +2304,7 @@ async function findAndReadPaymentScreenshot(page) {
     }).catch(() => {});
     await new Promise(r => setTimeout(r, 1500));
 
-    // â”€â”€ Step 2: Take screenshot → Vision finds the thumbnail coords â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step 2: Take screenshot → Vision finds the thumbnail coords â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     console.log('[Screenshot] Taking screenshot to locate payment thumbnail...');
     const scanSS = await page.screenshot({ type: 'jpeg', quality: 85 });
     const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 }));
@@ -2325,7 +2325,7 @@ async function findAndReadPaymentScreenshot(page) {
             `This is a ${scanW}Ã—${scanH}px screenshot of a Binance P2P order page.\n` +
             `The RIGHT side of the page has a chat panel with messages.\n` +
             `Is there an image/photo thumbnail sent by the buyer in that chat panel? ` +
-            `(It looks like a dark or colored rectangular thumbnail showing a phone screenshot or receipt â€” NOT an icon, NOT a button.)\n` +
+            `(It looks like a dark or colored rectangular thumbnail showing a phone screenshot or receipt â€" NOT an icon, NOT a button.)\n` +
             `If yes, return the CENTER pixel coordinates of that thumbnail.\n` +
             `If no thumbnail exists, return {"found": false}.\n` +
             `Return ONLY JSON: {"found": true, "x": 640, "y": 400} or {"found": false}` },
@@ -2340,10 +2340,10 @@ async function findAndReadPaymentScreenshot(page) {
     const locateResult = JSON.parse(locateMatch[0]);
     if (!locateResult.found) { console.log('[Screenshot] No payment thumbnail found in chat'); return null; }
 
-    // â”€â”€ Step 3: Click thumbnail to open lightbox â€” mouse click first, DOM fallback â”€â”€
+    // â"€â"€ Step 3: Click thumbnail to open lightbox â€" mouse click first, DOM fallback â"€â"€
     const thumbVpX = Math.round(locateResult.x / dpr);
     const thumbVpY = Math.round(locateResult.y / dpr);
-    console.log(`[Screenshot] Thumbnail at image(${locateResult.x},${locateResult.y}) → viewport(${thumbVpX},${thumbVpY}) â€” clicking...`);
+    console.log(`[Screenshot] Thumbnail at image(${locateResult.x},${locateResult.y}) → viewport(${thumbVpX},${thumbVpY}) â€" clicking...`);
     await page.mouse.move(thumbVpX, thumbVpY);
     await new Promise(r => setTimeout(r, 100));
     await page.mouse.click(thumbVpX, thumbVpY);
@@ -2364,32 +2364,32 @@ async function findAndReadPaymentScreenshot(page) {
       if (best) best.click();
     }, thumbVpX, thumbVpY).catch(() => {});
 
-    // Wait for lightbox to fully load â€” skip verification (Vision misidentifies it)
+    // Wait for lightbox to fully load â€" skip verification (Vision misidentifies it)
     console.log('[Screenshot] Waiting 5s for lightbox to load...');
     await new Promise(r => setTimeout(r, 5000));
 
-    // â”€â”€ Step 6: Screenshot the enlarged lightbox view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step 6: Screenshot the enlarged lightbox view â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const enlargedSS = await page.screenshot({ type: 'png' });
     await takeScreenshot('payment_screenshot_enlarged', page);
 
-    // â”€â”€ Step 7: Vision reads the enlarged screenshot â€” up to 2 attempts â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step 7: Vision reads the enlarged screenshot â€" up to 2 attempts â"€â"€â"€â"€â"€â"€â"€
     console.log('[Vision] Reading enlarged payment screenshot (Sonnet)...');
 
     const MPESA_OCR_PROMPT = `This screenshot may show one or more M-Pesa payment messages. Focus ONLY on the MOST RECENT (bottom-most) payment confirmation message.
 
 There are two possible formats for the M-Pesa transaction code:
 
-FORMAT 1 â€” Safaricom SMS:
+FORMAT 1 â€" Safaricom SMS:
 "XXXXXXXXXX Confirmed. Ksh 2,000.00 sent to NAME on DATE..."
-The code is the FIRST word â€” 8-12 uppercase alphanumeric characters (letters and digits only).
+The code is the FIRST word â€" 8-12 uppercase alphanumeric characters (letters and digits only).
 
-FORMAT 2 â€” I&M Bank / other bank SMS:
+FORMAT 2 â€" I&M Bank / other bank SMS:
 "M-PESA transfer of KES 2,000.00 to A/C ... M-PESA Ref ID: XXXXXXXXXX"
-The code follows "M-PESA Ref ID:" â€” 8-12 uppercase alphanumeric characters.
+The code follows "M-PESA Ref ID:" â€" 8-12 uppercase alphanumeric characters.
 
-Common OCR confusions: Iâ†”1, Oâ†”0, Bâ†”8, Sâ†”5, Zâ†”2.
-Ignore older messages higher up in the screenshot â€” only extract from the LAST/BOTTOM message.
-The code may start with digits or letters â€” include it regardless.
+Common OCR confusions: Iâ†"1, Oâ†"0, Bâ†"8, Sâ†"5, Zâ†"2.
+Ignore older messages higher up in the screenshot â€" only extract from the LAST/BOTTOM message.
+The code may start with digits or letters â€" include it regardless.
 
 Return ONLY this JSON with no other text:
 {"found": true, "code": "XXXXXXXXXX", "amount": 2000}
@@ -2418,13 +2418,13 @@ OR if no M-Pesa confirmation visible in the bottom message:
         if (readMatch) {
           const parsed = JSON.parse(readMatch[0]);
           if (parsed.found && parsed.code) {
-            // Accept 9-11 char codes â€” slight miscount is OK, VPS will validate
+            // Accept 9-11 char codes â€" slight miscount is OK, VPS will validate
             if (/^[A-Z0-9]{9,11}$/i.test(parsed.code)) {
               readResult = { ...parsed, code: parsed.code.toUpperCase() };
               console.log(`[Vision] Attempt ${attempt} âœ… code=${readResult.code} amount=${readResult.amount}`);
               break;
             } else {
-              console.log(`[Vision] Attempt ${attempt} rejected code "${parsed.code}" â€” unexpected format`);
+              console.log(`[Vision] Attempt ${attempt} rejected code "${parsed.code}" â€" unexpected format`);
             }
           } else {
             console.log(`[Vision] Attempt ${attempt}: found=false reason=${parsed.reason}`);
@@ -2436,13 +2436,13 @@ OR if no M-Pesa confirmation visible in the bottom message:
       if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
     }
 
-    // â”€â”€ 7. Close lightbox by reloading the page â€” most reliable approach â”€â”€â”€â”€â”€
+    // â"€â"€ 7. Close lightbox by reloading the page â€" most reliable approach â"€â"€â"€â"€â"€
     // Escape is unreliable for Binance's lightbox. Page reload guarantees all
     // overlays are destroyed and we get a clean DOM for the next steps.
-    console.log('[Vision] Closing lightbox â€” reloading page for clean state...');
+    console.log('[Vision] Closing lightbox â€" reloading page for clean state...');
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 2000));
-    console.log('[Vision] Page reloaded â€” lightbox destroyed');
+    console.log('[Vision] Page reloaded â€" lightbox destroyed');
 
     if (readResult?.found && readResult.code && /^[A-Z0-9]{8,12}$/i.test(readResult.code)) {
       console.log(`[Vision] âœ… M-Pesa code extracted: ${readResult.code} (amount: KES ${readResult.amount})`);
@@ -2465,7 +2465,7 @@ async function extractMpesaCodesFromChat(page) {
     return { mpesaCodes: [], bankRefs: [], hasImages: false };
   }
   try {
-    // â”€â”€ Step 0: Vision â€” ask Claude to read ONLY the most recent buyer message â”€â”€
+    // â"€â"€ Step 0: Vision â€" ask Claude to read ONLY the most recent buyer message â"€â"€
     // This avoids picking up old codes from previous orders still visible in chat.
     try {
       const ss = await page.screenshot({ type: 'jpeg', quality: 85 });
@@ -2481,7 +2481,7 @@ async function extractMpesaCodesFromChat(page) {
 Find ONLY the most recent (last / bottom-most) message sent by the BUYER (left-aligned bubbles).
 Does it contain an M-Pesa transaction code (8-12 uppercase alphanumeric characters, e.g. QE1FXYZABC or UDMSATAB0) or a bank reference number?
 Return ONLY JSON: {"mpesa_code": "CODE or null", "bank_ref": "REF or null"}
-IMPORTANT: ignore ALL older messages â€” only look at the single most recent buyer message.` },
+IMPORTANT: ignore ALL older messages â€" only look at the single most recent buyer message.` },
           ]}],
         }),
       });
@@ -2493,7 +2493,7 @@ IMPORTANT: ignore ALL older messages â€” only look at the single most recen
         const vCode = vResult.mpesa_code && /^[A-Z0-9]{8,12}$/i.test(vResult.mpesa_code) ? vResult.mpesa_code.toUpperCase() : null;
         const vRef  = vResult.bank_ref  && /^[A-Z0-9]{6,20}$/i.test(vResult.bank_ref)  ? vResult.bank_ref.toUpperCase()   : null;
         if (vCode || vRef) {
-          console.log(`[SparkP2P] Vision (latest message) â€” M-Pesa: ${vCode || 'none'} Bank: ${vRef || 'none'}`);
+          console.log(`[SparkP2P] Vision (latest message) â€" M-Pesa: ${vCode || 'none'} Bank: ${vRef || 'none'}`);
           return { mpesaCodes: vCode ? [vCode] : [], bankRefs: vRef ? [vRef] : [] };
         }
       }
@@ -2501,7 +2501,7 @@ IMPORTANT: ignore ALL older messages â€” only look at the single most recen
       console.log(`[SparkP2P] Vision latest-message scan error: ${e.message?.substring(0, 60)}`);
     }
 
-    // â”€â”€ Step 1: Find all <img> elements in the right half of the viewport (chat panel)
+    // â"€â"€ Step 1: Find all <img> elements in the right half of the viewport (chat panel)
     const chatImgHandles = await page.evaluateHandle(() => {
       const vw = window.innerWidth;
       return Array.from(document.querySelectorAll('img')).filter(img => {
@@ -2519,12 +2519,12 @@ IMPORTANT: ignore ALL older messages â€” only look at the single most recen
     for (let i = handles.length - 1; i >= 0; i--) {
       const el = handles[i].asElement();
       try {
-        // Click the element directly via JS â€” triggers React's handler, opens lightbox
+        // Click the element directly via JS â€" triggers React's handler, opens lightbox
         await el.evaluate(node => node.click());
-        console.log(`[SparkP2P] Clicked chat image ${i + 1} â€” waiting for lightbox...`);
+        console.log(`[SparkP2P] Clicked chat image ${i + 1} â€" waiting for lightbox...`);
         await new Promise(r => setTimeout(r, 2000));
 
-        // Screenshot the full page â€” lightbox should now be open and full-size
+        // Screenshot the full page â€" lightbox should now be open and full-size
         const enlarged = await page.screenshot({ type: 'jpeg', quality: 95 });
         await takeScreenshot(`chat_image_${i + 1}_enlarged`, page);
 
@@ -2533,14 +2533,14 @@ IMPORTANT: ignore ALL older messages â€” only look at the single most recen
         const bankRef = result.bank_ref;
         console.log(`[SparkP2P] Vision image ${i + 1}: mpesa_code=${code} bank_ref=${bankRef}`);
 
-        // Close lightbox before next attempt â€” wait long enough for it to fully close
+        // Close lightbox before next attempt â€" wait long enough for it to fully close
         await page.keyboard.press('Escape').catch(() => {});
         await new Promise(r => setTimeout(r, 1500));
 
         const mpesaFound = (code && /^[A-Z0-9]{8,12}$/i.test(code)) ? code.toUpperCase() : null;
         const bankFound = (bankRef && /^[A-Z0-9]{6,20}$/i.test(bankRef.trim())) ? bankRef.trim().toUpperCase() : null;
-        if (!mpesaFound && code) console.log(`[SparkP2P] Rejected mpesa_code "${code}" â€” unexpected format`);
-        if (!bankFound && bankRef) console.log(`[SparkP2P] Rejected bank_ref "${bankRef}" â€” unexpected format`);
+        if (!mpesaFound && code) console.log(`[SparkP2P] Rejected mpesa_code "${code}" â€" unexpected format`);
+        if (!bankFound && bankRef) console.log(`[SparkP2P] Rejected bank_ref "${bankRef}" â€" unexpected format`);
 
         // If Vision classified a 8-12 char code as bank_ref (e.g. starts with digits), treat it
         // as a potential M-Pesa code too so VPS can attempt verification on both
@@ -2622,7 +2622,7 @@ async function verifyMpesaPayment(orderNumber, fiatAmount, page = null, preExtra
     if (preExtracted) {
       mpesaCodes = preExtracted.mpesaCodes || [];
       bankRefs = preExtracted.bankRefs || [];
-      console.log(`[SparkP2P] Using pre-extracted codes â€” M-Pesa: [${mpesaCodes.join(', ')}] Bank: [${bankRefs.join(', ')}]`);
+      console.log(`[SparkP2P] Using pre-extracted codes â€" M-Pesa: [${mpesaCodes.join(', ')}] Bank: [${bankRefs.join(', ')}]`);
     } else if (page) {
       const extracted = await extractMpesaCodesFromChat(page);
       mpesaCodes = extracted.mpesaCodes || [];
@@ -2654,12 +2654,12 @@ async function verifyMpesaPayment(orderNumber, fiatAmount, page = null, preExtra
   }
 }
 
-// â”€â”€ Reconcile stuck orders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Reconcile stuck orders â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Runs every 10 polls. Reads Binance cancelled+completed history (all dates, not
 // just today) and reports them to SparkP2P so disputed/expired orders get updated.
 async function reconcileStuckOrders(page) {
   if (!page || !token || pauseNavigation) return;
-  console.log('[SparkP2P] ðŸ”„ Reconciling stuck orders against Binance history...');
+  console.log('[SparkP2P] ðŸ"„ Reconciling stuck orders against Binance history...');
 
   try {
     // Navigate to Binance order history tab
@@ -2780,7 +2780,7 @@ async function pollCycle() {
   scanningInProgress = true;
 
   try {
-    // â”€â”€ Check Binance session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Check Binance session â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const sessionAge = sessionStartTime ? Date.now() - sessionStartTime : Infinity;
     if (browserLocked && sessionAge > SESSION_GRACE_MS) {
       if (!(await isLoggedIn())) {
@@ -2790,7 +2790,7 @@ async function pollCycle() {
           scanningInProgress = false;
           return;
         }
-        console.log('[SparkP2P] Session expired â€” re-login required');
+        console.log('[SparkP2P] Session expired â€" re-login required');
         loggedOutStrikes = 0;
         sessionStartTime = null;
         stopPoller();
@@ -2813,7 +2813,7 @@ async function pollCycle() {
     const page = await getPage();
     if (!page) { scanningInProgress = false; return; }
 
-    // â”€â”€ idleScan handles everything â€” cycles through ALL active orders each poll â”€â”€
+    // â"€â"€ idleScan handles everything â€" cycles through ALL active orders each poll â"€â"€
     await idleScan(page);
 
     stats.polls++;
@@ -2825,8 +2825,8 @@ async function pollCycle() {
 
     const nextIn = (stats.orders > 0 ? POLL_INTERVAL_ACTIVE : POLL_INTERVAL_IDLE) / 1000;
     const orderSummary = stats.orders > 0
-      ? `${stats.orders} active order(s) â€” next cycle in ${nextIn}s`
-      : `Idle â€” next scan in ${nextIn}s`;
+      ? `${stats.orders} active order(s) â€" next cycle in ${nextIn}s`
+      : `Idle â€" next scan in ${nextIn}s`;
     const visionSummary = (_cycleVision + _cycleDom) > 0
       ? ` | State detection: ${_cycleDom} DOM, ${_cycleVision} Vision (${_cycleVision === 0 ? '0 Claude calls' : `${_cycleVision} Claude call${_cycleVision > 1 ? 's' : ''}`})`
       : '';
@@ -2841,15 +2841,15 @@ async function pollCycle() {
   }
 }
 
-// â”€â”€ monitorActiveBuyOrder â€” DEPRECATED: logic now in idleScan buy order loop â”€â”€
+// â"€â"€ monitorActiveBuyOrder â€" DEPRECATED: logic now in idleScan buy order loop â"€â"€
 // Kept as dead code; no longer called by the poll cycle.
 async function monitorActiveBuyOrder(_page) {
-  console.log('[SparkP2P] monitorActiveBuyOrder called (deprecated â€” idleScan handles buy orders)');
+  console.log('[SparkP2P] monitorActiveBuyOrder called (deprecated â€" idleScan handles buy orders)');
 }
 
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// DOM-BASED ORDER STATE DETECTION â€” replaces analyzePageWithVision
+// DOM-BASED ORDER STATE DETECTION â€" replaces analyzePageWithVision
 // Reads page text directly. No screenshots. No AI.
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async function detectOrderState(page) {
@@ -2863,7 +2863,7 @@ async function detectOrderState(page) {
     return 'order_complete';
   }
 
-  // Passkey screen â€” check before security_verification
+  // Passkey screen â€" check before security_verification
   if (lower.includes('verify with passkey') || lower.includes('my passkeys are not available')) {
     return 'passkey_required';
   }
@@ -2874,7 +2874,7 @@ async function detectOrderState(page) {
     return 'security_verification';
   }
 
-  // Confirm release modal â€” "Received payment in your account?" dialog
+  // Confirm release modal â€" "Received payment in your account?" dialog
   // Exact title Binance shows after clicking "Payment Received" button.
   // Also catches older wording as fallback.
   if (lower.includes('received payment in your account') ||
@@ -2883,7 +2883,7 @@ async function detectOrderState(page) {
     return 'confirm_release_modal';
   }
 
-  // Awaiting buyer payment â€” check BEFORE verify_payment to prevent false positives.
+  // Awaiting buyer payment â€" check BEFORE verify_payment to prevent false positives.
   // If "awaiting" is on the page, buyer has NOT paid yet regardless of other button text.
   if (lower.includes("awaiting buyer's payment") || lower.includes('awaiting payment') ||
       lower.includes('waiting for buyer') || lower.includes('waiting for payment') ||
@@ -2891,7 +2891,7 @@ async function detectOrderState(page) {
     return 'awaiting_payment';
   }
 
-  // Buyer has paid â€” Binance shows "Verify Payment" page with header text.
+  // Buyer has paid â€" Binance shows "Verify Payment" page with header text.
   // These phrases are UNIQUE to the sell-order payment verification state.
   // IMPORTANT: checked BEFORE awaiting_payment_confirmation to prevent BUY-order
   // phrases on the page (e.g. timeline text) from triggering the wrong branch.
@@ -2912,8 +2912,8 @@ async function detectOrderState(page) {
     return 'cancelled';
   }
 
-  // Buy order â€” we need to mark payment as sent to seller.
-  // Use the exact button label only â€” avoids matching timeline text on sell pages.
+  // Buy order â€" we need to mark payment as sent to seller.
+  // Use the exact button label only â€" avoids matching timeline text on sell pages.
   if (lower.includes("i've transferred, notify seller") ||
       lower.includes("i have transferred, notify seller") ||
       lower.includes('transferred, notify seller') ||
@@ -2921,7 +2921,7 @@ async function detectOrderState(page) {
     return 'awaiting_payment_confirmation';
   }
 
-  // Buy order â€” waiting for seller to release
+  // Buy order â€" waiting for seller to release
   if (lower.includes("awaiting seller's release") || lower.includes('waiting for seller') ||
       lower.includes('seller to release')) {
     return 'awaiting_release';
@@ -3196,7 +3196,7 @@ async function cancelOrderOnBinance(page, orderNumber, reason) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function idleScan(page) {
-  console.log(`[SparkP2P] â”€â”€ IDLE SCAN #${stats.polls + 1} â”€â”€`);
+  console.log(`[SparkP2P] â"€â"€ IDLE SCAN #${stats.polls + 1} â"€â"€`);
   _cycleVision = 0;
   _cycleDom    = 0;
   if (pauseNavigation) return;
@@ -3225,11 +3225,11 @@ async function idleScan(page) {
     } catch (_) {}
   }
 
-  // â”€â”€ Step 1: Check active orders FIRST â€” readOrders navigates to tab=0 itself â”€â”€
+  // â"€â"€ Step 1: Check active orders FIRST â€" readOrders navigates to tab=0 itself â"€â"€
   console.log('[SparkP2P] Step 1: Checking active orders (tab=0)...');
   if (pauseNavigation) return;
 
-  // Read active orders only â€” skip history scan so the page goes straight to order details.
+  // Read active orders only â€" skip history scan so the page goes straight to order details.
   // readOrders() handles the navigation; we don't navigate here to avoid a duplicate goto.
   const orders = await readOrders(true); // activeOnly=true
   stats.orders = orders.sell.length + orders.buy.length;
@@ -3241,7 +3241,7 @@ async function idleScan(page) {
   // This happens the moment a seller releases crypto — Binance moves the order to
   // Completed immediately, so readOrders(true) won't see it anymore.
   // We must scan the Completed tab for these even when other active orders exist,
-  // otherwise the order stays stuck as “payment sent” until the 10-poll reconcile.
+  // otherwise the order stays stuck as "payment sent" until the 10-poll reconcile.
   const currentActiveNums = [...orders.sell, ...orders.buy].map(o => o.orderNumber);
   const ghostPaidNums = Object.keys(buyPaymentSentAt).filter(n => !currentActiveNums.includes(n));
   if (ghostPaidNums.length > 0) {
@@ -3249,7 +3249,7 @@ async function idleScan(page) {
     sendBotLog('info', `Paid order left active tab — checking Completed tab: ${ghostPaidNums.join(', ')}`);
   }
 
-  // â”€â”€ Step 2: No active orders (or ghost paid orders) â€” scan wallets + full history â”€â”€â”€â”€
+  // â"€â"€ Step 2: No active orders (or ghost paid orders) â€" scan wallets + full history â"€â"€â"€â"€
 
   // Track first-seen times for all active orders, clean up departed ones
   const allActiveNums = [...orders.sell, ...orders.buy].map(o => o.orderNumber);
@@ -3279,7 +3279,7 @@ async function idleScan(page) {
     }
   }
 
-  // Report orders to VPS â€” protect ALL active orders from auto-cancel
+  // Report orders to VPS â€" protect ALL active orders from auto-cancel
   // Retry up to 3 times so a transient network hiccup doesn't silently lose an order
   const reportPayload = JSON.stringify({
     sell_orders: orders.sell.map(norm),
@@ -3328,10 +3328,10 @@ async function idleScan(page) {
     }
   }
 
-  // â”€â”€ Step 4: Cycle through ALL sell orders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // Bot visits each order, acts where needed, then moves on â€” never blocks on one order
+  // â"€â"€ Step 4: Cycle through ALL sell orders â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  // Bot visits each order, acts where needed, then moves on â€" never blocks on one order
   if (orders.sell.length > 0) {
-    console.log(`[SparkP2P] ðŸ”” ${orders.sell.length} sell order(s) â€” cycling through all`);
+    console.log(`[SparkP2P] ðŸ"" ${orders.sell.length} sell order(s) â€" cycling through all`);
   }
   if (botTradeMode === 'buy_only') {
     if (orders.sell.length > 0) console.log(`[SparkP2P] Skipping ${orders.sell.length} sell order(s) — mode: buy_only`);
@@ -3342,7 +3342,7 @@ async function idleScan(page) {
     const seenMins = Math.floor(seenMs / 60000);
     console.log(`[SparkP2P] Checking sell order ${order.orderNumber} (KES ${order.totalPrice}, seen ${seenMins}m)`);
 
-    // Navigate directly to order detail â€” no orders-list click needed
+    // Navigate directly to order detail â€" no orders-list click needed
     await page.goto(
       `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
       { waitUntil: 'domcontentloaded', timeout: 15000 }
@@ -3352,7 +3352,7 @@ async function idleScan(page) {
 
     await takeScreenshot(`scan_sell_${order.orderNumber}`, page);
 
-    // Vision is primary â€” understands page context, not just text matching.
+    // Vision is primary â€" understands page context, not just text matching.
     // DOM fallback if Vision unavailable (no API key).
     // DOM-first: free, instant. Vision only when DOM returns 'unknown'.
     let screen = await detectOrderState(page);
@@ -3378,10 +3378,10 @@ async function idleScan(page) {
     const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
     const lower = pageText.toLowerCase();
 
-    // â”€â”€ Complete â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Complete â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     if (screen === 'order_complete' ||
         lower.includes('sale successful') || lower.includes('order completed') || lower.includes('crypto released')) {
-      console.log(`[SparkP2P] âœ… Sell order ${order.orderNumber} COMPLETED â€” reporting release`);
+      console.log(`[SparkP2P] âœ… Sell order ${order.orderNumber} COMPLETED â€" reporting release`);
       sendBotLog('success', `Sell order ${order.orderNumber} completed — crypto released`);
       await fetch(`${API_BASE}/ext/report-release`, {
         method: 'POST',
@@ -3401,18 +3401,18 @@ async function idleScan(page) {
       sellPayInstructSentOrders.delete(order.orderNumber);
       delete lastSellDeficitMsg[order.orderNumber];
 
-    // â”€â”€ SELL ORDER: Buyer marked as paid â€” verify M-Pesa before releasing â”€â”€â”€â”€â”€â”€
+    // â"€â"€ SELL ORDER: Buyer marked as paid â€" verify M-Pesa before releasing â"€â"€â"€â"€â"€â"€
     } else if (screen === 'verify_payment') {
       activeOrderNumber = order.orderNumber;
       activeOrderFiatAmount = order.totalPrice;
 
       // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-      // SECOND VISIT: order already verified on a previous poll â€” send message
+      // SECOND VISIT: order already verified on a previous poll â€" send message
       // then click Payment Received and release. Nothing else.
       // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       if (verifiedOrders.has(order.orderNumber)) {
         const vd = verifiedOrders.get(order.orderNumber);
-        console.log(`[SparkP2P] â•â•â• Order ${order.orderNumber} â€” SECOND VISIT (release) â•â•â•`);
+        console.log(`[SparkP2P] â•â•â• Order ${order.orderNumber} â€" SECOND VISIT (release) â•â•â•`);
 
         // Reload the order page to guarantee a clean state (no lightboxes, no overlays)
         console.log(`[SparkP2P] Reloading order page for clean state...`);
@@ -3422,7 +3422,7 @@ async function idleScan(page) {
         ).catch(() => {});
 
         // Wait for the chat panel to fully render before screenshotting
-        // React needs time to hydrate â€” poll DOM for contenteditable on the right side
+        // React needs time to hydrate â€" poll DOM for contenteditable on the right side
         console.log(`[SparkP2P] Waiting for chat panel to render...`);
         const chatPanelReady = await (async () => {
           for (let i = 0; i < 20; i++) {
@@ -3436,12 +3436,12 @@ async function idleScan(page) {
             if (found) { console.log(`[SparkP2P] Chat panel ready (${(i+1)*500}ms)`); return true; }
             await new Promise(r => setTimeout(r, 500));
           }
-          console.log(`[SparkP2P] Chat panel not detected â€” proceeding anyway`);
+          console.log(`[SparkP2P] Chat panel not detected â€" proceeding anyway`);
           return false;
         })();
         await new Promise(r => setTimeout(r, 1000)); // extra settle time
 
-        // 1. Send message to buyer â€” Vision finds "Enter message here" and types
+        // 1. Send message to buyer â€" Vision finds "Enter message here" and types
         const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
         await sendChatMessage(page, chatMsg);
         await new Promise(r => setTimeout(r, 500));
@@ -3464,7 +3464,7 @@ async function idleScan(page) {
         await new Promise(r => setTimeout(r, 2000));
 
         // 3. Vision handles: modal checkbox → Confirm Release → security verification
-        // skipNavigation=true â€” we're already on the order page with the modal open.
+        // skipNavigation=true â€" we're already on the order page with the modal open.
         // Navigating away would close the modal and lose the state.
         await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [vd.code], bankRefs: [] } }, { skipNavigation: true });
 
@@ -3484,9 +3484,9 @@ async function idleScan(page) {
       } else {
       // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
       // FIRST VISIT: read the payment screenshot, verify the M-Pesa code.
-      // Do NOT click Payment Received here â€” that happens on the next poll.
+      // Do NOT click Payment Received here â€" that happens on the next poll.
       // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-        console.log(`[SparkP2P] â•â•â• Order ${order.orderNumber} â€” FIRST VISIT (verify only) â•â•â•`);
+        console.log(`[SparkP2P] â•â•â• Order ${order.orderNumber} â€" FIRST VISIT (verify only) â•â•â•`);
 
 
         // ── Choice Bank payment verification (runs before M-Pesa code check) ──
@@ -3563,9 +3563,9 @@ async function idleScan(page) {
         } // end _choiceHandled guard
       } // end FIRST VISIT
 
-    // â”€â”€ Mid-release state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Mid-release state â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     } else if (['confirm_release_modal','security_verification','totp_input','email_otp_input','passkey_failed'].includes(screen)) {
-      console.log(`[SparkP2P] Order ${order.orderNumber} mid-release (${screen}) â€” completing now`);
+      console.log(`[SparkP2P] Order ${order.orderNumber} mid-release (${screen}) â€" completing now`);
       activeOrderNumber = order.orderNumber;
       activeOrderFiatAmount = order.totalPrice;
       await releaseWithVision(page, order.orderNumber, {});
@@ -3579,13 +3579,13 @@ async function idleScan(page) {
       orderReminderSent.delete(order.orderNumber);
       delete orderLastBotReplyAt[order.orderNumber];
 
-    // â”€â”€ Awaiting buyer payment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Awaiting buyer payment â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     } else if (screen === 'awaiting_payment' || screen === 'payment_processing' ||
                lower.includes('awaiting') || lower.includes('pending payment')) {
 
-      // â”€â”€ Check countdown: if â‰¤ 2 minutes remaining, cancel the order â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Check countdown: if â‰¤ 2 minutes remaining, cancel the order â"€â"€â"€â"€â"€â"€â"€â"€
       const countdown = await page.evaluate(() => {
-        // Binance renders countdown as MM:SS text â€” find smallest visible timer
+        // Binance renders countdown as MM:SS text â€" find smallest visible timer
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         const pattern = /^\d{1,2}:\d{2}$/;
         let smallest = null;
@@ -3609,7 +3609,7 @@ async function idleScan(page) {
       const nearExpiry = countdown !== null && countdown <= 120 && !sellRejectedOrders.has(order.orderNumber); // â‰¤ 2 minutes
 
       if (nearExpiry) {
-        console.log(`[SparkP2P] â° Order ${order.orderNumber} is about to expire (${countdown}s left) â€” cancelling`);
+        console.log(`[SparkP2P] â° Order ${order.orderNumber} is about to expire (${countdown}s left) â€" cancelling`);
         // Use TreeWalker to find and click the Cancel / Cancel Order button
         const cancelled = await page.evaluate(() => {
           const cancelPhrases = ['cancel order', 'cancel', 'cancel the order'];
@@ -3626,7 +3626,7 @@ async function idleScan(page) {
           return false;
         });
         if (cancelled) {
-          console.log(`[SparkP2P] Order ${order.orderNumber} cancel clicked â€” waiting for confirmation dialog`);
+          console.log(`[SparkP2P] Order ${order.orderNumber} cancel clicked â€" waiting for confirmation dialog`);
           await new Promise(r => setTimeout(r, 2000));
           // Confirm the cancellation dialog if it appears
           await page.evaluate(() => {
@@ -3653,7 +3653,7 @@ async function idleScan(page) {
       delete lastDeficitSent[order.orderNumber];
           verifiedOrders.delete(order.orderNumber);
         } else {
-          console.log(`[SparkP2P] Order ${order.orderNumber} â€” could not find Cancel button, will retry next cycle`);
+          console.log(`[SparkP2P] Order ${order.orderNumber} â€" could not find Cancel button, will retry next cycle`);
         }
       } else if (sellRejectedOrders.has(order.orderNumber)) {
         // Merchant rejected this SELL order. We do NOT cancel it ourselves — a seller-initiated
@@ -3843,7 +3843,7 @@ async function idleScan(page) {
       }
       // Move on — check other orders
 
-    // â”€â”€ Cancelled â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Cancelled â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     } else if (lower.includes('cancelled') || lower.includes('canceled')) {
       console.log(`[SparkP2P] Sell order ${order.orderNumber} CANCELLED`);
       await fetch(`${API_BASE}/ext/report-orders`, {
@@ -3861,14 +3861,14 @@ async function idleScan(page) {
       delete lastSellDeficitMsg[order.orderNumber];
 
     } else {
-      console.log(`[SparkP2P] Sell order ${order.orderNumber} state unclear (${screen}) â€” will recheck next cycle`);
+      console.log(`[SparkP2P] Sell order ${order.orderNumber} state unclear (${screen}) â€" will recheck next cycle`);
     }
   }
 
   }  // end sell orders block
-  // â”€â”€ Step 5: Cycle through ALL buy orders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Step 5: Cycle through ALL buy orders â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   if (orders.buy.length > 0) {
-    console.log(`[SparkP2P] ðŸ'³ ${orders.buy.length} buy order(s) â€” cycling through all`);
+    console.log(`[SparkP2P] ðŸ'³ ${orders.buy.length} buy order(s) â€" cycling through all`);
   }
   if (botTradeMode === 'sell_only') {
     if (orders.buy.length > 0) console.log(`[SparkP2P] Skipping ${orders.buy.length} buy order(s) — mode: sell_only (trader handles manually)`);
@@ -3912,10 +3912,10 @@ async function idleScan(page) {
     const buyText = await page.evaluate(() => document.body.innerText).catch(() => '');
     const buyLower = buyText.toLowerCase();
 
-    // â”€â”€ Seller released crypto â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Seller released crypto â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     if (buyScreen === 'order_complete' ||
         buyLower.includes('order completed') || buyLower.includes('crypto received')) {
-      console.log(`[SparkP2P] âœ… Buy order ${order.orderNumber} COMPLETED â€” crypto received!`);
+      console.log(`[SparkP2P] âœ… Buy order ${order.orderNumber} COMPLETED â€" crypto received!`);
       const orderNum = order.orderNumber;
       // Only notify if this bot session actually sent the payment.
       // If buyPaymentSentAt is not set (bot restarted mid-order or order completed offline),
@@ -3946,8 +3946,8 @@ async function idleScan(page) {
       if (activeBuyOrderNumber === orderNum) activeBuyOrderNumber = null;
       stats.actions++;
 
-    // â”€â”€ Dispute / expired after we paid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // "appeal" text appears normally on Binance after payment confirmed â€” only treat it as
+    // â"€â"€ Dispute / expired after we paid â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // "appeal" text appears normally on Binance after payment confirmed â€" only treat it as
     // a dispute if the seller hasn't released after 20 minutes. "order expired" fires immediately.
     } else if (buyPaymentSentAt[order.orderNumber] && (() => {
         const minsWaited = Math.floor((Date.now() - buyPaymentSentAt[order.orderNumber]) / 60000);
@@ -3958,16 +3958,16 @@ async function idleScan(page) {
       const orderNum = order.orderNumber;
       const details = buyOrderDetailsMap[orderNum] || {};
       const minsWaited = Math.floor((Date.now() - buyPaymentSentAt[orderNum]) / 60000);
-      console.log(`[SparkP2P] ðŸš¨ Buy order ${orderNum} â€” dispute/expired after ${minsWaited}m â€” pausing ad & notifying trader`);
+      console.log(`[SparkP2P] ðŸš¨ Buy order ${orderNum} â€" dispute/expired after ${minsWaited}m â€" pausing ad & notifying trader`);
       await pauseBuyAdAndNotify(page, orderNum, buyOrderDetailsMap[orderNum]);
       await takeScreenshot(`paused ad: buy order ${orderNum}`);
       delete buyPaymentSentAt[orderNum];
       buyReminderSentOrders.delete(orderNum);
       if (activeBuyOrderNumber === orderNum) activeBuyOrderNumber = null;
 
-    // â”€â”€ Cancelled â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Cancelled â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     // Use Vision screen OR definitive past-tense phrases only.
-    // "order will be cancelled in X mins" is a WARNING â€” not a cancellation.
+    // "order will be cancelled in X mins" is a WARNING â€" not a cancellation.
     } else if (
       buyScreen === 'order_cancelled' ||
       buyLower.includes('order has been cancelled') ||
@@ -3986,13 +3986,13 @@ async function idleScan(page) {
       buyReminderSentOrders.delete(order.orderNumber);
       if (activeBuyOrderNumber === order.orderNumber) activeBuyOrderNumber = null;
 
-    // â”€â”€ We already paid â€” monitoring for seller release â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ We already paid â€" monitoring for seller release â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     } else if (buyPaymentSentAt[order.orderNumber]) {
       const minsWaiting = Math.floor((Date.now() - buyPaymentSentAt[order.orderNumber]) / 60000);
       const details = buyOrderDetailsMap[order.orderNumber] || {};
 
       if (minsWaiting >= 15) {
-        console.log(`[SparkP2P] ðŸš¨ Buy order ${order.orderNumber} â€” ${minsWaiting} min no release â€” pausing buy ad & notifying trader`);
+        console.log(`[SparkP2P] ðŸš¨ Buy order ${order.orderNumber} â€" ${minsWaiting} min no release â€" pausing buy ad & notifying trader`);
         await sendBinanceChatMessage(page,
           `Hi ${details.sellerName ? details.sellerName.split(' ')[0] : 'there'}, I sent KSh ${(details.amount || 0).toLocaleString()} ${minsWaiting} minutes ago and the crypto has not been released. I have notified the Binance support team. Please release the crypto at the earliest to avoid a formal dispute. Thank you.`
         );
@@ -4003,7 +4003,7 @@ async function idleScan(page) {
         buyReminderSentOrders.delete(order.orderNumber);
         if (activeBuyOrderNumber === order.orderNumber) activeBuyOrderNumber = null;
       } else if (minsWaiting >= 10 && !buyReminderSentOrders.has(order.orderNumber)) {
-        console.log(`[SparkP2P] â° Buy order ${order.orderNumber} â€” 10 min reminder to seller`);
+        console.log(`[SparkP2P] â° Buy order ${order.orderNumber} â€" 10 min reminder to seller`);
         await sendBinanceChatMessage(page,
           `Hi, just a friendly reminder — I sent the payment ${minsWaiting} minutes ago. Could you please release the crypto when you get a chance? Thank you! 😊`
         );
@@ -4012,10 +4012,10 @@ async function idleScan(page) {
       if (details.sellerName && anthropicApiKey) {
         await respondToBuyOrderChat(page, details);
       }
-      console.log(`[SparkP2P] Buy order ${order.orderNumber} â€” waiting ${minsWaiting}m for release (${buyScreen})`);
+      console.log(`[SparkP2P] Buy order ${order.orderNumber} â€" waiting ${minsWaiting}m for release (${buyScreen})`);
 
     // ── Payment sent but tracking lost (restart / manual pay) ────────────────
-    // If Binance shows “awaiting seller's release” but we have no buyPaymentSentAt
+    // If Binance shows "awaiting seller's release" but we have no buyPaymentSentAt
     // entry, the payment already happened. Set the timestamp now so the monitoring
     // block fires on the next cycle. DO NOT fall into the payment flow.
     } else if (
@@ -4027,7 +4027,7 @@ async function idleScan(page) {
     ) {
       buyPaymentSentAt[order.orderNumber] = Date.now();
       savePaidOrder(order.orderNumber, { source: 'restored', amount: order.fiatAmount });
-      console.log(`[SparkP2P] ⚠️ Buy order ${order.orderNumber} — “awaiting release” detected but tracking was lost — restored payment tracking, monitoring next cycle`);
+      console.log(`[SparkP2P] ⚠️ Buy order ${order.orderNumber} — "awaiting release" detected but tracking was lost — restored payment tracking, monitoring next cycle`);
       sendBotLog('warn', `Buy order ${order.orderNumber}: payment tracking restored — awaiting seller release. Will monitor for release or timeout.`);
 
     } else {
@@ -4170,10 +4170,10 @@ async function idleScan(page) {
                 { type: 'text', text: `Extract the payment details from this Binance P2P buy order page.
 Return JSON only (no other text):
 {
-  “method”: “mpesa | im_bank | other_bank”,
-  “phone”: “07XXXXXXXX or 254XXXXXXXXX â€” phone number if M-Pesa, else null”,
-  “account_number”: “bank account number if paying to a bank account, else null”,
-  "bank_name": "bank name e.g. 'I & M Bank', 'Equity Bank', 'KCB' â€” if bank transfer, else null",
+  "method": "mpesa | im_bank | other_bank",
+  "phone": "07XXXXXXXX or 254XXXXXXXXX â€" phone number if M-Pesa, else null",
+  "account_number": "bank account number if paying to a bank account, else null",
+  "bank_name": "bank name e.g. 'I & M Bank', 'Equity Bank', 'KCB' â€" if bank transfer, else null",
   "name": "seller full name",
   "amount": 1234,
   "network": "safaricom | airtel | null",
@@ -4207,7 +4207,7 @@ Method selection rules:
       const _localMissingPhone = !_localIsBank && (!paymentDetails?.phone || paymentDetails.phone.trim() === '');
       const _localMissingAccount = _localIsBank && (!paymentDetails?.account_number || !paymentDetails?.bank_name);
       if (!paymentDetails || !paymentDetails.amount || _localMissingPhone || _localMissingAccount) {
-        console.log(`[SparkP2P] Buy order ${order.orderNumber} â€” could not extract payment details, will retry next cycle`);
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} â€" could not extract payment details, will retry next cycle`);
         continue;
       }
 
@@ -4215,20 +4215,20 @@ Method selection rules:
       const firstName = (paymentDetails.name || 'Seller').split(' ')[0];
       const amt = Math.floor(parseFloat(paymentDetails.amount));
 
-      console.log(`[SparkP2P] ðŸ'³ Buy order ${order.orderNumber} â€” paying KSh ${amt} to ${paymentDetails.name} via ${method}`);
+      console.log(`[SparkP2P] ðŸ'³ Buy order ${order.orderNumber} â€" paying KSh ${amt} to ${paymentDetails.name} via ${method}`);
 
       // Choice Bank payment (replaced I&M Bank)
       let imResult = { success: false, screenshot: null, referenceId: null };
       let imNameMismatchAborted = false;
 
       if (imPaymentDoneMap[order.orderNumber]) {
-        console.log(“[SparkP2P] Choice Bank payment already done for “ + order.orderNumber + “ — skipping”);
+        console.log("[SparkP2P] Choice Bank payment already done for " + order.orderNumber + " — skipping");
         imResult = { success: true, ...imPaymentDoneMap[order.orderNumber] };
       } else if (imPaymentFailedOrders.has(order.orderNumber)) {
-        console.log(“[SparkP2P] Choice Bank payment previously failed for “ + order.orderNumber + “ — skipping”);
+        console.log("[SparkP2P] Choice Bank payment previously failed for " + order.orderNumber + " — skipping");
         continue;
       } else {
-        let verifiedName = “”;
+        let verifiedName = "";
 
         if (!imNameMismatchAborted) {
           // ── Step 1: Telegram approval — fires IMMEDIATELY after payment details extracted ──
@@ -4357,7 +4357,7 @@ Method selection rules:
           }
         }
       }
-      // Payment succeeded â€” store details and switch back to Binance
+      // Payment succeeded â€" store details and switch back to Binance
       // Payment failed / insufficient balance — do NOT tell the seller anything or click Transferred.
       if (!imResult.success) {
         console.log(`[SparkP2P] ⛔ Buy ${order.orderNumber} NOT paid (success=false) — skipping seller message & Transferred`);
@@ -4412,7 +4412,7 @@ Method selection rules:
                body.toLowerCase().includes('seller to release');
       }).catch(() => false);
       if (alreadyPending2) {
-        console.log(`[SparkP2P] âœ… Order ${order.orderNumber} already in "Pending Seller Release" â€” skipping upload & Transferred`);
+        console.log(`[SparkP2P] âœ… Order ${order.orderNumber} already in "Pending Seller Release" â€" skipping upload & Transferred`);
       }
 
       // Upload payment proof + handle confirmation
@@ -4465,18 +4465,18 @@ Method selection rules:
         body: JSON.stringify({ order_number: order.orderNumber, success: true, channel: method === 'mpesa' ? 'MPESA' : 'BANK' }),
       }).catch(() => {});
       stats.actions++;
-      console.log(`[SparkP2P] âœ… Buy order ${order.orderNumber} â€” paid and notified seller`);
+      console.log(`[SparkP2P] âœ… Buy order ${order.orderNumber} â€" paid and notified seller`);
     }
   }
 
   if (allActiveNums.length === 0) {
-    console.log('[SparkP2P] No active orders â€” staying idle');
+    console.log('[SparkP2P] No active orders â€" staying idle');
     // readOrders() at the start of the next poll will navigate to tab=0 — no need to pre-navigate here
   }
   }  // end buy orders block
 }
 
-// â”€â”€ Click an order row using DOM (reliable, no mouse needed) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Click an order row using DOM (reliable, no mouse needed) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 async function clickOrderWithMouse(page, orderNumber) {
   await takeScreenshot(`before_click_order_${orderNumber}`, page);
 
@@ -4497,7 +4497,7 @@ async function clickOrderWithMouse(page, orderNumber) {
         return 'order-number-text';
       }
     }
-    // Strategy 3: "Please release" link â€” click the row containing it
+    // Strategy 3: "Please release" link â€" click the row containing it
     const releaseEl = Array.from(document.querySelectorAll('a, span, div')).find(
       el => el.textContent.trim() === 'Please release'
     );
@@ -4519,9 +4519,9 @@ async function clickOrderWithMouse(page, orderNumber) {
   return true;
 }
 
-// â”€â”€ Focused order monitor â€” runs every 20s while an order is active â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Focused order monitor â€" runs every 20s while an order is active â"€â"€â"€â"€â"€â"€â"€â"€â"€
 async function navigateToOrderDetail(page, orderNumber) {
-  if (pauseNavigation) { console.log('[SparkP2P] Navigation paused â€” skipping order navigation'); return false; }
+  if (pauseNavigation) { console.log('[SparkP2P] Navigation paused â€" skipping order navigation'); return false; }
   console.log(`[SparkP2P] Navigating to order ${orderNumber} via orders list`);
   await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
     { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
@@ -4558,9 +4558,9 @@ async function navigateToOrderDetail(page, orderNumber) {
 
 async function monitorActiveOrder(page) {
   const orderNum = activeOrderNumber;
-  console.log(`[SparkP2P] â”€â”€ FOCUSED ORDER MONITOR: ${orderNum} â”€â”€`);
+  console.log(`[SparkP2P] â"€â"€ FOCUSED ORDER MONITOR: ${orderNum} â"€â"€`);
 
-  // Navigate DIRECTLY to the order detail page â€” do NOT go via the orders list
+  // Navigate DIRECTLY to the order detail page â€" do NOT go via the orders list
   await page.goto(
     `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNum}`,
     { waitUntil: 'domcontentloaded', timeout: 15000 }
@@ -4568,7 +4568,7 @@ async function monitorActiveOrder(page) {
   await new Promise(r => setTimeout(r, 3000));
   if (pauseNavigation || !pollerRunning) return;
 
-  // â”€â”€ Persistent loop â€” stay on this page until the order resolves â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Persistent loop â€" stay on this page until the order resolves â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   // Bot never leaves the order page between checks. Reload every 15s.
   // Max 25 minutes (P2P orders expire in 15 min, 10 min buffer for release steps).
   const MAX_ORDER_MS   = 25 * 60 * 1000;
@@ -4590,9 +4590,9 @@ async function monitorActiveOrder(page) {
 
     const screen = info.screen;
 
-    // â”€â”€ ORDER COMPLETE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ ORDER COMPLETE â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     if (screen === 'order_complete') {
-      console.log(`[SparkP2P] âœ… Order ${orderNum} COMPLETED â€” reporting release`);
+      console.log(`[SparkP2P] âœ… Order ${orderNum} COMPLETED â€" reporting release`);
       await fetch(`${API_BASE}/ext/report-release`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -4603,19 +4603,19 @@ async function monitorActiveOrder(page) {
       return;
     }
 
-    // â”€â”€ STILL WAITING FOR BUYER PAYMENT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STILL WAITING FOR BUYER PAYMENT â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     if (screen === 'awaiting_payment' || screen === 'payment_processing') {
       const elapsed = Math.round((Date.now() - loopStart) / 1000);
-      console.log(`[SparkP2P] Order ${orderNum} â€” waiting for buyer (${elapsed}s elapsed)`);
+      console.log(`[SparkP2P] Order ${orderNum} â€" waiting for buyer (${elapsed}s elapsed)`);
       await new Promise(r => setTimeout(r, CHECK_WAIT_MS));
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
       await new Promise(r => setTimeout(r, 2000));
       continue;
     }
 
-    // â”€â”€ BUYER HAS PAID â€” VERIFY THEN RELEASE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ BUYER HAS PAID â€" VERIFY THEN RELEASE â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     if (screen === 'verify_payment') {
-      console.log(`[SparkP2P] Order ${orderNum} shows VERIFY PAYMENT â€” checking M-Pesa...`);
+      console.log(`[SparkP2P] Order ${orderNum} shows VERIFY PAYMENT â€" checking M-Pesa...`);
 
       // Acknowledge buyer if they already sent proof in chat
       const buyerAlreadySent = await page.evaluate(() => {
@@ -4641,7 +4641,7 @@ async function monitorActiveOrder(page) {
 
       const { verified: verified, reason: verifyReason2 } = await verifyMpesaPayment(orderNum, activeOrderFiatAmount || info.fiat_amount_kes, page);
       if (verified) {
-        console.log(`[SparkP2P] âœ… M-Pesa confirmed â€” releasing`);
+        console.log(`[SparkP2P] âœ… M-Pesa confirmed â€" releasing`);
         await page.keyboard.press('Escape').catch(() => {});
         await new Promise(r => setTimeout(r, 800));
 
@@ -4679,16 +4679,16 @@ async function monitorActiveOrder(page) {
       }
     }
 
-    // â”€â”€ MID-RELEASE STATES â€” continue vision loop immediately â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ MID-RELEASE STATES â€" continue vision loop immediately â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     if (['confirm_release_modal','passkey_failed','security_verification','totp_input','email_otp_input'].includes(screen)) {
-      console.log(`[SparkP2P] Order ${orderNum} mid-release (${screen}) â€” continuing`);
+      console.log(`[SparkP2P] Order ${orderNum} mid-release (${screen}) â€" continuing`);
       await releaseWithVision(page, orderNum, {});
       codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
       return;
     }
 
-    // â”€â”€ DOM TEXT FALLBACK (Vision returned unknown) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ DOM TEXT FALLBACK (Vision returned unknown) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
     const lower = pageText.toLowerCase();
 
@@ -4704,7 +4704,7 @@ async function monitorActiveOrder(page) {
     }
 
     if (lower.includes('order completed') || lower.includes('sale successful') || lower.includes('released')) {
-      console.log(`[SparkP2P] Order ${orderNum} COMPLETED (DOM text) â€” reporting release`);
+      console.log(`[SparkP2P] Order ${orderNum} COMPLETED (DOM text) â€" reporting release`);
       await fetch(`${API_BASE}/ext/report-release`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -4715,7 +4715,7 @@ async function monitorActiveOrder(page) {
       return;
     }
 
-    // NOTE: do NOT match 'confirm payment' â€” that button appears on ALL sell order pages
+    // NOTE: do NOT match 'confirm payment' â€" that button appears on ALL sell order pages
     if (lower.includes('verify payment') || lower.includes('payment received')) {
       const { verified: verified3, reason: verifyReason3 } = await verifyMpesaPayment(orderNum, activeOrderFiatAmount, page);
       if (verified3) {
@@ -4734,13 +4734,13 @@ async function monitorActiveOrder(page) {
             'Hello! I can see you have made your payment but I\'m having trouble reading the screenshot. Could you please TYPE your M-Pesa confirmation code in this chat (e.g. QE1FXYZABC)? I will verify it immediately. Thank you!'
           );
         } else {
-          console.log(`[SparkP2P] Already asked buyer for code (DOM path) â€” waiting`);
+          console.log(`[SparkP2P] Already asked buyer for code (DOM path) â€" waiting`);
         }
       }
     }
 
-    // Unknown state â€” wait and reload
-    console.log(`[SparkP2P] Order ${orderNum} state unclear (${screen}) â€” reloading in ${CHECK_WAIT_MS / 1000}s`);
+    // Unknown state â€" wait and reload
+    console.log(`[SparkP2P] Order ${orderNum} state unclear (${screen}) â€" reloading in ${CHECK_WAIT_MS / 1000}s`);
     await new Promise(r => setTimeout(r, CHECK_WAIT_MS));
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 2000));
@@ -4750,7 +4750,7 @@ async function monitorActiveOrder(page) {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// MARKET PRICES â€” Read buy/sell prices from P2P page
+// MARKET PRICES â€" Read buy/sell prices from P2P page
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 async function readMarketPrices() {
@@ -4802,7 +4802,7 @@ async function readMarketPrices() {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// MY AD PRICES â€” Vision-scrape trader's own buy/sell prices
+// MY AD PRICES â€" Vision-scrape trader's own buy/sell prices
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 const MY_ADS_URL = 'https://p2p.binance.com/en/myads?type=normal&code=default';
@@ -4872,10 +4872,10 @@ async function scanMyAdPrices() {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// SCREENSHOT â€” Capture page and send to VPS
+// SCREENSHOT â€" Capture page and send to VPS
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// â”€â”€ Screenshots folder â€” all bot screenshots saved here for review â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Screenshots folder â€" all bot screenshots saved here for review â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const screenshotsDir = path.join(app.getPath('userData'), 'sparkp2p-screenshots');
 try { fs.mkdirSync(screenshotsDir, { recursive: true }); } catch (e) {}
 
@@ -4910,7 +4910,7 @@ async function takeScreenshot(reason, specificPage) {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// TOTP â€” Generate Google Authenticator code from base32 secret
+// TOTP â€" Generate Google Authenticator code from base32 secret
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 function generateTOTP(secret) {
@@ -4971,11 +4971,11 @@ function generateTOTPAtCounter(secret, counter) {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// PIN/PASSKEY ENTRY â€” Auto-enter security code when Binance asks
+// PIN/PASSKEY ENTRY â€" Auto-enter security code when Binance asks
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// â”€â”€ Read email OTP from Gmail (opened in new Chrome tab) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€ Read Binance OTP from Gmail â€” smart version â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Read email OTP from Gmail (opened in new Chrome tab) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// â"€â"€ Read Binance OTP from Gmail â€" smart version â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // â€¢ Searches for all recent Binance emails, picks the NEWEST one sent within
 //   the last 10 minutes (OTPs expire in 10 min on Binance).
 // â€¢ If no qualifying email found, returns null so the caller can resend.
@@ -5007,7 +5007,7 @@ async function _readEmailOTPOnce(gmailPage, sentAfterMs) {
   if (emails.length === 0) return null;
 
   // Find the most recent email that was sent AFTER sentAfterMs
-  // Gmail timestamps are like "Apr 2, 2026, 3:45 PM" â€” parse them
+  // Gmail timestamps are like "Apr 2, 2026, 3:45 PM" â€" parse them
   let targetIdx = null;
   const now = Date.now();
   const OTP_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
@@ -5030,7 +5030,7 @@ async function _readEmailOTPOnce(gmailPage, sentAfterMs) {
         console.log(`[SparkP2P] Email too old (${Math.round(ageMs/1000)}s), skipping`);
       }
     } else {
-      // Can't parse time â€” fall back to just using the first (newest) email
+      // Can't parse time â€" fall back to just using the first (newest) email
       // if it arrived after we triggered the send
       if (targetIdx === null) targetIdx = email.idx;
     }
@@ -5051,10 +5051,10 @@ async function _readEmailOTPOnce(gmailPage, sentAfterMs) {
   if (!clicked) return null;
   await new Promise(r => setTimeout(r, 2000));
 
-  // Extract 6-digit OTP â€” look for patterns like "123456" or "Your code is 123456"
+  // Extract 6-digit OTP â€" look for patterns like "123456" or "Your code is 123456"
   const emailText = await gmailPage.evaluate(() => document.body.innerText).catch(() => '');
 
-  // Match 6-digit code â€” prefer one near keywords like "code", "verification", "OTP"
+  // Match 6-digit code â€" prefer one near keywords like "code", "verification", "OTP"
   const lines = emailText.split('\n');
   let code = null;
   for (const line of lines) {
@@ -5079,7 +5079,7 @@ async function _readEmailOTPOnce(gmailPage, sentAfterMs) {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// IMAP EMAIL OTP â€” reads Binance verification code from Gmail via IMAP
+// IMAP EMAIL OTP â€" reads Binance verification code from Gmail via IMAP
 // No browser tab needed. Direct connection to Gmail.
 // Requires Gmail App Password configured in settings.
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -5121,7 +5121,7 @@ async function readEmailOTPviaIMAP(sentAfterMs = Date.now() - 120000) {
 
     if (!emailText) { console.log('[SparkP2P] Gmail IMAP: empty email body'); return null; }
 
-    // Extract 6-digit code — prefer line near “code”, “verification”, “otp”
+    // Extract 6-digit code — prefer line near "code", "verification", "otp"
     const lines = emailText.split(/[\r\n]+/);
     let code = null;
     for (const line of lines) {
@@ -5197,7 +5197,7 @@ async function _imapSearch({ sender, digits, sentAfterMs }) {
   }
 }
 
-// â”€â”€ Vision-based Gmail OTP reader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Vision-based Gmail OTP reader â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 async function readEmailOTPWithVision(binancePage = null) {
   if (!browser) return null;
   const sentAt = Date.now();
@@ -5227,7 +5227,7 @@ async function readEmailOTPWithVision(binancePage = null) {
     });
 
     if (!clicked) {
-      console.log(`[Vision] Gmail: no email yet (attempt ${attempt}/3) â€” waiting 8s...`);
+      console.log(`[Vision] Gmail: no email yet (attempt ${attempt}/3) â€" waiting 8s...`);
       await new Promise(r => setTimeout(r, 8000));
       continue;
     }
@@ -5264,13 +5264,13 @@ async function readEmailOTPWithVision(binancePage = null) {
       console.log('[Vision] Gmail Vision OTP error:', e.message?.substring(0, 60));
     }
 
-    console.log(`[Vision] OTP not found in email (attempt ${attempt}/3) â€” retrying...`);
+    console.log(`[Vision] OTP not found in email (attempt ${attempt}/3) â€" retrying...`);
     await new Promise(r => setTimeout(r, 8000));
   }
   return null;
 }
 
-// â”€â”€ Main readEmailOTP â€” with retry + resend logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Main readEmailOTP â€" with retry + resend logic â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Tries up to MAX_ATTEMPTS times. On each failed attempt it goes back to the
 // Binance tab and clicks the resend button before trying Gmail again.
 async function readEmailOTP(binancePage = null) {
@@ -5280,9 +5280,9 @@ async function readEmailOTP(binancePage = null) {
   const RESEND_WAIT_MS   = 8000;
   const sentAt = Date.now();
 
-  // Ensure persistent Gmail tab is open â€” open it now if it was closed
+  // Ensure persistent Gmail tab is open â€" open it now if it was closed
   if (!gmailPage || gmailPage.isClosed()) {
-    console.log('[SparkP2P] Gmail tab not open â€” opening now...');
+    console.log('[SparkP2P] Gmail tab not open â€" opening now...');
     await openGmailTab();
   }
   if (!gmailPage) { console.error('[SparkP2P] Could not open Gmail tab'); return null; }
@@ -5290,19 +5290,19 @@ async function readEmailOTP(binancePage = null) {
   // If Gmail tab is on login page, wait up to 60s for user to log in
   const gmailUrl = gmailPage.url();
   if (gmailUrl.includes('accounts.google.com') || gmailUrl.includes('/signin')) {
-    console.log('[SparkP2P] Gmail not logged in â€” waiting up to 60s for user to sign in...');
+    console.log('[SparkP2P] Gmail not logged in â€" waiting up to 60s for user to sign in...');
     await gmailPage.bringToFront();
     const loginDeadline = Date.now() + 60000;
     while (Date.now() < loginDeadline) {
       await new Promise(r => setTimeout(r, 2000));
       const url = gmailPage.url();
       if (!url.includes('accounts.google.com') && !url.includes('/signin')) {
-        console.log('[SparkP2P] Gmail login detected â€” proceeding with OTP read');
+        console.log('[SparkP2P] Gmail login detected â€" proceeding with OTP read');
         break;
       }
     }
     if (gmailPage.url().includes('accounts.google.com')) {
-      console.error('[SparkP2P] Gmail login timeout â€” could not read OTP');
+      console.error('[SparkP2P] Gmail login timeout â€" could not read OTP');
       return null;
     }
   }
@@ -5319,8 +5319,8 @@ async function readEmailOTP(binancePage = null) {
         return imapCode;
       }
 
-      // IMAP unavailable or no email yet â€” fall back to Gmail browser tab
-      console.log('[SparkP2P] IMAP: no code yet â€” trying Gmail browser tab...');
+      // IMAP unavailable or no email yet â€" fall back to Gmail browser tab
+      console.log('[SparkP2P] IMAP: no code yet â€" trying Gmail browser tab...');
       await gmailPage.bringToFront();
       const code = await _readEmailOTPOnce(gmailPage, sentAt);
       if (code) {
@@ -5329,9 +5329,9 @@ async function readEmailOTP(binancePage = null) {
         return code;
       }
 
-      // No OTP yet â€” click Resend on Binance then wait again
+      // No OTP yet â€" click Resend on Binance then wait again
       if (attempt < MAX_ATTEMPTS && binancePage) {
-        console.log('[SparkP2P] OTP not arrived â€” switching to Binance to resend...');
+        console.log('[SparkP2P] OTP not arrived â€" switching to Binance to resend...');
         await binancePage.bringToFront();
         const resent = await binancePage.evaluate(() => {
           const btn = Array.from(document.querySelectorAll('button, span, a')).find(el => {
@@ -5353,10 +5353,10 @@ async function readEmailOTP(binancePage = null) {
     if (binancePage) await binancePage.bringToFront().catch(() => {});
     return null;
   }
-  // Note: gmailPage stays open â€” it's a persistent tab
+  // Note: gmailPage stays open â€" it's a persistent tab
 }
 
-// â”€â”€ Type a 6-digit code using real keyboard events (like a human) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Type a 6-digit code using real keyboard events (like a human) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Returns the CSS selector of the input that was focused, or null if not found.
 async function _findInputNearLabel(page, labelKeyword) {
   // Returns { type: 'split'|'single', selector: string } or null
@@ -5428,7 +5428,7 @@ async function enterCodeIntoSection(page, labelKeyword, code) {
     return true;
 
   } else {
-    // Single input â€” click it, clear it, type the whole code
+    // Single input â€" click it, clear it, type the whole code
     const inp = await page.$(`[data-sparkfind="${found.attr}"]`);
     if (!inp) return false;
     await inp.click({ clickCount: 3 }); // triple-click to select all
@@ -5444,7 +5444,7 @@ async function enterCodeIntoSection(page, labelKeyword, code) {
 async function handleSecurityVerification(page) {
   await new Promise(r => setTimeout(r, 2000));
 
-  // Detect what Binance is asking for â€” may be multiple fields
+  // Detect what Binance is asking for â€" may be multiple fields
   const verification = await page.evaluate(() => {
     const text = document.body.innerText.toLowerCase();
     const hasEmail = text.includes('email verification') || text.includes('email code') || text.includes('email address');
@@ -5460,13 +5460,13 @@ async function handleSecurityVerification(page) {
     return true;
   }
 
-  console.log(`[SparkP2P] Verification needed â€” email:${verification.hasEmail} auth:${verification.hasAuth} fundpw:${verification.hasFundPw}`);
+  console.log(`[SparkP2P] Verification needed â€" email:${verification.hasEmail} auth:${verification.hasAuth} fundpw:${verification.hasFundPw}`);
   await takeScreenshot('Security verification');
 
   try {
-    // Passkey bypass â€” Vision finds "My Passkeys Are Not Available" and clicks it
+    // Passkey bypass â€" Vision finds "My Passkeys Are Not Available" and clicks it
     if (verification.hasPasskey && !verification.hasAuth && !verification.hasEmail) {
-      console.log('[SparkP2P] Passkey screen â€” Vision clicking "My Passkeys Are Not Available"...');
+      console.log('[SparkP2P] Passkey screen â€" Vision clicking "My Passkeys Are Not Available"...');
       let bypassed = false;
       for (const frame of [page, ...page.frames()]) {
         try {
@@ -5489,7 +5489,7 @@ async function handleSecurityVerification(page) {
         } catch (_) {}
       }
       if (bypassed) {
-        console.log('[SparkP2P] Passkey bypass clicked â€” waiting for TOTP/email form...');
+        console.log('[SparkP2P] Passkey bypass clicked â€" waiting for TOTP/email form...');
         await new Promise(r => setTimeout(r, 2500));
         const recheck = await page.evaluate(() => {
           const text = document.body.innerText.toLowerCase();
@@ -5502,7 +5502,7 @@ async function handleSecurityVerification(page) {
         if (recheck.hasAuth) verification.hasAuth = true;
         if (recheck.hasEmail) verification.hasEmail = true;
         if (recheck.hasFundPw) verification.hasFundPw = true;
-        console.log(`[SparkP2P] After bypass â€” email:${verification.hasEmail} auth:${verification.hasAuth}`);
+        console.log(`[SparkP2P] After bypass â€" email:${verification.hasEmail} auth:${verification.hasAuth}`);
       } else {
         console.log('[SparkP2P] Passkey bypass: Vision could not locate link');
         await takeScreenshot('Passkey bypass failed');
@@ -5510,7 +5510,7 @@ async function handleSecurityVerification(page) {
       }
     }
 
-    // â”€â”€ Google Authenticator â”€â”€
+    // â"€â"€ Google Authenticator â"€â"€
     if (verification.hasAuth) {
       if (!totpSecret) {
         console.log('[SparkP2P] TOTP required but not configured');
@@ -5544,9 +5544,9 @@ async function handleSecurityVerification(page) {
       }
     }
 
-    // â”€â”€ Email OTP â€” read from Gmail â”€â”€
+    // â"€â"€ Email OTP â€" read from Gmail â"€â"€
     if (verification.hasEmail) {
-      console.log('[SparkP2P] Email OTP required â€” fetching from Gmail...');
+      console.log('[SparkP2P] Email OTP required â€" fetching from Gmail...');
       // Click "Get Code" / "Send Code" if present (triggers the email send)
       const sentCode = await page.evaluate(() => {
         const btn = Array.from(document.querySelectorAll('button, a, span')).find(b =>
@@ -5574,13 +5574,13 @@ async function handleSecurityVerification(page) {
         }
         console.log(`[SparkP2P] Email OTP ${entered ? 'entered' : 'FAILED to enter'}`);
       } else {
-        console.log('[SparkP2P] Could not get email OTP â€” manual intervention needed');
-        await takeScreenshot('Email OTP required â€” manual needed');
+        console.log('[SparkP2P] Could not get email OTP â€" manual intervention needed');
+        await takeScreenshot('Email OTP required â€" manual needed');
         return false;
       }
     }
 
-    // â”€â”€ Fund Password â”€â”€
+    // â"€â"€ Fund Password â"€â"€
     if (verification.hasFundPw && traderPin) {
       const inp = await page.$('input[type="password"]');
       if (inp) {
@@ -5591,7 +5591,7 @@ async function handleSecurityVerification(page) {
       console.log('[SparkP2P] Fund password entered');
     }
 
-    // â”€â”€ Submit â€” try clicking the button, then press Enter as backup â”€â”€
+    // â"€â"€ Submit â€" try clicking the button, then press Enter as backup â"€â"€
     await new Promise(r => setTimeout(r, 600));
     const btnClicked = await page.evaluate(() => {
       const btn = Array.from(document.querySelectorAll('button')).find(b => {
@@ -5602,8 +5602,8 @@ async function handleSecurityVerification(page) {
       return false;
     });
     if (!btnClicked) {
-      // No button found â€” press Enter on keyboard (works on most forms)
-      console.log('[SparkP2P] No submit button found â€” pressing Enter');
+      // No button found â€" press Enter on keyboard (works on most forms)
+      console.log('[SparkP2P] No submit button found â€" pressing Enter');
       await page.keyboard.press('Enter');
     }
 
@@ -5620,7 +5620,7 @@ async function handleSecurityVerification(page) {
       await takeScreenshot('Verification passed');
       return true;
     } else {
-      console.log('[SparkP2P] Verification may have failed â€” inputs still visible');
+      console.log('[SparkP2P] Verification may have failed â€" inputs still visible');
       await takeScreenshot('Verification may have failed');
       return false;
     }
@@ -5631,7 +5631,7 @@ async function handleSecurityVerification(page) {
   }
 }
 
-// â”€â”€ Dismiss any Binance info/warning modals that block the order page â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Dismiss any Binance info/warning modals that block the order page â"€â"€â"€â"€â"€â"€â"€â"€
 // Handles: "Payment Completed?" → "I Understand", generic OK/Got It dialogs
 async function dismissBinanceModals(page) {
   const dismissed = await page.evaluate(() => {
@@ -5647,13 +5647,13 @@ async function dismissBinanceModals(page) {
     return null;
   }).catch(() => null);
   if (dismissed) {
-    console.log(`[SparkP2P] Dismissed modal â€” clicked "${dismissed}"`);
+    console.log(`[SparkP2P] Dismissed modal â€" clicked "${dismissed}"`);
     await new Promise(r => setTimeout(r, 800));
   }
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// CLICK HELPER â€” Find and click buttons by text, AI fallback
+// CLICK HELPER â€" Find and click buttons by text, AI fallback
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 async function clickButton(page, ...textOptions) {
@@ -5672,7 +5672,7 @@ async function clickButton(page, ...textOptions) {
   if (clicked) { console.log(`[SparkP2P] Clicked: "${clicked}"`); return true; }
 
   // AI fallback: take screenshot, ask AI to identify the button and give us its exact text
-  console.log(`[SparkP2P] Button not found by text (${textOptions[0]}...) â€” asking AI`);
+  console.log(`[SparkP2P] Button not found by text (${textOptions[0]}...) â€" asking AI`);
   try {
     const screenshot = await page.screenshot({ type: 'jpeg', quality: 70 });
     const aiResult = await aiScanner.analyzeScreenshot(screenshot, `
@@ -5699,13 +5699,13 @@ async function clickButton(page, ...textOptions) {
     if (aiResult?.all_buttons?.length) {
       console.log(`[SparkP2P] AI visible buttons: ${aiResult.all_buttons.slice(0, 8).join(' | ')}`);
     }
-  } catch (e) { /* AI unavailable â€” not critical */ }
+  } catch (e) { /* AI unavailable â€" not critical */ }
 
   return false;
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// SMART CHAT â€” Vision reads chat history, generates unique messages
+// SMART CHAT â€" Vision reads chat history, generates unique messages
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 // Analyse the chat panel: who sent last, how long ago, conversation context
@@ -5769,7 +5769,7 @@ ${contextInfo}
 
 Write ONE short, natural message to send to the buyer (max 2 sentences).
 - Sound human, not robotic
-- Vary wording â€” never repeat the same phrase twice
+- Vary wording â€" never repeat the same phrase twice
 - Be warm but professional
 - Do NOT include greetings like "Hello" or "Hi" if you've already been chatting
 Return ONLY the message text. No quotes, no JSON.`;
@@ -5838,10 +5838,10 @@ async function injectChatMonitor(page, { orderNumber, fiatAmount, buyerName, ord
 
     const findContainer = () => {
       const tries = [
-        '[class*=”ChatMessageList”]', '[class*=”chat-message-list”]',
-        '[class*=”messageList”]',     '[class*=”chatContent”]',
-        '[class*=”chat-content”]',    '[class*=”ChatPanel”]',
-        '[class*=”im-chat”]',
+        '[class*="ChatMessageList"]', '[class*="chat-message-list"]',
+        '[class*="messageList"]',     '[class*="chatContent"]',
+        '[class*="chat-content"]',    '[class*="ChatPanel"]',
+        '[class*="im-chat"]',
       ];
       for (const sel of tries) {
         const el = document.querySelector(sel);
@@ -5884,7 +5884,7 @@ async function injectChatMonitor(page, { orderNumber, fiatAmount, buyerName, ord
             if (!isBuyer) continue;
 
             // Extract text from the most specific text-bearing child
-            const textEl = msgEl.querySelector?.('p,[class*=”text”],[class*=”content”],span') || msgEl;
+            const textEl = msgEl.querySelector?.('p,[class*="text"],[class*="content"],span') || msgEl;
             const text   = textEl.textContent?.trim() || '';
 
             // Skip our own echoed messages
@@ -5948,7 +5948,7 @@ async function handleBuyerChatMessage(page, { text, imgs, orderNumber, fiatAmoun
   // Ignore if we're already in the middle of a release for this order
   if (activeOrderNumber === orderNumber) return;
 
-  console.log(`[SparkChat] Order ${orderNumber} — buyer: “${(text || '').substring(0, 80)}” +${imgs?.length || 0} img`);
+  console.log(`[SparkChat] Order ${orderNumber} — buyer: "${(text || '').substring(0, 80)}" +${imgs?.length || 0} img`);
 
   if (!orderChatHistory.has(orderNumber)) orderChatHistory.set(orderNumber, []);
   const history = orderChatHistory.get(orderNumber);
@@ -5996,15 +5996,15 @@ Order details:
 
 Respond ONLY with valid JSON — no markdown, no extra text:
 {
-  “action”: “reply” | “notify_trader” | “wait”,
-  “message”: “<message to seller or null>”,
-  “reason”: “<one line>”
+  "action": "reply" | "notify_trader" | "wait",
+  "message": "<message to seller or null>",
+  "reason": "<one line>"
 }
 
 Action rules:
-- “reply” — respond to the seller's message
-- “notify_trader” — seller is threatening, demanding extra payment, or clearly scamming
-- “wait” — stay silent (just responded, waiting for seller)
+- "reply" — respond to the seller's message
+- "notify_trader" — seller is threatening, demanding extra payment, or clearly scamming
+- "wait" — stay silent (just responded, waiting for seller)
 
 Guidelines:
 - Respond in seller's language (English or Swahili)
@@ -6013,7 +6013,7 @@ Guidelines:
 - If seller asks where you sent the money: confirm the phone/account (${paymentInfo?.phone || paymentInfo?.account_number || 'see receipt'}), amount KES ${(fiatAmount || 0).toLocaleString()}, and reference ${paymentInfo?.referenceId || 'see receipt'}
 - If seller says they haven't received the money: politely ask them to check again and mention the reference number
 - If seller is asking for more money or delaying without reason: notify_trader
-- After you've replied, use “wait” next turn so you don't repeat yourself`
+- After you've replied, use "wait" next turn so you don't repeat yourself`
     : `You are a professional, friendly crypto trading assistant managing a P2P sell order on Binance.
 
 Order details:
@@ -6024,17 +6024,17 @@ Order details:
 
 Respond ONLY with valid JSON — no markdown, no extra text:
 {
-  “action”: “reply” | “verify_and_release” | “notify_trader” | “wait”,
-  “message”: “<message to buyer or null>”,
-  “mpesa_code”: “<M-Pesa transaction code e.g. QE1FXYZABC or null>”,
-  “reason”: “<one line>”
+  "action": "reply" | "verify_and_release" | "notify_trader" | "wait",
+  "message": "<message to buyer or null>",
+  "mpesa_code": "<M-Pesa transaction code e.g. QE1FXYZABC or null>",
+  "reason": "<one line>"
 }
 
 Action rules:
-- “reply” — send a message to the buyer
-- “verify_and_release” — you found a valid M-Pesa code in the image or text. Put it in mpesa_code. The system will verify before releasing.
-- “notify_trader” — buyer is threatening, disputing, or clearly attempting fraud. Include a message field.
-- “wait” — stay silent (you just responded and are waiting for buyer action)
+- "reply" — send a message to the buyer
+- "verify_and_release" — you found a valid M-Pesa code in the image or text. Put it in mpesa_code. The system will verify before releasing.
+- "notify_trader" — buyer is threatening, disputing, or clearly attempting fraud. Include a message field.
+- "wait" — stay silent (you just responded and are waiting for buyer action)
 
 Guidelines:
 - Respond in buyer's language (English or Swahili)
@@ -6043,9 +6043,9 @@ Guidelines:
 - Payment instructions if buyer asks: Paybill ${paybill || '4041355'}, Account ${accountNumber || 'P2PT0001'}, Amount KES ${(fiatAmount || 0).toLocaleString()}
 - If buyer sends a screenshot: scan it for an M-Pesa transaction code (10-char alphanumeric like QE1FXYZABC). If found → verify_and_release. If not visible → reply asking them to type it.
 - If buyer types a 10-char alphanumeric code directly → verify_and_release
-- If buyer says “I've paid” / “nimetuma” with no proof → reply asking for screenshot or M-Pesa code
+- If buyer says "I've paid" / "nimetuma" with no proof → reply asking for screenshot or M-Pesa code
 - If buyer is clearly threatening or claiming to have paid with zero proof after 2 attempts → notify_trader
-- After you've asked for something, use “wait” next turn so you don't repeat yourself`;
+- After you've asked for something, use "wait" next turn so you don't repeat yourself`;
 
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -6121,12 +6121,12 @@ Guidelines:
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
           message: `Buyer on order ${orderNumber} (KES ${(fiatAmount || 0).toLocaleString()}) needs your attention. ` +
-                   `Last message: “${(text || '').substring(0, 150)}”`,
+                   `Last message: "${(text || '').substring(0, 150)}"`,
         }),
       }).catch(() => {});
 
     } else {
-      // “wait” — stay silent
+      // "wait" — stay silent
       console.log(`[SparkChat] Waiting silently.`);
     }
   } catch (e) {
@@ -6134,7 +6134,7 @@ Guidelines:
   }
 }
 
-// â”€â”€ Send a chat message on an order page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Send a chat message on an order page â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Handles both <textarea>/<input> and div[contenteditable] (Binance P2P uses the latter).
 async function sendChatMessageVision(page, message) { return sendChatMessage(page, message); }
 async function sendChatMessage(page, message) {
@@ -6142,13 +6142,13 @@ async function sendChatMessage(page, message) {
     await page.keyboard.press('Escape').catch(() => {});
     await new Promise(r => setTimeout(r, 500));
 
-    // â”€â”€ Step 1: Type message into the chat input â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step 1: Type message into the chat input â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const typed = await page.evaluate((msg) => {
       // Check textarea/input first, then contenteditable divs
       const textareaSelectors = [
-        'textarea[placeholder*=”message” i]',
-        'textarea[placeholder*=”enter” i]',
-        'input[placeholder*=”message” i]',
+        'textarea[placeholder*="message" i]',
+        'textarea[placeholder*="enter" i]',
+        'input[placeholder*="message" i]',
         'textarea',
       ];
       let input = null;
@@ -6164,7 +6164,7 @@ async function sendChatMessage(page, message) {
 
       if (!input) {
         // Binance P2P uses a contenteditable div for the chat input
-        const editables = document.querySelectorAll('div[contenteditable=”true”]');
+        const editables = document.querySelectorAll('div[contenteditable="true"]');
         for (const el of editables) {
           if (el.offsetParent !== null) { input = el; isContentEditable = true; break; }
         }
@@ -6184,7 +6184,7 @@ async function sendChatMessage(page, message) {
         return true;
       }
 
-      // textarea / input â€” use React native value setter so onChange fires
+      // textarea / input â€" use React native value setter so onChange fires
       const proto = input.tagName === 'TEXTAREA'
         ? window.HTMLTextAreaElement.prototype
         : window.HTMLInputElement.prototype;
@@ -6206,11 +6206,11 @@ async function sendChatMessage(page, message) {
       try {
         const ssBase64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 80 });
         const coordsRaw = await visionAsk(ssBase64,
-          'Find the chat message input box at the bottom right of the page (it usually says “Enter message here” or similar). ' +
-          'Return ONLY a JSON object: {“x”: <number>, “y”: <number>} with the center pixel coordinates. No other text.',
+          'Find the chat message input box at the bottom right of the page (it usually says "Enter message here" or similar). ' +
+          'Return ONLY a JSON object: {"x": <number>, "y": <number>} with the center pixel coordinates. No other text.',
           80
         );
-        const m = coordsRaw.match(/\{\s*”x”\s*:\s*(\d+)\s*,\s*”y”\s*:\s*(\d+)\s*\}/);
+        const m = coordsRaw.match(/\{\s*"x"\s*:\s*(\d+)\s*,\s*"y"\s*:\s*(\d+)\s*\}/);
         if (m) {
           const cx = parseInt(m[1]);
           const cy = parseInt(m[2]);
@@ -6252,7 +6252,7 @@ async function sendChatMessage(page, message) {
     await page.keyboard.press('Enter');
 
     await new Promise(r => setTimeout(r, 1000));
-    console.log(`[SparkP2P] âœ… Message sent: “${message.substring(0, 60)}”`);
+    console.log(`[SparkP2P] âœ… Message sent: "${message.substring(0, 60)}"`);
     return true;
 
   } catch (e) {
@@ -6262,20 +6262,20 @@ async function sendChatMessage(page, message) {
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// CLAUDE VISION â€” Screenshot-based page analysis
+// CLAUDE VISION â€" Screenshot-based page analysis
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 const VISION_PROMPT = `You are analyzing a Binance P2P order page screenshot.
 Extract ALL data with perfect precision and identify the exact screen state.
 
-Return ONLY a valid JSON object â€” no markdown, no explanation, no code fences.
+Return ONLY a valid JSON object â€" no markdown, no explanation, no code fences.
 
 {
   "screen": "<orders_list|awaiting_payment|payment_processing|verify_payment|confirm_release_modal|passkey_failed|security_verification|totp_input|email_otp_input|order_complete|unknown>",
   "order_number": "<exact order number string or null>",
   "buyer_name": "<exact full name or null>",
-  "fiat_amount_kes": <KES amount as plain number e.g. 1000.00 â€” NEVER add zeros>,
-  "usdt_amount": <USDT amount as plain number e.g. 7.71 â€” read character by character>,
+  "fiat_amount_kes": <KES amount as plain number e.g. 1000.00 â€" NEVER add zeros>,
+  "usdt_amount": <USDT amount as plain number e.g. 7.71 â€" read character by character>,
   "countdown_timer": "<e.g. 13:32 or null>",
   "verification_progress": "<e.g. 0/2 or 1/2 or null>",
   "pending_verifications": [],
@@ -6289,7 +6289,7 @@ Return ONLY a valid JSON object â€” no markdown, no explanation, no code fe
   "error_message": "<any error text visible or null>"
 }
 
-CRITICAL NUMBER RULES â€” read every digit individually:
+CRITICAL NUMBER RULES â€" read every digit individually:
 - "7.71 USDT" → usdt_amount: 7.71   (NOT 7710, NOT 7000, NOT 771)
 - "1,000.00 KES" → fiat_amount_kes: 1000.00
 - Commas are thousand separators, periods are decimal points
@@ -6312,11 +6312,11 @@ Screen identification rules:
 
 async function analyzePageWithVision(page) {
   if (!anthropicApiKey) {
-    console.log('[Vision] No Anthropic API key â€” skipping vision analysis');
+    console.log('[Vision] No Anthropic API key â€" skipping vision analysis');
     return { screen: 'unknown' };
   }
   try {
-    // â”€â”€ DOM pre-check â€” definitive markers that Vision often misreads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ DOM pre-check â€" definitive markers that Vision often misreads â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const domScreen = await page.evaluate(() => {
       const body = document.body.innerText || '';
       const lower = body.toLowerCase();
@@ -6324,20 +6324,20 @@ async function analyzePageWithVision(page) {
       // order_complete
       if (lower.includes('order completed') || lower.includes('sale successful') ||
           lower.includes('crypto released')) return 'order_complete';
-      // confirm_release_modal â€” unmistakable phrases
+      // confirm_release_modal â€" unmistakable phrases
       if (lower.includes('received payment in your account') ||
           lower.includes('i have verified that i received') ||
           lower.includes('confirm release')) return 'confirm_release_modal';
-      // totp_input â€” check BEFORE security_verification (shares "authenticator app" substring)
+      // totp_input â€" check BEFORE security_verification (shares "authenticator app" substring)
       if (hasOtpInput && (lower.includes('authenticator app verification') || lower.includes('google authenticator')))
         return 'totp_input';
       // email_otp
       if (hasOtpInput && (lower.includes('email verification') || lower.includes('email code')))
         return 'email_otp_input';
-      // security_verification â€” only when no OTP input present
+      // security_verification â€" only when no OTP input present
       if (lower.includes('security verification') || (!hasOtpInput && lower.includes('authenticator app')))
         return 'security_verification';
-      // passkey_failed â€” only if we explicitly see passkey failure text
+      // passkey_failed â€" only if we explicitly see passkey failure text
       if ((lower.includes('verification failed') || lower.includes('verify with passkey')) && lower.includes('passkey'))
         return 'passkey_failed';
       return null; // let Vision decide
@@ -6385,7 +6385,7 @@ async function analyzePageWithVision(page) {
   }
 }
 
-// â”€â”€ Vision API helper â€” consistent with rest of codebase (raw fetch, no SDK) â”€â”€
+// â"€â"€ Vision API helper â€" consistent with rest of codebase (raw fetch, no SDK) â"€â"€
 async function visionAsk(imageBase64, prompt, maxTokens = 150) {
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -6404,10 +6404,10 @@ async function visionAsk(imageBase64, prompt, maxTokens = 150) {
 }
 
 /**
- * svClickViaOOPIF â€” finds the Security Verification row using Puppeteer frames,
+ * svClickViaOOPIF â€" finds the Security Verification row using Puppeteer frames,
  * gets its exact coordinates from the DOM, then fires page.mouse.click() at those
  * coordinates. page.mouse.click() sends a real CDP input event (isTrusted:true),
- * so Binance accepts it â€” without any physical mouse movement.
+ * so Binance accepts it â€" without any physical mouse movement.
  */
 async function svClickViaOOPIF(page, targetText) {
   try {
@@ -6439,7 +6439,7 @@ async function svClickViaOOPIF(page, targetText) {
       };
     };
 
-    // Search all frames â€” try cross-origin (binance) frames first, then main
+    // Search all frames â€" try cross-origin (binance) frames first, then main
     const allFrames = [
       ...frames.filter(f => f.url().includes('binance.com')),
       ...frames.filter(f => !f.url().includes('binance.com')),
@@ -6481,7 +6481,7 @@ async function svClickViaOOPIF(page, targetText) {
         console.log(`[OOPIF]   iframe offset: (${Math.round(iframeOffset?.x||0)}, ${Math.round(iframeOffset?.y||0)}) → abs(${Math.round(absX)}, ${Math.round(absY)})`);
       }
 
-      // page.mouse.click() sends a CDP Input.dispatchMouseEvent â€” isTrusted:true,
+      // page.mouse.click() sends a CDP Input.dispatchMouseEvent â€" isTrusted:true,
       // accepted by Binance's security dialog, no physical mouse movement needed.
       console.log(`[OOPIF]   CDP mouse click at (${Math.round(absX)}, ${Math.round(absY)})`);
       await page.mouse.move(absX, absY);
@@ -6499,20 +6499,20 @@ async function svClickViaOOPIF(page, targetText) {
 }
 
 /**
- * svClickAnchored â€” Anchor-based GPT-4o click strategy.
+ * svClickAnchored â€" Anchor-based GPT-4o click strategy.
  *
  * 1. Find the Security Verification modal box in the main DOM (heading is accessible).
  * 2. Take screenshot + tell GPT-4o the exact modal pixel bounds.
  * 3. GPT-4o returns ABSOLUTE pixel coords of the target row (not guessed fractions).
- * 4. page.mouse.click() fires a CDP input event â€” isTrusted:true, no physical mouse.
+ * 4. page.mouse.click() fires a CDP input event â€" isTrusted:true, no physical mouse.
  */
 async function svClickAnchored(page, targetText) {
   try {
     if (!anthropicApiKey) throw new Error('No Anthropic API key');
 
-    // â”€â”€ Step 1: Locate the modal container in the main DOM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step 1: Locate the modal container in the main DOM â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const modal = await page.evaluate(() => {
-      // Find the "Security Verification" heading text node â€” it IS in the main frame DOM
+      // Find the "Security Verification" heading text node â€" it IS in the main frame DOM
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       while (walker.nextNode()) {
         const t = (walker.currentNode.textContent || '').trim();
@@ -6539,10 +6539,10 @@ async function svClickAnchored(page, targetText) {
     if (modal) {
       console.log(`[Anchored] Modal found: (${modal.x}, ${modal.y}) ${modal.w}Ã—${modal.h}`);
     } else {
-      console.log('[Anchored] Modal not found in DOM â€” sending screenshot without anchor');
+      console.log('[Anchored] Modal not found in DOM â€" sending screenshot without anchor');
     }
 
-    // â”€â”€ Step 2: Screenshot + Claude Vision with modal context â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step 2: Screenshot + Claude Vision with modal context â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const ss = await page.screenshot({ type: 'png' });
     const ssW = ss.readUInt32BE(16);
     const ssH = ss.readUInt32BE(20);
@@ -6578,15 +6578,15 @@ async function svClickAnchored(page, targetText) {
               `This is a ${ssW}Ã—${ssH} pixel screenshot of a Binance P2P trading platform.\n` +
               modalHint +
               `A "Security Verification Requirements" dialog is open. It lists two verification method rows stacked vertically, each spanning the full dialog width and containing an icon on the left, a label in the middle, and a right-pointing ">" arrow on the right:\n\n` +
-              `  ROW 1 (TOP ROW):    Label = "Authenticator App"  â€” has a shield or lock icon on the left side\n` +
-              `  ROW 2 (BOTTOM ROW): Label = "Email"              â€” has an envelope or email icon on the left side, positioned DIRECTLY BELOW Row 1\n\n` +
+              `  ROW 1 (TOP ROW):    Label = "Authenticator App"  â€" has a shield or lock icon on the left side\n` +
+              `  ROW 2 (BOTTOM ROW): Label = "Email"              â€" has an envelope or email icon on the left side, positioned DIRECTLY BELOW Row 1\n\n` +
               (targetText === 'Email'
                 ? `I need to click the EMAIL row (Row 2, the BOTTOM row with the envelope icon). ` +
                   `The Email row is positioned BELOW the Authenticator App row. ` +
                   `If the Authenticator App row already shows a checkmark or completed state, the Email row is the ONLY active/clickable row remaining.\n`
                 : `I need to click the AUTHENTICATOR APP row (Row 1, the TOP row with the shield icon).\n`) +
-              `Find the center pixel of the "${targetText}" row â€” click the middle of the row horizontally, and the vertical center of that specific row.\n` +
-              `Return ONLY a JSON object with absolute pixel coordinates â€” no explanation, no markdown:\n{"x": 640, "y": 334}` },
+              `Find the center pixel of the "${targetText}" row â€" click the middle of the row horizontally, and the vertical center of that specific row.\n` +
+              `Return ONLY a JSON object with absolute pixel coordinates â€" no explanation, no markdown:\n{"x": 640, "y": 334}` },
           ],
         }],
       }),
@@ -6602,12 +6602,12 @@ async function svClickAnchored(page, targetText) {
     const coords = JSON.parse(m[0]);
     if (!coords.x || !coords.y) throw new Error('Missing x/y');
 
-    // â”€â”€ Step 3: Image pixels → CSS viewport pixels → CDP click â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step 3: Image pixels → CSS viewport pixels → CDP click â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const vpX = Math.round(coords.x / dpr);
     const vpY = Math.round(coords.y / dpr);
     console.log(`[Anchored] "${targetText}" image(${coords.x},${coords.y}) → viewport(${vpX},${vpY})`);
 
-    // page.mouse.click sends CDP Input.dispatchMouseEvent â€” isTrusted:true
+    // page.mouse.click sends CDP Input.dispatchMouseEvent â€" isTrusted:true
     await page.mouse.move(vpX, vpY);
     await new Promise(r => setTimeout(r, 100));
     await page.mouse.click(vpX, vpY);
@@ -6620,7 +6620,7 @@ async function svClickAnchored(page, targetText) {
 }
 
 /**
- * realMouseClick â€” physically moves the OS cursor to a viewport position and clicks.
+ * realMouseClick â€" physically moves the OS cursor to a viewport position and clicks.
  * Uses Electron BrowserWindow.getContentBounds() for accurate coordinate mapping,
  * then SetCursorPos + mouse_event via PowerShell for the actual click.
  */
@@ -6643,7 +6643,7 @@ async function realMouseClick(page, viewportX, viewportY) {
     let screenX, screenY;
 
     if (cb.x > -1000 && cb.y > -1000) {
-      // Electron API path â€” reliable when window bounds are valid
+      // Electron API path â€" reliable when window bounds are valid
       screenX = Math.round((cb.x + viewportX) * sf);
       screenY = Math.round((cb.y + viewportY) * sf);
       console.log(`[RealClick] Electron bounds (${cb.x},${cb.y}) scale=${sf} → screen(${screenX},${screenY})`);
@@ -6706,14 +6706,14 @@ Write-Host "done"
 }
 
 /**
- * uiAutomationClick â€” clicks an element at screen coordinates using Windows UI Automation.
+ * uiAutomationClick â€" clicks an element at screen coordinates using Windows UI Automation.
  * Uses AutomationElement.FromPoint() + InvokePattern.Invoke() via PowerShell.
- * NO cursor movement â€” the mouse stays exactly where it is.
+ * NO cursor movement â€" the mouse stays exactly where it is.
  * Chromium/Electron supports UI Automation for all web content elements.
  *
  * @param {import('puppeteer-core').Page} page
- * @param {number} viewportX  â€” X in viewport pixels
- * @param {number} viewportY  â€” Y in viewport pixels
+ * @param {number} viewportX  â€" X in viewport pixels
+ * @param {number} viewportY  â€" Y in viewport pixels
  */
 async function uiAutomationClick(page, viewportX, viewportY) {
   try {
@@ -6785,12 +6785,12 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
 
   console.log(`[Vision] Starting vision-driven release for order ${orderNumber}`);
 
-  // Ensure Anthropic API key is loaded â€” re-fetch credentials if missing
+  // Ensure Anthropic API key is loaded â€" re-fetch credentials if missing
   if (!anthropicApiKey) {
-    console.log('[Vision] Anthropic API key missing â€” re-fetching credentials...');
+    console.log('[Vision] Anthropic API key missing â€" re-fetching credentials...');
     await fetchAndApplyCredentials();
     if (!anthropicApiKey) {
-      console.error('[Vision] Anthropic API key still missing after re-fetch â€” cannot proceed with Vision release');
+      console.error('[Vision] Anthropic API key still missing after re-fetch â€" cannot proceed with Vision release');
       return { success: false, error: 'No Anthropic API key' };
     }
     console.log('[Vision] Anthropic API key loaded successfully');
@@ -6798,7 +6798,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
 
   try {
     if (skipNavigation) {
-      console.log(`[Vision] Skipping navigation â€” already on order page with modal open`);
+      console.log(`[Vision] Skipping navigation â€" already on order page with modal open`);
     } else {
       await navigateToOrderDetail(page, orderNumber);
       await new Promise(r => setTimeout(r, 1500));
@@ -6813,29 +6813,29 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
     while (step < MAX_STEPS) {
       // Stop immediately if user paused the bot
       if (pauseNavigation) {
-        console.log('[Vision] Bot paused by user â€” halting vision loop');
+        console.log('[Vision] Bot paused by user â€" halting vision loop');
         return { success: false, error: 'paused' };
       }
       step++;
 
-      // â”€â”€ DOM pre-check: catch all states without Vision â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ DOM pre-check: catch all states without Vision â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       // ORDER MATTERS: more specific / modal states first; broader states last.
       const domScreen = await page.evaluate(() => {
         const text = document.body.innerText || '';
         const lower = text.toLowerCase();
 
-        // 1. Order complete â€” use specific multi-word phrases to avoid false positives
+        // 1. Order complete â€" use specific multi-word phrases to avoid false positives
         if (text.includes('Sale Successful') || text.includes('Order Completed') ||
             text.includes('Order Complete') || text.includes('Crypto Released'))
           return 'order_complete';
 
-        // 2. Confirm release modal â€” has unmistakable phrases unique to this modal
+        // 2. Confirm release modal â€" has unmistakable phrases unique to this modal
         if (text.includes('Received payment in your account') ||
             text.includes('I have verified that I received') ||
             text.includes('Confirm Release'))
           return 'confirm_release_modal';
 
-        // 3. TOTP input â€” check BEFORE security_verification.
+        // 3. TOTP input â€" check BEFORE security_verification.
         //    "Authenticator App Verification" contains "Authenticator App" so if security_verification
         //    checked first with that substring it would falsely match the TOTP page.
         //    Anchor: an OTP input field must be present on the page.
@@ -6843,12 +6843,12 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         if (hasOtpInput && (text.includes('Authenticator App Verification') || text.includes('Google Authenticator')))
           return 'totp_input';
 
-        // 4. Email OTP input â€” also requires the input field to be present
+        // 4. Email OTP input â€" also requires the input field to be present
         if (hasOtpInput && (text.includes('Email Verification') || text.includes('email verification code') ||
             lower.includes('email code')))
           return 'email_otp_input';
 
-        // 5. Security Verification Requirements (step-picker page â€” no code input).
+        // 5. Security Verification Requirements (step-picker page â€" no code input).
         //    Use "Security Verification" as anchor (unique to this page); also match
         //    "Authenticator App" only when NO otp input is present (i.e. not on TOTP page).
         if (text.includes('Security Verification') ||
@@ -6857,15 +6857,15 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           return `security_verification:${progress}`;
         }
 
-        // 6. Passkey screen â€” text not always in innerText (native WebAuthn dialog),
+        // 6. Passkey screen â€" text not always in innerText (native WebAuthn dialog),
         //    so only match when we actually see the passkey-specific phrase.
         const hasPasskeyLink = lower.includes('my passkeys are not available') || lower.includes('passkeys are not available');
         const hasPasskeyFail = lower.includes('verify with passkey') || lower.includes('verification failed');
         if (hasPasskeyLink || (hasPasskeyFail && lower.includes('passkey'))) return 'passkey_failed';
 
-        // 7. Verify Payment page â€” only if the "Payment Received" button is actually clickable.
+        // 7. Verify Payment page â€" only if the "Payment Received" button is actually clickable.
         //    If the text is present but the button is gone, a dialog (passkey/auth) is covering
-        //    the page â€” return null so Vision can identify the true state.
+        //    the page â€" return null so Vision can identify the true state.
         if (text.includes('Verify Payment') || text.includes('Confirm payment from buyer') ||
             text.includes('Confirm payment is received') || text.includes('Payment Received')) {
           const hasPayBtn = !!Array.from(document.querySelectorAll('button, [role="button"]')).find(b => {
@@ -6874,7 +6874,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
                    b.getBoundingClientRect().width > 0;
           });
           if (hasPayBtn) return 'verify_payment';
-          return null; // button absent â€” let Vision decide
+          return null; // button absent â€" let Vision decide
         }
 
         // 8. Awaiting payment
@@ -6895,7 +6895,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
       // Reset consecutive unknown counter on any known screen
       if (screen !== 'unknown') consecutiveUnknown = 0;
 
-      // â”€â”€ Order complete â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Order complete â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       if (screen === 'order_complete' || info.sale_successful) {
         console.log(`[Vision] Order ${orderNumber} released successfully!`);
         await fetch(`${API_BASE}/ext/report-release`, {
@@ -6906,10 +6906,10 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         return { success: true };
       }
 
-      // â”€â”€ Awaiting payment â€” DOM poll, no Vision calls until buyer pays â”€â”€â”€â”€â”€
+      // â"€â"€ Awaiting payment â€" DOM poll, no Vision calls until buyer pays â"€â"€â"€â"€â"€
       if (screen === 'awaiting_payment') {
         consecutiveUnknown = 0;
-        console.log('[Vision] Awaiting buyer payment â€” DOM polling every 20s (no Vision calls)...');
+        console.log('[Vision] Awaiting buyer payment â€" DOM polling every 20s (no Vision calls)...');
         // Poll DOM up to 45 times (15 minutes) without consuming Vision steps
         let paymentDetected = false;
         for (let poll = 0; poll < 45; poll++) {
@@ -6929,7 +6929,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
               pageText.includes('Sale Successful') ||
               pageText.includes('Received payment in your account')
             ) {
-              console.log('[Vision] Payment detected via DOM â€” resuming Vision loop');
+              console.log('[Vision] Payment detected via DOM â€" resuming Vision loop');
               paymentDetected = true;
               break;
             }
@@ -6939,25 +6939,25 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           }
         }
         if (!paymentDetected) {
-          console.log('[Vision] Buyer did not pay within 15 minutes â€” giving up');
+          console.log('[Vision] Buyer did not pay within 15 minutes â€" giving up');
           return { success: false, error: 'Payment timeout' };
         }
         continue;
       }
 
-      // â”€â”€ Payment processing â€” Binance verifying payment â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Payment processing â€" Binance verifying payment â"€â"€â"€â"€â"€â"€
       if (screen === 'payment_processing') {
         consecutiveUnknown = 0;
-        console.log('[Vision] Payment processing â€” waiting 10s for Binance to complete...');
+        console.log('[Vision] Payment processing â€" waiting 10s for Binance to complete...');
         await new Promise(r => setTimeout(r, 10000));
         await page.reload({ waitUntil: 'domcontentloaded' });
         await new Promise(r => setTimeout(r, 3000));
         continue;
       }
 
-      // â”€â”€ Verify payment â€” click Payment Received â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Verify payment â€" click Payment Received â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       // Message to buyer is sent by the main loop BEFORE releaseWithVision is called.
-      // IMPORTANT: Do NOT use clickButton() here â€” its AI fallback can mis-click "Appeal"
+      // IMPORTANT: Do NOT use clickButton() here â€" its AI fallback can mis-click "Appeal"
       // when the passkey dialog is open and "Payment Received" is not visible.
       if (screen === 'verify_payment') {
         // DOM-only: find and click "Payment Received" button (no AI fallback)
@@ -6977,10 +6977,10 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           continue;
         }
 
-        // Payment Received not found â€” passkey dialog is likely open (its text is not in
+        // Payment Received not found â€" passkey dialog is likely open (its text is not in
         // document.body.innerText because WebAuthn renders outside the main DOM tree).
         // Try to find and click the passkey bypass link via shadow DOM search + all frames.
-        console.log('[Vision] Payment Received not found â€” passkey dialog may be open, attempting bypass...');
+        console.log('[Vision] Payment Received not found â€" passkey dialog may be open, attempting bypass...');
         const phrases = ['my passkeys are not available', 'passkeys are not available', 'passkey is not available'];
         let passKeyHandled = false;
 
@@ -7019,11 +7019,11 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         }
 
         if (!passKeyHandled) {
-          // Neither Payment Received nor passkey link found â€” use Vision to see true state.
+          // Neither Payment Received nor passkey link found â€" use Vision to see true state.
           // This prevents blind clicking (e.g. Appeal) in unexpected situations.
-          console.log('[Vision] No actionable button found â€” using Vision to identify current screen...');
+          console.log('[Vision] No actionable button found â€" using Vision to identify current screen...');
           const vInfo = await analyzePageWithVision(page);
-          console.log(`[Vision] Vision identified: ${vInfo.screen} â€” will handle next iteration`);
+          console.log(`[Vision] Vision identified: ${vInfo.screen} â€" will handle next iteration`);
           // Do NOT click anything. Next iteration will re-evaluate with fresh DOM + Vision.
         }
 
@@ -7031,23 +7031,23 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         continue;
       }
 
-      // â”€â”€ Confirm release modal â€” verify M-Pesa, tick checkbox, Confirm Release â”€â”€
+      // â"€â"€ Confirm release modal â€" verify M-Pesa, tick checkbox, Confirm Release â"€â"€
       // Modal title: "Received payment in your account?"
       // Checkbox: "I have verified that I received KSh [AMOUNT] from the buyer - [NAME]"
       // Flow: verify M-Pesa → if confirmed tick + release; if not → Appeal
       if (screen === 'confirm_release_modal') {
-        console.log(`[Vision] Confirm release modal â€” verifying M-Pesa for order ${orderNumber}...`);
+        console.log(`[Vision] Confirm release modal â€" verifying M-Pesa for order ${orderNumber}...`);
         // Use codes extracted before the modal opened (modal covers chat panel).
         // Pass null for page so it doesn't try to re-scan the hidden chat.
         const { verified: mpesaVerified, reason: mpesaFailReason } = await verifyMpesaPayment(orderNumber, activeOrderFiatAmount, null, action.preChatCodes || null);
 
         if (mpesaVerified) {
-          console.log(`[Vision] âœ… M-Pesa confirmed â€” ticking checkbox and releasing...`);
+          console.log(`[Vision] âœ… M-Pesa confirmed â€" ticking checkbox and releasing...`);
 
-          // â”€â”€ Step 1: Tick the checkbox â€” DOM first, Vision fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+          // â"€â"€ Step 1: Tick the checkbox â€" DOM first, Vision fallback â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
           console.log(`[Vision] Ticking confirm-release checkbox...`);
           const checkboxClicked = await page.evaluate(() => {
-            // Binance uses Ant Design â€” try multiple selectors
+            // Binance uses Ant Design â€" try multiple selectors
             const selectors = [
               'input[type="checkbox"]',
               '.ant-checkbox-input',
@@ -7082,15 +7082,15 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           if (checkboxClicked) {
             console.log(`[Vision] âœ… Checkbox ticked via DOM`);
           } else {
-            console.log(`[Vision] DOM checkbox failed â€” trying Vision coordinates...`);
+            console.log(`[Vision] DOM checkbox failed â€" trying Vision coordinates...`);
             try {
               const ssBase64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 80 });
               const coords = await visionAsk(ssBase64,
-                'Find the small square checkbox to the left of the text “I have verified that I received” inside the confirmation modal. ' +
-                'Return ONLY a JSON object: {“x”: <number>, “y”: <number>} with the pixel coordinates of the checkbox center. No other text.',
+                'Find the small square checkbox to the left of the text "I have verified that I received" inside the confirmation modal. ' +
+                'Return ONLY a JSON object: {"x": <number>, "y": <number>} with the pixel coordinates of the checkbox center. No other text.',
                 80
               );
-              const m = coords.match(/\{\s*”x”\s*:\s*(\d+)\s*,\s*”y”\s*:\s*(\d+)\s*\}/);
+              const m = coords.match(/\{\s*"x"\s*:\s*(\d+)\s*,\s*"y"\s*:\s*(\d+)\s*\}/);
               if (m) {
                 await page.mouse.click(parseInt(m[1]), parseInt(m[2]));
                 console.log(`[Vision] âœ… Checkbox clicked via Vision coords (${m[1]}, ${m[2]})`);
@@ -7103,7 +7103,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           }
           await new Promise(r => setTimeout(r, 1200));
 
-          // â”€â”€ Step 2: Click Confirm Release â€” DOM first, Vision fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+          // â"€â"€ Step 2: Click Confirm Release â€" DOM first, Vision fallback â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
           console.log(`[Vision] Clicking Confirm Release button...`);
           const confirmClicked = await page.evaluate(() => {
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
@@ -7124,15 +7124,15 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           if (confirmClicked) {
             console.log(`[Vision] âœ… Confirm Release clicked via DOM`);
           } else {
-            console.log(`[Vision] DOM Confirm Release failed â€” trying Vision coordinates...`);
+            console.log(`[Vision] DOM Confirm Release failed â€" trying Vision coordinates...`);
             try {
               const ssBase64b = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 80 });
               const coords2 = await visionAsk(ssBase64b,
-                'Find the yellow or golden “Confirm Release” button at the bottom of the modal. ' +
-                'Return ONLY a JSON object: {“x”: <number>, “y”: <number>} with the pixel coordinates of the button center. No other text.',
+                'Find the yellow or golden "Confirm Release" button at the bottom of the modal. ' +
+                'Return ONLY a JSON object: {"x": <number>, "y": <number>} with the pixel coordinates of the button center. No other text.',
                 80
               );
-              const m2 = coords2.match(/\{\s*”x”\s*:\s*(\d+)\s*,\s*”y”\s*:\s*(\d+)\s*\}/);
+              const m2 = coords2.match(/\{\s*"x"\s*:\s*(\d+)\s*,\s*"y"\s*:\s*(\d+)\s*\}/);
               if (m2) {
                 await page.mouse.click(parseInt(m2[1]), parseInt(m2[2]));
                 console.log(`[Vision] âœ… Confirm Release clicked via Vision coords (${m2[1]}, ${m2[2]})`);
@@ -7147,7 +7147,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
 
         } else {
           console.log(`[Vision] âŒ M-Pesa not confirmed for ${orderNumber}: ${mpesaFailReason}`);
-          // Close the modal first â€” chat panel is hidden while modal is open
+          // Close the modal first â€" chat panel is hidden while modal is open
           await page.keyboard.press('Escape').catch(() => {});
           await new Promise(r => setTimeout(r, 800));
           await page.evaluate(() => {
@@ -7175,12 +7175,12 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         continue;
       }
 
-      // â”€â”€ Passkey failed â€” click "My Passkeys Are Not Available" â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Passkey failed â€" click "My Passkeys Are Not Available" â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       if (screen === 'passkey_failed') {
-        console.log('[DOM] Passkey screen â€” locating "My Passkeys Are Not Available"...');
+        console.log('[DOM] Passkey screen â€" locating "My Passkeys Are Not Available"...');
         await new Promise(r => setTimeout(r, 800));
 
-        // Search including shadow DOM â€” Binance may render the dialog in a web component
+        // Search including shadow DOM â€" Binance may render the dialog in a web component
         const passKeyCoords = await page.evaluate(() => {
           const phrases = ['my passkeys are not available', 'passkeys are not available', 'passkey is not available'];
 
@@ -7211,11 +7211,11 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         }).catch(() => null);
 
         if (passKeyCoords) {
-          console.log(`[DOM] Found "${passKeyCoords.text}" <${passKeyCoords.tag}> at (${Math.round(passKeyCoords.x)}, ${Math.round(passKeyCoords.y)}) â€” clicking`);
+          console.log(`[DOM] Found "${passKeyCoords.text}" <${passKeyCoords.tag}> at (${Math.round(passKeyCoords.x)}, ${Math.round(passKeyCoords.y)}) â€" clicking`);
           await page.mouse.click(passKeyCoords.x, passKeyCoords.y);
           console.log('[DOM] âœ… "My Passkeys Are Not Available" clicked');
         } else {
-          console.log('[DOM] Not found (incl. shadow DOM) â€” trying Tab keyboard navigation...');
+          console.log('[DOM] Not found (incl. shadow DOM) â€" trying Tab keyboard navigation...');
           // Keyboard fallback: Tab moves focus from "Try Again" → "My Passkeys Are Not Available" link
           // Then Enter activates it. Much more reliable than DOM/Vision for modal dialogs.
           await page.keyboard.press('Tab');
@@ -7227,7 +7227,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
             await page.keyboard.press('Enter');
             console.log('[DOM] âœ… Pressed Enter on focused passkey link');
           } else {
-            // Tab again â€” dialog may have more focusable elements before the link
+            // Tab again â€" dialog may have more focusable elements before the link
             await page.keyboard.press('Tab');
             await new Promise(r => setTimeout(r, 300));
             await page.keyboard.press('Enter');
@@ -7238,7 +7238,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         continue;
       }
 
-      // â”€â”€ Security verification â€” click Authenticator App / Email row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Security verification â€" click Authenticator App / Email row â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       // The rows ARE standard HTML elements (text visible in innerText).
       // Strategy: DOM find + mouse.click() at element coords → Tab keyboard → Vision.
       if (screen === 'security_verification') {
@@ -7248,7 +7248,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         ).catch(() => false);
         const targetText = authDone ? 'Email' : 'Authenticator App';
 
-        console.log(`[SV] Security verification ${authDone ? '1/2' : '0/2'} â€” clicking "${targetText}" row...`);
+        console.log(`[SV] Security verification ${authDone ? '1/2' : '0/2'} â€" clicking "${targetText}" row...`);
 
         // Wait for dialog open animation to settle
         await new Promise(r => setTimeout(r, 800));
@@ -7278,21 +7278,21 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         const markAuthDone = () => {
           if (!authDone) {
             svAuthDoneOrders.add(orderNumber);
-            console.log(`[SV] âœ… Auth App confirmed â€” order ${orderNumber} marked auth-done, next SV targets Email`);
+            console.log(`[SV] âœ… Auth App confirmed â€" order ${orderNumber} marked auth-done, next SV targets Email`);
           }
         };
 
-        // â”€â”€ Method 0: CDP OOPIF direct JS click (no screenshot, no mouse) â”€â”€â”€â”€â”€â”€â”€â”€
+        // â"€â"€ Method 0: CDP OOPIF direct JS click (no screenshot, no mouse) â"€â"€â"€â"€â"€â"€â"€â"€
         console.log(`[SV] Method 0: OOPIF CDP click on "${targetText}"...`);
         const oopifClicked = await svClickViaOOPIF(page, targetText);
         if (oopifClicked) {
           await new Promise(r => setTimeout(r, 1500));
           advanced = await svAdvanced();
           if (advanced) { console.log('[SV] âœ… OOPIF click advanced the page'); markAuthDone(); }
-          else console.log('[SV] OOPIF click fired but page did not advance â€” trying Claude Vision...');
+          else console.log('[SV] OOPIF click fired but page did not advance â€" trying Claude Vision...');
         }
 
-        // â”€â”€ Method 1: Anchor-based Claude Vision → CDP click (no physical mouse) â”€
+        // â"€â"€ Method 1: Anchor-based Claude Vision → CDP click (no physical mouse) â"€
         if (!advanced) {
           console.log(`[SV] Method 1: Anchor-based Claude Vision click on "${targetText}"...`);
           const anchored = await svClickAnchored(page, targetText);
@@ -7304,13 +7304,13 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         }
 
         if (!advanced) {
-          // â”€â”€ Method 2: DOM-anchored CDP click at fixed row offsets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+          // â"€â"€ Method 2: DOM-anchored CDP click at fixed row offsets â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
           await page.bringToFront();
           await new Promise(r => setTimeout(r, 500));
 
           const dialogAnchor = await page.evaluate(() => {
             const vw = document.documentElement.clientWidth;
-            // Priority 1: find the "0/2" or "1/2" leaf node â€” closest element to the rows
+            // Priority 1: find the "0/2" or "1/2" leaf node â€" closest element to the rows
             const all = Array.from(document.querySelectorAll('*'));
             for (const el of all) {
               if (el.children.length > 0) continue; // leaf only
@@ -7343,12 +7343,12 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
             yGuesses = authDone
               ? [baseY + offset2, baseY + offset3, baseY + offset1]  // Email = 2nd row
               : [baseY + offset1, baseY + offset2, baseY + offset3]; // Auth App = 1st row
-            console.log(`[SV] Anchor "${dialogAnchor.anchor}" bottom y=${baseY} â€” trying y: ${yGuesses.join(', ')}`);
+            console.log(`[SV] Anchor "${dialogAnchor.anchor}" bottom y=${baseY} â€" trying y: ${yGuesses.join(', ')}`);
           } else {
             const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
             rowX = Math.round(vp.w / 2);
             yGuesses = authDone ? [280, 320, 360, 240] : [220, 260, 300, 340];
-            console.log(`[SV] No anchor â€” scanning y range: ${yGuesses.join(', ')}`);
+            console.log(`[SV] No anchor â€" scanning y range: ${yGuesses.join(', ')}`);
           }
 
           for (let attempt = 0; attempt < yGuesses.length && !advanced; attempt++) {
@@ -7363,7 +7363,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           }
         }
 
-        // Final poll up to 6s â€” also checks if a previous click worked but detection was slow
+        // Final poll up to 6s â€" also checks if a previous click worked but detection was slow
         for (let p = 0; p < 12 && !advanced; p++) {
           await new Promise(r => setTimeout(r, 500));
           advanced = await svAdvanced();
@@ -7373,14 +7373,14 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         continue;
       }
 
-      // â”€â”€ TOTP input â€” type code character by character + click Submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ TOTP input â€" type code character by character + click Submit â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       if (screen === 'totp_input') {
         if (!totpSecret) {
-          console.log('[TOTP] Secret not in memory â€” re-fetching credentials...');
+          console.log('[TOTP] Secret not in memory â€" re-fetching credentials...');
           await fetchAndApplyCredentials();
         }
         if (!totpSecret) {
-          console.error('[TOTP] Secret not configured â€” check your SparkP2P settings');
+          console.error('[TOTP] Secret not configured â€" check your SparkP2P settings');
           return { success: false, error: 'TOTP not configured' };
         }
         const code = generateTOTP(totpSecret);
@@ -7419,7 +7419,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
 
             console.log(`[TOTP] Input found at (${Math.round(absX)}, ${Math.round(absY)}) in ${frame.url().substring(0, 50)}`);
             clipboard.writeText(code);
-            await page.mouse.click(absX, absY); // CDP click â€” isTrusted:true, focuses input
+            await page.mouse.click(absX, absY); // CDP click â€" isTrusted:true, focuses input
             await new Promise(r => setTimeout(r, 150));
             // Clear any existing value first
             await page.keyboard.down('Control');
@@ -7442,7 +7442,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           // Fallback: CDP keyboard events don't reach cross-origin iframe inputs.
           // Strategy: Claude Vision finds the exact TOTP input box pixel coords,
           // then CDP click focuses it, then clipboard Ctrl+V pastes the code.
-          // Uses Anthropic API (anthropicApiKey) â€” avoids GPT-4o content policy refusals
+          // Uses Anthropic API (anthropicApiKey) â€" avoids GPT-4o content policy refusals
           // on Binance security screenshots.
           console.log('[TOTP] Using Claude Vision to locate TOTP input box...');
           let totpInputVpX = null, totpInputVpY = null;
@@ -7499,7 +7499,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
                       `It is positioned BELOW the dialog title and ABOVE the Submit/Confirm button.\n` +
                       `The input is currently empty (no digits yet) and has a visible border or underline.\n` +
                       `Identify the center pixel of this input field (or the center of the leftmost digit box if there are 6 separate boxes).\n` +
-                      `Return ONLY a JSON object with the absolute pixel coordinates â€” no explanation, no markdown:\n{"x": 640, "y": 290}` },
+                      `Return ONLY a JSON object with the absolute pixel coordinates â€" no explanation, no markdown:\n{"x": 640, "y": 290}` },
                   ],
                 }],
               }),
@@ -7519,7 +7519,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
             totpInputVpY = Math.round(coords.y / dpr);
             console.log(`[TOTP] Vision → image(${coords.x},${coords.y}) → viewport(${totpInputVpX},${totpInputVpY})`);
           } catch (vErr) {
-            console.log(`[TOTP] Vision failed: ${vErr.message} â€” using center fallback`);
+            console.log(`[TOTP] Vision failed: ${vErr.message} â€" using center fallback`);
           }
 
           // If vision failed, use a safe center-screen fallback
@@ -7537,7 +7537,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           await page.mouse.click(totpInputVpX, totpInputVpY);
           await new Promise(r => setTimeout(r, 300));
 
-          // Try clipboard paste (Ctrl+V) first â€” works if input is in main frame
+          // Try clipboard paste (Ctrl+V) first â€" works if input is in main frame
           clipboard.writeText(code);
           await page.keyboard.down('Control');
           await page.keyboard.press('v');
@@ -7552,8 +7552,8 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           if (pasteWorked) {
             console.log('[TOTP] âœ… Ctrl+V paste confirmed in main frame input');
           } else {
-            // Cross-origin iframe â€” Ctrl+V didn't reach. Fall back to OS keybd_event.
-            console.log('[TOTP] Ctrl+V did not land (cross-origin) â€” using OS keyboard fallback');
+            // Cross-origin iframe â€" Ctrl+V didn't reach. Fall back to OS keybd_event.
+            console.log('[TOTP] Ctrl+V did not land (cross-origin) â€" using OS keyboard fallback');
             const psTypeScript = `
 Add-Type -TypeDefinition @"
 using System;
@@ -7590,19 +7590,19 @@ Write-Host "done"`;
             await new Promise(r => setTimeout(r, 400));
           }
 
-          console.log('[TOTP] âœ… Code entry complete â€” proceeding to Submit');
+          console.log('[TOTP] âœ… Code entry complete â€" proceeding to Submit');
           totpFilled = true;
         }
         await new Promise(r => setTimeout(r, 600));
 
-        // Step 2: Click Submit button â€” search all frames, all button-like elements
+        // Step 2: Click Submit button â€" search all frames, all button-like elements
         let totpSubmitted = false;
         const submitFrames = [page.mainFrame(), ...page.frames()];
         for (const frame of submitFrames) {
           try {
             totpSubmitted = await frame.evaluate(() => {
               const keywords = ['submit', 'confirm', 'verify', 'next'];
-              // Walk text nodes â€” catches any language variant
+              // Walk text nodes â€" catches any language variant
               const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
               while (walker.nextNode()) {
                 const t = (walker.currentNode.textContent || '').trim().toLowerCase();
@@ -7629,17 +7629,17 @@ Write-Host "done"`;
         if (totpSubmitted) {
           console.log('[TOTP] âœ… Submit clicked via DOM');
         } else {
-          console.log('[TOTP] DOM submit failed â€” pressing Enter');
+          console.log('[TOTP] DOM submit failed â€" pressing Enter');
           await page.keyboard.press('Enter');
         }
         await new Promise(r => setTimeout(r, 2500));
-        // Mark Auth App as done â€” next security_verification iteration targets Email
+        // Mark Auth App as done â€" next security_verification iteration targets Email
         svAuthDoneOrders.add(orderNumber);
-        console.log(`[TOTP] âœ… Auth App step complete â€” order ${orderNumber} marked, next SV will target Email`);
+        console.log(`[TOTP] âœ… Auth App step complete â€" order ${orderNumber} marked, next SV will target Email`);
         continue;
       }
 
-      // â”€â”€ Email OTP â€” DOM send + Gmail extract + DOM fill â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Email OTP â€" DOM send + Gmail extract + DOM fill â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       if (screen === 'email_otp_input') {
         // Step 1: Click "Send Code" / "Get Code" via DOM text-node walker
         const sendClicked = await page.evaluate(() => {
@@ -7663,7 +7663,7 @@ Write-Host "done"`;
           console.error('[Email OTP] OTP not found in Gmail');
           return { success: false, error: 'Email OTP not found' };
         }
-        console.log(`[Email OTP] Got OTP: ${emailCode} â€” filling into Binance`);
+        console.log(`[Email OTP] Got OTP: ${emailCode} â€" filling into Binance`);
         await page.bringToFront();
         await new Promise(r => setTimeout(r, 1000));
 
@@ -7696,9 +7696,9 @@ Write-Host "done"`;
             }
 
             console.log(`[Email OTP] Input at frame(${frame.url().substring(0,50)}) abs(${Math.round(absX)},${Math.round(absY)})`);
-            // Copy code to clipboard then Ctrl+V â€” simplest and most reliable
+            // Copy code to clipboard then Ctrl+V â€" simplest and most reliable
             clipboard.writeText(emailCode);
-            await page.mouse.click(absX, absY); // CDP click â€” isTrusted:true, focuses input
+            await page.mouse.click(absX, absY); // CDP click â€" isTrusted:true, focuses input
             await new Promise(r => setTimeout(r, 200));
             await page.keyboard.down('Control');
             await page.keyboard.press('v');
@@ -7711,8 +7711,8 @@ Write-Host "done"`;
           }
         }
         if (!emailFilled) {
-          // Cross-origin iframe â€” use Claude Vision to find input coords, then OS keyboard
-          console.log('[Email OTP] Frame search failed â€” using Claude Vision to locate input...');
+          // Cross-origin iframe â€" use Claude Vision to find input coords, then OS keyboard
+          console.log('[Email OTP] Frame search failed â€" using Claude Vision to locate input...');
           let emailInputVpX = null, emailInputVpY = null;
 
           try {
@@ -7752,7 +7752,7 @@ Write-Host "done"`;
                     `This is a ${ssW}Ã—${ssH} pixel screenshot of a Binance P2P "Email Verification" dialog.\n` +
                     anchorHint +
                     `There is a text input box for the 6-digit email verification code, next to a "Resend Code" button.\n` +
-                    `Find the center pixel of that input box. Return ONLY JSON â€” no explanation:\n{"x": 480, "y": 290}` },
+                    `Find the center pixel of that input box. Return ONLY JSON â€" no explanation:\n{"x": 480, "y": 290}` },
                 ]}],
               }),
             });
@@ -7799,8 +7799,8 @@ Write-Host "done"`;
           if (pasteWorked) {
             console.log('[Email OTP] âœ… Ctrl+V paste confirmed');
           } else {
-            // Cross-origin iframe â€” fall back to OS keybd_event (same as TOTP)
-            console.log('[Email OTP] Ctrl+V did not land â€” using OS keyboard fallback');
+            // Cross-origin iframe â€" fall back to OS keybd_event (same as TOTP)
+            console.log('[Email OTP] Ctrl+V did not land â€" using OS keyboard fallback');
             const psTypeScript = `
 Add-Type -TypeDefinition @"
 using System;
@@ -7839,7 +7839,7 @@ Write-Host "done"`;
         }
         await new Promise(r => setTimeout(r, 400));
 
-        // Step 4: Click Submit â€” search all frames
+        // Step 4: Click Submit â€" search all frames
         let emailSubmitted = false;
         for (const frame of emailFrames) {
           try {
@@ -7861,8 +7861,8 @@ Write-Host "done"`;
         if (emailSubmitted) {
           console.log('[Email OTP] âœ… Submit clicked via DOM');
         } else {
-          // DOM submit failed (cross-origin iframe) â€” use Claude Vision to click Submit button
-          console.log('[Email OTP] DOM submit failed â€” using Claude Vision to click Submit...');
+          // DOM submit failed (cross-origin iframe) â€" use Claude Vision to click Submit button
+          console.log('[Email OTP] DOM submit failed â€" using Claude Vision to click Submit...');
           try {
             const ss2 = await page.screenshot({ type: 'png' });
             const ssW2 = ss2.readUInt32BE(16);
@@ -7911,14 +7911,14 @@ Write-Host "done"`;
         continue;
       }
 
-      // â”€â”€ Unknown â€” wait and retry before reloading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Unknown â€" wait and retry before reloading â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       consecutiveUnknown++;
       const unknownUrl = page.url();
-      console.log(`[Vision] Unknown screen at step ${step} (${consecutiveUnknown} in a row) â€” URL: ${unknownUrl}`);
+      console.log(`[Vision] Unknown screen at step ${step} (${consecutiveUnknown} in a row) â€" URL: ${unknownUrl}`);
 
       if (!unknownUrl.includes('fiatOrderDetail')) {
-        // We are not on the order detail page â€” navigate back immediately
-        console.log(`[Vision] Not on order detail page â€” navigating back to order ${orderNumber}`);
+        // We are not on the order detail page â€" navigate back immediately
+        console.log(`[Vision] Not on order detail page â€" navigating back to order ${orderNumber}`);
         await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1',
           { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
         await new Promise(r => setTimeout(r, 2500));
@@ -7928,7 +7928,7 @@ Write-Host "done"`;
         continue;
       }
 
-      // On the right page but Vision confused â€” wait longer before reloading
+      // On the right page but Vision confused â€" wait longer before reloading
       if (consecutiveUnknown < 3) {
         // First 2 unknowns: just wait and retry Vision (page may be mid-load)
         console.log(`[Vision] Waiting 5s and retrying Vision (attempt ${consecutiveUnknown}/3 before reload)...`);
@@ -7936,8 +7936,8 @@ Write-Host "done"`;
         continue;
       }
 
-      // 3+ consecutive unknowns â€” reload the page
-      console.log(`[Vision] 3 consecutive unknowns â€” reloading page...`);
+      // 3+ consecutive unknowns â€" reload the page
+      console.log(`[Vision] 3 consecutive unknowns â€" reloading page...`);
       consecutiveUnknown = 0;
       await new Promise(r => setTimeout(r, 2000));
       await page.reload({ waitUntil: 'domcontentloaded' });
@@ -7954,7 +7954,7 @@ Write-Host "done"`;
 }
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// ACTION EXECUTION â€” Full automation with PIN + screenshots
+// ACTION EXECUTION â€" Full automation with PIN + screenshots
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 async function execAction(action) {
@@ -7972,13 +7972,13 @@ async function execAction(action) {
     await takeScreenshot(`Before ${type}: order ${order_number}`);
 
     if (type === 'release') {
-      // Vision-driven release â€” Claude reads every screenshot and decides the next action
+      // Vision-driven release â€" Claude reads every screenshot and decides the next action
       const result = await releaseWithVision(page, order_number, action);
       if (result.success) stats.actions++;
       await takeScreenshot(`After release: order ${order_number}`);
 
     } else if (type === 'pay' || type === 'mark_as_paid') {
-      // â”€â”€ Full buy-side payment automation â”€â”€
+      // â"€â"€ Full buy-side payment automation â"€â"€
       // 1. Extract payment details from Binance order page using Vision
       // 2. Send money via I&M Bank
       // 3. Upload receipt + notify seller on Binance
@@ -8047,9 +8047,9 @@ async function execAction(action) {
 Return JSON only (no other text):
 {
   "method": "mpesa | im_bank | other_bank",
-  "phone": "07XXXXXXXX or 254XXXXXXXXX â€” phone number if M-Pesa, else null",
+  "phone": "07XXXXXXXX or 254XXXXXXXXX â€" phone number if M-Pesa, else null",
   "account_number": "bank account number if paying to a bank account, else null",
-  "bank_name": "bank name e.g. 'I & M Bank', 'Equity Bank', 'KCB' â€” if bank transfer, else null",
+  "bank_name": "bank name e.g. 'I & M Bank', 'Equity Bank', 'KCB' â€" if bank transfer, else null",
   "name": "seller full name",
   "amount": 1234,
   "network": "safaricom | airtel | null",
@@ -8092,7 +8092,7 @@ Method selection rules:
 
       console.log(`[SparkP2P] Payment details: ${JSON.stringify(paymentDetails)}`);
 
-      // â”€â”€ Validate payment details before attempting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Validate payment details before attempting â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       const _pm = (paymentDetails.method || 'mpesa').toLowerCase();
       const isBankTransfer = _pm === 'im_bank' || _pm === 'other_bank';
       const missingPhone = !isBankTransfer && (!paymentDetails.phone || paymentDetails.phone.trim() === '');
@@ -8100,12 +8100,12 @@ Method selection rules:
       const missingAmount = !paymentDetails.amount || paymentDetails.amount <= 0;
       if (missingPhone || missingAccount || missingAmount) {
         const reason = missingPhone ? 'phone number is missing' : missingAccount ? 'bank account number or bank name is missing' : 'amount is zero/missing';
-        console.error(`[SparkP2P] âŒ Buy order ${order_number} â€” payment details incomplete (${reason}), will retry next cycle`);
-        await takeScreenshot(`Pay details incomplete â€” ${reason}: ${order_number}`);
-        return; // retry next cycle â€” do NOT pause ad or send email
+        console.error(`[SparkP2P] âŒ Buy order ${order_number} â€" payment details incomplete (${reason}), will retry next cycle`);
+        await takeScreenshot(`Pay details incomplete â€" ${reason}: ${order_number}`);
+        return; // retry next cycle â€" do NOT pause ad or send email
       }
 
-      // â”€â”€ Step 1b: Send greeting once per order â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â"€â"€ Step 1b: Send greeting once per order â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       const MPESA_MAX = 250_000;
       const isSplitNeeded = !isBankTransfer && Math.floor(paymentDetails.amount) > MPESA_MAX;
 
@@ -8262,7 +8262,7 @@ Method selection rules:
       await new Promise(r => setTimeout(r, 3000));
       await dismissBinanceModals(page);
 
-      // Step 4: Send post-payment chat message (once only â€” guard against retries)
+      // Step 4: Send post-payment chat message (once only â€" guard against retries)
       if (!buyPostPaymentMsgSentOrders.has(order_number)) {
         buyPostPaymentMsgSentOrders.add(order_number);
         const payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
@@ -8280,7 +8280,7 @@ Method selection rules:
       }).catch(() => false);
 
       if (alreadyPendingRelease) {
-        console.log(`[SparkP2P] âœ… Order ${order_number} already in "Pending Seller Release" state â€” skipping upload & Transferred button`);
+        console.log(`[SparkP2P] âœ… Order ${order_number} already in "Pending Seller Release" state â€" skipping upload & Transferred button`);
       }
 
       // Step 5b: Upload payment proof (I&M receipt screenshot) + handle confirmation
@@ -8305,7 +8305,7 @@ Method selection rules:
             (document.body.innerText || '').toLowerCase().includes('seller to release')
           ).catch(() => false);
           if (nowPending) {
-            console.log(`[SparkP2P] âœ… Page moved to "Pending Release" â€” no need to click Transferred`);
+            console.log(`[SparkP2P] âœ… Page moved to "Pending Release" â€" no need to click Transferred`);
             notifyClicked = true; break;
           }
           const clicked = await clickButton(page, 'transferred', 'notify seller', 'transferred, notify seller', 'payment done', 'i have paid');
@@ -8323,14 +8323,14 @@ Method selection rules:
             await handleSecurityVerification(page);
             break;
           }
-          console.log(`[SparkP2P] "Transferred" button not found on attempt ${attempt}/${NOTIFY_MAX_RETRIES}${attempt < NOTIFY_MAX_RETRIES ? ' â€” reloading page...' : ''}`);
+          console.log(`[SparkP2P] "Transferred" button not found on attempt ${attempt}/${NOTIFY_MAX_RETRIES}${attempt < NOTIFY_MAX_RETRIES ? ' â€" reloading page...' : ''}`);
           if (attempt < NOTIFY_MAX_RETRIES) {
             await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
             await new Promise(r => setTimeout(r, 3000));
           }
         }
         if (!notifyClicked) {
-          console.log(`[SparkP2P] âš ï¸ Could not confirm payment after ${NOTIFY_MAX_RETRIES} attempts â€” seller will release once they see the chat message`);
+          console.log(`[SparkP2P] âš ï¸ Could not confirm payment after ${NOTIFY_MAX_RETRIES} attempts â€" seller will release once they see the chat message`);
           await takeScreenshot(`Transferred btn not found: ${order_number}`);
         }
       }
@@ -8360,7 +8360,7 @@ Method selection rules:
 
       stats.actions++;
       activeBuyOrderNumber = order_number;
-      console.log(`[SparkP2P] ðŸ'€ Buy order ${order_number} â€” I&M paid, idleScan will monitor for seller release`);
+      console.log(`[SparkP2P] ðŸ'€ Buy order ${order_number} â€" I&M paid, idleScan will monitor for seller release`);
 
     } else if (type === 'send_message') {
       // If buyer already paid (verify_payment state), skip payment instruction messages
@@ -8372,7 +8372,7 @@ Method selection rules:
                             return btns.some(b => (b.textContent || '').trim().toLowerCase().startsWith('payment received'));
                           }).catch(() => false);
       if (alreadyPaid) {
-        console.log(`[SparkP2P] â­ Skipping send_message â€” buyer already paid (verify_payment state)`);
+        console.log(`[SparkP2P] â­ Skipping send_message â€" buyer already paid (verify_payment state)`);
             } else {
         // -- Counterparty screening: CF filters + DD — both enforced before payment instructions --
         const needsScreening = (cfEnabled && (cfMin30d > 0 || cfMinAll > 0)) || ddEnabled;
@@ -8687,7 +8687,7 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, name, amou
   return { success: true, referenceId: data.transaction_id || '', screenshot: data.receipt_image || null };
 }
 
-// BUY ORDER â€” I&M PAYMENT EXECUTION
+// BUY ORDER â€" I&M PAYMENT EXECUTION
 // Reads payment details from Binance, sends money via I&M Bank,
 // takes a screenshot of success, and uploads proof to Binance chat.
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -8695,9 +8695,9 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, name, amou
 async function executeImPayment({ phone, name, amount, reference, network = 'safaricom' }) {
   if (!imPage || imPage.isClosed()) throw new Error('I&M Bank tab is not open. Please reconnect I&M Bank.');
   if (!imPin) throw new Error('I&M PIN not set. Please save your PIN in Settings → Binance tab.');
-  if (!anthropicApiKey) throw new Error('Anthropic API key not set â€” Vision required for I&M payments.');
-  if (!phone || String(phone).trim() === '') throw new Error('Phone number is empty â€” cannot send payment');
-  if (!amount || Number(amount) <= 0) throw new Error(`Amount is invalid (${amount}) â€” cannot send payment`);
+  if (!anthropicApiKey) throw new Error('Anthropic API key not set â€" Vision required for I&M payments.');
+  if (!phone || String(phone).trim() === '') throw new Error('Phone number is empty â€" cannot send payment');
+  if (!amount || Number(amount) <= 0) throw new Error(`Amount is invalid (${amount}) â€" cannot send payment`);
 
   imWithdrawalRunning = true;
   const cleanPhone = String(phone).replace(/^0/, '').replace(/\s/g, ''); // strip leading 0
@@ -8713,10 +8713,10 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   await setZoom80(imPage);
   await new Promise(r => setTimeout(r, 400));
 
-  // DPR â€” only used for Vision screenshot coordinate division (NOT for DOM coords)
+  // DPR â€" only used for Vision screenshot coordinate division (NOT for DOM coords)
   let imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
   console.log(`[I&M] DPR = ${imDpr}`);
-  // Helper: click a radio button by label text â€” L1 DOM, L2 Vision fallback
+  // Helper: click a radio button by label text â€" L1 DOM, L2 Vision fallback
   const clickRadio = async (labelText) => {
     // L1: dispatchEvent inside the page — Angular mat-radio-button ignores CDP mouse.click
     const clicked = await imPage.evaluate((txt) => {
@@ -8778,7 +8778,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
   const phoneL1Filled = false; // Vision handles phone entry
   console.log(`[I&M] Pre-radios done (otherPhone=${r1}, oneOff=${r2}, confirmed=${radiosConfirmed}) — handing off to Vision loop`);
 
-  // I&M amount field only accepts whole numbers â€” truncate decimals
+  // I&M amount field only accepts whole numbers â€" truncate decimals
   const amountInt = Math.floor(parseFloat(amount));
   console.log(`[I&M Vision] Amount rounded: ${amount} → ${amountInt}`);
 
@@ -8795,7 +8795,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
     // ── Account dropdown (Layer 1 → Layer 2) ───────────────────────────────────
     if (!accountSelected) {
-      // Scroll to top so the “Select an account” trigger is visible
+      // Scroll to top so the "Select an account" trigger is visible
       await imPage.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' })).catch(() => {});
       await new Promise(r => setTimeout(r, 300));
 
@@ -8803,7 +8803,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       const domCoords = await imPage.evaluate((acct) => {
         const search = acct || 'BONITO CHELUGET';
         const all = Array.from(document.querySelectorAll(
-          'mat-option, .mat-option, [role=”option”], li, div, span, td'
+          'mat-option, .mat-option, [role="option"], li, div, span, td'
         ));
         for (const el of all) {
           const txt = el.textContent.trim();
@@ -8819,7 +8819,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
 
       if (domCoords && domCoords.x > 0 && domCoords.y > 0) {
         await imPage.mouse.click(domCoords.x, domCoords.y);
-        console.log(`[I&M] ✅ L1 clicked <${domCoords.tag}> “${domCoords.text}” at (${Math.round(domCoords.x)}, ${Math.round(domCoords.y)})`);
+        console.log(`[I&M] ✅ L1 clicked <${domCoords.tag}> "${domCoords.text}" at (${Math.round(domCoords.x)}, ${Math.round(domCoords.y)})`);
         accountSelected = true;
         await new Promise(r => setTimeout(r, 1000));
         // Re-click radios — account selection resets the form to defaults
@@ -8835,16 +8835,16 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
         continue;
       }
 
-      // L1b: Dropdown is not open yet — try to click the “Select an account” trigger
+      // L1b: Dropdown is not open yet — try to click the "Select an account" trigger
       const triggerClicked = await imPage.evaluate(() => {
         const candidates = Array.from(document.querySelectorAll(
-          'mat-select, .mat-select-trigger, [role=”combobox”], [aria-haspopup=”listbox”]'
+          'mat-select, .mat-select-trigger, [role="combobox"], [aria-haspopup="listbox"]'
         ));
         for (const el of candidates) {
           const r = el.getBoundingClientRect();
           if (r.width > 0 && r.height > 0 && r.top >= 0) { el.click(); return true; }
         }
-        // Fallback: any element whose exact text is “Select an account”
+        // Fallback: any element whose exact text is "Select an account"
         const all = Array.from(document.querySelectorAll('span, div, p'));
         for (const el of all) {
           if (el.textContent.trim().toLowerCase() === 'select an account') {
@@ -8860,7 +8860,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
         // Try L1a again immediately after opening
         const domCoords2 = await imPage.evaluate((acct) => {
           const search = acct || 'BONITO CHELUGET';
-          const all = Array.from(document.querySelectorAll('mat-option, .mat-option, [role=”option”]'));
+          const all = Array.from(document.querySelectorAll('mat-option, .mat-option, [role="option"]'));
           for (const el of all) {
             const txt = el.textContent.trim();
             if (!txt.includes(search)) continue;
@@ -8873,7 +8873,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
         }, traderImAccount || '00108094726050').catch(() => null);
         if (domCoords2) {
           await imPage.mouse.click(domCoords2.x, domCoords2.y);
-          console.log(`[I&M] ✅ L1b selected account “${domCoords2.text}”`);
+          console.log(`[I&M] ✅ L1b selected account "${domCoords2.text}"`);
           accountSelected = true;
           await new Promise(r => setTimeout(r, 1000));
           // Re-click radios — account selection resets the form to defaults
@@ -8919,7 +8919,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       if (clicked) { console.log('[I&M Vision] Proceed clicked — continuing'); await new Promise(r => setTimeout(r, 1500)); continue; }
     }
 
-    // â”€â”€ Detect success â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Detect success â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const isSuccess = lower.includes('payment success') || lower.includes('transaction successful') ||
                       lower.includes('transfer successful') || lower.includes('sent successfully') ||
                       lower.includes('transaction complete') || lower.includes('money sent') ||
@@ -8933,7 +8933,7 @@ async function executeImPayment({ phone, name, amount, reference, network = 'saf
       return { success: true, screenshot: receiptSS, referenceId };
     }
 
-    // â”€â”€ Ask Claude what screen we are on and what to do â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Ask Claude what screen we are on and what to do â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const visionRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
@@ -8949,7 +8949,7 @@ Debit account to use: ${traderImAccount || 'first available account'}
 Identify the current screen and return ONE action as JSON:
 
 SCREENS:
-- "account_list" = The debit account dropdown list is OPEN â€” you can see account rows like "SPARK FREELANCE SOLUTIONS" or "BONITO CHELUGET SAMOEI" listed below a Search box
+- "account_list" = The debit account dropdown list is OPEN â€" you can see account rows like "SPARK FREELANCE SOLUTIONS" or "BONITO CHELUGET SAMOEI" listed below a Search box
 - "form" = Send Money to Mobile form (has fields: debit account, phone, amount, etc.)
 - "review" = Review/confirmation modal showing payment summary
 - "pin" = Identity Validation / PIN entry screen
@@ -8967,10 +8967,10 @@ ACTIONS (pick exactly one):
 - {"screen":"dashboard","action":"navigate"}
 - {"screen":"success","action":"done"}
 
-IMPORTANT: For "click" and "type" actions you MUST include "x" and "y" â€” the pixel coordinates of the CENTER of the element in the screenshot. These are used for mouse clicks.
+IMPORTANT: For "click" and "type" actions you MUST include "x" and "y" â€" the pixel coordinates of the CENTER of the element in the screenshot. These are used for mouse clicks.
 
-FORM FILLING ORDER â€” do ONE action per response, strictly in this order:
-0. If you see an open account list (screen="account_list", rows like "SPARK FREELANCE" or "BONITO CHELUGET" visible) → click the row containing "${traderImAccount || 'BONITO CHELUGET SAMOEI'}" â€” return screen="account_list"
+FORM FILLING ORDER â€" do ONE action per response, strictly in this order:
+0. If you see an open account list (screen="account_list", rows like "SPARK FREELANCE" or "BONITO CHELUGET" visible) → click the row containing "${traderImAccount || 'BONITO CHELUGET SAMOEI'}" â€" return screen="account_list"
 1. If debit account shows "Select an account" and NO list is open → click the â–¼ dropdown arrow to open it
 2. (account_list handled by step 0 above)
 3. ${radiosConfirmed ? '⚠️ SKIP THIS STEP — "Other Phone" and "One-off Beneficiary" were already set programmatically. Do NOT click them again.' : 'CRITICAL — Check the "Other Phone" radio button. If "Own Phone" is still selected → click the "Other Phone" radio circle IMMEDIATELY.'}
@@ -8978,7 +8978,7 @@ FORM FILLING ORDER â€” do ONE action per response, strictly in this order:
 5. ${phoneL1Filled ? `⚠️ SKIP — phone number was pre-filled by automation. The field already contains ${cleanPhone}. Do NOT type it again under any circumstances.` : `PHONE — Look carefully at the phone number field. If it contains ANY digits (e.g. 7XXXXXXXX), it is already filled — do NOT type again. Only type ${cleanPhone} if the field is completely empty.`}
 5b. AUTOCOMPLETE — If a suggestion card (e.g. "Sophia Muthoni Munene") appears below the phone field, press Tab (action="press_key", value="Tab") first to dismiss it. After dismissing, re-check the phone — if it already has digits, do NOT retype.
 6. If network (Safaricom/Airtel) not selected → click ${network}
-7. If amount field is empty or shows 0 → type amount: ${amountInt}. If it shows ANY non-zero number (e.g. 1,930 or 1930) treat it as correctly filled â€” do NOT retype it
+7. If amount field is empty or shows 0 → type amount: ${amountInt}. If it shows ANY non-zero number (e.g. 1,930 or 1930) treat it as correctly filled â€" do NOT retype it
 8. If reference/narration field is empty (shows 0/50 or nothing) → type reference: ${String(reference).substring(0,30)}
 9. ONLY click Continue when ALL of the above are done: Other Phone selected, phone=${cleanPhone}, network selected, amount=${amountInt}, reference filled. If ANY field is missing, fix it first.
 
@@ -9004,25 +9004,25 @@ Return ONLY valid JSON, no other text.` },
     if (!action) { console.log(`[I&M Vision] Could not parse action at step ${step}`); continue; }
     console.log(`[I&M Vision] Step ${step}: screen="${action.screen}" action="${action.action}" desc="${action.description || ''}" val="${action.value || ''}"`);
 
-    // â”€â”€ Guard: block Vision from re-clicking radio buttons already set by L1 â”€â”€
+    // â"€â"€ Guard: block Vision from re-clicking radio buttons already set by L1 â"€â"€
     if (radiosConfirmed && action.action === 'click') {
       const desc = (action.description || '').toLowerCase();
       if (desc.includes('other phone') || desc.includes('one-off') || desc.includes('one off') || desc.includes('beneficiary')) {
-        console.log(`[I&M Vision] â›” Blocked redundant radio click "${action.description}" â€” radios already confirmed`);
+        console.log(`[I&M Vision] â›" Blocked redundant radio click "${action.description}" â€" radios already confirmed`);
         continue; // skip this step, take fresh screenshot next iteration
       }
     }
 
-    // â”€â”€ Execute the action â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Execute the action â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     if (action.screen === 'success' || action.action === 'done') {
-      // Handled above by text detection â€” but catch it here too
+      // Handled above by text detection â€" but catch it here too
       const receiptSS2 = await takeImSuccessScreenshot(imPage) || screenshot;
       imWithdrawalRunning = false;
       return { success: true, screenshot: receiptSS2, referenceId };
     }
 
     if (action.screen === 'dashboard' || action.action === 'navigate') {
-      console.log('[I&M Vision] On dashboard â€” navigating back to form');
+      console.log('[I&M Vision] On dashboard â€" navigating back to form');
       await imPage.goto('https://digital.imbank.com/inm-retail/transfers/send-money-to-mobile/form',
         { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
       await new Promise(r => setTimeout(r, 3000));
@@ -9030,7 +9030,7 @@ Return ONLY valid JSON, no other text.` },
     }
 
     if (action.action === 'type' && action.value) {
-      // Layer 1: Vision gave us coordinates â€” click to focus the field
+      // Layer 1: Vision gave us coordinates â€" click to focus the field
       if (action.x && action.y) {
         await imPage.mouse.click(action.x / imDpr, action.y / imDpr);
         await new Promise(r => setTimeout(r, 400));
@@ -9057,7 +9057,7 @@ Return ONLY valid JSON, no other text.` },
         await new Promise(r => setTimeout(r, 1200));
       } else {
         // Fallback: label-text DOM search (no coordinates given)
-        console.log(`[I&M Vision] Active element not an input (${filled.reason}) â€” trying label fallback`);
+        console.log(`[I&M Vision] Active element not an input (${filled.reason}) â€" trying label fallback`);
         const fallback = await imPage.evaluate((desc, val) => {
           const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
           const setVal = (el) => {
@@ -9087,7 +9087,7 @@ Return ONLY valid JSON, no other text.` },
           console.log(`[I&M Vision] Set "${action.value}" via label fallback`);
           await new Promise(r => setTimeout(r, 1200));
         } else {
-          console.log(`[I&M Vision] âŒ Could not set "${action.value}" â€” field not found`);
+          console.log(`[I&M Vision] âŒ Could not set "${action.value}" â€" field not found`);
         }
       }
 
@@ -9166,12 +9166,12 @@ Return ONLY valid JSON, no other text.` },
         await pinInput.type(imPin, { delay: 150 });
         console.log('[I&M Vision] PIN entered');
       } else {
-        console.log('[I&M Vision] PIN input not found â€” trying keyboard');
+        console.log('[I&M Vision] PIN input not found â€" trying keyboard');
         await imPage.keyboard.type(imPin, { delay: 150 });
       }
       await new Promise(r => setTimeout(r, 600));
 
-      // Immediately click Complete after PIN â€” L1 DOM, L2 Vision
+      // Immediately click Complete after PIN â€" L1 DOM, L2 Vision
       const completeBtn = await imPage.evaluate(() => {
         const btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
         const btn = btns.find(b => (b.textContent || '').trim().toLowerCase() === 'complete');
@@ -9267,7 +9267,7 @@ Return ONLY valid JSON, no other text.` },
           continue;
         }
         // Fall through to coord click if DOM failed
-        console.log('[I&M Vision] DOM Continue not found â€” falling back to coord click');
+        console.log('[I&M Vision] DOM Continue not found â€" falling back to coord click');
       }
 
       if (action.x && action.y) {
@@ -9308,11 +9308,11 @@ Return ONLY valid JSON, no other text.` },
   return { success: false, screenshot, referenceId: null };
 }
 
-// executeImPesaLinkByPhone â€” REMOVED. Use executeImBankTransfer for all bank transfers.
+// executeImPesaLinkByPhone â€" REMOVED. Use executeImBankTransfer for all bank transfers.
 
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// I&M LOCAL TRANSFER â€” I&M → I&M or I&M → other bank by account number
+// I&M LOCAL TRANSFER â€" I&M → I&M or I&M → other bank by account number
 // Used when seller provides a bank account number (not phone-based PesaLink)
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async function executeImBankTransfer({ accountNumber, bankName, name, amount, reference }) {
@@ -9348,7 +9348,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
 
   // All form filling handled inside Vision loop after account selection
 
-  // â”€â”€ Vision loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â"€â"€ Vision loop â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const IM_MAX_STEPS = 30;
   let step = 0;
   let screenshot = null;
@@ -9362,7 +9362,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
     // Re-read DPR each iteration in case zoom changed
     imDpr = await imPage.evaluate(() => window.devicePixelRatio || 1).catch(() => imDpr);
 
-    // â”€â”€ Account selection: type account number in dropdown search box â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Account selection: type account number in dropdown search box â"€â"€â"€â"€â"€â"€â"€â"€
     if (!accountSelected) {
       // Check if the dropdown search box is visible (dropdown is open)
       const searchBox = await imPage.evaluate(() => {
@@ -9424,10 +9424,10 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
           await new Promise(r => setTimeout(r, 1500));
           continue;
         }
-        // No search box and no “Select an account” trigger — an account is already selected.
+        // No search box and no "Select an account" trigger — an account is already selected.
         // This happens when the browser restores the last session state on page load.
         const alreadySelected = await imPage.evaluate(() => {
-          // Look for an element showing a selected account (contains “KES ACC” or has account number format)
+          // Look for an element showing a selected account (contains "KES ACC" or has account number format)
           return Array.from(document.querySelectorAll('*')).some(el => {
             const txt = (el.textContent || '').trim();
             const r = el.getBoundingClientRect();
@@ -9443,7 +9443,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       }
     }
 
-    // â”€â”€ Post-account-selection L1 fill (runs once after account confirmed) â”€â”€â”€
+    // â"€â"€ Post-account-selection L1 fill (runs once after account confirmed) â"€â"€â"€
     if (accountSelected && !formFilled) {
       await new Promise(r => setTimeout(r, 1000));
 
@@ -9476,20 +9476,20 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
       await new Promise(r => setTimeout(r, 1800));
 
       // Verify Angular registered the radio change.
-      // The “Bank name” field is a mat-select (dropdown), not a plain <input>, so we check:
+      // The "Bank name" field is a mat-select (dropdown), not a plain <input>, so we check:
       //   1. The radio button aria-checked/mat-radio-checked state
       //   2. Visible label text that only appears in the One-off section
       //   3. Any mat-select element visible (bank name dropdown)
       //   4. Legacy input placeholder check as final fallback
       const oneOffVisible = await imPage.evaluate(() => {
         // Check 1: Angular radio state
-        const radios = Array.from(document.querySelectorAll('mat-radio-button, [role=”radio”]'));
+        const radios = Array.from(document.querySelectorAll('mat-radio-button, [role="radio"]'));
         const oneOff = radios.find(r => (r.textContent || '').toLowerCase().includes('one-off'));
         if (oneOff) {
           const checked = oneOff.classList.contains('mat-radio-checked') ||
                           oneOff.classList.contains('mat-mdc-radio-checked') ||
                           oneOff.getAttribute('aria-checked') === 'true' ||
-                          !!oneOff.querySelector('input[type=”radio”]:checked');
+                          !!oneOff.querySelector('input[type="radio"]:checked');
           if (checked) return true;
         }
         // Check 2: field labels that only appear when One-off section is expanded
@@ -9552,7 +9552,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
           await new Promise(r => setTimeout(r, 1200));
         }
         const bankSelected2 = await imPage.evaluate((bank) => {
-          const opts = Array.from(document.querySelectorAll('mat-option, [role=”option”], [class*=”option” i], .ng-option, .dropdown-item'));
+          const opts = Array.from(document.querySelectorAll('mat-option, [role="option"], [class*="option" i], .ng-option, .dropdown-item'));
           const nm = s => s.toLowerCase().replace(/[&\s]/g, '');
           const match = opts.find(o => {
             const txt = (o.textContent || '').trim();
@@ -9567,7 +9567,7 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
         if (bankSelected2) {
           console.log(`[BankTransfer] ✅ Bank selected: ${bankSelected2}`);
         } else {
-          console.log(`[BankTransfer] ⚠️ Bank option not found for “${targetBank}” — Vision will handle`);
+          console.log(`[BankTransfer] ⚠️ Bank option not found for "${targetBank}" — Vision will handle`);
         }
         await new Promise(r => setTimeout(r, 1000));
       } else {
@@ -9626,10 +9626,10 @@ async function executeImBankTransfer({ accountNumber, bankName, name, amount, re
           }
         } else { console.log('[BankTransfer] ⚠️ Validate button not found or disabled'); }
       } else {
-        console.log('[BankTransfer] âš ï¸ Account number input not found â€” skipped');
+        console.log('[BankTransfer] âš ï¸ Account number input not found â€" skipped');
       }
 
-      // KES currency â€” use Puppeteer page.select() for native <select>, fallback to click+keyboard
+      // KES currency â€" use Puppeteer page.select() for native <select>, fallback to click+keyboard
       const kesSetBySelect = await (async () => {
         try {
           // Find native <select> with KES option
@@ -9687,11 +9687,11 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
           await new Promise(resolve => { require('child_process').exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psTmp}"`, { timeout: 5000 }, resolve); });
           console.log('[BankTransfer] âœ… Currency KES via OS click+K fallback');
         } else {
-          console.log('[BankTransfer] âš ï¸ Currency trigger not found â€” Vision will handle');
+          console.log('[BankTransfer] âš ï¸ Currency trigger not found â€" Vision will handle');
         }
       }
 
-      // Amount â€” scroll it into view first, then fill
+      // Amount â€" scroll it into view first, then fill
       const amtFilled2 = await imPage.evaluate((amt) => {
         const inputs = Array.from(document.querySelectorAll('input[type="number"],input[type="text"]'));
         const amtInput = inputs.find(i => {
@@ -9713,7 +9713,7 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       if (amtFilled2) console.log(`[BankTransfer] âœ… Amount: ${amountInt}`);
       await new Promise(r => setTimeout(r, 500));
 
-      // Reference â€” scroll into view, then fill
+      // Reference â€" scroll into view, then fill
       const refFilled2 = await imPage.evaluate((ref) => {
         const inputs = Array.from(document.querySelectorAll('input,textarea'));
         const i = inputs.find(inp => (inp.placeholder || '').toLowerCase().includes('payment description') || (inp.placeholder || '').toLowerCase().includes('reference') || (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('reference') || (inp.getAttribute('formcontrolname') || '').toLowerCase().includes('narration'));
@@ -9731,7 +9731,7 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       if (refFilled2) console.log('[BankTransfer] âœ… Reference filled');
       await new Promise(r => setTimeout(r, 500));
 
-      // Pesalink radio â€” scroll into view, then click
+      // Pesalink radio â€" scroll into view, then click
       await imPage.evaluate(() => {
         const all = Array.from(document.querySelectorAll('label, span, div, input[type="radio"]'));
         const el = all.find(e => (e.textContent || '').trim() === 'Pesalink' && e.getBoundingClientRect().width > 0);
@@ -9746,8 +9746,8 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
           const handles = await imPage.$$('select');
           if (!handles.length) { console.log('[BankTransfer] ⚠️ No <select> elements found'); return false; }
 
-          // Find the payment purpose select by: aria-label/name/formcontrolname containing “purpose”,
-          // or by being the select whose options include “Other” after triggering Angular lazy load.
+          // Find the payment purpose select by: aria-label/name/formcontrolname containing "purpose",
+          // or by being the select whose options include "Other" after triggering Angular lazy load.
           // Do NOT rely on a hardcoded index — the count of selects varies by screen/form state.
           let handle = null;
 
@@ -9761,7 +9761,7 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
             if (match) { handle = h; console.log('[BankTransfer] Found purpose select by attribute'); break; }
           }
 
-          // Pass 2: trigger each select and check if its options include “Other”
+          // Pass 2: trigger each select and check if its options include "Other"
           if (!handle) {
             for (const h of handles) {
               await h.evaluate(el => {
@@ -9812,10 +9812,10 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
             if (otherOpt) break;
           }
 
-          if (!otherOpt) { console.log('[BankTransfer] ⚠️ No “Other” option found after 3 attempts'); return false; }
+          if (!otherOpt) { console.log('[BankTransfer] ⚠️ No "Other" option found after 3 attempts'); return false; }
 
           await handle.select(otherOpt.value);
-          console.log(`[BankTransfer] ✅ Payment Purpose set to “${otherOpt.text}” (value=”${otherOpt.value}”)`);
+          console.log(`[BankTransfer] ✅ Payment Purpose set to "${otherOpt.text}" (value="${otherOpt.value}")`);
           await new Promise(r => setTimeout(r, 400));
           return true;
         } catch (e) { console.log(`[BankTransfer] Purpose select err: ${e.message}`); }
@@ -9829,7 +9829,7 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
         else window.scrollTo(0, document.body.scrollHeight);
       }).catch(() => {});
       await new Promise(r => setTimeout(r, 800));
-      console.log('[BankTransfer] Post-account L1 fill done â€” Vision handles Continue/review/PIN');
+      console.log('[BankTransfer] Post-account L1 fill done â€" Vision handles Continue/review/PIN');
       continue;
     }
 
@@ -9845,12 +9845,12 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
     if (isSuccess) {
       const refMatch = pageText.match(/reference\s*id\s*(?:number)?[:\s]+([A-Z0-9]{8,12})/i);
       if (refMatch) referenceId = refMatch[1].trim();
-      console.log(`[BankTransfer] âœ… SUCCESS â€” Ref: ${referenceId}`);
+      console.log(`[BankTransfer] âœ… SUCCESS â€" Ref: ${referenceId}`);
       imWithdrawalRunning = false;
       return { success: true, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => screenshot), referenceId };
     }
 
-    // â”€â”€ Pre-check: if currency dropdown is open, click KES directly â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Pre-check: if currency dropdown is open, click KES directly â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const openKES = await imPage.evaluate(() => {
       const all = Array.from(document.querySelectorAll('li, span, div, option, mat-option'));
       const leaf = all.filter(el => {
@@ -9869,7 +9869,7 @@ public class KS2 { [DllImport("user32.dll")] public static extern void keybd_eve
       return null;
     }).catch(() => null);
     if (openKES) {
-      // Dropdown is open â€” press K+Enter via OS keybd_event (type-ahead selects KES)
+      // Dropdown is open â€" press K+Enter via OS keybd_event (type-ahead selects KES)
       const psKesVision = `
 Add-Type -TypeDefinition @"
 using System; using System.Runtime.InteropServices; using System.Threading;
@@ -9905,27 +9905,27 @@ TARGET PAYMENT:
 - Payment mode: Pesalink (radio button)
 - Payment purpose: Other
 
-IMPORTANT: The following were already filled programmatically â€” do NOT re-fill them unless clearly wrong:
-- “One-off Beneficiary” radio: ALREADY SELECTED
-- Bank name: ALREADY SET to “${targetBank}”
+IMPORTANT: The following were already filled programmatically â€" do NOT re-fill them unless clearly wrong:
+- "One-off Beneficiary" radio: ALREADY SELECTED
+- Bank name: ALREADY SET to "${targetBank}"
 - Account number: ALREADY TYPED (${accountNumber}) and Validated
 - Amount: ALREADY SET to ${amountInt}
 - Reference: ALREADY FILLED
 - Pesalink radio: ALREADY SELECTED
-- Payment Purpose: ALREADY SET to “Other”
+- Payment Purpose: ALREADY SET to "Other"
 
-CRITICAL: If the form still shows “Saved Beneficiary” selected OR any required field shows a validation error OR amount is empty → DO NOT click Continue. Instead return action=”refill” so the bot can re-fill the form.
+CRITICAL: If the form still shows "Saved Beneficiary" selected OR any required field shows a validation error OR amount is empty → DO NOT click Continue. Instead return action="refill" so the bot can re-fill the form.
 
 ALL form fields have been filled. Your ONLY jobs are:
-1. If currency shows “-” → click the currency dropdown and select KES
-2. If you see a green “Continue” button AND no red validation errors visible → click it
-3. On review/confirmation screen → click “Submit” or “Confirm”
-4. On PIN screen → action=”type_pin”
-5. After PIN → if you see “Okay” or “Complete” or “Done” button → click it. If not visible → action=”scroll”
-6. On success/completion screen → action=”done”
-7. If form has validation errors or fields are empty → action=”refill”
+1. If currency shows "-" → click the currency dropdown and select KES
+2. If you see a green "Continue" button AND no red validation errors visible → click it
+3. On review/confirmation screen → click "Submit" or "Confirm"
+4. On PIN screen → action="type_pin"
+5. After PIN → if you see "Okay" or "Complete" or "Done" button → click it. If not visible → action="scroll"
+6. On success/completion screen → action="done"
+7. If form has validation errors or fields are empty → action="refill"
 
-If a button you need is not visible, return action=”scroll” to scroll down.
+If a button you need is not visible, return action="scroll" to scroll down.
 DO NOT click Validate, DO NOT re-enter any fields.
 
 Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"click|type|type_pin|scroll|done","description":"what you are doing","value":"text if typing","x":NNN,"y":NNN}` },
@@ -9963,7 +9963,7 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
         await new Promise(r => setTimeout(r, 150));
       }
       await new Promise(r => setTimeout(r, 800));
-      // Click Complete immediately after PIN â€” don't wait for Vision to see it
+      // Click Complete immediately after PIN â€" don't wait for Vision to see it
       const completeClicked = await imPage.evaluate(() => {
         const btns = Array.from(document.querySelectorAll('button'));
         const btn = btns.find(b => (b.textContent || '').trim().toLowerCase() === 'complete');
@@ -9981,7 +9981,7 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
       await new Promise(r => setTimeout(r, 800)); continue;
     }
     if (action.action === 'scroll') {
-      // Try to find and click the target button via DOM â€” search inside modal first
+      // Try to find and click the target button via DOM â€" search inside modal first
       const domClicked = await imPage.evaluate((scrn) => {
         // Review screen: only Submit/Confirm inside the modal (NOT Continue from form behind)
         const reviewOnly = scrn === 'review';
@@ -10060,12 +10060,12 @@ Return ONLY JSON: {"screen":"form|account_list|review|pin|success","action":"cli
   return { success: false, screenshot: await imPage.screenshot({ encoding: 'base64' }).catch(() => null), referenceId: null };
 }
 
-// â”€â”€ Pause buy ad and notify trader when seller hasn't released after payment â”€â”€
+// â"€â"€ Pause buy ad and notify trader when seller hasn't released after payment â"€â"€
 // The trader will manually handle the appeal on Binance.
 // Steps: navigate to My Ads → find the BUY ad → toggle it offline → notify trader.
 async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
   const { sellerName = 'Unknown', amount = 0 } = orderDetails || {};
-  console.log(`[SparkP2P] â¸ï¸  Pausing buy ad for order ${orderNumber} â€” seller ${sellerName} has not released`);
+  console.log(`[SparkP2P] â¸ï¸  Pausing buy ad for order ${orderNumber} â€" seller ${sellerName} has not released`);
 
   // Step 1: Navigate to My Ads and take the BUY ad offline
   let adPaused = false;
@@ -10074,7 +10074,7 @@ async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
     await new Promise(r => setTimeout(r, 3000));
 
     // The My Ads page shows each ad as a table row with a Status column.
-    // Status shows "Online" text + a small icon right next to it â€” clicking
+    // Status shows "Online" text + a small icon right next to it â€" clicking
     // that icon shows an "Offline" tooltip and toggles the ad offline.
     // We find the BUY row, locate the element whose text is exactly "Online",
     // then click the icon/span sitting immediately beside it.
@@ -10099,7 +10099,7 @@ async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
         // The clickable offline icon is the next sibling element of the "Online" span
         const icon = el.nextElementSibling || el.querySelector('span, svg, i');
         if (icon) { icon.click(); return true; }
-        // Last resort â€” click the container of "Online"
+        // Last resort â€" click the container of "Online"
         el.parentElement?.click();
         return true;
       }
@@ -10109,14 +10109,14 @@ async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
     if (adPaused) {
       console.log('[SparkP2P] âœ… Buy ad toggled offline');
     } else {
-      console.log('[SparkP2P] âš ï¸  Buy ad Online icon not found â€” may already be offline');
+      console.log('[SparkP2P] âš ï¸  Buy ad Online icon not found â€" may already be offline');
     }
     await new Promise(r => setTimeout(r, 1500));
   } catch (e) {
     console.log(`[SparkP2P] pauseBuyAd navigation error: ${e.message}`);
   }
 
-  // Step 2: Report to backend â€” triggers email, SMS, and in-app notification to trader
+  // Step 2: Report to backend â€" triggers email, SMS, and in-app notification to trader
   try {
     await fetch(`${API_BASE}/ext/report-buy-expired`, {
       method: 'POST',
@@ -10163,7 +10163,7 @@ async function uploadPaymentProofToBinance(page, screenshotBase64) {
   let tmpPath = null;
   try {
     tmpPath = path.join(app.getPath('temp'), `im_receipt_${Date.now()}.jpg`);
-    // Resize to 480px wide JPEG â€” fits any mobile screen without horizontal scrolling
+    // Resize to 480px wide JPEG â€" fits any mobile screen without horizontal scrolling
     try {
       const { nativeImage } = require('electron');
       const img = nativeImage.createFromBuffer(Buffer.from(screenshotBase64, 'base64'));
@@ -10179,7 +10179,7 @@ async function uploadPaymentProofToBinance(page, screenshotBase64) {
       fs.writeFileSync(tmpPath, Buffer.from(screenshotBase64, 'base64'));
     }
 
-    // â”€â”€ Step A: Open the Payment Confirmation modal if not already open â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step A: Open the Payment Confirmation modal if not already open â"€â"€â"€â"€â"€â"€
     const modalAlreadyOpen = await page.evaluate(() =>
       !!document.querySelector('[class*="modal" i], [class*="dialog" i], [role="dialog"]') &&
       document.body.innerText.toLowerCase().includes('payment confirmation')
@@ -10205,7 +10205,7 @@ async function uploadPaymentProofToBinance(page, screenshotBase64) {
       console.log('[SparkP2P] Payment Confirmation modal already open');
     }
 
-    // â”€â”€ Step B: Click the "Upload" icon INSIDE the modal → FileChooser â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Step B: Click the "Upload" icon INSIDE the modal → FileChooser â"€â"€â"€â"€â"€â"€â"€â"€
     // Inject file into Binance modal using React-compatible DataTransfer
     // uploadFile() via CDP does not fire React's synthetic onChange — use base64 DataTransfer instead
     let uploaded = false;
@@ -10279,14 +10279,14 @@ async function uploadPaymentProofToBinance(page, screenshotBase64) {
     if (!uploaded) { console.log('[SparkP2P] Could not upload inside modal'); return result; }
     result.uploaded = true;
 
-    // â”€â”€ Step C: Wait for preview, then click checkbox via mouse coords + Confirm â”€
+    // â"€â"€ Step C: Wait for preview, then click checkbox via mouse coords + Confirm â"€
     await new Promise(r => setTimeout(r, 3000));
 
-    // â”€â”€ Checkbox click: Layer 1 DOM → Layer 2 Vision â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Checkbox click: Layer 1 DOM → Layer 2 Vision â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const pageDpr = await page.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
     let cbClicked = false;
 
-    // Layer 1: DOM â€” find the small visible checkbox square element
+    // Layer 1: DOM â€" find the small visible checkbox square element
     const cbCoords = await page.evaluate(() => {
       // Try small square spans used by Ant Design / Binance checkboxes
       const squares = Array.from(document.querySelectorAll(
@@ -10316,7 +10316,7 @@ async function uploadPaymentProofToBinance(page, screenshotBase64) {
       await new Promise(r => setTimeout(r, 600));
     }
 
-    // Layer 2: Vision â€” take screenshot and ask Claude Haiku for exact checkbox coordinates
+    // Layer 2: Vision â€" take screenshot and ask Claude Haiku for exact checkbox coordinates
     if (!cbClicked && anthropicApiKey) {
       const cbSS = await page.screenshot({ encoding: 'base64' }).catch(() => null);
       if (cbSS) {
@@ -10350,12 +10350,12 @@ async function uploadPaymentProofToBinance(page, screenshotBase64) {
       }
     }
 
-    if (!cbClicked) console.log('[SparkP2P] âš ï¸ Checkbox not found â€” confirming anyway');
+    if (!cbClicked) console.log('[SparkP2P] âš ï¸ Checkbox not found â€" confirming anyway');
 
-    // â”€â”€ Confirm button: Layer 1 DOM → Layer 2 Vision â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ Confirm button: Layer 1 DOM → Layer 2 Vision â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     let confirmClicked = false;
 
-    // Layer 1: DOM â€” find Confirm button inside the modal by text
+    // Layer 1: DOM â€" find Confirm button inside the modal by text
     const confirmCoords = await page.evaluate(() => {
       const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
       for (const btn of btns) {
@@ -10374,7 +10374,7 @@ async function uploadPaymentProofToBinance(page, screenshotBase64) {
       confirmClicked = true;
     }
 
-    // Layer 2: Vision â€” screenshot → Claude Haiku finds the Confirm button
+    // Layer 2: Vision â€" screenshot → Claude Haiku finds the Confirm button
     if (!confirmClicked && anthropicApiKey) {
       const cfSS = await page.screenshot({ encoding: 'base64' }).catch(() => null);
       if (cfSS) {
@@ -10434,7 +10434,7 @@ let _cycleDom    = 0; // Free DOM detections this scan cycle (reset each idleSca
 async function sendImageInBinanceChat(page, screenshotBase64) {
   let tmpPath = null;
   try {
-    // Resize to 480px wide JPEG â€” fits any mobile screen without horizontal scrolling
+    // Resize to 480px wide JPEG â€" fits any mobile screen without horizontal scrolling
     tmpPath = path.join(app.getPath('temp'), `chat_img_${Date.now()}.jpg`);
     try {
       const { nativeImage } = require('electron');
@@ -10451,7 +10451,7 @@ async function sendImageInBinanceChat(page, screenshotBase64) {
     }
 
     // Find the image/attachment button in the chat input area
-    // Binance chat has a small image icon (ðŸ“·) to the left of the text input
+    // Binance chat has a small image icon (ðŸ"·) to the left of the text input
     const pageDpr = await page.evaluate(() => window.devicePixelRatio || 1).catch(() => 1);
 
     const attachCoords = await page.evaluate(() => {
@@ -10515,7 +10515,7 @@ async function sendImageInBinanceChat(page, screenshotBase64) {
           model: 'claude-haiku-4-5-20251001', max_tokens: 80,
           messages: [{ role: 'user', content: [
             { type: 'image', source: { type: 'base64', media_type: 'image/png', data: chatSS } },
-            { type: 'text', text: 'Find the image/camera/attachment icon in the chat input area (NOT the upload proof button â€” the small icon next to the message text box at the bottom of the page). Return its center coordinates as JSON: {"x":NNN,"y":NNN}. If not found return {"x":0,"y":0}' },
+            { type: 'text', text: 'Find the image/camera/attachment icon in the chat input area (NOT the upload proof button â€" the small icon next to the message text box at the bottom of the page). Return its center coordinates as JSON: {"x":NNN,"y":NNN}. If not found return {"x":0,"y":0}' },
           ]}],
         }),
       }).catch(() => null);
@@ -10540,7 +10540,7 @@ async function sendImageInBinanceChat(page, screenshotBase64) {
       }
     }
 
-    console.log('[SparkP2P] âš ï¸ Could not find chat image button â€” screenshot not sent in chat');
+    console.log('[SparkP2P] âš ï¸ Could not find chat image button â€" screenshot not sent in chat');
     return false;
   } catch (e) {
     console.log('[SparkP2P] sendImageInBinanceChat error:', e.message);
@@ -10682,10 +10682,10 @@ Return ONLY valid JSON with this exact structure:
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // I&M BANK AUTOMATION
-// Opens as a new tab in the existing Binance browser â€” one browser, all tabs
+// Opens as a new tab in the existing Binance browser â€" one browser, all tabs
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// Navigate to dashboard â€” triggers OAuth redirect to login page with correct PKCE params
+// Navigate to dashboard â€" triggers OAuth redirect to login page with correct PKCE params
 const IM_URL = 'https://digital.imbank.com/inm-retail/dashboard';
 const IM_TRANSFERS_URL = 'https://digital.imbank.com/inm-retail/transfers';
 const IM_KEEP_ALIVE_INTERVAL = 60 * 1000; // ping every 1 min to prevent session timeout
@@ -10697,7 +10697,7 @@ async function connectIm() {
   connectingIm = true;
   console.log('[SparkP2P] Opening I&M Bank tab...');
   try {
-    // Ensure main browser is running â€” launch if needed
+    // Ensure main browser is running â€" launch if needed
     if (!browser) {
       await launchChrome(IM_URL);
       await connectPuppeteer();
@@ -10711,11 +10711,11 @@ async function connectIm() {
       imPage = existing;
     } else {
       imPage = await browser.newPage();
-      // Restore saved session cookies before navigating â€” avoids login page if session still valid
+      // Restore saved session cookies before navigating â€" avoids login page if session still valid
       const savedCookies = loadImCookiesLocal();
       if (savedCookies) {
         await restoreCookiesToPage(imPage, savedCookies, 'https://digital.imbank.com');
-        console.log('[SparkP2P] I&M saved session cookies restored â€” attempting silent reconnect');
+        console.log('[SparkP2P] I&M saved session cookies restored â€" attempting silent reconnect');
       }
       await imPage.goto(IM_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
@@ -10741,7 +10741,7 @@ async function connectIm() {
       // the M-Pesa handler calls lockChromeBrowser() when it finishes.
       if (mpesaPortalReady) await lockChromeBrowser().catch(() => {});
       connectingIm = false;
-      mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“im-connected”))').catch(() => {});
+      mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("im-connected"))').catch(() => {});
       sendBotLog('success', 'I&M Bank portal connected');
       // Always switch Chrome focus back to Binance — even if poller was already running
       const binancePage = await getPage('binance.com').catch(() => null);
@@ -10749,7 +10749,7 @@ async function connectIm() {
       const setup = await checkSetupComplete();
       if (setup.complete && !pollerRunning) {
         pauseNavigation = false;
-        mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“setup-complete”))').catch(() => {});
+        mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
         console.log('[SparkP2P] I&M logged in — starting scanner');
         sendBotLog('success', 'I&M connected — starting scanner');
         await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
@@ -10776,7 +10776,7 @@ async function connectIm() {
       // Start bot on Binance immediately — don't wait for I&M
       if (!pollerRunning) {
         pauseNavigation = false;
-        mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“setup-complete”))').catch(() => {});
+        mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
         await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
         startPoller();
       }
@@ -10943,7 +10943,7 @@ function startImRecoveryPoller() {
         startImKeepAlive();
         const binancePageRecovery = await getPage('binance.com').catch(() => null);
         if (binancePageRecovery) await binancePageRecovery.bringToFront().catch(() => {});
-        mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent(“im-connected”))').catch(() => {});
+        mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("im-connected"))').catch(() => {});
         if (token) {
           fetch(`${API_BASE}/ext/notify-trader`, {
             method: 'POST',
@@ -11011,7 +11011,7 @@ function startImKeepAlive() {
 
       // Skip keep-alive navigation if a withdrawal is currently running
       if (imWithdrawalRunning) {
-        console.log('[SparkP2P] I&M keep-alive skipped â€” withdrawal in progress');
+        console.log('[SparkP2P] I&M keep-alive skipped â€" withdrawal in progress');
         return;
       }
 
@@ -11054,7 +11054,7 @@ async function executeImWithdrawal(job) {
   sendBotLog('info', `I&M Bank withdrawal started — KES ${job.amount}`);
 
   try {
-    // â”€â”€ STEP 1: Navigate to Own Account Transfer form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STEP 1: Navigate to Own Account Transfer form â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     await imPage.goto(
       'https://digital.imbank.com/inm-retail/transfers/own-account-transfer/form',
       { waitUntil: 'networkidle2', timeout: 30000 }
@@ -11062,7 +11062,7 @@ async function executeImWithdrawal(job) {
     await sleep(2000);
     console.log('[SparkP2P] I&M: Loaded own-account-transfer form');
 
-    // â”€â”€ STEP 2: Select FROM account (SPARK FREELANCE SOLUTIONS) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STEP 2: Select FROM account (SPARK FREELANCE SOLUTIONS) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     // Click the From dropdown
     await imPage.waitForSelector('select, [class*="dropdown"], [class*="select"]', { timeout: 10000 }).catch(() => {});
     // Use Claude Vision to identify and click the From dropdown, then select correct account
@@ -11088,7 +11088,7 @@ async function executeImWithdrawal(job) {
     }
     await sleep(1000);
 
-    // â”€â”€ STEP 3: Select TO account (trader's personal account) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STEP 3: Select TO account (trader's personal account) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const allDropdowns = await imPage.$$('ng-select, app-select, select').catch(() => []);
     let toDone = false;
     if (allDropdowns.length > 1) {
@@ -11107,7 +11107,7 @@ async function executeImWithdrawal(job) {
     }
     await sleep(1000);
 
-    // â”€â”€ STEP 4: Set currency to KES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STEP 4: Set currency to KES â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     // Click the currency dropdown and select KES
     const currencyDropdown = await imPage.$('select[formcontrolname*="currency"], [class*="currency"] select, select').catch(() => null);
     if (currencyDropdown) {
@@ -11125,8 +11125,8 @@ async function executeImWithdrawal(job) {
     console.log('[SparkP2P] I&M: Currency set to KES');
     await sleep(500);
 
-    // â”€â”€ STEP 5: Enter amount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Amount field â€” type the whole number part (cents field stays 00)
+    // â"€â"€ STEP 5: Enter amount â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // Amount field â€" type the whole number part (cents field stays 00)
     const amountWhole = Math.floor(job.amount).toString();
     const amountInput = await imPage.$('input[type="number"], input[formcontrolname*="amount"], input[placeholder*="amount" i]').catch(() => null);
     if (amountInput) {
@@ -11140,7 +11140,7 @@ async function executeImWithdrawal(job) {
     console.log(`[SparkP2P] I&M: Entered amount ${amountWhole}`);
     await sleep(500);
 
-    // â”€â”€ STEP 6: Enter description (optional) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STEP 6: Enter description (optional) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const descInput = await imPage.$('textarea, input[formcontrolname*="description"], input[placeholder*="description" i]').catch(() => null);
     if (descInput) {
       await descInput.click();
@@ -11148,7 +11148,7 @@ async function executeImWithdrawal(job) {
     }
     await sleep(500);
 
-    // â”€â”€ STEP 7: Click Continue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STEP 7: Click Continue â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     const continueBtn = await $x('//button[contains(text(), "Continue")]').catch(() => []);
     if (continueBtn.length > 0) {
       await continueBtn[0].click();
@@ -11158,7 +11158,7 @@ async function executeImWithdrawal(job) {
     console.log('[SparkP2P] I&M: Clicked Continue');
     await sleep(3000);
 
-    // â”€â”€ STEP 8: Review modal â€” verify account name then click Submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STEP 8: Review modal â€" verify account name then click Submit â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     // Use Claude Vision to read the beneficiary name shown in the review modal
     ss = await imPage.screenshot({ encoding: 'base64' });
     const reviewCheck = await imVisionVerify(
@@ -11171,12 +11171,12 @@ async function executeImWithdrawal(job) {
     );
 
     if (reviewCheck && reviewCheck.match === false) {
-      console.log(`[SparkP2P] âš ï¸ I&M review: account name mismatch! Expected "${EXPECTED_NAME}", found "${reviewCheck.found_name}" â€” discarding`);
+      console.log(`[SparkP2P] âš ï¸ I&M review: account name mismatch! Expected "${EXPECTED_NAME}", found "${reviewCheck.found_name}" â€" discarding`);
       const discardBtn = await $x('//button[contains(text(), "Discard")] | //a[contains(text(), "Discard")]').catch(() => []);
       if (discardBtn.length > 0) await discardBtn[0].click().catch(() => {});
       throw new Error(`Account name mismatch: expected "${EXPECTED_NAME}", got "${reviewCheck.found_name}"`);
     }
-    console.log(`[SparkP2P] I&M: Review verified (${reviewCheck?.found_name || 'name confirmed'}) â€” submitting`);
+    console.log(`[SparkP2P] I&M: Review verified (${reviewCheck?.found_name || 'name confirmed'}) â€" submitting`);
 
     // Click Submit
     const submitBtn = await $x('//button[contains(text(), "Submit")]').catch(() => []);
@@ -11188,7 +11188,7 @@ async function executeImWithdrawal(job) {
     await sleep(2000);
     console.log('[SparkP2P] I&M: Clicked Submit');
 
-    // â”€â”€ STEP 9: Identity Validation â€” enter PIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STEP 9: Identity Validation â€" enter PIN â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     await imPage.waitForSelector('input[type="password"], input[placeholder*="PIN" i]', { timeout: 10000 });
     const pinInput = await imPage.$('input[type="password"], input[placeholder*="PIN" i]').catch(() => null);
     if (!pinInput) throw new Error('PIN input not found');
@@ -11207,7 +11207,7 @@ async function executeImWithdrawal(job) {
     console.log('[SparkP2P] I&M: Clicked Complete');
     await sleep(4000);
 
-    // â”€â”€ STEP 10: Verify success screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STEP 10: Verify success screen â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     ss = await imPage.screenshot({ encoding: 'base64' });
     const successCheck = await imVisionVerify(
       ss,
@@ -11217,7 +11217,7 @@ async function executeImWithdrawal(job) {
     );
 
     if (successCheck && successCheck.success) {
-      console.log(`[SparkP2P] âœ… I&M withdrawal KES ${job.amount} SUCCESS â€” ref: ${successCheck.reference || 'N/A'}`);
+      console.log(`[SparkP2P] âœ… I&M withdrawal KES ${job.amount} SUCCESS â€" ref: ${successCheck.reference || 'N/A'}`);
       sendBotLog('success', `I&M Bank withdrawal KES ${job.amount} completed — ref: ${successCheck.reference || 'N/A'}`);
       // Click Close to dismiss the success modal
       const closeBtn = await $x('//button[contains(text(), "Close")]').catch(() => []);
@@ -11247,7 +11247,7 @@ async function executeImWithdrawal(job) {
   }
 }
 
-// â”€â”€ Claude Vision helpers for I&M automation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Claude Vision helpers for I&M automation â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function _parseVisionJson(text) {
   // Strip markdown code fences before parsing
   const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -11454,7 +11454,7 @@ async function checkImPageHealth(page) {
   return 'error';
 }
 
-// â”€â”€ I&M Local Transfer (to any I&M account holder) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ I&M Local Transfer (to any I&M account holder) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Used for all trader withdrawals to their I&M accounts
 async function executeImLocalTransfer(job, _page = null) {
   // job = { id, amount, destination_account, destination_name }
@@ -12451,7 +12451,7 @@ setInterval(async () => {
     if (!res.ok) return;
     const data = await res.json();
     if (data.jobs && data.jobs.length > 0) {
-      console.log(`[SparkP2P] ${data.jobs.length} pending I&M withdrawal(s) found â€” executing first`);
+      console.log(`[SparkP2P] ${data.jobs.length} pending I&M withdrawal(s) found â€" executing first`);
       const job = data.jobs[0];
       await executeImLocalTransfer(job);
     }
@@ -12497,7 +12497,7 @@ setInterval(async () => {
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // M-PESA ORG PORTAL AUTOMATION
 // Automates org.ke.m-pesa.com to sweep funds from paybill 4041355
-// → linked I&M Bank account (FREE â€” "No charge" confirmed in portal)
+// → linked I&M Bank account (FREE â€" "No charge" confirmed in portal)
 // Same approach as I&M Bank: real Chrome tab, cookie persistence, Vision
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
@@ -12617,7 +12617,7 @@ async function connectMpesaPortal() {
   connectingMpesa = true;
   console.log('[SparkP2P] Opening M-PESA org portal tab...');
   try {
-    // Ensure main browser is running â€” launch if needed
+    // Ensure main browser is running â€" launch if needed
     if (!browser) {
       await launchChrome(MPESA_ORG_URL);
       await connectPuppeteer();
@@ -12631,11 +12631,11 @@ async function connectMpesaPortal() {
       mpesaOrgPage = existing;
     } else {
       mpesaOrgPage = await browser.newPage();
-      // Restore saved session cookies before navigating â€” avoids login page if session still valid
+      // Restore saved session cookies before navigating â€" avoids login page if session still valid
       const savedMpesaCookies = loadMpesaCookiesLocal();
       if (savedMpesaCookies) {
         await restoreCookiesToPage(mpesaOrgPage, savedMpesaCookies, MPESA_ORG_URL);
-        console.log('[SparkP2P] M-PESA saved session cookies restored â€” attempting silent reconnect');
+        console.log('[SparkP2P] M-PESA saved session cookies restored â€" attempting silent reconnect');
       }
       await mpesaOrgPage.goto(MPESA_ORG_URL, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     }
@@ -12740,7 +12740,7 @@ function startMpesaOrgKeepAlive() {
   }, MPESA_ORG_KEEP_ALIVE_INTERVAL);
 }
 
-// â”€â”€ Paybill Statement Scraper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Paybill Statement Scraper â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Navigates to the M-PESA org portal statement/history page, uses Claude Vision
 // to extract all visible transactions, and pushes them to the backend.
 // Runs every 30 min when the portal is connected.
@@ -12846,7 +12846,7 @@ Return ONLY valid JSON: {"transactions": [...]}` }
       body: JSON.stringify({ transactions }),
     });
     const pushData = await pushRes.json();
-    console.log(`[PaybillSync] Sync complete â€” inserted: ${pushData.inserted}, skipped: ${pushData.skipped}`);
+    console.log(`[PaybillSync] Sync complete â€" inserted: ${pushData.inserted}, skipped: ${pushData.skipped}`);
 
   } catch (e) {
     console.error('[PaybillSync] Error:', e.message?.substring(0, 100));
@@ -12860,12 +12860,12 @@ Return ONLY valid JSON: {"transactions": [...]}` }
 
 function startPaybillSync() {
   if (paybillSyncTimer) clearInterval(paybillSyncTimer);
-  // First run after 30 min â€” don't navigate away from portal immediately after login
+  // First run after 30 min â€" don't navigate away from portal immediately after login
   paybillSyncTimer = setInterval(scrapePaybillStatement, 30 * 60 * 1000);
   console.log('[PaybillSync] Statement sync started (every 30 min, first run in 30 min)');
 }
 
-// â”€â”€ Shared helper: fill a form on the M-PESA org portal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Shared helper: fill a form on the M-PESA org portal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Fills Amount(KSH), Remark, and Reason (Input Manually) on the current page,
 // then clicks Submit. Used by both Revenue Settlement and Org Withdrawal steps.
 async function _fillAndSubmitMpesaForm(page, amount, remark, reason) {
@@ -12920,7 +12920,7 @@ async function _fillAndSubmitMpesaForm(page, amount, remark, reason) {
       const manual = opts.find(o => o.text.toLowerCase().includes('manual') || o.text.toLowerCase().includes('input'));
       if (manual) { sel.value = manual.value; sel.dispatchEvent(new Event('change', { bubbles: true })); return; }
     }
-    // For custom dropdown already showing "Input Manually..." â€” nothing to do
+    // For custom dropdown already showing "Input Manually..." â€" nothing to do
   }).catch(() => {});
 
   await new Promise(r => setTimeout(r, 400));
@@ -12961,7 +12961,7 @@ async function _fillAndSubmitMpesaForm(page, amount, remark, reason) {
   return submitted;
 }
 
-// â”€â”€ Wait for "Operation succeeded." or "Transaction Budget" popup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Wait for "Operation succeeded." or "Transaction Budget" popup â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 async function _waitForMpesaSuccess(page, screenshotLabel) {
   await new Promise(r => setTimeout(r, 3000));
 
@@ -12973,7 +12973,7 @@ async function _waitForMpesaSuccess(page, screenshotLabel) {
   }).catch(() => false);
 
   if (succeeded) {
-    console.log(`[SparkP2P] âœ… ${screenshotLabel} â€” "Operation succeeded." detected`);
+    console.log(`[SparkP2P] âœ… ${screenshotLabel} â€" "Operation succeeded." detected`);
     await takeScreenshot(screenshotLabel + '_success', page);
     return true;
   }
@@ -13000,7 +13000,7 @@ async function _waitForMpesaSuccess(page, screenshotLabel) {
     return true;
   }
 
-  // Vision fallback â€” check what's on screen
+  // Vision fallback â€" check what's on screen
   if (anthropicApiKey) {
     const ss = await page.screenshot({ encoding: 'base64' });
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -13038,7 +13038,7 @@ async function _waitForMpesaSuccess(page, screenshotLabel) {
   return false;
 }
 
-// â”€â”€ Full sweep: Step 1 Revenue Settlement + Step 2 Org Withdrawal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â"€â"€ Full sweep: Step 1 Revenue Settlement + Step 2 Org Withdrawal â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 async function executeMpesaSweep(sweepJob) {
   // sweepJob = { sweep_id, amount, reference }
   if (mpesaSweepRunning) return { success: false, error: 'sweep_in_progress' };
@@ -13085,8 +13085,8 @@ async function executeMpesaSweep(sweepJob) {
   };
 
   try {
-    // â”€â”€ STEP 1: Revenue Settlement (utility float → working account) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Navigate directly to initiate URL â€” "All organization" is pre-selected by default
+    // â"€â"€ STEP 1: Revenue Settlement (utility float → working account) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // Navigate directly to initiate URL â€" "All organization" is pre-selected by default
     console.log('[SparkP2P] Step 1: Revenue Settlement...');
     // Retry up to 3 times — back-to-back sweeps can leave the portal transitioning
     // so the revenue form loads but Submit isn't rendered yet. Fresh navigation fixes it.
@@ -13138,19 +13138,19 @@ async function executeMpesaSweep(sweepJob) {
     const step1Ok = await mpesaOrgPage.evaluate(() =>
       document.body.innerText.toLowerCase().includes('operation succeeded')
     ).catch(() => false);
-    console.log(`[SparkP2P] Step 1 result: ${step1Ok ? 'âœ… Operation succeeded' : 'unknown â€” proceeding anyway'}`);
+    console.log(`[SparkP2P] Step 1 result: ${step1Ok ? 'âœ… Operation succeeded' : 'unknown â€" proceeding anyway'}`);
     await takeScreenshot('sweep_step1_revenue_result', mpesaOrgPage);
 
     await new Promise(r => setTimeout(r, 2000));
 
-    // â”€â”€ STEP 2: Organization Withdrawal (working account → I&M Bank) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â"€â"€ STEP 2: Organization Withdrawal (working account → I&M Bank) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     // Transaction Center → Initiate Transaction → "Organization Withdrawal From MPESA-Real Time"
     console.log('[SparkP2P] Step 2: Org Withdrawal to I&M Bank...');
     await mpesaOrgPage.goto(MPESA_ORG_INITIATE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 3000));
     await takeScreenshot('sweep_step2_withdrawal_form', mpesaOrgPage);
 
-    // Select "Organization Withdrawal From MPESA-Real Time" â€” must match "real time" exactly
+    // Select "Organization Withdrawal From MPESA-Real Time" â€" must match "real time" exactly
     const serviceSelected = await mpesaOrgPage.evaluate(() => {
       // Try native <select> first
       for (const sel of document.querySelectorAll('select')) {
@@ -13206,7 +13206,7 @@ async function executeMpesaSweep(sweepJob) {
     ).catch(() => []);
     console.log('[SparkP2P] All inputs on page:', JSON.stringify(allInputs.slice(0, 20)));
 
-    // Find Amount field â€” check placeholder, name, id, aria-label, and surrounding label text
+    // Find Amount field â€" check placeholder, name, id, aria-label, and surrounding label text
     const amountHandle = await mpesaOrgPage.evaluateHandle((amt) => {
       const inputs = Array.from(document.querySelectorAll('input'));
       return inputs.find(el => {
@@ -13273,7 +13273,7 @@ async function executeMpesaSweep(sweepJob) {
 
     await new Promise(r => setTimeout(r, 300));
 
-    // Fill "Enter The Reason..." textarea (Reason field â€” "Input Manually..." already selected)
+    // Fill "Enter The Reason..." textarea (Reason field â€" "Input Manually..." already selected)
     await mpesaOrgPage.evaluate(() => {
       const ta = Array.from(document.querySelectorAll('textarea'));
       const reason = ta.find(el => (el.placeholder || '').toLowerCase().includes('reason'));
@@ -13433,7 +13433,7 @@ setInterval(async () => {
     if (!res.ok) return;
     const data = await res.json();
     if (data.sweeps && data.sweeps.length > 0) {
-      console.log(`[SparkP2P] ${data.sweeps.length} pending M-PESA sweep(s) found â€” executing first`);
+      console.log(`[SparkP2P] ${data.sweeps.length} pending M-PESA sweep(s) found â€" executing first`);
       await executeMpesaSweep(data.sweeps[0]);
     }
   } catch (e) {}
@@ -13445,8 +13445,8 @@ ipcMain.handle('connect-im', () => { connectIm(); return { opened: true }; });
 ipcMain.handle('connect-mpesa', () => { connectMpesaPortal(); return { opened: true }; });
 ipcMain.handle('unlock-browser', async () => { await unlockChromeBrowser(); console.log('[SparkP2P] Browser manually unlocked'); return { ok: true }; });
 ipcMain.handle('lock-browser', async () => { const p = await getPage(); if (p) await lockChromeBrowser(); return { ok: true }; });
-ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED â€” Chrome unlocked for manual use'); return { ok: true }; });
-ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED â€” Chrome locked back to bot'); return { ok: true }; });
+ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED â€" Chrome unlocked for manual use'); return { ok: true }; });
+ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED â€" Chrome locked back to bot'); return { ok: true }; });
 ipcMain.handle('open-gmail-tab', async () => {
   // If Chrome is not running yet, launch it to Gmail directly
   if (!browser) {
@@ -13464,7 +13464,7 @@ ipcMain.handle('set-token', (_, t) => {
   const isNew = !token && !!t;
   token = t;
   if (isNew && t) {
-    // Token just arrived (admin portal login or page reload) â€” reset stale portal flags
+    // Token just arrived (admin portal login or page reload) â€" reset stale portal flags
     fetch(`${API_BASE}/traders/disconnect-im`, { method: 'POST', headers: { 'Authorization': `Bearer ${t}` } }).catch(() => {});
     fetch(`${API_BASE}/traders/disconnect-mpesa-portal`, { method: 'POST', headers: { 'Authorization': `Bearer ${t}` } }).catch(() => {});
     // Auto-connect M-Pesa portal using persisted Chrome cookies (I&M tab no longer auto-opened)
@@ -13528,7 +13528,7 @@ ipcMain.handle('manual-mpesa-sweep', async (_, amount) => {
   if (!amt || amt <= 0) return { ok: false, error: 'Invalid amount' };
   if (!mpesaOrgPage || mpesaOrgPage.isClosed()) return { ok: false, error: 'M-PESA portal not connected' };
   if (mpesaSweepRunning) return { ok: false, error: 'Sweep already in progress' };
-  console.log(`[SparkP2P] Manual M-PESA sweep triggered â€” KES ${amt}`);
+  console.log(`[SparkP2P] Manual M-PESA sweep triggered â€" KES ${amt}`);
   const result = await executeMpesaSweep({ sweep_id: 'manual', amount: amt, reference: 'Manual-' + Date.now() });
   return { ok: result?.success !== false, error: result?.error || null };
 });
