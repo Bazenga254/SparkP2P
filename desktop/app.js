@@ -4170,20 +4170,6 @@ Method selection rules:
       const firstName = (paymentDetails.name || 'Seller').split(' ')[0];
       const amt = Math.floor(parseFloat(paymentDetails.amount));
 
-      // Send greeting (once per order)
-      if (!buyGreetingSentOrders.has(order.orderNumber)) {
-        buyGreetingSentOrders.add(order.orderNumber);
-        let greetMsg = '';
-        if (method === 'mpesa') {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! 🙏`;
-        } else {
-          greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you! 🙏`;
-        }
-        await sendBinanceChatMessage(page, greetMsg);
-        console.log(`[SparkP2P] ðŸ'‹ Greeting sent for buy order ${order.orderNumber} (method: ${method})`);
-        await new Promise(r => setTimeout(r, 1000));
-      }
-
       console.log(`[SparkP2P] ðŸ'³ Buy order ${order.orderNumber} â€” paying KSh ${amt} to ${paymentDetails.name} via ${method}`);
 
       // Choice Bank payment (replaced I&M Bank)
@@ -4191,22 +4177,37 @@ Method selection rules:
       let imNameMismatchAborted = false;
 
       if (imPaymentDoneMap[order.orderNumber]) {
-        console.log("[SparkP2P] Choice Bank payment already done for " + order.orderNumber + " — skipping");
+        console.log(“[SparkP2P] Choice Bank payment already done for “ + order.orderNumber + “ — skipping”);
         imResult = { success: true, ...imPaymentDoneMap[order.orderNumber] };
       } else if (imPaymentFailedOrders.has(order.orderNumber)) {
-        console.log("[SparkP2P] Choice Bank payment previously failed for " + order.orderNumber + " — skipping");
+        console.log(“[SparkP2P] Choice Bank payment previously failed for “ + order.orderNumber + “ — skipping”);
         continue;
       } else {
-        let verifiedName = "";
+        let verifiedName = “”;
 
         if (!imNameMismatchAborted) {
-          // ── Step 1: Request Telegram approval before touching Choice Bank ──
-          // Get current Choice balance for the notification
+          // ── Step 1: Telegram approval — fires IMMEDIATELY after payment details extracted ──
+          // Seller stats (already fetched for DD check) are included so the trader sees the
+          // full profile in Telegram before approving. Greeting is sent only after approval.
           let choiceBal = 0;
           try {
             const balRes = await fetch(`${API_BASE}/choice/balance/${traderChoiceAccountId}`, { headers: { 'Authorization': 'Bearer ' + token } }).catch(() => null);
             if (balRes && balRes.ok) { const bd = await balRes.json(); choiceBal = bd.balance || 0; }
           } catch(_e) {}
+
+          // Build advisory from seller stats
+          const _ss = sellerStats || {};
+          let advisory = '';
+          if (_ss.trades_30d != null && _ss.completionRate) {
+            const cr = parseFloat(_ss.completionRate) || 0;
+            if (cr >= 98 && _ss.trades_30d >= 100) {
+              advisory = `Looks good\n  • Releases in ~${_ss.avgReleaseMins || _ss.avgPayMins || '?'} min on average`;
+            } else if (cr < 90 || (_ss.trades_30d != null && _ss.trades_30d < 10)) {
+              advisory = `Caution — low completion rate (${_ss.completionRate})`;
+            } else {
+              advisory = `Acceptable — ${_ss.completionRate} completion`;
+            }
+          }
 
           let buyApproved = false;
           if (!buyApprovalRequestedOrders.has(order.orderNumber)) {
@@ -4222,17 +4223,23 @@ Method selection rules:
                 account_number: paymentDetails.account_number || '',
                 bank_name: paymentDetails.bank_name || '',
                 choice_balance: choiceBal,
+                trades_30d: _ss.trades_30d ?? null,
+                trades_all: _ss.trades_all ?? null,
+                completion_rate: _ss.completionRate || '',
+                account_age_days: _ss.registeredDays ?? null,
+                avg_release_mins: _ss.avgReleaseMins ?? null,
+                avg_pay_mins: parseFloat(_ss.avgPayMins) || null,
+                advisory,
               }),
             }).catch(() => null);
             const approvalData = approvalRes?.ok ? await approvalRes.json().catch(() => ({})) : {};
             if (approvalData.auto_approved) {
-              // Telegram not linked — proceed automatically
               buyApproved = true;
               console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram not linked, auto-approving payment`);
             } else {
               buyApprovalRequestedOrders.add(order.orderNumber);
               sendBotLog('info', `Buy order ${order.orderNumber} — waiting for Telegram payment approval`);
-              console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram approval request sent, waiting...`);
+              console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram approval sent immediately, bot on order page`);
             }
           } else {
             // Already requested — poll the status
@@ -4268,7 +4275,21 @@ Method selection rules:
 
           if (!buyApproved) continue;
 
-          // ── Step 2: Execute the Choice Bank payment ──
+          // ── Step 2: Send greeting NOW (after approval, not before) ──
+          if (!buyGreetingSentOrders.has(order.orderNumber)) {
+            buyGreetingSentOrders.add(order.orderNumber);
+            let greetMsg = '';
+            if (method === 'mpesa') {
+              greetMsg = `Hello ${firstName}, I will be sending KES ${amt} to your M-Pesa number ${paymentDetails.phone} shortly. Please be ready to receive. Thank you! 🙏`;
+            } else {
+              greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you! 🙏`;
+            }
+            await sendBinanceChatMessage(page, greetMsg);
+            console.log(`[SparkP2P] ðŸ'‹ Greeting sent for buy order ${order.orderNumber} (after Telegram approval)`);
+            await new Promise(r => setTimeout(r, 800));
+          }
+
+          // ── Step 3: Execute the Choice Bank payment ──
           try {
             imResult = await executeChoicePayment({
               phone: paymentDetails.phone, accountNumber: paymentDetails.account_number,

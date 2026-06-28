@@ -474,6 +474,14 @@ class BuyApprovalRequest(BaseModel):
     account_number: str = ""
     bank_name: str = ""
     choice_balance: float = 0.0
+    # Seller profile stats from Binance EP-19
+    trades_30d: int | None = None
+    trades_all: int | None = None
+    completion_rate: str = ""      # e.g. "99.76%"
+    account_age_days: int | None = None
+    avg_release_mins: float | None = None
+    avg_pay_mins: float | None = None
+    advisory: str = ""             # e.g. "Looks good" or "Caution"
 
 
 @router.post("/request-buy-approval")
@@ -489,7 +497,6 @@ async def request_buy_approval(
     falls through to the existing auto-pay behaviour.
     """
     if not trader.telegram_chat_id:
-        # Telegram not linked — let payment proceed automatically
         return {"ok": True, "auto_approved": True}
 
     if data.method in ("im_bank", "other_bank"):
@@ -501,13 +508,39 @@ async def request_buy_approval(
     bal_str = f"KES {int(data.choice_balance):,}" if data.choice_balance else "unknown"
     name = data.seller_name or "Unknown seller"
 
+    # Seller profile section
+    profile_lines = []
+    if data.trades_30d is not None:
+        profile_lines.append(f"  - 30d trades: {data.trades_30d:,}")
+    if data.trades_all is not None:
+        profile_lines.append(f"  - All-time trades: {data.trades_all:,}")
+    if data.completion_rate:
+        profile_lines.append(f"  - 30d completion: {data.completion_rate}")
+    if data.account_age_days is not None:
+        profile_lines.append(f"  - Account age: {data.account_age_days} days")
+    if data.avg_release_mins is not None:
+        profile_lines.append(f"  - Avg release time: {data.avg_release_mins:.1f} min")
+    if data.avg_pay_mins is not None:
+        profile_lines.append(f"  - Avg pay time: {data.avg_pay_mins:.1f} min")
+    profile_section = ("Seller Profile:\n" + "\n".join(profile_lines) + "\n\n") if profile_lines else ""
+
+    advisory_section = ""
+    if data.advisory:
+        icon = "✅" if "good" in data.advisory.lower() else "⚠️"
+        advisory_section = f"Advisory:\n{icon} {data.advisory}\n\n"
+
     text = (
-        f"🤖 SparkBot — BUY Order Payment\n\n"
-        f"💸 Amount:  {amt_str}\n"
-        f"👤 Seller:  {name}\n"
-        f"📍 To:      {dest}\n"
-        f"📋 Order:   ...{data.order_number[-12:]}\n"
-        f"💰 Balance: {bal_str}\n\n"
+        f"🆕 New Buy Order — Pay Seller\n\n"
+        f"Amount to send: {amt_str}\n"
+        f"Crypto: {data.order_number and '' or ''}"  # placeholder kept for spacing
+        f"Seller: {name}\n"
+        f"Order: {data.order_number}\n\n"
+        f"{profile_section}"
+        f"{advisory_section}"
+        f"Pay To:\n"
+        f"  - Method: {data.method.replace('_', ' ').title()}\n"
+        + (f"  - Account name: {data.bank_name}\n  - Account number: {data.account_number}\n" if data.method in ("im_bank", "other_bank") else f"  - Phone: {data.phone}\n")
+        + f"\n💰 Choice Bank balance: {bal_str}\n\n"
         f"Approve this payment?"
     )
     keyboard = {"inline_keyboard": [[
