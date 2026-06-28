@@ -110,7 +110,7 @@ function saveReportedCompleted(numSet) {
 }
 
 const CDP_PORT = 9222;
-const POLL_INTERVAL_ACTIVE = 60000; // 1 minute â€" cycle through all active orders
+const POLL_INTERVAL_ACTIVE = 10000; // 10 seconds â€" cycle through all active orders
 const POLL_INTERVAL_IDLE   = 5000;  // 15 seconds â€" no orders, scan faster
 
 let mainWindow = null;
@@ -4257,8 +4257,27 @@ Method selection rules:
       const _localIsBank = _localPm === 'im_bank' || _localPm === 'other_bank';
       const _localMissingPhone = !_localIsBank && (!paymentDetails?.phone || paymentDetails.phone.trim() === '');
       const _localMissingAccount = _localIsBank && (!paymentDetails?.account_number || !paymentDetails?.bank_name);
+      // Retry DOM extraction once more if still missing (page may not have fully rendered yet)
       if (!paymentDetails || !paymentDetails.amount || _localMissingPhone || _localMissingAccount) {
-        console.log(`[SparkP2P] Buy order ${order.orderNumber} â€" could not extract payment details, will retry next cycle`);
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} — payment details incomplete, retrying DOM in 4s`);
+        await new Promise(r => setTimeout(r, 4000));
+        try {
+          const retryText = await page.evaluate(() => document.body.innerText).catch(() => '');
+          const rPhone = (retryText.match(/\b(07\d{8}|254\d{9}|\+254\d{9})\b/) || [])[1] || null;
+          const rAmtM = retryText.match(/KSh\s*([\d,]+\.?\d*)/);
+          const rAmt = rAmtM ? parseFloat(rAmtM[1].replace(/,/g, '')) : null;
+          const rNameM = retryText.match(/(?:^|\n)[ \t]*Name[ \t]*\r?\n[ \t]*([A-Za-z][A-Za-z .'"-]{2,60})[ \t]*(?:\r?\n|$)/m);
+          const rName = rNameM ? rNameM[1].trim() : '';
+          const rVia = (retryText.match(/Transfer via[:\s]+([^\n]+)/i) || [])[1] || '';
+          const rMethod = /i\s*&\s*m/i.test(rVia) ? 'im_bank' : 'mpesa';
+          if (rAmt && rPhone) {
+            paymentDetails = { method: rMethod, phone: rPhone, name: rName, amount: rAmt, reference: order.orderNumber, network: 'safaricom', _source: 'dom_retry' };
+            console.log(`[SparkP2P] DOM retry extracted: ${rPhone}, KES ${rAmt}`);
+          }
+        } catch(_) {}
+      }
+      if (!paymentDetails || !paymentDetails.amount || _localMissingPhone || _localMissingAccount) {
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} — could not extract payment details, will retry next cycle`);
         continue;
       }
 
