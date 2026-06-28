@@ -5249,8 +5249,9 @@ async function readEmailOTPviaIMAP(sentAfterMs = Date.now() - 120000) {
 }
 
 // Read Choice Bank OTP from the Gmail tab already open in Chrome.
-// Much faster and more reliable than IMAP — uses the same tab-based approach
-// as Binance security code reading. Waits up to 60s (emails arrive in 10-35s).
+// Sender: notify@choice-bank.co  |  Subject: Transaction OTP
+// Body format: "Verification code XXXX for transaction of KES Y.YY from ****ZZZZ."
+// Waits up to 60s polling every 5s — emails typically arrive in 10-35s.
 async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
   if (!browser) { console.log('[SparkP2P] Choice OTP: browser not open'); return null; }
 
@@ -5261,10 +5262,9 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
   }
   if (!gmailPage) { console.log('[SparkP2P] Choice OTP: could not open Gmail tab'); return null; }
 
-  // Gmail search that catches any OTP/verification email from Choice Bank
-  // arriving in the last hour — deliberately broad so we don't rely on knowing
-  // the exact sender domain.
-  const searchUrl = 'https://mail.google.com/mail/u/0/#search/subject%3Aotp+OR+subject%3Averification+OR+from%3Achoice+newer_than%3A1h';
+  // Precise search: sender + subject both known. Falls back to broader search if
+  // Choice Bank ever changes their sending domain.
+  const searchUrl = 'https://mail.google.com/mail/u/0/#search/from%3Anotify%40choice-bank.co+subject%3A%22Transaction+OTP%22+newer_than%3A1h';
 
   console.log('[SparkP2P] Waiting for Choice Bank OTP email in Gmail (10-35s expected)...');
 
@@ -5280,7 +5280,16 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
       await new Promise(r => setTimeout(r, 2000));
 
       // Check if any email row exists
-      const hasRow = await gmailPage.evaluate(() => !!document.querySelector('tr.zA'));
+      let hasRow = await gmailPage.evaluate(() => !!document.querySelector('tr.zA'));
+      if (!hasRow) {
+        // Fallback: broaden search in case sender domain ever changes
+        await gmailPage.goto(
+          'https://mail.google.com/mail/u/0/#search/subject%3A%22Transaction+OTP%22+newer_than%3A1h',
+          { waitUntil: 'domcontentloaded', timeout: 10000 }
+        ).catch(() => {});
+        await new Promise(r => setTimeout(r, 1500));
+        hasRow = await gmailPage.evaluate(() => !!document.querySelector('tr.zA'));
+      }
       if (!hasRow) {
         const waitedSec = Math.round((Date.now() - (deadline - MAX_WAIT)) / 1000);
         console.log(`[SparkP2P] Choice OTP: no email yet (${waitedSec}s elapsed) — retrying in 5s...`);
@@ -5324,20 +5333,23 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
   return null;
 }
 
-// Extract a 4-6 digit OTP from the email body text.
-// Prioritises lines containing OTP-related keywords, falls back to any digit sequence.
+// Extract Choice Bank OTP from email body.
+// Known format: "Verification code 0423 for transaction of KES 10.00 from ****8626."
 function _extractChoiceOTP(text) {
   if (!text) return null;
+  // Primary: exact Choice Bank format — most reliable, won't pick up amounts or refs
+  const primary = text.match(/[Vv]erification\s+code\s+(\d{4,6})/);
+  if (primary) return primary[1];
+  // Secondary: any line containing OTP/code/verification keywords
   const lines = text.split(/[\r\n]+/);
-  // Priority: lines with OTP keywords
   for (const line of lines) {
     const l = line.toLowerCase();
-    if (l.includes('otp') || l.includes('code') || l.includes('verif') || l.includes('pin') || l.includes('passcode')) {
+    if (l.includes('otp') || l.includes('code') || l.includes('verif') || l.includes('pin')) {
       const m = line.match(/\b(\d{4,6})\b/);
       if (m) return m[1];
     }
   }
-  // Fallback: any 4-6 digit sequence in the whole body
+  // Last resort: first 4-6 digit sequence in body
   const m = text.match(/\b(\d{4,6})\b/);
   return m ? m[1] : null;
 }
