@@ -2951,13 +2951,17 @@ async def choice_pay(
                     f"KES {data.amount:,.0f} needed. Top up your Choice account."),
         )
 
+    from app.services.choice_bank.client import send_otp
+
     remark = data.remark or f"SparkP2P BUY {data.order_number[-12:]}"
-    # M-Pesa B2C requires payeeBankCode="M-PESA"; without it Choice Bank treats the
-    # transfer as internal and returns success without actually routing via M-Pesa.
-    effective_bank_code = data.bank_code
-    if not effective_bank_code and data.payee_account_id.isdigit() and len(data.payee_account_id) == 9:
-        effective_bank_code = "M-PESA"
-    logger.info(f"[ChoiceBank] BUY payment: KES {data.amount} → {data.payee_account_id} ({effective_bank_code or 'internal'})")
+
+    # M-Pesa B2C requires payeeBankCode="M-PESA". PesaLink requires the bank's CBK code.
+    # Without the correct bank code Choice Bank treats the call as an internal transfer
+    # and returns success without actually routing the money.
+    is_mpesa = not data.bank_code and data.payee_account_id.isdigit() and len(data.payee_account_id) == 9
+    effective_bank_code = data.bank_code if data.bank_code else ("M-PESA" if is_mpesa else "")
+    logger.info(f"[ChoiceBank] BUY payment: KES {data.amount} → {data.payee_account_id} (bankCode={effective_bank_code or 'internal'})")
+
     result = await transfer(
         payer_account_id=trader.choice_account_id,
         payee_account_id=data.payee_account_id,
@@ -2975,25 +2979,33 @@ async def choice_pay(
     tx_id = tx_data.get("txId") or tx_data.get("externalTxId") or ""
     application_id = tx_data.get("applicationId") or ""
 
-    # If Choice requires OTP confirmation, return otp_required so the desktop can read
-    # the email OTP via IMAP and confirm it via /ext/choice-confirm-otp.
-    if application_id and not tx_id:
-        return {
-            "status": "otp_required",
-            "application_id": application_id,
-            "order_number": data.order_number,
-            "amount": data.amount,
-            "payee": data.payee_account_id,
-            "payee_name": data.payee_name,
-            "remark": remark,
-        }
+    # All external transfers (M-Pesa, PesaLink, Airtel) require OTP before money moves.
+    # - M-Pesa / Airtel: Choice Bank returns txId — we must call send_otp(txId) to trigger the OTP.
+    # - PesaLink / large interbank: Choice Bank returns applicationId — OTP is auto-sent; we call
+    #   send_otp as well (no-op if already sent) and use applicationId as the confirmation handle.
+    # In both cases we return otp_required so the desktop reads the email OTP and confirms.
+    business_id = tx_id or application_id
+    if not business_id:
+        raise HTTPException(status_code=502, detail="Choice Bank returned no transaction ID — transfer may not have been created")
 
-    # OTP-free path (tx_id returned immediately — merchant whitelisted or small amount)
-    return await _finalise_choice_payment(
-        trader=trader, db=db, tx_id=tx_id, amount=data.amount,
-        payee_account_id=data.payee_account_id, payee_name=data.payee_name,
-        order_number=data.order_number, remark=remark, bank_code=data.bank_code,
-    )
+    try:
+        otp_res = await send_otp(business_id, otp_type="EMAIL")
+        if otp_res.get("code") != "00000":
+            logger.warning(f"[ChoiceBank] send_otp returned {otp_res.get('code')}: {otp_res.get('msg')} — OTP may be auto-sent by Choice Bank")
+        else:
+            logger.info(f"[ChoiceBank] OTP triggered via EMAIL for businessId={business_id}")
+    except Exception as exc:
+        logger.warning(f"[ChoiceBank] send_otp call failed: {exc} — continuing, OTP may be auto-sent")
+
+    return {
+        "status": "otp_required",
+        "application_id": business_id,   # txId or applicationId — both work with confirm_otp
+        "order_number": data.order_number,
+        "amount": data.amount,
+        "payee": data.payee_account_id,
+        "payee_name": data.payee_name,
+        "remark": remark,
+    }
 
 
 class ChoiceConfirmOtpRequest(BaseModel):
