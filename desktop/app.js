@@ -155,6 +155,7 @@ const sellApprovalRequestedOrders = new Set(); // sell orderNums where Telegram 
 const sellApprovedOrders = new Set();           // sell orderNums approved by merchant via Telegram
 const sellRejectedOrders = new Set();           // sell orderNums rejected or timed-out by merchant
 const buyApprovalRequestedOrders = new Set();   // buy orderNums where Telegram approval has been requested
+const buyDeclineMsgSent = new Set();            // buy orderNums where the polite excuse was sent to seller
 const sellRejectionMsgSent = new Set();         // sell orderNums where the polite cancel request was already sent
 const sellPayInstructSentOrders = new Set();    // sell orderNums where payment instructions sent to buyer
 const lastSellDeficitMsg = {};                  // orderNum → KES deficit last sent to buyer (dedup)
@@ -4305,7 +4306,12 @@ Method selection rules:
               sendBotLog('success', `Buy order ${order.orderNumber} — approved, executing payment`);
             } else if (approvalStatus === 'rejected') {
               imPaymentFailedOrders.add(order.orderNumber);
-              sendBotLog('warning', `Buy order ${order.orderNumber} — payment declined by you on Telegram. Order will expire.`);
+              sendBotLog('warning', `Buy order ${order.orderNumber} — payment declined on Telegram. Sending excuse to seller.`);
+              if (!buyDeclineMsgSent.has(order.orderNumber)) {
+                buyDeclineMsgSent.add(order.orderNumber);
+                const buyDeclineMsg = `Hello, and thank you for your listing. I sincerely apologize, but I am currently experiencing a temporary technical issue with my payment system and I am unable to complete this payment at this time. I kindly request that you cancel this order on your end so you can continue trading without any delay. I am truly sorry for the inconvenience and I genuinely appreciate your patience and understanding.`;
+                await sendBinanceChatMessage(page, buyDeclineMsg).catch(() => {});
+              }
               continue;
             } else if (approvalStatus === 'timeout') {
               imPaymentFailedOrders.add(order.orderNumber);
@@ -8224,7 +8230,12 @@ Method selection rules:
               sendBotLog('success', `Buy order ${order_number} — approved, executing payment`);
             } else if (approvalStatus2 === 'rejected') {
               imPaymentFailedOrders.add(order_number);
-              sendBotLog('warning', `Buy order ${order_number} — payment declined on Telegram. Order will expire.`);
+              sendBotLog('warning', `Buy order ${order_number} — payment declined on Telegram. Sending excuse to seller.`);
+              if (!buyDeclineMsgSent.has(order_number)) {
+                buyDeclineMsgSent.add(order_number);
+                const buyDeclineMsg2 = `Hello, and thank you for your listing. I sincerely apologize, but I am currently experiencing a temporary technical issue with my payment system and I am unable to complete this payment at this time. I kindly request that you cancel this order on your end so you can continue trading without any delay. I am truly sorry for the inconvenience and I genuinely appreciate your patience and understanding.`;
+                await sendBinanceChatMessage(page, buyDeclineMsg2).catch(() => {});
+              }
               return;
             } else if (approvalStatus2 === 'timeout') {
               imPaymentFailedOrders.add(order_number);
