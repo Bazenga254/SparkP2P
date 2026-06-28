@@ -28,6 +28,11 @@ contextBridge.exposeInMainWorld('sparkp2p', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   manualMpesaSweep: (amount) => ipcRenderer.invoke('manual-mpesa-sweep', amount),
   getLogs: () => ipcRenderer.invoke('get-bot-logs'),
-  onLog: (callback) => ipcRenderer.on('bot-log', (_event, data) => callback(data)),
+  onLog: (callback) => {
+    ipcRenderer.removeAllListeners('bot-log');
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('bot-log', handler);
+    return () => ipcRenderer.removeListener('bot-log', handler);
+  },
   verifyLockTotp: (code) => ipcRenderer.invoke('verify-lock-totp', code),
 });

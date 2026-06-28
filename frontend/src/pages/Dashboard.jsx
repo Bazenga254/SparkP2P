@@ -1343,8 +1343,9 @@ export default function Dashboard() {
       .catch(() => {});
     loadServer();
     const iv = setInterval(loadServer, 30000);
+    let offLog = null;
     if (window.sparkp2p?.onLog) {
-      window.sparkp2p.onLog(entry => {
+      offLog = window.sparkp2p.onLog(entry => {
         setBotLogs(prev => {
           const next = [...prev, entry];
           return next.length > 400 ? next.slice(-400) : next;
@@ -1352,7 +1353,7 @@ export default function Dashboard() {
         if (entry && entry.message) postBotLog({ level: entry.level || 'info', message: String(entry.message), time: entry.time || new Date().toISOString() }).catch(() => {});
       });
     }
-    return () => clearInterval(iv);
+    return () => { clearInterval(iv); offLog?.(); };
   }, []);
 
   useEffect(() => {

@@ -216,6 +216,7 @@ const reportedCompletedSellOrders = new Set(); // order numbers already sent as 
 const buyGreetingSentOrders = new Set();    // orderNums where greeting was already sent
 const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent KSh..." was already sent
 const markPaidDoneOrders = new Set();          // orderNums where EP-17 mark-paid was already called — skip on restart
+const telegramApprovedOrders = new Set();      // orderNums where Telegram approval was confirmed — persisted so restart skips re-poll
 // Restore paid orders from disk on startup (survives bot restarts)
 {
   const _paidOnDisk = loadPaidOrders();
@@ -238,13 +239,20 @@ const markPaidDoneOrders = new Set();          // orderNums where EP-17 mark-pai
   Object.entries(_flags).forEach(([num, f]) => {
     if (f.greetingSent)        buyGreetingSentOrders.add(num);
     if (f.approvalRequested)   buyApprovalRequestedOrders.add(num);
+    if (f.telegramApproved)    telegramApprovedOrders.add(num);
     if (f.paymentFailed)       imPaymentFailedOrders.add(num);
     if (f.postPaymentMsgSent)  buyPostPaymentMsgSentOrders.add(num);
     if (f.markPaidDone)        markPaidDoneOrders.add(num);
     if (f.reminderSent)        buyReminderSentOrders.add(num);
   });
   const _restored = Object.keys(_flags).length;
-  if (_restored) console.log(`[SparkP2P] Restored order flags for ${_restored} order(s) from disk`);
+  if (_restored) {
+    const _steps = Object.entries(_flags).map(([n, f]) => {
+      const flags = Object.keys(f).filter(k => f[k]).join(',');
+      return `${n.slice(-8)}:[${flags}]`;
+    }).join(' ');
+    console.log(`[SparkP2P] Restored order flags for ${_restored} order(s): ${_steps}`);
+  }
 // Restore completed buy orders from disk — prevents duplicate SMS when bot restarts
 {
   const _completedOnDisk = loadReportedCompleted();
@@ -4383,7 +4391,12 @@ Method selection rules:
           }
 
           let buyApproved = false;
-          if (!buyApprovalRequestedOrders.has(order.orderNumber)) {
+          // Fast-path: if we already confirmed approval in a previous session, skip
+          // Telegram polling entirely and go straight to payment.
+          if (telegramApprovedOrders.has(order.orderNumber)) {
+            buyApproved = true;
+            console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram approval restored from disk, skipping poll`);
+          } else if (!buyApprovalRequestedOrders.has(order.orderNumber)) {
             const approvalRes = await fetch(API_BASE + '/telegram/request-buy-approval', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
@@ -4408,6 +4421,8 @@ Method selection rules:
             const approvalData = approvalRes?.ok ? await approvalRes.json().catch(() => ({})) : {};
             if (approvalData.auto_approved) {
               buyApproved = true;
+              telegramApprovedOrders.add(order.orderNumber);
+              _saveOrderFlag(order.orderNumber, 'telegramApproved', true);
               console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram not linked, auto-approving payment`);
             } else {
               buyApprovalRequestedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'approvalRequested', true);
@@ -4426,6 +4441,8 @@ Method selection rules:
 
             if (approvalStatus === 'approved') {
               buyApproved = true;
+              telegramApprovedOrders.add(order.orderNumber);
+              _saveOrderFlag(order.orderNumber, 'telegramApproved', true);
               sendBotLog('success', `Buy order ${order.orderNumber} — approved, executing payment`);
             } else if (approvalStatus === 'rejected') {
               imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
