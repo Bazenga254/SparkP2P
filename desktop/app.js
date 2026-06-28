@@ -1894,84 +1894,6 @@ async function verifyTraderIdentity(page) {
   }
 }
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// WALLET SCANNER â€” Read all coin balances from Overview
-// Uses DOM text (overlay-safe) + AI parsing
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-async function readWalletPage(page, url, walletType) {
-  console.log(`[SparkP2P] Reading ${walletType} wallet...`);
-  await page.goto(url, { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
-  await new Promise(r => setTimeout(r, 5000));
-
-  // DOM-based balance reading — no Claude needed
-  const walletText = await page.evaluate(() => document.body.innerText).catch(() => '');
-  const knownAssets = ['USDT','BTC','ETH','BNB','BUSD','USDC','TRX','SOL','XRP','ADA','MATIC','DOT','AVAX','LINK','LTC','SHIB','DOGE'];
-  const lines = walletText.split('\n').map(l => l.trim()).filter(Boolean);
-  const balances = [];
-  const seen = new Set();
-  for (let i = 0; i < lines.length; i++) {
-    const asset = knownAssets.find(a => lines[i] === a || lines[i].startsWith(a + ' '));
-    if (!asset || seen.has(asset)) continue;
-    for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
-      const numMatch = lines[j].match(/^([\d,]+\.?\d+)$/);
-      if (numMatch) {
-        const total = parseFloat(numMatch[1].replace(/,/g, ''));
-        if (total > 0) { seen.add(asset); balances.push({ asset, total, available: total, locked: 0 }); }
-        break;
-      }
-    }
-  }
-  console.log(`[SparkP2P] ${walletType} (DOM): ${balances.length} assets found`);
-  return balances.map(b => ({ asset: b.asset, free: b.available, locked: b.locked, total: b.total, wallet: walletType }));
-}
-
-let _walletScanRunning = false;
-
-function scheduleWalletScan() {
-  // Fire-and-forget: scan wallets in the background after an order completes.
-  // Opens a NEW browser tab so it never hijacks the main order-navigation page.
-  if (_walletScanRunning || !browser || !token) return;
-  _walletScanRunning = true;
-  (async () => {
-    try {
-      const scanPage = await browser.newPage();
-      const balances = await scanWalletBalances(scanPage);
-      await uploadBalances(balances);
-      await scanPage.close().catch(() => {});
-    } catch (e) {
-      console.warn('[SparkP2P] Background wallet scan failed:', e.message?.substring(0, 60));
-    } finally {
-      _walletScanRunning = false;
-    }
-  })();
-}
-
-async function scanWalletBalances(page) {
-  const fundingBals = await readWalletPage(page, 'https://www.binance.com/en/my/wallet/funding', 'Funding');
-  const spotBals = await readWalletPage(page, 'https://www.binance.com/en/my/wallet/account/overview', 'Spot');
-
-  // Merge: if same asset exists in both, keep funding; add spot-only assets separately
-  const fundingAssets = new Set(fundingBals.map(b => b.asset));
-  const allBalances = [...fundingBals, ...spotBals.filter(b => !fundingAssets.has(b.asset))];
-  console.log(`[SparkP2P] Wallet scan: ${allBalances.length} assets (${fundingBals.length} funding, ${spotBals.length} spot)`);
-
-  // Successfully scanned Binance pages â€” session is alive, reset the re-login timer
-  sessionStartTime = Date.now();
-  loggedOutStrikes = 0;
-
-  return allBalances;
-}
-
-async function uploadBalances(balances, nickname = '') {
-  if (!token) return;
-  await fetch(`${API_BASE}/ext/report-account-data`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    body: JSON.stringify({ balances, active_ads: [], completed_orders: [], payment_methods: [], nickname }),
-  }).catch(() => {});
-  console.log(`[SparkP2P] Uploaded ${balances.length} balances to VPS`);
-}
 
 async function initialScan() {
   if (scanningInProgress) return;
@@ -3985,7 +3907,6 @@ async function idleScan(page) {
       removePaidOrder(orderNum);
       if (activeBuyOrderNumber === orderNum) activeBuyOrderNumber = null;
       stats.actions++;
-      scheduleWalletScan(); // background — doesn't block next poll
 
     // â”€â”€ Dispute / expired after we paid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // "appeal" text appears normally on Binance after payment confirmed â€” only treat it as
@@ -4609,7 +4530,6 @@ async function monitorActiveOrder(page) {
       }).catch(() => {});
       codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
-      scheduleWalletScan(); // background — doesn't block next poll
       return;
     }
 
@@ -4671,8 +4591,7 @@ async function monitorActiveOrder(page) {
         await releaseWithVision(page, orderNum, {});
         codeFallbackAskedForOrder = null;
         activeOrderNumber = null; activeOrderFiatAmount = 0;
-        scheduleWalletScan(); // background — doesn't block next poll
-        return;
+          return;
       } else {
         // Ask buyer for code once, then wait
         if (codeFallbackAskedForOrder !== orderNum) {
@@ -4723,7 +4642,6 @@ async function monitorActiveOrder(page) {
       }).catch(() => {});
       codeFallbackAskedForOrder = null;
       activeOrderNumber = null; activeOrderFiatAmount = 0;
-      scheduleWalletScan(); // background — doesn't block next poll
       return;
     }
 
