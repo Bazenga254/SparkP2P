@@ -1319,7 +1319,16 @@ async function onGmailConfirmed() {
   if (setup.complete && !pollerRunning) {
     pauseNavigation = false;
     mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
-    console.log('[SparkP2P] All connections established â€" starting bot');
+    console.log('[SparkP2P] All connections established — starting bot');
+    // Navigate Binance tab to P2P orders page immediately so pending orders are visible on first poll
+    try {
+      const _bp = await getPage();
+      if (_bp && !_bp.url().includes('fiatOrder')) {
+        await _bp.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 800));
+        console.log('[SparkP2P] Navigated to P2P orders page');
+      }
+    } catch(_) {}
     await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
     startPoller();
   }
@@ -1719,9 +1728,18 @@ async function onLoginDetected() {
     const setup = await checkSetupComplete();
     if (setup.complete && !pollerRunning) {
       mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
-        console.log('[SparkP2P] All connections established — starting bot');
-        await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
-        startPoller();
+      console.log('[SparkP2P] All connections established — starting bot');
+      // Navigate Binance tab to P2P orders page immediately so pending orders are visible on first poll
+      try {
+        const _bp = await getPage();
+        if (_bp && !_bp.url().includes('fiatOrder')) {
+          await _bp.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+          await new Promise(r => setTimeout(r, 800));
+          console.log('[SparkP2P] Navigated to P2P orders page');
+        }
+      } catch(_) {}
+      await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
+      startPoller();
     } else if (!setup.complete) {
       console.log('[SparkP2P] Setup incomplete:', setup.missing.join(', '));
     }
