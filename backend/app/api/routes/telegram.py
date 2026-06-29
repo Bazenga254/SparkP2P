@@ -16,9 +16,12 @@ router = APIRouter()
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
-# In-memory stores (reset on restart — acceptable for short-lived approval sessions)
-_link_codes: dict = {}       # code -> {trader_id, expires_at}
-_pending_approvals: dict = {}  # order_number -> {chat_id, message_id, status, trader_id, created_at}
+# In-memory stores
+_link_codes: dict = {}         # code -> {trader_id, expires_at}
+_pending_approvals: dict = {}  # order_number -> {chat_id, message_id, status, trader_id, created_at, type?}
+_pending_name_checks: dict = {}  # order_number -> {chat_id, message_id, status, trader_id, created_at}
+
+APPROVAL_TIMEOUT = 2700  # 45 minutes
 
 
 def _tg_api_url():
@@ -187,6 +190,58 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
         if len(parts) == 2:
             action, order_number = parts
+
+            # ── Name mismatch callbacks ──────────────────────────────────────
+            if action in ("name_approve", "name_reject"):
+                nc = _pending_name_checks.get(order_number)
+                if action == "name_approve":
+                    await _tg_send("answerCallbackQuery", {
+                        "callback_query_id": cb_id,
+                        "text": "✅ Releasing crypto now...",
+                    })
+                    if nc and nc.get("message_id"):
+                        await _tg_send("editMessageText", {
+                            "chat_id": nc["chat_id"],
+                            "message_id": nc["message_id"],
+                            "text": f"✅ APPROVED — RELEASING\n\nOrder {order_number}\nCrypto will be released via EP-20.",
+                        })
+                    # Signal the desktop bot via _pending_name_checks
+                    if nc:
+                        nc["status"] = "approved"
+                    # Also call EP-20 directly from the server side
+                    try:
+                        from sqlalchemy import select as _sel
+                        from app.models.trader import Trader as _Trader
+                        _t = (await db.execute(_sel(_Trader).where(_Trader.id == (nc or {}).get("trader_id", 0)))).scalar_one_or_none()
+                        if _t and _t.binance_api_key and _t.binance_api_secret:
+                            from app.core.security import decrypt_data
+                            from app.services.binance.sapi_client import release_coin, relay_trader
+                            relay_trader.set(_t.id)
+                            await release_coin(decrypt_data(_t.binance_api_key), decrypt_data(_t.binance_api_secret), order_number)
+                    except Exception as _re:
+                        import logging; logging.getLogger(__name__).warning("name_approve release failed: %s", _re)
+                else:  # name_reject
+                    await _tg_send("answerCallbackQuery", {
+                        "callback_query_id": cb_id,
+                        "text": "🔒 Order held. Please review manually in Binance.",
+                    })
+                    if nc and nc.get("message_id"):
+                        await _tg_send("editMessageText", {
+                            "chat_id": nc["chat_id"],
+                            "message_id": nc["message_id"],
+                            "text": (
+                                f"🔒 HELD — MANUAL REVIEW REQUIRED\n\n"
+                                f"Order {order_number}\n\n"
+                                f"Please log in to Binance P2P and review this order. "
+                                f"Do NOT release crypto until the payment source is verified. "
+                                f"Contact the buyer if needed to resolve the discrepancy."
+                            ),
+                        })
+                    if nc:
+                        nc["status"] = "rejected"
+                return {"ok": True}
+
+            # ── Sell / Buy approval callbacks ────────────────────────────────
             ap = _pending_approvals.get(order_number)
 
             if ap:
@@ -194,6 +249,15 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
                 if action in ("approve", "buy_approve"):
                     ap["status"] = "approved"
+                    # Persist to DB so status survives a server restart
+                    try:
+                        from sqlalchemy import text as _sql_text
+                        await db.execute(_sql_text(
+                            "UPDATE sell_order_notifications SET last_status = 'APPROVED' WHERE order_number = :o"
+                        ), {"o": str(order_number)})
+                        await db.commit()
+                    except Exception:
+                        pass
                     await _tg_send("answerCallbackQuery", {
                         "callback_query_id": cb_id,
                         "text": "✅ Approved — payment will be sent now" if is_buy else "✅ Approved — payment details sent to buyer",
@@ -211,6 +275,14 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
                 elif action in ("reject", "buy_decline"):
                     ap["status"] = "rejected"
+                    try:
+                        from sqlalchemy import text as _sql_text
+                        await db.execute(_sql_text(
+                            "UPDATE sell_order_notifications SET last_status = 'REJECTED' WHERE order_number = :o"
+                        ), {"o": str(order_number)})
+                        await db.commit()
+                    except Exception:
+                        pass
                     await _tg_send("answerCallbackQuery", {
                         "callback_query_id": cb_id,
                         "text": "❌ Declined — payment cancelled" if is_buy else "❌ Rejected — excuse message sent to buyer",
@@ -219,7 +291,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         edit_text = (
                             f"❌ DECLINED — PAYMENT CANCELLED\n\nOrder ...{order_number[-12:]}\n"
                             f"No money sent. Order will expire."
-                        ) if is_buy else f"❌ REJECTED\n\nOrder {order_number}\nExcuse message sent. Order will cancel in 15 min."
+                        ) if is_buy else f"❌ REJECTED\n\nOrder {order_number}\nExcuse message sent. Awaiting buyer cancellation."
                         await _tg_send("editMessageText", {
                             "chat_id": ap["chat_id"],
                             "message_id": ap["message_id"],
@@ -450,13 +522,34 @@ async def request_approval(
 async def check_approval_status(
     order_number: str,
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ):
     ap = _pending_approvals.get(order_number)
+
+    # Not in memory — server may have restarted. Restore from DB if the notification exists.
     if not ap:
+        from sqlalchemy import text as _sql_text
+        row = (await db.execute(_sql_text(
+            "SELECT tg_message_id, last_status FROM sell_order_notifications WHERE order_number = :o"
+        ), {"o": str(order_number)})).first()
+        if row:
+            _db_status = (row[1] or "").upper()
+            if _db_status in ("APPROVED",):
+                return {"status": "approved"}
+            if _db_status in ("REJECTED",):
+                return {"status": "rejected"}
+            # Pending/unknown — recreate in-memory so next approve/reject press works
+            _pending_approvals[order_number] = {
+                "chat_id": str(trader.telegram_chat_id or ""),
+                "message_id": row[0],
+                "status": "pending",
+                "trader_id": trader.id,
+                "created_at": time.time(),
+            }
+            return {"status": "pending"}
         return {"status": "not_found"}
 
-    # Auto-expire after 20 minutes
-    if time.time() - ap["created_at"] > 1200:
+    if time.time() - ap["created_at"] > APPROVAL_TIMEOUT:
         _pending_approvals.pop(order_number, None)
         return {"status": "timeout"}
 
@@ -538,8 +631,8 @@ async def request_buy_approval(
         f"{profile_section}"
         f"{advisory_section}"
         f"Pay To:\n"
-        f"  - Method: {data.method.replace('_', ' ').title()}\n"
-        + (f"  - Account name: {data.bank_name}\n  - Account number: {data.account_number}\n" if data.method in ("im_bank", "other_bank") else f"  - Phone: {data.phone}\n")
+        f"  - Method: {'PesaLink' if data.method in ('im_bank', 'other_bank') else 'M-Pesa'}\n"
+        + (f"  - Bank: {data.bank_name}\n  - Account holder: {name}\n  - Account number: {data.account_number}\n" if data.method in ("im_bank", "other_bank") else f"  - Phone: {data.phone}\n")
         + f"\n💰 Choice Bank balance: {bal_str}\n\n"
         f"Approve this payment?"
     )
@@ -570,3 +663,63 @@ async def request_buy_approval(
     }
 
     return {"ok": True, "auto_approved": False, "message_id": msg_id}
+
+
+# ── Name mismatch alert — payment sender ≠ buyer Binance name ────────────────
+
+class NameMismatchAlert(BaseModel):
+    order_number: str
+    amount: float
+    payment_method: str = "mpesa"    # "mpesa" | "pesalink"
+    sender_name: str = ""            # Name from Choice Bank webhook
+    buyer_binance_name: str = ""     # Buyer's Binance display name
+
+
+@router.post("/name-mismatch-alert")
+async def name_mismatch_alert(
+    data: NameMismatchAlert,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Send a Telegram YES/NO prompt when the payment sender name doesn't match
+    the buyer's Binance name. YES → bot calls EP-20 to release. NO → merchant
+    must handle manually."""
+    if not trader.telegram_chat_id:
+        return {"ok": False, "reason": "no_telegram"}
+
+    method_label = "PesaLink" if data.payment_method == "pesalink" else "M-Pesa"
+    amt_str = f"KES {int(data.amount):,}"
+
+    text = (
+        f"⚠️ <b>Payment Name Mismatch — Your Action Required</b>\n\n"
+        f"<b>Order:</b> {data.order_number}\n"
+        f"<b>Amount:</b> {amt_str}\n"
+        f"<b>Method:</b> {method_label}\n\n"
+        f"A payment has been received in your Choice Bank account for the above order. "
+        f"However, the sender's registered name does not match the buyer's Binance name:\n\n"
+        f"  • <b>Sender name</b> ({method_label}): <code>{data.sender_name or 'Unknown'}</code>\n"
+        f"  • <b>Buyer name</b> (Binance): <code>{data.buyer_binance_name or 'Unknown'}</code>\n\n"
+        f"This may indicate the buyer used a third-party account. Please review the order "
+        f"carefully before deciding.\n\n"
+        f"<b>Would you like to release the crypto, or hold for manual review?</b>"
+    )
+    keyboard = {"inline_keyboard": [[
+        {"text": "✅ Release Crypto", "callback_data": f"name_approve:{data.order_number}"},
+        {"text": "🔒 Hold — Review Manually", "callback_data": f"name_reject:{data.order_number}"},
+    ]]}
+
+    resp = await _tg_send("sendMessage", {
+        "chat_id": trader.telegram_chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "reply_markup": keyboard,
+    })
+    ok = bool(resp and resp.get("ok"))
+    if ok:
+        _pending_name_checks[data.order_number] = {
+            "chat_id": str(trader.telegram_chat_id),
+            "message_id": resp["result"]["message_id"],
+            "status": "pending",
+            "trader_id": trader.id,
+            "created_at": time.time(),
+        }
+    return {"ok": ok}

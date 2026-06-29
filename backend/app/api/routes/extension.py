@@ -1644,6 +1644,68 @@ async def get_order_detail(
     }
 
 
+# ─── EP-13 sell order state (SAPI HMAC) ──────────────────────────────────────
+
+@router.get("/sell-order-state")
+async def sell_order_state(
+    order_number: str,
+    trader: Trader = Depends(get_current_trader),
+):
+    """EP-13 via SAPI HMAC: return normalised order state + payment method.
+    Replaces DOM/Vision state detection in the desktop sell-order loop."""
+    from app.services.binance.sapi_client import get_order_payment_details, relay_trader
+    api_key, api_secret = _sapi_creds(trader)
+    relay_trader.set(trader.id)
+    try:
+        d = await get_order_payment_details(api_key, api_secret, order_number)
+    except Exception as e:
+        logger.warning("sell-order-state EP-13 failed for %s: %s", order_number, e)
+        return {"ok": False, "error": str(e), "state": "unknown"}
+
+    raw_status = d.get("order_status", "")
+
+    # Map Binance order status strings → our internal state names
+    _AWAITING  = {"WAS_CREATED", "TRADING", "PENDING", "20", "10"}
+    _VERIFY    = {"TAKER_PAID", "BUYER_PAID", "PAYING", "CONFIRM_RELEASING", "30"}
+    _COMPLETE  = {"COMPLETED", "SELLER_RELEASED", "SUCCESS", "40", "50", "70"}
+    _CANCELLED = {"CANCELLED", "CANCELLED_BY_SYSTEM", "60", "80"}
+
+    if raw_status in _AWAITING:
+        state = "awaiting_payment"
+    elif raw_status in _VERIFY:
+        state = "verify_payment"
+    elif raw_status in _COMPLETE:
+        state = "order_complete"
+    elif raw_status in _CANCELLED:
+        state = "cancelled"
+    else:
+        state = "unknown"
+
+    # Determine payment method from EP-13 raw_pay_type / method name
+    raw_method = str(d.get("method") or "").lower()
+    raw_pay    = str(d.get("raw_pay_type") or "").lower()
+    _bank_keywords = ("pesalink", "bank", "equity", "kcb", "coop", "stanchart",
+                      "absa", "ncba", "dtb", "stanbic", "family", "i&m", "im bank")
+    if any(k in raw_method or k in raw_pay for k in _bank_keywords):
+        payment_method = "pesalink"
+    else:
+        payment_method = "mpesa"
+
+    return {
+        "ok": True,
+        "state": state,
+        "raw_status": raw_status,
+        "payment_method": payment_method,
+        "buyer_name": d.get("counterparty_nickname"),
+        "amount": d.get("fiat_amount"),
+        "trades_30d": d.get("trades_30d"),
+        "trades_all": d.get("trades_all"),
+        "completion_rate": d.get("completion_rate"),
+        "account_age_days": d.get("account_age_days"),
+        "avg_pay_mins": d.get("avg_pay_mins"),
+    }
+
+
 # ─── Order action endpoints (SAPI — HMAC signed, relay-routed) ───────────────
 
 def _sapi_creds(trader: Trader):
@@ -1725,6 +1787,26 @@ async def release_coin_endpoint(
     except Exception as e:
         logger.warning("release-coin failed for %s: %s", data.order_number, e)
         return {"ok": False, "error": str(e)}
+
+
+@router.post("/check-can-release")
+async def check_can_release_endpoint(
+    data: OrderActionRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """EP-12: read-only probe — confirm Binance allows release before calling EP-20."""
+    from app.services.binance.sapi_client import check_if_can_release, relay_trader
+    api_key, api_secret = _sapi_creds(trader)
+    relay_trader.set(trader.id)
+    try:
+        resp = await check_if_can_release(api_key, api_secret, data.order_number)
+        ok_code = resp.get("code") == "000000" or resp.get("success") is True
+        can_release = ok_code and bool(resp.get("data") if resp.get("data") is not None else True)
+        return {"ok": True, "can_release": can_release, "raw": resp}
+    except Exception as e:
+        logger.warning("check-can-release failed for %s: %s", data.order_number, e)
+        # Don't block release on EP-12 failure — let EP-20 be the final arbiter
+        return {"ok": False, "can_release": True, "error": str(e)}
 
 
 # ─── I&M Bank withdrawal job queue ───────────────────────────────────────────

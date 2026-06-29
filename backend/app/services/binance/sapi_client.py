@@ -320,6 +320,18 @@ async def get_order_payment_details(api_key: str, api_secret: str, order_number:
         cp_nick = d.get("sellerNickname")   # we buy -> counterparty is the seller
     else:
         cp_nick = d.get("buyerNickname")    # we sell -> counterparty is the buyer
+    try:
+        fiat_amount = float(d.get("totalPrice") or d.get("fiatAmount") or 0)
+    except Exception:
+        fiat_amount = 0.0
+    cp = d.get("counterPartyUserInfoVo") or {}
+    trades_30d = cp.get("lastMonthOrderNum") or cp.get("tradeCount30d")
+    trades_all = cp.get("orderCount") or cp.get("tradeCountTotal")
+    rate_raw   = cp.get("monthFinishRate") or cp.get("completionRate")
+    completion = f"{float(rate_raw)*100:.1f}%" if rate_raw is not None else ""
+    reg_days   = cp.get("registerDays")
+    avg_pay_secs = cp.get("avgPayTime")
+    avg_pay_mins = round(float(avg_pay_secs) / 60, 1) if avg_pay_secs else None
     return {
         "method": (chosen or {}).get("tradeMethodName") or pay_type,
         "name": name,
@@ -328,6 +340,13 @@ async def get_order_payment_details(api_key: str, api_secret: str, order_number:
         "raw_pay_type": pay_type,
         "counterparty_nickname": cp_nick,
         "taker_user_no": d.get("takerUserNo"),
+        "order_status": str(d.get("orderStatus") or "").upper(),
+        "fiat_amount": fiat_amount,
+        "trades_30d": trades_30d,
+        "trades_all": trades_all,
+        "completion_rate": completion,
+        "account_age_days": reg_days,
+        "avg_pay_mins": avg_pay_mins,
     }
 
 

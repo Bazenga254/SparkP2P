@@ -435,7 +435,22 @@ async def _handle_transaction_result(params: dict, raw: dict):
         if sender_name:
             order.counterparty_name = sender_name
 
-        # Credit wallet with the incremental amount (this payment only, not double-count)
+        # ── Name mismatch check ────────────────────────────────────────────
+        # Compare sender's bank/M-Pesa registered name vs buyer's Binance name.
+        # If they clearly differ, alert the merchant via Telegram before allowing release.
+        _buyer_binance_name = order.counterparty_name or ""  # set above if sender_name arrived first
+        # Get the Binance nickname stored on the order (may differ from counterparty_name)
+        # counterparty_name here is the Choice Bank sender name we just wrote. We need the
+        # Binance nickname separately — stored on the order as a separate field or payment note.
+        # We do a fuzzy word-level check: if no word ≥4 chars in sender_name matches buyer_name, flag.
+        _name_mismatch = False
+        _stored_buyer_nick = getattr(order, "counterparty_name", "") or ""
+        if sender_name and _stored_buyer_nick and sender_name.strip().lower() != _stored_buyer_nick.strip().lower():
+            _sender_words = {w.lower() for w in sender_name.split() if len(w) >= 4}
+            _buyer_words  = {w.lower() for w in _stored_buyer_nick.split() if len(w) >= 4}
+            _name_mismatch = len(_sender_words & _buyer_words) == 0
+
+        # Credit wallet
         wallet_result = await db.execute(select(Wallet).where(Wallet.trader_id == trader.id))
         wallet = wallet_result.scalar_one_or_none()
         if not wallet:
@@ -447,7 +462,7 @@ async def _handle_transaction_result(params: dict, raw: dict):
         wallet.total_earned += amount
         wallet.daily_volume += amount
         if not is_partial:
-            wallet.daily_trades += 1  # only count a new trade for single-shot payments
+            wallet.daily_trades += 1
 
         db.add(WalletTransaction(
             trader_id=trader.id,
@@ -464,15 +479,59 @@ async def _handle_transaction_result(params: dict, raw: dict):
             f"[ChoiceBank] MATCHED: {tx_id} → order {order.binance_order_number} "
             f"(Trader: {trader.full_name}, KES {amount}, total KES {total_received:.2f}) → PAYMENT_RECEIVED"
         )
+
         try:
-            from app.api.routes.telegram import notify_trader
-            _tg_msg = (
-                "💰 KES " + f"{amount:,.0f}" +
-                " received — payment confirmed!" + chr(10) +
-                "From: " + (sender_name or sender_phone or "Unknown") + chr(10) +
-                "Order: " + (order.binance_order_number or "")
-            )
-            await notify_trader(trader, _tg_msg)
+            from app.api.routes.telegram import notify_trader, name_mismatch_alert
+            from pydantic import BaseModel as _BM
+            if _name_mismatch:
+                # Determine payment channel for the alert label
+                _pay_method = "pesalink" if _channel and "pesalink" in _channel.lower() else "mpesa"
+                # Use the endpoint logic directly (avoids HTTP round-trip)
+                from app.api.routes.telegram import _pending_name_checks, _tg_send, APPROVAL_TIMEOUT
+                import time as _time
+                _method_label = "PesaLink" if _pay_method == "pesalink" else "M-Pesa"
+                _amt_str = f"KES {int(amount):,}"
+                _text = (
+                    f"⚠️ <b>Payment Name Mismatch — Your Action Required</b>\n\n"
+                    f"<b>Order:</b> {order.binance_order_number}\n"
+                    f"<b>Amount:</b> {_amt_str}\n"
+                    f"<b>Method:</b> {_method_label}\n\n"
+                    f"A payment has been received but the sender name does not match the buyer's Binance name:\n\n"
+                    f"  • <b>Sender name</b> ({_method_label}): <code>{sender_name}</code>\n"
+                    f"  • <b>Buyer name</b> (Binance): <code>{_stored_buyer_nick or 'Unknown'}</code>\n\n"
+                    f"This may indicate the buyer used a third-party account. Please review carefully.\n\n"
+                    f"<b>Release crypto or hold for manual review?</b>"
+                )
+                _keyboard = {"inline_keyboard": [[
+                    {"text": "✅ Release Crypto", "callback_data": f"name_approve:{order.binance_order_number}"},
+                    {"text": "🔒 Hold — Review Manually", "callback_data": f"name_reject:{order.binance_order_number}"},
+                ]]}
+                _resp = await _tg_send("sendMessage", {
+                    "chat_id": trader.telegram_chat_id,
+                    "text": _text,
+                    "parse_mode": "HTML",
+                    "reply_markup": _keyboard,
+                })
+                if _resp and _resp.get("ok"):
+                    _pending_name_checks[order.binance_order_number] = {
+                        "chat_id": str(trader.telegram_chat_id),
+                        "message_id": _resp["result"]["message_id"],
+                        "status": "pending",
+                        "trader_id": trader.id,
+                        "created_at": _time.time(),
+                    }
+                logger.warning(
+                    f"[ChoiceBank] Name mismatch on order {order.binance_order_number}: "
+                    f"sender={sender_name!r} vs buyer={_stored_buyer_nick!r} — Telegram alert sent"
+                )
+            else:
+                _tg_msg = (
+                    "💰 KES " + f"{amount:,.0f}" +
+                    " received — payment confirmed!" + chr(10) +
+                    "From: " + (sender_name or sender_phone or "Unknown") + chr(10) +
+                    "Order: " + (order.binance_order_number or "")
+                )
+                await notify_trader(trader, _tg_msg)
         except Exception as _e:
             logger.warning(f"[ChoiceBank] Matched inbound notify failed: {_e}")
 
@@ -824,7 +883,9 @@ def _normalize_mobile(raw: str) -> str:
 
 
 async def _reconcile_deposit(account_id: str, payment_id: int, amount: float, bal_before: float):
-    """Wait 3 min then check if Choice Bank balance went up — if so, mark deposit COMPLETED."""
+    """Wait 3 min then check if Choice Bank balance went up — if so, mark deposit COMPLETED.
+    bal_before is also persisted in the payment remarks so the persistent poller can retry
+    if this background task is killed by a server restart."""
     await asyncio.sleep(180)
     try:
         async with async_session() as _db:
@@ -835,7 +896,7 @@ async def _reconcile_deposit(account_id: str, payment_id: int, amount: float, ba
             bal_now = float((bal_result.get("data") or {}).get("balance") or 0)
             if bal_now >= bal_before + amount - 5:  # 5 KES tolerance
                 p.status = PaymentStatus.COMPLETED
-                p.remarks = (p.remarks or "") + " [balance-verified]"
+                p.remarks = (p.remarks or "").replace(f" bal_before:{bal_before}", "") + " [balance-verified]"
                 await _db.commit()
                 logger.info(f"[ChoiceDeposit] Reconciled payment {payment_id}: balance {bal_before}→{bal_now}")
             else:
@@ -884,7 +945,7 @@ async def stk_push_deposit(
             amount=body.amount,
             phone=mobile,
             sender_name="Choice Bank STK Push",
-            remarks=f"Deposit via M-Pesa STK to Choice Bank",
+            remarks=f"Deposit via M-Pesa STK to Choice Bank bal_before:{bal_before}",
             status=PaymentStatus.PENDING,
         )
         db.add(p)

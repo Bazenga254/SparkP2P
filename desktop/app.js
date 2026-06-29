@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage, dialog, powerMonitor, screen: electronScreen, shell } = require('electron');
+﻿const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, clipboard, safeStorage, dialog, powerMonitor, screen: electronScreen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -134,8 +134,8 @@ function saveReportedCompleted(numSet) {
 }
 
 const CDP_PORT = 9222;
-const POLL_INTERVAL_ACTIVE = 10000; // 10 seconds â€" cycle through all active orders
-const POLL_INTERVAL_IDLE   = 5000;  // 15 seconds â€" no orders, scan faster
+const POLL_INTERVAL_ACTIVE = 5000; // 5 seconds — cycle through all active orders
+const POLL_INTERVAL_IDLE   = 5000; // 5 seconds — no orders, scan faster
 
 let mainWindow = null;
 let tray = null;
@@ -213,6 +213,7 @@ const imPaymentDoneMap = {};         // { orderNum: { screenshot, referenceId } 
 const imPaymentFailedOrders = new Set(); // orderNums where I&M payment failed all retries — skip until order clears
 const reportedCompletedBuyOrders = new Set();  // order numbers already sent as completed_buy_order_numbers — prevents duplicate SMS
 const reportedCompletedSellOrders = new Set(); // order numbers already sent as completed_sell_order_numbers — prevents duplicate SMS
+const sellOrderDetailsCache = {};  // { orderNumber: { state, payment_method, buyer_name, amount, ts, ...ep13 } }
 const buyGreetingSentOrders = new Set();    // orderNums where greeting was already sent
 const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent KSh..." was already sent
 const markPaidDoneOrders = new Set();          // orderNums where EP-17 mark-paid was already called — skip on restart
@@ -3445,10 +3446,11 @@ async function idleScan(page) {
     }
   }
 
-  // â"€â"€ Step 4: Cycle through ALL sell orders â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-  // Bot visits each order, acts where needed, then moves on â€" never blocks on one order
+  // ── Step 4: Cycle through ALL sell orders ──────────────────────────────────
+  // State detection: EP-13 SAPI (authoritative, no DOM/Vision).
+  // Browser navigates only when a chat message must be typed (rejection / instructions / release).
   if (orders.sell.length > 0) {
-    console.log(`[SparkP2P] ðŸ"" ${orders.sell.length} sell order(s) â€" cycling through all`);
+    console.log(`[SparkP2P] 🔔 ${orders.sell.length} sell order(s) — cycling through all`);
   }
   if (botTradeMode === 'buy_only') {
     if (orders.sell.length > 0) console.log(`[SparkP2P] Skipping ${orders.sell.length} sell order(s) — mode: buy_only`);
@@ -3459,52 +3461,38 @@ async function idleScan(page) {
     const seenMins = Math.floor(seenMs / 60000);
     console.log(`[SparkP2P] Checking sell order ${order.orderNumber} (KES ${order.totalPrice}, seen ${seenMins}m)`);
 
-    // Navigate directly to order detail â€" no orders-list click needed
-    await page.goto(
-      `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
-      { waitUntil: 'domcontentloaded', timeout: 15000 }
-    ).catch(() => {});
-    await new Promise(r => setTimeout(r, 3000));
-    if (pauseNavigation) break;
-
-    await takeScreenshot(`scan_sell_${order.orderNumber}`, page);
-
-    // Vision is primary â€" understands page context, not just text matching.
-    // DOM fallback if Vision unavailable (no API key).
-    // DOM-first: free, instant. Vision only when DOM returns 'unknown'.
-    let screen = await detectOrderState(page);
-    let visionInfo = null;
-    let usedVision = false;
-    if (screen === 'unknown' && anthropicApiKey) {
-      visionInfo = await analyzePageWithVision(page);
-      screen = visionInfo?.screen || 'unknown';
-      usedVision = true;
-    }
-    if (screen === 'unknown') {
-      await new Promise(r => setTimeout(r, 2000));
-      screen = await detectOrderState(page);
-      if (screen === 'unknown' && anthropicApiKey) {
-        visionInfo = await analyzePageWithVision(page);
-        screen = visionInfo?.screen || 'unknown';
-        usedVision = true;
+    // EP-13 (SAPI): get authoritative state + payment method -- no DOM/Vision, no navigation
+    const _cacheAge = sellOrderDetailsCache[order.orderNumber]
+      ? Date.now() - sellOrderDetailsCache[order.orderNumber].ts : Infinity;
+    let _ep13 = _cacheAge < 8000 ? sellOrderDetailsCache[order.orderNumber] : null;
+    if (!_ep13) {
+      const _ep13Res = await fetch(
+        `${API_BASE}/ext/sell-order-state?order_number=${encodeURIComponent(order.orderNumber)}`,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      ).then(r => r.json()).catch(() => ({}));
+      if (_ep13Res.ok) {
+        _ep13 = { ..._ep13Res, ts: Date.now() };
+        sellOrderDetailsCache[order.orderNumber] = _ep13;
       }
     }
-    _cycleVision += usedVision ? 1 : 0;
-    _cycleDom   += usedVision ? 0 : 1;
-    console.log(`[SparkP2P] Sell order ${order.orderNumber} state: ${screen} (via ${usedVision ? 'Vision' : 'DOM'})`);
-    const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
-    const lower = pageText.toLowerCase();
+    const screen        = (_ep13 && _ep13.state)          || 'unknown';
+    const _isPesaLink   = (_ep13 && _ep13.payment_method) === 'pesalink';
+    const _buyerBinName = (_ep13 && _ep13.buyer_name)     || order.buyerNickname || order.counterparty || '';
+    const _orderAmount  = Number((_ep13 && _ep13.amount)  || order.totalPrice || 0);
+    _cycleVision += 0; _cycleDom += 1;
+    console.log(`[SparkP2P] Sell order ${order.orderNumber} state: ${screen} (EP-13, ${_isPesaLink ? 'PesaLink' : 'M-Pesa'})`);
 
-    // â"€â"€ Complete â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-    if (screen === 'order_complete' ||
-        lower.includes('sale successful') || lower.includes('order completed') || lower.includes('crypto released')) {
-      console.log(`[SparkP2P] âœ… Sell order ${order.orderNumber} COMPLETED â€" reporting release`);
-      sendBotLog('success', `Sell order ${order.orderNumber} completed — crypto released`);
-      await fetch(`${API_BASE}/ext/report-release`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ order_number: order.orderNumber, success: true }),
-      }).catch(() => {});
+    // Navigate browser to order page only when bot needs to type (merchant sees it live)
+    const _gotoOrder = async () => {
+      await page.goto(
+        `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+        { waitUntil: 'domcontentloaded', timeout: 15000 }
+      ).catch(() => {});
+      await new Promise(r => setTimeout(r, 2000));
+    };
+
+    // Cleanup all state for a finished/cancelled order
+    const _cleanupSellOrder = () => {
       delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
       orderReminderSent.delete(order.orderNumber);
       delete orderLastBotReplyAt[order.orderNumber];
@@ -3515,487 +3503,282 @@ async function idleScan(page) {
       sellApprovalRequestedOrders.delete(order.orderNumber);
       sellApprovedOrders.delete(order.orderNumber);
       sellRejectedOrders.delete(order.orderNumber);
+      sellRejectionMsgSent.delete(order.orderNumber);
       sellPayInstructSentOrders.delete(order.orderNumber);
       delete lastSellDeficitMsg[order.orderNumber];
+      delete sellOrderDetailsCache[order.orderNumber];
+    };
 
-    // â"€â"€ SELL ORDER: Buyer marked as paid â€" verify M-Pesa before releasing â"€â"€â"€â"€â"€â"€
-    } else if (screen === 'verify_payment') {
-      activeOrderNumber = order.orderNumber;
-      activeOrderFiatAmount = order.totalPrice;
+    // -- Complete -------------------------------------------------------------
+    if (screen === 'order_complete') {
+      console.log(`[SparkP2P] Sell order ${order.orderNumber} COMPLETED -- reporting release`);
+      sendBotLog('success', `Sell order ${order.orderNumber} completed -- crypto released`);
+      await fetch(`${API_BASE}/ext/report-release`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number: order.orderNumber, success: true }),
+      }).catch(() => {});
+      _cleanupSellOrder();
+      continue;
+    }
 
-      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-      // SECOND VISIT: order already verified on a previous poll â€" send message
-      // then click Payment Received and release. Nothing else.
-      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-      if (verifiedOrders.has(order.orderNumber)) {
-        const vd = verifiedOrders.get(order.orderNumber);
-        console.log(`[SparkP2P] â•â•â• Order ${order.orderNumber} â€" SECOND VISIT (release) â•â•â•`);
-
-        // Reload the order page to guarantee a clean state (no lightboxes, no overlays)
-        console.log(`[SparkP2P] Reloading order page for clean state...`);
-        await page.goto(
-          `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
-          { waitUntil: 'domcontentloaded', timeout: 15000 }
-        ).catch(() => {});
-
-        // Wait for the chat panel to fully render before screenshotting
-        // React needs time to hydrate â€" poll DOM for contenteditable on the right side
-        console.log(`[SparkP2P] Waiting for chat panel to render...`);
-        const chatPanelReady = await (async () => {
-          for (let i = 0; i < 20; i++) {
-            const found = await page.evaluate(() => {
-              const els = Array.from(document.querySelectorAll('[contenteditable="true"]'));
-              return els.some(el => {
-                const r = el.getBoundingClientRect();
-                return r.width > 50 && r.left > window.innerWidth * 0.3;
-              });
-            }).catch(() => false);
-            if (found) { console.log(`[SparkP2P] Chat panel ready (${(i+1)*500}ms)`); return true; }
-            await new Promise(r => setTimeout(r, 500));
-          }
-          console.log(`[SparkP2P] Chat panel not detected â€" proceeding anyway`);
-          return false;
-        })();
-        await new Promise(r => setTimeout(r, 1000)); // extra settle time
-
-        // 1. Send message to buyer â€" Vision finds "Enter message here" and types
-        const chatMsg = `Your payment of KES ${order.totalPrice} has been received and verified successfully. I am now releasing your crypto. Thank you!`;
-        await sendChatMessage(page, chatMsg);
-        await new Promise(r => setTimeout(r, 500));
-        if (pauseNavigation) break;
-
-        // 2. Click Payment Received
-        const btnClicked = await page.evaluate(() => {
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-          while (walker.nextNode()) {
-            const el = walker.currentNode;
-            if (el.tagName !== 'BUTTON') continue;
-            const t = (el.textContent || '').trim().toLowerCase();
-            if (t === 'payment received' || t.startsWith('payment received')) {
-              el.click(); return true;
-            }
-          }
-          return false;
-        });
-        console.log(`[SparkP2P] Payment Received button clicked: ${btnClicked}`);
-        await new Promise(r => setTimeout(r, 2000));
-
-        // 3. Vision handles: modal checkbox → Confirm Release → security verification
-        // skipNavigation=true â€" we're already on the order page with the modal open.
-        // EP-20: try API release first — if it succeeds, skip Vision entirely
-        let _apiReleased = false;
-        try {
-          const _rlRes = await fetch(`${API_BASE}/ext/release-coin`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ order_number: order.orderNumber }),
-          }).catch(() => null);
-          if (_rlRes?.ok) {
-            const _rlData = await _rlRes.json().catch(() => ({}));
-            _apiReleased = _rlData.ok === true;
-            if (_apiReleased) console.log(`[SparkP2P] ✅ EP-20 API release success for ${order.orderNumber} — no Vision needed`);
-            else console.log(`[SparkP2P] EP-20 release returned ok=false for ${order.orderNumber} — falling back to Vision`);
-          }
-        } catch(_e) {}
-        if (!_apiReleased) {
-          await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [vd.code], bankRefs: [] } }, { skipNavigation: true });
-        }
-
-        // Cleanup
-        activeOrderNumber = null;
-        activeOrderFiatAmount = 0;
-        verifiedOrders.delete(order.orderNumber);
-        orderChatHistory.delete(order.orderNumber);
-        delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
-        codeFallbackAskedOrders.delete(order.orderNumber);
-      delete partialPayments[order.orderNumber];
-      delete lastDeficitSent[order.orderNumber];
-        orderReminderSent.delete(order.orderNumber);
-      delete orderLastBotReplyAt[order.orderNumber];
-        if (orderReminderSent._times) delete orderReminderSent._times[order.orderNumber + '_waiting_mpesa'];
-
-      } else {
-      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-      // FIRST VISIT: read the payment screenshot, verify the M-Pesa code.
-      // Do NOT click Payment Received here â€" that happens on the next poll.
-      // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-        console.log(`[SparkP2P] â•â•â• Order ${order.orderNumber} â€" FIRST VISIT (verify only) â•â•â•`);
-
-
-        // ── Choice Bank payment verification (runs before M-Pesa code check) ──
-        let _choiceHandled = false;
-        const _choiceVerifyRes = await fetch(
-          `${API_BASE}/ext/choice-payment-received?order_number=${encodeURIComponent(order.orderNumber)}`,
-          { headers: { 'Authorization': `Bearer ${token}` } }
-        ).catch(() => null);
-        if (_choiceVerifyRes?.ok) {
-          const _choiceVerifyData = await _choiceVerifyRes.json().catch(() => ({}));
-          const _cvPaid = _choiceVerifyData.total_paid || 0;
-          if (_choiceVerifyData.received) {
-            // Full Choice Bank payment confirmed — release immediately
-            console.log(`[SparkP2P] ✅ Choice Bank full payment confirmed (KES ${_cvPaid}) — releasing immediately`);
-            const _cvMsg = await generateUniqueMessage('payment_verified_releasing', null, { amount: order.totalPrice })
-              || `Your payment of KES ${order.totalPrice.toLocaleString()} has been confirmed via our banking system. Releasing your crypto now — thank you!`;
-            await sendChatMessage(page, _cvMsg);
-            await new Promise(r => setTimeout(r, 500));
-            if (!pauseNavigation) {
-              const _cvBtnClicked = await page.evaluate(() => {
-                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-                while (walker.nextNode()) {
-                  const el = walker.currentNode;
-                  if (el.tagName !== 'BUTTON') continue;
-                  const t = (el.textContent || '').trim().toLowerCase();
-                  if (t === 'payment received' || t.startsWith('payment received')) { el.click(); return true; }
-                }
-                return false;
-              });
-              console.log(`[SparkP2P] Payment Received button clicked: ${_cvBtnClicked}`);
-              await new Promise(r => setTimeout(r, 2000));
-              activeOrderNumber = order.orderNumber;
-              activeOrderFiatAmount = order.totalPrice;
-              await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [], bankRefs: [] } }, { skipNavigation: true });
-              activeOrderNumber = null;
-              activeOrderFiatAmount = 0;
-            }
-            // Cleanup
-            verifiedOrders.delete(order.orderNumber);
-            delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
-            codeFallbackAskedOrders.delete(order.orderNumber);
-            delete partialPayments[order.orderNumber];
-            delete lastDeficitSent[order.orderNumber];
-            delete lastSellDeficitMsg[order.orderNumber];
-            sellPayInstructSentOrders.delete(order.orderNumber);
-            sellApprovalRequestedOrders.delete(order.orderNumber);
-            sellApprovedOrders.delete(order.orderNumber);
-            orderReminderSent.delete(order.orderNumber);
-            delete orderLastBotReplyAt[order.orderNumber];
-            _choiceHandled = true;
-          } else if (_cvPaid > 0) {
-            // Partial Choice Bank payment — send deficit message and wait
-            const _cvDeficit = Math.round((Number(order.totalPrice) - _cvPaid) * 100) / 100;
-            if (lastSellDeficitMsg[order.orderNumber] !== _cvDeficit) {
-              const _cvDefMsg = `We have received KES ${_cvPaid.toLocaleString()} of the required KES ${order.totalPrice.toLocaleString()}. Please send the remaining KES ${_cvDeficit.toLocaleString()} and we will release your crypto immediately.`;
-              await sendChatMessage(page, _cvDefMsg);
-              lastSellDeficitMsg[order.orderNumber] = _cvDeficit;
-              console.log(`[SparkP2P] Choice Bank partial (verify_payment): KES ${_cvPaid}/${order.totalPrice} — deficit message sent`);
-            }
-            _choiceHandled = true;
-          }
-        }
-        if (!_choiceHandled) {
-        // Choice Bank payment not yet confirmed — buyer marked as paid but payment not detected.
-        // Send a brief "verifying" message once, then wait silently for the webhook to fire.
-        const _awaitKey = order.orderNumber + '_awaiting_choice_confirm';
-        if (!codeFallbackAskedOrders.has(_awaitKey)) {
-          await sendChatMessage(page, `Thank you! We're verifying your payment through our banking system. Your crypto will be released automatically as soon as the payment is confirmed.`);
-          codeFallbackAskedOrders.add(_awaitKey);
-          console.log(`[SparkP2P] Order ${order.orderNumber} — buyer marked paid, Choice Bank not yet confirmed — sent wait message`);
-        } else {
-          console.log(`[SparkP2P] Order ${order.orderNumber} — buyer marked paid, waiting for Choice Bank confirmation (silent)`);
-        }
-        } // end _choiceHandled guard
-      } // end FIRST VISIT
-
-    // â"€â"€ Mid-release state â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-    } else if (['confirm_release_modal','security_verification','totp_input','email_otp_input','passkey_failed'].includes(screen)) {
-      console.log(`[SparkP2P] Order ${order.orderNumber} mid-release (${screen}) â€" completing now`);
-      activeOrderNumber = order.orderNumber;
-      activeOrderFiatAmount = order.totalPrice;
-      await releaseWithVision(page, order.orderNumber, {});
-      activeOrderNumber = null;
-      activeOrderFiatAmount = 0;
-      delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
-      codeFallbackAskedOrders.delete(order.orderNumber);
-      delete partialPayments[order.orderNumber];
-      delete lastDeficitSent[order.orderNumber];
-      verifiedOrders.delete(order.orderNumber);
-      orderReminderSent.delete(order.orderNumber);
-      delete orderLastBotReplyAt[order.orderNumber];
-
-    // â"€â"€ Awaiting buyer payment â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-    } else if (screen === 'awaiting_payment' || screen === 'payment_processing' ||
-               lower.includes('awaiting') || lower.includes('pending payment')) {
-
-      // â"€â"€ Check countdown: if â‰¤ 2 minutes remaining, cancel the order â"€â"€â"€â"€â"€â"€â"€â"€
-      const countdown = await page.evaluate(() => {
-        // Binance renders countdown as MM:SS text â€" find smallest visible timer
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        const pattern = /^\d{1,2}:\d{2}$/;
-        let smallest = null;
-        while (walker.nextNode()) {
-          const t = walker.currentNode.textContent.trim();
-          if (pattern.test(t)) {
-            const [mm, ss] = t.split(':').map(Number);
-            const totalSecs = mm * 60 + ss;
-            if (smallest === null || totalSecs < smallest) smallest = totalSecs;
-          }
-        }
-        return smallest; // null if not found
-      }).catch(() => null);
-
-      if (countdown !== null) {
-        console.log(`[SparkP2P] Order ${order.orderNumber} countdown: ${Math.floor(countdown / 60)}:${String(countdown % 60).padStart(2, '0')} (${countdown}s remaining)`);
-      }
-
-      // Never self-cancel a REJECTED sell order — a seller-initiated cancel hurts our completion
-      // rate. We asked the buyer to cancel; otherwise let Binance expire it (counts against buyer).
-      const nearExpiry = countdown !== null && countdown <= 120 && !sellRejectedOrders.has(order.orderNumber); // â‰¤ 2 minutes
-
-      if (nearExpiry) {
-        console.log(`[SparkP2P] â° Order ${order.orderNumber} is about to expire (${countdown}s left) â€" cancelling`);
-        // Use TreeWalker to find and click the Cancel / Cancel Order button
-        const cancelled = await page.evaluate(() => {
-          const cancelPhrases = ['cancel order', 'cancel', 'cancel the order'];
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-          while (walker.nextNode()) {
-            const el = walker.currentNode;
-            if (el.tagName !== 'BUTTON' && el.tagName !== 'A') continue;
-            const t = (el.textContent || '').trim().toLowerCase();
-            if (cancelPhrases.some(p => t === p || t.startsWith(p))) {
-              el.click();
-              return true;
-            }
-          }
-          return false;
-        });
-        if (cancelled) {
-          console.log(`[SparkP2P] Order ${order.orderNumber} cancel clicked â€" waiting for confirmation dialog`);
-          await new Promise(r => setTimeout(r, 2000));
-          // Confirm the cancellation dialog if it appears
-          await page.evaluate(() => {
-            const phrases = ['confirm', 'yes', 'confirm cancel', 'yes, cancel'];
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-            while (walker.nextNode()) {
-              const el = walker.currentNode;
-              if (el.tagName !== 'BUTTON') continue;
-              const t = (el.textContent || '').trim().toLowerCase();
-              if (phrases.some(p => t === p || t.startsWith(p))) {
-                el.click();
-                return true;
-              }
-            }
-            return false;
-          });
-          await new Promise(r => setTimeout(r, 1000));
-          await takeScreenshot(`cancel_expired_${order.orderNumber}`, page);
-          delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
-          orderReminderSent.delete(order.orderNumber);
-      delete orderLastBotReplyAt[order.orderNumber];
-          codeFallbackAskedOrders.delete(order.orderNumber);
-      delete partialPayments[order.orderNumber];
-      delete lastDeficitSent[order.orderNumber];
-          verifiedOrders.delete(order.orderNumber);
-        } else {
-          console.log(`[SparkP2P] Order ${order.orderNumber} â€" could not find Cancel button, will retry next cycle`);
-        }
-      } else if (sellRejectedOrders.has(order.orderNumber)) {
-        // Merchant rejected this SELL order. We do NOT cancel it ourselves — a seller-initiated
-        // cancellation hurts our completion rate. Instead, send a polite, professional message
-        // (once) asking the buyer to cancel, then let the order ride: the buyer cancels, or
-        // Binance expires it at the payment deadline (which counts against the buyer, not us).
-        if (!sellRejectionMsgSent.has(order.orderNumber)) {
-          const rejMsg =
-            `Hello, and thank you for your order. I sincerely apologize, but I am currently ` +
-            `experiencing a temporary issue with my bank and I am unable to complete this ` +
-            `transaction at the moment. To save you time, kindly cancel this order so you can ` +
-            `trade with another merchant without any delay. I am very sorry for the inconvenience ` +
-            `and truly appreciate your understanding. Thank you.`;
-          await sendBinanceChatMessage(page, rejMsg).catch(() => {});
-          sellRejectionMsgSent.add(order.orderNumber);
-          console.log(`[SparkP2P] Order ${order.orderNumber} — rejected (sell): sent polite cancel request, NOT self-cancelling`);
-          sendBotLog('info', `Sell order ${order.orderNumber} rejected — asked buyer to cancel (no seller-side cancel)`);
-        } else {
-          console.log(`[SparkP2P] Order ${order.orderNumber} — rejected (sell): awaiting buyer cancel / expiry (silent)`);
-        }
-
-      } else if (!sellApprovalRequestedOrders.has(order.orderNumber)) {
-        // ── STEP 1: First time seeing this order — request Telegram approval ──
-        console.log(`[SparkP2P] Order ${order.orderNumber} — new sell order, requesting Telegram approval`);
-        // Primary: confirmed Binance stats via backend EP-19; fallback to browser scraping
-        let _buyerStats = null;
-        try {
-          const _csRes = await fetch(`${API_BASE}/ext/counterparty-stats?order_number=${encodeURIComponent(order.orderNumber)}`,
-            { headers: { 'Authorization': `Bearer ${token}` } });
-          if (_csRes.ok) { const _cs = await _csRes.json(); if (_cs.ok) _buyerStats = _cs; }
-        } catch (_) {}
-        if (!_buyerStats) _buyerStats = await fetchCounterpartyStats(page, order.orderNumber, 'buyer').catch(() => ({}));
-        const _buyerNick = order.buyerNickname || order.counterparty || '';
-        const _approvalBody = {
-          order: {
-            orderNumber: order.orderNumber,
-            totalPrice: order.totalPrice,
-            buyerNickname: _buyerNick,
-            counterparty: _buyerNick,
-          },
-          buyer_stats: _buyerStats || {},
-        };
-        if (botFullAuto) {
-          // Strict full-auto: screen here and auto-decide — no manual approval card.
-          const _s = _buyerStats || {};
-          const _ret = _s.tradedBefore === true;
-          let _ff = null;
-          if (!_ret) {
-            if (ddEnabled) {
-              if (ddAutoCancelNew && _s.trades_all != null && _s.trades_all < 5) _ff = `brand-new account (${_s.trades_all} trades)`;
-              if (!_ff && ddMin30d > 0 && _s.trades_30d != null && _s.trades_30d < ddMin30d) _ff = `low 30-day trades (${_s.trades_30d}/${ddMin30d})`;
-              if (!_ff && ddMinAll > 0 && _s.trades_all != null && _s.trades_all < ddMinAll) _ff = `low all-time trades (${_s.trades_all}/${ddMinAll})`;
-            }
-            if (cfEnabled) {
-              if (!_ff && cfMin30d > 0 && _s.trades_30d != null && _s.trades_30d < cfMin30d) _ff = `insufficient 30-day trades (${_s.trades_30d}/${cfMin30d})`;
-              if (!_ff && cfMinAll > 0 && _s.trades_all != null && _s.trades_all < cfMinAll) _ff = `insufficient all-time trades (${_s.trades_all}/${cfMinAll})`;
-            }
-          }
-          sellApprovalRequestedOrders.add(order.orderNumber);
-          if (_ff) {
-            sellRejectedOrders.add(order.orderNumber);
-            sendBotLog('info', `Sell order ${order.orderNumber} auto-rejected (full-auto) — ${_ff}`);
-            await fetch(`${API_BASE}/ext/notify-trader`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ message: `🤖 Auto-rejected sell order ${order.orderNumber} (KES ${(order.totalPrice || 0).toLocaleString()}) — failed screening: ${_ff}. A polite cancel message was sent.` }) }).catch(() => {});
-            console.log(`[SparkP2P] FULL-AUTO idleScan auto-reject ${order.orderNumber} — ${_ff}`);
-          } else {
-            sellApprovedOrders.add(order.orderNumber);   // STEP 3 sends the payment details
-            sendBotLog('info', `Sell order ${order.orderNumber} auto-approved (full-auto) — passed screening`);
-            console.log(`[SparkP2P] FULL-AUTO idleScan auto-approve ${order.orderNumber}`);
-          }
-        } else {
-          const _approvalRes = await fetch(`${API_BASE}/telegram/request-approval`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify(_approvalBody),
-          }).catch(() => null);
-          sellApprovalRequestedOrders.add(order.orderNumber);
-          const _approvalOk = _approvalRes?.ok ? (await _approvalRes.json().catch(() => ({}))).ok : false;
-          console.log(`[SparkP2P] Telegram approval request sent for ${order.orderNumber}: ${_approvalOk ? 'OK' : 'FAILED'}`);
-          sendBotLog('info', `Sell order ${order.orderNumber} — waiting for Telegram approval`);
-        }
-
-      } else if (!sellApprovedOrders.has(order.orderNumber)) {
-        // ── STEP 2: Poll Telegram approval status ──
-        const _statusRes = await fetch(
-          `${API_BASE}/telegram/approval-status?order_number=${encodeURIComponent(order.orderNumber)}`,
-          { headers: { 'Authorization': `Bearer ${token}` } }
-        ).catch(() => null);
-        const _statusData = _statusRes?.ok ? await _statusRes.json().catch(() => ({})) : {};
-        const _approvalStatus = _statusData.status || 'pending';
-        console.log(`[SparkP2P] Order ${order.orderNumber} Telegram approval status: ${_approvalStatus}`);
-
-        if (_approvalStatus === 'approved') {
-          sellApprovedOrders.add(order.orderNumber);
-          console.log(`[SparkP2P] ✅ Order ${order.orderNumber} APPROVED by merchant`);
-          sendBotLog('success', `Sell order ${order.orderNumber} approved — sending payment instructions`);
-        } else if (_approvalStatus === 'rejected' || _approvalStatus === 'timeout') {
-          sellRejectedOrders.add(order.orderNumber);
-          console.log(`[SparkP2P] ❌ Order ${order.orderNumber} ${_approvalStatus} by merchant`);
-        } else {
-          console.log(`[SparkP2P] Order ${order.orderNumber} — still waiting for merchant approval (${_approvalStatus})`);
-        }
-
-      }
-
-      // ── STEP 3: Send payment instructions once approved ──
-      if (sellApprovedOrders.has(order.orderNumber) && !sellPayInstructSentOrders.has(order.orderNumber)) {
-        const _choiceAccNum = traderChoiceAccountNumber || '';
-        const _orderAmount = Number(order.totalPrice);
-        const _lowerPage = (await page.evaluate(() => document.body.innerText).catch(() => '')).toLowerCase();
-
-        // Detect buyer payment method from Binance order page
-        const _isPesaLink = _lowerPage.includes('pesalink') || _lowerPage.includes('pesa link') ||
-          _lowerPage.includes('bank transfer') || _lowerPage.includes('equity bank') ||
-          _lowerPage.includes('kcb') || _lowerPage.includes('co-op') || _lowerPage.includes('cooperative') ||
-          _lowerPage.includes('absa') || _lowerPage.includes('stanbic') || _lowerPage.includes('family bank') ||
-          _lowerPage.includes('ncba') || _lowerPage.includes('dtb') || _lowerPage.includes('diamond trust');
-        const _isMpesa = !_isPesaLink;
-
-        // Choice Bank production paybill (was a stale hardcoded 4007199). Sent as separate, easy-to-
-        // copy messages: intro, paybill, account number — matching the approved-buyer path.
-        const _PAYBILL = '444174';
-        let _payMsgs = [];
-        if (_isPesaLink) {
-          _payMsgs = [
-            `Hello! Please send KES ${_orderAmount.toLocaleString()} via PesaLink to Choice Microfinance Bank 👇`,
-            `Bank: Choice Microfinance Bank`,
-            `Account Number: ${_choiceAccNum}`,
-            `Once sent, share your bank confirmation here and I'll release your crypto. Thank you!`,
-          ];
-        } else if (_isMpesa && _orderAmount > 250000) {
-          // M-Pesa per-transaction limit is 250K — buyer pays in two transactions to the same paybill.
-          const _secondTx = _orderAmount - 250000;
-          _payMsgs = [
-            `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa in TWO transactions to the Paybill below 👇`,
-            `Paybill Number: ${_PAYBILL}`,
-            `Account Number: ${_choiceAccNum}`,
-            `1️⃣ Send KES 250,000 first, then 2️⃣ send KES ${_secondTx.toLocaleString()} to the same Paybill + account. Then tap "I've Sent Payment". Thank you!`,
-          ];
-        } else {
-          _payMsgs = [
-            `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa to the Paybill below. Your crypto is released automatically once payment is received 👇`,
-            `Paybill Number: ${_PAYBILL}`,
-            `Account Number: ${_choiceAccNum}`,
-          ];
-        }
-
-        if (_choiceAccNum) {
-          for (let i = 0; i < _payMsgs.length; i++) {
-            await sendBinanceChatMessage(page, _payMsgs[i]);
-            if (i < _payMsgs.length - 1) await new Promise(r => setTimeout(r, 1000 + Math.random() * 800));  // human-like gap
-          }
-          sellPayInstructSentOrders.add(order.orderNumber);
-          console.log(`[SparkP2P] Order ${order.orderNumber} — payment instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'}, ${_payMsgs.length} msgs, paybill ${_PAYBILL})`);
-        } else {
-          console.log(`[SparkP2P] Order ${order.orderNumber} — Choice Bank account number not set, cannot send instructions`);
-        }
-      }
-
-      // ── STEP 4: Poll Choice Bank for incoming payment & send deficit messages ──
-      if (sellApprovedOrders.has(order.orderNumber) && sellPayInstructSentOrders.has(order.orderNumber)) {
-        const _cbPollRes = await fetch(
-          `${API_BASE}/ext/choice-payment-received?order_number=${encodeURIComponent(order.orderNumber)}`,
-          { headers: { 'Authorization': `Bearer ${token}` } }
-        ).catch(() => null);
-        if (_cbPollRes?.ok) {
-          const _cbPollData = await _cbPollRes.json().catch(() => ({}));
-          const _cbPaid = _cbPollData.total_paid || 0;
-          if (_cbPollData.received) {
-            console.log(`[SparkP2P] Order ${order.orderNumber} — Choice Bank FULL payment confirmed (KES ${_cbPaid}) — waiting for buyer to mark as paid`);
-            sendBotLog('success', `Sell order ${order.orderNumber} — Choice Bank payment received KES ${_cbPaid}`);
-          } else if (_cbPaid > 0) {
-            // Partial payment — send deficit message (deduped)
-            const _cbDeficit = Math.round((Number(order.totalPrice) - _cbPaid) * 100) / 100;
-            if (lastSellDeficitMsg[order.orderNumber] !== _cbDeficit) {
-              const _defMsg = `Thank you for your payment! We have received KES ${_cbPaid.toLocaleString()} so far. Please send the remaining KES ${_cbDeficit.toLocaleString()} to the same paybill to complete the transaction.`;
-              await sendBinanceChatMessage(page, _defMsg);
-              lastSellDeficitMsg[order.orderNumber] = _cbDeficit;
-              console.log(`[SparkP2P] Order ${order.orderNumber} — Choice Bank partial: KES ${_cbPaid}/${order.totalPrice} — deficit message sent`);
-            }
-          } else {
-            console.log(`[SparkP2P] Order ${order.orderNumber} — Choice Bank: no payment yet (${seenMins}m elapsed)`);
-          }
-        }
-      } else if (!sellApprovalRequestedOrders.has(order.orderNumber)) {
-        // Silent wait — approval not yet requested (happens when buyerStats fetch delays things)
-        console.log(`[SparkP2P] Order ${order.orderNumber} — awaiting buyer payment (${seenMins}m elapsed, ${countdown !== null ? countdown + 's left' : 'no timer'}) — silent`);
-      }
-      // Move on — check other orders
-
-    // â"€â"€ Cancelled â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-    } else if (lower.includes('cancelled') || lower.includes('canceled')) {
+    // -- Cancelled ------------------------------------------------------------
+    if (screen === 'cancelled') {
       console.log(`[SparkP2P] Sell order ${order.orderNumber} CANCELLED`);
       await fetch(`${API_BASE}/ext/report-orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [order.orderNumber] }),
       }).catch(() => {});
-      delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
-      orderReminderSent.delete(order.orderNumber);
-      delete orderLastBotReplyAt[order.orderNumber];
-      sellApprovalRequestedOrders.delete(order.orderNumber);
-      sellApprovedOrders.delete(order.orderNumber);
-      sellRejectedOrders.delete(order.orderNumber);
-      sellPayInstructSentOrders.delete(order.orderNumber);
-      delete lastSellDeficitMsg[order.orderNumber];
-
-    } else {
-      console.log(`[SparkP2P] Sell order ${order.orderNumber} state unclear (${screen}) â€" will recheck next cycle`);
+      _cleanupSellOrder();
+      continue;
     }
+
+    // -- Buyer marked paid: verify Choice Bank then release -------------------
+    if (screen === 'verify_payment') {
+      delete sellOrderDetailsCache[order.orderNumber]; // force fresh EP-13 next cycle
+      activeOrderNumber = order.orderNumber;
+      activeOrderFiatAmount = _orderAmount;
+
+      // Navigate so merchant sees bot activity
+      await _gotoOrder();
+      if (pauseNavigation) { activeOrderNumber = null; activeOrderFiatAmount = 0; break; }
+
+      const _cvRes = await fetch(
+        `${API_BASE}/ext/choice-payment-received?order_number=${encodeURIComponent(order.orderNumber)}`,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      ).then(r => r.json()).catch(() => ({}));
+      const _cvPaid = _cvRes.total_paid || 0;
+
+      if (_cvRes.received) {
+        // Full payment confirmed via Choice Bank
+        console.log(`[SparkP2P] Choice Bank confirmed KES ${_cvPaid} -- releasing`);
+        await sendBinanceChatMessage(page,
+          `Your payment of KES ${_orderAmount.toLocaleString()} has been confirmed via our banking system. Releasing your crypto now -- thank you!`
+        );
+        await new Promise(r => setTimeout(r, 800));
+        if (!pauseNavigation) {
+          // EP-12: confirm Binance is ready to release before EP-20
+          const _ep12 = await fetch(`${API_BASE}/ext/check-can-release`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ order_number: order.orderNumber }),
+          }).then(r => r.json()).catch(() => ({ can_release: true }));
+          if (_ep12.can_release === false) {
+            sendBotLog('warning', `Sell order ${order.orderNumber}: EP-12 says not ready -- retrying next cycle`);
+            activeOrderNumber = null; activeOrderFiatAmount = 0;
+            continue;
+          }
+          // Click Payment Received (DOM TreeWalker)
+          await page.evaluate(() => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+            while (walker.nextNode()) {
+              const el = walker.currentNode;
+              if (el.tagName !== 'BUTTON') continue;
+              const t = (el.textContent || '').trim().toLowerCase();
+              if (t === 'payment received' || t.startsWith('payment received')) { el.click(); return true; }
+            }
+            return false;
+          });
+          await new Promise(r => setTimeout(r, 2000));
+          // EP-20 first; Vision fallback
+          const _rlRes = await fetch(`${API_BASE}/ext/release-coin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ order_number: order.orderNumber }),
+          }).then(r => r.json()).catch(() => ({}));
+          if (_rlRes.ok === true) {
+            console.log(`[SparkP2P] EP-20 release success for ${order.orderNumber}`);
+          } else {
+            await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [], bankRefs: [] } }, { skipNavigation: true });
+          }
+        }
+        activeOrderNumber = null; activeOrderFiatAmount = 0;
+        _cleanupSellOrder();
+        continue;
+      } else if (_cvPaid > 0) {
+        // Partial payment -- send deficit message (deduplicated)
+        const _deficit = Math.round((_orderAmount - _cvPaid) * 100) / 100;
+        if (lastSellDeficitMsg[order.orderNumber] !== _deficit) {
+          await sendBinanceChatMessage(page,
+            `We have received KES ${_cvPaid.toLocaleString()} of the required KES ${_orderAmount.toLocaleString()}. ` +
+            `Please send the remaining KES ${_deficit.toLocaleString()} to complete your transaction. Thank you!`
+          );
+          lastSellDeficitMsg[order.orderNumber] = _deficit;
+        }
+      } else {
+        // No payment yet -- send wait message once then stay silent
+        const _awaitKey = order.orderNumber + '_awaiting_choice_confirm';
+        if (!codeFallbackAskedOrders.has(_awaitKey)) {
+          await sendBinanceChatMessage(page,
+            `Thank you! We are verifying your payment through our banking system. ` +
+            `Your crypto will be released automatically as soon as the payment is confirmed.`
+          );
+          codeFallbackAskedOrders.add(_awaitKey);
+        }
+      }
+      activeOrderNumber = null; activeOrderFiatAmount = 0;
+      continue;
+    }
+
+    // -- Awaiting payment: approval / rejection / payment instructions --------
+    if (screen === 'awaiting_payment' || screen === 'unknown') {
+
+      // REJECTED: navigate to page so merchant sees bot typing the excuse, then move on
+      if (sellRejectedOrders.has(order.orderNumber)) {
+        if (!sellRejectionMsgSent.has(order.orderNumber)) {
+          await _gotoOrder();
+          if (pauseNavigation) break;
+          const rejMsg =
+            `Hello, and thank you for your order. I sincerely apologize, but due to a temporary issue ` +
+            `with our banking system, we are unable to complete this transaction at this time. To avoid ` +
+            `any delay for you, we kindly request that you cancel this order so that you may trade with ` +
+            `another merchant. We deeply regret this inconvenience and truly appreciate your understanding. Thank you.`;
+          await sendBinanceChatMessage(page, rejMsg).catch(() => {});
+          sellRejectionMsgSent.add(order.orderNumber);
+          sendBotLog('info', `Sell order ${order.orderNumber} rejected -- excuse message sent, awaiting buyer cancellation`);
+        } else {
+          console.log(`[SparkP2P] Order ${order.orderNumber} -- rejected: awaiting buyer cancel / expiry (silent)`);
+        }
+        continue;
+      }
+
+      // STEP 1: First time seeing this order -- request Telegram approval
+      if (!sellApprovalRequestedOrders.has(order.orderNumber)) {
+        console.log(`[SparkP2P] New sell order ${order.orderNumber} -- requesting Telegram approval`);
+        const _approvalBody = {
+          order: {
+            orderNumber: order.orderNumber,
+            totalPrice: _orderAmount,
+            buyerNickname: _buyerBinName,
+            counterparty: _buyerBinName,
+          },
+          buyer_stats: {
+            allTimeTrades: _ep13 && _ep13.trades_all,
+            last30dTrades: _ep13 && _ep13.trades_30d,
+            completionRate: _ep13 && _ep13.completion_rate,
+            avgPayMins: _ep13 && _ep13.avg_pay_mins,
+            registeredDays: _ep13 && _ep13.account_age_days,
+          },
+        };
+        if (botFullAuto) {
+          const _s = _approvalBody.buyer_stats;
+          let _ff = null;
+          if (ddEnabled) {
+            if (ddAutoCancelNew && _s.allTimeTrades != null && _s.allTimeTrades < 5) _ff = `brand-new account (${_s.allTimeTrades} trades)`;
+            if (!_ff && ddMin30d > 0 && _s.last30dTrades != null && _s.last30dTrades < ddMin30d) _ff = `low 30d trades (${_s.last30dTrades}/${ddMin30d})`;
+            if (!_ff && ddMinAll > 0 && _s.allTimeTrades != null && _s.allTimeTrades < ddMinAll) _ff = `low all-time trades (${_s.allTimeTrades}/${ddMinAll})`;
+          }
+          sellApprovalRequestedOrders.add(order.orderNumber);
+          if (_ff) {
+            sellRejectedOrders.add(order.orderNumber);
+            sendBotLog('info', `Sell order ${order.orderNumber} auto-rejected (full-auto) -- ${_ff}`);
+          } else {
+            sellApprovedOrders.add(order.orderNumber);
+            sendBotLog('info', `Sell order ${order.orderNumber} auto-approved (full-auto)`);
+          }
+        } else {
+          await fetch(`${API_BASE}/telegram/request-approval`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify(_approvalBody),
+          }).catch(() => null);
+          sellApprovalRequestedOrders.add(order.orderNumber);
+          sendBotLog('info', `Sell order ${order.orderNumber} -- waiting for Telegram approval`);
+        }
+        continue; // move to next order while waiting
+      }
+
+      // STEP 2: Poll Telegram approval status
+      if (!sellApprovedOrders.has(order.orderNumber) && !sellRejectedOrders.has(order.orderNumber)) {
+        const _statusData = await fetch(
+          `${API_BASE}/telegram/approval-status?order_number=${encodeURIComponent(order.orderNumber)}`,
+          { headers: { 'Authorization': `Bearer ${token}` } }
+        ).then(r => r.json()).catch(() => ({}));
+        const _approvalStatus = _statusData.status || 'pending';
+        console.log(`[SparkP2P] Order ${order.orderNumber} Telegram status: ${_approvalStatus}`);
+        if (_approvalStatus === 'approved') {
+          sellApprovedOrders.add(order.orderNumber);
+          sendBotLog('success', `Sell order ${order.orderNumber} approved -- sending payment instructions`);
+        } else if (_approvalStatus === 'rejected' || _approvalStatus === 'timeout') {
+          sellRejectedOrders.add(order.orderNumber);
+        } else {
+          continue; // still pending
+        }
+      }
+
+      // STEP 3: Send payment instructions -- navigate first so merchant sees bot typing
+      if (sellApprovedOrders.has(order.orderNumber) && !sellPayInstructSentOrders.has(order.orderNumber)) {
+        const _PAYBILL = '444174';
+        const _choiceAccNum = traderChoiceAccountNumber || '';
+        let _payMsgs = [];
+        if (_isPesaLink) {
+          _payMsgs = [
+            `Hello! Please send KES ${_orderAmount.toLocaleString()} via PesaLink to Choice Microfinance Bank`,
+            `Bank: Choice Microfinance Bank`,
+            `Account Number: ${_choiceAccNum}`,
+            `Once sent, please type your bank reference number here so we can verify your payment. Your crypto is released automatically. Thank you!`,
+          ];
+        } else if (_orderAmount > 250000) {
+          const _second = _orderAmount - 250000;
+          _payMsgs = [
+            `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa in TWO transactions`,
+            `Paybill Number: ${_PAYBILL}`,
+            `Account Number: ${_choiceAccNum}`,
+            `1. Send KES 250,000 first, then 2. Send KES ${_second.toLocaleString()} to the same Paybill and account. Once done, type both M-Pesa confirmation codes here (e.g. SAX1234567). Thank you!`,
+          ];
+        } else {
+          _payMsgs = [
+            `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa to the Paybill below. Your crypto is released automatically once payment is confirmed.`,
+            `Paybill Number: ${_PAYBILL}`,
+            `Account Number: ${_choiceAccNum}`,
+            `Once sent, please type your M-Pesa confirmation code (e.g. SAX1234567) here. Thank you!`,
+          ];
+        }
+        if (_choiceAccNum) {
+          await _gotoOrder();
+          if (pauseNavigation) break;
+          for (let i = 0; i < _payMsgs.length; i++) {
+            await sendBinanceChatMessage(page, _payMsgs[i]);
+            if (i < _payMsgs.length - 1) await new Promise(r => setTimeout(r, 1000 + Math.random() * 800));
+          }
+          sellPayInstructSentOrders.add(order.orderNumber);
+          console.log(`[SparkP2P] Order ${order.orderNumber} -- instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'}, paybill ${_PAYBILL}, acct ${_choiceAccNum})`);
+        } else {
+          console.log(`[SparkP2P] Order ${order.orderNumber} -- Choice Bank account not set, cannot send instructions`);
+        }
+        continue; // move to next order immediately after sending instructions
+      }
+
+      // STEP 4: Poll Choice Bank while awaiting buyer payment
+      if (sellApprovedOrders.has(order.orderNumber) && sellPayInstructSentOrders.has(order.orderNumber)) {
+        const _cbRes = await fetch(
+          `${API_BASE}/ext/choice-payment-received?order_number=${encodeURIComponent(order.orderNumber)}`,
+          { headers: { 'Authorization': `Bearer ${token}` } }
+        ).then(r => r.json()).catch(() => ({}));
+        const _cbPaid = _cbRes.total_paid || 0;
+        if (_cbRes.received) {
+          sendBotLog('success', `Sell order ${order.orderNumber} -- Choice Bank KES ${_cbPaid} confirmed, waiting for buyer to tap "I've Sent"`);
+        } else if (_cbPaid > 0) {
+          const _deficit = Math.round((_orderAmount - _cbPaid) * 100) / 100;
+          if (lastSellDeficitMsg[order.orderNumber] !== _deficit) {
+            await _gotoOrder();
+            if (!pauseNavigation) {
+              await sendBinanceChatMessage(page,
+                `Thank you! We have received KES ${_cbPaid.toLocaleString()} so far. ` +
+                `Please send the remaining KES ${_deficit.toLocaleString()} to the same paybill to complete your transaction.`
+              );
+              lastSellDeficitMsg[order.orderNumber] = _deficit;
+            }
+          }
+        } else {
+          console.log(`[SparkP2P] Order ${order.orderNumber} -- awaiting Choice Bank payment (${seenMins}m elapsed)`);
+        }
+        continue;
+      }
+    }
+
+    console.log(`[SparkP2P] Sell order ${order.orderNumber} state unclear (${screen}) -- will recheck next cycle`);
   }
 
   }  // end sell orders block
@@ -4426,6 +4209,23 @@ Method selection rules:
         let verifiedName = "";
 
         if (!imNameMismatchAborted) {
+          // ── Amount sanity check — cross-validate against the authoritative order total ──
+          // paymentDetails.amount comes from the order detail page (API or DOM scrape).
+          // order.totalPrice comes independently from the Binance order list API.
+          // If they disagree by more than 1%, something was mis-extracted — abort rather
+          // than risk sending the wrong amount via Choice Bank (no refund mechanism).
+          const _expectedKes = parseFloat(order.totalPrice) || 0;
+          const _extractedKes = parseFloat(paymentDetails.amount) || 0;
+          if (_expectedKes > 0 && _extractedKes > 0) {
+            const _diff = Math.abs(_extractedKes - _expectedKes);
+            const _pct = _diff / _expectedKes;
+            if (_pct > 0.01) { // more than 1% difference
+              sendBotLog('error', `❌ Amount mismatch on buy order ${order.orderNumber}: Binance order says KES ${_expectedKes.toLocaleString()} but payment details extracted KES ${_extractedKes.toLocaleString()} — payment ABORTED to prevent overpayment. Check the order manually.`);
+              imPaymentFailedOrders.add(order.orderNumber);
+              continue;
+            }
+          }
+
           // ── Step 1: Telegram approval — fires IMMEDIATELY after payment details extracted ──
           // Seller stats (already fetched for DD check) are included so the trader sees the
           // full profile in Telegram before approving. Greeting is sent only after approval.
@@ -4549,7 +4349,8 @@ Method selection rules:
           try {
             imResult = await executeChoicePayment({
               phone: paymentDetails.phone, accountNumber: paymentDetails.account_number,
-              bankCode: paymentDetails.bank_code||"", name: verifiedName||paymentDetails.name,
+              bankCode: paymentDetails.bank_code||"", bankName: paymentDetails.bank_name||"",
+              name: verifiedName||paymentDetails.name,
               amount: paymentDetails.amount, orderNumber: order.orderNumber, method: method,
             });
             if (imResult.success) {
@@ -8552,7 +8353,8 @@ Method selection rules:
           try {
             imResult = await executeChoicePayment({
               phone: paymentDetails.phone, accountNumber: paymentDetails.account_number,
-              bankCode: paymentDetails.bank_code||"", name: verifiedName||paymentDetails.name,
+              bankCode: paymentDetails.bank_code||"", bankName: paymentDetails.bank_name||"",
+              name: verifiedName||paymentDetails.name,
               amount: paymentDetails.amount, orderNumber: order_number, method: payMethod,
             });
             if (imResult.success) {
@@ -8950,18 +8752,76 @@ function norm(o) {
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+// ── Kenya bank name → PesaLink CBK sort code ────────────────────────────────
+// Binance shows bank name only (never the code). This maps the display name to
+// the CBK institution code Choice Bank needs to route the PesaLink transfer.
+function _pesalinkBankCode(bankName) {
+  if (!bankName) return null;
+  const n = bankName.toLowerCase().trim();
+  const banks = [
+    [['equity'],                                         '068'],
+    [['kcb', 'kenya commercial'],                        '011'],
+    [['cooperative', 'co-operative', 'co operative', 'coop'], '055'],
+    [['stanchart', 'standard chartered'],                '002'],
+    [['absa', 'barclays'],                               '030'],
+    [['ncba', 'nic bank', 'nic/', 'commercial bank of africa', 'cba bank'], '044'],
+    [['i&m', 'i & m', 'im bank'],                        '023'],
+    [['dtb', 'diamond trust'],                           '063'],
+    [['stanbic'],                                        '031'],
+    [['national bank', 'nbk'],                           '012'],
+    [['family bank'],                                    '070'],
+    [['prime bank'],                                     '010'],
+    [['hf group', 'housing finance'],                    '061'],
+    [['gulf african'],                                   '072'],
+    [['sidian'],                                         '066'],
+    [['bank of africa'],                                 '060'],
+    [['ecobank'],                                        '043'],
+    [['abc bank'],                                       '035'],
+    [['consolidated bank'],                              '016'],
+    [['credit bank'],                                    '025'],
+    [['citibank', 'citi bank'],                          '008'],
+    [['mayfair'],                                        '065'],
+    [['uba', 'united bank for africa'],                  '076'],
+    [['gt bank', 'gtbank', 'guaranty trust'],            '053'],
+    [['victoria'],                                       '054'],
+    [['spire bank'],                                     '049'],
+    [['kingdom bank'],                                   '087'],
+    [['postbank', 'post bank'],                          '025'],
+    [['bank of baroda'],                                 '006'],
+    [['bank of india'],                                  '005'],
+    [['middle east bank'],                               '018'],
+    [['oriental'],                                       '014'],
+  ];
+  for (const [keywords, code] of banks) {
+    if (keywords.some(k => n.includes(k))) return code;
+  }
+  return null;
+}
+
 // ── Choice Bank payment — replaces I&M Bank for all BUY order payments ────────
-async function executeChoicePayment({ phone, accountNumber, bankCode, name, amount, orderNumber, method }) {
+async function executeChoicePayment({ phone, accountNumber, bankCode, bankName, name, amount, orderNumber, method }) {
   if (!traderChoiceAccountId) throw new Error('Choice Bank account not linked. Complete KYC in Bank Account tab.');
   if (!amount || Number(amount) <= 0) throw new Error('Amount invalid: ' + amount);
 
+  // Auto-detect payment type from the data itself:
+  //   phone number present → M-Pesa
+  //   account number present → PesaLink (all bank transfers on Binance P2P Kenya are PesaLink)
+  const _rawPhone = String(phone || '').replace(/\s/g, '');
+  const isMpesa = !!phone && /^(?:(?:0|\+?254)?[17]\d{8})$/.test(_rawPhone);
+
   let payeeId;
-  if (method === 'im_bank' || method === 'other_bank') {
-    if (!accountNumber) throw new Error('Bank account number required for bank transfer');
-    payeeId = String(accountNumber).replace(/\s/g, '');
+  if (isMpesa) {
+    payeeId = _rawPhone.replace(/^(0|\+?254)/, ''); // normalize to 9-digit
+    bankCode = ''; // M-Pesa must have no bank code
+    console.log(`[SparkP2P] Choice Bank: M-Pesa → ${payeeId} (${name})`);
   } else {
-    if (!phone) throw new Error('Phone number required for M-Pesa payment');
-    payeeId = String(phone).replace(/^(0|\+?254)/, '').replace(/\s/g, ''); // 9-digit
+    // PesaLink bank transfer
+    if (!accountNumber) throw new Error('No account number for bank transfer — cannot send PesaLink');
+    payeeId = String(accountNumber).replace(/\s/g, '');
+    // Derive bank code from the bank name Binance gave us (name is the PERSON, bankName is the BANK)
+    if (!bankCode) bankCode = _pesalinkBankCode(bankName) || '';
+    if (!bankCode) throw new Error(`Unknown bank for PesaLink: "${bankName}" — report this bank name so it can be added`);
+    console.log(`[SparkP2P] Choice Bank: PesaLink → acct ${payeeId}, bank "${bankName}" (code ${bankCode}), payee: ${name}`);
   }
 
   const amountRounded = Math.round(parseFloat(amount) * 100) / 100;
