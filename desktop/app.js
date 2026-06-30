@@ -1042,7 +1042,7 @@ async function connectPuppeteer() {
     // Enforce tab whitelist and one-tab-per-service rule.
     // maxTabs: 1 = enforce single tab; Infinity = allow any number (OAuth popups, etc.)
     const TAB_GROUPS = [
-      { name: 'Binance',    domains: ['binance.com'],                            maxTabs: 1        },
+      { name: 'Binance',    domains: ['binance.com'],                            maxTabs: Infinity },
       { name: 'Gmail',      domains: ['mail.google.com'],                        maxTabs: 1        },
       { name: 'GoogleAuth', domains: ['accounts.google.com', 'google.com'],      maxTabs: Infinity }, // OAuth popups — Binance and Gmail both open these
       { name: 'M-Pesa',     domains: ['org.ke.m-pesa.com'],                       maxTabs: 1       },
@@ -4273,6 +4273,7 @@ Method selection rules:
             const _pct = _diff / _expectedKes;
             if (_pct > 0.01) { // more than 1% difference
               sendBotLog('error', `❌ Amount mismatch on buy order ${order.orderNumber}: Binance order says KES ${_expectedKes.toLocaleString()} but payment details extracted KES ${_extractedKes.toLocaleString()} — payment ABORTED to prevent overpayment. Check the order manually.`);
+              delete buyPaymentDetailsCache[order.orderNumber]; // clear stale cache so next cycle re-fetches
               imPaymentFailedOrders.add(order.orderNumber);
               continue;
             }
