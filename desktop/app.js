@@ -277,6 +277,7 @@ const telegramApprovedOrders = new Set();      // orderNums where Telegram appro
 }
 let buyPaymentScreenshot = null;  // Base64 screenshot of I&M success â€" uploaded to Binance chat
 let gmailPage = null;          // Persistent Gmail tab â€" opened alongside Binance, kept alive
+const orderTabs = {};          // orderNumber -> Puppeteer Page -- one dedicated tab per active order
 let imPage = null;             // Persistent I&M Bank tab â€" new tab in the main Binance browser
 let connectingIm = false;      // Prevents concurrent connectIm() calls
 let imWithdrawalRunning = false; // Prevents concurrent withdrawal executions
@@ -1370,6 +1371,53 @@ async function openGmailTab() {
 }
 
 let gmailLoginPollTimer = null;
+
+// -- Order tab management: one dedicated browser tab per active order ------------------
+// Each tab is parked on the Binance order detail URL so the bot never has to do a full
+// page navigation for state checks or chat messages — just bringToFront() + reload().
+
+async function openOrderTab(orderNumber) {
+  if (!browser) return null;
+  if (orderTabs[orderNumber] && !orderTabs[orderNumber].isClosed()) return orderTabs[orderNumber];
+  try {
+    const tab = await browser.newPage();
+    await tab.goto(
+      `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNumber}`,
+      { waitUntil: 'domcontentloaded', timeout: 20000 }
+    ).catch(() => {});
+    tab.on('close', () => { delete orderTabs[orderNumber]; });
+    orderTabs[orderNumber] = tab;
+    console.log(`[SparkP2P] Opened tab for order ${orderNumber}`);
+    return tab;
+  } catch (e) {
+    console.log(`[SparkP2P] Could not open tab for order ${orderNumber}: ${e.message?.substring(0, 60)}`);
+    return null;
+  }
+}
+
+async function closeOrderTab(orderNumber) {
+  const tab = orderTabs[orderNumber];
+  if (!tab) return;
+  delete orderTabs[orderNumber];
+  try { if (!tab.isClosed()) await tab.close(); } catch (_) {}
+  console.log(`[SparkP2P] Closed tab for order ${orderNumber}`);
+}
+
+async function ensureOrderTabs(orders) {
+  if (!browser) return;
+  const activeNums = new Set([...orders.sell, ...orders.buy].map(o => o.orderNumber));
+  // Open missing tabs
+  for (const o of [...orders.sell, ...orders.buy]) {
+    if (!orderTabs[o.orderNumber] || orderTabs[o.orderNumber].isClosed()) {
+      await openOrderTab(o.orderNumber);
+      await new Promise(r => setTimeout(r, 300)); // brief gap between tab opens
+    }
+  }
+  // Close tabs for orders that are no longer active
+  for (const num of Object.keys(orderTabs)) {
+    if (!activeNums.has(num)) await closeOrderTab(num);
+  }
+}
 function startGmailLoginPoller() {
   if (gmailLoginPollTimer) return; // already polling
   let attempts = 0;
@@ -3343,6 +3391,7 @@ async function idleScan(page) {
   const orders = await readOrders(true); // activeOnly=true
   stats.orders = orders.sell.length + orders.buy.length;
   console.log(`[SparkP2P] Orders found: ${orders.sell.length} sell, ${orders.buy.length} buy`);
+  await ensureOrderTabs(orders); // open/close per-order tabs to match active order list
 
   const hasActiveOrders = orders.sell.length > 0 || orders.buy.length > 0;
 
@@ -3482,17 +3531,19 @@ async function idleScan(page) {
     _cycleVision += 0; _cycleDom += 1;
     console.log(`[SparkP2P] Sell order ${order.orderNumber} state: ${screen} (EP-13, ${_isPesaLink ? 'PesaLink' : 'M-Pesa'})`);
 
-    // Navigate browser to order page only when bot needs to type (merchant sees it live)
+    // Tab is already parked on this order's URL — just bring it to front + reload
+    const sPage = orderTabs[order.orderNumber] || page;
     const _gotoOrder = async () => {
-      await page.goto(
-        `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
-        { waitUntil: 'domcontentloaded', timeout: 15000 }
-      ).catch(() => {});
-      await new Promise(r => setTimeout(r, 2000));
+      try { await sPage.bringToFront(); } catch (_) {}
+      try {
+        await sPage.reload({ waitUntil: 'domcontentloaded', timeout: 12000 });
+      } catch (_) {}
+      await new Promise(r => setTimeout(r, 1500));
     };
 
     // Cleanup all state for a finished/cancelled order
     const _cleanupSellOrder = () => {
+      closeOrderTab(order.orderNumber);
       delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
       orderReminderSent.delete(order.orderNumber);
       delete orderLastBotReplyAt[order.orderNumber];
@@ -3553,7 +3604,7 @@ async function idleScan(page) {
       if (_cvRes.received) {
         // Full payment confirmed via Choice Bank
         console.log(`[SparkP2P] Choice Bank confirmed KES ${_cvPaid} -- releasing`);
-        await sendBinanceChatMessage(page,
+        await sendBinanceChatMessage(sPage,
           `Your payment of KES ${_orderAmount.toLocaleString()} has been confirmed via our banking system. Releasing your crypto now -- thank you!`
         );
         await new Promise(r => setTimeout(r, 800));
@@ -3590,7 +3641,7 @@ async function idleScan(page) {
           if (_rlRes.ok === true) {
             console.log(`[SparkP2P] EP-20 release success for ${order.orderNumber}`);
           } else {
-            await releaseWithVision(page, order.orderNumber, { preChatCodes: { mpesaCodes: [], bankRefs: [] } }, { skipNavigation: true });
+            await releaseWithVision(sPage, order.orderNumber, { preChatCodes: { mpesaCodes: [], bankRefs: [] } }, { skipNavigation: true });
           }
         }
         activeOrderNumber = null; activeOrderFiatAmount = 0;
@@ -3600,7 +3651,7 @@ async function idleScan(page) {
         // Partial payment -- send deficit message (deduplicated)
         const _deficit = Math.round((_orderAmount - _cvPaid) * 100) / 100;
         if (lastSellDeficitMsg[order.orderNumber] !== _deficit) {
-          await sendBinanceChatMessage(page,
+          await sendBinanceChatMessage(sPage,
             `We have received KES ${_cvPaid.toLocaleString()} of the required KES ${_orderAmount.toLocaleString()}. ` +
             `Please send the remaining KES ${_deficit.toLocaleString()} to complete your transaction. Thank you!`
           );
@@ -3610,7 +3661,7 @@ async function idleScan(page) {
         // No payment yet -- send wait message once then stay silent
         const _awaitKey = order.orderNumber + '_awaiting_choice_confirm';
         if (!codeFallbackAskedOrders.has(_awaitKey)) {
-          await sendBinanceChatMessage(page,
+          await sendBinanceChatMessage(sPage,
             `Thank you! We are verifying your payment through our banking system. ` +
             `Your crypto will be released automatically as soon as the payment is confirmed.`
           );
@@ -3634,7 +3685,7 @@ async function idleScan(page) {
             `with our banking system, we are unable to complete this transaction at this time. To avoid ` +
             `any delay for you, we kindly request that you cancel this order so that you may trade with ` +
             `another merchant. We deeply regret this inconvenience and truly appreciate your understanding. Thank you.`;
-          await sendBinanceChatMessage(page, rejMsg).catch(() => {});
+          await sendBinanceChatMessage(sPage, rejMsg).catch(() => {});
           sellRejectionMsgSent.add(order.orderNumber);
           sendBotLog('info', `Sell order ${order.orderNumber} rejected -- excuse message sent, awaiting buyer cancellation`);
         } else {
@@ -3739,7 +3790,7 @@ async function idleScan(page) {
           await _gotoOrder();
           if (pauseNavigation) break;
           for (let i = 0; i < _payMsgs.length; i++) {
-            await sendBinanceChatMessage(page, _payMsgs[i]);
+            await sendBinanceChatMessage(sPage, _payMsgs[i]);
             if (i < _payMsgs.length - 1) await new Promise(r => setTimeout(r, 1000 + Math.random() * 800));
           }
           sellPayInstructSentOrders.add(order.orderNumber);
@@ -3764,7 +3815,7 @@ async function idleScan(page) {
           if (lastSellDeficitMsg[order.orderNumber] !== _deficit) {
             await _gotoOrder();
             if (!pauseNavigation) {
-              await sendBinanceChatMessage(page,
+              await sendBinanceChatMessage(sPage,
                 `Thank you! We have received KES ${_cbPaid.toLocaleString()} so far. ` +
                 `Please send the remaining KES ${_deficit.toLocaleString()} to the same paybill to complete your transaction.`
               );
@@ -3793,36 +3844,35 @@ async function idleScan(page) {
     if (pauseNavigation) break;
     console.log(`[SparkP2P] Checking buy order ${order.orderNumber}`);
 
-    // Only navigate to order page if not already there — keeps the bot parked on the active order.
-    const targetOrderUrl = `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`;
-    const currentUrl = page.url();
-    if (!currentUrl.includes(order.orderNumber)) {
-      await page.goto(targetOrderUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-      await new Promise(r => setTimeout(r, 3000));
-    } else {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
-      await new Promise(r => setTimeout(r, 1500));
-    }
-    if (pauseNavigation) break;
+    // Tab is already parked on this order's URL — bring to front and reload (much faster than goto)
+    const oPage = orderTabs[order.orderNumber] || page;
+    try { await oPage.bringToFront(); } catch (_) {}
+    await oPage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(async () => {
+      await oPage.goto(
+        `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+        { waitUntil: 'domcontentloaded', timeout: 15000 }
+      ).catch(() => {});
+    });
+    await new Promise(r => setTimeout(r, 1500));
 
-    await dismissBinanceModals(page);
-    await takeScreenshot(`scan_buy_${order.orderNumber}`, page);
+    await dismissBinanceModals(oPage);
+    await takeScreenshot(`scan_buy_${order.orderNumber}`, oPage);
 
     // Vision primary, DOM fallback
     // DOM-first: free, instant. Vision only when DOM returns 'unknown'.
-    let buyScreen = await detectOrderState(page);
+    let buyScreen = await detectOrderState(oPage);
     let buyVisionInfo = null;
     let buyUsedVision = false;
     if (buyScreen === 'unknown' && anthropicApiKey) {
-      buyVisionInfo = await analyzePageWithVision(page);
+      buyVisionInfo = await analyzePageWithVision(oPage);
       buyScreen = buyVisionInfo?.screen || 'unknown';
       buyUsedVision = true;
     }
     if (buyScreen === 'unknown') {
       await new Promise(r => setTimeout(r, 2000));
-      buyScreen = await detectOrderState(page);
+      buyScreen = await detectOrderState(oPage);
       if (buyScreen === 'unknown' && anthropicApiKey) {
-        buyVisionInfo = await analyzePageWithVision(page);
+        buyVisionInfo = await analyzePageWithVision(oPage);
         buyScreen = buyVisionInfo?.screen || 'unknown';
         buyUsedVision = true;
       }
@@ -3830,7 +3880,7 @@ async function idleScan(page) {
     _cycleVision += buyUsedVision ? 1 : 0;
     _cycleDom   += buyUsedVision ? 0 : 1;
     console.log(`[SparkP2P] Buy order ${order.orderNumber} state: ${buyScreen} (via ${buyUsedVision ? 'Vision' : 'DOM'})`);
-    const buyText = await page.evaluate(() => document.body.innerText).catch(() => '');
+    const buyText = await oPage.evaluate(() => document.body.innerText).catch(() => '');
     const buyLower = buyText.toLowerCase();
 
     // â"€â"€ Seller released crypto â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -3864,6 +3914,7 @@ async function idleScan(page) {
       buyGreetingSentOrders.delete(orderNum);
       buyPostPaymentMsgSentOrders.delete(orderNum);
       removePaidOrder(orderNum);
+      closeOrderTab(orderNum);
       if (activeBuyOrderNumber === orderNum) activeBuyOrderNumber = null;
       stats.actions++;
 
@@ -3880,7 +3931,7 @@ async function idleScan(page) {
       const details = buyOrderDetailsMap[orderNum] || {};
       const minsWaited = Math.floor((Date.now() - buyPaymentSentAt[orderNum]) / 60000);
       console.log(`[SparkP2P] ðŸš¨ Buy order ${orderNum} â€" dispute/expired after ${minsWaited}m â€" pausing ad & notifying trader`);
-      await pauseBuyAdAndNotify(page, orderNum, buyOrderDetailsMap[orderNum]);
+      await pauseBuyAdAndNotify(oPage, orderNum, buyOrderDetailsMap[orderNum]);
       await takeScreenshot(`paused ad: buy order ${orderNum}`);
       delete buyPaymentSentAt[orderNum];
       buyReminderSentOrders.delete(orderNum);
@@ -3906,6 +3957,7 @@ async function idleScan(page) {
       delete buyPaymentSentAt[order.orderNumber];
       buyReminderSentOrders.delete(order.orderNumber);
       if (activeBuyOrderNumber === order.orderNumber) activeBuyOrderNumber = null;
+      closeOrderTab(order.orderNumber);
 
     // â"€â"€ We already paid â€" monitoring for seller release â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     } else if (buyPaymentSentAt[order.orderNumber]) {
@@ -3914,24 +3966,24 @@ async function idleScan(page) {
 
       if (minsWaiting >= 15) {
         console.log(`[SparkP2P] ðŸš¨ Buy order ${order.orderNumber} â€" ${minsWaiting} min no release â€" pausing buy ad & notifying trader`);
-        await sendBinanceChatMessage(page,
+        await sendBinanceChatMessage(oPage,
           `Hi ${details.sellerName ? details.sellerName.split(' ')[0] : 'there'}, I sent KSh ${(details.amount || 0).toLocaleString()} ${minsWaiting} minutes ago and the crypto has not been released. I have notified the Binance support team. Please release the crypto at the earliest to avoid a formal dispute. Thank you.`
         );
         await new Promise(r => setTimeout(r, 1500));
-        await pauseBuyAdAndNotify(page, order.orderNumber, details);
+        await pauseBuyAdAndNotify(oPage, order.orderNumber, details);
         await takeScreenshot(`15min pause buy: ${order.orderNumber}`);
         delete buyPaymentSentAt[order.orderNumber];
         buyReminderSentOrders.delete(order.orderNumber);
         if (activeBuyOrderNumber === order.orderNumber) activeBuyOrderNumber = null;
       } else if (minsWaiting >= 10 && !buyReminderSentOrders.has(order.orderNumber)) {
         console.log(`[SparkP2P] â° Buy order ${order.orderNumber} â€" 10 min reminder to seller`);
-        await sendBinanceChatMessage(page,
+        await sendBinanceChatMessage(oPage,
           `Hi, just a friendly reminder — I sent the payment ${minsWaiting} minutes ago. Could you please release the crypto when you get a chance? Thank you! 😊`
         );
         buyReminderSentOrders.add(order.orderNumber);; _saveOrderFlag(order.orderNumber, 'reminderSent', true);
       }
       if (details.sellerName && anthropicApiKey) {
-        await respondToBuyOrderChat(page, details);
+        await respondToBuyOrderChat(oPage, details);
       }
       console.log(`[SparkP2P] Buy order ${order.orderNumber} â€" waiting ${minsWaiting}m for release (${buyScreen})`);
 
@@ -3994,7 +4046,7 @@ async function idleScan(page) {
 
       if (!orderFirstSeenAt[order.orderNumber] && ddEnabled) {
         const sellerNick = order.counterparty || '';
-        sellerStats = await fetchCounterpartyStats(page, order.orderNumber, 'seller');
+        sellerStats = await fetchCounterpartyStats(oPage, order.orderNumber, 'seller');
         const sellerReturning = await checkReturningBuyer(sellerNick);
 
         if (sellerReturning) {
@@ -4010,7 +4062,7 @@ async function idleScan(page) {
 
           if (failReason) {
             console.log(`[SparkP2P] DD: seller ${sellerNick} FAILED -- ${failReason}`);
-            await cancelOrderOnBinance(page, order.orderNumber, failReason);
+            await cancelOrderOnBinance(oPage, order.orderNumber, failReason);
             continue;
           }
           console.log(`[SparkP2P] DD: seller ${sellerNick} passed (30d: ${sellerStats.trades_30d ?? 'n/a'}, all: ${sellerStats.trades_all ?? 'n/a'})`);
@@ -4032,7 +4084,7 @@ async function idleScan(page) {
       }
       if (!paymentDetails) {
       try {
-        paymentDetails = await page.evaluate(() => {
+        paymentDetails = await oPage.evaluate(() => {
           const getText = (labelRegex) => {
             const els = Array.from(document.querySelectorAll('div, span, td, p, th, li'));
             for (const el of els) {
@@ -4116,7 +4168,7 @@ async function idleScan(page) {
       if (!paymentDetails && anthropicApiKey && !paymentDetails?.account_number && (!paymentDetails?.phone || !paymentDetails?.amount)) {
         console.log('[SparkP2P] L1 DOM extraction incomplete — falling back to Vision OCR');
         const domPhone = paymentDetails?.phone || null; // preserve DOM phone if Vision overwrites
-        const paySS = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+        const paySS = await oPage.screenshot({ encoding: 'base64' }).catch(() => null);
         if (paySS) {
           const extractRes = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
@@ -4170,7 +4222,7 @@ Method selection rules:
         console.log(`[SparkP2P] Buy order ${order.orderNumber} — payment details incomplete, retrying DOM in 4s`);
         await new Promise(r => setTimeout(r, 4000));
         try {
-          const retryText = await page.evaluate(() => document.body.innerText).catch(() => '');
+          const retryText = await oPage.evaluate(() => document.body.innerText).catch(() => '');
           const rPhone = (retryText.match(/\b(07\d{8}|254\d{9}|\+254\d{9})\b/) || [])[1] || null;
           const rAmtM = retryText.match(/KSh\s*([\d,]+\.?\d*)/);
           const rAmt = rAmtM ? parseFloat(rAmtM[1].replace(/,/g, '')) : null;
@@ -4340,7 +4392,7 @@ Method selection rules:
             } else {
               greetMsg = `Hello ${firstName}, I will be sending KES ${amt} directly to your ${paymentDetails.bank_name || 'bank'} account (${paymentDetails.account_number || ''}) shortly. Thank you! 🙏`;
             }
-            await sendBinanceChatMessage(page, greetMsg);
+            await sendBinanceChatMessage(oPage, greetMsg);
             console.log(`[SparkP2P] ðŸ'‹ Greeting sent for buy order ${order.orderNumber} (after Telegram approval)`);
             await new Promise(r => setTimeout(r, 800));
           }
@@ -4404,11 +4456,11 @@ Method selection rules:
       buyReminderSentOrders.delete(order.orderNumber);
 
       // Navigate back to Binance order page
-      await page.bringToFront();
-      await page.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+      await oPage.bringToFront();
+      await oPage.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
         { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
       // Wait for the chat panel to render (Binance P2P uses contenteditable div, not textarea)
-      await page.waitForFunction(
+      await oPage.waitForFunction(
         () => !!document.querySelector('[placeholder*="message" i], [placeholder*="Enter message" i], textarea, div[contenteditable="true"]'),
         { timeout: 15000 }
       ).catch(() => {});
@@ -4425,7 +4477,7 @@ Method selection rules:
           const refPart = imResult.referenceId ? ` M-Pesa Ref: ${imResult.referenceId}.` : '';
           postPayMsg = `Hello ${firstName}, I have sent KSh ${amt.toLocaleString()} to your M-Pesa (${paymentDetails.phone}) at ${payTime}.${refPart} Please check and release the crypto. Thank you! 🙏`;
         }
-        const postMsgSent = await sendBinanceChatMessage(page, postPayMsg);
+        const postMsgSent = await sendBinanceChatMessage(oPage, postPayMsg);
         if (postMsgSent) { buyPostPaymentMsgSentOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'postPaymentMsgSent', true); }
         else console.log(`[SparkP2P] ⚠️ Post-payment message not sent for ${order.orderNumber} — will retry next cycle`);
       }
@@ -4452,10 +4504,10 @@ Method selection rules:
       }
       // Send receipt screenshot in chat if we have one
       if (imResult.screenshot) {
-        await sendImageInBinanceChat(page, imResult.screenshot).catch(() => {});
+        await sendImageInBinanceChat(oPage, imResult.screenshot).catch(() => {});
       }
 
-      await takeScreenshot(`buy_paid_${order.orderNumber}`, page);
+      await takeScreenshot(`buy_paid_${order.orderNumber}`, oPage);
       await fetch(`${API_BASE}/ext/report-payment-sent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -8854,7 +8906,7 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, bankName, 
   // OTP required — read the emailed 4-digit code via IMAP then confirm
   if (data.status === 'otp_required') {
     console.log('[SparkP2P] Choice Bank OTP required for transfer applicationId=' + data.application_id);
-    const otp = await readChoiceOTPviaIMAP(sentAt);
+    const otp = await readChoiceOTPviaGmail(sentAt);
     if (!otp) throw new Error('Choice Bank OTP email did not arrive within 8 minutes. Transfer cancelled.');
 
     const confirmRes = await fetch(API_BASE + '/ext/choice-confirm-otp', {
