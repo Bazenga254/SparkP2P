@@ -4262,10 +4262,10 @@ Method selection rules:
 
         if (!imNameMismatchAborted) {
           // ── Amount sanity check — cross-validate against the authoritative order total ──
-          // paymentDetails.amount comes from the order detail page (API or DOM scrape).
-          // order.totalPrice comes independently from the Binance order list API.
-          // If they disagree by more than 1%, something was mis-extracted — abort rather
-          // than risk sending the wrong amount via Choice Bank (no refund mechanism).
+          // Skip if Telegram approval was already requested — the order was validated before
+          // approval was sent; re-checking with a potentially stale cache on subsequent polls
+          // would cause spurious aborts on orders that are legitimately waiting for approval.
+          if (!buyApprovalRequestedOrders.has(order.orderNumber) && !telegramApprovedOrders.has(order.orderNumber)) {
           const _expectedKes = parseFloat(order.totalPrice) || 0;
           const _extractedKes = parseFloat(paymentDetails.amount) || 0;
           if (_expectedKes > 0 && _extractedKes > 0) {
@@ -4278,6 +4278,7 @@ Method selection rules:
               continue;
             }
           }
+          } // end amount check guard
 
           // ── Step 1: Telegram approval — fires IMMEDIATELY after payment details extracted ──
           // Seller stats (already fetched for DD check) are included so the trader sees the
