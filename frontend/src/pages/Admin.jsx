@@ -4670,20 +4670,33 @@ export default function Admin() {
           )}
 
           {activeTab === 'expenses' && (
-            <div>
-              {/* Page header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+            <div className="fin-page">
+
+              {/* ── Page header ── */}
+              <div className="fin-page-head">
                 <div>
-                  <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>Financials</h2>
-                  <p style={{ color: '#6b7280', fontSize: 13, margin: 0 }}>Revenue from subscriptions and platform expenses</p>
+                  <h1>Financials</h1>
+                  <p>Revenue from subscriptions and platform expenses</p>
                 </div>
-                <button onClick={() => { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); loadRevenueBreakdown(revPeriod, revPlan, 1); }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 13 }}>
-                  <RefreshCw size={14} /> Refresh
-                </button>
+                <div className="fin-head-actions">
+                  <div className="fin-segment">
+                    {[['today','Today'],['week','This week'],['month','This month'],['all','All time']].map(([val, label]) => (
+                      <button key={val} className={revPeriod === val ? 'on' : ''}
+                        onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1); }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="fin-btn" onClick={() => {
+                    adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {});
+                    loadRevenueBreakdown(revPeriod, revPlan, 1);
+                  }}>
+                    <RefreshCw size={14} /> Refresh
+                  </button>
+                </div>
               </div>
 
-              {/* Profit Summary — always visible */}
+              {/* ── KPI cards ── */}
               {(() => {
                 const subRevenue = revBreakdown?.summary?.total ?? 0;
                 const outboundRevenue = obBreakdown?.total?.markup ?? 0;
@@ -4692,362 +4705,380 @@ export default function Admin() {
                 const netProfit = totalRevenue - totalExpenses;
                 const isProfit = netProfit >= 0;
                 return (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-                    <div style={{ padding: '16px 20px', background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 12 }}>
-                      <div style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>Total Revenue</div>
-                      <div style={{ color: '#10b981', fontWeight: 800, fontSize: 24 }}>{fmtKES(totalRevenue)}</div>
-                      <div style={{ color: '#4b5563', fontSize: 11, marginTop: 4 }}>Subscriptions {fmtKES(subRevenue)} + outbound fees {fmtKES(outboundRevenue)}</div>
+                  <div className="fin-kpi-row">
+                    <div className="fin-kpi fin-kpi-rev">
+                      <div className="fin-k-label">Total revenue</div>
+                      <div className="fin-k-value">{fmtKES(totalRevenue)}</div>
+                      <div className="fin-k-note">Subscriptions {fmtKES(subRevenue)} + outbound fees {fmtKES(outboundRevenue)}</div>
                     </div>
-                    <div style={{ padding: '16px 20px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 12 }}>
-                      <div style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>Total Expenses</div>
-                      <div style={{ color: '#ef4444', fontWeight: 800, fontSize: 24 }}>{fmtKES(totalExpenses)}</div>
-                      <div style={{ color: '#4b5563', fontSize: 11, marginTop: 4 }}>All logged expenses</div>
+                    <div className="fin-kpi fin-kpi-exp">
+                      <div className="fin-k-label">Total expenses</div>
+                      <div className="fin-k-value">{fmtKES(totalExpenses)}</div>
+                      <div className="fin-k-note">All logged expenses</div>
                     </div>
-                    <div style={{ padding: '16px 20px', background: isProfit ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)', border: `1px solid ${isProfit ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 12 }}>
-                      <div style={{ color: '#6b7280', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>Net Profit</div>
-                      <div style={{ color: isProfit ? '#10b981' : '#ef4444', fontWeight: 800, fontSize: 24 }}>{isProfit ? '+' : '-'}{fmtKES(Math.abs(netProfit))}</div>
-                      <div style={{ color: '#4b5563', fontSize: 11, marginTop: 4 }}>Revenue minus expenses</div>
+                    <div className={`fin-kpi ${isProfit ? 'fin-kpi-net' : 'fin-kpi-exp'}`}>
+                      <div className="fin-k-label">Net profit</div>
+                      <div className="fin-k-value">{isProfit ? '+' : '-'}{fmtKES(Math.abs(netProfit))}</div>
+                      <div className="fin-k-note">Revenue minus expenses</div>
                     </div>
                   </div>
                 );
               })()}
 
-              {/* Sub-tab switcher */}
-              <div style={{ display: 'flex', gap: 0, background: '#111827', borderRadius: 10, padding: 4, border: '1px solid #1f2937', marginBottom: 20, width: 'fit-content' }}>
-                {[['revenue','Revenue'], ['expenses','Expenses']].map(([v, l]) => (
-                  <button key={v} onClick={() => setExpSubView(v)}
-                    style={{ padding: '7px 24px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
-                      background: expSubView === v ? '#f59e0b' : 'transparent',
-                      color: expSubView === v ? '#000' : '#6b7280' }}>
-                    {l}
-                  </button>
-                ))}
-              </div>
-
-              {/* ── Revenue sub-view ── */}
-              {expSubView === 'revenue' && (
-                <>
-              {/* Period + Plan filters */}
-                <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                    {[['today','Today'], ['week','This Week'], ['month','This Month'], ['all','All Time']].map(([val, label]) => (
-                      <button key={val} onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1); }}
-                        style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                          background: revPeriod === val ? '#f59e0b' : 'transparent', color: revPeriod === val ? '#000' : '#9ca3af' }}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                    {[['all','All Plans'], ['starter','Starter'], ['pro','Starter Pro'], ['pro_max','Starter Pro Max']].map(([val, label]) => (
-                      <button key={val} onClick={() => { setRevPlan(val); setRevPage(1); loadRevenueBreakdown(revPeriod, val, 1); }}
-                        style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                          background: revPlan === val ? '#10b981' : 'transparent', color: revPlan === val ? '#000' : '#9ca3af' }}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Summary: Total Revenue bar + 4 plan cards */}
-                <div className="adm-card" style={{ padding: '14px 20px', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 4 }}>Total Subscription Revenue (Paid Only)</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: '#10b981' }}>{fmtKES(revBreakdown?.summary?.total ?? 0)}</div>
-                  </div>
-                  <div style={{ fontSize: 12, color: '#6b7280' }}>Excludes admin-granted plans</div>
-                </div>
-                {/* Outbound transaction-fee revenue (our markup, remitted monthly by Choice Bank) */}
-                <div className="adm-card" style={{ padding: '14px 20px', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderLeft: '3px solid #3b82f6' }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 4 }}>Outbound Fee Revenue (Our Markup)</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: '#3b82f6' }}>{fmtKES(obBreakdown?.total?.markup ?? 0)}</div>
-                  </div>
-                  <div style={{ fontSize: 12, color: '#6b7280', textAlign: 'right' }}>
-                    Withheld by Choice Bank, remitted monthly<br/>
-                    Gross fees charged (CB+markup): {fmtKES(obBreakdown?.total?.total_fee ?? 0)}
-                  </div>
-                </div>
-
-                {/* Per-product outbound revenue breakdown + Choice Bank invoice */}
-                <div className="adm-card" style={{ marginBottom: 16, padding: 0, overflow: 'hidden' }}>
-                  <div className="adm-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h3>Revenue by Product</h3>
-                    <span style={{ fontSize: 11, color: '#6b7280' }}>{obBreakdown?.label || ''}</span>
-                  </div>
-                  <table className="adm-table" style={{ width: '100%', fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ color: '#6b7280', textAlign: 'left' }}>
-                        <th style={{ padding: '8px 14px' }}>Product / Channel</th>
-                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Transactions</th>
-                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Volume</th>
-                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Choice Bank charges</th>
-                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Our markup (Spark AI)</th>
-                        <th style={{ padding: '8px 14px', textAlign: 'right' }}>Total charged</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(obBreakdown?.products || []).map(p => (
-                        <tr key={p.key} style={{ borderTop: '1px solid #1f2937', opacity: p.count ? 1 : 0.45 }}>
-                          <td style={{ padding: '9px 14px', color: '#e5e7eb', fontWeight: 600 }}>{p.label}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{p.count.toLocaleString()}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{fmtKES(p.volume)}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#9ca3af' }}>{fmtKES(p.cb_fee)}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#3b82f6', fontWeight: 700 }}>{fmtKES(p.markup)}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', color: '#10b981', fontWeight: 700 }}>{fmtKES(p.total_fee)}</td>
-                        </tr>
-                      ))}
-                      <tr style={{ borderTop: '2px solid #2a3142', background: 'rgba(59,130,246,0.06)' }}>
-                        <td style={{ padding: '10px 14px', fontWeight: 800, color: '#fff' }}>Total</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{(obBreakdown?.total?.count ?? 0).toLocaleString()}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{fmtKES(obBreakdown?.total?.volume ?? 0)}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e5e7eb' }}>{fmtKES(obBreakdown?.total?.cb_fee ?? 0)}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#3b82f6', fontWeight: 800 }}>{fmtKES(obBreakdown?.total?.markup ?? 0)}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', color: '#10b981', fontWeight: 800 }}>{fmtKES(obBreakdown?.total?.total_fee ?? 0)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                  {/* Invoice generator */}
-                  <div style={{ padding: '12px 14px', borderTop: '1px solid #1f2937' }}>
-                    {/* Mode toggle */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                      <span style={{ fontSize: 12.5, color: '#9ca3af', fontWeight: 600 }}>📄 Generate Choice Bank invoice —</span>
-                      <div style={{ display: 'flex', background: '#0a0d14', border: '1px solid #2a3142', borderRadius: 8, overflow: 'hidden' }}>
-                        {[['month', 'By Month'], ['range', 'Date Range']].map(([val, label]) => (
-                          <button key={val} onClick={() => setInvoiceMode(val)}
-                            style={{ padding: '5px 12px', border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                              background: invoiceMode === val ? '#f59e0b' : 'transparent',
-                              color: invoiceMode === val ? '#1a1205' : '#9ca3af' }}>
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    {/* Inputs */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                      {invoiceMode === 'month' ? (
-                        <input type="month" value={invoiceMonth} onChange={e => setInvoiceMonth(e.target.value)}
-                          style={{ padding: '7px 10px', borderRadius: 8, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 13, colorScheme: 'dark' }} />
-                      ) : (
-                        <>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>From</span>
-                            <input type="date" value={invoiceStartDate} onChange={e => setInvoiceStartDate(e.target.value)}
-                              style={{ padding: '7px 10px', borderRadius: 8, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 13, colorScheme: 'dark' }} />
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>To</span>
-                            <input type="date" value={invoiceEndDate} onChange={e => setInvoiceEndDate(e.target.value)}
-                              style={{ padding: '7px 10px', borderRadius: 8, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 13, colorScheme: 'dark' }} />
-                          </div>
-                        </>
-                      )}
-                      <button onClick={handleGenerateInvoice} disabled={invoiceBusy}
-                        style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: invoiceBusy ? '#3a3f4d' : '#f59e0b', color: invoiceBusy ? '#9aa4b2' : '#1a1205', fontWeight: 800, fontSize: 13, cursor: invoiceBusy ? 'default' : 'pointer' }}>
-                        {invoiceBusy ? 'Generating…' : 'Download Invoice (PDF)'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-                  {[
-                    { key: 'starter',  label: 'Starter',         color: '#10b981', kes: 3000  },
-                    { key: 'pro',      label: 'Starter Pro',     color: '#f59e0b', kes: 5000  },
-                    { key: 'pro_max',  label: 'Starter Pro Max', color: '#8b5cf6', kes: 10000 },
-                  ].map(p => (
-                    <div key={p.key} className="adm-card" style={{ padding: '14px 16px', borderTop: `2px solid ${p.color}` }}>
-                      <div style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: 700, marginBottom: 8 }}>{p.label}</div>
-                      <div style={{ fontSize: 26, fontWeight: 800, color: p.color, lineHeight: 1 }}>{revBreakdown?.summary?.[p.key + '_count'] ?? 0}</div>
-                      <div style={{ fontSize: 10, color: '#6b7280', marginTop: 5 }}>paid subscriber{(revBreakdown?.summary?.[p.key + '_count'] ?? 0) !== 1 ? 's' : ''}</div>
-                      <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1f2937' }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: '#fff' }}>{fmtKES(revBreakdown?.summary?.[p.key] ?? 0)}</div>
-                        <div style={{ fontSize: 10, color: '#4b5563', marginTop: 2 }}>{fmtKES(p.kes)}/mo each</div>
-                      </div>
-                    </div>
+              {/* ── Filter bar ── */}
+              <div className="fin-filters">
+                <div className="fin-segment">
+                  {[['revenue','Revenue'],['expenses','Expenses']].map(([val, label]) => (
+                    <button key={val} className={expSubView === val ? 'on' : ''} onClick={() => setExpSubView(val)}>{label}</button>
                   ))}
                 </div>
+                <select className="fin-select" value={revPlan}
+                  onChange={e => { setRevPlan(e.target.value); setRevPage(1); loadRevenueBreakdown(revPeriod, e.target.value, 1); }}>
+                  {[['all','All plans'],['starter','Starter'],['pro','Starter Pro'],['pro_max','Starter Pro Max']].map(([val, label]) => (
+                    <option key={val} value={val}>{label}</option>
+                  ))}
+                </select>
+              </div>
 
-                {/* Subscription payments table */}
-                <div className="adm-card" style={{ marginBottom: 16 }}>
-                  <div className="adm-card-header">
-                    <h3>Subscription Payments</h3>
-                    <span className="adm-card-count">{revBreakdown?.total ?? 0} total</span>
-                  </div>
-                  {revLoading ? (
-                    <p className="adm-empty">Loading...</p>
-                  ) : revBreakdown?.transactions?.length > 0 ? (
-                    <>
-                      <div className="adm-table-wrap">
-                        <table className="adm-table">
+              {/* ══ REVENUE VIEW ══ */}
+              {expSubView === 'revenue' && (
+                <>
+                  {/* Revenue composition */}
+                  <section className="fin-section">
+                    <div className="fin-section-head">
+                      <div>
+                        <h2>Revenue composition</h2>
+                        <div className="fin-sub">Where the period's revenue came from</div>
+                      </div>
+                    </div>
+                    <div className="fin-card fin-composition">
+                      <div className="fin-comp-cell fin-comp-sub">
+                        <div className="fin-c-label">Subscription revenue · paid only</div>
+                        <div className="fin-c-value">{fmtKES(revBreakdown?.summary?.total ?? 0)}</div>
+                        <div className="fin-c-note">Excludes admin-granted plans</div>
+                      </div>
+                      <div className="fin-comp-cell fin-comp-fee">
+                        <div className="fin-c-label">Outbound fee revenue · our markup</div>
+                        <div className="fin-c-value">{fmtKES(obBreakdown?.total?.markup ?? 0)}</div>
+                        <div className="fin-c-note">Withheld by Choice Bank, remitted monthly.<br/>Gross fees charged (CB + markup): {fmtKES(obBreakdown?.total?.total_fee ?? 0)}</div>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Revenue by product */}
+                  <section className="fin-section">
+                    <div className="fin-section-head">
+                      <div>
+                        <h2>Revenue by product</h2>
+                        <div className="fin-sub">{obBreakdown?.label || 'Today'} · per payment channel</div>
+                      </div>
+                      <span className="fin-badge">{(obBreakdown?.total?.count ?? 0).toLocaleString()} transactions</span>
+                    </div>
+                    <div className="fin-card">
+                      <table className="fin-table">
+                        <thead>
+                          <tr>
+                            <th>Product / channel</th>
+                            <th className="r">Transactions</th>
+                            <th className="r">Volume</th>
+                            <th className="r">Choice Bank charges</th>
+                            <th className="r">Our markup (Spark AI)</th>
+                            <th className="r">Total charged</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(obBreakdown?.products || []).map(p => (
+                            <tr key={p.key} style={{ opacity: p.count ? 1 : 0.4 }}>
+                              <td className="name">{p.label}</td>
+                              <td className="r num">{p.count.toLocaleString()}</td>
+                              <td className="r num">{fmtKES(p.volume)}</td>
+                              <td className="r num">{fmtKES(p.cb_fee)}</td>
+                              <td className="r num fin-blue">{fmtKES(p.markup)}</td>
+                              <td className="r num fin-green">{fmtKES(p.total_fee)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td>Total</td>
+                            <td className="r num">{(obBreakdown?.total?.count ?? 0).toLocaleString()}</td>
+                            <td className="r num">{fmtKES(obBreakdown?.total?.volume ?? 0)}</td>
+                            <td className="r num">{fmtKES(obBreakdown?.total?.cb_fee ?? 0)}</td>
+                            <td className="r num fin-blue">{fmtKES(obBreakdown?.total?.markup ?? 0)}</td>
+                            <td className="r num fin-green">{fmtKES(obBreakdown?.total?.total_fee ?? 0)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                      {/* Invoice generator */}
+                      <div className="fin-table-toolbar">
+                        <div className="fin-tt-label">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ width: 15, height: 15, strokeWidth: 1.9 }}><path d="M14 3v5h5"/><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+                          Generate Choice Bank invoice
+                        </div>
+                        <div className="fin-tt-right">
+                          <div className="fin-segment" style={{ fontSize: 12 }}>
+                            {[['month','By Month'],['range','Date Range']].map(([val, label]) => (
+                              <button key={val} className={invoiceMode === val ? 'on' : ''} onClick={() => setInvoiceMode(val)}>{label}</button>
+                            ))}
+                          </div>
+                          {invoiceMode === 'month' ? (
+                            <input className="fin-month-input" type="month" value={invoiceMonth} onChange={e => setInvoiceMonth(e.target.value)} style={{ colorScheme: 'dark' }} />
+                          ) : (
+                            <>
+                              <span className="fin-range-lbl">From</span>
+                              <input className="fin-month-input" type="date" value={invoiceStartDate} onChange={e => setInvoiceStartDate(e.target.value)} style={{ colorScheme: 'dark' }} />
+                              <span className="fin-range-lbl">To</span>
+                              <input className="fin-month-input" type="date" value={invoiceEndDate} onChange={e => setInvoiceEndDate(e.target.value)} style={{ colorScheme: 'dark' }} />
+                            </>
+                          )}
+                          <button className="fin-btn fin-btn-primary" onClick={handleGenerateInvoice} disabled={invoiceBusy}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ width: 14, height: 14, strokeWidth: 2 }}><path d="M12 3v12"/><path d="M8 11l4 4 4-4"/><path d="M5 21h14"/></svg>
+                            {invoiceBusy ? 'Generating…' : 'Download invoice (PDF)'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Subscription plans */}
+                  <section className="fin-section">
+                    <div className="fin-section-head">
+                      <div>
+                        <h2>Subscription plans</h2>
+                        <div className="fin-sub">Paid subscribers and revenue per tier</div>
+                      </div>
+                    </div>
+                    <div className="fin-plans">
+                      {[
+                        { key: 'starter',  label: 'Starter',         cls: 'fin-p1', kes: 3000  },
+                        { key: 'pro',      label: 'Starter Pro',     cls: 'fin-p2', kes: 5000  },
+                        { key: 'pro_max',  label: 'Starter Pro Max', cls: 'fin-p3', kes: 10000 },
+                      ].map(p => {
+                        const cnt = revBreakdown?.summary?.[p.key + '_count'] ?? 0;
+                        return (
+                          <div key={p.key} className={`fin-plan ${p.cls}`}>
+                            <div className="fin-p-name">{p.label}</div>
+                            <div className="fin-p-subs"><b>{cnt}</b><span>paid subscriber{cnt !== 1 ? 's' : ''}</span></div>
+                            <div className="fin-p-rev">
+                              <div className="fin-p-rev-amt">{fmtKES(revBreakdown?.summary?.[p.key] ?? 0)}</div>
+                              <div className="fin-p-rev-per">{fmtKES(p.kes)} / mo each</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+
+                  {/* Subscription payments */}
+                  <section className="fin-section">
+                    <div className="fin-section-head">
+                      <div>
+                        <h2>Subscription payments</h2>
+                        <div className="fin-sub">Payments received this period</div>
+                      </div>
+                      <span className="fin-badge">{revBreakdown?.total ?? 0} total</span>
+                    </div>
+                    <div className="fin-card">
+                      {revLoading ? (
+                        <div className="fin-empty"><div className="fin-e-sub">Loading…</div></div>
+                      ) : revBreakdown?.transactions?.length > 0 ? (
+                        <>
+                          <table className="fin-sub-table">
+                            <thead>
+                              <tr>
+                                <th>Date</th>
+                                <th>Trader</th>
+                                <th>Plan</th>
+                                <th>M-Pesa TX</th>
+                                <th>Expires</th>
+                                <th className="r">Amount</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {revBreakdown.transactions.map(tx => (
+                                <tr key={tx.id}>
+                                  <td style={{ fontSize: 12, color: '#5b6472', whiteSpace: 'nowrap' }}>{fmtDateEAT(tx.started_at)}</td>
+                                  <td>
+                                    <div style={{ fontWeight: 600, fontSize: 13 }}>{tx.trader_name}</div>
+                                    <div style={{ fontSize: 11, color: '#5b6472' }}>{tx.trader_phone}</div>
+                                  </td>
+                                  <td><span className={`fin-plan-badge ${tx.plan}`}>{tx.plan}</span></td>
+                                  <td style={{ fontSize: 11, fontFamily: 'monospace', color: '#8b95a5' }}>{tx.mpesa_transaction_id || '—'}</td>
+                                  <td style={{ fontSize: 12, color: '#5b6472' }}>{tx.expires_at ? fmtDateEAT(tx.expires_at) : '—'}</td>
+                                  <td className="r fin-green">+{fmtKESFee(tx.amount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          {revBreakdown.pages > 1 && (
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 24px', borderTop: '1px solid #182131' }}>
+                              <button className="fin-btn" onClick={() => { setRevPage(p => p - 1); loadRevenueBreakdown(revPeriod, revPlan, revPage - 1); }} disabled={revPage <= 1}>Prev</button>
+                              <span style={{ fontSize: 13, color: '#5b6472' }}>Page {revPage} of {revBreakdown.pages} · {revBreakdown.total} payments</span>
+                              <button className="fin-btn" onClick={() => { setRevPage(p => p + 1); loadRevenueBreakdown(revPeriod, revPlan, revPage + 1); }} disabled={revPage >= revBreakdown.pages}>Next</button>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="fin-empty">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+                          <div className="fin-e-title">No subscription payments yet</div>
+                          <div className="fin-e-sub">Payments for the selected period will appear here.</div>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+
+                  {/* Monthly volume */}
+                  <section className="fin-section">
+                    <div className="fin-section-head">
+                      <div>
+                        <h2>Monthly volume</h2>
+                        <div className="fin-sub">Trading volume and fees earned by month</div>
+                      </div>
+                    </div>
+                    <div className="fin-card">
+                      {analytics?.monthly_volumes?.length > 0 ? (
+                        <table className="fin-table">
                           <thead>
                             <tr>
-                              <th>Date</th>
-                              <th>Trader</th>
-                              <th>Plan</th>
-                              <th>M-Pesa TX</th>
-                              <th>Expires</th>
-                              <th style={{ textAlign: 'right' }}>Amount</th>
+                              <th>Month</th>
+                              <th className="r">Buy volume</th>
+                              <th className="r">Sell volume</th>
+                              <th className="r">Total volume</th>
+                              <th className="r">Trades</th>
+                              <th className="r">Fees earned</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {revBreakdown.transactions.map((tx) => (
-                              <tr key={tx.id}>
-                                <td style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>{fmtDateEAT(tx.started_at)}</td>
-                                <td>
-                                  <div style={{ fontWeight: 500, fontSize: 13 }}>{tx.trader_name}</div>
-                                  <div style={{ fontSize: 11, color: '#6b7280' }}>{tx.trader_phone}</div>
-                                </td>
-                                <td>
-                                  <span style={{ padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700,
-                                    background: tx.plan === 'pro' ? 'rgba(139,92,246,0.15)' : 'rgba(245,158,11,0.15)',
-                                    color: tx.plan === 'pro' ? '#8b5cf6' : '#f59e0b', textTransform: 'uppercase' }}>
-                                    {tx.plan}
-                                  </span>
-                                </td>
-                                <td className="mono" style={{ fontSize: 11 }}>{tx.mpesa_transaction_id || '—'}</td>
-                                <td style={{ fontSize: 12, color: '#6b7280' }}>{tx.expires_at ? fmtDateEAT(tx.expires_at) : '—'}</td>
-                                <td style={{ textAlign: 'right', fontWeight: 700, color: '#10b981' }}>+{fmtKESFee(tx.amount)}</td>
+                            {[...analytics.monthly_volumes].reverse().map((m, i) => (
+                              <tr key={i}>
+                                <td className="name">{m.month}</td>
+                                <td className="r num fin-blue">{fmtKES(m.buy_volume)}</td>
+                                <td className="r num fin-green">{fmtKES(m.sell_volume)}</td>
+                                <td className="r num">{fmtKES(m.total_volume)}</td>
+                                <td className="r num">{m.trades.toLocaleString()}</td>
+                                <td className="r num fin-orange">{fmtKES(m.profit)}</td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
-                      </div>
-                      {revBreakdown.pages > 1 && (
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
-                          <button onClick={() => { setRevPage(p => p - 1); loadRevenueBreakdown(revPeriod, revPlan, revPage - 1); }} disabled={revPage <= 1}
-                            style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage <= 1 ? '#4b5563' : '#fff', cursor: revPage <= 1 ? 'default' : 'pointer', fontSize: 13 }}>Prev</button>
-                          <span style={{ fontSize: 13, color: '#6b7280' }}>Page {revPage} of {revBreakdown.pages} &middot; {revBreakdown.total} payments</span>
-                          <button onClick={() => { setRevPage(p => p + 1); loadRevenueBreakdown(revPeriod, revPlan, revPage + 1); }} disabled={revPage >= revBreakdown.pages}
-                            style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: revPage >= revBreakdown.pages ? '#4b5563' : '#fff', cursor: revPage >= revBreakdown.pages ? 'default' : 'pointer', fontSize: 13 }}>Next</button>
+                      ) : (
+                        <div className="fin-empty">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 3v18h18"/><path d="M7 16l4-4 4 4 4-6"/></svg>
+                          <div className="fin-e-title">No volume data yet</div>
+                          <div className="fin-e-sub">Monthly trading data will appear here once orders complete.</div>
                         </div>
                       )}
-                    </>
-                  ) : (
-                    <p className="adm-empty">No subscription payments for this period</p>
-                  )}
-                </div>
-
-                {/* Monthly volume breakdown */}
-                <div className="adm-card">
-                  <div className="adm-card-header"><h3>Monthly Volume</h3></div>
-                  {analytics?.monthly_volumes?.length > 0 ? (
-                    <div className="adm-table-wrap">
-                      <table className="adm-table">
-                        <thead>
-                          <tr><th>Month</th><th>Buy Volume</th><th>Sell Volume</th><th>Total Volume</th><th>Trades</th><th>Fees Earned</th></tr>
-                        </thead>
-                        <tbody>
-                          {[...analytics.monthly_volumes].reverse().map((m, i) => (
-                            <tr key={i}>
-                              <td style={{ fontWeight: 600 }}>{m.month}</td>
-                              <td style={{ color: 'var(--blue)' }}>{fmtKES(m.buy_volume)}</td>
-                              <td style={{ color: 'var(--green)' }}>{fmtKES(m.sell_volume)}</td>
-                              <td>{fmtKES(m.total_volume)}</td>
-                              <td>{m.trades}</td>
-                              <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{fmtKES(m.profit)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
                     </div>
-                  ) : (
-                    <p className="adm-empty">No revenue data yet</p>
-                  )}
-                </div>
+                  </section>
                 </>
               )}
 
-              {/* ── Expenses sub-view ── */}
+              {/* ══ EXPENSES VIEW ══ */}
               {expSubView === 'expenses' && (
-                <>
-                  {/* Add expense form */}
-                  <div className="adm-card" style={{ marginBottom: 16, padding: 20 }}>
-                    <h3 style={{ margin: '0 0 14px', color: '#fff', fontSize: 15 }}>Log New Expense</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: 10, alignItems: 'end' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Description</label>
-                        <input className="adm-input" placeholder="e.g. Server costs" value={expenseForm.description} onChange={e => setExpenseForm(f => ({ ...f, description: e.target.value }))} style={{ width: '100%' }} />
-                      </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Amount (KES)</label>
-                        <input className="adm-input" type="number" placeholder="e.g. 5000" value={expenseForm.amount} onChange={e => setExpenseForm(f => ({ ...f, amount: e.target.value }))} style={{ width: 140 }} />
-                      </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Category</label>
-                        <select className="adm-select" value={expenseForm.category} onChange={e => setExpenseForm(f => ({ ...f, category: e.target.value }))} style={{ width: 140 }}>
-                          {[['general','General'],['hosting','Hosting'],['marketing','Marketing'],['salaries','Salaries'],['software','Software'],['bank_fees','Bank Fees'],['other','Other']].map(([v,l]) => (
-                            <option key={v} value={v}>{l}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Date</label>
-                        <input className="adm-input" type="date" value={expenseForm.expense_date} onChange={e => setExpenseForm(f => ({ ...f, expense_date: e.target.value }))} style={{ width: 140 }} />
-                      </div>
+                <section className="fin-section">
+                  <div className="fin-section-head">
+                    <div>
+                      <h2>Logged expenses</h2>
+                      <div className="fin-sub">Platform costs recorded this period</div>
                     </div>
-                    <div style={{ marginTop: 12, textAlign: 'right' }}>
-                      <button className="adm-btn adm-btn-danger" disabled={expenseSubmitting} onClick={async () => {
-                        if (!expenseForm.description || !expenseForm.amount) return;
-                        setExpenseSubmitting(true);
-                        try {
-                          await adminAddExpense({ description: expenseForm.description, amount: parseFloat(expenseForm.amount), category: expenseForm.category, expense_date: expenseForm.expense_date });
-                          setExpenseForm(f => ({ ...f, description: '', amount: '' }));
-                          const r = await adminGetExpenses();
-                          setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0);
-                        } catch(err) {} finally { setExpenseSubmitting(false); }
-                      }} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        <PlusCircle size={14} /> {expenseSubmitting ? 'Adding...' : 'Add Expense'}
-                      </button>
-                    </div>
+                    <span className="fin-badge">{expenses.length} total</span>
                   </div>
-
-                  {/* Expenses table */}
-                  <div className="adm-card" style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ borderBottom: '1px solid #1f2937' }}>
-                          {['Date', 'Description', 'Category', 'Amount', ''].map(h => (
-                            <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: '#6b7280', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {expenses.length === 0 && (
-                          <tr><td colSpan={5} style={{ textAlign: 'center', color: '#6b7280', padding: 40 }}>No expenses logged yet</td></tr>
-                        )}
-                        {expenses.map(e => (
-                          <tr key={e.id} style={{ borderBottom: '1px solid #111827' }}>
-                            <td style={{ padding: '10px 14px', color: '#9ca3af' }}>{e.expense_date}</td>
-                            <td style={{ padding: '10px 14px', color: '#fff' }}>{e.description}</td>
-                            <td style={{ padding: '10px 14px' }}>
-                              <span style={{ padding: '3px 10px', borderRadius: 12, background: 'rgba(239,68,68,0.1)', color: '#f87171', fontSize: 11, fontWeight: 600 }}>
-                                {e.category}
-                              </span>
-                            </td>
-                            <td style={{ padding: '10px 14px', color: '#ef4444', fontWeight: 700 }}>{fmtKES(e.amount)}</td>
-                            <td style={{ padding: '10px 14px', textAlign: 'right' }}>
-                              <button
-                                onClick={async () => {
+                  <div className="fin-card">
+                    {/* Add expense form */}
+                    <div className="fin-expense-form">
+                      <h3>Log new expense</h3>
+                      <div className="fin-expense-grid">
+                        <div>
+                          <label className="fin-exp-lbl">Description</label>
+                          <input className="fin-exp-input" placeholder="e.g. Server costs" value={expenseForm.description}
+                            onChange={e => setExpenseForm(f => ({ ...f, description: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="fin-exp-lbl">Amount (KES)</label>
+                          <input className="fin-exp-input" type="number" placeholder="e.g. 5000" value={expenseForm.amount}
+                            onChange={e => setExpenseForm(f => ({ ...f, amount: e.target.value }))} style={{ width: 140 }} />
+                        </div>
+                        <div>
+                          <label className="fin-exp-lbl">Category</label>
+                          <select className="fin-exp-select" value={expenseForm.category}
+                            onChange={e => setExpenseForm(f => ({ ...f, category: e.target.value }))} style={{ width: 140 }}>
+                            {[['general','General'],['hosting','Hosting'],['marketing','Marketing'],['salaries','Salaries'],
+                              ['software','Software'],['bank_fees','Bank Fees'],['other','Other']].map(([v,l]) => (
+                              <option key={v} value={v}>{l}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="fin-exp-lbl">Date</label>
+                          <input className="fin-exp-input" type="date" value={expenseForm.expense_date}
+                            onChange={e => setExpenseForm(f => ({ ...f, expense_date: e.target.value }))}
+                            style={{ width: 140, colorScheme: 'dark' }} />
+                        </div>
+                      </div>
+                      <div className="fin-expense-form-footer">
+                        <button className="fin-btn fin-btn-danger" disabled={expenseSubmitting}
+                          onClick={async () => {
+                            if (!expenseForm.description || !expenseForm.amount) return;
+                            setExpenseSubmitting(true);
+                            try {
+                              await adminAddExpense({ description: expenseForm.description, amount: parseFloat(expenseForm.amount), category: expenseForm.category, expense_date: expenseForm.expense_date });
+                              setExpenseForm(f => ({ ...f, description: '', amount: '' }));
+                              const r = await adminGetExpenses();
+                              setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0);
+                            } catch(err) {} finally { setExpenseSubmitting(false); }
+                          }}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <PlusCircle size={14} /> {expenseSubmitting ? 'Adding…' : 'Add expense'}
+                        </button>
+                      </div>
+                    </div>
+                    {/* Expenses table */}
+                    {expenses.length === 0 ? (
+                      <div className="fin-empty">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/></svg>
+                        <div className="fin-e-title">No expenses logged</div>
+                        <div className="fin-e-sub">When you record a platform cost, it will show up here.</div>
+                      </div>
+                    ) : (
+                      <table className="fin-sub-table">
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Description</th>
+                            <th>Category</th>
+                            <th className="r">Amount</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {expenses.map(e => (
+                            <tr key={e.id}>
+                              <td style={{ color: '#5b6472' }}>{e.expense_date}</td>
+                              <td style={{ fontWeight: 600 }}>{e.description}</td>
+                              <td><span className="fin-exp-cat">{e.category}</span></td>
+                              <td className="r" style={{ color: '#ef4444', fontWeight: 700 }}>{fmtKES(e.amount)}</td>
+                              <td style={{ textAlign: 'right' }}>
+                                <button onClick={async () => {
                                   if (!window.confirm('Delete this expense?')) return;
                                   try {
                                     await adminDeleteExpense(e.id);
                                     const r = await adminGetExpenses();
-                                    setExpenses(r.data.expenses || []);
-                                    setExpensesTotal(r.data.total || 0);
+                                    setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0);
                                   } catch(err) {}
-                                }}
-                                style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4 }}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                                }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4 }}>
+                                  <Trash2 size={14} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
-                </>
+                </section>
               )}
+
             </div>
           )}
 
