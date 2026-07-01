@@ -375,6 +375,9 @@ export default function Admin() {
   const [revLoading, setRevLoading] = useState(false);
   const [obBreakdown, setObBreakdown] = useState(null);  // per-product outbound revenue
   const [invoiceMonth, setInvoiceMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [invoiceMode, setInvoiceMode] = useState('month'); // 'month' | 'range'
+  const [invoiceStartDate, setInvoiceStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [invoiceEndDate, setInvoiceEndDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [invoiceBusy, setInvoiceBusy] = useState(false);
   const [expSubView, setExpSubView] = useState('revenue');
 
@@ -777,10 +780,20 @@ export default function Admin() {
   const handleGenerateInvoice = async () => {
     setInvoiceBusy(true);
     try {
-      const r = await api.get('/admin/invoice/choice', { params: { month: invoiceMonth }, responseType: 'blob' });
+      let params, filename;
+      if (invoiceMode === 'range') {
+        if (!invoiceStartDate || !invoiceEndDate) { alert('Please select both a start and end date.'); setInvoiceBusy(false); return; }
+        if (invoiceStartDate > invoiceEndDate) { alert('Start date must be before end date.'); setInvoiceBusy(false); return; }
+        params = { start_date: invoiceStartDate, end_date: invoiceEndDate };
+        filename = `SFS-${invoiceStartDate.replace(/-/g,'')}-${invoiceEndDate.replace(/-/g,'')}_ChoiceBank_Invoice.pdf`;
+      } else {
+        params = { month: invoiceMonth };
+        filename = `SFS-${invoiceMonth.replace('-', '')}_ChoiceBank_Invoice.pdf`;
+      }
+      const r = await api.get('/admin/invoice/choice', { params, responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
       const a = document.createElement('a');
-      a.href = url; a.download = `SFS-${invoiceMonth.replace('-', '')}_ChoiceBank_Invoice.pdf`;
+      a.href = url; a.download = filename;
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
     } catch (e) { alert('Could not generate the invoice.'); }
     finally { setInvoiceBusy(false); }
@@ -4794,15 +4807,46 @@ export default function Admin() {
                       </tr>
                     </tbody>
                   </table>
-                  {/* Monthly invoice generator */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderTop: '1px solid #1f2937', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 12.5, color: '#9ca3af', fontWeight: 600 }}>📄 Generate Choice Bank invoice for</span>
-                    <input type="month" value={invoiceMonth} onChange={e => setInvoiceMonth(e.target.value)}
-                      style={{ padding: '7px 10px', borderRadius: 8, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 13, colorScheme: 'dark' }} />
-                    <button onClick={handleGenerateInvoice} disabled={invoiceBusy}
-                      style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: invoiceBusy ? '#3a3f4d' : '#f59e0b', color: invoiceBusy ? '#9aa4b2' : '#1a1205', fontWeight: 800, fontSize: 13, cursor: invoiceBusy ? 'default' : 'pointer' }}>
-                      {invoiceBusy ? 'Generating…' : 'Download Invoice (PDF)'}
-                    </button>
+                  {/* Invoice generator */}
+                  <div style={{ padding: '12px 14px', borderTop: '1px solid #1f2937' }}>
+                    {/* Mode toggle */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <span style={{ fontSize: 12.5, color: '#9ca3af', fontWeight: 600 }}>📄 Generate Choice Bank invoice —</span>
+                      <div style={{ display: 'flex', background: '#0a0d14', border: '1px solid #2a3142', borderRadius: 8, overflow: 'hidden' }}>
+                        {[['month', 'By Month'], ['range', 'Date Range']].map(([val, label]) => (
+                          <button key={val} onClick={() => setInvoiceMode(val)}
+                            style={{ padding: '5px 12px', border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                              background: invoiceMode === val ? '#f59e0b' : 'transparent',
+                              color: invoiceMode === val ? '#1a1205' : '#9ca3af' }}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Inputs */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      {invoiceMode === 'month' ? (
+                        <input type="month" value={invoiceMonth} onChange={e => setInvoiceMonth(e.target.value)}
+                          style={{ padding: '7px 10px', borderRadius: 8, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 13, colorScheme: 'dark' }} />
+                      ) : (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>From</span>
+                            <input type="date" value={invoiceStartDate} onChange={e => setInvoiceStartDate(e.target.value)}
+                              style={{ padding: '7px 10px', borderRadius: 8, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 13, colorScheme: 'dark' }} />
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>To</span>
+                            <input type="date" value={invoiceEndDate} onChange={e => setInvoiceEndDate(e.target.value)}
+                              style={{ padding: '7px 10px', borderRadius: 8, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 13, colorScheme: 'dark' }} />
+                          </div>
+                        </>
+                      )}
+                      <button onClick={handleGenerateInvoice} disabled={invoiceBusy}
+                        style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: invoiceBusy ? '#3a3f4d' : '#f59e0b', color: invoiceBusy ? '#9aa4b2' : '#1a1205', fontWeight: 800, fontSize: 13, cursor: invoiceBusy ? 'default' : 'pointer' }}>
+                        {invoiceBusy ? 'Generating…' : 'Download Invoice (PDF)'}
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>

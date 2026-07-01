@@ -2462,11 +2462,14 @@ async def outbound_revenue_breakdown(
 
 @router.get("/invoice/choice")
 async def choice_bank_invoice(
-    month: str = Query(...),   # YYYY-MM
+    month: str = Query(default=""),        # YYYY-MM  (full-month mode)
+    start_date: str = Query(default=""),   # YYYY-MM-DD (custom range mode)
+    end_date: str = Query(default=""),     # YYYY-MM-DD (inclusive)
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate a branded PDF invoice to Choice Microfinance Bank for the month's markup revenue."""
+    """Generate a branded PDF invoice to Choice Microfinance Bank for the period's markup revenue.
+    Supports two modes: month=YYYY-MM (full calendar month) or start_date+end_date=YYYY-MM-DD range."""
     import io
     from pathlib import Path
     from fastapi import Response
@@ -2477,10 +2480,25 @@ async def choice_bank_invoice(
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_RIGHT, TA_LEFT
 
-    start, end = _month_range(month)
+    if start_date and end_date:
+        # Custom date range: start is 00:00:00 UTC on start_date, end is 23:59:59 UTC on end_date
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            end = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+        period_label = f"{datetime.strptime(start_date, '%Y-%m-%d').strftime('%d %b %Y')} – {datetime.strptime(end_date, '%Y-%m-%d').strftime('%d %b %Y')}"
+        inv_no = f"SFS-{start_date.replace('-', '')}-{end_date.replace('-', '')}"
+    elif month:
+        start, end = _month_range(month)
+        period_label = start.strftime("%B %Y")
+        inv_no = f"SFS-{start.strftime('%Y%m')}"
+    else:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Provide either 'month' (YYYY-MM) or 'start_date'+'end_date' (YYYY-MM-DD).")
+
     data = await _compute_outbound_breakdown(db, start, end)
-    period_label = start.strftime("%B %Y")
-    inv_no = f"SFS-{start.strftime('%Y%m')}"
     today = datetime.now(timezone.utc).strftime("%d %b %Y")
 
     BRAND = colors.HexColor("#1F3864"); AMBER = colors.HexColor("#f59e0b")
