@@ -1537,6 +1537,7 @@ async def get_active_orders(
         logger.warning("active-orders session fetch failed for trader %s: %s", trader.id, e)
         return {"ok": False, "error": str(e), "orders": []}
 
+    seen_order_numbers: set = set()
     orders = []
     for raw, side in ((sell_raw, "SELL"), (buy_raw, "BUY")):
         if isinstance(raw, Exception) or not isinstance(raw, list):
@@ -1545,6 +1546,10 @@ async def get_active_orders(
             order_number = str(o.get("orderNumber") or o.get("orderId") or "")
             if len(order_number) < 15:
                 continue
+            if order_number in seen_order_numbers:
+                logger.warning("active-orders: duplicate order %s skipped (appeared in both SELL and BUY lists)", order_number)
+                continue
+            seen_order_numbers.add(order_number)
             fiat   = float(o.get("totalPrice") or o.get("fiatAmount") or 0)
             crypto = float(o.get("amount") or o.get("cryptoAmount") or 0)
             price  = float(o.get("unitPrice") or o.get("price") or 0)
@@ -1552,9 +1557,12 @@ async def get_active_orders(
                 o.get("buyerNickname") or o.get("sellerNickname")
                 or o.get("counterPartyNickName") or ""
             )
+            # Use Binance's own tradeType field if present; fall back to the side we requested
+            binance_type = (str(o.get("tradeType") or "")).upper()
+            trade_type = binance_type if binance_type in ("SELL", "BUY") else side
             orders.append({
                 "orderNumber": order_number,
-                "tradeType": side,
+                "tradeType": trade_type,
                 "totalPrice": fiat,
                 "amount": crypto,
                 "price": price,

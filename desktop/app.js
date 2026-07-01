@@ -3882,6 +3882,16 @@ async function idleScan(page) {
     console.log(`[SparkP2P] Buy order ${order.orderNumber} state: ${buyScreen} (via ${buyUsedVision ? 'Vision' : 'DOM'})`);
     const buyText = await oPage.evaluate(() => document.body.innerText).catch(() => '');
     const buyLower = buyText.toLowerCase();
+    // Safety guard: if the page shows SELL order indicators, this order was misclassified.
+    // Attempting payment here would send money to the wrong person (our own account details).
+    if (buyLower.includes("awaiting buyer's payment") ||
+        buyLower.includes('confirm payment from buyer') ||
+        buyLower.includes('confirm payment is received')) {
+      console.log(`[SparkP2P] ⚠️ Order ${order.orderNumber} is in buy list but page shows SELL order — misclassified. Skipping to prevent wrong payment.`);
+      sendBotLog('warn', `Order ${order.orderNumber}: classified as BUY but page is a SELL order — skipping to protect funds`);
+      continue;
+    }
+
 
     // â"€â"€ Seller released crypto â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     if (buyScreen === 'order_complete' ||
@@ -13783,3 +13793,4 @@ ipcMain.handle('manual-mpesa-sweep', async (_, amount) => {
   const result = await executeMpesaSweep({ sweep_id: 'manual', amount: amt, reference: 'Manual-' + Date.now() });
   return { ok: result?.success !== false, error: result?.error || null };
 });
+
