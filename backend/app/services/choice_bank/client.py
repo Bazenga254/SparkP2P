@@ -278,6 +278,24 @@ async def get_account_details(account_id: str) -> dict:
     })
 
 
+async def verify_email_address(
+    document_number: str,
+    personal_id_type: str = "101",  # 101=National ID, 102=Alien ID, 103=Passport
+    onboard_type: str = "personal",
+) -> dict:
+    """Send an OTP to the email linked to this account for verification.
+    Uses /account/verifyEmailOrMobile (not /account/verifyEmailAddress which returns 500
+    for existing accounts). Returns { applicationId } — confirm via confirm_otp()."""
+    params = {
+        "onboardType": onboard_type,
+        "documentNumber": document_number,
+        "verifyType": "email",
+    }
+    if onboard_type == "personal":
+        params["personalIdType"] = personal_id_type
+    return await _post("/account/verifyEmailOrMobile", params)
+
+
 # ── Transfers ─────────────────────────────────────────────────────────────────
 
 

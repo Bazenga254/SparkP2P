@@ -4673,7 +4673,7 @@ export default function Admin() {
               {/* Profit Summary — always visible */}
               {(() => {
                 const subRevenue = revBreakdown?.summary?.total ?? 0;
-                const outboundRevenue = revBreakdown?.summary?.outbound_markup ?? 0;
+                const outboundRevenue = obBreakdown?.total?.markup ?? 0;
                 const totalRevenue = subRevenue + outboundRevenue;
                 const totalExpenses = expensesTotal ?? 0;
                 const netProfit = totalRevenue - totalExpenses;
@@ -4748,11 +4748,11 @@ export default function Admin() {
                 <div className="adm-card" style={{ padding: '14px 20px', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderLeft: '3px solid #3b82f6' }}>
                   <div>
                     <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700, marginBottom: 4 }}>Outbound Fee Revenue (Our Markup)</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: '#3b82f6' }}>{fmtKES(revBreakdown?.summary?.outbound_markup ?? 0)}</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: '#3b82f6' }}>{fmtKES(obBreakdown?.total?.markup ?? 0)}</div>
                   </div>
                   <div style={{ fontSize: 12, color: '#6b7280', textAlign: 'right' }}>
                     Withheld by Choice Bank, remitted monthly<br/>
-                    Gross fees charged: {fmtKES(revBreakdown?.summary?.outbound_gross ?? 0)}
+                    Gross fees charged (CB+markup): {fmtKES(obBreakdown?.total?.total_fee ?? 0)}
                   </div>
                 </div>
 
@@ -4890,7 +4890,7 @@ export default function Admin() {
                     <div className="adm-table-wrap">
                       <table className="adm-table">
                         <thead>
-                          <tr><th>Month</th><th>Buy Volume</th><th>Sell Volume</th><th>Total Volume</th><th>Trades</th><th>Profit</th></tr>
+                          <tr><th>Month</th><th>Buy Volume</th><th>Sell Volume</th><th>Total Volume</th><th>Trades</th><th>Fees Earned</th></tr>
                         </thead>
                         <tbody>
                           {[...analytics.monthly_volumes].reverse().map((m, i) => (

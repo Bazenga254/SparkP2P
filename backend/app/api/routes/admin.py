@@ -1502,7 +1502,7 @@ async def admin_analytics(
             func.sum(case((Order.side == "sell", Order.fiat_amount), else_=0)).label("sell_volume"),
             func.sum(case((Order.side == "buy", Order.fiat_amount), else_=0)).label("buy_volume"),
             func.sum(Order.fiat_amount).label("total_volume"),
-            func.sum(Order.platform_fee + Order.settlement_fee).label("profit"),
+            func.sum(Order.platform_fee + Order.settlement_fee + Order.choice_fee).label("profit"),
             func.count(Order.id).label("trades"),
         )
         .where(

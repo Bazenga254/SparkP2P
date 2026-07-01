@@ -678,7 +678,7 @@ export default function Login() {
             {/* Inactivity logout banner */}
             {inactivityLogout && (
               <div style={{ background: '#1e3a2f', border: '1px solid #059669', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#6ee7b7', display: 'flex', gap: 8, alignItems: 'center' }}>
-                🔐 You were logged out after 30 minutes of inactivity.
+                🔐 You were logged out after 60 minutes of inactivity.
               </div>
             )}
 

@@ -3,7 +3,7 @@ import { getProfile } from '../services/api';
 
 const AuthContext = createContext(null);
 
-const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (web/desktop only)
+const INACTIVITY_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes (web/desktop only)
 const ACTIVITY_EVENTS = ['mousedown', 'keydown', 'touchstart', 'scroll', 'api-activity'];
 const LAST_ACTIVE_KEY = 'sparkp2p_last_active';
 // In the native mobile app users stay logged in (like any phone app); the idle auto-logout is
