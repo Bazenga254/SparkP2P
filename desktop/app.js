@@ -155,7 +155,7 @@ let traderImAccount = null;    // Trader's I&M settlement account number â€" 
 const DEV_UNLOCK = false; // true = no CSS overlay on browser tabs
 const DEV_FORCE_NAME_MISMATCH = false; // true = simulate name mismatch (TEST ONLY)
 const BOT_DISABLED = false; // set to true to disable automation
-const LOCK_TIMEOUT_SECS = 5 * 60; // 5 minutes inactivity before screen locks
+const LOCK_TIMEOUT_SECS = 60 * 60; // 1 hour inactivity before screen locks
 let screenLocked = false;
 let browserLocked = false;
 let lockFrameListener = null;
@@ -831,7 +831,7 @@ function createMainWindow() {
       + 'el.innerHTML=\'<div style="background:#0f1623;border:1px solid #1f2937;border-radius:20px;padding:48px 40px;text-align:center;max-width:380px;width:90%;box-shadow:0 32px 80px rgba(0,0,0,0.85)">'
       + '<div style="font-size:56px;margin-bottom:12px">🔒</div>'
       + '<div style="font-size:22px;font-weight:700;color:#f59e0b;margin-bottom:8px">Session Locked</div>'
-      + '<div style="font-size:13px;color:#6b7280;margin-bottom:28px;line-height:1.6">5 minutes of inactivity.<br>Enter your Google Authenticator<br>code to resume.</div>'
+      + '<div style="font-size:13px;color:#6b7280;margin-bottom:28px;line-height:1.6">1 hour of inactivity.<br>Enter your Google Authenticator<br>code to resume.</div>'
       + '<input id="sp2p-lock-code" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" style="width:100%;padding:16px;font-size:28px;letter-spacing:12px;text-align:center;background:#1f2937;border:2px solid #374151;border-radius:12px;color:#fff;outline:none;box-sizing:border-box;margin-bottom:8px">'
       + '<div id="sp2p-lock-err" style="min-height:20px;font-size:13px;color:#ef4444;margin-bottom:12px"></div>'
       + '<button id="sp2p-lock-btn" style="width:100%;padding:14px;background:#f59e0b;color:#000;font-weight:700;font-size:16px;border:none;border-radius:12px;cursor:pointer">Unlock</button>'
@@ -13831,6 +13831,7 @@ ipcMain.handle('manual-mpesa-sweep', async (_, amount) => {
   const result = await executeMpesaSweep({ sweep_id: 'manual', amount: amt, reference: 'Manual-' + Date.now() });
   return { ok: result?.success !== false, error: result?.error || null };
 });
+
 
 
 
