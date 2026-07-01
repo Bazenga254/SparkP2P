@@ -202,6 +202,7 @@ let loggedOutStrikes = 0;      // Consecutive failed isLoggedIn() checks before 
 let activeOrderNumber = null;     // Sell order currently being released (guards auto-cancel protection)
 let activeOrderFiatAmount = 0;    // KES amount of the sell order being released
 let activeBuyOrderNumber = null;  // Last buy order processed (kept for compat)
+let activeBuyPaymentSlot = null; // order number holding the Choice Bank payment slot; null = slot free, set = OTP in-flight
 // Per-order tracking dictionaries â€" supports multiple concurrent orders
 const orderFirstSeenAt = {};        // { orderNum: timestamp } â€" when we first detected this order
 const orderReminderSent = new Set(); // sell orderNums where we already sent the 1-min "Hi, are you there?" reminder
@@ -2425,6 +2426,7 @@ function stopPoller() {
   activeOrderNumber = null;
   activeOrderFiatAmount = 0;
   activeBuyOrderNumber = null;
+  activeBuyPaymentSlot = null;
   codeFallbackAskedForOrder = null;
   scanningInProgress = false;
   // Tell backend the bot stopped so offline SMS alerts are suppressed.
@@ -3504,7 +3506,9 @@ async function idleScan(page) {
   if (botTradeMode === 'buy_only') {
     if (orders.sell.length > 0) console.log(`[SparkP2P] Skipping ${orders.sell.length} sell order(s) — mode: buy_only`);
   } else {
-  for (const order of orders.sell) {
+  const sortedSellOrders = [...orders.sell].sort((a, b) =>
+    (orderFirstSeenAt[a.orderNumber] || Date.now()) - (orderFirstSeenAt[b.orderNumber] || Date.now()));
+  for (const order of sortedSellOrders) {
     if (pauseNavigation) break;
     const seenMs = Date.now() - (orderFirstSeenAt[order.orderNumber] || Date.now());
     const seenMins = Math.floor(seenMs / 60000);
@@ -3840,7 +3844,20 @@ async function idleScan(page) {
   if (botTradeMode === 'sell_only') {
     if (orders.buy.length > 0) console.log(`[SparkP2P] Skipping ${orders.buy.length} buy order(s) — mode: sell_only (trader handles manually)`);
   } else {
-  for (const order of orders.buy) {
+
+  // Sort buy orders oldest-first: order with least time remaining gets paid first.
+  const sortedBuyOrders = [...orders.buy].sort((a, b) =>
+    (orderFirstSeenAt[a.orderNumber] || Date.now()) - (orderFirstSeenAt[b.orderNumber] || Date.now()));
+
+  // Auto-clear payment slot if that order left the active list without completing payment.
+  if (activeBuyPaymentSlot &&
+      !sortedBuyOrders.find(o => o.orderNumber === activeBuyPaymentSlot) &&
+      !buyPaymentSentAt[activeBuyPaymentSlot]) {
+    console.log(`[SparkP2P] Payment slot auto-cleared: order ${activeBuyPaymentSlot} left active list without payment`);
+    sendBotLog('warn', `Payment slot freed — order ${activeBuyPaymentSlot} left queue unexpectedly`);
+    activeBuyPaymentSlot = null;
+  }
+  for (const order of sortedBuyOrders) {
     if (pauseNavigation) break;
     console.log(`[SparkP2P] Checking buy order ${order.orderNumber}`);
 
@@ -4014,6 +4031,21 @@ async function idleScan(page) {
       sendBotLog('warn', `Buy order ${order.orderNumber}: payment tracking restored — awaiting seller release. Will monitor for release or timeout.`);
 
     } else {
+      // -- PAYMENT QUEUE GATE -------------------------------------------------------
+      // Only ONE Choice Bank payment can be in-flight at a time (OTP + confirmation).
+      // If another order already holds the payment slot, queue this one and skip it.
+      if (activeBuyPaymentSlot && activeBuyPaymentSlot !== order.orderNumber) {
+        const _pending = sortedBuyOrders.filter(o => !buyPaymentSentAt[o.orderNumber] && !imPaymentFailedOrders.has(o.orderNumber));
+        const _pos = _pending.findIndex(o => o.orderNumber === order.orderNumber) + 1;
+        console.log('[SparkP2P] Order ' + order.orderNumber + ' queued (pos ' + _pos + ') — waiting for ' + activeBuyPaymentSlot + ' payment first');
+        sendBotLog('info', 'Order ...' + order.orderNumber.slice(-8) + ' queued (pos ' + _pos + '/' + _pending.length + ') — completing ...' + activeBuyPaymentSlot.slice(-8) + ' first');
+        continue;
+      }
+      if (!activeBuyPaymentSlot) {
+        activeBuyPaymentSlot = order.orderNumber;
+        console.log('[SparkP2P] Payment slot claimed by order ' + order.orderNumber);
+      }
+      // ---------------------------------------------------------------------------------
       // Payment not yet sent -- screen seller first (DD), then extract details and pay
       let sellerStats = null; // hoisted so Telegram advisory block can read stats from first cycle
 
@@ -4073,6 +4105,7 @@ async function idleScan(page) {
           if (failReason) {
             console.log(`[SparkP2P] DD: seller ${sellerNick} FAILED -- ${failReason}`);
             await cancelOrderOnBinance(oPage, order.orderNumber, failReason);
+            activeBuyPaymentSlot = null; // release slot — DD failed, order cancelled
             continue;
           }
           console.log(`[SparkP2P] DD: seller ${sellerNick} passed (30d: ${sellerStats.trades_30d ?? 'n/a'}, all: ${sellerStats.trades_all ?? 'n/a'})`);
@@ -4438,6 +4471,7 @@ Method selection rules:
                   amount: paymentDetails.amount, minutes_waited: 0,
                   reason: "Choice Bank payment failed: " + _errMsg + ". Please complete manually." })
               }).catch(function(){});
+              activeBuyPaymentSlot = null; // release slot on permanent failure so next order can pay
             } else {
               // Soft failure (wrong OTP, network, timeout) — log visibly and retry next cycle
               // telegramApprovedOrders still has this order so next poll goes straight to payment
@@ -4465,6 +4499,10 @@ Method selection rules:
         screenshot: imResult.screenshot || null,
       };
       buyPaymentSentAt[order.orderNumber] = Date.now();
+      // Release payment slot so the next queued order can proceed
+      activeBuyPaymentSlot = null;
+      const _nextQueued = sortedBuyOrders.filter(o => !buyPaymentSentAt[o.orderNumber] && !imPaymentFailedOrders.has(o.orderNumber) && o.orderNumber !== order.orderNumber);
+      if (_nextQueued.length > 0) sendBotLog('info', 'Payment sent for ...' + order.orderNumber.slice(-8) + '. Processing next order ...' + _nextQueued[0].orderNumber.slice(-8) + (' (' + _nextQueued.length + ' remaining)'));
       buyReminderSentOrders.delete(order.orderNumber);
 
       // Navigate back to Binance order page
@@ -13793,4 +13831,8 @@ ipcMain.handle('manual-mpesa-sweep', async (_, amount) => {
   const result = await executeMpesaSweep({ sweep_id: 'manual', amount: amt, reference: 'Manual-' + Date.now() });
   return { ok: result?.success !== false, error: result?.error || null };
 });
+
+
+
+
 
