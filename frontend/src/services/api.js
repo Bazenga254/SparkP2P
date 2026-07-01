@@ -173,6 +173,11 @@ export const validateReferralCode = (code) => api.get(`/affiliates/validate/${co
 export const getAdminTraderBotLogs = (traderId) => api.get(`/admin/traders/${traderId}/bot-logs`);
 export const adminGetKycTraders = () => api.get('/admin/kyc/traders');
 export const adminGetKycLiveStatus = (traderId) => api.get(`/admin/kyc/status/${traderId}`);
+export const adminResetKyc = (traderId) => api.post(`/admin/kyc/reset/${traderId}`);
+export const adminGetKycSubmissions = () => api.get('/admin/kyc/submissions');
+export const adminGetKycSubmission = (id) => api.get(`/admin/kyc/submission/${id}`);
+export const adminApproveKycSubmission = (id) => api.post(`/admin/kyc/submission/${id}/approve`);
+export const adminRejectKycSubmission = (id, notes) => api.post(`/admin/kyc/submission/${id}/reject`, { notes });
 export const adminGetTraderChoiceBalance = (traderId) => api.get(`/admin/traders/${traderId}/choice-balance`);
 export const adminGetChoicePlatformFloat = () => api.get('/admin/choice/platform-float');
 export const adminGetExpenses = () => api.get('/admin/expenses');

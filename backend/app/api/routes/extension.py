@@ -151,7 +151,7 @@ async def report_orders(
             if completed_order.status not in [OrderStatus.COMPLETED, OrderStatus.RELEASED]:
                 if completed_order.status == OrderStatus.PENDING:
                     completed_order.status = OrderStatus.PAYMENT_SENT
-                await _complete_buy_order(completed_order, trader, db, notify=False)
+                await _complete_buy_order(completed_order, trader, db, notify=True)
         else:
             # Order completed while bot was offline and full data couldn't be parsed — create stub.
             stub = Order(
@@ -1571,11 +1571,60 @@ async def get_order_detail(
     order_number: str,
     trader: Trader = Depends(get_current_trader),
 ):
-    """Return full order detail including payment info via stored session credentials.
+    """Return full order detail including payment info.
 
-    Desktop bot calls this to get phone/name/method after detecting a new order,
-    replacing DOM/Vision scraping for payment detail extraction.
+    Tries SAPI (API key) first — works even when session cookies are expired.
+    Falls back to cookie-based client if SAPI is unavailable.
     """
+    # ── SAPI path (API key) — preferred, no cookie dependency ────────────────
+    if trader.binance_api_key and trader.binance_api_secret:
+        try:
+            from app.services.binance.sapi_client import get_order_payment_details, relay_trader
+            from app.core.security import decrypt_data
+            relay_trader.set(trader.id)
+            api_key    = decrypt_data(trader.binance_api_key)
+            api_secret = decrypt_data(trader.binance_api_secret)
+            d = await get_order_payment_details(api_key, api_secret, order_number)
+            phone = None
+            account_number = None
+            bank_name = None
+            for f in (d.get("fields") or []):
+                lbl = (f.get("label") or "").lower()
+                val = (f.get("value") or "").strip()
+                if not val:
+                    continue
+                if not phone and any(w in lbl for w in ("phone", "mobile", "number")):
+                    phone = val
+                if not account_number and any(w in lbl for w in ("account", "card")):
+                    account_number = val
+                if not bank_name and "bank" in lbl:
+                    bank_name = val
+            phone = phone or d.get("pay_account") or None
+            method_raw = str(d.get("method") or "").lower()
+            if any(k in method_raw for k in ("pesalink", "equity", "kcb", "coop", "i&m", "im bank")):
+                method = "other_bank"
+            elif any(k in method_raw for k in ("mpesa", "m-pesa", "safaricom")):
+                method = "mpesa"
+            else:
+                method = "mpesa"
+            return {
+                "ok": True,
+                "method": method,
+                "phone": phone,
+                "account_number": account_number or None,
+                "bank_name": bank_name or None,
+                "fiat_amount": d.get("fiat_amount"),
+                "counterparty_name": d.get("name") or d.get("counterparty_nickname"),
+                "trades_30d": d.get("trades_30d"),
+                "trades_all": d.get("trades_all"),
+                "completion_rate": d.get("completion_rate"),
+                "account_age_days": d.get("account_age_days"),
+                "avg_pay_mins": d.get("avg_pay_mins"),
+            }
+        except Exception as e:
+            logger.warning("order-detail SAPI path failed for %s: %s — falling back to cookies", order_number, e)
+
+    # ── Cookie path (legacy) ──────────────────────────────────────────────────
     if not trader.binance_cookies:
         return {"ok": False, "error": "no_session"}
 
@@ -3153,6 +3202,21 @@ async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_i
         )
     except Exception as e:
         logger.warning(f"choice-pay receipt generation failed: {e}")
+
+    # Notify trader that payment has been sent
+    try:
+        from app.api.routes.telegram import notify_trader as _tg_notify
+        _method_label = "Bank/PesaLink" if bank_code else "M-Pesa"
+        _short = order_number[-8:] if order_number else "?"
+        await _tg_notify(
+            trader,
+            f"💸 <b>Payment sent!</b>\n\n"
+            f"KES {int(amount):,} → {payee_name or payee_account_id} ({_method_label})\n"
+            f"Order ref: <code>...{_short}</code>\n"
+            f"<i>Waiting for seller to release crypto...</i>",
+        )
+    except Exception as _ne:
+        logger.warning(f"choice-pay sent-notification failed: {_ne}")
 
     return {
         "success": True,

@@ -583,86 +583,57 @@ async def request_buy_approval(
     trader: Trader = Depends(get_current_trader),
 ):
     """
-    Send a Telegram APPROVE / DECLINE prompt to the trader before executing a BUY
-    order payment from Choice Bank. The desktop bot polls /approval-status and only
-    calls /ext/choice-pay once it receives 'approved'.
-    If Telegram is not connected, returns ok=True with auto_approved=True so the bot
-    falls through to the existing auto-pay behaviour.
+    Notify trader of an incoming buy order and auto-pay immediately (no approval gate).
+    Previously required Telegram YES/NO — removed because with multiple concurrent orders
+    the approval response was being mis-matched to the wrong order. The bot now pays
+    automatically and the merchant only receives informational alerts (before + after payment).
     """
     if not trader.telegram_chat_id:
         return {"ok": True, "auto_approved": True}
 
     if data.method in ("im_bank", "other_bank"):
-        dest = f"{data.bank_name or 'Bank'} a/c {data.account_number or '?'}"
+        dest = f"{'PesaLink' if data.method == 'im_bank' else 'Bank'} {data.bank_name or ''} a/c {data.account_number or '?'}"
     else:
         dest = f"M-Pesa {data.phone or '?'}"
 
     amt_str = f"KES {int(data.amount):,}"
-    bal_str = f"KES {int(data.choice_balance):,}" if data.choice_balance else "unknown"
+    bal_str = f"KES {int(data.choice_balance):,}" if data.choice_balance else "?"
     name = data.seller_name or "Unknown seller"
 
-    # Seller profile section
     profile_lines = []
     if data.trades_30d is not None:
-        profile_lines.append(f"  - 30d trades: {data.trades_30d:,}")
-    if data.trades_all is not None:
-        profile_lines.append(f"  - All-time trades: {data.trades_all:,}")
+        profile_lines.append(f"  30d trades: {data.trades_30d:,}")
     if data.completion_rate:
-        profile_lines.append(f"  - 30d completion: {data.completion_rate}")
-    if data.account_age_days is not None:
-        profile_lines.append(f"  - Account age: {data.account_age_days} days")
+        profile_lines.append(f"  Completion: {data.completion_rate}")
     if data.avg_release_mins is not None:
-        profile_lines.append(f"  - Avg release time: {data.avg_release_mins:.1f} min")
-    if data.avg_pay_mins is not None:
-        profile_lines.append(f"  - Avg pay time: {data.avg_pay_mins:.1f} min")
-    profile_section = ("Seller Profile:\n" + "\n".join(profile_lines) + "\n\n") if profile_lines else ""
+        profile_lines.append(f"  Avg release: {data.avg_release_mins:.1f} min")
+    profile_section = ("\n" + "\n".join(profile_lines)) if profile_lines else ""
 
     advisory_section = ""
     if data.advisory:
         icon = "✅" if "good" in data.advisory.lower() else "⚠️"
-        advisory_section = f"Advisory:\n{icon} {data.advisory}\n\n"
+        advisory_section = f"\n{icon} {data.advisory}"
 
     text = (
-        f"🆕 New Buy Order — Pay Seller\n\n"
-        f"Amount to send: {amt_str}\n"
-        f"Crypto: {data.order_number and '' or ''}"  # placeholder kept for spacing
-        f"Seller: {name}\n"
-        f"Order: {data.order_number}\n\n"
+        f"🚀 <b>Buy order — paying automatically</b>\n\n"
+        f"<b>Amount:</b> {amt_str}\n"
+        f"<b>Seller:</b> {name}\n"
+        f"<b>Paying to:</b> {dest}\n"
+        f"<b>CB Balance:</b> {bal_str}\n"
+        f"<b>Order:</b> <code>...{data.order_number[-12:]}</code>"
         f"{profile_section}"
-        f"{advisory_section}"
-        f"Pay To:\n"
-        f"  - Method: {'PesaLink' if data.method in ('im_bank', 'other_bank') else 'M-Pesa'}\n"
-        + (f"  - Bank: {data.bank_name}\n  - Account holder: {name}\n  - Account number: {data.account_number}\n" if data.method in ("im_bank", "other_bank") else f"  - Phone: {data.phone}\n")
-        + f"\n💰 Choice Bank balance: {bal_str}\n\n"
-        f"Approve this payment?"
+        f"{advisory_section}\n\n"
+        f"<i>Payment executing now — you will be notified when sent and when complete.</i>"
     )
-    keyboard = {"inline_keyboard": [[
-        {"text": "✅ APPROVE", "callback_data": f"buy_approve:{data.order_number}"},
-        {"text": "❌ DECLINE", "callback_data": f"buy_decline:{data.order_number}"},
-    ]]}
 
-    resp = await _tg_send("sendMessage", {
+    # Informational only — no approval buttons
+    await _tg_send("sendMessage", {
         "chat_id": trader.telegram_chat_id,
         "text": text,
-        "reply_markup": keyboard,
+        "parse_mode": "HTML",
     })
 
-    msg_id = None
-    if resp and resp.get("ok"):
-        msg_id = resp.get("result", {}).get("message_id")
-
-    _pending_approvals[data.order_number] = {
-        "chat_id": trader.telegram_chat_id,
-        "message_id": msg_id,
-        "status": "pending",
-        "trader_id": trader.id,
-        "created_at": time.time(),
-        "type": "buy",
-        "amount_str": amt_str,
-        "dest": dest,
-    }
-
-    return {"ok": True, "auto_approved": False, "message_id": msg_id}
+    return {"ok": True, "auto_approved": True}
 
 
 # ── Name mismatch alert — payment sender ≠ buyer Binance name ────────────────

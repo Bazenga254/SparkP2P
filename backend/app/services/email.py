@@ -366,3 +366,64 @@ def send_internal_transfer_received(to_email: str, trader_name: str, amount: flo
     </div>
     """
     return send_email(to_email, "SparkP2P - Transfer Received", html)
+
+
+def send_kyc_rejection_email(to_email: str, trader_name: str, notes: str) -> bool:
+    """Notify trader that their KYC submission was rejected with admin notes."""
+    html = f"""
+    <div style="font-family:-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
+      <div style="text-align:center;margin-bottom:30px;">
+        <h1 style="color:#f59e0b;font-size:28px;margin:0;">SparkP2P</h1>
+        <p style="color:#888;font-size:14px;">Automated P2P Trading</p>
+      </div>
+      <div style="background:#1a1d27;border-radius:12px;padding:32px;">
+        <div style="font-size:40px;text-align:center;margin-bottom:16px;">&#10060;</div>
+        <h2 style="color:#ef4444;font-size:20px;margin:0 0 12px;text-align:center;">KYC Submission Needs Correction</h2>
+        <p style="color:#9ca3af;font-size:14px;margin:0 0 20px;">
+          Hi {trader_name}, your KYC submission for Choice Bank has been reviewed and requires corrections before it can be forwarded.
+        </p>
+        <div style="background:#0f1117;border:1px solid #ef4444;border-radius:10px;padding:16px;margin-bottom:20px;">
+          <div style="color:#f87171;font-size:12px;font-weight:600;margin-bottom:8px;">Reason / Required Action</div>
+          <div style="color:#fca5a5;font-size:14px;line-height:1.6;">{notes}</div>
+        </div>
+        <p style="color:#9ca3af;font-size:14px;margin:0 0 20px;">
+          Please log in to SparkP2P and click the <strong style="color:#f59e0b;">Fix &amp; Resubmit</strong> button in your dashboard to correct and resubmit your information.
+        </p>
+        <a href="https://sparkp2p.com" style="display:block;text-align:center;background:#f59e0b;color:#000;font-weight:700;font-size:15px;padding:14px 24px;border-radius:10px;text-decoration:none;">
+          Log in to Fix &amp; Resubmit
+        </a>
+      </div>
+      <p style="color:#6b7280;font-size:11px;text-align:center;margin-top:20px;">Powered by Spark AI &bull; sparkp2p.com</p>
+    </div>
+    """
+    return send_email(to_email, "SparkP2P - KYC Submission Needs Correction", html)
+
+
+def send_kyc_approved_for_otp_email(to_email: str, trader_name: str, otp_channel: str) -> bool:
+    """Notify trader that admin approved their KYC and they need to enter the OTP."""
+    channel_text = "email" if otp_channel == "email" else "SMS"
+    html = f"""
+    <div style="font-family:-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
+      <div style="text-align:center;margin-bottom:30px;">
+        <h1 style="color:#f59e0b;font-size:28px;margin:0;">SparkP2P</h1>
+        <p style="color:#888;font-size:14px;">Automated P2P Trading</p>
+      </div>
+      <div style="background:#1a1d27;border-radius:12px;padding:32px;">
+        <div style="font-size:40px;text-align:center;margin-bottom:16px;">&#9989;</div>
+        <h2 style="color:#10b981;font-size:20px;margin:0 0 12px;text-align:center;">KYC Approved — Action Required</h2>
+        <p style="color:#9ca3af;font-size:14px;margin:0 0 20px;">
+          Hi {trader_name}, great news! Your KYC submission has been reviewed and approved by SparkP2P.
+        </p>
+        <div style="background:#0f1117;border:1px solid #10b981;border-radius:10px;padding:16px;margin-bottom:20px;">
+          <div style="color:#6b7280;font-size:12px;margin-bottom:4px;">Next Step</div>
+          <div style="color:#d1d5db;font-size:14px;line-height:1.6;">
+            A verification code has been sent to your <strong style="color:#f59e0b;">{channel_text}</strong>.
+            Open the SparkP2P app, go to <strong>Settings → Choice Bank</strong>, and click <strong>Set Up</strong> to enter the code.
+          </div>
+        </div>
+        <p style="color:#6b7280;font-size:12px;margin:0;">The code expires in 30 minutes. If you miss it, request a new verification link from the app.</p>
+      </div>
+      <p style="color:#6b7280;font-size:11px;text-align:center;margin-top:20px;">Powered by Spark AI &bull; sparkp2p.com</p>
+    </div>
+    """
+    return send_email(to_email, "SparkP2P - KYC Approved — Enter Your Verification Code", html)

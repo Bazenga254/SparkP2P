@@ -1,15 +1,18 @@
-from app.core.config import settings
+﻿from app.core.config import settings
 import secrets
 import time
 import logging
 
 logger = logging.getLogger(__name__)
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_trader, get_db
 from app.models.trader import Trader
+from app.models.kyc_submission import KycSubmission
 from app.services.choice_bank import client as choice
 
 router = APIRouter()
@@ -19,14 +22,13 @@ TOKEN_TTL = 1800  # 30 minutes
 
 
 def _pdf_to_jpeg_b64(pdf_b64: str) -> str:
-    """Render the first page of a base64 PDF to a base64 JPEG. Choice Bank's production onboarding
-    rejects PDF media ('content type does not support PDF'), so KRA certs uploaded as PDF (the
-    iTax download) are flattened to an image here."""
+    """Render the first page of a base64 PDF to a base64 JPEG. Choice Bank production onboarding
+    rejects PDF media, so KRA certs uploaded as PDF are flattened to an image here."""
     import base64
     import fitz  # PyMuPDF
     raw = base64.b64decode(pdf_b64)
     doc = fitz.open(stream=raw, filetype="pdf")
-    pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2))   # 2x for legibility
+    pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2))
     return base64.b64encode(pix.tobytes("jpeg")).decode()
 
 
@@ -61,18 +63,49 @@ async def validate_kyc_token(token: str, db: AsyncSession = Depends(get_db)):
     trader = await db.get(Trader, tid)
     if not trader:
         raise HTTPException(404, "Trader not found.")
+
     kyc_status = trader.choice_kyc_status or ""
+
+    # Staging flow: submission is in our DB, pending/rejected by admin
+    if kyc_status.startswith("staging:") or kyc_status.startswith("rejected_admin:"):
+        result = await db.execute(
+            select(KycSubmission)
+            .where(KycSubmission.trader_id == tid)
+            .order_by(KycSubmission.created_at.desc())
+            .limit(1)
+        )
+        sub = result.scalar_one_or_none()
+        sub_status = sub.status if sub else "pending_review"
+        onboarding_id = (sub.choice_onboarding_id or "") if sub else ""
+        admin_notes = (sub.admin_notes or "") if sub else ""
+        if kyc_status.startswith("rejected_admin:"):
+            sub_status = "rejected"
+        return {
+            "verified": False,
+            "trader_id": tid,
+            "full_name": trader.full_name,
+            "phone": getattr(trader, "phone", "") or "",
+            "account_number": trader.choice_account_number,
+            "kyc_status": kyc_status,
+            "pending_onboarding_id": onboarding_id,
+            "submission_status": sub_status,
+            "admin_notes": admin_notes,
+        }
+
+    # Original flow: pending:ONBRD... = submitted to Choice Bank
     pending_onboarding_id = ""
     if kyc_status.startswith("pending:"):
         pending_onboarding_id = kyc_status.split(":", 1)[1]
     return {
         "verified": bool(trader.choice_account_id),
-        "trader_id": trader.id,
+        "trader_id": tid,
         "full_name": trader.full_name,
         "phone": getattr(trader, "phone", "") or "",
         "account_number": trader.choice_account_number,
         "kyc_status": kyc_status,
         "pending_onboarding_id": pending_onboarding_id,
+        "submission_status": "",
+        "admin_notes": "",
     }
 
 
@@ -89,7 +122,7 @@ class MobileKycBody(BaseModel):
     kra_pin: str
     employment_status: str
     monthly_income: str
-    front_photo_b64: str = ""   # documents now uploaded after OTP confirm via /kyc/upload-docs
+    front_photo_b64: str = ""
     back_photo_b64: str = ""
     selfie_b64: str = ""
     kra_cert_b64: str = ""
@@ -98,22 +131,22 @@ class MobileKycBody(BaseModel):
 
 @router.post("/kyc/submit/{token}")
 async def submit_mobile_kyc(token: str, body: MobileKycBody, db: AsyncSession = Depends(get_db)):
+    """Save KYC data + images to our staging DB for admin review.
+    Nothing is sent to Choice Bank until an admin explicitly approves."""
     tid = _decode_token(token)
     trader = await db.get(Trader, tid)
     if not trader:
         raise HTTPException(404, "Trader not found.")
     if trader.choice_account_id:
-        logger.warning(f"[KYC] submit trader={tid}: already has choice_account_id={trader.choice_account_id} — OTP SKIPPED (already_verified)")
         return {"status": "already_verified", "account_number": trader.choice_account_number}
 
-    # Email is mandatory — it's the channel Choice verifies + sends transaction OTPs to, which the bot
-    # reads to automate payouts. Must be the same email used for Binance (so one inbox holds both OTPs).
     _email = (body.email or "").strip()
     if not _email or "@" not in _email or "." not in _email.split("@")[-1]:
         raise HTTPException(400, "A valid email address is required — use the same email as your Binance account.")
 
-    result = await choice.create_current_account(
-        user_id=str(tid),
+    sub = KycSubmission(
+        trader_id=tid,
+        status="pending_review",
         first_name=body.first_name,
         last_name=body.last_name,
         middle_name=body.middle_name,
@@ -126,44 +159,27 @@ async def submit_mobile_kyc(token: str, body: MobileKycBody, db: AsyncSession = 
         kra_pin=body.kra_pin,
         employment_status=body.employment_status,
         monthly_income=body.monthly_income,
+        front_photo_b64=body.front_photo_b64 or None,
+        back_photo_b64=body.back_photo_b64 or None,
+        selfie_b64=body.selfie_b64 or None,
+        kra_cert_b64=body.kra_cert_b64 or None,
+        kra_cert_content_type=body.kra_cert_content_type,
     )
-    if result.get("code") == "13203":
-        raise HTTPException(400, "This ID is already registered with Choice Bank. Please contact SparkP2P support to resolve this.")
-    if result.get("code") != "00000":
-        raise HTTPException(400, result.get("msg", "Onboarding request failed"))
-
-    onboarding_id = (
-        result.get("onboardingRequestId")
-        or (result.get("data") or {}).get("onboardingRequestId")
-        or ""
-    )
-    if not onboarding_id:
-        raise HTTPException(500, "Choice Bank did not return an onboarding ID")
-
-    # Persist the onboarding link IMMEDIATELY — BEFORE the media uploads — so a hiccup in any
-    # upload can never lose it. (This was the bug: the save ran only AFTER all 4 uploads, so a
-    # single failed upload left choice_kyc_status NULL while the onboarding already existed at
-    # Choice — exactly why an approved KYC never reflected back.) The KYC poller relies on this
-    # "pending:<id>" link to reconcile the approval later.
-    trader.choice_kyc_status = "pending:" + onboarding_id
+    db.add(sub)
+    trader.choice_kyc_status = "staging:pending_review"
     await db.commit()
+    await db.refresh(sub)
+    logger.warning(f"[KYC] Staging submission created: trader={tid} ({trader.full_name}) sub_id={sub.id}")
 
-    # Verify the EMAIL in its OPEN WINDOW — RIGHT AFTER submit, BEFORE any document upload. Choice
-    # starts reviewing once documents are in, which closes the OTP window (13211 "under review").
-    # Confirmed working end-to-end (send -> deliver -> confirmOperation = verified). Documents are
-    # uploaded later, after the user confirms this code, via /kyc/upload-docs. SMS fallback so
-    # onboarding never breaks if email OTP can't be sent.
-    otp_channel = "email"
-    otp_res = await choice.send_otp(onboarding_id, "EMAIL")
-    logger.warning(f"[KYC] {onboarding_id} sendOtp(EMAIL) -> code={otp_res.get('code')} msg={otp_res.get('msg') or otp_res.get('message')}")
-    if otp_res.get("code") != "00000":
-        otp_channel = "sms"
-        sms_res = await choice.send_otp(onboarding_id, "SMS")
-        logger.warning(f"[KYC] {onboarding_id} EMAIL failed; sendOtp(SMS) -> code={sms_res.get('code')} msg={sms_res.get('msg') or sms_res.get('message')}")
-        if sms_res.get("code") != "00000":
-            raise HTTPException(400, "Documents submitted but OTP failed: " + sms_res.get("msg", "OTP error"))
+    try:
+        from app.api.routes.telegram import notify_admin
+        await notify_admin(
+            f"\U0001f4cb New KYC submission from {trader.full_name} (trader #{tid}) — review in Admin → KYC tab."
+        )
+    except Exception as _e:
+        logger.warning(f"[KYC] Admin Telegram notify failed: {_e}")
 
-    return {"onboardingRequestId": onboarding_id, "otp_channel": otp_channel}
+    return {"status": "pending_review", "submission_id": sub.id}
 
 
 class OtpBody(BaseModel):
@@ -173,10 +189,44 @@ class OtpBody(BaseModel):
 
 @router.post("/kyc/otp/{token}")
 async def confirm_mobile_otp(token: str, body: OtpBody, db: AsyncSession = Depends(get_db)):
-    _decode_token(token)
+    """Confirm Choice Bank email OTP. For staged submissions, also uploads images from our DB
+    so the trader goes straight to polling without a separate upload step."""
+    tid = _decode_token(token)
     result = await choice.confirm_otp(body.onboarding_request_id, body.otp)
     if result.get("code") != "00000":
         raise HTTPException(400, result.get("msg", "OTP verification failed"))
+
+    # Look for a staged submission that has the images
+    sub_result = await db.execute(
+        select(KycSubmission)
+        .where(KycSubmission.trader_id == tid)
+        .where(KycSubmission.choice_onboarding_id == body.onboarding_request_id)
+        .limit(1)
+    )
+    sub = sub_result.scalar_one_or_none()
+
+    if sub and sub.front_photo_b64:
+        logger.warning(f"[KYC] uploading from staging sub={sub.id} oid={body.onboarding_request_id}")
+        for media_type, b64 in [
+            ("KYCF00001", sub.front_photo_b64),
+            ("KYCF00002", sub.back_photo_b64),
+            ("KYCF00006", sub.selfie_b64),
+        ]:
+            if not b64:
+                continue
+            upload_res = await choice.upload_kyc_media(body.onboarding_request_id, media_type, b64, "image")
+            logger.warning(f"[KYC] staging upload {media_type} -> code={upload_res.get('code')} msg={upload_res.get('msg') or upload_res.get('message')}")
+            if upload_res.get("code") != "00000":
+                raise HTTPException(400, f"Failed to upload {media_type}: " + upload_res.get("msg", "Upload error"))
+
+        sub.status = "submitted"
+        trader = await db.get(Trader, tid)
+        if trader:
+            trader.choice_kyc_status = "pending:" + body.onboarding_request_id
+        await db.commit()
+        return {"status": "submitted", "onboarding_id": body.onboarding_request_id}
+
+    # Legacy path: no staged submission — frontend will call upload-docs separately
     return {"status": "confirmed"}
 
 
@@ -187,7 +237,6 @@ class ResendOtpBody(BaseModel):
 @router.post("/kyc/resend-otp/{token}")
 async def resend_kyc_otp(token: str, body: ResendOtpBody):
     _decode_token(token)
-    # Try email first, fall back to SMS
     result = await choice.resend_otp(body.onboarding_request_id, "EMAIL")
     if result.get("code") != "00000":
         result = await choice.resend_otp(body.onboarding_request_id, "SMS")
@@ -206,15 +255,23 @@ class UploadDocsBody(BaseModel):
 
 @router.post("/kyc/upload-docs/{token}")
 async def upload_kyc_docs(token: str, body: UploadDocsBody, db: AsyncSession = Depends(get_db)):
-    """Upload the KYC documents AFTER the email OTP is confirmed — so the email OTP fires in its open
-    window (right after submit, before review). Choice current-account docs: ID front/back + selfie."""
+    """Legacy path: upload ID photos after OTP confirm. Staged submissions skip this — images are
+    uploaded in confirm_mobile_otp from the DB. This endpoint stays for the legacy non-staged path."""
     _decode_token(token)
+    oid = body.onboarding_request_id
+    sizes = {
+        "KYCF00001": len(body.front_photo_b64),
+        "KYCF00002": len(body.back_photo_b64),
+        "KYCF00006": len(body.selfie_b64),
+    }
+    logger.warning(f"[KYC] upload-docs {oid} b64_sizes={sizes}")
     for media_type, b64 in [
         ("KYCF00001", body.front_photo_b64),
         ("KYCF00002", body.back_photo_b64),
         ("KYCF00006", body.selfie_b64),
     ]:
-        upload_res = await choice.upload_kyc_media(body.onboarding_request_id, media_type, b64, "image")
+        upload_res = await choice.upload_kyc_media(oid, media_type, b64, "image")
+        logger.warning(f"[KYC] upload-docs {oid} {media_type} -> code={upload_res.get('code')} msg={upload_res.get('msg') or upload_res.get('message')}")
         if upload_res.get("code") != "00000":
             raise HTTPException(400, "Failed to upload " + media_type + ": " + upload_res.get("msg", "Upload error"))
     return {"status": "uploaded"}
@@ -227,7 +284,6 @@ async def poll_mobile_kyc(token: str, onboarding_id: str, db: AsyncSession = Dep
     if not trader:
         raise HTTPException(404)
 
-    # getUserKyc returns numeric status codes (1-9); getOnboardingStatus does not
     kyc_result = await choice.get_user_kyc(onboarding_id)
     kyc_data = kyc_result.get("data") or kyc_result
     status = kyc_data.get("status")
@@ -239,16 +295,13 @@ async def poll_mobile_kyc(token: str, onboarding_id: str, db: AsyncSession = Dep
         status_int = 0
 
     if status_int == 3:
-        # Passed — fetch accountId from getOnboardingStatus (getUserKyc doesn't return it)
         status_result = await choice.get_onboarding_status(onboarding_id)
         status_data = status_result.get("data") or status_result
         aid = status_data.get("accountId") or ""
-        # accountId is the account identifier used for transfers and is also the account number
-        trader.choice_account_id = aid or onboarding_id  # fallback so we mark as approved
+        trader.choice_account_id = aid or onboarding_id
         trader.choice_account_number = aid
         trader.choice_kyc_status = "approved"
         await db.commit()
-        # Notify trader via Telegram, email, and SMS
         try:
             from app.api.routes.telegram import notify_trader
             _tg = (
@@ -292,7 +345,6 @@ async def poll_mobile_kyc(token: str, onboarding_id: str, db: AsyncSession = Dep
         trader.choice_kyc_status = "rejected"
         await db.commit()
     elif status_int == 9:
-        # Manual review — keep pending: prefix so user can resume polling after returning to page
         if not (trader.choice_kyc_status or "").startswith("pending:"):
             trader.choice_kyc_status = "pending:" + onboarding_id
             await db.commit()

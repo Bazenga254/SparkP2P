@@ -2057,8 +2057,41 @@ export default function Dashboard() {
                 🔕 Daily Telegram alert limit reached ({rateLimit.telegram.used}/{rateLimit.telegram.limit}). Alerts resume after the 3:00 AM reset.
               </div>
             )}
-            {/* Choice Bank verification banner — only after profile loads */}
-            {profile && !profile.choice_account_id && (
+            {/* KYC rejection banner — shown when admin rejected our staging submission */}
+            {profile && !profile.choice_account_id && (profile.choice_kyc_status || '').startsWith('rejected_admin:') && (
+              <div onClick={async () => {
+                try {
+                  const res = await kycCreateSession();
+                  const token = res.data.token;
+                  if (isNative()) {
+                    navigate(`/kyc/${token}`);
+                  } else {
+                    const url = `${window.location.origin}/verify-kyc?t=${token}`;
+                    if (window.sparkp2p && window.sparkp2p.openExternal) {
+                      window.sparkp2p.openExternal(url);
+                    } else {
+                      window.open(url, '_blank');
+                    }
+                  }
+                } catch {
+                  setSettingsInitialSection('bank');
+                  setActiveTab('settings');
+                }
+              }}
+                style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 18px', marginBottom: 16, borderRadius: 10,
+                  background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', cursor: 'pointer' }}>
+                <span style={{ fontSize: 18, marginTop: 2 }}>❌</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: '#ef4444', fontWeight: 700, fontSize: 13, marginBottom: 4 }}>KYC Submission Needs Correction</div>
+                  <div style={{ color: '#fca5a5', fontSize: 12, lineHeight: 1.5 }}>
+                    {(profile.choice_kyc_status || '').replace('rejected_admin:', '') || 'Your KYC submission was rejected. Please fix and resubmit.'}
+                  </div>
+                  <div style={{ color: '#ef4444', fontSize: 12, fontWeight: 600, marginTop: 6 }}>Tap to Fix &amp; Resubmit →</div>
+                </div>
+              </div>
+            )}
+            {/* Choice Bank verification banner — only after profile loads (hide if already rejected — rejection banner shows instead) */}
+            {profile && !profile.choice_account_id && !(profile.choice_kyc_status || '').startsWith('rejected_admin:') && (
               <div onClick={async () => {
                 try {
                   const res = await kycCreateSession();

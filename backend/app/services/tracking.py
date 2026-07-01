@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 ONLINE_WINDOW_SECS = 120   # trader considered online if heartbeat within this
 GAP_SECS = 120             # a poll gap larger than this = bot was offline -> reset floor
-POLL_INTERVAL_SECS = 30
+POLL_INTERVAL_SECS = 15
 BOOT_GRACE_SECS = 120   # after backend (re)start, dont reset floors (a restart != trader offline)
 TERMINAL = {"COMPLETED", "CANCELLED", "CANCELLED_BY_SYSTEM"}
 _poller_boot = None
@@ -1004,8 +1004,8 @@ async def track_trader(db, trader) -> int:
                 # the bot's API call arrives. Update now so the monitor query is consistent.
                 if _tt == "BUY" and _cur == "COMPLETED":
                     await db.execute(_sql_text3(
-                        "UPDATE orders SET status = 'completed', settled_at = NOW() "
-                        "WHERE binance_order_number = :o AND status NOT IN ('completed','released')"
+                        "UPDATE orders SET status = 'COMPLETED', settled_at = NOW() "
+                        "WHERE binance_order_number = :o AND status NOT IN ('COMPLETED','RELEASED')"
                     ), {"o": str(ono)})
                 await db.commit()   # release the lock before the (network) Telegram send below
                 # Respect the merchant's notification scope — don't announce the outcome of an

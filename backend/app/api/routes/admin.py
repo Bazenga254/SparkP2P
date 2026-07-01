@@ -155,10 +155,14 @@ async def admin_dashboard(
     )
     internal_count, internal_volume = result.one()
 
-    # KYC pending — traders who submitted Choice Bank onboarding awaiting review/approval.
+    # KYC pending — includes staging submissions awaiting admin review + Choice Bank onboarding
     result = await db.execute(
         select(func.count(Trader.id)).where(
-            or_(Trader.choice_kyc_status.like('pending%'), Trader.choice_kyc_status.like('onboarding%'))
+            or_(
+                Trader.choice_kyc_status.like('pending%'),
+                Trader.choice_kyc_status.like('onboarding%'),
+                Trader.choice_kyc_status.like('staging%'),
+            )
         )
     )
     kyc_pending = result.scalar() or 0
@@ -700,6 +704,61 @@ async def reset_trader_password(
 
     logger.info(f"Password reset for trader {trader.id} ({trader.full_name})")
     return {"status": "ok", "message": "Password reset and sent via SMS"}
+
+
+class ChoiceVerifyEmailIn(BaseModel):
+    document_number: str
+    personal_id_type: str = "101"  # 101=National ID, 102=Alien ID, 103=Passport
+
+
+class ChoiceConfirmEmailOtpIn(BaseModel):
+    application_id: str
+    otp: str
+
+
+@router.post("/traders/{trader_id}/choice-verify-email")
+async def admin_choice_verify_email(
+    trader_id: int,
+    body: ChoiceVerifyEmailIn,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger email OTP verification for a trader's Choice Bank account."""
+    from app.services.choice_bank import client as _cb
+    result = await _cb.verify_email_address(body.document_number, body.personal_id_type)
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=502, detail=result.get("msg") or "Choice Bank error")
+    application_id = (result.get("data") or {}).get("applicationId") or result.get("applicationId") or ""
+    return {"ok": True, "application_id": application_id}
+
+
+@router.post("/traders/{trader_id}/choice-confirm-email-otp")
+async def admin_choice_confirm_email_otp(
+    trader_id: int,
+    body: ChoiceConfirmEmailOtpIn,
+    admin: Trader = Depends(get_admin_trader),
+):
+    """Confirm the email verification OTP for a trader's Choice Bank account."""
+    from app.services.choice_bank import client as _cb
+    result = await _cb.confirm_otp(body.application_id, body.otp)
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=502, detail=result.get("msg") or "OTP confirmation failed")
+    return {"ok": True}
+
+
+@router.post("/traders/{trader_id}/send-test-email")
+async def admin_send_test_email(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a test verification email to the trader's registered email address."""
+    from app.services.email import send_verification_code
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    ok = send_verification_code(trader.email, "TEST-OK")
+    return {"ok": ok, "email": trader.email}
 
 
 @router.post("/traders/{trader_id}/backfill-today")
@@ -3358,6 +3417,258 @@ async def admin_get_kyc_live_status(
             "rejection_reason_msgs": status_data.get("rejectionReasonMsgs") or [],
         },
     }
+
+
+@router.post("/kyc/reset/{trader_id}")
+async def admin_reset_kyc(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset a trader's KYC status to null so they can re-apply via the mobile KYC flow."""
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    if trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="Trader already has an approved Choice Bank account — cannot reset")
+    old_status = trader.choice_kyc_status
+    trader.choice_kyc_status = None
+    await db.commit()
+    await write_audit_log(db, admin, "reset_kyc", target_trader_id=trader_id, detail=f"reset choice_kyc_status from '{old_status}' to null for {trader.full_name}")
+    logger.warning(f"[Admin] KYC reset for trader {trader_id} ({trader.full_name}) by {admin.full_name} — was: {old_status}")
+    return {"status": "ok", "trader_id": trader_id, "trader_name": trader.full_name, "previous_status": old_status}
+
+
+# ── KYC Staging Submission Admin Routes ────────────────────────────────────────
+
+@router.get("/kyc/submissions")
+async def admin_list_kyc_submissions(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all KYC staging submissions (without large image fields)."""
+    from app.models.kyc_submission import KycSubmission
+    result = await db.execute(
+        select(KycSubmission, Trader)
+        .join(Trader, KycSubmission.trader_id == Trader.id)
+        .order_by(
+            # pending_review first, then by newest
+            KycSubmission.status.asc(),
+            KycSubmission.created_at.desc(),
+        )
+    )
+    rows = result.all()
+    return {
+        "submissions": [
+            {
+                "id": sub.id,
+                "trader_id": sub.trader_id,
+                "trader_name": trader.full_name,
+                "trader_phone": trader.phone or "",
+                "status": sub.status,
+                "first_name": sub.first_name,
+                "last_name": sub.last_name,
+                "email": sub.email,
+                "id_number": sub.id_number,
+                "admin_notes": sub.admin_notes or "",
+                "created_at": sub.created_at.isoformat() if sub.created_at else None,
+                "reviewed_at": sub.reviewed_at.isoformat() if sub.reviewed_at else None,
+                "choice_onboarding_id": sub.choice_onboarding_id or "",
+                "has_front": bool(sub.front_photo_b64),
+                "has_back": bool(sub.back_photo_b64),
+                "has_selfie": bool(sub.selfie_b64),
+                "has_kra": bool(sub.kra_cert_b64),
+            }
+            for sub, trader in rows
+        ]
+    }
+
+
+@router.get("/kyc/submission/{submission_id}")
+async def admin_get_kyc_submission(
+    submission_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get full KYC submission including base64 images for admin preview."""
+    from app.models.kyc_submission import KycSubmission
+    sub = await db.get(KycSubmission, submission_id)
+    if not sub:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    trader = await db.get(Trader, sub.trader_id)
+    return {
+        "id": sub.id,
+        "trader_id": sub.trader_id,
+        "trader_name": trader.full_name if trader else "",
+        "trader_phone": trader.phone if trader else "",
+        "status": sub.status,
+        "first_name": sub.first_name,
+        "last_name": sub.last_name,
+        "middle_name": sub.middle_name or "",
+        "mobile": sub.mobile,
+        "id_number": sub.id_number,
+        "birthday": sub.birthday,
+        "gender": sub.gender,
+        "email": sub.email,
+        "address": sub.address,
+        "kra_pin": sub.kra_pin,
+        "employment_status": sub.employment_status,
+        "monthly_income": sub.monthly_income,
+        "front_photo_b64": sub.front_photo_b64 or "",
+        "back_photo_b64": sub.back_photo_b64 or "",
+        "selfie_b64": sub.selfie_b64 or "",
+        "kra_cert_b64": sub.kra_cert_b64 or "",
+        "kra_cert_content_type": sub.kra_cert_content_type or "image",
+        "admin_notes": sub.admin_notes or "",
+        "choice_onboarding_id": sub.choice_onboarding_id or "",
+        "created_at": sub.created_at.isoformat() if sub.created_at else None,
+        "reviewed_at": sub.reviewed_at.isoformat() if sub.reviewed_at else None,
+    }
+
+
+class KycRejectBody(BaseModel):
+    notes: str = ""
+
+
+@router.post("/kyc/submission/{submission_id}/reject")
+async def admin_reject_kyc_submission(
+    submission_id: int,
+    body: KycRejectBody,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reject a KYC submission. Sends email + in-app notification to trader with admin notes."""
+    from datetime import datetime
+    from app.models.kyc_submission import KycSubmission
+    from app.api.deps import log_event
+    sub = await db.get(KycSubmission, submission_id)
+    if not sub:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    trader = await db.get(Trader, sub.trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    notes = (body.notes or "").strip() or "Please review and correct your submission."
+    sub.status = "rejected"
+    sub.admin_notes = notes
+    sub.reviewed_at = datetime.utcnow()
+    trader.choice_kyc_status = "rejected_admin:" + notes[:200]
+    await db.commit()
+
+    await write_audit_log(db, admin, "reject_kyc_submission", target_trader_id=trader.id,
+                          detail=f"Rejected KYC sub #{submission_id} for {trader.full_name}. Notes: {notes}")
+    logger.warning(f"[Admin] KYC sub #{submission_id} REJECTED for trader {trader.id} ({trader.full_name}) by {admin.full_name}")
+
+    try:
+        from app.services.email import send_kyc_rejection_email
+        send_kyc_rejection_email(trader.email, trader.full_name, notes)
+    except Exception as _e:
+        logger.warning(f"[KYC] Rejection email failed: {_e}")
+
+    try:
+        await log_event(db, trader.id,
+                        f"KYC submission rejected: {notes}. Please log in and resubmit via the Choice Bank setup link.", "warning")
+    except Exception as _e:
+        logger.warning(f"[KYC] In-app notify failed: {_e}")
+
+    return {"status": "ok", "submission_id": submission_id}
+
+
+@router.post("/kyc/submission/{submission_id}/approve")
+async def admin_approve_kyc_submission(
+    submission_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Approve a KYC staging submission: creates Choice Bank account, sends OTP to trader.
+    Trader then opens KYC link, enters OTP, and images are uploaded from DB automatically."""
+    from datetime import datetime
+    from app.models.kyc_submission import KycSubmission
+    from app.services.choice_bank import client as choice
+    sub = await db.get(KycSubmission, submission_id)
+    if not sub:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    if sub.status not in ("pending_review", "rejected"):
+        raise HTTPException(status_code=400, detail=f"Submission is already {sub.status}")
+    trader = await db.get(Trader, sub.trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    if trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="Trader already has an approved Choice Bank account")
+
+    # 1. Create Choice Bank account
+    result = await choice.create_current_account(
+        user_id=str(trader.id),
+        first_name=sub.first_name,
+        last_name=sub.last_name,
+        middle_name=sub.middle_name or "",
+        mobile=sub.mobile,
+        id_number=sub.id_number,
+        birthday=sub.birthday,
+        gender=sub.gender,
+        email=sub.email,
+        address=sub.address,
+        kra_pin=sub.kra_pin,
+        employment_status=sub.employment_status,
+        monthly_income=sub.monthly_income,
+    )
+    logger.warning(f"[Admin] KYC approve sub#{submission_id}: create_account code={result.get('code')} msg={result.get('msg')}")
+
+    if result.get("code") == "13203":
+        raise HTTPException(400, "This ID is already registered with Choice Bank. Use 'Reset KYC' and advise the trader to contact support.")
+    if result.get("code") != "00000":
+        raise HTTPException(400, result.get("msg", "Choice Bank onboarding request failed"))
+
+    onboarding_id = (
+        result.get("onboardingRequestId")
+        or (result.get("data") or {}).get("onboardingRequestId")
+        or ""
+    )
+    if not onboarding_id:
+        raise HTTPException(500, "Choice Bank did not return an onboarding ID")
+
+    # 2. Persist onboarding link immediately
+    sub.choice_onboarding_id = onboarding_id
+    trader.choice_kyc_status = "staging:otp_pending"
+    await db.commit()
+
+    # 3. Send OTP to trader (email first, SMS fallback)
+    otp_channel = "email"
+    otp_res = await choice.send_otp(onboarding_id, "EMAIL")
+    logger.warning(f"[Admin] KYC approve sendOtp(EMAIL) -> code={otp_res.get('code')}")
+    if otp_res.get("code") != "00000":
+        otp_channel = "sms"
+        sms_res = await choice.send_otp(onboarding_id, "SMS")
+        logger.warning(f"[Admin] KYC approve sendOtp(SMS) -> code={sms_res.get('code')}")
+        if sms_res.get("code") != "00000":
+            raise HTTPException(400, "Choice Bank account created but OTP send failed: " + sms_res.get("msg", "OTP error"))
+
+    # 4. Mark submission as otp_pending
+    sub.status = "otp_pending"
+    sub.reviewed_at = datetime.utcnow()
+    await db.commit()
+
+    await write_audit_log(db, admin, "approve_kyc_submission", target_trader_id=trader.id,
+                          detail=f"Approved KYC sub #{submission_id} for {trader.full_name}, onboarding_id={onboarding_id}")
+
+    # 5. Notify trader to open KYC link and enter OTP
+    try:
+        from app.api.routes.telegram import notify_trader
+        await notify_trader(trader,
+            "\U0001f3e6 Your KYC has been approved for submission!\n"
+            "Please open the SparkP2P app, go to Settings → Choice Bank, and click 'Set Up' to enter the verification code sent to your email."
+        )
+    except Exception as _e:
+        logger.warning(f"[KYC] Approval notify Telegram failed: {_e}")
+
+    try:
+        from app.services.email import send_kyc_approved_for_otp_email
+        send_kyc_approved_for_otp_email(trader.email, trader.full_name, otp_channel)
+    except Exception as _e:
+        logger.warning(f"[KYC] Approval notify email failed: {_e}")
+
+    return {"status": "ok", "onboarding_id": onboarding_id, "otp_channel": otp_channel}
+
 
 @router.get("/traders/{trader_id}/choice-balance")
 async def admin_get_trader_choice_balance(

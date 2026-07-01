@@ -6,13 +6,14 @@ import axios from 'axios';
 const API = '/api';
 const PROGRESS_STEPS = ['personal', 'contact', 'financial', 'kra-cert', 'id-front', 'id-back', 'selfie'];
 
-function compressImage(file, maxW = 1280, quality = 0.8) {
+function compressImage(file, maxPx = 1280, quality = 0.8) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxW / img.width);
+      // Limit LONGEST side so portrait selfies don't exceed maxPx either
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
       const w = Math.round(img.width * scale);
       const h = Math.round(img.height * scale);
       const canvas = document.createElement('canvas');
@@ -181,6 +182,7 @@ export default function KycMobilePage() {
   const [msg, setMsg] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [rejectionMsg, setRejectionMsg] = useState('');
+  const [uploadError, setUploadError] = useState('');
   const pollingRef = useRef(null);
 
   useEffect(() => {
@@ -188,8 +190,30 @@ export default function KycMobilePage() {
     axios.get(`${API}/kyc/validate/${token}`)
       .then(r => {
         if (r.data.verified) { setStep('done'); setLoading(false); return; }
+        const ks = r.data.kyc_status || '';
+        // Staging flow: our admin pre-validation layer
+        if (ks.startsWith('staging:') || ks.startsWith('rejected_admin:')) {
+          const sub = r.data.submission_status;
+          if (sub === 'otp_pending' && r.data.pending_onboarding_id) {
+            // Admin approved — OTP sent, show OTP input
+            setRequestId(r.data.pending_onboarding_id);
+            setStep('otp');
+          } else if (sub === 'submitted' && r.data.pending_onboarding_id) {
+            // Images uploaded, waiting for Choice Bank decision
+            setRequestId(r.data.pending_onboarding_id);
+            setStep('polling');
+          } else if (sub === 'rejected') {
+            setRejectionMsg(r.data.admin_notes || 'Your submission requires corrections. Please fix and resubmit.');
+            setStep('rejected_admin');
+          } else {
+            // pending_review or unknown — waiting for admin
+            setStep('pending_review');
+          }
+          setLoading(false);
+          return;
+        }
         if (r.data.pending_onboarding_id) {
-          // Already submitted — go straight to polling, skip the form
+          // Already submitted directly to Choice Bank — go straight to polling
           setRequestId(r.data.pending_onboarding_id);
           setStep('polling');
           setLoading(false);
@@ -220,8 +244,14 @@ export default function KycMobilePage() {
           setRejectionMsg(r.data.rejectionReasonMsg || 'Your application was not approved.');
           setStep('rejected');
         }
-      } catch {}
-      if (attempts >= 72) { clearInterval(pollingRef.current); pollingRef.current = null; setMsg({ text: 'Still reviewing. Check back later — this page will update when done.' }); }
+      } catch (err) {
+        // Token expired (400) — stop polling and tell the user to reopen the link
+        if (err.response && err.response.status === 400) {
+          clearInterval(pollingRef.current); pollingRef.current = null;
+          setMsg({ text: 'Session expired. Please re-open the KYC link from the SparkP2P app to check your status.' });
+        }
+      }
+      if (attempts >= 72) { clearInterval(pollingRef.current); pollingRef.current = null; setMsg({ text: 'Still reviewing. Check back later — re-open the KYC link from SparkP2P to see the latest status.' }); }
     }, 10000);
     return () => { if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; } };
   }, [step, requestId, token]);
@@ -241,9 +271,15 @@ export default function KycMobilePage() {
       const b64 = await compressImage(file);
       setFiles(f => ({ ...f, [key]: b64 }));
     } catch {
-      const reader = new FileReader();
-      reader.onload = ev => setFiles(f => ({ ...f, [key]: ev.target.result.split(',')[1] }));
-      reader.readAsDataURL(file);
+      // canvas failed — retry at half resolution before falling back to raw file
+      try {
+        const b64 = await compressImage(file, 640, 0.6);
+        setFiles(f => ({ ...f, [key]: b64 }));
+      } catch {
+        const reader = new FileReader();
+        reader.onload = ev => setFiles(f => ({ ...f, [key]: ev.target.result.split(',')[1] }));
+        reader.readAsDataURL(file);
+      }
     }
   };
 
@@ -264,10 +300,18 @@ export default function KycMobilePage() {
         kra_pin: form.kraPin,
         employment_status: form.employmentStatus,
         monthly_income: form.monthlyIncome,
+        front_photo_b64: files.front || '',
+        back_photo_b64: files.back || '',
+        selfie_b64: files.selfie || '',
+        kra_cert_b64: files.kra || '',
+        kra_cert_content_type: kraContentType,
       });
       if (res.data.status === 'already_verified') { setStep('done'); return; }
+      // Staging: saved to our DB for admin review
+      if (res.data.status === 'pending_review') { setStep('pending_review'); return; }
+      // Legacy (non-staging): OTP sent immediately
       setRequestId(res.data.onboardingRequestId);
-      setStep('otp');   // email OTP already sent; documents upload after it's confirmed
+      setStep('otp');
     } catch (e) {
       setMsg({ text: (e.response && e.response.data && e.response.data.detail) || 'Submission failed. Please try again.' });
     } finally { setSubmitting(false); }
@@ -277,20 +321,51 @@ export default function KycMobilePage() {
     if (!otp.trim()) { setMsg({ text: 'Please enter the code from your email.' }); return; }
     setSubmitting(true); setMsg(null);
     try {
-      // 1) Confirm the email OTP (this verifies the email — its window is open before any uploads).
-      await axios.post(`${API}/kyc/otp/${token}`, { onboarding_request_id: requestId, otp: otp.trim() });
-      // 2) Email verified — NOW upload the documents and let Choice review.
-      await axios.post(`${API}/kyc/upload-docs/${token}`, {
-        onboarding_request_id: requestId,
-        front_photo_b64: files.front,
-        back_photo_b64: files.back,
-        selfie_b64: files.selfie,
-      });
-      setStep('polling'); // polling useEffect takes over from here
+      const r = await axios.post(`${API}/kyc/otp/${token}`, { onboarding_request_id: requestId, otp: otp.trim() });
+      if (r.data.status === 'submitted') {
+        // Staged path: images already uploaded from DB — go straight to polling
+        setRequestId(r.data.onboarding_id || requestId);
+        setStep('polling');
+      } else {
+        // Legacy path: frontend uploads docs next
+        setStep('uploading');
+      }
     } catch (e) {
       setMsg({ text: (e.response && e.response.data && e.response.data.detail) || 'Verification failed. Please try again.' });
     } finally { setSubmitting(false); }
   };
+
+  // Called automatically when landing on 'uploading', and also on manual retry
+  const doUpload = async () => {
+    setSubmitting(true); setUploadError('');
+    try {
+      // Guard: if any image exceeds 1.5 MB as base64, re-compress before sending
+      const compress = async (b64, key) => {
+        if (!b64 || b64.length <= 1.5 * 1024 * 1024) return b64;
+        // Recreate blob from b64 then compress further
+        const byteArr = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const blob = new Blob([byteArr], { type: 'image/jpeg' });
+        const file = new File([blob], key + '.jpg', { type: 'image/jpeg' });
+        try { return await compressImage(file, 800, 0.55); } catch { return b64; }
+      };
+      const front = await compress(files.front, 'front');
+      const back  = await compress(files.back,  'back');
+      const selfie = await compress(files.selfie, 'selfie');
+      await axios.post(`${API}/kyc/upload-docs/${token}`, {
+        onboarding_request_id: requestId,
+        front_photo_b64: front,
+        back_photo_b64: back,
+        selfie_b64: selfie,
+      });
+      setStep('polling');
+    } catch (e) {
+      setUploadError((e.response && e.response.data && e.response.data.detail) || 'Upload failed — please tap Retry.');
+    } finally { setSubmitting(false); }
+  };
+
+  // Auto-trigger upload when entering the uploading step
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (step === 'uploading' && !uploadError) doUpload(); }, [step]);
 
   const setField = (key) => (e) => setForm(f => ({ ...f, [key]: e.target.value }));
 
@@ -329,6 +404,63 @@ export default function KycMobilePage() {
       <div style={{ color: '#6b7280', fontSize: 13, maxWidth: 300, lineHeight: 1.6 }}>
         Please contact SparkP2P support for assistance, or request a new verification link to try again.
       </div>
+    </div>
+  );
+
+  // Admin rejected our staging submission — show reason + fix button
+  if (step === 'rejected_admin') return (
+    <div style={S.center}>
+      <div style={{ fontSize: 64, marginBottom: 20 }}>&#10060;</div>
+      <div style={{ color: '#ef4444', fontSize: 22, fontWeight: 800, marginBottom: 12 }}>Submission Needs Correction</div>
+      <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 12, padding: '16px 20px', maxWidth: 320, marginBottom: 24, textAlign: 'left' }}>
+        <div style={{ color: '#f87171', fontSize: 12, fontWeight: 600, marginBottom: 8 }}>REQUIRED ACTION</div>
+        <div style={{ color: '#fca5a5', fontSize: 14, lineHeight: 1.7 }}>{rejectionMsg}</div>
+      </div>
+      <div style={{ color: '#9ca3af', fontSize: 13, maxWidth: 300, lineHeight: 1.6, marginBottom: 28 }}>
+        Please correct the issues above and resubmit your information for review.
+      </div>
+      <button onClick={() => { setRejectionMsg(''); setStep('personal'); }}
+        style={{ padding: '14px 32px', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', fontWeight: 800, fontSize: 16, cursor: 'pointer' }}>
+        Fix &amp; Resubmit
+      </button>
+    </div>
+  );
+
+  // Submitted to our staging DB, waiting for admin review
+  if (step === 'pending_review') return (
+    <div style={S.center}>
+      <div style={{ width: 60, height: 60, border: '5px solid rgba(245,158,11,0.2)', borderTop: '5px solid #f59e0b', borderRadius: '50%', animation: 'spin 1.5s linear infinite', marginBottom: 28 }} />
+      <div style={{ color: '#fff', fontWeight: 800, fontSize: 22, marginBottom: 10 }}>Submission Under Review</div>
+      <div style={{ color: '#9ca3af', fontSize: 15, maxWidth: 300, lineHeight: 1.7, marginBottom: 20 }}>
+        Your documents have been submitted to the SparkP2P team for verification. We will review them and notify you by email once approved.
+      </div>
+      <div style={{ color: '#6b7280', fontSize: 13, maxWidth: 280, lineHeight: 1.6 }}>
+        This usually takes 1–2 business days. You can close this page — we will email you when it is ready.
+      </div>
+      <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
+    </div>
+  );
+
+  if (step === 'uploading') return (
+    <div style={S.center}>
+      {!uploadError ? (
+        <>
+          <div style={{ width: 60, height: 60, border: '5px solid rgba(16,185,129,0.2)', borderTop: '5px solid #10b981', borderRadius: '50%', animation: 'spin 1s linear infinite', marginBottom: 28 }} />
+          <div style={{ color: '#fff', fontWeight: 800, fontSize: 22, marginBottom: 10 }}>Uploading Documents</div>
+          <div style={{ color: '#9ca3af', fontSize: 15, maxWidth: 300, lineHeight: 1.7 }}>Sending your ID photos to Choice Bank. Please keep this page open…</div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 52, marginBottom: 16 }}>&#9888;&#65039;</div>
+          <div style={{ color: '#ef4444', fontSize: 18, fontWeight: 800, marginBottom: 12 }}>Upload Failed</div>
+          <div style={{ color: '#9ca3af', fontSize: 14, maxWidth: 300, lineHeight: 1.7, marginBottom: 24 }}>{uploadError}</div>
+          <button onClick={() => { setUploadError(''); doUpload(); }} disabled={submitting}
+            style={{ padding: '14px 32px', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', fontWeight: 800, fontSize: 16, cursor: 'pointer' }}>
+            {submitting ? 'Retrying…' : 'Retry Upload'}
+          </button>
+        </>
+      )}
+      <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
     </div>
   );
 

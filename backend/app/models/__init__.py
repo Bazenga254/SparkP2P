@@ -12,6 +12,7 @@ from app.models.survey import SurveyResponse
 from app.models.affiliate import Affiliate, AffiliateEarning, AffiliatePayout, AffiliateStatus, AffiliatePayoutStatus
 from app.models.bot_log import BotLog
 from app.models.squad import Squad, SquadMember
+from app.models.kyc_submission import KycSubmission
 
 __all__ = [
     "Squad", "SquadMember",
@@ -28,4 +29,5 @@ __all__ = [
     "SurveyResponse",
     "Affiliate", "AffiliateEarning", "AffiliatePayout", "AffiliateStatus", "AffiliatePayoutStatus",
     "BotLog",
+    "KycSubmission",
 ]
