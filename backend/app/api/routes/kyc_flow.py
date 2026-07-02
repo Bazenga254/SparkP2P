@@ -237,13 +237,11 @@ class ResendOtpBody(BaseModel):
 @router.post("/kyc/resend-otp/{token}")
 async def resend_kyc_otp(token: str, body: ResendOtpBody):
     _decode_token(token)
-    result = await choice.resend_otp(body.onboarding_request_id, "EMAIL")
-    if result.get("code") != "00000":
-        result = await choice.resend_otp(body.onboarding_request_id, "SMS")
-    if result.get("code") != "00000":
-        raise HTTPException(400, result.get("msg", "Could not resend OTP"))
-    channel = "email" if result.get("code") == "00000" else "sms"
-    return {"status": "sent", "channel": channel}
+    email_res = await choice.resend_otp(body.onboarding_request_id, "EMAIL")
+    sms_res = await choice.resend_otp(body.onboarding_request_id, "SMS")
+    if email_res.get("code") != "00000" and sms_res.get("code") != "00000":
+        raise HTTPException(400, email_res.get("msg") or sms_res.get("msg", "Could not resend OTP"))
+    return {"status": "sent", "channel": "both"}
 
 
 class UploadDocsBody(BaseModel):

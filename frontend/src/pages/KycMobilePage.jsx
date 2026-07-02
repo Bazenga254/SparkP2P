@@ -478,7 +478,7 @@ export default function KycMobilePage() {
     <div style={S.wrap}>
       <div style={S.header}><div style={{ color: '#fff', fontSize: 18, fontWeight: 800, paddingBottom: 16 }}>Enter OTP</div></div>
       <div style={S.body}>
-        <StepTitle icon="&#9993;" title="Verify your email" sub="Choice Bank emailed you a verification code. Enter it here (check the same email you use for Binance)." />
+        <StepTitle icon="&#9993;" title="Enter Verification Code" sub="Choice Bank sent you a code by EMAIL and by SMS. Check both — email may be in your spam/junk folder. Enter the 4-digit code below." />
         <MsgBox msg={msg} />
         <label style={S.lbl}>Verification Code</label>
         <input type="tel" maxLength={6} value={otp} onChange={e => setOtp(e.target.value)}
@@ -491,7 +491,7 @@ export default function KycMobilePage() {
           setMsg({ text: 'Resending...', color: '#f59e0b' });
           try {
             await axios.post(`${API}/kyc/resend-otp/${token}`, { onboarding_request_id: requestId });
-            setMsg({ text: 'Code resent — check your email (and SMS as backup).' });
+            setMsg({ text: 'Code resent to your email AND SMS. Check both, including your spam folder.' });
           } catch { setMsg({ text: 'Could not resend. Please wait a moment and try again.' }); }
         }} disabled={submitting} style={{ marginTop: 12, background: 'none', border: 'none', color: '#6b7280', fontSize: 13, cursor: 'pointer', textDecoration: 'underline' }}>
           Didn't get the code? Resend

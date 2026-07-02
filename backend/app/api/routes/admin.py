@@ -3650,16 +3650,16 @@ async def admin_approve_kyc_submission(
     trader.choice_kyc_status = "staging:otp_pending"
     await db.commit()
 
-    # 3. Send OTP to trader (email first, SMS fallback)
-    otp_channel = "email"
-    otp_res = await choice.send_otp(onboarding_id, "EMAIL")
-    logger.warning(f"[Admin] KYC approve sendOtp(EMAIL) -> code={otp_res.get('code')}")
-    if otp_res.get("code") != "00000":
-        otp_channel = "sms"
-        sms_res = await choice.send_otp(onboarding_id, "SMS")
-        logger.warning(f"[Admin] KYC approve sendOtp(SMS) -> code={sms_res.get('code')}")
-        if sms_res.get("code") != "00000":
-            raise HTTPException(400, "Choice Bank account created but OTP send failed: " + sms_res.get("msg", "OTP error"))
+    # 3. Send OTP to trader — always send BOTH email AND SMS.
+    # Email must be sent to mark it as verified for future transaction OTPs (bot reads from inbox).
+    # SMS is sent unconditionally so the trader has a reliable delivery channel even if email goes to spam.
+    email_res = await choice.send_otp(onboarding_id, "EMAIL")
+    logger.warning(f"[Admin] KYC approve sendOtp(EMAIL) -> code={email_res.get('code')}")
+    sms_res = await choice.send_otp(onboarding_id, "SMS")
+    logger.warning(f"[Admin] KYC approve sendOtp(SMS) -> code={sms_res.get('code')}")
+    if email_res.get("code") != "00000" and sms_res.get("code") != "00000":
+        raise HTTPException(400, "Choice Bank account created but OTP delivery failed on both email and SMS: " + (sms_res.get("msg") or email_res.get("msg", "OTP error")))
+    otp_channel = "both"
 
     # 4. Mark submission as otp_pending
     sub.status = "otp_pending"
@@ -3674,7 +3674,9 @@ async def admin_approve_kyc_submission(
         from app.api.routes.telegram import notify_trader
         await notify_trader(trader,
             "\U0001f3e6 Your KYC has been approved for submission!\n"
-            "Please open the SparkP2P app, go to Settings → Choice Bank, and click 'Set Up' to enter the verification code sent to your email."
+            "Choice Bank has sent you a verification code by EMAIL and by SMS.\n"
+            "Please open the SparkP2P app, go to Settings → Choice Bank, click ‘Set Up’, and enter the code.\n"
+            "⚠️ Check your email spam folder if you don’t see it in your inbox."
         )
     except Exception as _e:
         logger.warning(f"[KYC] Approval notify Telegram failed: {_e}")
