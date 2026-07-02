@@ -3,7 +3,7 @@ import api from '../services/api';
 import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal, Search } from 'lucide-react';
 import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminResetKyc, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense, adminGetKycSubmissions, adminGetKycSubmission, adminApproveKycSubmission, adminRejectKycSubmission } from '../services/api';
 
 const sidebarSections = [
@@ -258,6 +258,8 @@ export default function Admin() {
   const [kycSubActing, setKycSubActing] = useState(null); // submission_id being approved/rejected
   const [kycRejectNotes, setKycRejectNotes] = useState('');
   const [kycRejectTarget, setKycRejectTarget] = useState(null); // submission_id to reject (shows modal)
+  const [kycSearch, setKycSearch] = useState('');
+  const [kycFilter, setKycFilter] = useState('all'); // 'all' | 'approved' | 'pending' | 'none'
   const [choiceFloat, setChoiceFloat] = useState(null);
   const [choiceFloatLoading, setChoiceFloatLoading] = useState(false);
   const [expenses, setExpenses] = useState([]);
@@ -5082,97 +5084,246 @@ export default function Admin() {
             </div>
           )}
 
-          {activeTab === 'kyc' && (
-            <div>
-              <div className="adm-card-header" style={{ marginBottom: 16 }}>
-                <h2 style={{ color: '#fff', margin: 0 }}>KYC Verification</h2>
-                <button className="adm-btn" onClick={() => {
-                  adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {});
-                  adminGetKycSubmissions().then(r => setKycSubmissions(r.data.submissions || [])).catch(() => {});
-                }} style={{ fontSize: 12 }}>
-                  <RefreshCw size={13} /> Refresh
-                </button>
+          {activeTab === 'kyc' && (() => {
+            const kycAvatarColors = [['#FFC968','#F5A524'],['#7DD3FC','#38BDF8'],['#86EFAC','#34D399'],['#F0ABFC','#D946EF'],['#FDA4AF','#FB7185'],['#A5B4FC','#818CF8'],['#FCD34D','#FBBF24'],['#5EEAD4','#2DD4BF']];
+            const kycAvatarColor = (id) => kycAvatarColors[id % kycAvatarColors.length];
+            const kycInitials = (name) => { const p = (name||'').trim().split(/\s+/).filter(Boolean); return p.length === 1 ? p[0].slice(0,2).toUpperCase() : (p[0][0]+(p[p.length-1][0])).toUpperCase(); };
+            const kycDeriveStatus = (t) => {
+              if ((t.choice_kyc_status||'') === 'approved' || t.choice_account_id) return 'approved';
+              const s = t.choice_kyc_status || '';
+              if (s.startsWith('staging:') || s.startsWith('pending:') || s.startsWith('onboarding:') || s.startsWith('rejected_admin:')) return 'pending';
+              return 'none';
+            };
+            const pendingSubs = kycSubmissions.filter(s => s.status === 'pending_review');
+            const totalApproved = kycTraders.filter(t => kycDeriveStatus(t) === 'approved').length;
+            const totalPending = kycTraders.filter(t => kycDeriveStatus(t) === 'pending').length;
+            const totalNone = kycTraders.filter(t => kycDeriveStatus(t) === 'none').length;
+            const q = kycSearch.toLowerCase();
+            const filteredTraders = kycTraders.filter(t => {
+              const matchFilter = kycFilter === 'all' || kycDeriveStatus(t) === kycFilter;
+              const matchQ = !q || (t.full_name||'').toLowerCase().includes(q) || (t.phone||'').toLowerCase().includes(q) || (t.choice_account_id||'').includes(q);
+              return matchFilter && matchQ;
+            });
+            const S = {
+              page: { background: 'radial-gradient(1200px 600px at 78% -10%, rgba(245,165,36,0.06), transparent 60%), #0A0D14', minHeight: '100%' },
+              surface: { background: '#111623', border: '1px solid #1A2130', borderRadius: 14 },
+              surface2: { background: '#151B29' },
+              th: { padding: '13px 20px', textAlign: 'left', fontSize: 11, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#5C6577', background: '#151B29', borderBottom: '1px solid #1A2130', whiteSpace: 'nowrap' },
+              td: { padding: '14px 20px', borderBottom: '1px solid #1A2130', verticalAlign: 'middle' },
+            };
+            return (
+            <div style={S.page}>
+              {/* Page header */}
+              <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap', marginBottom: 26 }}>
+                <div>
+                  <h1 style={{ fontFamily: 'inherit', fontSize: 27, fontWeight: 700, letterSpacing: '-0.02em', margin: 0, color: '#EAEEF5' }}>KYC Verification</h1>
+                  <p style={{ color: '#8A94A6', marginTop: 4, fontSize: 13.5 }}>Review trader identity submissions and approve accounts for trading.</p>
+                </div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button onClick={() => {
+                    adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {});
+                    adminGetKycSubmissions().then(r => setKycSubmissions(r.data.submissions || [])).catch(() => {});
+                  }} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 16px', borderRadius: 10, fontWeight: 600, fontSize: 13, cursor: 'pointer', border: '1px solid #232B3A', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', boxShadow: '0 8px 18px -8px rgba(245,165,36,0.6)' }}>
+                    <RefreshCw size={14} /> Refresh
+                  </button>
+                </div>
               </div>
 
-              {/* ── Staging Submissions (admin review layer) ─────────────── */}
-              <div className="adm-card" style={{ marginBottom: 20 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-                  <h3 style={{ margin: 0, color: '#fff', fontSize: 16 }}>Submissions Pending Review</h3>
-                  {kycSubmissions.filter(s => s.status === 'pending_review').length > 0 && (
-                    <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '2px 8px', fontSize: 12, fontWeight: 700 }}>
-                      {kycSubmissions.filter(s => s.status === 'pending_review').length}
-                    </span>
-                  )}
-                </div>
-                {kycSubmissions.length === 0 ? (
-                  <div style={{ color: '#6b7280', fontSize: 13, textAlign: 'center', padding: '20px 0' }}>No submissions yet.</div>
+              {/* Stats row */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 30 }}>
+                {[
+                  { label: 'Total Traders', val: kycTraders.length, note: 'On the platform', ic: '👥', icBg: 'rgba(138,148,166,0.12)', icColor: '#8A94A6', valColor: '#EAEEF5' },
+                  { label: 'Approved', val: totalApproved, note: 'Verified & trading', ic: '✅', icBg: 'rgba(52,211,153,0.13)', icColor: '#34D399', valColor: '#34D399' },
+                  { label: 'Pending Review', val: totalPending, note: 'Awaiting approval', ic: '⏳', icBg: 'rgba(245,165,36,0.12)', icColor: '#F5A524', valColor: '#F5A524' },
+                  { label: 'Not Started', val: totalNone, note: 'No submission yet', ic: '○', icBg: 'rgba(96,110,135,0.14)', icColor: '#8A94A6', valColor: '#EAEEF5' },
+                ].map(({ label, val, note, ic, icBg, icColor, valColor }) => (
+                  <div key={label} style={{ ...S.surface, padding: '18px 20px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 12, color: '#8A94A6', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+                      <span style={{ width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', background: icBg, color: icColor, fontSize: 14 }}>{ic}</span>
+                    </div>
+                    <div style={{ fontFamily: 'inherit', fontSize: 30, fontWeight: 700, marginTop: 12, letterSpacing: '-0.02em', color: valColor }}>{val}</div>
+                    <div style={{ fontSize: 12, color: '#5C6577', marginTop: 3 }}>{note}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Pending submissions */}
+              <h2 style={{ fontFamily: 'inherit', fontSize: 15, fontWeight: 600, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 9, color: '#EAEEF5' }}>
+                Submissions Pending Review
+                {pendingSubs.length > 0 && (
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(248,113,113,0.12)', color: '#F87171', border: '1px solid rgba(248,113,113,0.3)' }}>{pendingSubs.length}</span>
+                )}
+              </h2>
+              <div style={{ ...S.surface, marginBottom: 30, overflow: 'hidden' }}>
+                {pendingSubs.length === 0 ? (
+                  <div style={{ padding: '42px 24px', textAlign: 'center' }}>
+                    <div style={{ width: 52, height: 52, borderRadius: 14, margin: '0 auto 14px', display: 'grid', placeItems: 'center', background: '#151B29', border: '1px solid #232B3A', color: '#8A94A6', fontSize: 22 }}>📋</div>
+                    <div style={{ fontWeight: 600, fontSize: 15, color: '#EAEEF5' }}>Nothing waiting on you</div>
+                    <div style={{ color: '#8A94A6', fontSize: 13, marginTop: 4 }}>New identity submissions will appear here for approval.</div>
+                  </div>
                 ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr>{['Trader','Name','ID Number','Email','Docs','Status','Submitted','Actions'].map(h => <th key={h} style={{ ...S.th, paddingLeft: 14, paddingRight: 14 }}>{h}</th>)}</tr>
+                      </thead>
+                      <tbody>
+                        {pendingSubs.map(sub => {
+                          const [c0,c1] = kycAvatarColor(sub.trader_id);
+                          return (
+                            <tr key={sub.id} style={{ transition: 'background .12s' }} onMouseEnter={e => e.currentTarget.style.background='#151B29'} onMouseLeave={e => e.currentTarget.style.background=''}>
+                              <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14, color: '#5C6577', fontSize: 12, fontFamily: 'monospace' }}>#{sub.trader_id}</td>
+                              <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <div style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 11, color: '#0A0D14', background: `linear-gradient(135deg,${c0},${c1})` }}>{kycInitials(sub.trader_name)}</div>
+                                  <span style={{ fontWeight: 600, fontSize: 13, color: '#EAEEF5', whiteSpace: 'nowrap' }}>{sub.trader_name}</span>
+                                </div>
+                              </td>
+                              <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14, fontFamily: 'monospace', fontSize: 12.5, color: '#EAEEF5' }}>{sub.id_number}</td>
+                              <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14, color: '#8A94A6', fontSize: 13, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub.email}</td>
+                              <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14 }}>
+                                <div style={{ display: 'flex', gap: 4 }}>
+                                  {[['F','ID front',sub.has_front],['B','ID back',sub.has_back],['S','Selfie',sub.has_selfie],['K','KRA cert',sub.has_kra]].map(([lbl,title,has]) => (
+                                    <span key={lbl} title={title} style={{ width: 22, height: 22, borderRadius: 6, border: `1px solid ${has ? 'rgba(52,211,153,0.35)' : '#232B3A'}`, background: has ? 'rgba(52,211,153,0.1)' : '#151B29', color: has ? '#34D399' : '#5C6577', fontFamily: 'monospace', fontSize: 10, fontWeight: 700, display: 'grid', placeItems: 'center' }}>{lbl}</span>
+                                  ))}
+                                </div>
+                              </td>
+                              <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14 }}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, fontSize: 11.5, fontWeight: 600, background: 'rgba(245,165,36,0.12)', color: '#F5A524', border: '1px solid rgba(245,165,36,0.28)', whiteSpace: 'nowrap' }}>⏳ Pending</span>
+                              </td>
+                              <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14, fontFamily: 'monospace', fontSize: 12, color: '#8A94A6', whiteSpace: 'nowrap' }}>
+                                {sub.created_at ? new Date(sub.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
+                              </td>
+                              <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14 }}>
+                                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                  <button
+                                    disabled={kycSubLoading && kycSubDetail?.id === sub.id}
+                                    onClick={async () => { setKycSubLoading(true); try { const r = await adminGetKycSubmission(sub.id); setKycSubDetail(r.data); } catch { alert('Failed to load'); } finally { setKycSubLoading(false); } }}
+                                    style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(245,165,36,0.4)', background: 'rgba(245,165,36,0.12)', color: '#FFB53D', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                                    👁 {kycSubLoading && kycSubDetail?.id === sub.id ? '…' : 'Review'}
+                                  </button>
+                                  <button
+                                    disabled={kycSubActing === sub.id}
+                                    onClick={async () => {
+                                      if (!window.confirm(`Approve ${sub.trader_name}'s KYC and submit to Choice Bank?`)) return;
+                                      setKycSubActing(sub.id);
+                                      try { await adminApproveKycSubmission(sub.id); const r = await adminGetKycSubmissions(); setKycSubmissions(r.data.submissions || []); alert('Approved! OTP sent to trader.'); }
+                                      catch (e) { alert(e?.response?.data?.detail || 'Approval failed'); }
+                                      finally { setKycSubActing(null); }
+                                    }}
+                                    style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(52,211,153,0.28)', background: 'rgba(52,211,153,0.13)', color: '#34D399', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                                    ✓ {kycSubActing === sub.id ? '…' : 'Approve'}
+                                  </button>
+                                  <button
+                                    disabled={kycSubActing === sub.id}
+                                    onClick={() => { setKycRejectTarget(sub.id); setKycRejectNotes(''); }}
+                                    style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(248,113,113,0.35)', background: 'rgba(248,113,113,0.12)', color: '#F87171', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                                    ✕ Reject
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* All Traders */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+                <h2 style={{ fontFamily: 'inherit', fontSize: 15, fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: 9, color: '#EAEEF5' }}>
+                  All Traders
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(245,165,36,0.12)', color: '#F5A524', border: '1px solid rgba(245,165,36,0.28)' }}>{filteredTraders.length}</span>
+                </h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  {/* Search */}
+                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                    <Search size={14} style={{ position: 'absolute', left: 10, color: '#5C6577', pointerEvents: 'none' }} />
+                    <input
+                      value={kycSearch} onChange={e => setKycSearch(e.target.value)}
+                      placeholder="Search name, phone, ID…"
+                      style={{ background: '#111623', border: '1px solid #232B3A', color: '#EAEEF5', borderRadius: 10, padding: '9px 12px 9px 32px', fontSize: 13, width: 220, fontFamily: 'inherit', outline: 'none' }}
+                    />
+                  </div>
+                  {/* Filter pills */}
+                  <div style={{ display: 'flex', background: '#111623', border: '1px solid #232B3A', borderRadius: 10, padding: 3, gap: 2 }}>
+                    {[['all','All'],['approved','Approved'],['pending','Pending'],['none','Not started']].map(([f,label]) => (
+                      <button key={f} onClick={() => setKycFilter(f)}
+                        style={{ padding: '6px 13px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, border: kycFilter === f ? '1px solid #232B3A' : '1px solid transparent', background: kycFilter === f ? '#19212F' : 'transparent', color: kycFilter === f ? '#EAEEF5' : '#8A94A6', cursor: 'pointer' }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div style={{ ...S.surface, overflow: 'hidden' }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
-                      <tr style={{ borderBottom: '1px solid #1f2937' }}>
-                        {['Trader', 'Name', 'ID Number', 'Email', 'Docs', 'Status', 'Submitted', 'Actions'].map(h => (
-                          <th key={h} style={{ padding: '6px 10px', textAlign: 'left', color: '#6b7280', fontWeight: 600, fontSize: 12 }}>{h}</th>
-                        ))}
-                      </tr>
+                      <tr>{['#','Trader','Phone','Account ID','Status','Actions'].map(h => <th key={h} style={{ ...S.th, textAlign: h === 'Actions' ? 'right' : 'left' }}>{h}</th>)}</tr>
                     </thead>
                     <tbody>
-                      {kycSubmissions.map(sub => {
-                        const statusColor = sub.status === 'pending_review' ? '#78350f' : sub.status === 'rejected' ? '#7f1d1d' : sub.status === 'otp_pending' ? '#1e3a5f' : sub.status === 'submitted' ? '#14532d' : '#374151';
-                        const statusLabel = sub.status === 'pending_review' ? '⏳ Pending' : sub.status === 'rejected' ? '❌ Rejected' : sub.status === 'otp_pending' ? '📧 OTP Sent' : sub.status === 'submitted' ? '✅ Submitted' : sub.status;
+                      {filteredTraders.length === 0 ? (
+                        <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: '#8A94A6' }}>No traders match your search.</td></tr>
+                      ) : filteredTraders.map(t => {
+                        const [c0,c1] = kycAvatarColor(t.id);
+                        const ds = kycDeriveStatus(t);
+                        const statusPill = ds === 'approved'
+                          ? <span style={{ display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,background:'rgba(52,211,153,0.13)',color:'#34D399',border:'1px solid rgba(52,211,153,0.28)',whiteSpace:'nowrap' }}>✓ Approved</span>
+                          : ds === 'pending'
+                          ? <span style={{ display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,background:'rgba(245,165,36,0.12)',color:'#F5A524',border:'1px solid rgba(245,165,36,0.28)',whiteSpace:'nowrap' }}>⏳ Pending</span>
+                          : <span style={{ display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,background:'rgba(138,148,166,0.10)',color:'#8A94A6',border:'1px solid #232B3A',whiteSpace:'nowrap' }}>— None</span>;
                         return (
-                          <tr key={sub.id} style={{ borderBottom: '1px solid #111827' }}>
-                            <td style={{ padding: '8px 10px', color: '#6b7280', fontSize: 12 }}>#{sub.trader_id}</td>
-                            <td style={{ padding: '8px 10px', color: '#fff', fontWeight: 600 }}>{sub.trader_name}</td>
-                            <td style={{ padding: '8px 10px', color: '#9ca3af', fontFamily: 'monospace', fontSize: 12 }}>{sub.id_number}</td>
-                            <td style={{ padding: '8px 10px', color: '#9ca3af', fontSize: 12 }}>{sub.email}</td>
-                            <td style={{ padding: '8px 10px', fontSize: 12 }}>
-                              <span title="ID Front" style={{ color: sub.has_front ? '#10b981' : '#ef4444' }}>F</span>
-                              <span title="ID Back" style={{ color: sub.has_back ? '#10b981' : '#ef4444' }}> B</span>
-                              <span title="Selfie" style={{ color: sub.has_selfie ? '#10b981' : '#ef4444' }}> S</span>
-                              <span title="KRA Cert" style={{ color: sub.has_kra ? '#10b981' : '#9ca3af' }}> K</span>
+                          <tr key={t.id} onMouseEnter={e => e.currentTarget.style.background='#151B29'} onMouseLeave={e => e.currentTarget.style.background=''} style={{ transition: 'background .12s' }}>
+                            <td style={{ ...S.td, color: '#5C6577', fontFamily: 'monospace', fontSize: 12 }}>{String(t.id).padStart(2,'0')}</td>
+                            <td style={S.td}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 12, color: '#0A0D14', background: `linear-gradient(135deg,${c0},${c1})` }}>{kycInitials(t.full_name)}</div>
+                                <div>
+                                  <div style={{ fontWeight: 600, fontSize: 13.5, color: '#EAEEF5' }}>{t.full_name}</div>
+                                  <div style={{ fontSize: 11.5, color: '#5C6577' }}>Trader #{t.id}</div>
+                                </div>
+                              </div>
                             </td>
-                            <td style={{ padding: '8px 10px' }}>
-                              <span style={{ background: statusColor, color: '#fff', padding: '2px 7px', borderRadius: 4, fontSize: 11 }}>{statusLabel}</span>
+                            <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 12.5, color: '#8A94A6', whiteSpace: 'nowrap' }}>{t.phone || '—'}</td>
+                            <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 12.5, color: t.choice_account_id ? '#EAEEF5' : '#5C6577' }}>
+                              {t.choice_account_id || (t.onboarding_id ? t.onboarding_id.slice(-12) : '—')}
                             </td>
-                            <td style={{ padding: '8px 10px', color: '#6b7280', fontSize: 11 }}>
-                              {sub.created_at ? new Date(sub.created_at).toLocaleDateString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }) : '—'}
-                            </td>
-                            <td style={{ padding: '8px 10px' }}>
-                              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                                <button className="adm-btn" style={{ fontSize: 11, padding: '3px 8px' }}
-                                  disabled={kycSubLoading && kycSubDetail?.id === sub.id}
-                                  onClick={async () => {
-                                    setKycSubLoading(true);
-                                    try {
-                                      const r = await adminGetKycSubmission(sub.id);
-                                      setKycSubDetail(r.data);
-                                    } catch { alert('Failed to load submission'); }
-                                    finally { setKycSubLoading(false); }
-                                  }}>
-                                  {kycSubLoading && kycSubDetail?.id === sub.id ? '…' : 'Review'}
-                                </button>
-                                {sub.status === 'pending_review' && (
+                            <td style={S.td}>{statusPill}</td>
+                            <td style={{ ...S.td, textAlign: 'right' }}>
+                              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                                {ds === 'approved' ? (
+                                  <span style={{ display:'inline-flex',alignItems:'center',gap:6,color:'#34D399',fontSize:12.5,fontWeight:600 }}>✓ Approved</span>
+                                ) : (
                                   <>
-                                    <button className="adm-btn" style={{ fontSize: 11, padding: '3px 8px', background: '#065f46', color: '#6ee7b7' }}
-                                      disabled={kycSubActing === sub.id}
-                                      onClick={async () => {
-                                        if (!window.confirm(`Approve ${sub.trader_name}'s KYC and submit to Choice Bank?`)) return;
-                                        setKycSubActing(sub.id);
-                                        try {
-                                          await adminApproveKycSubmission(sub.id);
-                                          const r = await adminGetKycSubmissions();
-                                          setKycSubmissions(r.data.submissions || []);
-                                          alert('Approved! OTP sent to trader.');
-                                        } catch (e) { alert(e?.response?.data?.detail || 'Approval failed'); }
-                                        finally { setKycSubActing(null); }
-                                      }}>
-                                      {kycSubActing === sub.id ? '…' : '✓ Approve'}
-                                    </button>
-                                    <button className="adm-btn" style={{ fontSize: 11, padding: '3px 8px', background: '#7f1d1d', color: '#fca5a5' }}
-                                      disabled={kycSubActing === sub.id}
-                                      onClick={() => { setKycRejectTarget(sub.id); setKycRejectNotes(''); }}>
-                                      ✕ Reject
-                                    </button>
+                                    {t.onboarding_id && (
+                                      <button
+                                        disabled={kycLiveLoading && kycSelectedTrader === t.id}
+                                        onClick={async () => { setKycSelectedTrader(t.id); setKycLiveResult(null); setKycLiveLoading(true); try { const r = await adminGetKycLiveStatus(t.id); setKycLiveResult(r.data); } catch (e) { setKycLiveResult({ error: e?.response?.data?.detail || 'API error' }); } finally { setKycLiveLoading(false); } }}
+                                        style={{ padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600, border: '1px solid #232B3A', background: '#151B29', color: '#EAEEF5', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                        {kycLiveLoading && kycSelectedTrader === t.id ? 'Checking…' : '🔍 Check Live'}
+                                      </button>
+                                    )}
+                                    {!t.choice_account_id && t.choice_kyc_status && t.choice_kyc_status !== 'approved' && (
+                                      <button
+                                        disabled={kycResetting === t.id}
+                                        onClick={async () => {
+                                          if (!window.confirm(`Reset KYC for ${t.full_name}? They will need to re-apply from scratch.`)) return;
+                                          setKycResetting(t.id);
+                                          try { await adminResetKyc(t.id); const r = await adminGetKycTraders(); setKycTraders(r.data.traders || []); }
+                                          catch (e) { alert(e?.response?.data?.detail || 'Reset failed'); }
+                                          finally { setKycResetting(null); }
+                                        }}
+                                        style={{ padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600, border: '1px solid rgba(248,113,113,0.35)', background: 'transparent', color: '#F87171', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                        {kycResetting === t.id ? 'Resetting…' : '↺ Reset KYC'}
+                                      </button>
+                                    )}
+                                    {!t.onboarding_id && (!t.choice_kyc_status || t.choice_kyc_status === 'approved') && (
+                                      <span style={{ fontSize: 12.5, color: '#5C6577' }}>Not started</span>
+                                    )}
                                   </>
                                 )}
                               </div>
@@ -5182,298 +5333,51 @@ export default function Admin() {
                       })}
                     </tbody>
                   </table>
-                )}
-              </div>
-
-              {/* Reject modal */}
-              {kycRejectTarget && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-                  <div style={{ background: '#13151f', border: '1px solid #1f2937', borderRadius: 16, padding: 28, width: '100%', maxWidth: 420 }}>
-                    <h3 style={{ color: '#ef4444', margin: '0 0 16px' }}>Reject KYC Submission</h3>
-                    <div style={{ color: '#9ca3af', fontSize: 13, marginBottom: 12 }}>
-                      Tell the trader what to correct. This note will be emailed to them and shown in their dashboard.
-                    </div>
-                    <textarea
-                      value={kycRejectNotes}
-                      onChange={e => setKycRejectNotes(e.target.value)}
-                      placeholder="e.g. ID photo is blurry — please retake. Selfie does not show your face clearly."
-                      style={{ width: '100%', background: '#0d0f1e', border: '1px solid #374151', borderRadius: 10, color: '#fff', padding: '12px 14px', fontSize: 14, minHeight: 120, resize: 'vertical', boxSizing: 'border-box', outline: 'none', marginBottom: 16 }}
-                    />
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <button className="adm-btn" style={{ flex: 1, background: '#7f1d1d', color: '#fca5a5', fontWeight: 700 }}
-                        disabled={kycSubActing === kycRejectTarget}
-                        onClick={async () => {
-                          if (!kycRejectNotes.trim()) { alert('Please enter rejection notes.'); return; }
-                          setKycSubActing(kycRejectTarget);
-                          try {
-                            await adminRejectKycSubmission(kycRejectTarget, kycRejectNotes.trim());
-                            const r = await adminGetKycSubmissions();
-                            setKycSubmissions(r.data.submissions || []);
-                            setKycRejectTarget(null);
-                            setKycRejectNotes('');
-                            alert('Submission rejected. Email sent to trader.');
-                          } catch (e) { alert(e?.response?.data?.detail || 'Rejection failed'); }
-                          finally { setKycSubActing(null); }
-                        }}>
-                        {kycSubActing === kycRejectTarget ? 'Rejecting…' : 'Send Rejection'}
-                      </button>
-                      <button className="adm-btn" style={{ flex: 1 }} onClick={() => { setKycRejectTarget(null); setKycRejectNotes(''); }}>Cancel</button>
-                    </div>
-                  </div>
                 </div>
-              )}
-
-              {/* Submission detail modal — images + all fields */}
-              {kycSubDetail && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 9998, overflowY: 'auto', padding: '20px 16px' }}>
-                  <div style={{ background: '#13151f', border: '1px solid #1f2937', borderRadius: 16, padding: 24, maxWidth: 660, margin: '0 auto' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                      <h3 style={{ margin: 0, color: '#fff' }}>KYC Review — {kycSubDetail.trader_name}</h3>
-                      <button onClick={() => setKycSubDetail(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 20 }}>✕</button>
-                    </div>
-                    {/* Personal data grid */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 20px', marginBottom: 20, fontSize: 13 }}>
-                      {[
-                        ['First Name', kycSubDetail.first_name],
-                        ['Last Name', kycSubDetail.last_name],
-                        ['Middle Name', kycSubDetail.middle_name || '—'],
-                        ['Mobile', kycSubDetail.mobile],
-                        ['ID Number', kycSubDetail.id_number],
-                        ['Birthday', kycSubDetail.birthday],
-                        ['Gender', kycSubDetail.gender === 1 ? 'Male' : 'Female'],
-                        ['Email', kycSubDetail.email],
-                        ['KRA PIN', kycSubDetail.kra_pin],
-                        ['Employment', kycSubDetail.employment_status],
-                        ['Income', kycSubDetail.monthly_income],
-                        ['Address', kycSubDetail.address],
-                      ].map(([lbl, val]) => (
-                        <div key={lbl}>
-                          <div style={{ color: '#6b7280', fontSize: 11, marginBottom: 2 }}>{lbl}</div>
-                          <div style={{ color: '#fff', fontWeight: 500, wordBreak: 'break-all' }}>{val}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {/* Document images */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
-                      {[['ID Front', kycSubDetail.front_photo_b64], ['ID Back', kycSubDetail.back_photo_b64], ['Selfie', kycSubDetail.selfie_b64]].map(([lbl, b64]) => (
-                        <div key={lbl}>
-                          <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 6 }}>{lbl}</div>
-                          {b64 ? <img src={`data:image/jpeg;base64,${b64}`} alt={lbl} style={{ width: '100%', borderRadius: 8, border: '1px solid #374151' }} /> : <div style={{ color: '#6b7280', fontSize: 12, padding: 20, textAlign: 'center', border: '1px dashed #374151', borderRadius: 8 }}>No image</div>}
-                        </div>
-                      ))}
-                      {kycSubDetail.kra_cert_b64 && (
-                        <div>
-                          <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 6 }}>KRA Certificate</div>
-                          {kycSubDetail.kra_cert_content_type === 'pdf' ? (
-                            <div
-                              onClick={() => {
-                                const blob = new Blob([Uint8Array.from(atob(kycSubDetail.kra_cert_b64), c => c.charCodeAt(0))], { type: 'application/pdf' });
-                                window.open(URL.createObjectURL(blob), '_blank');
-                              }}
-                              style={{ padding: '14px 12px', background: '#0d1117', border: '1px solid #374151', borderRadius: 8, color: '#10b981', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
-                            >
-                              📄 PDF uploaded — <span style={{ textDecoration: 'underline' }}>Click to open</span>
-                            </div>
-                          ) : (
-                            <img src={`data:image/jpeg;base64,${kycSubDetail.kra_cert_b64}`} alt="KRA Cert" style={{ width: '100%', borderRadius: 8, border: '1px solid #374151' }} />
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    {/* Action buttons */}
-                    {kycSubDetail.status === 'pending_review' && (
-                      <div style={{ display: 'flex', gap: 10 }}>
-                        <button className="adm-btn" style={{ flex: 1, background: '#065f46', color: '#6ee7b7', fontWeight: 700 }}
-                          disabled={kycSubActing === kycSubDetail.id}
-                          onClick={async () => {
-                            if (!window.confirm(`Approve ${kycSubDetail.trader_name} and submit to Choice Bank?`)) return;
-                            setKycSubActing(kycSubDetail.id);
-                            try {
-                              await adminApproveKycSubmission(kycSubDetail.id);
-                              const r = await adminGetKycSubmissions();
-                              setKycSubmissions(r.data.submissions || []);
-                              setKycSubDetail(null);
-                              alert('Approved! OTP sent to trader.');
-                            } catch (e) { alert(e?.response?.data?.detail || 'Approval failed'); }
-                            finally { setKycSubActing(null); }
-                          }}>
-                          {kycSubActing === kycSubDetail.id ? 'Approving…' : '✓ Approve & Submit to Choice Bank'}
-                        </button>
-                        <button className="adm-btn" style={{ flex: 1, background: '#7f1d1d', color: '#fca5a5', fontWeight: 700 }}
-                          onClick={() => { setKycRejectTarget(kycSubDetail.id); setKycRejectNotes(''); setKycSubDetail(null); }}>
-                          ✕ Reject
-                        </button>
-                      </div>
-                    )}
-                    {kycSubDetail.admin_notes && (
-                      <div style={{ marginTop: 12, background: '#0d1117', border: '1px solid #374151', borderRadius: 8, padding: 12, color: '#9ca3af', fontSize: 13 }}>
-                        <strong style={{ color: '#6b7280' }}>Admin notes:</strong> {kycSubDetail.admin_notes}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Trader KYC table */}
-              <div className="adm-card" style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid #1f2937' }}>
-                      {['#', 'Name', 'Phone', 'DB Status', 'Account ID', 'Actions'].map(h => (
-                        <th key={h} style={{ padding: '8px 12px', textAlign: 'left', color: '#6b7280', fontWeight: 600 }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {kycTraders.map(t => {
-                      const status = t.choice_kyc_status || '';
-                      let badge = { label: 'None', color: '#374151' };
-                      if (status === 'approved') badge = { label: 'Approved ✅', color: '#065f46' };
-                      else if (status === 'rejected') badge = { label: 'Rejected ❌', color: '#7f1d1d' };
-                      else if (status.startsWith('pending:')) badge = { label: 'Pending Review ⏳', color: '#78350f' };
-                      else if (status.startsWith('onboarding:')) badge = { label: 'Submitted', color: '#1e3a5f' };
-                      return (
-                        <tr key={t.id} style={{ borderBottom: '1px solid #111827' }}>
-                          <td style={{ padding: '10px 12px', color: '#6b7280' }}>{t.id}</td>
-                          <td style={{ padding: '10px 12px', color: '#fff', fontWeight: 600 }}>{t.full_name}</td>
-                          <td style={{ padding: '10px 12px', color: '#9ca3af' }}>{t.phone || '—'}</td>
-                          <td style={{ padding: '10px 12px' }}>
-                            <span style={{ background: badge.color, color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 11 }}>{badge.label}</span>
-                          </td>
-                          <td style={{ padding: '10px 12px', color: '#9ca3af', fontSize: 12 }}>
-                            {t.choice_account_id || (t.onboarding_id ? t.onboarding_id.slice(-12) : '—')}
-                          </td>
-                          <td style={{ padding: '10px 12px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            {t.onboarding_id ? (
-                              <button
-                                className="adm-btn"
-                                style={{ fontSize: 11, padding: '4px 10px' }}
-                                disabled={kycLiveLoading && kycSelectedTrader === t.id}
-                                onClick={async () => {
-                                  setKycSelectedTrader(t.id);
-                                  setKycLiveResult(null);
-                                  setKycLiveLoading(true);
-                                  try {
-                                    const r = await adminGetKycLiveStatus(t.id);
-                                    setKycLiveResult(r.data);
-                                  } catch (e) {
-                                    setKycLiveResult({ error: e?.response?.data?.detail || 'API error' });
-                                  } finally {
-                                    setKycLiveLoading(false);
-                                  }
-                                }}
-                              >
-                                {kycLiveLoading && kycSelectedTrader === t.id ? 'Checking...' : 'Check Live'}
-                              </button>
-                            ) : (
-                              <span style={{ fontSize: 11, color:
-                                t.choice_kyc_status === 'approved' ? '#6b7280' :
-                                t.choice_kyc_status === 'rejected' ? '#ef4444' : '#374151'
-                              }}>
-                                {t.choice_kyc_status === 'approved' ? '✅ Approved' :
-                                 t.choice_kyc_status === 'rejected' ? '❌ Rejected' : 'Not started'}
-                              </span>
-                            )}
-                            {!t.choice_account_id && t.choice_kyc_status && t.choice_kyc_status !== 'approved' && (
-                              <button
-                                className="adm-btn"
-                                style={{ fontSize: 11, padding: '4px 10px', background: '#7f1d1d', color: '#fca5a5' }}
-                                disabled={kycResetting === t.id}
-                                onClick={async () => {
-                                  if (!window.confirm(`Reset KYC for ${t.full_name}? They will need to re-apply from scratch.`)) return;
-                                  setKycResetting(t.id);
-                                  try {
-                                    await adminResetKyc(t.id);
-                                    const r = await adminGetKycTraders();
-                                    setKycTraders(r.data.traders || []);
-                                  } catch (e) {
-                                    alert(e?.response?.data?.detail || 'Reset failed');
-                                  } finally { setKycResetting(null); }
-                                }}
-                              >
-                                {kycResetting === t.id ? 'Resetting…' : 'Reset KYC'}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
               </div>
 
               {/* Live KYC result panel */}
               {kycLiveResult && (
-                <div className="adm-card" style={{ marginTop: 16 }}>
+                <div style={{ ...S.surface, marginTop: 16, padding: 20 }}>
                   {kycLiveResult.error ? (
-                    <div style={{ color: '#f87171', padding: 16 }}>Error: {kycLiveResult.error}</div>
+                    <div style={{ color: '#F87171', padding: 8 }}>Error: {kycLiveResult.error}</div>
                   ) : (() => {
                     const k = kycLiveResult.kyc || {};
                     const o = kycLiveResult.onboarding || {};
-                    const statusColors = { 'Passed': '#065f46', 'Rejected': '#7f1d1d', 'Manual Review': '#78350f', 'Processing': '#1e3a5f', 'Submitted': '#1e3a5f' };
-                    const profileColors = { 'Validated': '#065f46', 'Declined': '#7f1d1d' };
-                    const sColor = statusColors[k.status_label?.split(' ')[0]] || '#374151';
-                    const pColor = profileColors[k.profile_check_label] || '#374151';
+                    const sColor = k.status_label?.includes('Pass') ? '#065f46' : k.status_label?.includes('Reject') ? '#7f1d1d' : '#1e3a5f';
+                    const pColor = k.profile_check_label?.includes('Validated') ? '#065f46' : k.profile_check_label?.includes('Declined') ? '#7f1d1d' : '#374151';
                     return (
                       <div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                          <h3 style={{ margin: 0, color: '#fff' }}>{kycLiveResult.trader_name}</h3>
-                          <button onClick={() => setKycLiveResult(null)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 18 }}>✕</button>
+                          <h3 style={{ margin: 0, color: '#EAEEF5' }}>{kycLiveResult.trader_name}</h3>
+                          <button onClick={() => setKycLiveResult(null)} style={{ background: 'none', border: 'none', color: '#8A94A6', cursor: 'pointer', fontSize: 18 }}>✕</button>
                         </div>
-                        <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 16 }}>
-                          Onboarding ID: {kycLiveResult.onboarding_id}
-                        </div>
-
-                        {/* Status badges */}
+                        <div style={{ fontSize: 11, color: '#5C6577', marginBottom: 16, fontFamily: 'monospace' }}>Onboarding ID: {kycLiveResult.onboarding_id}</div>
                         <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-                          <div style={{ background: sColor, color: '#fff', padding: '6px 14px', borderRadius: 6, fontWeight: 700, fontSize: 13 }}>
-                            KYC: {k.status_label}
-                          </div>
-                          <div style={{ background: pColor, color: '#fff', padding: '6px 14px', borderRadius: 6, fontWeight: 700, fontSize: 13 }}>
-                            Profile Check: {k.profile_check_label}
-                          </div>
+                          <div style={{ background: sColor, color: '#fff', padding: '6px 14px', borderRadius: 6, fontWeight: 700, fontSize: 13 }}>KYC: {k.status_label}</div>
+                          <div style={{ background: pColor, color: '#fff', padding: '6px 14px', borderRadius: 6, fontWeight: 700, fontSize: 13 }}>Profile Check: {k.profile_check_label}</div>
                         </div>
-
-                        {/* Profile check result */}
                         {k.profile_check_result_text && (
-                          <div style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 8, padding: 12, marginBottom: 16 }}>
-                            <span style={{ color: '#6b7280', fontSize: 12 }}>Profile Check Result: </span>
-                            <span style={{ color: '#d1d5db', fontSize: 13 }}>{k.profile_check_result_text} ({k.profile_check_result_code})</span>
+                          <div style={{ background: '#0d1117', border: '1px solid #1A2130', borderRadius: 8, padding: 12, marginBottom: 16 }}>
+                            <span style={{ color: '#5C6577', fontSize: 12 }}>Profile Check Result: </span>
+                            <span style={{ color: '#EAEEF5', fontSize: 13 }}>{k.profile_check_result_text} ({k.profile_check_result_code})</span>
                           </div>
                         )}
-
-                        {/* KYC fields */}
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 24px', marginBottom: 16 }}>
-                          {[
-                            ['Full Name', k.full_name],
-                            ['ID Number', k.id_number],
-                            ['KRA PIN', k.kra_pin],
-                            ['Mobile', k.mobile],
-                            ['Email', k.email],
-                            ['Employment', k.employment_status],
-                          ].map(([label, val]) => val ? (
-                            <div key={label}>
-                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>{label}</div>
-                              <div style={{ color: '#fff', fontSize: 13, fontWeight: 500 }}>{val}</div>
-                            </div>
+                          {[['Full Name',k.full_name],['ID Number',k.id_number],['KRA PIN',k.kra_pin],['Mobile',k.mobile],['Email',k.email],['Employment',k.employment_status]].map(([lbl,val]) => val ? (
+                            <div key={lbl}><div style={{ fontSize: 11, color: '#5C6577', marginBottom: 2 }}>{lbl}</div><div style={{ color: '#EAEEF5', fontSize: 13, fontWeight: 500 }}>{val}</div></div>
                           ) : null)}
                         </div>
-
-                        {/* Account ID if approved */}
                         {o.account_id && (
                           <div style={{ background: '#052e16', border: '1px solid #166534', borderRadius: 8, padding: 12, marginBottom: 12 }}>
                             <div style={{ fontSize: 11, color: '#4ade80', marginBottom: 4 }}>Choice Bank Account ID</div>
                             <div style={{ color: '#86efac', fontFamily: 'monospace', fontSize: 15, fontWeight: 700 }}>{o.account_id}</div>
                           </div>
                         )}
-
-                        {/* Rejection reasons */}
-                        {o.rejection_reason_msgs && o.rejection_reason_msgs.length > 0 && (
+                        {o.rejection_reason_msgs?.length > 0 && (
                           <div style={{ background: '#1c0a0a', border: '1px solid #991b1b', borderRadius: 8, padding: 12 }}>
-                            <div style={{ fontSize: 11, color: '#f87171', marginBottom: 8, fontWeight: 600 }}>Rejection Reasons</div>
-                            {o.rejection_reason_msgs.map((msg, i) => (
-                              <div key={i} style={{ color: '#fca5a5', fontSize: 13, marginBottom: 4 }}>• {msg}</div>
-                            ))}
+                            <div style={{ fontSize: 11, color: '#F87171', marginBottom: 8, fontWeight: 600 }}>Rejection Reasons</div>
+                            {o.rejection_reason_msgs.map((msg, i) => <div key={i} style={{ color: '#fca5a5', fontSize: 13, marginBottom: 4 }}>• {msg}</div>)}
                           </div>
                         )}
                       </div>
@@ -5481,8 +5385,104 @@ export default function Admin() {
                   })()}
                 </div>
               )}
+
+              {/* Reject modal */}
+              {kycRejectTarget && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                  <div style={{ background: '#111623', border: '1px solid #1A2130', borderRadius: 16, padding: 28, width: '100%', maxWidth: 420 }}>
+                    <h3 style={{ color: '#F87171', margin: '0 0 16px' }}>Reject KYC Submission</h3>
+                    <div style={{ color: '#8A94A6', fontSize: 13, marginBottom: 12 }}>Tell the trader what to correct. This note will be emailed to them.</div>
+                    <textarea
+                      value={kycRejectNotes} onChange={e => setKycRejectNotes(e.target.value)}
+                      placeholder="e.g. ID photo is blurry — please retake. Selfie does not show your face clearly."
+                      style={{ width: '100%', background: '#0A0D14', border: '1px solid #232B3A', borderRadius: 10, color: '#EAEEF5', padding: '12px 14px', fontSize: 14, minHeight: 120, resize: 'vertical', boxSizing: 'border-box', outline: 'none', marginBottom: 16, fontFamily: 'inherit' }}
+                    />
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button
+                        disabled={kycSubActing === kycRejectTarget}
+                        onClick={async () => {
+                          if (!kycRejectNotes.trim()) { alert('Please enter rejection notes.'); return; }
+                          setKycSubActing(kycRejectTarget);
+                          try { await adminRejectKycSubmission(kycRejectTarget, kycRejectNotes.trim()); const r = await adminGetKycSubmissions(); setKycSubmissions(r.data.submissions || []); setKycRejectTarget(null); setKycRejectNotes(''); alert('Submission rejected. Email sent to trader.'); }
+                          catch (e) { alert(e?.response?.data?.detail || 'Rejection failed'); }
+                          finally { setKycSubActing(null); }
+                        }}
+                        style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: '1px solid rgba(248,113,113,0.35)', background: 'rgba(248,113,113,0.12)', color: '#F87171', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+                        {kycSubActing === kycRejectTarget ? 'Rejecting…' : 'Send Rejection'}
+                      </button>
+                      <button onClick={() => { setKycRejectTarget(null); setKycRejectNotes(''); }}
+                        style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: '1px solid #232B3A', background: '#151B29', color: '#EAEEF5', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Submission detail modal */}
+              {kycSubDetail && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9998, overflowY: 'auto', padding: '20px 16px' }}>
+                  <div style={{ background: '#111623', border: '1px solid #1A2130', borderRadius: 16, padding: 24, maxWidth: 660, margin: '0 auto' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                      <h3 style={{ margin: 0, color: '#EAEEF5' }}>KYC Review — {kycSubDetail.trader_name}</h3>
+                      <button onClick={() => setKycSubDetail(null)} style={{ background: 'none', border: 'none', color: '#8A94A6', cursor: 'pointer', fontSize: 20 }}>✕</button>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 20px', marginBottom: 20, fontSize: 13 }}>
+                      {[['First Name',kycSubDetail.first_name],['Last Name',kycSubDetail.last_name],['Middle Name',kycSubDetail.middle_name||'—'],['Mobile',kycSubDetail.mobile],['ID Number',kycSubDetail.id_number],['Birthday',kycSubDetail.birthday],['Gender',kycSubDetail.gender===1?'Male':'Female'],['Email',kycSubDetail.email],['KRA PIN',kycSubDetail.kra_pin],['Employment',kycSubDetail.employment_status],['Income',kycSubDetail.monthly_income],['Address',kycSubDetail.address]].map(([lbl,val]) => (
+                        <div key={lbl}><div style={{ color: '#5C6577', fontSize: 11, marginBottom: 2 }}>{lbl}</div><div style={{ color: '#EAEEF5', fontWeight: 500, wordBreak: 'break-all' }}>{val}</div></div>
+                      ))}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+                      {[['ID Front',kycSubDetail.front_photo_b64],['ID Back',kycSubDetail.back_photo_b64],['Selfie',kycSubDetail.selfie_b64]].map(([lbl,b64]) => (
+                        <div key={lbl}>
+                          <div style={{ color: '#8A94A6', fontSize: 12, marginBottom: 6 }}>{lbl}</div>
+                          {b64 ? <img src={`data:image/jpeg;base64,${b64}`} alt={lbl} style={{ width: '100%', borderRadius: 8, border: '1px solid #232B3A' }} /> : <div style={{ color: '#5C6577', fontSize: 12, padding: 20, textAlign: 'center', border: '1px dashed #232B3A', borderRadius: 8 }}>No image</div>}
+                        </div>
+                      ))}
+                      {kycSubDetail.kra_cert_b64 && (
+                        <div>
+                          <div style={{ color: '#8A94A6', fontSize: 12, marginBottom: 6 }}>KRA Certificate</div>
+                          {kycSubDetail.kra_cert_content_type === 'pdf' ? (
+                            <div onClick={() => { const blob = new Blob([Uint8Array.from(atob(kycSubDetail.kra_cert_b64), c => c.charCodeAt(0))], { type: 'application/pdf' }); window.open(URL.createObjectURL(blob), '_blank'); }}
+                              style={{ padding: '14px 12px', background: '#0A0D14', border: '1px solid #232B3A', borderRadius: 8, color: '#34D399', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+                              📄 PDF uploaded — <span style={{ textDecoration: 'underline' }}>Click to open</span>
+                            </div>
+                          ) : (
+                            <img src={`data:image/jpeg;base64,${kycSubDetail.kra_cert_b64}`} alt="KRA Cert" style={{ width: '100%', borderRadius: 8, border: '1px solid #232B3A' }} />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {kycSubDetail.status === 'pending_review' && (
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <button disabled={kycSubActing === kycSubDetail.id}
+                          onClick={async () => {
+                            if (!window.confirm(`Approve ${kycSubDetail.trader_name} and submit to Choice Bank?`)) return;
+                            setKycSubActing(kycSubDetail.id);
+                            try { await adminApproveKycSubmission(kycSubDetail.id); const r = await adminGetKycSubmissions(); setKycSubmissions(r.data.submissions || []); setKycSubDetail(null); alert('Approved! OTP sent to trader.'); }
+                            catch (e) { alert(e?.response?.data?.detail || 'Approval failed'); }
+                            finally { setKycSubActing(null); }
+                          }}
+                          style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: '1px solid rgba(52,211,153,0.28)', background: 'rgba(52,211,153,0.13)', color: '#34D399', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+                          {kycSubActing === kycSubDetail.id ? 'Approving…' : '✓ Approve & Submit to Choice Bank'}
+                        </button>
+                        <button onClick={() => { setKycRejectTarget(kycSubDetail.id); setKycRejectNotes(''); setKycSubDetail(null); }}
+                          style={{ flex: 1, padding: '10px 0', borderRadius: 10, border: '1px solid rgba(248,113,113,0.35)', background: 'rgba(248,113,113,0.12)', color: '#F87171', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+                          ✕ Reject
+                        </button>
+                      </div>
+                    )}
+                    {kycSubDetail.admin_notes && (
+                      <div style={{ marginTop: 12, background: '#0A0D14', border: '1px solid #1A2130', borderRadius: 8, padding: 12, color: '#8A94A6', fontSize: 13 }}>
+                        <strong style={{ color: '#5C6577' }}>Admin notes:</strong> {kycSubDetail.admin_notes}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+            );
+          })()}
 
         </div>
       </div>
