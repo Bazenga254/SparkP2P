@@ -3614,8 +3614,10 @@ async def admin_approve_kyc_submission(
     if trader.choice_account_id:
         raise HTTPException(status_code=400, detail="Trader already has an approved Choice Bank account")
 
-    # 1. Create Choice Bank account
-    result = await choice.create_current_account(
+    # 1. Create Choice Bank account using the easy (v3) endpoint — same one that
+    # produced Benson and Bonito's approved Current Accounts. Photos go inline so
+    # no separate uploadMedia step is needed; OTP still required after submission.
+    result = await choice.create_wallet_account(
         user_id=str(trader.id),
         first_name=sub.first_name,
         last_name=sub.last_name,
@@ -3626,9 +3628,9 @@ async def admin_approve_kyc_submission(
         gender=sub.gender,
         email=sub.email,
         address=sub.address,
-        kra_pin=sub.kra_pin,
-        employment_status=sub.employment_status,
-        monthly_income=sub.monthly_income,
+        front_photo_b64=sub.front_photo_b64 or "",
+        back_photo_b64=sub.back_photo_b64 or "",
+        selfie_b64=sub.selfie_b64 or "",
     )
     logger.warning(f"[Admin] KYC approve sub#{submission_id}: create_account code={result.get('code')} msg={result.get('msg')}")
 

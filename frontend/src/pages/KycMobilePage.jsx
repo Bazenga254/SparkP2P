@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import axios from 'axios';
+import '@smile_identity/smart-camera-web';
 
 const API = '/api';
 const PROGRESS_STEPS = ['personal', 'contact', 'financial', 'kra-cert', 'id-front', 'id-back', 'selfie'];
@@ -675,13 +676,31 @@ export default function KycMobilePage() {
     </div>
   );
 
-  // Step 7: Selfie
+  // Step 7: Selfie — Smile ID liveness check (same SDK that approved Benson & Bonito)
+  const smileRef = useRef(null);
+  useEffect(() => {
+    if (step !== 'selfie') return;
+    const cam = smileRef.current;
+    if (!cam) return;
+    const onCapture = (e) => {
+      const imgs = ((e.detail) || {}).images || [];
+      const img = imgs[0];
+      if (img && img.image) {
+        // strip data URI prefix if present
+        const b64 = img.image.replace(/^data:image\/[^;]+;base64,/, '');
+        setFiles(f => ({ ...f, selfie: b64 }));
+      }
+    };
+    cam.addEventListener('imagesComputed', onCapture);
+    return () => cam.removeEventListener('imagesComputed', onCapture);
+  }, [step]);
+
   if (step === 'selfie') return (
     <div style={S.wrap}>
       <div style={S.header}><ProgressBar step={step} /></div>
       <div style={S.body}>
         <button onClick={() => setStep('id-back')} style={S.back}>&#8592; Back</button>
-        <StepTitle icon="&#129331;" title="Selfie Photo" sub="Use your front camera to take a clear selfie. Look directly at the camera with good lighting." />
+        <StepTitle icon="&#129331;" title="Liveness Check" sub="Complete the face scan below. Look directly at the camera and follow the on-screen prompts." />
         <MsgBox msg={msg} />
         {files.selfie ? (
           <div>
@@ -689,19 +708,16 @@ export default function KycMobilePage() {
               <img src={`data:image/jpeg;base64,${files.selfie}`} alt="Selfie" style={{ width: '100%', display: 'block' }} />
             </div>
             <button onClick={() => setFiles(f => ({ ...f, selfie: '' }))} style={{ width: '100%', padding: '13px 0', borderRadius: 12, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 15, cursor: 'pointer', marginBottom: 12 }}>
-              Retake Selfie
+              Redo Liveness Check
             </button>
             <button onClick={submitKyc} disabled={submitting} style={S.nextBtn(submitting)}>
               {submitting ? 'Submitting...' : 'Submit for KYC Review'}
             </button>
           </div>
         ) : (
-          <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '48px 24px', borderRadius: 16, border: '2px dashed #374151', background: '#13151f', cursor: 'pointer', textAlign: 'center' }}>
-            <span style={{ fontSize: 52 }}>&#129331;</span>
-            <span style={{ color: '#d1d5db', fontWeight: 700, fontSize: 17 }}>Tap to take selfie</span>
-            <span style={{ color: '#6b7280', fontSize: 13 }}>Uses your front camera</span>
-            <input type="file" accept="image/*" capture="user" style={{ display: 'none' }} onChange={e => handleFile(e, 'selfie')} />
-          </label>
+          <div style={{ borderRadius: 16, overflow: 'hidden', background: '#13151f', border: '1px solid #374151' }}>
+            <smart-camera-web ref={smileRef} capture-id="selfie" />
+          </div>
         )}
       </div>
       <style>{'*{box-sizing:border-box}'}</style>

@@ -205,20 +205,10 @@ async def confirm_mobile_otp(token: str, body: OtpBody, db: AsyncSession = Depen
     )
     sub = sub_result.scalar_one_or_none()
 
-    if sub and sub.front_photo_b64:
-        logger.warning(f"[KYC] uploading from staging sub={sub.id} oid={body.onboarding_request_id}")
-        for media_type, b64 in [
-            ("KYCF00001", sub.front_photo_b64),
-            ("KYCF00002", sub.back_photo_b64),
-            ("KYCF00006", sub.selfie_b64),
-        ]:
-            if not b64:
-                continue
-            upload_res = await choice.upload_kyc_media(body.onboarding_request_id, media_type, b64, "image")
-            logger.warning(f"[KYC] staging upload {media_type} -> code={upload_res.get('code')} msg={upload_res.get('msg') or upload_res.get('message')}")
-            if upload_res.get("code") != "00000":
-                raise HTTPException(400, f"Failed to upload {media_type}: " + upload_res.get("msg", "Upload error"))
-
+    if sub:
+        # Photos were already submitted inline when the admin called create_wallet_account.
+        # OTP confirmation is all that's needed — no separate uploadMedia step.
+        logger.warning(f"[KYC] OTP confirmed for staging sub={sub.id} oid={body.onboarding_request_id}")
         sub.status = "submitted"
         trader = await db.get(Trader, tid)
         if trader:
@@ -226,7 +216,7 @@ async def confirm_mobile_otp(token: str, body: OtpBody, db: AsyncSession = Depen
         await db.commit()
         return {"status": "submitted", "onboarding_id": body.onboarding_request_id}
 
-    # Legacy path: no staged submission — frontend will call upload-docs separately
+    # Legacy path: no staged submission
     return {"status": "confirmed"}
 
 
