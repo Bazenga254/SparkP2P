@@ -5265,7 +5265,15 @@ export default function Admin() {
                         <div>
                           <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 6 }}>KRA Certificate</div>
                           {kycSubDetail.kra_cert_content_type === 'pdf' ? (
-                            <div style={{ padding: '14px 12px', background: '#0d1117', border: '1px solid #374151', borderRadius: 8, color: '#10b981', fontSize: 13 }}>📄 PDF uploaded</div>
+                            <div
+                              onClick={() => {
+                                const blob = new Blob([Uint8Array.from(atob(kycSubDetail.kra_cert_b64), c => c.charCodeAt(0))], { type: 'application/pdf' });
+                                window.open(URL.createObjectURL(blob), '_blank');
+                              }}
+                              style={{ padding: '14px 12px', background: '#0d1117', border: '1px solid #374151', borderRadius: 8, color: '#10b981', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                            >
+                              📄 PDF uploaded — <span style={{ textDecoration: 'underline' }}>Click to open</span>
+                            </div>
                           ) : (
                             <img src={`data:image/jpeg;base64,${kycSubDetail.kra_cert_b64}`} alt="KRA Cert" style={{ width: '100%', borderRadius: 8, border: '1px solid #374151' }} />
                           )}
