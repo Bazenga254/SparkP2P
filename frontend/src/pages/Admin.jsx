@@ -4,7 +4,7 @@ import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPaym
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal, Search } from 'lucide-react';
-import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminResetKyc, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense, adminGetKycSubmissions, adminGetKycSubmission, adminApproveKycSubmission, adminRejectKycSubmission } from '../services/api';
+import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminResetKyc, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense, adminGetKycSubmissions, adminGetKycSubmission, adminApproveKycSubmission, adminRejectKycSubmission, adminConfirmKycOtp, adminResendKycOtp } from '../services/api';
 
 const sidebarSections = [
   {
@@ -258,6 +258,10 @@ export default function Admin() {
   const [kycSubActing, setKycSubActing] = useState(null); // submission_id being approved/rejected
   const [kycRejectNotes, setKycRejectNotes] = useState('');
   const [kycRejectTarget, setKycRejectTarget] = useState(null); // submission_id to reject (shows modal)
+  const [kycOtpTarget, setKycOtpTarget] = useState(null); // submission_id with OTP modal open
+  const [kycOtpInput, setKycOtpInput] = useState('');
+  const [kycOtpLoading, setKycOtpLoading] = useState(false);
+  const [kycOtpMsg, setKycOtpMsg] = useState('');
   const [kycSearch, setKycSearch] = useState('');
   const [kycFilter, setKycFilter] = useState('all'); // 'all' | 'approved' | 'pending' | 'none'
   const [choiceFloat, setChoiceFloat] = useState(null);
@@ -5094,7 +5098,17 @@ export default function Admin() {
               if (s.startsWith('staging:') || s.startsWith('pending:') || s.startsWith('onboarding:') || s.startsWith('rejected_admin:')) return 'pending';
               return 'none';
             };
-            const pendingSubs = kycSubmissions.filter(s => s.status === 'pending_review');
+            const pendingSubs = (() => {
+              // For each trader, only show their latest submission (highest id) that is actionable
+              const actionable = kycSubmissions.filter(s => s.status === 'pending_review' || s.status === 'otp_pending');
+              const latestByTrader = {};
+              for (const s of actionable) {
+                if (!latestByTrader[s.trader_id] || s.id > latestByTrader[s.trader_id].id) {
+                  latestByTrader[s.trader_id] = s;
+                }
+              }
+              return Object.values(latestByTrader).sort((a, b) => b.id - a.id);
+            })();
             const totalApproved = kycTraders.filter(t => kycDeriveStatus(t) === 'approved').length;
             const totalPending = kycTraders.filter(t => kycDeriveStatus(t) === 'pending').length;
             const totalNone = kycTraders.filter(t => kycDeriveStatus(t) === 'none').length;
@@ -5190,38 +5204,55 @@ export default function Admin() {
                                 </div>
                               </td>
                               <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14 }}>
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, fontSize: 11.5, fontWeight: 600, background: 'rgba(245,165,36,0.12)', color: '#F5A524', border: '1px solid rgba(245,165,36,0.28)', whiteSpace: 'nowrap' }}>⏳ Pending</span>
+                                {sub.status === 'otp_pending'
+                                  ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, fontSize: 11.5, fontWeight: 600, background: 'rgba(59,130,246,0.13)', color: '#60A5FA', border: '1px solid rgba(59,130,246,0.28)', whiteSpace: 'nowrap' }}>📤 Sent · OTP Pending</span>
+                                  : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, fontSize: 11.5, fontWeight: 600, background: 'rgba(245,165,36,0.12)', color: '#F5A524', border: '1px solid rgba(245,165,36,0.28)', whiteSpace: 'nowrap' }}>⏳ Pending Review</span>}
                               </td>
                               <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14, fontFamily: 'monospace', fontSize: 12, color: '#8A94A6', whiteSpace: 'nowrap' }}>
                                 {sub.created_at ? new Date(sub.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
                               </td>
                               <td style={{ ...S.td, paddingLeft: 14, paddingRight: 14 }}>
-                                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                                  <button
-                                    disabled={kycSubLoading && kycSubDetail?.id === sub.id}
-                                    onClick={async () => { setKycSubLoading(true); try { const r = await adminGetKycSubmission(sub.id); setKycSubDetail(r.data); } catch { alert('Failed to load'); } finally { setKycSubLoading(false); } }}
-                                    style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(245,165,36,0.4)', background: 'rgba(245,165,36,0.12)', color: '#FFB53D', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-                                    👁 {kycSubLoading && kycSubDetail?.id === sub.id ? '…' : 'Review'}
-                                  </button>
-                                  <button
-                                    disabled={kycSubActing === sub.id}
-                                    onClick={async () => {
-                                      if (!window.confirm(`Approve ${sub.trader_name}'s KYC and submit to Choice Bank?`)) return;
-                                      setKycSubActing(sub.id);
-                                      try { await adminApproveKycSubmission(sub.id); const r = await adminGetKycSubmissions(); setKycSubmissions(r.data.submissions || []); alert('Approved! OTP sent to trader.'); }
-                                      catch (e) { alert(e?.response?.data?.detail || 'Approval failed'); }
-                                      finally { setKycSubActing(null); }
-                                    }}
-                                    style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(52,211,153,0.28)', background: 'rgba(52,211,153,0.13)', color: '#34D399', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-                                    ✓ {kycSubActing === sub.id ? '…' : 'Approve'}
-                                  </button>
-                                  <button
-                                    disabled={kycSubActing === sub.id}
-                                    onClick={() => { setKycRejectTarget(sub.id); setKycRejectNotes(''); }}
-                                    style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(248,113,113,0.35)', background: 'rgba(248,113,113,0.12)', color: '#F87171', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-                                    ✕ Reject
-                                  </button>
-                                </div>
+                                {sub.status === 'otp_pending' ? (
+                                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                                    <button
+                                      onClick={async () => { setKycOtpTarget(sub); setKycOtpInput(''); setKycOtpMsg(''); try { await adminResendKycOtp(sub.id); setKycOtpMsg('OTP resent to email + SMS'); } catch { setKycOtpMsg(''); } }}
+                                      style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(245,165,36,0.4)', background: 'rgba(245,165,36,0.12)', color: '#FFB53D', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                      🔁 Resend OTP
+                                    </button>
+                                    <button
+                                      onClick={() => { setKycOtpTarget(sub); setKycOtpInput(''); setKycOtpMsg(''); }}
+                                      style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(59,130,246,0.4)', background: 'rgba(59,130,246,0.13)', color: '#60A5FA', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                      🔑 Enter OTP
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                    <button
+                                      disabled={kycSubLoading && kycSubDetail?.id === sub.id}
+                                      onClick={async () => { setKycSubLoading(true); try { const r = await adminGetKycSubmission(sub.id); setKycSubDetail(r.data); } catch { alert('Failed to load'); } finally { setKycSubLoading(false); } }}
+                                      style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(245,165,36,0.4)', background: 'rgba(245,165,36,0.12)', color: '#FFB53D', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                                      👁 {kycSubLoading && kycSubDetail?.id === sub.id ? '…' : 'Review'}
+                                    </button>
+                                    <button
+                                      disabled={kycSubActing === sub.id}
+                                      onClick={async () => {
+                                        if (!window.confirm(`Approve ${sub.trader_name}'s KYC and submit to Choice Bank?`)) return;
+                                        setKycSubActing(sub.id);
+                                        try { await adminApproveKycSubmission(sub.id); const r = await adminGetKycSubmissions(); setKycSubmissions(r.data.submissions || []); const [rt] = await Promise.all([adminGetKycTraders()]); setKycTraders((rt.data||{}).traders||[]); alert('✅ All data + photos sent to Choice Bank successfully.\n\nOTP sent to trader\'s EMAIL and SMS.\n\nCall the trader and ask them to read the OTP code shown on their phone, then click "Enter OTP" to confirm it.'); }
+                                        catch (e) { alert(e?.response?.data?.detail || 'Approval failed'); }
+                                        finally { setKycSubActing(null); }
+                                      }}
+                                      style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(52,211,153,0.28)', background: 'rgba(52,211,153,0.13)', color: '#34D399', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                                      ✓ {kycSubActing === sub.id ? '…' : 'Approve'}
+                                    </button>
+                                    <button
+                                      disabled={kycSubActing === sub.id}
+                                      onClick={() => { setKycRejectTarget(sub.id); setKycRejectNotes(''); }}
+                                      style={{ padding: '5px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px solid rgba(248,113,113,0.35)', background: 'rgba(248,113,113,0.12)', color: '#F87171', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                                      ✕ Reject
+                                    </button>
+                                  </div>
+                                )}
                               </td>
                             </tr>
                           );
@@ -5271,10 +5302,17 @@ export default function Admin() {
                       ) : filteredTraders.map(t => {
                         const [c0,c1] = kycAvatarColor(t.id);
                         const ds = kycDeriveStatus(t);
+                        const ks = t.choice_kyc_status || '';
                         const statusPill = ds === 'approved'
                           ? <span style={{ display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,background:'rgba(52,211,153,0.13)',color:'#34D399',border:'1px solid rgba(52,211,153,0.28)',whiteSpace:'nowrap' }}>✓ Approved</span>
+                          : (ks === 'staging:otp_pending' || ks.startsWith('onboarding:'))
+                          ? <span style={{ display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,background:'rgba(59,130,246,0.13)',color:'#60A5FA',border:'1px solid rgba(59,130,246,0.28)',whiteSpace:'nowrap' }}>📤 Sent · OTP Pending</span>
+                          : ks.startsWith('pending:')
+                          ? <span style={{ display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,background:'rgba(139,92,246,0.13)',color:'#A78BFA',border:'1px solid rgba(139,92,246,0.28)',whiteSpace:'nowrap' }}>🔄 OTP Done · CB Reviewing</span>
+                          : ks.startsWith('rejected_admin:')
+                          ? <span style={{ display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,background:'rgba(239,68,68,0.12)',color:'#F87171',border:'1px solid rgba(239,68,68,0.28)',whiteSpace:'nowrap' }}>✗ Admin Rejected</span>
                           : ds === 'pending'
-                          ? <span style={{ display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,background:'rgba(245,165,36,0.12)',color:'#F5A524',border:'1px solid rgba(245,165,36,0.28)',whiteSpace:'nowrap' }}>⏳ Pending</span>
+                          ? <span style={{ display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,background:'rgba(245,165,36,0.12)',color:'#F5A524',border:'1px solid rgba(245,165,36,0.28)',whiteSpace:'nowrap' }}>⏳ Under Review</span>
                           : <span style={{ display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',borderRadius:20,fontSize:11.5,fontWeight:600,background:'rgba(138,148,166,0.10)',color:'#8A94A6',border:'1px solid #232B3A',whiteSpace:'nowrap' }}>— None</span>;
                         return (
                           <tr key={t.id} onMouseEnter={e => e.currentTarget.style.background='#151B29'} onMouseLeave={e => e.currentTarget.style.background=''} style={{ transition: 'background .12s' }}>
@@ -5387,6 +5425,54 @@ export default function Admin() {
               )}
 
               {/* Reject modal */}
+              {kycOtpTarget && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.80)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                  <div style={{ background: '#111623', border: '1px solid #1A2130', borderRadius: 16, padding: 28, width: '100%', maxWidth: 400 }}>
+                    <div style={{ fontSize: 28, marginBottom: 12, textAlign: 'center' }}>🔑</div>
+                    <h3 style={{ color: '#60A5FA', margin: '0 0 6px', textAlign: 'center' }}>Enter OTP for {kycOtpTarget.trader_name}</h3>
+                    <div style={{ color: '#8A94A6', fontSize: 13, marginBottom: 20, textAlign: 'center', lineHeight: 1.6 }}>
+                      Call the trader and ask them to read the verification code sent to their phone (SMS) or email. Enter it below.
+                    </div>
+                    {kycOtpMsg && <div style={{ padding: '10px 14px', borderRadius: 10, background: kycOtpMsg.includes('resent') ? 'rgba(52,211,153,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${kycOtpMsg.includes('resent') ? 'rgba(52,211,153,0.25)' : 'rgba(239,68,68,0.25)'}`, color: kycOtpMsg.includes('resent') ? '#34D399' : '#F87171', fontSize: 13, marginBottom: 14, textAlign: 'center' }}>{kycOtpMsg}</div>}
+                    <input
+                      type="text" inputMode="numeric" maxLength={6}
+                      value={kycOtpInput}
+                      onChange={e => { setKycOtpInput(e.target.value.replace(/\D/g, '')); setKycOtpMsg(''); }}
+                      placeholder="123456"
+                      style={{ width: '100%', background: '#0A0D14', border: '2px solid #374151', borderRadius: 12, color: '#fff', padding: '16px', fontSize: 32, letterSpacing: 10, textAlign: 'center', fontWeight: 800, boxSizing: 'border-box', marginBottom: 16, fontFamily: 'monospace', cursor: 'text' }}
+                    />
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                      <button
+                        disabled={kycOtpLoading || kycOtpInput.length < 4}
+                        onClick={async () => {
+                          setKycOtpLoading(true); setKycOtpMsg('');
+                          try {
+                            await adminConfirmKycOtp(kycOtpTarget.id, kycOtpInput);
+                            const [r, rt] = await Promise.all([adminGetKycSubmissions(), adminGetKycTraders()]);
+                            setKycSubmissions(r.data.submissions || []);
+                            setKycTraders((rt.data||{}).traders||[]);
+                            setKycOtpTarget(null); setKycOtpInput('');
+                            alert(`✅ OTP confirmed for ${kycOtpTarget.trader_name}.\n\nChoice Bank is now processing their application. You will see the status update to "Approved" in the traders table once Choice Bank completes the review (usually 2–5 minutes).`);
+                          } catch (e) { setKycOtpMsg(e?.response?.data?.detail || 'Incorrect OTP — check the code and try again'); }
+                          finally { setKycOtpLoading(false); }
+                        }}
+                        style={{ flex: 1, padding: '12px 0', borderRadius: 10, border: '1px solid rgba(59,130,246,0.4)', background: kycOtpInput.length >= 4 ? 'rgba(59,130,246,0.2)' : '#151B29', color: kycOtpInput.length >= 4 ? '#60A5FA' : '#5C6577', fontWeight: 700, fontSize: 15, cursor: kycOtpInput.length >= 4 ? 'pointer' : 'not-allowed' }}>
+                        {kycOtpLoading ? 'Confirming…' : '✓ Confirm OTP'}
+                      </button>
+                      <button onClick={() => { setKycOtpTarget(null); setKycOtpInput(''); setKycOtpMsg(''); }}
+                        style={{ flex: 1, padding: '12px 0', borderRadius: 10, border: '1px solid #232B3A', background: '#151B29', color: '#EAEEF5', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}>
+                        Cancel
+                      </button>
+                    </div>
+                    <button
+                      onClick={async () => { try { await adminResendKycOtp(kycOtpTarget.id); setKycOtpMsg('OTP resent to email + SMS'); } catch (e) { setKycOtpMsg(e?.response?.data?.detail || 'Resend failed'); } }}
+                      style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'none', color: '#5C6577', fontSize: 12.5, cursor: 'pointer', textDecoration: 'underline' }}>
+                      Didn't get the code? Resend OTP
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {kycRejectTarget && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
                   <div style={{ background: '#111623', border: '1px solid #1A2130', borderRadius: 16, padding: 28, width: '100%', maxWidth: 420 }}>
@@ -5459,7 +5545,7 @@ export default function Admin() {
                           onClick={async () => {
                             if (!window.confirm(`Approve ${kycSubDetail.trader_name} and submit to Choice Bank?`)) return;
                             setKycSubActing(kycSubDetail.id);
-                            try { await adminApproveKycSubmission(kycSubDetail.id); const r = await adminGetKycSubmissions(); setKycSubmissions(r.data.submissions || []); setKycSubDetail(null); alert('Approved! OTP sent to trader.'); }
+                            try { await adminApproveKycSubmission(kycSubDetail.id); const [r, rt] = await Promise.all([adminGetKycSubmissions(), adminGetKycTraders()]); setKycSubmissions(r.data.submissions || []); setKycTraders((rt.data||{}).traders||[]); setKycSubDetail(null); alert('✅ All data + photos sent to Choice Bank successfully.\n\nOTP sent to trader\'s EMAIL and SMS.\n\nTrader must open the KYC link in SparkP2P, enter the code, and then Choice Bank will process their application.\n\n⚠️ Remind the trader to check their spam folder.'); }
                             catch (e) { alert(e?.response?.data?.detail || 'Approval failed'); }
                             finally { setKycSubActing(null); }
                           }}

@@ -3614,10 +3614,8 @@ async def admin_approve_kyc_submission(
     if trader.choice_account_id:
         raise HTTPException(status_code=400, detail="Trader already has an approved Choice Bank account")
 
-    # 1. Create Choice Bank account using the easy (v3) endpoint — same one that
-    # produced Benson and Bonito's approved Current Accounts. Photos go inline so
-    # no separate uploadMedia step is needed; OTP still required after submission.
-    result = await choice.create_wallet_account(
+    # 1. Create Current Account via submitOnboardingRequest (includes KRA PIN, employment, income).
+    result = await choice.create_current_account(
         user_id=str(trader.id),
         first_name=sub.first_name,
         last_name=sub.last_name,
@@ -3626,13 +3624,13 @@ async def admin_approve_kyc_submission(
         id_number=sub.id_number,
         birthday=sub.birthday,
         gender=sub.gender,
+        kra_pin=sub.kra_pin or "",
+        employment_status=sub.employment_status or "F",
+        monthly_income=sub.monthly_income or "A",
         email=sub.email,
         address=sub.address,
-        front_photo_b64=sub.front_photo_b64 or "",
-        back_photo_b64=sub.back_photo_b64 or "",
-        selfie_b64=sub.selfie_b64 or "",
     )
-    logger.warning(f"[Admin] KYC approve sub#{submission_id}: create_account code={result.get('code')} msg={result.get('msg')}")
+    logger.warning(f"[Admin] KYC approve sub#{submission_id}: create_current_account code={result.get('code')} msg={result.get('msg')}")
 
     if result.get("code") == "13203":
         raise HTTPException(400, "This ID is already registered with Choice Bank. Use 'Reset KYC' and advise the trader to contact support.")
@@ -3647,14 +3645,27 @@ async def admin_approve_kyc_submission(
     if not onboarding_id:
         raise HTTPException(500, "Choice Bank did not return an onboarding ID")
 
-    # 2. Persist onboarding link immediately
+    # 2. Persist onboarding ID immediately so it is not lost if later steps fail.
     sub.choice_onboarding_id = onboarding_id
     trader.choice_kyc_status = "staging:otp_pending"
     await db.commit()
 
-    # 3. Send OTP to trader — always send BOTH email AND SMS.
-    # Email must be sent to mark it as verified for future transaction OTPs (bot reads from inbox).
-    # SMS is sent unconditionally so the trader has a reliable delivery channel even if email goes to spam.
+    # 3. Upload KYC media server-side right now — before OTP so documents reach Choice Bank
+    #    regardless of whether/when the OTP is confirmed.
+    for media_type, b64 in [
+        ("KYCF00001", sub.front_photo_b64 or ""),
+        ("KYCF00002", sub.back_photo_b64 or ""),
+        ("KYCF00006", sub.selfie_b64 or ""),
+    ]:
+        if not b64:
+            logger.warning(f"[Admin] KYC approve sub#{submission_id}: skipping {media_type} — no image stored")
+            continue
+        upload_res = await choice.upload_kyc_media(onboarding_id, media_type, b64, "image")
+        logger.warning(f"[Admin] KYC approve sub#{submission_id}: uploadMedia {media_type} -> code={upload_res.get('code')} msg={upload_res.get('msg') or upload_res.get('message')}")
+        if upload_res.get("code") != "00000":
+            logger.warning(f"[Admin] KYC approve sub#{submission_id}: {media_type} upload failed but continuing — {upload_res}")
+
+    # 4. Send OTP — both EMAIL and SMS for maximum deliverability.
     email_res = await choice.send_otp(onboarding_id, "EMAIL")
     logger.warning(f"[Admin] KYC approve sendOtp(EMAIL) -> code={email_res.get('code')}")
     sms_res = await choice.send_otp(onboarding_id, "SMS")
@@ -3663,7 +3674,7 @@ async def admin_approve_kyc_submission(
         raise HTTPException(400, "Choice Bank account created but OTP delivery failed on both email and SMS: " + (sms_res.get("msg") or email_res.get("msg", "OTP error")))
     otp_channel = "both"
 
-    # 4. Mark submission as otp_pending
+    # 5. Mark submission as otp_pending
     sub.status = "otp_pending"
     sub.reviewed_at = datetime.utcnow()
     await db.commit()
@@ -3690,6 +3701,64 @@ async def admin_approve_kyc_submission(
         logger.warning(f"[KYC] Approval notify email failed: {_e}")
 
     return {"status": "ok", "onboarding_id": onboarding_id, "otp_channel": otp_channel}
+
+
+class AdminKycOtpBody(BaseModel):
+    otp: str
+
+
+@router.post("/kyc-submissions/{submission_id}/confirm-otp")
+async def admin_confirm_kyc_otp(
+    submission_id: int,
+    body: AdminKycOtpBody,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin confirms Choice Bank OTP on behalf of the trader (called after phoning the trader)."""
+    from app.models.kyc_submission import KycSubmission
+    sub = await db.get(KycSubmission, submission_id)
+    if not sub:
+        raise HTTPException(404, "Submission not found")
+    if sub.status != "otp_pending":
+        raise HTTPException(400, f"Submission is not awaiting OTP (status: {sub.status})")
+    if not sub.choice_onboarding_id:
+        raise HTTPException(400, "No onboarding ID on this submission")
+
+    result = await choice.confirm_otp(sub.choice_onboarding_id, body.otp.strip())
+    logger.warning(f"[Admin] KYC OTP confirm sub#{submission_id}: code={result.get('code')} msg={result.get('msg')}")
+    if result.get("code") != "00000":
+        raise HTTPException(400, result.get("msg") or "OTP verification failed — check the code and try again")
+
+    sub.status = "submitted"
+    trader = await db.get(Trader, sub.trader_id)
+    if trader:
+        trader.choice_kyc_status = "pending:" + sub.choice_onboarding_id
+    await db.commit()
+    await write_audit_log(db, admin, "confirm_kyc_otp", target_trader_id=sub.trader_id,
+                          detail=f"Admin confirmed OTP for sub #{submission_id} ({trader.full_name if trader else sub.trader_id})")
+    return {"status": "submitted", "onboarding_id": sub.choice_onboarding_id}
+
+
+@router.post("/kyc-submissions/{submission_id}/resend-otp")
+async def admin_resend_kyc_otp(
+    submission_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resend Choice Bank OTP for a submission that is awaiting OTP."""
+    from app.models.kyc_submission import KycSubmission
+    sub = await db.get(KycSubmission, submission_id)
+    if not sub or sub.status != "otp_pending":
+        raise HTTPException(400, "Submission is not awaiting OTP")
+    if not sub.choice_onboarding_id:
+        raise HTTPException(400, "No onboarding ID on this submission")
+
+    email_res = await choice.resend_otp(sub.choice_onboarding_id, "EMAIL")
+    sms_res = await choice.resend_otp(sub.choice_onboarding_id, "SMS")
+    logger.warning(f"[Admin] KYC resend OTP sub#{submission_id}: email={email_res.get('code')} sms={sms_res.get('code')}")
+    if email_res.get("code") != "00000" and sms_res.get("code") != "00000":
+        raise HTTPException(400, "Failed to resend OTP: " + (sms_res.get("msg") or email_res.get("msg", "error")))
+    return {"status": "resent"}
 
 
 @router.get("/traders/{trader_id}/choice-balance")
