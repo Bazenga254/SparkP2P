@@ -5340,9 +5340,19 @@ export default function Admin() {
                                     {t.onboarding_id && (
                                       <button
                                         disabled={kycLiveLoading && kycSelectedTrader === t.id}
-                                        onClick={async () => { setKycSelectedTrader(t.id); setKycLiveResult(null); setKycLiveLoading(true); try { const r = await adminGetKycLiveStatus(t.id); setKycLiveResult(r.data); } catch (e) { setKycLiveResult({ error: e?.response?.data?.detail || 'API error' }); } finally { setKycLiveLoading(false); } }}
-                                        style={{ padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600, border: '1px solid #232B3A', background: '#151B29', color: '#EAEEF5', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                        {kycLiveLoading && kycSelectedTrader === t.id ? 'Checking…' : '🔍 Check Live'}
+                                        onClick={async () => {
+                                          setKycSelectedTrader(t.id); setKycLiveResult(null); setKycLiveLoading(true);
+                                          try {
+                                            const r = await adminGetKycLiveStatus(t.id);
+                                            setKycLiveResult(r.data);
+                                            // Refresh traders list so status badge updates immediately
+                                            const tr = await adminGetKycTraders();
+                                            setKycTraders(tr.data.traders || []);
+                                          } catch (e) { setKycLiveResult({ error: e?.response?.data?.detail || 'API error' }); }
+                                          finally { setKycLiveLoading(false); }
+                                        }}
+                                        style={{ padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600, border: '1px solid #232B3A', background: t.choice_kyc_status === 'staging:otp_pending' ? 'rgba(59,130,246,0.15)' : '#151B29', color: '#EAEEF5', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                        {kycLiveLoading && kycSelectedTrader === t.id ? 'Syncing…' : t.choice_kyc_status === 'staging:otp_pending' ? '🔄 Sync Status' : '🔍 Check Live'}
                                       </button>
                                     )}
                                     {!t.choice_account_id && t.choice_kyc_status && t.choice_kyc_status !== 'approved' && (

@@ -3321,8 +3321,24 @@ async def admin_list_kyc_traders(
     db: AsyncSession = Depends(get_db),
 ):
     """List all traders and their Choice Bank KYC status from DB."""
+    from app.models.kyc_submission import KycSubmission
+
     result = await db.execute(select(Trader).order_by(Trader.id))
     traders = result.scalars().all()
+
+    # Pre-fetch onboarding IDs for staging:otp_pending traders (stored in kyc_submissions, not trader row)
+    staging_ids = [t.id for t in traders if (t.choice_kyc_status or "") == "staging:otp_pending"]
+    staging_onboarding = {}
+    if staging_ids:
+        sub_res = await db.execute(
+            select(KycSubmission.trader_id, KycSubmission.choice_onboarding_id)
+            .where(KycSubmission.trader_id.in_(staging_ids))
+            .where(KycSubmission.choice_onboarding_id.isnot(None))
+            .order_by(KycSubmission.id.desc())
+        )
+        for row in sub_res.all():
+            if row.trader_id not in staging_onboarding:
+                staging_onboarding[row.trader_id] = row.choice_onboarding_id
 
     data = []
     for t in traders:
@@ -3332,6 +3348,8 @@ async def admin_list_kyc_traders(
             onboarding_id = ks[len("pending:"):]
         elif ks.startswith("onboarding:"):
             onboarding_id = ks[len("onboarding:"):]
+        elif ks == "staging:otp_pending":
+            onboarding_id = staging_onboarding.get(t.id)
 
         data.append({
             "id": t.id,
@@ -3358,17 +3376,30 @@ async def admin_get_kyc_live_status(
     if not trader:
         raise HTTPException(status_code=404, detail="Trader not found")
 
+    from app.models.kyc_submission import KycSubmission
+    from app.services.choice_bank import client as choice
+
     ks = trader.choice_kyc_status or ""
     onboarding_id = None
     if ks.startswith("pending:"):
         onboarding_id = ks[len("pending:"):]
     elif ks.startswith("onboarding:"):
         onboarding_id = ks[len("onboarding:"):]
+    elif ks == "staging:otp_pending":
+        # Onboarding ID lives in kyc_submissions for this state
+        sub_res = await db.execute(
+            select(KycSubmission)
+            .where(KycSubmission.trader_id == trader_id)
+            .where(KycSubmission.choice_onboarding_id.isnot(None))
+            .order_by(KycSubmission.id.desc())
+            .limit(1)
+        )
+        _sub = sub_res.scalar_one_or_none()
+        if _sub:
+            onboarding_id = _sub.choice_onboarding_id
 
     if not onboarding_id:
         raise HTTPException(status_code=404, detail="No pending onboarding ID for this trader")
-
-    from app.services.choice_bank import client as choice
 
     kyc_result = await choice.get_user_kyc(onboarding_id)
     status_result = await choice.get_onboarding_status(onboarding_id)
@@ -3397,11 +3428,62 @@ async def admin_get_kyc_live_status(
     # Auto-update DB when live check reveals a terminal state so badge refreshes immediately.
     if status_int == 3:  # Passed → approved
         aid = status_data.get("accountId") or ""
-        if (trader.choice_kyc_status or "") != "approved":
+        was_approved = (trader.choice_kyc_status or "") == "approved"
+        if not was_approved:
             trader.choice_account_id = aid or onboarding_id
             trader.choice_account_number = aid
             trader.choice_kyc_status = "approved"
+            # Update the matching submission too
+            sub_res2 = await db.execute(
+                select(KycSubmission)
+                .where(KycSubmission.trader_id == trader_id)
+                .where(KycSubmission.choice_onboarding_id == onboarding_id)
+                .limit(1)
+            )
+            _sub2 = sub_res2.scalar_one_or_none()
+            if _sub2:
+                _sub2.status = "approved"
             await db.commit()
+            # Notify trader via Telegram, email and SMS
+            try:
+                from app.api.routes.telegram import notify_trader
+                from app.core.config import settings as _s
+                _tg = (
+                    "\U0001f389 Your Choice Bank account is approved!" + chr(10) +
+                    "Account ID: " + (aid or "—") + chr(10) +
+                    "Paybill: " + _s.CHOICE_BANK_PAYBILL + " | Account No: " + (aid or "—") + chr(10) +
+                    "You can now receive payments directly to your Choice Bank account."
+                )
+                await notify_trader(trader, _tg)
+            except Exception as _e:
+                logger.warning(f"[Admin KYC Sync] Telegram notify failed: {_e}")
+            try:
+                from app.services.email import send_email
+                from app.core.config import settings as _s
+                _html = (
+                    "<h2>\U0001f389 Choice Bank Account Approved!</h2>"
+                    "<p>Hi " + (trader.full_name or "Trader") + ",</p>"
+                    "<p>Your <strong>Choice Bank account</strong> has been approved on SparkP2P.</p>"
+                    "<table style='border-collapse:collapse'>"
+                    "<tr><td style='padding:6px 12px;color:#6b7280'>Account ID</td>"
+                    "<td style='padding:6px 12px;font-weight:700'>" + (aid or "—") + "</td></tr>"
+                    "<tr><td style='padding:6px 12px;color:#6b7280'>Paybill</td>"
+                    "<td style='padding:6px 12px;font-weight:700'>" + _s.CHOICE_BANK_PAYBILL + "</td></tr>"
+                    "<tr><td style='padding:6px 12px;color:#6b7280'>Account No</td>"
+                    "<td style='padding:6px 12px;font-weight:700'>" + (aid or "—") + "</td></tr>"
+                    "</table>"
+                    "<p>Log in to SparkP2P to view your account details.</p>"
+                )
+                await send_email(trader.email, "Choice Bank Account Approved — SparkP2P", _html)
+            except Exception as _e:
+                logger.warning(f"[Admin KYC Sync] Email notify failed: {_e}")
+            try:
+                from app.services.sms import send_otp_sms
+                from app.core.config import settings as _s
+                _sms = "SparkP2P: Choice Bank account approved! Acct: " + (aid or "N/A") + ". Paybill " + _s.CHOICE_BANK_PAYBILL + "."
+                await send_otp_sms(trader.phone, _sms)
+            except Exception as _e:
+                logger.warning(f"[Admin KYC Sync] SMS notify failed: {_e}")
     elif status_int == 4 or profile_int == 3:  # Rejected or profile check Declined
         if (trader.choice_kyc_status or "") != "rejected":
             trader.choice_kyc_status = "rejected"
@@ -3716,6 +3798,7 @@ async def admin_confirm_kyc_otp(
 ):
     """Admin confirms Choice Bank OTP on behalf of the trader (called after phoning the trader)."""
     from app.models.kyc_submission import KycSubmission
+    from app.services.choice_bank import client as choice
     sub = await db.get(KycSubmission, submission_id)
     if not sub:
         raise HTTPException(404, "Submission not found")
@@ -3747,6 +3830,7 @@ async def admin_resend_kyc_otp(
 ):
     """Resend Choice Bank OTP for a submission that is awaiting OTP."""
     from app.models.kyc_submission import KycSubmission
+    from app.services.choice_bank import client as choice
     sub = await db.get(KycSubmission, submission_id)
     if not sub or sub.status != "otp_pending":
         raise HTTPException(400, "Submission is not awaiting OTP")
