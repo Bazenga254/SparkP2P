@@ -4,7 +4,7 @@ import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPaym
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal, Search } from 'lucide-react';
-import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminResetKyc, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense, adminGetKycSubmissions, adminGetKycSubmission, adminApproveKycSubmission, adminRejectKycSubmission, adminConfirmKycOtp, adminResendKycOtp } from '../services/api';
+import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminResetKyc, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense, adminGetKycSubmissions, adminGetKycSubmission, adminApproveKycSubmission, adminRejectKycSubmission, adminConfirmKycOtp, adminResendKycOtp, adminVerifyTraderContact, adminConfirmTraderContactVerify } from '../services/api';
 
 const sidebarSections = [
   {
@@ -262,6 +262,11 @@ export default function Admin() {
   const [kycOtpInput, setKycOtpInput] = useState('');
   const [kycOtpLoading, setKycOtpLoading] = useState(false);
   const [kycOtpMsg, setKycOtpMsg] = useState('');
+  // Contact verification (post-approval) modal
+  const [kycVerifyTarget, setKycVerifyTarget] = useState(null); // { trader_id, trader_name, verify_type, application_id }
+  const [kycVerifyOtp, setKycVerifyOtp] = useState('');
+  const [kycVerifyLoading, setKycVerifyLoading] = useState(false);
+  const [kycVerifyMsg, setKycVerifyMsg] = useState('');
   const [kycSearch, setKycSearch] = useState('');
   const [kycFilter, setKycFilter] = useState('all'); // 'all' | 'approved' | 'pending' | 'none'
   const [choiceFloat, setChoiceFloat] = useState(null);
@@ -5334,7 +5339,35 @@ export default function Admin() {
                             <td style={{ ...S.td, textAlign: 'right' }}>
                               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                                 {ds === 'approved' ? (
-                                  <span style={{ display:'inline-flex',alignItems:'center',gap:6,color:'#34D399',fontSize:12.5,fontWeight:600 }}>✓ Approved</span>
+                                  <div style={{ display:'flex',gap:6,justifyContent:'flex-end',flexWrap:'wrap' }}>
+                                    <span style={{ display:'inline-flex',alignItems:'center',gap:6,color:'#34D399',fontSize:12.5,fontWeight:600 }}>✓ Approved</span>
+                                    <button
+                                      onClick={async () => {
+                                        setKycVerifyMsg(''); setKycVerifyOtp('');
+                                        setKycVerifyLoading(true);
+                                        try {
+                                          const r = await adminVerifyTraderContact(t.id, 'email');
+                                          setKycVerifyTarget({ trader_id: t.id, trader_name: t.full_name, verify_type: 'email', application_id: r.data.application_id });
+                                        } catch(e) { alert(e?.response?.data?.detail || 'Failed to send email OTP'); }
+                                        finally { setKycVerifyLoading(false); }
+                                      }}
+                                      style={{ padding:'4px 10px',borderRadius:7,fontSize:11.5,fontWeight:600,border:'1px solid rgba(96,165,250,0.35)',background:'transparent',color:'#60A5FA',cursor:'pointer',whiteSpace:'nowrap' }}>
+                                      📧 Verify Email
+                                    </button>
+                                    <button
+                                      onClick={async () => {
+                                        setKycVerifyMsg(''); setKycVerifyOtp('');
+                                        setKycVerifyLoading(true);
+                                        try {
+                                          const r = await adminVerifyTraderContact(t.id, 'mobile');
+                                          setKycVerifyTarget({ trader_id: t.id, trader_name: t.full_name, verify_type: 'mobile', application_id: r.data.application_id });
+                                        } catch(e) { alert(e?.response?.data?.detail || 'Failed to send phone OTP'); }
+                                        finally { setKycVerifyLoading(false); }
+                                      }}
+                                      style={{ padding:'4px 10px',borderRadius:7,fontSize:11.5,fontWeight:600,border:'1px solid rgba(52,211,153,0.35)',background:'transparent',color:'#34D399',cursor:'pointer',whiteSpace:'nowrap' }}>
+                                      📱 Verify Phone
+                                    </button>
+                                  </div>
                                 ) : (
                                   <>
                                     {t.onboarding_id && (
@@ -5479,6 +5512,60 @@ export default function Admin() {
                       style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: 'none', background: 'none', color: '#5C6577', fontSize: 12.5, cursor: 'pointer', textDecoration: 'underline' }}>
                       Didn't get the code? Resend OTP
                     </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Contact Verification Modal (post-approval) */}
+              {kycVerifyTarget && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.80)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                  <div style={{ background: '#111623', border: '1px solid #1A2130', borderRadius: 16, padding: 28, width: '100%', maxWidth: 400 }}>
+                    <div style={{ fontSize: 28, marginBottom: 12, textAlign: 'center' }}>{kycVerifyTarget.verify_type === 'email' ? '📧' : '📱'}</div>
+                    <h3 style={{ color: '#60A5FA', margin: '0 0 6px', textAlign: 'center' }}>
+                      Verify {kycVerifyTarget.verify_type === 'email' ? 'Email' : 'Phone'} — {kycVerifyTarget.trader_name}
+                    </h3>
+                    <div style={{ color: '#8A94A6', fontSize: 13, marginBottom: 16, textAlign: 'center', lineHeight: 1.6 }}>
+                      An OTP has been sent to the trader's {kycVerifyTarget.verify_type === 'email' ? 'email address' : 'phone number'}.<br/>
+                      Call them to get the code, then enter it below.
+                    </div>
+                    {kycVerifyTarget.application_id && (
+                      <div style={{ background: '#0A0D14', border: '1px solid #1A2130', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontFamily: 'monospace', fontSize: 11, color: '#5C6577' }}>
+                        App ID: {kycVerifyTarget.application_id}
+                      </div>
+                    )}
+                    {kycVerifyMsg && (
+                      <div style={{ background: kycVerifyMsg.includes('✅') ? 'rgba(52,211,153,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${kycVerifyMsg.includes('✅') ? 'rgba(52,211,153,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 8, padding: '10px 14px', marginBottom: 14, color: kycVerifyMsg.includes('✅') ? '#34D399' : '#F87171', fontSize: 13 }}>
+                        {kycVerifyMsg}
+                      </div>
+                    )}
+                    <input
+                      type="text" inputMode="numeric" maxLength={6}
+                      value={kycVerifyOtp}
+                      onChange={e => { setKycVerifyOtp(e.target.value.replace(/\D/g, '')); setKycVerifyMsg(''); }}
+                      placeholder="123456"
+                      style={{ width: '100%', background: '#0A0D14', border: '2px solid #374151', borderRadius: 12, color: '#fff', padding: '16px', fontSize: 32, letterSpacing: 10, textAlign: 'center', fontWeight: 800, boxSizing: 'border-box', marginBottom: 16, fontFamily: 'monospace', cursor: 'text' }}
+                    />
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                      <button
+                        disabled={kycVerifyLoading || kycVerifyOtp.length < 4}
+                        onClick={async () => {
+                          setKycVerifyLoading(true); setKycVerifyMsg('');
+                          try {
+                            await adminConfirmTraderContactVerify(kycVerifyTarget.trader_id, kycVerifyTarget.application_id, kycVerifyOtp);
+                            setKycVerifyMsg('✅ Verified! The trader can now receive transaction OTPs.');
+                            setKycVerifyOtp('');
+                            setTimeout(() => { setKycVerifyTarget(null); setKycVerifyMsg(''); }, 2500);
+                          } catch(e) { setKycVerifyMsg(e?.response?.data?.detail || 'Incorrect OTP — try again'); }
+                          finally { setKycVerifyLoading(false); }
+                        }}
+                        style={{ flex: 1, padding: '12px 0', borderRadius: 10, border: '1px solid rgba(59,130,246,0.4)', background: kycVerifyOtp.length >= 4 ? 'rgba(59,130,246,0.2)' : '#151B29', color: kycVerifyOtp.length >= 4 ? '#60A5FA' : '#5C6577', fontWeight: 700, fontSize: 15, cursor: kycVerifyOtp.length >= 4 ? 'pointer' : 'not-allowed' }}>
+                        {kycVerifyLoading ? 'Verifying…' : '✓ Confirm OTP'}
+                      </button>
+                      <button onClick={() => { setKycVerifyTarget(null); setKycVerifyOtp(''); setKycVerifyMsg(''); }}
+                        style={{ flex: 1, padding: '12px 0', borderRadius: 10, border: '1px solid #232B3A', background: '#151B29', color: '#EAEEF5', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}>
+                        Cancel
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

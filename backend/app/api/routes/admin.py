@@ -3539,6 +3539,91 @@ async def admin_reset_kyc(
     return {"status": "ok", "trader_id": trader_id, "trader_name": trader.full_name, "previous_status": old_status}
 
 
+# ── KYC Contact Verification (post-approval) ──────────────────────────────────
+
+class VerifyContactBody(BaseModel):
+    verify_type: str  # "email" or "mobile"
+
+
+@router.post("/kyc/traders/{trader_id}/verify-contact")
+async def admin_verify_trader_contact(
+    trader_id: int,
+    body: VerifyContactBody,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger Choice Bank contact verification for an approved trader.
+    Sends an OTP to their email or phone — confirm with /confirm-contact-verify."""
+    from app.models.kyc_submission import KycSubmission
+    from app.services.choice_bank import client as choice
+
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    # Get ID number from latest submission
+    sub_res = await db.execute(
+        select(KycSubmission)
+        .where(KycSubmission.trader_id == trader_id)
+        .order_by(KycSubmission.id.desc())
+        .limit(1)
+    )
+    sub = sub_res.scalar_one_or_none()
+    if not sub or not sub.id_number:
+        raise HTTPException(status_code=400, detail="No KYC submission with ID number found for this trader")
+
+    if body.verify_type == "email":
+        result = await choice.verify_email_address(document_number=sub.id_number)
+    elif body.verify_type == "mobile":
+        result = await choice.verify_mobile_number(document_number=sub.id_number)
+    else:
+        raise HTTPException(status_code=400, detail="verify_type must be 'email' or 'mobile'")
+
+    if result.get("code") not in ("00000", None) and result.get("code") != "00000":
+        code = result.get("code", "")
+        msg = result.get("msg", "Verification request failed")
+        if code:
+            raise HTTPException(status_code=400, detail=f"Choice Bank error {code}: {msg}")
+
+    application_id = (result.get("data") or {}).get("applicationId") or result.get("applicationId") or ""
+    logger.warning(f"[Admin] Contact verify triggered for trader {trader_id} ({trader.full_name}) type={body.verify_type} appId={application_id} code={result.get('code')}")
+    return {
+        "status": "otp_sent",
+        "verify_type": body.verify_type,
+        "application_id": application_id,
+        "trader_name": trader.full_name,
+        "choice_response": result,
+    }
+
+
+class ConfirmContactVerifyBody(BaseModel):
+    application_id: str
+    otp: str
+
+
+@router.post("/kyc/traders/{trader_id}/confirm-contact-verify")
+async def admin_confirm_trader_contact_verify(
+    trader_id: int,
+    body: ConfirmContactVerifyBody,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Confirm the OTP sent by /verify-contact to mark email/mobile as verified."""
+    from app.services.choice_bank import client as choice
+
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    result = await choice.confirm_contact_verify(body.application_id.strip(), body.otp.strip())
+    code = result.get("code", "")
+    if code != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", f"OTP confirmation failed (code {code})"))
+
+    logger.warning(f"[Admin] Contact verify confirmed for trader {trader_id} ({trader.full_name}) appId={body.application_id}")
+    return {"status": "verified", "trader_name": trader.full_name}
+
+
 # ── KYC Staging Submission Admin Routes ────────────────────────────────────────
 
 @router.get("/kyc/submissions")

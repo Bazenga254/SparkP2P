@@ -181,6 +181,8 @@ export const adminRejectKycSubmission = (id, notes) => api.post(`/admin/kyc/subm
 export const adminConfirmKycOtp = (id, otp) => api.post(`/admin/kyc-submissions/${id}/confirm-otp`, { otp });
 export const adminResendKycOtp = (id) => api.post(`/admin/kyc-submissions/${id}/resend-otp`);
 export const adminGetTraderChoiceBalance = (traderId) => api.get(`/admin/traders/${traderId}/choice-balance`);
+export const adminVerifyTraderContact = (traderId, verify_type) => api.post(`/admin/kyc/traders/${traderId}/verify-contact`, { verify_type });
+export const adminConfirmTraderContactVerify = (traderId, application_id, otp) => api.post(`/admin/kyc/traders/${traderId}/confirm-contact-verify`, { application_id, otp });
 export const adminGetChoicePlatformFloat = () => api.get('/admin/choice/platform-float');
 export const adminGetExpenses = () => api.get('/admin/expenses');
 export const adminPostExpense = (body) => api.post('/admin/expenses', body);

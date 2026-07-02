@@ -296,6 +296,31 @@ async def verify_email_address(
     return await _post("/account/verifyEmailOrMobile", params)
 
 
+async def verify_mobile_number(
+    document_number: str,
+    personal_id_type: str = "101",
+    onboard_type: str = "personal",
+) -> dict:
+    """Send an OTP to the mobile linked to this account for verification.
+    Returns { applicationId } — confirm via confirm_contact_verify()."""
+    params = {
+        "onboardType": onboard_type,
+        "documentNumber": document_number,
+        "verifyType": "mobile",
+    }
+    if onboard_type == "personal":
+        params["personalIdType"] = personal_id_type
+    return await _post("/account/verifyEmailOrMobile", params)
+
+
+async def confirm_contact_verify(application_id: str, otp: str) -> dict:
+    """Confirm the OTP sent by verifyEmailOrMobile / verifyEmailAddress."""
+    return await _post("/common/confirmOtp", {
+        "businessId": application_id,
+        "otpCode": otp,
+    })
+
+
 # ── Transfers ─────────────────────────────────────────────────────────────────
 
 
