@@ -5339,35 +5339,7 @@ export default function Admin() {
                             <td style={{ ...S.td, textAlign: 'right' }}>
                               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                                 {ds === 'approved' ? (
-                                  <div style={{ display:'flex',gap:6,justifyContent:'flex-end',flexWrap:'wrap' }}>
-                                    <span style={{ display:'inline-flex',alignItems:'center',gap:6,color:'#34D399',fontSize:12.5,fontWeight:600 }}>✓ Approved</span>
-                                    <button
-                                      onClick={async () => {
-                                        setKycVerifyMsg(''); setKycVerifyOtp('');
-                                        setKycVerifyLoading(true);
-                                        try {
-                                          const r = await adminVerifyTraderContact(t.id, 'email');
-                                          setKycVerifyTarget({ trader_id: t.id, trader_name: t.full_name, verify_type: 'email', application_id: r.data.application_id });
-                                        } catch(e) { alert(e?.response?.data?.detail || 'Failed to send email OTP'); }
-                                        finally { setKycVerifyLoading(false); }
-                                      }}
-                                      style={{ padding:'4px 10px',borderRadius:7,fontSize:11.5,fontWeight:600,border:'1px solid rgba(96,165,250,0.35)',background:'transparent',color:'#60A5FA',cursor:'pointer',whiteSpace:'nowrap' }}>
-                                      📧 Verify Email
-                                    </button>
-                                    <button
-                                      onClick={async () => {
-                                        setKycVerifyMsg(''); setKycVerifyOtp('');
-                                        setKycVerifyLoading(true);
-                                        try {
-                                          const r = await adminVerifyTraderContact(t.id, 'mobile');
-                                          setKycVerifyTarget({ trader_id: t.id, trader_name: t.full_name, verify_type: 'mobile', application_id: r.data.application_id });
-                                        } catch(e) { alert(e?.response?.data?.detail || 'Failed to send phone OTP'); }
-                                        finally { setKycVerifyLoading(false); }
-                                      }}
-                                      style={{ padding:'4px 10px',borderRadius:7,fontSize:11.5,fontWeight:600,border:'1px solid rgba(52,211,153,0.35)',background:'transparent',color:'#34D399',cursor:'pointer',whiteSpace:'nowrap' }}>
-                                      📱 Verify Phone
-                                    </button>
-                                  </div>
+                                  <span style={{ display:'inline-flex',alignItems:'center',gap:6,color:'#34D399',fontSize:12.5,fontWeight:600 }}>✓ Approved</span>
                                 ) : (
                                   <>
                                     {t.onboarding_id && (
