@@ -96,6 +96,38 @@ def mpesa_b2b_markup(amount: float) -> int:
     return _bracket(amount, [(u, v[1]) for u, v in _B2B])
 
 
+# ── M-Pesa B2B KRA Paybill ────────────────────────────────────────────────────
+_KRA_PAYBILL = [
+    (49,        (2,   1,   3)),
+    (100,       (3,   2,   5)),
+    (500,       (12,  5,  17)),
+    (1000,      (17,  7,  24)),
+    (1500,      (28, 11,  39)),
+    (2500,      (33, 13,  46)),
+    (3500,      (47, 19,  66)),
+    (5000,      (56, 22,  78)),
+    (7500,      (74, 30, 104)),
+    (10000,     (80, 32, 112)),
+    (15000,     (101,40, 141)),
+    (20000,     (106,42, 148)),
+    (25000,     (112,45, 157)),
+    (30000,     (117,47, 164)),
+    (35000,     (128,51, 179)),
+    (40000,     (144,58, 202)),
+    (45000,     (148,59, 207)),
+    (float("inf"), (153,59, 212)),
+]
+
+def kra_paybill_total_fee(amount: float) -> int:
+    return _bracket(amount, [(u, v[2]) for u, v in _KRA_PAYBILL])
+
+def kra_paybill_cb_fee(amount: float) -> int:
+    return _bracket(amount, [(u, v[0]) for u, v in _KRA_PAYBILL])
+
+def kra_paybill_markup(amount: float) -> int:
+    return _bracket(amount, [(u, v[1]) for u, v in _KRA_PAYBILL])
+
+
 # ── Airtel B2C ────────────────────────────────────────────────────────────────
 _AIRTEL_B2C = [
     (9,     (0,  3,  3)),
@@ -129,6 +161,41 @@ def airtel_cb_fee(amount: float) -> int:
 
 def airtel_markup(amount: float) -> int:
     return _bracket(amount, [(u, v[1]) for u, v in _AIRTEL_B2C])
+
+
+# ── Airtel B2B ────────────────────────────────────────────────────────────────
+_AIRTEL_B2B = [
+    (9,     (0,   2,   2)),
+    (49,    (0,   3,   3)),
+    (100,   (0,   5,   5)),
+    (500,   (7,   6,  13)),
+    (1000,  (12, 10,  22)),
+    (1500,  (15, 15,  30)),
+    (2500,  (17, 17,  34)),
+    (3500,  (24, 24,  48)),
+    (5000,  (24, 24,  48)),
+    (7500,  (37, 37,  74)),
+    (10000, (42, 42,  84)),
+    (15000, (62, 62, 124)),
+    (20000, (67, 67, 134)),
+    (25000, (73, 73, 146)),
+    (30000, (78, 78, 156)),
+    (35000, (101,101,202)),
+    (40000, (106,106,212)),
+    (45000, (110,110,220)),
+    (50000, (113,113,226)),
+    (70000, (113,113,226)),
+    (float("inf"), (113,113,226)),
+]
+
+def airtel_b2b_total_fee(amount: float) -> int:
+    return _bracket(amount, [(u, v[2]) for u, v in _AIRTEL_B2B])
+
+def airtel_b2b_cb_fee(amount: float) -> int:
+    return _bracket(amount, [(u, v[0]) for u, v in _AIRTEL_B2B])
+
+def airtel_b2b_markup(amount: float) -> int:
+    return _bracket(amount, [(u, v[1]) for u, v in _AIRTEL_B2B])
 
 
 # ── PesaLink / Bank ───────────────────────────────────────────────────────────
@@ -172,11 +239,18 @@ def outbound_cb_fee(channel: str, amount: float) -> int:
 # ── Per-product tariff (revenue breakdown + invoice) ──────────────────────────
 
 PRODUCTS = {
-    "B2C":      "M-Pesa B2C",
-    "B2B":      "M-Pesa B2B (Paybill/Till)",
-    "PESALINK": "PesaLink / Bank",
-    "AIRTEL":   "Airtel Money",
+    "B2C":         "M-Pesa B2C",
+    "B2B":         "M-Pesa B2B (Paybill/Till)",
+    "KRA_PAYBILL": "M-Pesa B2B (KRA Paybill)",
+    "PESALINK":    "PesaLink / Bank",
+    "AIRTEL":      "Airtel Money B2C",
+    "AIRTEL_B2B":  "Airtel Money B2B",
+    "CASH_KES":    "KES Cash Withdrawal",
+    "CASH_USD":    "USD Cash Withdrawal",
 }
+
+# KRA shortcode — used to distinguish KRA Paybill from regular B2B Paybill
+KRA_SHORTCODE = "572572"
 
 _TXTYPE_CHANNEL = {
     "TTID0001": "M-Pesa",
@@ -187,6 +261,9 @@ _TXTYPE_CHANNEL = {
     "TTID0024": "Airtel Money",
     "TTID0002": "Bank/PesaLink",
     "TTID0009": "Bank/PesaLink",
+    # Cash withdrawals — TTIDs TBD (will update when a real transaction is observed)
+    # "TTIDXXXX": "KES Cash Withdrawal",
+    # "TTIDYYYY": "USD Cash Withdrawal",
 }
 
 
@@ -195,13 +272,34 @@ def channel_from_txtype(tx_type: str) -> str:
 
 
 def categorize(transaction_type: str = "", destination_type: str = "", method: str = "") -> str:
+    """Map a payment's metadata to a PRODUCTS key.
+
+    destination_type "kra_paybill" is set at initiation time (business_number == KRA_SHORTCODE)
+    so it beats the generic paybill check below.
+    destination_type "airtel_b2b" is set when the trader pays an Airtel business number.
+    """
     s = " ".join(str(x or "").lower() for x in (transaction_type, destination_type, method))
+    # Cash withdrawals
+    if "kes cash withdrawal" in s or destination_type == "cash_kes":
+        return "CASH_KES"
+    if "usd cash withdrawal" in s or destination_type == "cash_usd":
+        return "CASH_USD"
+    # KRA Paybill (must come before generic B2B check)
+    if "kra_paybill" in s or destination_type == "kra_paybill":
+        return "KRA_PAYBILL"
+    # Airtel B2B (must come before generic Airtel check)
+    if "airtel_b2b" in s or destination_type == "airtel_b2b":
+        return "AIRTEL_B2B"
+    # Generic B2B (Paybill / Till / BuyGoods)
     if "paybill" in s or "till" in s or "buygoods" in s or "b2b" in s:
         return "B2B"
+    # Airtel B2C
     if "airtel" in s:
         return "AIRTEL"
+    # Excluded rails
     if "rtgs" in s or "eft" in s or "swift" in s:
         return "EXCLUDED"
+    # M-Pesa B2C (individual send-money)
     if "mpesa" in s or "m-pesa" in s:
         return "B2C"
     return "PESALINK"
@@ -209,19 +307,27 @@ def categorize(transaction_type: str = "", destination_type: str = "", method: s
 
 def product_markup(product: str, amount: float) -> int:
     p = (product or "").upper()
-    if p == "B2C":      return mpesa_markup(amount)
-    if p == "B2B":      return mpesa_b2b_markup(amount)
-    if p == "PESALINK": return pesalink_markup(amount)
-    if p == "AIRTEL":   return airtel_markup(amount)
+    if p == "B2C":         return mpesa_markup(amount)
+    if p == "B2B":         return mpesa_b2b_markup(amount)
+    if p == "KRA_PAYBILL": return kra_paybill_markup(amount)
+    if p == "PESALINK":    return pesalink_markup(amount)
+    if p == "AIRTEL":      return airtel_markup(amount)
+    if p == "AIRTEL_B2B":  return airtel_b2b_markup(amount)
+    if p == "CASH_KES":    return 25   # flat KES 25 per KES cash withdrawal
+    if p == "CASH_USD":    return 1    # flat KES 1 per USD cash withdrawal
     return 0
 
 def product_cb_fee(product: str, amount: float) -> int:
     """Choice Bank's portion of the fee (their cost, not remitted to us)."""
     p = (product or "").upper()
-    if p == "B2C":      return mpesa_cb_fee(amount)
-    if p == "B2B":      return mpesa_b2b_cb_fee(amount)
-    if p == "PESALINK": return pesalink_cb_fee(amount)
-    if p == "AIRTEL":   return airtel_cb_fee(amount)
+    if p == "B2C":         return mpesa_cb_fee(amount)
+    if p == "B2B":         return mpesa_b2b_cb_fee(amount)
+    if p == "KRA_PAYBILL": return kra_paybill_cb_fee(amount)
+    if p == "PESALINK":    return pesalink_cb_fee(amount)
+    if p == "AIRTEL":      return airtel_cb_fee(amount)
+    if p == "AIRTEL_B2B":  return airtel_b2b_cb_fee(amount)
+    if p == "CASH_KES":    return 0   # Choice Bank doesn't charge for KES ATM withdrawals
+    if p == "CASH_USD":    return 1   # Choice Bank charges KES 1 for USD withdrawals
     return 0
 
 def product_total_fee(product: str, amount: float) -> int:

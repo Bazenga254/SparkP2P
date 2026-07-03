@@ -29,7 +29,7 @@ const sidebarSections = [
   {
     label: 'PLATFORM',
     items: [
-      { key: 'expenses', icon: Receipt, label: 'Expenses' },
+      { key: 'expenses', icon: Receipt, label: 'Revenue' },
       { key: 'security', icon: Shield, label: 'Security' },
       { key: 'settings', icon: Settings, label: 'Settings' },
     ],
@@ -4686,8 +4686,8 @@ export default function Admin() {
               {/* ── Page header ── */}
               <div className="fin-page-head">
                 <div>
-                  <h1>Financials</h1>
-                  <p>Revenue from subscriptions and platform expenses</p>
+                  <h1>Revenue</h1>
+                  <p>Revenue from subscriptions and outbound transaction fees</p>
                 </div>
                 <div className="fin-head-actions">
                   <div className="fin-segment">
@@ -4739,7 +4739,7 @@ export default function Admin() {
               {/* ── Filter bar ── */}
               <div className="fin-filters">
                 <div className="fin-segment">
-                  {[['revenue','Revenue'],['expenses','Expenses']].map(([val, label]) => (
+                  {[['revenue','Revenue'],['expenses','Operating Expenses']].map(([val, label]) => (
                     <button key={val} className={expSubView === val ? 'on' : ''} onClick={() => setExpSubView(val)}>{label}</button>
                   ))}
                 </div>
@@ -5696,7 +5696,7 @@ export default function Admin() {
               { key: 'paybill',     label: 'Paybill Txns',      icon: Banknote      },
               { key: 'kyc',         label: 'KYC Verification',  icon: UserCheck     },
               { key: 'revenue',     label: 'Revenue',           icon: TrendingUp    },
-              { key: 'expenses',    label: 'Expenses',          icon: Receipt       },
+              { key: 'expenses',    label: 'Revenue',           icon: Receipt       },
               { key: 'affiliates',  label: 'Affiliates',        icon: Share2        },
               { key: 'security',    label: 'Security',          icon: Shield        },
               { key: 'settings',    label: 'Settings',          icon: Settings      },

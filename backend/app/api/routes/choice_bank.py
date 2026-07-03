@@ -1131,6 +1131,24 @@ async def send_money_confirm(body: SendMoneyConfirm, trader: Trader = Depends(ge
 
     _pending_send_money.pop(trader.id, None)
     _to = pending.get("name") or ("0" + pending["phone"])
+
+    # Pre-create Payment record tagged as M-Pesa B2C so the webhook finds it ready.
+    try:
+        from app.models.payment import Payment as _Pmt, PaymentDirection as _PD, PaymentStatus as _PS
+        db.add(_Pmt(
+            trader_id=trader.id,
+            direction=_PD.OUTBOUND,
+            mpesa_transaction_id=pending["tx_id"],
+            transaction_type="CHOICE_OUTBOUND",
+            amount=float(pending["amount"]),
+            destination=pending.get("phone", ""),
+            destination_type="M-Pesa",
+            remarks=f"Send money to {_to} via Choice Bank",
+            status=_PS.PENDING,
+        ))
+    except Exception:
+        pass
+
     try:
         from app.services.ledger import record_activity
         from app.models.wallet import TransactionType as _TT
@@ -1248,6 +1266,34 @@ async def paybill_confirm(body: PaybillConfirm, trader: Trader = Depends(get_cur
 
     _pending_paybill.pop(trader.id, None)
     _dest = f"Paybill {pending['biz']} acc {pending['acct']}" if pending["is_paybill"] else f"Till {pending['biz']}"
+
+    # Tag destination_type for revenue categorization (kra_paybill beats generic paybill).
+    from app.services.outbound_fees import KRA_SHORTCODE
+    if pending["biz"] == KRA_SHORTCODE:
+        _dest_type = "kra_paybill"
+    elif not pending["is_paybill"]:
+        _dest_type = "mpesa_till"
+    else:
+        _dest_type = "mpesa_paybill"
+
+    # Pre-create the Payment record so the webhook finds it and just updates status.
+    # This ensures destination_type is set correctly before the webhook fires.
+    try:
+        from app.models.payment import Payment as _Pmt, PaymentDirection as _PD, PaymentStatus as _PS
+        db.add(_Pmt(
+            trader_id=trader.id,
+            direction=_PD.OUTBOUND,
+            mpesa_transaction_id=pending["tx_id"],
+            transaction_type="CHOICE_OUTBOUND",
+            amount=float(pending["amount"]),
+            destination=_dest,
+            destination_type=_dest_type,
+            remarks=f"Paybill payment via Choice Bank",
+            status=_PS.PENDING,
+        ))
+    except Exception:
+        pass
+
     try:
         from app.services.ledger import record_activity
         from app.models.wallet import TransactionType as _TT
