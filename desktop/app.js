@@ -2940,33 +2940,37 @@ async function pollCycle() {
 
   try {
     // â"€â"€ Check Binance session â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    // Always check if a Binance tab exists — if Chrome closed it the bot would otherwise
+    // keep polling Gmail/blank tabs forever showing "Idle" without triggering reconnect.
+    const binanceTabExists = !!(await getPage('binance.com'));
     const sessionAge = sessionStartTime ? Date.now() - sessionStartTime : Infinity;
-    if (browserLocked && sessionAge > SESSION_GRACE_MS) {
-      if (!(await isLoggedIn())) {
-        loggedOutStrikes++;
-        console.log(`[SparkP2P] isLoggedIn() returned false (strike ${loggedOutStrikes}/${LOGOUT_STRIKES_NEEDED})`);
-        if (loggedOutStrikes < LOGOUT_STRIKES_NEEDED) {
-          scanningInProgress = false;
-          return;
-        }
-        console.log('[SparkP2P] Session expired â€" re-login required');
-        loggedOutStrikes = 0;
-        sessionStartTime = null;
-        stopPoller();
+    const sessionBad = !binanceTabExists ||
+      (browserLocked && sessionAge > SESSION_GRACE_MS && !(await isLoggedIn()));
+    if (sessionBad) {
+      loggedOutStrikes++;
+      const reason = !binanceTabExists ? 'Binance tab missing' : 'isLoggedIn() false';
+      console.log(`[SparkP2P] ${reason} (strike ${loggedOutStrikes}/${LOGOUT_STRIKES_NEEDED})`);
+      if (loggedOutStrikes < LOGOUT_STRIKES_NEEDED) {
         scanningInProgress = false;
-        await unlockChromeBrowser();
-        const page = await getPage('binance.com');
-        if (page) await page.goto('https://accounts.binance.com/en/login', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-        if (mainWindow) {
-          mainWindow.show();
-          mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("binance-disconnected"))');
-        }
-        connectingBinance = false;
-        connectBinance();
         return;
-      } else {
-        loggedOutStrikes = 0;
       }
+      console.log('[SparkP2P] Binance session lost â€" re-login required');
+      loggedOutStrikes = 0;
+      sessionStartTime = null;
+      stopPoller();
+      scanningInProgress = false;
+      await unlockChromeBrowser();
+      const page = await getPage('binance.com');
+      if (page) await page.goto('https://accounts.binance.com/en/login', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("binance-disconnected"))');
+      }
+      connectingBinance = false;
+      connectBinance();
+      return;
+    } else {
+      loggedOutStrikes = 0;
     }
 
     const page = await getPage();
