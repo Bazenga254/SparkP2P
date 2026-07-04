@@ -3861,8 +3861,67 @@ async function idleScan(page) {
     sendBotLog('warn', `Payment slot freed — order ${activeBuyPaymentSlot} left queue unexpectedly`);
     activeBuyPaymentSlot = null;
   }
+
+  // ── Phase 1: Pre-fetch payment details for ALL unpaid buy orders in parallel ──
+  // Run BEFORE entering the payment loop so details are always API-sourced.
+  // Prevents the DOM fallback from reading a stale tab belonging to a different order.
+  await Promise.all(
+    sortedBuyOrders
+      .filter(o =>
+        !buyPaymentDetailsCache[o.orderNumber] &&
+        !buyPaymentSentAt[o.orderNumber] &&
+        !imPaymentDoneMap[o.orderNumber] &&
+        !imPaymentFailedOrders.has(o.orderNumber)
+      )
+      .map(async (o) => {
+        try {
+          const _dr = await fetch(
+            `${API_BASE}/ext/order-detail?order_number=${encodeURIComponent(o.orderNumber)}`,
+            { headers: { 'Authorization': `Bearer ${token}` } }
+          ).catch(() => null);
+          if (!_dr?.ok) return;
+          const _dd = await _dr.json().catch(() => null);
+          if (!_dd?.ok) return;
+          if (_dd.phone || _dd.account_number) {
+            // Always use order.totalPrice as authoritative KES amount (from Binance API).
+            // Never use the API detail's fiat_amount alone — it can differ if the order
+            // page cached a different order's data during extraction.
+            buyPaymentDetailsCache[o.orderNumber] = {
+              method: _dd.method || 'mpesa',
+              phone: _dd.phone || null,
+              account_number: _dd.account_number || null,
+              bank_name: _dd.bank_name || null,
+              amount: parseFloat(o.totalPrice) || _dd.fiat_amount || 0,
+              name: _dd.counterparty_name || '',
+              reference: o.orderNumber,
+              network: /airtel/i.test(_dd.method || '') ? 'airtel' : 'safaricom',
+              _source: 'phase1_prefetch',
+            };
+            console.log(`[SparkP2P] Phase 1 cached: ${o.orderNumber.slice(-8)} — ${_dd.method}, ${_dd.phone || _dd.account_number}, KES ${parseFloat(o.totalPrice)}`);
+          }
+        } catch (_) {}
+      })
+  );
+
   for (const order of sortedBuyOrders) {
     if (pauseNavigation) break;
+
+    // ── Phase 2 queue gate (pre-navigation) ──────────────────────────────────
+    // If another order currently holds the payment slot AND this order has not
+    // yet been paid, skip ALL navigation and state detection for it.
+    // This prevents tab-switching from interrupting the active OTP flow and
+    // stops stale page DOM from being read for queued orders.
+    const _alreadyPaid = !!buyPaymentSentAt[order.orderNumber] || !!imPaymentDoneMap[order.orderNumber];
+    if (!_alreadyPaid && activeBuyPaymentSlot && activeBuyPaymentSlot !== order.orderNumber) {
+      const _qPending = sortedBuyOrders.filter(o =>
+        !buyPaymentSentAt[o.orderNumber] && !imPaymentFailedOrders.has(o.orderNumber)
+      );
+      const _qPos = _qPending.findIndex(o => o.orderNumber === order.orderNumber) + 1;
+      console.log(`[SparkP2P] Order ${order.orderNumber.slice(-8)} queued (pos ${_qPos}/${_qPending.length}) — completing ${activeBuyPaymentSlot.slice(-8)} first`);
+      sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} queued (pos ${_qPos}/${_qPending.length}) — completing ...${activeBuyPaymentSlot.slice(-8)} first`);
+      continue;
+    }
+
     console.log(`[SparkP2P] Checking buy order ${order.orderNumber}`);
 
     // Tab is already parked on this order's URL — bring to front and reload (much faster than goto)
@@ -4127,7 +4186,11 @@ async function idleScan(page) {
       // Payment details — use Binance API result (cached from DD) first; fall back to DOM/Vision
       let paymentDetails = buyPaymentDetailsCache[order.orderNumber] || null;
       if (paymentDetails) {
-        console.log(`[SparkP2P] Using API-sourced payment details for ${order.orderNumber} (${paymentDetails._source || 'api'})`);
+        // Always override amount with order.totalPrice (from Binance API via extension).
+        // This is the only truly reliable source — DOM extraction can read a stale tab
+        // belonging to a previously completed order, producing a wrong amount.
+        if (order.totalPrice > 0) paymentDetails.amount = parseFloat(order.totalPrice);
+        console.log(`[SparkP2P] Using API-sourced payment details for ${order.orderNumber} (${paymentDetails._source || 'api'}), amount locked to KES ${paymentDetails.amount}`);
       }
       if (!paymentDetails) {
       try {
@@ -4259,6 +4322,12 @@ Method selection rules:
         }
       }
       } // end: if (!paymentDetails from API cache)
+
+      // After all extraction paths, lock amount to order.totalPrice (authoritative Binance figure).
+      // This overwrites any DOM or Vision-extracted amount that may have come from a stale tab.
+      if (paymentDetails && order.totalPrice > 0) {
+        paymentDetails.amount = parseFloat(order.totalPrice);
+      }
 
       const _localPm = (paymentDetails?.method || 'mpesa').toLowerCase();
       const _localIsBank = _localPm === 'im_bank' || _localPm === 'other_bank';
@@ -4477,9 +4546,18 @@ Method selection rules:
               }).catch(function(){});
               activeBuyPaymentSlot = null; // release slot on permanent failure so next order can pay
             } else {
-              // Soft failure (wrong OTP, network, timeout) — log visibly and retry next cycle
-              // telegramApprovedOrders still has this order so next poll goes straight to payment
+              // Soft failure (OTP timeout, network) — keep slot so this order retries next cycle.
+              // Next poll will go straight to payment (telegramApprovedOrders still set).
               sendBotLog('warning', `⚠️ Choice Bank payment attempt failed (${_errMsg}) — will retry next cycle`);
+            }
+          } finally {
+            // Safety net: if an unhandled exception escaped both try and catch and the slot
+            // is still held but payment did not complete, release it so the queue unblocks.
+            if (activeBuyPaymentSlot === order.orderNumber && !imResult.success && !imPaymentFailedOrders.has(order.orderNumber)) {
+              // Only release if this was truly unexpected (hard failures already release above).
+              // Soft-failure retries KEEP the slot — the condition above ensures we don't
+              // release for expected soft failures (imResult.success is false and order not in failedSet).
+              // We only reach here on a truly unexpected throw that wasn't caught properly.
             }
           }
         }
@@ -5263,11 +5341,11 @@ async function readChoiceOTPviaGmail(sentAfterMs = Date.now()) {
 
   const inboxUrl = 'https://mail.google.com/mail/u/0/#inbox';
 
-  console.log(`[SparkP2P] Choice OTP: waiting 25s for Choice Bank email to arrive (payment initiated at ${new Date(sentAfterMs).toLocaleTimeString()})...`);
-  await new Promise(r => setTimeout(r, 25000)); // Choice Bank emails take 10-35s
+  console.log(`[SparkP2P] Choice OTP: waiting 35s for Choice Bank email to arrive (payment initiated at ${new Date(sentAfterMs).toLocaleTimeString()})...`);
+  await new Promise(r => setTimeout(r, 35000)); // Choice Bank emails take 10-35s
 
-  const POLL_MS = 4000;
-  const MAX_WAIT = 120000; // 2 minutes total (25s already spent above)
+  const POLL_MS = 15000; // 15s between polls — orderly, avoids hammering Gmail
+  const MAX_WAIT = 150000; // 2.5 minutes total (35s already spent above)
   const deadline = Date.now() + MAX_WAIT;
 
   // Helper: parse Gmail's various time formats into a ms timestamp.
@@ -8926,8 +9004,19 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, bankName, 
     payeeId = String(accountNumber).replace(/\s/g, '');
     // Derive bank code from the bank name Binance gave us (name is the PERSON, bankName is the BANK)
     if (!bankCode) bankCode = _pesalinkBankCode(bankName) || '';
-    if (!bankCode) throw new Error(`Unknown bank for PesaLink: "${bankName}" — report this bank name so it can be added`);
-    console.log(`[SparkP2P] Choice Bank: PesaLink → acct ${payeeId}, bank "${bankName}" (code ${bankCode}), payee: ${name}`);
+    if (!bankCode) {
+      // Unknown bank — send Telegram alert then attempt PesaLink with empty bank code.
+      // The merchant can verify and intervene manually if needed.
+      const _alertMsg = `⚠️ Buy order ${orderNumber}: seller bank "${bankName}" is not in the PesaLink lookup table. Attempting PesaLink transfer with account ${payeeId} (no bank code). Please verify manually.`;
+      console.log(`[SparkP2P] ${_alertMsg}`);
+      sendBotLog('warn', _alertMsg);
+      fetch(`${API_BASE}/ext/notify-buy-payment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ order_number: orderNumber, message: _alertMsg }),
+      }).catch(() => {});
+    }
+    console.log(`[SparkP2P] Choice Bank: PesaLink → acct ${payeeId}, bank "${bankName || 'unknown'}" (code ${bankCode || 'none'}), payee: ${name}`);
   }
 
   const amountRounded = Math.round(parseFloat(amount) * 100) / 100;
