@@ -2600,6 +2600,11 @@ async def get_my_transactions(
             label, icon = "Payment", "💱"
             desc = p.remarks or p.sender_name or label
 
+        tx_fee = 0
+        if direction == "out":
+            from app.services.outbound_fees import categorize as _cat, product_total_fee as _ptf
+            tx_fee = _ptf(_cat(p.transaction_type, p.destination_type), abs(p.amount))
+
         entries.append({
             "id": f"p{p.id}",
             "source": "payment",
@@ -2607,6 +2612,7 @@ async def get_my_transactions(
             "icon": icon,
             "direction": direction,
             "amount": abs(p.amount),
+            "tx_fee": tx_fee,
             "description": desc.strip(" ·"),
             "reference": ref,
             "phone": p.phone or p.destination or "",

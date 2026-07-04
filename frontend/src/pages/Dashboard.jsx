@@ -12,14 +12,17 @@ import MarketActivity from '../components/MarketActivity';
 import SquadPanel from '../components/SquadPanel';
 import MobileRelayBanner from '../components/MobileRelayBanner';
 
-// Choice Bank outbound transaction fees (KES) — mirror backend app/services/outbound_fees.py.
-// Choice Bank withholds these on its side (debits amount + fee); shown here so the trader sees it.
+// Settlement withdrawal fee shown in the withdrawal confirm dialog (M-Pesa / PesaLink rail).
+// tx_fee on transaction rows comes from the backend (outbound_fees.py) — no duplication needed.
 const MPESA_MIN_WITHDRAWAL = 1501;
 function mpesaOutboundFee(amount) {
   const a = amount || 0;
-  if (a <= 2500) return 20;
-  if (a <= 3500) return 21;
-  if (a <= 7500) return 24;
+  if (a <= 100)   return 8;
+  if (a <= 1000)  return 14;
+  if (a <= 1500)  return 16;
+  if (a <= 2500)  return 20;
+  if (a <= 3500)  return 21;
+  if (a <= 7500)  return 24;
   if (a <= 15000) return 28;
   if (a <= 25000) return 31;
   if (a <= 30000) return 32;
@@ -27,7 +30,7 @@ function mpesaOutboundFee(amount) {
   return 40;
 }
 function pesalinkOutboundFee(amount) {
-  return (amount || 0) <= 1000 ? 10 : 25;
+  return (amount || 0) <= 1000 ? 15 : 30;
 }
 function getWithdrawalFee(method, amount) {
   if (amount <= 0) return 0;
@@ -2757,11 +2760,14 @@ export default function Dashboard() {
                         <div style={{ fontSize: 14, fontWeight: 700, color: isIn ? '#10b981' : '#ef4444' }}>
                           {isIn ? '+' : '-'}{fmtAmt(t.amount)}
                         </div>
+                        {!isIn && t.tx_fee > 0 && (
+                          <div style={{ fontSize: 10, color: '#6b7280', marginTop: 1 }}>Fee: KES {t.tx_fee}</div>
+                        )}
                         {t.status === 'completed' && !isIn && (
-                          <div style={{ fontSize: 10, color: '#10b981', marginTop: 2 }}>✓ completed</div>
+                          <div style={{ fontSize: 10, color: '#10b981', marginTop: 1 }}>✓ completed</div>
                         )}
                         {t.status && t.status !== 'completed' && (
-                          <div style={{ fontSize: 10, color: t.status === 'failed' ? '#ef4444' : '#f59e0b', marginTop: 2 }}>{t.status}</div>
+                          <div style={{ fontSize: 10, color: t.status === 'failed' ? '#ef4444' : '#f59e0b', marginTop: 1 }}>{t.status}</div>
                         )}
                       </div>
                     </div>
