@@ -2324,6 +2324,12 @@ export default function Dashboard() {
                     <span>Binance Fees (KES {binanceFeePerUsdt}/USDT · buy + sell)</span>
                     <span>-KES {(profitData?.fees_kes ?? stats?.today?.binance_fees ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                   </div>
+                  {profitData && (profitData.choice_bank_fees ?? 0) > 0 && (
+                    <div className="profit-row fee-row">
+                      <span>Choice Bank Fees</span>
+                      <span>-KES {(profitData.choice_bank_fees).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

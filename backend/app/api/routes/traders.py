@@ -710,7 +710,25 @@ async def profit_breakdown(
     tp = today_realized_pnl(all_rows, fee_per_usdt=fee)   # net = USDT_sold x (margin - fee)
     pnl["gross_profit"] = tp["gross"]
     pnl["fees_kes"] = tp["fees"]
-    pnl["net_profit"] = tp["net"]
+
+    # Sum total fees charged on today's outbound Choice Bank transactions.
+    from app.models.payment import Payment as _Pay, PaymentDirection as _PD, PaymentStatus as _PS
+    from app.services.outbound_fees import categorize as _cat, product_total_fee as _ptf
+    out_payments = (await db.execute(
+        select(_Pay).where(
+            _Pay.trader_id == trader.id,
+            _Pay.direction == _PD.OUTBOUND,
+            _Pay.status == _PS.COMPLETED,
+            _Pay.created_at >= today_start,
+        )
+    )).scalars().all()
+    choice_bank_fees = sum(
+        _ptf(_cat(p.transaction_type, p.destination_type), abs(p.amount))
+        for p in out_payments
+    )
+
+    pnl["choice_bank_fees"] = round(choice_bank_fees, 2)
+    pnl["net_profit"] = round(tp["net"] - choice_bank_fees, 2)
     return {
         "available": True,
         "date": today_start.strftime("%Y-%m-%d"),
