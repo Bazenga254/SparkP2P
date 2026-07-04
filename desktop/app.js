@@ -4531,10 +4531,32 @@ Method selection rules:
             const _errMsg = e.message || 'Unknown error';
             console.error("[SparkP2P] Choice Bank payment error for " + order.orderNumber + ": " + _errMsg);
 
-            // Determine if this is a hard failure (balance/account) or a soft/OTP failure
-            const _isHardFailure = /insufficient|balance|invalid account|not found|account.*block|cannot transfer/i.test(_errMsg);
+            const _isOtpTimeout   = /OTP email did not arrive/i.test(_errMsg);
+            const _isHardFailure  = !_isOtpTimeout && /insufficient|balance|invalid account|not found|account.*block|cannot transfer/i.test(_errMsg);
 
-            if (_isHardFailure) {
+            if (_isOtpTimeout) {
+              // OTP never arrived in 3 minutes — cancel the Binance order, notify merchant,
+              // release the payment slot so order B can proceed immediately.
+              const _cancelMsg = `⚠️ Order ${order.orderNumber.slice(-8)}: Choice Bank OTP did not arrive within 3 minutes. Binance order CANCELLED. ` +
+                `Check Choice Bank for any pending transfer of KES ${paymentDetails.amount} to ${paymentDetails.name} and cancel it if it has not expired automatically.`;
+              sendBotLog('error', _cancelMsg);
+              console.log(`[SparkP2P] OTP timeout — cancelling Binance order ${order.orderNumber} and moving to next`);
+
+              // Cancel on Binance via SAPI (EP-9)
+              await fetch(`${API_BASE}/ext/cancel-order`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ order_number: order.orderNumber }),
+              }).catch(() => {});
+
+              // Mark permanently so it is not retried
+              imPaymentFailedOrders.add(order.orderNumber);
+              _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
+
+              // Release slot immediately — next order in queue can now proceed
+              activeBuyPaymentSlot = null;
+
+            } else if (_isHardFailure) {
               // Permanent failure — mark and report
               imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
               sendBotLog('error', `❌ Choice Bank payment failed (${_errMsg}) — reporting to Telegram`);
@@ -4546,8 +4568,7 @@ Method selection rules:
               }).catch(function(){});
               activeBuyPaymentSlot = null; // release slot on permanent failure so next order can pay
             } else {
-              // Soft failure (OTP timeout, network) — keep slot so this order retries next cycle.
-              // Next poll will go straight to payment (telegramApprovedOrders still set).
+              // Soft failure (network blip etc.) — keep slot so this order retries next cycle.
               sendBotLog('warning', `⚠️ Choice Bank payment attempt failed (${_errMsg}) — will retry next cycle`);
             }
           } finally {
