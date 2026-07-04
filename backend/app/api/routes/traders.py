@@ -711,7 +711,9 @@ async def profit_breakdown(
     pnl["gross_profit"] = tp["gross"]
     pnl["fees_kes"] = tp["fees"]
 
-    # Sum total fees charged on today's outbound Choice Bank transactions.
+    # Sum transaction fees on today's outbound Choice Bank SETTLEMENT payments only.
+    # order_id IS NOT NULL = linked to a P2P trade; personal paybills / withdrawals
+    # / send-money have order_id = NULL and must not affect the trader's P&L.
     from app.models.payment import Payment as _Pay, PaymentDirection as _PD, PaymentStatus as _PS
     from app.services.outbound_fees import categorize as _cat, product_total_fee as _ptf
     out_payments = (await db.execute(
@@ -719,6 +721,7 @@ async def profit_breakdown(
             _Pay.trader_id == trader.id,
             _Pay.direction == _PD.OUTBOUND,
             _Pay.status == _PS.COMPLETED,
+            _Pay.order_id.isnot(None),
             _Pay.created_at >= today_start,
         )
     )).scalars().all()
