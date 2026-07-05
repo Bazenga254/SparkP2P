@@ -16,9 +16,9 @@ Flow:
 import logging
 from collections import deque
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from typing import List, Optional, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +30,7 @@ from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.im_sweep import ImSweep
 from app.models.batch import WithdrawalBatch, BatchItem
 from app.services.settlement.engine import SettlementEngine
-from app.api.deps import get_current_trader
+from app.api.deps import get_current_trader, get_current_trader_id
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,7 @@ class ReportPaymentSentRequest(BaseModel):
     order_number: str
     success: bool
     error: Optional[str] = None
+    channel: Optional[str] = None  # 'MPESA' or 'BANK' — rail used to pay the seller (for credit fee)
 
 
 class ReportMessageSentRequest(BaseModel):
@@ -150,7 +151,7 @@ async def report_orders(
             if completed_order.status not in [OrderStatus.COMPLETED, OrderStatus.RELEASED]:
                 if completed_order.status == OrderStatus.PENDING:
                     completed_order.status = OrderStatus.PAYMENT_SENT
-                await _complete_buy_order(completed_order, trader, db, notify=False)
+                await _complete_buy_order(completed_order, trader, db, notify=True)
         else:
             # Order completed while bot was offline and full data couldn't be parsed — create stub.
             stub = Order(
@@ -261,8 +262,10 @@ async def report_release(
         raise HTTPException(status_code=404, detail="Order not found")
 
     if data.success:
+        _was_released = order.status in (OrderStatus.RELEASED, OrderStatus.COMPLETED)
         order.status = OrderStatus.RELEASED
         order.released_at = datetime.now(timezone.utc)
+        # Credits retired — billing is now subscription + per-tier rate limits (no per-order charge).
         await db.commit()
 
         logger.info(f"Order {data.order_number} released via extension for trader {trader.full_name}")
@@ -329,8 +332,22 @@ async def report_payment_sent(
         raise HTTPException(status_code=404, detail="Order not found")
 
     if data.success:
-        order.status = OrderStatus.PAYMENT_SENT
-        order.payment_sent_at = datetime.now(timezone.utc)
+        _already_sent = order.status == OrderStatus.PAYMENT_SENT
+        # Never downgrade a COMPLETED/RELEASED order back to PAYMENT_SENT.
+        # This happens when a payment retry succeeds after the order was already marked done.
+        if order.status not in (OrderStatus.COMPLETED, OrderStatus.RELEASED):
+            order.status = OrderStatus.PAYMENT_SENT
+            order.payment_sent_at = datetime.now(timezone.utc)
+        # Buy order = outbound payment to the seller via Choice Bank. Choice Bank withholds the KES
+        # fee on its side (debits amount + fee from the trader's account) and remits our markup
+        # monthly — so no credit charge here. Record the fee once for reconciliation.
+        if not _already_sent:
+            try:
+                from app.services.outbound_fees import outbound_fee as _outbound_fee
+                _ch = (data.channel or "BANK").upper()
+                order.choice_fee = _outbound_fee(_ch, order.fiat_amount or 0)
+            except Exception as _e:
+                logger.warning(f"buy-order fee record failed for {data.order_number}: {_e}")
         await db.commit()
         logger.info(f"Buy order {data.order_number} marked as paid via extension")
     else:
@@ -357,6 +374,7 @@ async def report_message_sent(
 
 class ReportBuyCompletedRequest(BaseModel):
     order_number: str
+    notify: bool = True  # False when bot restarted mid-order or completion detected offline
 
 
 @router.post("/report-buy-completed")
@@ -392,7 +410,7 @@ async def report_buy_completed(
             f"in unexpected status {order.status}"
         )
 
-    await _complete_buy_order(order, trader, db)
+    await _complete_buy_order(order, trader, db, notify=data.notify)
     await db.commit()
 
     return {"status": "ok"}
@@ -534,6 +552,13 @@ async def get_pending_actions(
     """
     actions: list[dict] = []
 
+    # Subscription gate: no auto buy/sell/release when the plan is expired (locked) or the daily
+    # trade cap is reached. Returns no actions so the bot stays idle. Choice Bank is unaffected.
+    from app.services.enforcement import can_auto_trade
+    _allowed, _reason = await can_auto_trade(db, trader)
+    if not _allowed:
+        return {"actions": [], "locked": _reason}
+
     # Sell side: payment received, needs release — only if mode allows sell automation
     sell_automated = (trader.bot_trade_mode or 'both') in ('both', 'sell_only')
     if sell_automated:
@@ -643,6 +668,20 @@ async def verify_payment(
                         "reason": f"already_used: M-Pesa code {code} is from a transaction that predates this order. Ask buyer to send a new payment.",
                         "mpesa_receipt": code,
                     }
+                # Amount gate — a genuine code is NOT enough; the payment must cover the order
+                # (whole-figure, cents ignored). Prevents releasing a large order for a small real payment.
+                if data.fiat_amount and int(direct_payment.amount) < int(data.fiat_amount):
+                    logger.warning(
+                        f"M-Pesa code {code} underpaid: KES {direct_payment.amount} < order KES {data.fiat_amount} "
+                        f"for {data.binance_order_number}"
+                    )
+                    return {
+                        "verified": False,
+                        "reason": (f"underpaid: this M-Pesa payment was KES {direct_payment.amount:,.0f} but the order "
+                                   f"is KES {data.fiat_amount:,.0f}. Ask the buyer to pay the difference."),
+                        "mpesa_receipt": code,
+                        "amount_received": direct_payment.amount,
+                    }
                 logger.info(f"M-Pesa code {code} matched directly in Payment table for order {data.binance_order_number}")
                 # Lock this payment to the order so it can never be reused for another order
                 if direct_payment.order_id is None:
@@ -673,7 +712,8 @@ async def verify_payment(
         amount_result = await db.execute(
             select(Payment).where(
                 Payment.trader_id == trader.id,
-                Payment.amount.between(data.fiat_amount - amount_tolerance, data.fiat_amount + amount_tolerance),
+                # Whole-figure: lower bound = floored order amount (no underpayment), small over-tolerance to still match.
+                Payment.amount.between(int(data.fiat_amount), data.fiat_amount + amount_tolerance),
                 Payment.created_at >= time_floor,
                 Payment.direction == PaymentDirection.INBOUND,
                 or_(Payment.order_id.is_(None), Payment.order_id == order.id),
@@ -762,8 +802,10 @@ class BotLogRequest(BaseModel):
 async def receive_bot_log(
     data: BotLogRequest,
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Desktop app pushes each log entry here so admins can view live trader logs."""
+    """Desktop app pushes each log entry here. Persisted to the DB so admins can review a
+    trader's logs even across backend restarts (also kept in memory for fast live reads)."""
     tid = trader.id
     if tid not in _trader_bot_logs:
         _trader_bot_logs[tid] = deque(maxlen=_BOT_LOG_MAX)
@@ -772,7 +814,65 @@ async def receive_bot_log(
         "message": data.message,
         "time": data.time,
     })
+    try:
+        from app.models.bot_log import BotLog
+        from sqlalchemy import text as _sqltext
+        db.add(BotLog(trader_id=tid, level=(data.level or "")[:20], message=data.message, time=(data.time or "")[:40]))
+        # Keep the table tidy — drop this trader's log lines older than 14 days.
+        await db.execute(_sqltext(
+            "DELETE FROM bot_logs WHERE trader_id = :t AND created_at < now() - interval '14 days'"
+        ), {"t": tid})
+        await db.commit()
+    except Exception as _e:
+        logger.warning(f"bot-log persist failed for trader {tid}: {_e}")
     return {"ok": True}
+
+
+# ── Per-trader Binance relay (the desktop executes the trader's Binance calls on its own IP) ──
+
+class RelayResultRequest(BaseModel):
+    job_id: str
+    body: Any = None
+
+
+@router.get("/relay/poll")
+async def relay_poll(request: Request, trader_id: int = Depends(get_current_trader_id)):
+    """Desktop long-polls here. Returns the next signed Binance job for THIS trader to execute on
+    its own IP, or {job: None} if none arrives within the wait window. The desktop must pin the
+    host to Binance and only forward the returned path/params/body/headers.
+
+    Auth is token-only (no DB) so the 25s wait does NOT hold a pool connection — otherwise every
+    online trader polling back-to-back pins a connection and exhausts the DB pool."""
+    from app.services.binance import relay_router
+    from app.api.deps import get_client_ip
+    job = await relay_router.next_job(trader_id, wait=25.0, client_ip=get_client_ip(request))
+    return job or {"job": None}
+
+
+@router.post("/relay/result")
+async def relay_result(data: RelayResultRequest, _tid: int = Depends(get_current_trader_id)):
+    """Desktop posts back the Binance response (parsed JSON) for a job it executed."""
+    from app.services.binance import relay_router
+    delivered = relay_router.deliver_result(data.job_id, data.body)
+    return {"ok": delivered}
+
+
+@router.get("/relay/status")
+async def relay_status(trader_id: int = Depends(get_current_trader_id)):
+    """Whether THIS trader's relay (desktop app or phone) is currently online — i.e. it has
+    long-polled within the presence window. The connect/API screen uses this to tell a merchant
+    to start their relay before testing API keys. Token-only auth (no DB), like /relay/poll."""
+    from app.services.binance import relay_router
+    return {"online": relay_router.is_connected(trader_id)}
+
+
+@router.get("/notifications/poll")
+async def notifications_poll(after: int = 0, trader_id: int = Depends(get_current_trader_id)):
+    """Phone relay polls this for new alerts to post as native notifications. Token-only auth (no
+    DB) so it doesn't hold a pool connection."""
+    from app.services import push_queue
+    items, last = push_queue.poll(trader_id, after)
+    return {"items": items, "last_id": last}
 
 
 @router.post("/heartbeat")
@@ -785,7 +885,9 @@ async def heartbeat(
     Only updates the last-seen timestamp — does NOT touch bot_intentionally_stopped
     to avoid a race where an in-flight heartbeat clears the flag set by /bot-stopped.
     """
-    trader.updated_at = datetime.now(timezone.utc)
+    _now = datetime.now(timezone.utc)
+    trader.updated_at = _now
+    trader.last_extension_sync = _now  # presence signal — drives Online status on dashboard + admin
     await db.commit()
     return {"status": "ok", "trader_id": trader.id}
 
@@ -1124,6 +1226,7 @@ async def _complete_sell_order(order: Order, trader: Trader, db: AsyncSession) -
 
     trader.total_trades += 1
     trader.total_volume += order.fiat_amount
+    # Credits retired — billing is now subscription + per-tier rate limits (no per-order charge).
 
     logger.info(
         f"Sell order {order.binance_order_number} RELEASED (reconcile) — "
@@ -1257,16 +1360,30 @@ async def _process_reported_sell_order(
 
     # Tell extension to send payment instructions via chat.
     # buyer_nickname is included so the bot can run DD screening before sending.
-    paybill = settings.MPESA_SHORTCODE
-    message = (
-        f"Hi! Please send KES {amount:,.0f} to:\n"
-        f"M-Pesa Paybill: {paybill}\n"
-        f"Account Number: {display_account}\n"
-        f"Account Holder: {trader.full_name}\n\n"
-        f"You will receive a confirmation message once payment is received. "
-        f"Your crypto will be released automatically."
-    )
-    return {"action": "send_message", "order_number": order_number, "message": message, "buyer_nickname": order_data.buyerNickname or "", "fiat_amount": float(order_data.totalPrice or 0)}
+    # Prefer Choice Bank: paying to the Choice paybill + the trader's Choice account number lands
+    # the funds directly in their Choice account AND auto-matches the order (the Choice webhook
+    # matches the pending SELL order by trader + amount, then auto-releases). Fall back to the
+    # central M-Pesa paybill + P2P account ref for traders without a Choice account.
+    # Sent as 4 SEPARATE chat messages so the buyer can copy each value cleanly: intro, paybill,
+    # account number, account name. `message` keeps the combined blob for backward-compat with
+    # older desktop builds that only read a single `message`.
+    if trader.choice_account_number:
+        messages = [
+            f"Hi! Please send KES {amount:,.0f} via M-Pesa to the Paybill below. Your crypto is released automatically once payment is received 👇",
+            f"Paybill Number: {settings.CHOICE_BANK_PAYBILL}",
+            f"Account Number: {trader.choice_account_number}",
+            f"Account Name: {trader.full_name}",
+        ]
+    else:
+        messages = [
+            f"Hi! Please send KES {amount:,.0f} via M-Pesa to the Paybill below. Your crypto is released automatically once payment is received 👇",
+            f"M-Pesa Paybill: {settings.MPESA_SHORTCODE}",
+            f"Account Number: {display_account}",
+            f"Account Holder: {trader.full_name}",
+        ]
+    return {"action": "send_message", "order_number": order_number, "messages": messages,
+            "message": "\n".join(messages), "buyer_nickname": order_data.buyerNickname or "",
+            "fiat_amount": float(order_data.totalPrice or 0)}
 
 
 async def _process_reported_buy_order(
@@ -1348,6 +1465,405 @@ async def check_returning_buyer(
     )
     existing = result.scalar_one_or_none()
     return {"is_returning": existing is not None}
+
+
+@router.get("/counterparty-stats")
+async def counterparty_stats(
+    order_number: str,
+    trader: Trader = Depends(get_current_trader),
+):
+    """EP-19 via relay: full buyer profile + prior-trade count for a given order.
+    Returns normalized stats for Telegram screening — confirmed Binance fields."""
+    if not trader.binance_api_key or not trader.binance_api_secret:
+        return {"ok": False, "error": "no_api_key"}
+    try:
+        from app.core.security import decrypt_data
+        from app.services.binance.sapi_client import get_counterparty_statistic, relay_trader
+        relay_trader.set(trader.id)   # route via this trader's desktop in per_trader mode
+        api_key = decrypt_data(trader.binance_api_key)
+        api_secret = decrypt_data(trader.binance_api_secret)
+        d = await get_counterparty_statistic(api_key, api_secret, order_number)
+    except Exception as e:
+        logger.warning("counterparty-stats failed for order %s: %s", order_number, e)
+        return {"ok": False, "error": str(e)}
+
+    trades_30d = d.get("completedOrderNumOfLatest30day")
+    trades_all = d.get("completedOrderNum")
+    rate_30d   = d.get("finishRateLatest30Day")
+    avg_pay    = d.get("avgPayTime")
+    reg_days   = d.get("registerDays")
+    with_us    = d.get("numberOfTradesWithCounterpartyCompleted30day") or 0
+
+    return {
+        "ok": True,
+        "trades_30d": trades_30d,
+        "trades_all": trades_all,
+        "last30dTrades": trades_30d,
+        "allTimeTrades": trades_all,
+        "completionRate": (f"{rate_30d*100:.2f}%" if rate_30d is not None else "N/A"),
+        "avgPayMins": (f"{avg_pay/60:.2f}" if avg_pay is not None else "N/A"),
+        "registeredDays": reg_days,
+        "tradedBefore": with_us > 0,
+        "tradesWithUs30d": with_us,
+        "raw": d,
+    }
+
+
+@router.get("/active-orders")
+async def get_active_orders(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Fetch active Binance P2P orders via stored session credentials.
+
+    Desktop bot calls this instead of querying Binance directly from the
+    browser — decouples order detection from the Puppeteer page state.
+    Returns combined BUY + SELL active orders in a normalised format.
+    """
+    if not trader.binance_cookies:
+        return {"ok": False, "error": "no_session", "orders": []}
+
+    try:
+        from app.services.binance.client import BinanceP2PClient
+        client = BinanceP2PClient.from_trader(trader)
+
+        # Fetch both sides concurrently
+        import asyncio
+        sell_raw, buy_raw = await asyncio.gather(
+            client.get_pending_orders("SELL"),
+            client.get_pending_orders("BUY"),
+            return_exceptions=True,
+        )
+    except Exception as e:
+        logger.warning("active-orders session fetch failed for trader %s: %s", trader.id, e)
+        return {"ok": False, "error": str(e), "orders": []}
+
+    seen_order_numbers: set = set()
+    orders = []
+    for raw, side in ((sell_raw, "SELL"), (buy_raw, "BUY")):
+        if isinstance(raw, Exception) or not isinstance(raw, list):
+            continue
+        for o in raw:
+            order_number = str(o.get("orderNumber") or o.get("orderId") or "")
+            if len(order_number) < 15:
+                continue
+            if order_number in seen_order_numbers:
+                logger.warning("active-orders: duplicate order %s skipped (appeared in both SELL and BUY lists)", order_number)
+                continue
+            seen_order_numbers.add(order_number)
+            fiat   = float(o.get("totalPrice") or o.get("fiatAmount") or 0)
+            crypto = float(o.get("amount") or o.get("cryptoAmount") or 0)
+            price  = float(o.get("unitPrice") or o.get("price") or 0)
+            counterparty = (
+                o.get("buyerNickname") or o.get("sellerNickname")
+                or o.get("counterPartyNickName") or ""
+            )
+            # Use Binance's own tradeType field if present; fall back to the side we requested
+            binance_type = (str(o.get("tradeType") or "")).upper()
+            trade_type = binance_type if binance_type in ("SELL", "BUY") else side
+            orders.append({
+                "orderNumber": order_number,
+                "tradeType": trade_type,
+                "totalPrice": fiat,
+                "amount": crypto,
+                "price": price,
+                "asset": "USDT",
+                "status": "Pending Payment",
+                "counterparty": counterparty,
+            })
+
+    return {"ok": True, "orders": orders}
+
+
+@router.get("/order-detail")
+async def get_order_detail(
+    order_number: str,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Return full order detail including payment info.
+
+    Tries SAPI (API key) first — works even when session cookies are expired.
+    Falls back to cookie-based client if SAPI is unavailable.
+    """
+    # ── SAPI path (API key) — preferred, no cookie dependency ────────────────
+    if trader.binance_api_key and trader.binance_api_secret:
+        try:
+            from app.services.binance.sapi_client import get_order_payment_details, relay_trader
+            from app.core.security import decrypt_data
+            relay_trader.set(trader.id)
+            api_key    = decrypt_data(trader.binance_api_key)
+            api_secret = decrypt_data(trader.binance_api_secret)
+            d = await get_order_payment_details(api_key, api_secret, order_number)
+            phone = None
+            account_number = None
+            bank_name = None
+            for f in (d.get("fields") or []):
+                lbl = (f.get("label") or "").lower()
+                val = (f.get("value") or "").strip()
+                if not val:
+                    continue
+                if not phone and any(w in lbl for w in ("phone", "mobile", "number")):
+                    phone = val
+                if not account_number and any(w in lbl for w in ("account", "card")):
+                    account_number = val
+                if not bank_name and "bank" in lbl:
+                    bank_name = val
+            phone = phone or d.get("pay_account") or None
+            method_raw = str(d.get("method") or "").lower()
+            if any(k in method_raw for k in ("pesalink", "equity", "kcb", "coop", "i&m", "im bank")):
+                method = "other_bank"
+            elif any(k in method_raw for k in ("mpesa", "m-pesa", "safaricom")):
+                method = "mpesa"
+            else:
+                method = "mpesa"
+            return {
+                "ok": True,
+                "method": method,
+                "phone": phone,
+                "account_number": account_number or None,
+                "bank_name": bank_name or None,
+                "fiat_amount": d.get("fiat_amount"),
+                "counterparty_name": d.get("name") or d.get("counterparty_nickname"),
+                "trades_30d": d.get("trades_30d"),
+                "trades_all": d.get("trades_all"),
+                "completion_rate": d.get("completion_rate"),
+                "account_age_days": d.get("account_age_days"),
+                "avg_pay_mins": d.get("avg_pay_mins"),
+            }
+        except Exception as e:
+            logger.warning("order-detail SAPI path failed for %s: %s — falling back to cookies", order_number, e)
+
+    # ── Cookie path (legacy) ──────────────────────────────────────────────────
+    if not trader.binance_cookies:
+        return {"ok": False, "error": "no_session"}
+
+    try:
+        from app.services.binance.client import BinanceP2PClient
+        client = BinanceP2PClient.from_trader(trader)
+        d = await client.get_order_detail(order_number)
+    except Exception as e:
+        logger.warning("order-detail failed for %s: %s", order_number, e)
+        return {"ok": False, "error": str(e)}
+
+    if not d:
+        return {"ok": False, "error": "empty_response"}
+
+    # Extract payment details from payInfo array
+    pay_info = d.get("payInfo") or d.get("tradePayInfo") or d.get("sellerPayInfo") or []
+    pi = pay_info[0] if isinstance(pay_info, list) and pay_info else {}
+
+    method_raw = str(pi.get("payMethodName") or pi.get("payType") or "").lower()
+    if "i" in method_raw and "m" in method_raw and "bank" in method_raw:
+        method = "im_bank"
+    elif any(k in method_raw for k in ("mpesa", "m-pesa", "safaricom")):
+        method = "mpesa"
+    elif any(k in method_raw for k in ("equity", "kcb", "coop", "bank", "pesalink")):
+        method = "other_bank"
+    else:
+        method = "mpesa"
+
+    fields = pi.get("fields") or []
+    def _fv(key):
+        for f in fields:
+            if key in str(f.get("identifier") or f.get("fieldName") or "").lower():
+                return str(f.get("value") or f.get("fieldValue") or "").strip()
+        return ""
+
+    phone          = _fv("phone") or _fv("mobile") or _fv("number")
+    account_number = _fv("account") or _fv("card")
+    bank_name      = _fv("bank") or pi.get("payMethodName") or ""
+
+    # Counterparty info
+    cp = d.get("counterPartyUserInfoVo") or d.get("sellerInfo") or {}
+    name          = cp.get("nickName") or d.get("sellerNickname") or d.get("buyerNickname") or ""
+    trades_30d    = cp.get("lastMonthOrderNum") or cp.get("tradeCount30d")
+    trades_all    = cp.get("orderCount") or cp.get("tradeCountTotal")
+    rate_raw      = cp.get("monthFinishRate") or cp.get("completionRate")
+    completion    = f"{float(rate_raw)*100:.1f}%" if rate_raw is not None else ""
+    reg_days      = cp.get("registerDays")
+    avg_pay_secs  = cp.get("avgPayTime")
+    avg_pay_mins  = round(float(avg_pay_secs) / 60, 1) if avg_pay_secs else None
+
+    fiat_amount   = float(d.get("totalPrice") or d.get("fiatAmount") or 0)
+
+    return {
+        "ok": True,
+        "method": method,
+        "phone": phone or None,
+        "account_number": account_number or None,
+        "bank_name": bank_name or None,
+        "fiat_amount": fiat_amount,
+        "counterparty_name": name,
+        "trades_30d": trades_30d,
+        "trades_all": trades_all,
+        "completion_rate": completion,
+        "account_age_days": reg_days,
+        "avg_pay_mins": avg_pay_mins,
+    }
+
+
+# ─── EP-13 sell order state (SAPI HMAC) ──────────────────────────────────────
+
+@router.get("/sell-order-state")
+async def sell_order_state(
+    order_number: str,
+    trader: Trader = Depends(get_current_trader),
+):
+    """EP-13 via SAPI HMAC: return normalised order state + payment method.
+    Replaces DOM/Vision state detection in the desktop sell-order loop."""
+    from app.services.binance.sapi_client import get_order_payment_details, relay_trader
+    api_key, api_secret = _sapi_creds(trader)
+    relay_trader.set(trader.id)
+    try:
+        d = await get_order_payment_details(api_key, api_secret, order_number)
+    except Exception as e:
+        logger.warning("sell-order-state EP-13 failed for %s: %s", order_number, e)
+        return {"ok": False, "error": str(e), "state": "unknown"}
+
+    raw_status = d.get("order_status", "")
+
+    # Map Binance order status strings → our internal state names
+    _AWAITING  = {"WAS_CREATED", "TRADING", "PENDING", "20", "10"}
+    _VERIFY    = {"TAKER_PAID", "BUYER_PAID", "PAYING", "CONFIRM_RELEASING", "30"}
+    _COMPLETE  = {"COMPLETED", "SELLER_RELEASED", "SUCCESS", "40", "50", "70"}
+    _CANCELLED = {"CANCELLED", "CANCELLED_BY_SYSTEM", "60", "80"}
+
+    if raw_status in _AWAITING:
+        state = "awaiting_payment"
+    elif raw_status in _VERIFY:
+        state = "verify_payment"
+    elif raw_status in _COMPLETE:
+        state = "order_complete"
+    elif raw_status in _CANCELLED:
+        state = "cancelled"
+    else:
+        state = "unknown"
+
+    # Determine payment method from EP-13 raw_pay_type / method name
+    raw_method = str(d.get("method") or "").lower()
+    raw_pay    = str(d.get("raw_pay_type") or "").lower()
+    _bank_keywords = ("pesalink", "bank", "equity", "kcb", "coop", "stanchart",
+                      "absa", "ncba", "dtb", "stanbic", "family", "i&m", "im bank")
+    if any(k in raw_method or k in raw_pay for k in _bank_keywords):
+        payment_method = "pesalink"
+    else:
+        payment_method = "mpesa"
+
+    return {
+        "ok": True,
+        "state": state,
+        "raw_status": raw_status,
+        "payment_method": payment_method,
+        "buyer_name": d.get("counterparty_nickname"),
+        "amount": d.get("fiat_amount"),
+        "trades_30d": d.get("trades_30d"),
+        "trades_all": d.get("trades_all"),
+        "completion_rate": d.get("completion_rate"),
+        "account_age_days": d.get("account_age_days"),
+        "avg_pay_mins": d.get("avg_pay_mins"),
+    }
+
+
+# ─── Order action endpoints (SAPI — HMAC signed, relay-routed) ───────────────
+
+def _sapi_creds(trader: Trader):
+    """Return (api_key, api_secret) or raise HTTPException if not set."""
+    from app.core.security import decrypt_data
+    if not trader.binance_api_key or not trader.binance_api_secret:
+        raise HTTPException(status_code=400, detail="no_api_key")
+    return decrypt_data(trader.binance_api_key), decrypt_data(trader.binance_api_secret)
+
+
+class OrderActionRequest(BaseModel):
+    order_number: str
+
+
+@router.post("/mark-paid")
+async def mark_order_paid(
+    data: OrderActionRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """EP-17: mark a BUY order as paid after sending money to the seller."""
+    from app.services.binance.sapi_client import mark_order_as_paid, relay_trader
+    api_key, api_secret = _sapi_creds(trader)
+    relay_trader.set(trader.id)
+    try:
+        resp = await mark_order_as_paid(api_key, api_secret, data.order_number)
+        ok = resp.get("code") == "000000" or resp.get("success") is True
+        return {"ok": ok, "raw": resp}
+    except Exception as e:
+        logger.warning("mark-paid failed for %s: %s", data.order_number, e)
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/cancel-order")
+async def cancel_binance_order(
+    data: OrderActionRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """EP-9: cancel an order (called when trader declines via Telegram)."""
+    from app.services.binance.sapi_client import cancel_order, relay_trader
+    api_key, api_secret = _sapi_creds(trader)
+    relay_trader.set(trader.id)
+    try:
+        resp = await cancel_order(api_key, api_secret, data.order_number)
+        ok = resp.get("code") == "000000" or resp.get("success") is True
+        return {"ok": ok, "raw": resp}
+    except Exception as e:
+        logger.warning("cancel-order failed for %s: %s", data.order_number, e)
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/release-coin")
+async def release_coin_endpoint(
+    data: OrderActionRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """EP-20: release crypto to buyer on a SELL order after payment confirmed."""
+    from app.services.binance.sapi_client import release_coin, relay_trader
+    api_key, api_secret = _sapi_creds(trader)
+    relay_trader.set(trader.id)
+    try:
+        resp = await release_coin(api_key, api_secret, data.order_number)
+        ok = resp.get("code") == "000000" or resp.get("success") is True
+        if ok:
+            # Update our DB record
+            result = await db.execute(
+                select(Order).where(
+                    Order.trader_id == trader.id,
+                    Order.binance_order_number == data.order_number,
+                )
+            )
+            order = result.scalar_one_or_none()
+            if order:
+                order.status = OrderStatus.COMPLETED
+                await db.commit()
+        return {"ok": ok, "raw": resp}
+    except Exception as e:
+        logger.warning("release-coin failed for %s: %s", data.order_number, e)
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/check-can-release")
+async def check_can_release_endpoint(
+    data: OrderActionRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """EP-12: read-only probe — confirm Binance allows release before calling EP-20."""
+    from app.services.binance.sapi_client import check_if_can_release, relay_trader
+    api_key, api_secret = _sapi_creds(trader)
+    relay_trader.set(trader.id)
+    try:
+        resp = await check_if_can_release(api_key, api_secret, data.order_number)
+        ok_code = resp.get("code") == "000000" or resp.get("success") is True
+        can_release = ok_code and bool(resp.get("data") if resp.get("data") is not None else True)
+        return {"ok": True, "can_release": can_release, "raw": resp}
+    except Exception as e:
+        logger.warning("check-can-release failed for %s: %s", data.order_number, e)
+        # Don't block release on EP-12 failure — let EP-20 be the final arbiter
+        return {"ok": False, "can_release": True, "error": str(e)}
 
 
 # ─── I&M Bank withdrawal job queue ───────────────────────────────────────────
@@ -2420,7 +2936,8 @@ async def choice_payment_received(
         )
     )
     total_paid = float(total_result.scalar() or 0)
-    received = total_paid >= order.fiat_amount - 5
+    # Whole-figure match: ignore cents only, NO underpayment slack (was amount - 5 KES).
+    received = int(total_paid) >= int(order.fiat_amount)
     return {
         "received": received,
         "total_paid": total_paid,
@@ -2429,7 +2946,56 @@ async def choice_payment_received(
     }
 
 
+# ── SMS-OTP relay: the phone's SmsReceiver posts incoming OTP texts here ───────
+
+import re as _re
+import asyncio as _asyncio
+import time as _time
+
+# trader_id -> {otp, sender, ts}. Latest OTP the phone relayed; a pending payout reads it to confirm.
+_received_sms_otp: dict[int, dict] = {}
+
+# account_last_4 -> {event: asyncio.Event, otp: str|None}. Pending SMS OTP waiter for choice-pay-confirm-sms.
+_pending_sms_otps: dict[str, dict] = {}
+
+
+class SmsOtpData(BaseModel):
+    sender: str = ""
+    body: str = ""
+
+
+@router.post("/sms-otp")
+async def receive_sms_otp(data: SmsOtpData, trader: Trader = Depends(get_current_trader)):
+    """The sideloaded app's SMS reader forwards incoming code-bearing SMS here. We log sender+body (to
+    learn the exact Choice OTP format) and stash the extracted 6-digit code so a pending Choice payout
+    can confirm the operation with it (the channel that actually works — email can't be verified)."""
+    body = data.body or ""
+    # Choice format: "Verification code 2402. This code expires in 10 minutes." (4-digit code).
+    m = _re.search(r"[Vv]erification code[:\s]*(\d{3,8})", body) or _re.search(r"(?<!\d)(\d{4,8})(?!\d)", body)
+    otp = m.group(1) if m else None
+    logger.warning(f"[SMS-OTP] trader={trader.id} sender={data.sender!r} body={body[:120]!r} -> otp={otp}")
+    if otp:
+        _received_sms_otp[trader.id] = {"otp": otp, "sender": data.sender, "ts": _time.time()}
+    return {"ok": True, "otp_seen": bool(otp)}
+
+
 # ── Buy order pre-payment Telegram notification ───────────────────────────────
+
+async def _choice_balance(trader) -> float | None:
+    """Live Choice Bank balance (KES) for the trader's sub-account, or None if unavailable.
+    Used to block BUY-order payouts the trader can't actually fund."""
+    acct = getattr(trader, "choice_account_id", None)
+    if not acct:
+        return None
+    try:
+        from app.services.choice_bank import client as choice_client
+        result = await choice_client.get_account_details(acct)
+        data = result.get("data") or {}
+        bal = data.get("balance")
+        return float(bal) if bal is not None else None
+    except Exception:
+        return None
+
 
 class NotifyBuyPaymentRequest(BaseModel):
     order_number: str
@@ -2458,6 +3024,20 @@ async def notify_buy_payment(
     name = data.verified_name or data.seller_name or "Unknown"
     verified_tag = " ✅" if data.verified_name else ""
 
+    # Balance pre-check — never announce/attempt a payout the trader can't fund.
+    bal = await _choice_balance(trader)
+    if bal is not None and bal < data.amount:
+        shortfall = data.amount - bal
+        await notify_trader(trader, (
+            f"⚠️ SparkP2P — Insufficient Choice balance\n\n"
+            f"Cannot pay {amt_str} for order ...{data.order_number[-12:]}.\n"
+            f"💰 Choice balance: KES {bal:,.0f}\n"
+            f"➕ Top up at least KES {shortfall:,.0f} more.\n\n"
+            f"Order was NOT processed and the seller was NOT told you paid. "
+            f"Top up your Choice account so future orders go through."
+        ))
+        return {"ok": False, "insufficient": True, "balance": bal, "needed": data.amount}
+
     if data.method in ("im_bank", "other_bank"):
         bank = data.bank_name or "Bank"
         dest = f"{bank} a/c {data.account_number or '?'}"
@@ -2475,6 +3055,25 @@ async def notify_buy_payment(
 
     await notify_trader(trader, msg)
     return {"ok": True}
+
+
+class OtpTimeoutNotifyRequest(BaseModel):
+    order_number: str
+    amount: float
+    name: str = ""
+    method: str = "mpesa"
+
+
+@router.post("/notify-otp-timeout")
+async def notify_otp_timeout(
+    data: OtpTimeoutNotifyRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Called by the desktop bot when Choice Bank OTP didn't arrive in 3 minutes.
+    Sends a Telegram message with inline buttons asking the merchant if money moved."""
+    from app.api.routes.telegram import send_otp_timeout_alert
+    ok = await send_otp_timeout_alert(trader, data.order_number, data.amount, data.name, data.method)
+    return {"ok": ok}
 
 
 # ── Choice Bank outbound payment (BUY order payments to sellers) ──────────────
@@ -2507,12 +3106,32 @@ async def choice_pay(
 
     from app.services.choice_bank.client import transfer
 
+    # Hard balance gate — never move money the trader doesn't have (prevents a failed transfer that
+    # leaves the seller falsely told "paid" and the order auto-cancelling).
+    bal = await _choice_balance(trader)
+    if bal is not None and bal < data.amount:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Insufficient Choice balance: KES {bal:,.0f} available, "
+                    f"KES {data.amount:,.0f} needed. Top up your Choice account."),
+        )
+
+    from app.services.choice_bank.client import send_otp
+
     remark = data.remark or f"SparkP2P BUY {data.order_number[-12:]}"
+
+    # M-Pesa B2C requires payeeBankCode="M-PESA". PesaLink requires the bank's CBK code.
+    # Without the correct bank code Choice Bank treats the call as an internal transfer
+    # and returns success without actually routing the money.
+    is_mpesa = not data.bank_code and data.payee_account_id.isdigit() and len(data.payee_account_id) == 9
+    effective_bank_code = data.bank_code if data.bank_code else ("M-PESA" if is_mpesa else "")
+    logger.info(f"[ChoiceBank] BUY payment: KES {data.amount} → {data.payee_account_id} (bankCode={effective_bank_code or 'internal'})")
+
     result = await transfer(
         payer_account_id=trader.choice_account_id,
         payee_account_id=data.payee_account_id,
         amount=data.amount,
-        payee_bank_code=data.bank_code,
+        payee_bank_code=effective_bank_code,
         payee_name=data.payee_name,
         remark=remark,
     )
@@ -2523,24 +3142,194 @@ async def choice_pay(
 
     tx_data = result.get("data") or {}
     tx_id = tx_data.get("txId") or tx_data.get("externalTxId") or ""
+    application_id = tx_data.get("applicationId") or ""
 
+    # All external transfers (M-Pesa, PesaLink, Airtel) require OTP before money moves.
+    # - M-Pesa / Airtel: Choice Bank returns txId — we must call send_otp(txId) to trigger the OTP.
+    # - PesaLink / large interbank: Choice Bank returns applicationId — OTP is auto-sent; we call
+    #   send_otp as well (no-op if already sent) and use applicationId as the confirmation handle.
+    # In both cases we return otp_required so the desktop waits for SMS OTP via webhook and confirms.
+    business_id = tx_id or application_id
+    if not business_id:
+        raise HTTPException(status_code=502, detail="Choice Bank returned no transaction ID — transfer may not have been created")
+
+    try:
+        otp_res = await send_otp(business_id, otp_type="SMS")
+        if otp_res.get("code") != "00000":
+            logger.warning(f"[ChoiceBank] send_otp returned {otp_res.get('code')}: {otp_res.get('msg')} — OTP may be auto-sent by Choice Bank")
+        else:
+            logger.info(f"[ChoiceBank] OTP triggered via SMS for businessId={business_id}")
+    except Exception as exc:
+        logger.warning(f"[ChoiceBank] send_otp call failed: {exc} — continuing, OTP may be auto-sent")
+
+    return {
+        "status": "otp_required",
+        "application_id": business_id,   # txId or applicationId — both work with confirm_otp
+        "order_number": data.order_number,
+        "amount": data.amount,
+        "payee": data.payee_account_id,
+        "payee_name": data.payee_name,
+        "remark": remark,
+    }
+
+
+class ChoiceConfirmOtpRequest(BaseModel):
+    application_id: str
+    otp: str
+    order_number: str
+    amount: float
+    payee_account_id: str
+    payee_name: str = ""
+    bank_code: str = ""
+    remark: str = ""
+
+
+@router.post("/choice-confirm-otp")
+async def choice_confirm_otp(
+    data: ChoiceConfirmOtpRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Confirm a Choice Bank transfer OTP read from Gmail. Called by desktop after readChoiceOTPviaIMAP."""
+    from app.services.choice_bank.client import confirm_otp
+    result = await confirm_otp(data.application_id, data.otp)
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "OTP confirmation failed"))
+    tx_data = result.get("data") or {}
+    tx_id = tx_data.get("txId") or tx_data.get("externalTxId") or data.application_id
+    return await _finalise_choice_payment(
+        trader=trader, db=db, tx_id=tx_id, amount=data.amount,
+        payee_account_id=data.payee_account_id, payee_name=data.payee_name,
+        order_number=data.order_number, remark=data.remark, bank_code=data.bank_code,
+    )
+
+
+async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_id,
+                                    payee_name, order_number, remark, bank_code):
+    """Record the payment in DB and generate a receipt image after OTP is confirmed."""
+    _dest_type = "Bank Transfer" if bank_code else "M-Pesa"
     payment = Payment(
         trader_id=trader.id,
         direction=PaymentDirection.OUTBOUND,
         status=PaymentStatus.COMPLETED,
-        amount=data.amount,
+        amount=amount,
         transaction_type="CHOICE_OUTBOUND",
-        phone=data.payee_account_id,
+        phone=payee_account_id,
+        destination=payee_account_id,
+        destination_type=_dest_type,
+        sender_name=payee_name,
         mpesa_transaction_id=tx_id or None,
-        remarks=f"BUY {data.order_number[-12:]}: {data.payee_name}",
+        remarks=f"BUY {order_number[-12:]}: {payee_name}",
     )
     db.add(payment)
     await db.commit()
 
+    receipt_b64 = ""
+    try:
+        from app.services.payment_receipt import generate_receipt
+        receipt_b64 = generate_receipt(
+            amount=amount, payee_name=payee_name, payee_account=payee_account_id,
+            ref=tx_id or remark, method="Bank Transfer" if bank_code else "M-Pesa",
+        )
+    except Exception as e:
+        logger.warning(f"choice-pay receipt generation failed: {e}")
+
+    # Notify trader that payment has been sent
+    try:
+        from app.api.routes.telegram import notify_trader as _tg_notify
+        _method_label = "Bank/PesaLink" if bank_code else "M-Pesa"
+        _short = order_number[-8:] if order_number else "?"
+        await _tg_notify(
+            trader,
+            f"💸 <b>Payment sent!</b>\n\n"
+            f"KES {int(amount):,} → {payee_name or payee_account_id} ({_method_label})\n"
+            f"Order ref: <code>...{_short}</code>\n"
+            f"<i>Waiting for seller to release crypto...</i>",
+        )
+    except Exception as _ne:
+        logger.warning(f"choice-pay sent-notification failed: {_ne}")
+
     return {
         "success": True,
         "transaction_id": tx_id,
-        "amount": data.amount,
-        "payee": data.payee_account_id,
+        "amount": amount,
+        "payee": payee_account_id,
         "remark": remark,
+        "receipt_image": receipt_b64,
     }
+
+
+# ── SMS-OTP confirm: waits for Advanta inbound webhook then confirms the transfer ─
+
+class ChoicePayConfirmSmsRequest(BaseModel):
+    application_id: str
+    order_number: str
+    amount: float
+    payee_account_id: str
+    payee_name: str = ""
+    bank_code: str = ""
+    remark: str = ""
+
+
+@router.post("/choice-pay-confirm-sms")
+async def choice_pay_confirm_sms(
+    data: ChoicePayConfirmSmsRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Called by the desktop bot after /choice-pay returns otp_required.
+    Waits for the Choice Bank SMS OTP to arrive via Advanta webhook, then confirms the transfer.
+    Replaces the Gmail-polling approach — typical latency is under 10 seconds.
+    """
+    from app.services.choice_bank.client import confirm_otp, resend_otp as _resend_otp
+
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+
+    account_last_4 = str(trader.choice_account_id)[-4:]
+    key = account_last_4
+
+    # Register a waiter for this account
+    event = _asyncio.Event()
+    _pending_sms_otps[key] = {"event": event, "otp": None}
+
+    try:
+        # Wait up to 60 seconds for the OTP SMS to arrive via Advanta webhook
+        try:
+            await _asyncio.wait_for(event.wait(), timeout=60.0)
+        except _asyncio.TimeoutError:
+            logger.warning(f"[SMS-OTP] First 60s timeout for account ****{account_last_4} — resending OTP")
+            try:
+                await _resend_otp(data.application_id, otp_type="SMS")
+            except Exception as _re:
+                logger.warning(f"[SMS-OTP] resend_otp failed: {_re}")
+            # Reset event and wait another 30 seconds
+            event.clear()
+            _pending_sms_otps[key]["otp"] = None
+            try:
+                await _asyncio.wait_for(event.wait(), timeout=30.0)
+            except _asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=408,
+                    detail="Choice Bank SMS OTP did not arrive within 90 seconds. Transfer cancelled.",
+                )
+
+        otp = (_pending_sms_otps.get(key) or {}).get("otp")
+        if not otp:
+            raise HTTPException(status_code=500, detail="SMS OTP event fired but no code was stored")
+
+        logger.info(f"[SMS-OTP] Received OTP for account ****{account_last_4} — confirming transfer")
+        result = await confirm_otp(data.application_id, otp)
+        if result.get("code") != "00000":
+            raise HTTPException(status_code=400, detail=result.get("msg", "OTP confirmation failed"))
+
+        tx_data = result.get("data") or {}
+        tx_id = tx_data.get("txId") or tx_data.get("externalTxId") or data.application_id
+        return await _finalise_choice_payment(
+            trader=trader, db=db, tx_id=tx_id, amount=data.amount,
+            payee_account_id=data.payee_account_id, payee_name=data.payee_name,
+            order_number=data.order_number, remark=data.remark, bank_code=data.bank_code,
+        )
+    finally:
+        _pending_sms_otps.pop(key, None)

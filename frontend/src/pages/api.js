@@ -51,7 +51,6 @@ export const getProfile = () => api.get('/traders/me');
 export const connectBinance = (data) => api.post('/traders/connect-binance', data);
 export const updateSettlement = (data) => api.put('/traders/settlement', data);
 export const updateVerification = (data) => api.put('/traders/verification', data);
-export const saveBinance2fa = (secret, code) => api.post('/traders/binance-2fa/save', { secret, code });
 export const updateTradingConfig = (data) => api.put('/traders/trading-config', data);
 export const saveBinanceApiKey = (data) => api.put('/traders/binance-api-key', data);
 export const deleteBinanceApiKey = () => api.delete('/traders/binance-api-key');
@@ -81,19 +80,12 @@ export const internalTransfer = (recipient, amount) => api.post('/traders/wallet
 
 // Orders
 export const getOrders = (params = {}) => api.get('/orders', { params });
-// Export orders to .xlsx. range: 24h|7d|30d|1y|all (24h = since 3AM EAT). type: all|incoming|outgoing.
-export const exportOrders = (range, type) => api.get('/orders/export', { params: { range, type }, responseType: 'blob' });
 export const getOrderStats = () => api.get('/orders/stats');
 export const createOrder = (data) => api.post('/orders', data);
 
 // Subscriptions
 export const initiateSubscription = (plan, phone) => api.post('/subscriptions/initiate', { plan, phone });
 export const getSubscriptionStatus = () => api.get('/subscriptions/status');
-export const getPaymentInfo = () => api.get('/subscriptions/payment-info');
-export const subscriptionDepositInitiate = (amount, phone) => api.post('/subscriptions/deposit/initiate', { amount, phone });
-export const payChoiceInitiate = (plan) => api.post('/subscriptions/pay-choice/initiate', { plan });
-export const payChoiceConfirm = (otp) => api.post('/subscriptions/pay-choice/confirm', { otp });
-export const adminSendSms = (body) => api.post('/admin/sms/send', body);
 export const renewSubscription = (plan, phone) => api.post('/subscriptions/renew', { plan, phone });
 export const getRateLimit = () => api.get('/traders/rate-limit');
 
@@ -101,7 +93,7 @@ export const getRateLimit = () => api.get('/traders/rate-limit');
 export const getAdminDashboard = () => api.get('/admin/dashboard');
 export const getAdminTraders = (params = {}) => api.get('/admin/traders', { params });
 export const updateTraderStatus = (id, status) => api.put(`/admin/traders/${id}/status?new_status=${status}`);
-export const updateTraderTier = (id, tier, expiresAt = '') => api.put(`/admin/traders/${id}/tier?tier=${tier}${expiresAt ? `&expires_at=${encodeURIComponent(expiresAt)}` : ''}`);
+export const updateTraderTier = (id, tier) => api.put(`/admin/traders/${id}/tier?tier=${tier}`);
 export const getDisputedOrders = () => api.get('/admin/orders/disputed');
 export const getUnmatchedPayments = () => api.get('/admin/payments/unmatched');
 export const resolveUnmatchedPayment = (id) => api.delete('/admin/payments/unmatched/' + id);
@@ -173,16 +165,7 @@ export const validateReferralCode = (code) => api.get(`/affiliates/validate/${co
 export const getAdminTraderBotLogs = (traderId) => api.get(`/admin/traders/${traderId}/bot-logs`);
 export const adminGetKycTraders = () => api.get('/admin/kyc/traders');
 export const adminGetKycLiveStatus = (traderId) => api.get(`/admin/kyc/status/${traderId}`);
-export const adminResetKyc = (traderId) => api.post(`/admin/kyc/reset/${traderId}`);
-export const adminGetKycSubmissions = () => api.get('/admin/kyc/submissions');
-export const adminGetKycSubmission = (id) => api.get(`/admin/kyc/submission/${id}`);
-export const adminApproveKycSubmission = (id) => api.post(`/admin/kyc/submission/${id}/approve`);
-export const adminRejectKycSubmission = (id, notes) => api.post(`/admin/kyc/submission/${id}/reject`, { notes });
-export const adminConfirmKycOtp = (id, otp) => api.post(`/admin/kyc-submissions/${id}/confirm-otp`, { otp });
-export const adminResendKycOtp = (id) => api.post(`/admin/kyc-submissions/${id}/resend-otp`);
 export const adminGetTraderChoiceBalance = (traderId) => api.get(`/admin/traders/${traderId}/choice-balance`);
-export const adminVerifyTraderContact = (traderId, verify_type) => api.post(`/admin/kyc/traders/${traderId}/verify-contact`, { verify_type });
-export const adminConfirmTraderContactVerify = (traderId, application_id, otp) => api.post(`/admin/kyc/traders/${traderId}/confirm-contact-verify`, { application_id, otp });
 export const adminGetChoicePlatformFloat = () => api.get('/admin/choice/platform-float');
 export const adminGetExpenses = () => api.get('/admin/expenses');
 export const adminPostExpense = (body) => api.post('/admin/expenses', body);
@@ -203,23 +186,5 @@ export const cbWithdrawToBank = (otp, amount) => api.post('/traders/cb-withdraw-
 export const cbWithdrawInitiate = (amount) => api.post('/traders/cb-withdraw-to-bank/initiate', { amount });
 export const cbWithdrawToMpesa = (otp, amount) => api.post("/traders/cb-withdraw-to-bank", { otp, amount });
 export const cbWithdrawToMpesaInitiate = (amount) => api.post("/traders/cb-withdraw-to-mpesa/initiate", { amount });
-// Payments Hub — Send Money to any M-Pesa number (OTP-confirmed)
-export const cbSendMoneyInitiate = (body) => api.post('/choice/pay/send-money/initiate', body);
-export const cbSendMoneyConfirm = (otp) => api.post('/choice/pay/send-money/confirm', { otp });
-export const cbSendMoneyConfirmSms = () => api.post('/choice/pay/send-money/confirm-sms');
-// Payments Hub — M-Pesa Paybill / Till (OTP-confirmed)
-export const cbLookupShortcode = (code) => api.get('/choice/pay/lookup-shortcode', { params: { code } });
-export const cbPaybillInitiate = (body) => api.post('/choice/pay/paybill/initiate', body);
-export const cbPaybillConfirm = (otp) => api.post('/choice/pay/paybill/confirm', { otp });
-// Payments Hub — Bank transfers (PesaLink / internal / RTGS / M-Pesa deposit)
-export const cbGetBanks = () => api.get('/choice/banks');
-export const cbLookupMpesaName = (phone) => api.get('/choice/pay/lookup-mpesa-name', { params: { phone } });
-export const cbLookupBankAccount = (account_id, bank_code = '') => api.get('/choice/pay/lookup-account', { params: { account_id, bank_code } });
-export const cbBankTransferInitiate = (body) => api.post('/choice/pay/bank-transfer/initiate', body);
-export const cbBankTransferConfirm = (otp) => api.post('/choice/pay/bank-transfer/confirm', { otp });
-export const cbRtgsInitiate = (body) => api.post('/choice/pay/rtgs/initiate', body);
-export const cbRtgsConfirm = (otp) => api.post('/choice/pay/rtgs/confirm', { otp });
-export const cbMpesaToBank = (body) => api.post('/choice/pay/mpesa-to-bank', body);
-export const cbResendOtp = (flow) => api.post('/choice/pay/resend-otp', { flow });
 export const kycCreateSession = () => api.post('/kyc/session');
 export default api;
