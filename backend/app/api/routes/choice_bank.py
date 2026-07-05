@@ -1181,7 +1181,7 @@ async def send_money_confirm_sms(
 
     try:
         try:
-            await _asyncio.wait_for(event.wait(), timeout=60.0)
+            await _asyncio.wait_for(event.wait(), timeout=50.0)
         except _asyncio.TimeoutError:
             logger.warning("[SMS-OTP] send-money 60s timeout for ****" + account_last_4 + " - resending")
             try:
@@ -1191,9 +1191,9 @@ async def send_money_confirm_sms(
             event.clear()
             _pending_sms_otps[account_last_4]["otp"] = None
             try:
-                await _asyncio.wait_for(event.wait(), timeout=30.0)
+                await _asyncio.wait_for(event.wait(), timeout=10.0)
             except _asyncio.TimeoutError:
-                raise HTTPException(status_code=408, detail="SMS OTP did not arrive within 90 seconds. Please try again.")
+                raise HTTPException(status_code=408, detail="SMS OTP did not arrive within 60 seconds. Please try again.")
 
         otp = (_pending_sms_otps.get(account_last_4) or {}).get("otp")
         if not otp:

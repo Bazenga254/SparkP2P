@@ -3295,11 +3295,11 @@ async def choice_pay_confirm_sms(
     _pending_sms_otps[key] = {"event": event, "otp": None}
 
     try:
-        # Wait up to 60 seconds for the OTP SMS to arrive via Advanta webhook
+        # Wait up to 50 seconds for the OTP SMS to arrive via MacroDroid webhook
         try:
-            await _asyncio.wait_for(event.wait(), timeout=60.0)
+            await _asyncio.wait_for(event.wait(), timeout=50.0)
         except _asyncio.TimeoutError:
-            logger.warning(f"[SMS-OTP] First 60s timeout for account ****{account_last_4} — resending OTP")
+            logger.warning(f"[SMS-OTP] First 50s timeout for account ****{account_last_4} — resending OTP")
             try:
                 await _resend_otp(data.application_id, otp_type="SMS")
             except Exception as _re:
@@ -3308,11 +3308,11 @@ async def choice_pay_confirm_sms(
             event.clear()
             _pending_sms_otps[key]["otp"] = None
             try:
-                await _asyncio.wait_for(event.wait(), timeout=30.0)
+                await _asyncio.wait_for(event.wait(), timeout=10.0)
             except _asyncio.TimeoutError:
                 raise HTTPException(
                     status_code=408,
-                    detail="Choice Bank SMS OTP did not arrive within 90 seconds. Transfer cancelled.",
+                    detail="Choice Bank SMS OTP did not arrive within 60 seconds. Transfer cancelled.",
                 )
 
         otp = (_pending_sms_otps.get(key) or {}).get("otp")

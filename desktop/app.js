@@ -1785,31 +1785,24 @@ async function onLoginDetected() {
   // Sync Binance cookies immediately so backend marks binance_connected = true
   await syncCookies();
 
-  // Open Gmail tab (tab 2) — onGmailConfirmed() starts bot once Gmail is confirmed
-  const gmailOk = await openGmailTab().catch(() => false);
-  if (gmailOk) {
-    console.log('[SparkP2P] Gmail ready — bot start handled by onGmailConfirmed');
-  } else {
-    console.log('[SparkP2P] Gmail not confirmed — starting bot in Binance-only mode (Gmail optional for OTP reads)');
-    // Bot starts with Binance alone; Gmail login poller runs in background and will sync cookies when user signs in
-    const setup = await checkSetupComplete();
-    if (setup.complete && !pollerRunning) {
-      mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
-      console.log('[SparkP2P] All connections established — starting bot');
-      // Navigate Binance tab to P2P orders page immediately so pending orders are visible on first poll
-      try {
-        const _bp = await getPage();
-        if (_bp && !_bp.url().includes('fiatOrder')) {
-          await _bp.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
-          await new Promise(r => setTimeout(r, 800));
-          console.log('[SparkP2P] Navigated to P2P orders page');
-        }
-      } catch(_) {}
-      await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
-      startPoller();
-    } else if (!setup.complete) {
-      console.log('[SparkP2P] Setup incomplete:', setup.missing.join(', '));
-    }
+  // Start bot (OTP now via SMS/MacroDroid — Gmail no longer needed)
+  const setup = await checkSetupComplete();
+  if (setup.complete && !pollerRunning) {
+    mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
+    console.log('[SparkP2P] All connections established — starting bot');
+    // Navigate Binance tab to P2P orders page immediately so pending orders are visible on first poll
+    try {
+      const _bp = await getPage();
+      if (_bp && !_bp.url().includes('fiatOrder')) {
+        await _bp.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 800));
+        console.log('[SparkP2P] Navigated to P2P orders page');
+      }
+    } catch(_) {}
+    await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
+    startPoller();
+  } else if (!setup.complete) {
+    console.log('[SparkP2P] Setup incomplete:', setup.missing.join(', '));
   }
 
   // Suppress window.open() on Binance pages (prevents popup tabs)
