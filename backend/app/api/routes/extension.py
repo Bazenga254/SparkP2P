@@ -3208,36 +3208,44 @@ async def choice_pay_confirm_sms(
         raise HTTPException(status_code=400, detail="No Choice Bank account configured")
 
     account_last_4 = str(trader.choice_account_id)[-4:]
-    event = asyncio.Event()
-    _pending_sms_otps[account_last_4] = {"event": event, "otp": None}
-    logger.info(f"[ChoiceBank] Waiting for SMS OTP for account ****{account_last_4} (applicationId={data.application_id})")
 
-    try:
-        # Wait up to 60s; if no OTP, resend and wait another 30s
-        try:
-            await asyncio.wait_for(event.wait(), timeout=60.0)
-        except asyncio.TimeoutError:
-            logger.warning(f"[ChoiceBank] 60s OTP timeout for ****{account_last_4} — resending")
-            try:
-                from app.services.choice_bank.client import resend_otp
-                await resend_otp(data.application_id, otp_type="SMS")
-            except Exception as _re:
-                logger.warning(f"[ChoiceBank] resend_otp failed: {_re}")
-            event.clear()
-            _pending_sms_otps[account_last_4]["otp"] = None
-            try:
-                await asyncio.wait_for(event.wait(), timeout=30.0)
-            except asyncio.TimeoutError:
-                raise HTTPException(
-                    status_code=408,
-                    detail="Choice Bank OTP not received after resend — check MacroDroid SMS relay is running",
-                )
-
-        otp = (_pending_sms_otps.get(account_last_4) or {}).get("otp")
-        if not otp:
-            raise HTTPException(status_code=502, detail="OTP event fired but no code was extracted from SMS")
-    finally:
+    # Fast path: OTP may have arrived before this endpoint was called (race condition in webhooks).
+    # webhooks.py caches the OTP in _pending_sms_otps even when no waiter exists yet.
+    cached = _pending_sms_otps.get(account_last_4)
+    if cached and cached.get("otp") and cached.get("event") is None and _time.time() - cached.get("ts", 0) < 300:
+        otp = cached["otp"]
         _pending_sms_otps.pop(account_last_4, None)
+        logger.info(f"[ChoiceBank] Using cached SMS OTP for ****{account_last_4} (arrived before waiter)")
+    else:
+        # Register event waiter and block until OTP arrives
+        event = asyncio.Event()
+        _pending_sms_otps[account_last_4] = {"event": event, "otp": None}
+        logger.info(f"[ChoiceBank] Waiting for SMS OTP for account ****{account_last_4} (applicationId={data.application_id})")
+        otp = None
+        try:
+            try:
+                await asyncio.wait_for(event.wait(), timeout=60.0)
+            except asyncio.TimeoutError:
+                logger.warning(f"[ChoiceBank] 60s OTP timeout for ****{account_last_4} — resending")
+                try:
+                    from app.services.choice_bank.client import resend_otp
+                    await resend_otp(data.application_id, otp_type="SMS")
+                except Exception as _re:
+                    logger.warning(f"[ChoiceBank] resend_otp failed: {_re}")
+                event.clear()
+                _pending_sms_otps[account_last_4]["otp"] = None
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=60.0)
+                except asyncio.TimeoutError:
+                    raise HTTPException(
+                        status_code=408,
+                        detail="Choice Bank OTP not received after resend — check MacroDroid SMS relay is running",
+                    )
+            otp = (_pending_sms_otps.get(account_last_4) or {}).get("otp")
+            if not otp:
+                raise HTTPException(status_code=502, detail="OTP event fired but no code was extracted from SMS")
+        finally:
+            _pending_sms_otps.pop(account_last_4, None)
 
     logger.info(f"[ChoiceBank] SMS OTP received for ****{account_last_4} — confirming with Choice Bank")
     result = await confirm_otp(data.application_id, otp)

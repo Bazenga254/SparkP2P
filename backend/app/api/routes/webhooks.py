@@ -32,17 +32,24 @@ pending_email_verifications: dict[str, dict] = {}
 
 
 def _resolve_otp(otp: str, account_last_4: str, source: str):
-    """Fire asyncio event for any pending waiter — transaction OTP or email verification."""
+    """Fire asyncio event for any pending waiter — transaction OTP or email verification.
+    Always caches the OTP so a confirm-sms call that starts slightly later can still pick it up."""
+    import time as _t
     resolved = False
 
-    # Transaction OTP (choice-pay-confirm-sms)
+    # Transaction OTP (choice-pay-confirm-sms / send-money/confirm-sms)
     from app.api.routes.extension import _pending_sms_otps
     entry = _pending_sms_otps.get(account_last_4)
-    if entry:
+    if entry and entry.get("event"):
         entry["otp"] = otp
+        entry["ts"] = _t.time()
         entry["event"].set()
         logger.info(f"[{source}] Resolved transaction OTP waiter for ****{account_last_4}")
         resolved = True
+    else:
+        # No active waiter — cache OTP for up to 5 minutes so confirm-sms can pick it up
+        _pending_sms_otps[account_last_4] = {"otp": otp, "ts": _t.time(), "event": None}
+        logger.info(f"[{source}] Cached OTP for ****{account_last_4} (no active waiter yet)")
 
     # Email verification (admin setup-otp-email)
     ev = pending_email_verifications.get(account_last_4)
@@ -51,9 +58,6 @@ def _resolve_otp(otp: str, account_last_4: str, source: str):
         ev["event"].set()
         logger.info(f"[{source}] Resolved email-verification waiter for ****{account_last_4}")
         resolved = True
-
-    if not resolved:
-        logger.warning(f"[{source}] No pending waiter for ****{account_last_4} — OTP arrived but nobody is listening")
 
 
 # ── Inbound SMS (Twilio / Advanta / Africa's Talking) ────────────────────────
