@@ -3195,14 +3195,18 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
   // Uses Binance's internal browser API — same endpoints the P2P web UI calls.
   // No API keys needed: runs inside the logged-in browser session via page.evaluate().
   try {
-    const stats = await page.evaluate(async (orderNo, counterpartySide) => {
+    // 15s timeout: if the Binance session is expired the inner fetch hangs forever without this.
+    const evalPromise = page.evaluate(async (orderNo, counterpartySide) => {
       try {
+        const ac = new AbortController();
+        const tid = setTimeout(() => ac.abort(), 12000);
         // Step 1: Fetch order detail to get the counterparty's Binance userNo
         const detailRes = await fetch('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/trade/get', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ orderNo }),
           credentials: 'include',
+          signal: ac.signal,
         });
         if (!detailRes.ok) return null;
         const detail = await detailRes.json();
@@ -3220,6 +3224,7 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userNo }),
           credentials: 'include',
+          signal: ac.signal,
         });
         if (!profileRes.ok) return null;
         const profile = await profileRes.json();
@@ -3291,6 +3296,7 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(attempt.body),
               credentials: 'include',
+              signal: ac.signal,
             });
             if (!hRes.ok) continue;
             const hData = await hRes.json();
@@ -3342,6 +3348,7 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
           }
         } catch(_) {}
 
+        clearTimeout(tid);
         return {
           trades_30d, trades_all, paymentDetails,
           // Full profile fields for Telegram approval message
@@ -3363,6 +3370,7 @@ async function fetchCounterpartyStats(page, orderNumber, side) {
         return null;
       }
     }, orderNumber, side);
+    const stats = await Promise.race([evalPromise, new Promise(r => setTimeout(() => r(null), 15000))]);
 
     if (stats) {
       console.log(`[SparkP2P] DD stats via API — 30d: ${stats.trades_30d ?? 'n/a'}, all: ${stats.trades_all ?? 'n/a'}, tradedBefore: ${stats.tradedBefore ?? 'n/a'}`);
@@ -4114,22 +4122,15 @@ async function idleScan(page) {
 
     console.log(`[SparkP2P] Checking buy order ${order.orderNumber}`);
 
-    // Tab management: bring to front without reloading.
-    // Reloading (domcontentloaded) causes React to be mid-render when state detection runs —
-    // the page may show static "Cancel" text without the "will be cancelled in XX:XX" timer,
-    // which triggers a false cancelled-detection and closes the tab. Just bringToFront instead.
+    // Tab management: bring to front + reload so DOM extraction always gets fresh page content.
     if (orderTabs[order.orderNumber] && !orderTabs[order.orderNumber].isClosed()) {
       try { await orderTabs[order.orderNumber].bringToFront(); } catch (_) {}
-      // If the tab drifted away from this order's page (e.g. Binance redirect), navigate back.
-      const _tabUrl = await orderTabs[order.orderNumber].url().catch(() => '');
-      if (!_tabUrl.includes(order.orderNumber)) {
-        console.log(`[SparkP2P] Tab for ${order.orderNumber.slice(-8)} drifted (${_tabUrl.slice(0,60)}) — navigating back`);
+      await orderTabs[order.orderNumber].reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(async () => {
         await orderTabs[order.orderNumber].goto(
           `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
-          { waitUntil: 'networkidle2', timeout: 20000 }
+          { waitUntil: 'domcontentloaded', timeout: 15000 }
         ).catch(() => {});
-        await new Promise(r => setTimeout(r, 1500));
-      }
+      });
     } else {
       // Tab not open yet — openOrderTab loads the URL
       await openOrderTab(order.orderNumber);
@@ -4430,12 +4431,14 @@ async function idleScan(page) {
           console.log(`[SparkP2P] DD: seller ${sellerNick} is returning -- bypassing screening`);
         } else {
           let failReason = null;
-          if (ddAutoCancelNew && sellerStats.trades_all !== null && sellerStats.trades_all < 5)
-            failReason = `brand-new account (${sellerStats.trades_all} all-time trades, minimum 5)`;
-          if (!failReason && sellerStats.trades_30d !== null && sellerStats.trades_30d < ddMin30d)
-            failReason = `low recent activity (${sellerStats.trades_30d} trades in 30 days, minimum ${ddMin30d})`;
-          if (!failReason && ddMinAll > 0 && sellerStats.trades_all !== null && sellerStats.trades_all < ddMinAll)
-            failReason = `low total trades (${sellerStats.trades_all} all-time, minimum ${ddMinAll})`;
+          if (sellerStats) {
+            if (ddAutoCancelNew && sellerStats.trades_all !== null && sellerStats.trades_all < 5)
+              failReason = `brand-new account (${sellerStats.trades_all} all-time trades, minimum 5)`;
+            if (!failReason && sellerStats.trades_30d !== null && sellerStats.trades_30d < ddMin30d)
+              failReason = `low recent activity (${sellerStats.trades_30d} trades in 30 days, minimum ${ddMin30d})`;
+            if (!failReason && ddMinAll > 0 && sellerStats.trades_all !== null && sellerStats.trades_all < ddMinAll)
+              failReason = `low total trades (${sellerStats.trades_all} all-time, minimum ${ddMinAll})`;
+          }
 
           if (failReason) {
             console.log(`[SparkP2P] DD: seller ${sellerNick} FAILED -- ${failReason}`);
@@ -4443,7 +4446,7 @@ async function idleScan(page) {
             activeBuyPaymentSlot = null; // release slot — DD failed, order cancelled
             continue;
           }
-          console.log(`[SparkP2P] DD: seller ${sellerNick} passed (30d: ${sellerStats.trades_30d ?? 'n/a'}, all: ${sellerStats.trades_all ?? 'n/a'})`);
+          console.log(`[SparkP2P] DD: seller ${sellerNick} passed (30d: ${sellerStats?.trades_30d ?? 'n/a'}, all: ${sellerStats?.trades_all ?? 'n/a'})`);
         }
         // Cache payment details extracted from the Binance API (same trade/get call used for DD)
         if (sellerStats?.paymentDetails) {
@@ -11944,7 +11947,7 @@ async function executeImWithdrawal(job) {
     const descInput = await imPage.$('textarea, input[formcontrolname*="description"], input[placeholder*="description" i]').catch(() => null);
     if (descInput) {
       await descInput.click();
-      await descInput.type(`SparkP2P withdrawal ${job.id}`, { delay: 30 });
+      await descInput.type(`Spark withdrawal ${job.id}`, { delay: 30 });
     }
     await sleep(500);
 

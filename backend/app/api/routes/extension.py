@@ -2954,6 +2954,9 @@ import time as _time
 # trader_id -> {otp, sender, ts}. Latest OTP the phone relayed; a pending payout reads it to confirm.
 _received_sms_otp: dict[int, dict] = {}
 
+# account_last_4 -> {event: asyncio.Event, otp: str | None}. Event-based waiter for choice-pay-confirm-sms.
+_pending_sms_otps: dict[str, dict] = {}
+
 
 class SmsOtpData(BaseModel):
     sender: str = ""
@@ -3095,7 +3098,7 @@ async def choice_pay(
 
     from app.services.choice_bank.client import send_otp
 
-    remark = data.remark or f"SparkP2P BUY {data.order_number[-12:]}"
+    remark = data.remark or f"Spark BUY {data.order_number[-12:]}"
 
     # M-Pesa B2C requires payeeBankCode="M-PESA". PesaLink requires the bank's CBK code.
     # Without the correct bank code Choice Bank treats the call as an internal transfer
@@ -3125,17 +3128,17 @@ async def choice_pay(
     # - M-Pesa / Airtel: Choice Bank returns txId — we must call send_otp(txId) to trigger the OTP.
     # - PesaLink / large interbank: Choice Bank returns applicationId — OTP is auto-sent; we call
     #   send_otp as well (no-op if already sent) and use applicationId as the confirmation handle.
-    # In both cases we return otp_required so the desktop reads the email OTP and confirms.
+    # In both cases we return otp_required so the desktop waits for the SMS OTP via MacroDroid relay.
     business_id = tx_id or application_id
     if not business_id:
         raise HTTPException(status_code=502, detail="Choice Bank returned no transaction ID — transfer may not have been created")
 
     try:
-        otp_res = await send_otp(business_id, otp_type="EMAIL")
+        otp_res = await send_otp(business_id, otp_type="SMS")
         if otp_res.get("code") != "00000":
             logger.warning(f"[ChoiceBank] send_otp returned {otp_res.get('code')}: {otp_res.get('msg')} — OTP may be auto-sent by Choice Bank")
         else:
-            logger.info(f"[ChoiceBank] OTP triggered via EMAIL for businessId={business_id}")
+            logger.info(f"[ChoiceBank] OTP triggered via SMS for businessId={business_id}")
     except Exception as exc:
         logger.warning(f"[ChoiceBank] send_otp call failed: {exc} — continuing, OTP may be auto-sent")
 
@@ -3172,6 +3175,62 @@ async def choice_confirm_otp(
     result = await confirm_otp(data.application_id, data.otp)
     if result.get("code") != "00000":
         raise HTTPException(status_code=400, detail=result.get("msg", "OTP confirmation failed"))
+    tx_data = result.get("data") or {}
+    tx_id = tx_data.get("txId") or tx_data.get("externalTxId") or data.application_id
+    return await _finalise_choice_payment(
+        trader=trader, db=db, tx_id=tx_id, amount=data.amount,
+        payee_account_id=data.payee_account_id, payee_name=data.payee_name,
+        order_number=data.order_number, remark=data.remark, bank_code=data.bank_code,
+    )
+
+
+class ChoicePayConfirmSmsRequest(BaseModel):
+    application_id: str
+    order_number: str
+    amount: float
+    payee_account_id: str
+    payee_name: str = ""
+    bank_code: str = ""
+    remark: str = ""
+
+
+@router.post("/choice-pay-confirm-sms")
+async def choice_pay_confirm_sms(
+    data: ChoicePayConfirmSmsRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Wait for Choice Bank SMS OTP forwarded from the phone via MacroDroid, then confirm the transfer."""
+    import asyncio
+    from app.services.choice_bank.client import confirm_otp
+
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account configured")
+
+    account_last_4 = str(trader.choice_account_id)[-4:]
+    event = asyncio.Event()
+    _pending_sms_otps[account_last_4] = {"event": event, "otp": None}
+    logger.info(f"[ChoiceBank] Waiting for SMS OTP for account ****{account_last_4} (applicationId={data.application_id})")
+
+    try:
+        try:
+            await asyncio.wait_for(event.wait(), timeout=120.0)
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=408,
+                detail="Choice Bank OTP not received within 120 seconds — check your phone's SMS relay is running",
+            )
+        otp = _pending_sms_otps[account_last_4].get("otp")
+        if not otp:
+            raise HTTPException(status_code=502, detail="OTP event fired but no code was extracted from SMS")
+    finally:
+        _pending_sms_otps.pop(account_last_4, None)
+
+    logger.info(f"[ChoiceBank] SMS OTP received for ****{account_last_4} — confirming with Choice Bank")
+    result = await confirm_otp(data.application_id, otp)
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "OTP confirmation failed"))
+
     tx_data = result.get("data") or {}
     tx_id = tx_data.get("txId") or tx_data.get("externalTxId") or data.application_id
     return await _finalise_choice_payment(

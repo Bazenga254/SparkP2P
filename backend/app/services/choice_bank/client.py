@@ -344,7 +344,7 @@ async def transfer(
         "payeeAccountId": payee_account_id,
         "currency":       "KES",
         "amount":         f"{float(amount):.2f}",
-        "remark":         remark or "SparkP2P payment",
+        "remark":         remark or "Spark payment",
     }
     if payee_bank_code:
         params["payeeBankCode"] = payee_bank_code
@@ -392,7 +392,7 @@ async def large_domestic_interbank_transfer(
     amount:              float,
     payment_channel:     str = "RTGS",   # "RTGS" (instant) or "EFT" (T+1 batch)
     payment_purpose_id:  str = "OTHR",
-    payment_purpose:     str = "SparkP2P withdrawal",
+    payment_purpose:     str = "Spark withdrawal",
     sender_address:      str = "Nairobi, Kenya",
     message_to_beneficiary: str = "",
     beneficiary_email:   str = "",
@@ -461,7 +461,7 @@ async def batch_disburse(
         "payeeBankCode":    str(payee_bank_code),
         "currency":         "KES",
         "amount":           f"{float(amount):.2f}",
-        "remark":           remark or "SparkP2P payment",
+        "remark":           remark or "Spark payment",
     }
     if org_tx_id:
         beneficiary["orgTxId"] = org_tx_id
