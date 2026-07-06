@@ -1,6 +1,6 @@
 {
   "name": "sparkp2p",
-  "version": "1.9.25",
+  "version": "1.9.45",
   "description": "SparkP2P — Automated Binance P2P Trading",
   "main": "app.js",
   "scripts": {
@@ -29,7 +29,8 @@
       {
         "provider": "github",
         "owner": "Bazenga254",
-        "repo": "SparkP2P-releases"
+        "repo": "SparkP2P-releases",
+        "releaseType": "release"
       }
     ],
     "win": {

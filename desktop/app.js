@@ -144,6 +144,7 @@ let traderIsAdmin = false; // Set after login — gates M-PESA portal auto-open 
 let browser = null;
 let pollerRunning = false;
 let pollTimer = null;
+let releasePollerTimer = null; // background interval: checks if paid buy orders have been released
 let stats = { polls: 0, actions: 0, errors: 0, orders: 0 };
 let traderPin = null;    // Binance fund/trading password â€" stored in memory only
 let totpSecret = null;   // Google Authenticator base32 secret â€" stored in memory only
@@ -152,6 +153,11 @@ let traderChoiceAccountNumber = null; // Choice Bank account number (e.g. CMB000
 let traderChoiceAccountId = null;     // Choice Bank internal account ID — used as payer for BUY transfers
 let traderPhoneNumber = null;  // Trader's own phone number â€" included in buy greeting message
 let traderImAccount = null;    // Trader's I&M settlement account number â€" used to select debit account
+let _choiceBankCodes = [];        // live bank code list from Choice Bank API
+let _choiceBankCodesFetchedAt = 0; // timestamp of last successful fetch
+const orderTabAbsenceCounts = {}; // orderNumber → consecutive scans absent from active list
+const ghostAbsenceCounts = {};    // orderNumber → consecutive scans paid order absent (2 required to fire ghost)
+
 const DEV_UNLOCK = false; // true = no CSS overlay on browser tabs
 const DEV_FORCE_NAME_MISMATCH = false; // true = simulate name mismatch (TEST ONLY)
 const BOT_DISABLED = false; // set to true to disable automation
@@ -1407,16 +1413,39 @@ async function closeOrderTab(orderNumber) {
 async function ensureOrderTabs(orders) {
   if (!browser) return;
   const activeNums = new Set([...orders.sell, ...orders.buy].map(o => o.orderNumber));
-  // Open missing tabs
+
+  // Open tabs for all active unpaid orders. Reset absence counter for every order we see.
   for (const o of [...orders.sell, ...orders.buy]) {
+    orderTabAbsenceCounts[o.orderNumber] = 0; // seen this scan — reset
+    if (o.tradeType === 'BUY' && (buyPaymentSentAt[o.orderNumber] || markPaidDoneOrders.has(o.orderNumber))) continue; // paid: no tab needed
     if (!orderTabs[o.orderNumber] || orderTabs[o.orderNumber].isClosed()) {
       await openOrderTab(o.orderNumber);
-      await new Promise(r => setTimeout(r, 300)); // brief gap between tab opens
+      await new Promise(r => setTimeout(r, 300));
     }
   }
-  // Close tabs for orders that are no longer active
+
+  // Close tabs only under strict conditions to enforce the rule:
+  // "once a tab is opened for an order it stays open until the order is marked as paid."
+  const _confirmedList = activeNums.size > 0;
   for (const num of Object.keys(orderTabs)) {
-    if (!activeNums.has(num)) await closeOrderTab(num);
+    // Rule 1: always close tabs for paid orders (background API polling takes over)
+    if (buyPaymentSentAt[num] || markPaidDoneOrders.has(num)) {
+      delete orderTabAbsenceCounts[num];
+      await closeOrderTab(num);
+      continue;
+    }
+    // Rule 2: close tabs for orders absent from the active list — but only after 3 consecutive
+    // scans of absence (~15 seconds). A single transient API/network hiccup must never close
+    // an in-progress order tab mid-payment.
+    if (_confirmedList && !activeNums.has(num)) {
+      orderTabAbsenceCounts[num] = (orderTabAbsenceCounts[num] || 0) + 1;
+      if (orderTabAbsenceCounts[num] >= 3) {
+        console.log(`[SparkP2P] Order ${num.slice(-8)} absent 3+ scans — closing stale tab`);
+        delete orderTabAbsenceCounts[num];
+        await closeOrderTab(num);
+      }
+      // else: keep tab open — transient disappearance, not a genuine cancellation
+    }
   }
 }
 function startGmailLoginPoller() {
@@ -1785,31 +1814,24 @@ async function onLoginDetected() {
   // Sync Binance cookies immediately so backend marks binance_connected = true
   await syncCookies();
 
-  // Open Gmail tab (tab 2) — onGmailConfirmed() starts bot once Gmail is confirmed
-  const gmailOk = await openGmailTab().catch(() => false);
-  if (gmailOk) {
-    console.log('[SparkP2P] Gmail ready — bot start handled by onGmailConfirmed');
-  } else {
-    console.log('[SparkP2P] Gmail not confirmed — starting bot in Binance-only mode (Gmail optional for OTP reads)');
-    // Bot starts with Binance alone; Gmail login poller runs in background and will sync cookies when user signs in
-    const setup = await checkSetupComplete();
-    if (setup.complete && !pollerRunning) {
-      mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
-      console.log('[SparkP2P] All connections established — starting bot');
-      // Navigate Binance tab to P2P orders page immediately so pending orders are visible on first poll
-      try {
-        const _bp = await getPage();
-        if (_bp && !_bp.url().includes('fiatOrder')) {
-          await _bp.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
-          await new Promise(r => setTimeout(r, 800));
-          console.log('[SparkP2P] Navigated to P2P orders page');
-        }
-      } catch(_) {}
-      await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
-      startPoller();
-    } else if (!setup.complete) {
-      console.log('[SparkP2P] Setup incomplete:', setup.missing.join(', '));
-    }
+  // Start bot (OTP now via SMS/MacroDroid — Gmail no longer needed)
+  const setup = await checkSetupComplete();
+  if (setup.complete && !pollerRunning) {
+    mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
+    console.log('[SparkP2P] All connections established — starting bot');
+    // Navigate Binance tab to P2P orders page immediately so pending orders are visible on first poll
+    try {
+      const _bp = await getPage();
+      if (_bp && !_bp.url().includes('fiatOrder')) {
+        await _bp.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 800));
+        console.log('[SparkP2P] Navigated to P2P orders page');
+      }
+    } catch(_) {}
+    await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
+    startPoller();
+  } else if (!setup.complete) {
+    console.log('[SparkP2P] Setup incomplete:', setup.missing.join(', '));
   }
 
   // Suppress window.open() on Binance pages (prevents popup tabs)
@@ -2408,6 +2430,57 @@ function scheduleNextPoll(delayMs) {
   }, delayMs);
 }
 
+// Background interval: every 30 s check if any paid buy orders have been released by seller.
+// Uses /ext/active-orders API — no page navigation required. When an order disappears from
+// the active list, the seller has released coins; we report it immediately without waiting
+// for the main poll cycle or the 10-poll reconcile pass.
+async function checkPaidOrderReleases() {
+  if (!token || !pollerRunning) return;
+  const paidNums = Object.keys(buyPaymentSentAt);
+  if (paidNums.length === 0) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/ext/active-orders`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    }).catch(() => null);
+    if (!res || !res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (!data || !data.ok) return;
+
+    const activeNums = new Set((data.orders || []).map(o => o.orderNumber));
+    for (const orderNum of paidNums) {
+      if (activeNums.has(orderNum)) continue; // still active — seller hasn't released yet
+      if (reportedCompletedBuyOrders.has(orderNum)) continue; // already reported
+      // Order gone from active list — seller released coins
+      reportedCompletedBuyOrders.add(orderNum);
+      console.log(`[SparkP2P] Release poller: order ${orderNum.slice(-8)} released — reporting`);
+      fetch(`${API_BASE}/ext/report-buy-completed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number: orderNum, notify: true }),
+      }).then(r => {
+        if (r.ok) {
+          saveReportedCompleted(reportedCompletedBuyOrders);
+          sendBotLog('success', `Order ...${orderNum.slice(-8)} — seller released crypto!`);
+        } else {
+          reportedCompletedBuyOrders.delete(orderNum); // retry next check
+        }
+      }).catch(() => { reportedCompletedBuyOrders.delete(orderNum); });
+      // Clean up local tracking state
+      delete buyPaymentSentAt[orderNum];
+      buyReminderSentOrders.delete(orderNum);
+      delete buyOrderDetailsMap[orderNum];
+      delete imPaymentDoneMap[orderNum];
+      imPaymentFailedOrders.delete(orderNum);
+      buyGreetingSentOrders.delete(orderNum);
+      buyPostPaymentMsgSentOrders.delete(orderNum);
+      markPaidDoneOrders.delete(orderNum);
+      removePaidOrder(orderNum);
+      _removeOrderFlags(orderNum);
+    }
+  } catch (_) {}
+}
+
 function startPoller() {
   if (BOT_DISABLED) { console.log('[SparkP2P] BOT_DISABLED — automation skipped'); return; }
   if (pollerRunning) return;
@@ -2418,11 +2491,17 @@ function startPoller() {
     fetch(`${API_BASE}/ext/bot-started`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }).catch(() => {});
   }
   scheduleNextPoll(0); // run immediately
+  // Start background release poller — checks every 30 s if paid buy orders were released
+  if (!releasePollerTimer) {
+    releasePollerTimer = setInterval(() => { checkPaidOrderReleases().catch(() => {}); }, 30000);
+    console.log('[SparkP2P] Release poller started (30s interval)');
+  }
 }
 
 function stopPoller() {
   pollerRunning = false;
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  if (releasePollerTimer) { clearInterval(releasePollerTimer); releasePollerTimer = null; }
   activeOrderNumber = null;
   activeOrderFiatAmount = 0;
   activeBuyOrderNumber = null;
@@ -3407,10 +3486,60 @@ async function idleScan(page) {
   // We must scan the Completed tab for these even when other active orders exist,
   // otherwise the order stays stuck as "payment sent" until the 10-poll reconcile.
   const currentActiveNums = [...orders.sell, ...orders.buy].map(o => o.orderNumber);
-  const ghostPaidNums = Object.keys(buyPaymentSentAt).filter(n => !currentActiveNums.includes(n));
+
+  // Reset ghost absence counter for paid orders that are still active this scan.
+  for (const n of currentActiveNums) {
+    if (ghostAbsenceCounts[n] > 0) {
+      console.log(`[SparkP2P] Paid order ${n.slice(-8)} reappeared — resetting ghost counter (was absent ${ghostAbsenceCounts[n]} scan(s))`);
+    }
+    delete ghostAbsenceCounts[n];
+  }
+
+  // Increment absence counter for paid orders not seen this scan.
+  // We require 2 consecutive absences before treating it as a seller release —
+  // a single-scan absence is almost always a transient Binance API hiccup.
+  const ghostCandidates = Object.keys(buyPaymentSentAt).filter(n => !currentActiveNums.includes(n));
+  for (const n of ghostCandidates) {
+    ghostAbsenceCounts[n] = (ghostAbsenceCounts[n] || 0) + 1;
+    if (ghostAbsenceCounts[n] === 1) {
+      console.log(`[SparkP2P] Paid order ${n.slice(-8)} missing from active list (scan 1/2) — waiting one more scan before ghost cleanup`);
+    }
+  }
+
+  const ghostPaidNums = ghostCandidates.filter(n => ghostAbsenceCounts[n] >= 2);
   if (ghostPaidNums.length > 0) {
-    console.log(`[SparkP2P] Ghost paid order(s) detected (paid but left active tab): ${ghostPaidNums.join(', ')} — scanning Completed tab now`);
-    sendBotLog('info', `Paid order left active tab — checking Completed tab: ${ghostPaidNums.join(', ')}`);
+    console.log(`[SparkP2P] Ghost paid order(s) confirmed (2+ scans absent) — seller released: ${ghostPaidNums.join(', ')}`);
+    // Report completions immediately (don't wait for the reconcile pass every 10 polls)
+    for (const ghostNum of ghostPaidNums) {
+      delete ghostAbsenceCounts[ghostNum]; // reset counter
+      if (reportedCompletedBuyOrders.has(ghostNum)) continue;
+      reportedCompletedBuyOrders.add(ghostNum);
+      fetch(`${API_BASE}/ext/report-buy-completed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number: ghostNum, notify: true }),
+      }).then(r => {
+        if (r.ok) {
+          saveReportedCompleted(reportedCompletedBuyOrders);
+          console.log(`[SparkP2P] Ghost order ${ghostNum.slice(-8)} — completion reported`);
+          sendBotLog('success', `Order ...${ghostNum.slice(-8)} — seller released crypto!`);
+        } else {
+          reportedCompletedBuyOrders.delete(ghostNum); // allow retry next cycle
+          console.warn(`[SparkP2P] Ghost order ${ghostNum.slice(-8)} report failed — reconcile will retry`);
+        }
+      }).catch(() => { reportedCompletedBuyOrders.delete(ghostNum); });
+      // Clean up local state (tab already closed by ensureOrderTabs)
+      delete buyPaymentSentAt[ghostNum];
+      buyReminderSentOrders.delete(ghostNum);
+      delete buyOrderDetailsMap[ghostNum];
+      delete imPaymentDoneMap[ghostNum];
+      imPaymentFailedOrders.delete(ghostNum);
+      buyGreetingSentOrders.delete(ghostNum);
+      buyPostPaymentMsgSentOrders.delete(ghostNum);
+      markPaidDoneOrders.delete(ghostNum);
+      removePaidOrder(ghostNum);
+      _removeOrderFlags(ghostNum);
+    }
   }
 
   // â"€â"€ Step 2: No active orders (or ghost paid orders) â€" scan wallets + full history â"€â"€â"€â"€
@@ -3435,18 +3564,25 @@ async function idleScan(page) {
   }
   for (const num of Object.keys(orderFirstSeenAt)) {
     if (!allActiveNums.includes(num)) {
+      // If this order was already paid (buyPaymentSentAt set), ghost detection handles
+      // the cleanup once the seller confirms release (2 consecutive absent scans).
+      // Do NOT delete payment state here — a single scan absence may be a Binance
+      // API glitch and deleting state could cause the bot to re-pay the same order.
+      const _isPaidOrder = !!buyPaymentSentAt[num];
       delete orderFirstSeenAt[num];
       orderReminderSent.delete(num);
       delete orderLastBotReplyAt[num];
       codeFallbackAskedOrders.delete(num);
-      delete buyPaymentSentAt[num];
+      if (!_isPaidOrder) {
+        delete buyPaymentSentAt[num];
+        removePaidOrder(num);
+      }
       buyReminderSentOrders.delete(num);
       delete buyOrderDetailsMap[num];
       delete imPaymentDoneMap[num];
       imPaymentFailedOrders.delete(num);
       buyGreetingSentOrders.delete(num);
       buyPostPaymentMsgSentOrders.delete(num);
-      removePaidOrder(num);
       delete partialPayments[num];
       delete lastDeficitSent[num];
     }
@@ -3883,25 +4019,54 @@ async function idleScan(page) {
           const _dd = await _dr.json().catch(() => null);
           if (!_dd?.ok) return;
           if (_dd.phone || _dd.account_number) {
-            // Always use order.totalPrice as authoritative KES amount (from Binance API).
-            // Never use the API detail's fiat_amount alone — it can differ if the order
-            // page cached a different order's data during extraction.
+            // Determine method from phone vs account_number — backend may not return method field.
+            // Validate phone is actually a Kenyan mobile number: backend sometimes puts account
+            // number (e.g. "1291280588") into the phone field for bank transfer orders.
+            const _isKEPhone = (p) => /^(?:(?:0|\+?254)?[17]\d{8})$/.test(String(p||'').replace(/\s/g,''));
+            const _p1HasAcct  = !!((_dd.account_number || '').trim());
+            const _p1HasPhone = _isKEPhone(_dd.phone);
+            let _p1Method = (_dd.method || '').toLowerCase();
+            if (!_p1Method || _p1Method === 'mpesa') {
+              if (_p1HasAcct && !_p1HasPhone) {
+                _p1Method = /i\s*&\s*m|i&m/i.test(_dd.bank_name || '') ? 'im_bank' : 'other_bank';
+              } else {
+                _p1Method = 'mpesa';
+              }
+            }
+            // Preserve Vision-enriched bank name/code if Vision already ran for this order.
+            // Phase 1 overwrites the cache every scan — without this, _bankNameVisionDone is lost.
+            const _prevP1 = buyPaymentDetailsCache[o.orderNumber];
+            const _keepVision = !!_prevP1?._bankNameVisionDone;
             buyPaymentDetailsCache[o.orderNumber] = {
-              method: _dd.method || 'mpesa',
-              phone: _dd.phone || null,
+              method: _p1Method,
+              phone: _p1HasPhone ? _dd.phone : null,
               account_number: _dd.account_number || null,
-              bank_name: _dd.bank_name || null,
-              amount: parseFloat(o.totalPrice) || _dd.fiat_amount || 0,
+              bank_name: _keepVision ? _prevP1.bank_name : (_dd.bank_name && /[A-Za-z]/.test(_dd.bank_name) ? _dd.bank_name : null),
+              bank_code: _keepVision ? _prevP1.bank_code : (_dd.bank_code || null),
+              _bankNameVisionDone: _keepVision,
+              amount: _dd.fiat_amount || parseFloat(o.totalPrice) || 0,
               name: _dd.counterparty_name || '',
               reference: o.orderNumber,
-              network: /airtel/i.test(_dd.method || '') ? 'airtel' : 'safaricom',
+              network: /airtel/i.test(_p1Method) ? 'airtel' : 'safaricom',
               _source: 'phase1_prefetch',
             };
-            console.log(`[SparkP2P] Phase 1 cached: ${o.orderNumber.slice(-8)} — ${_dd.method}, ${_dd.phone || _dd.account_number}, KES ${parseFloat(o.totalPrice)}`);
+            console.log(`[SparkP2P] Phase 1 cached: ${o.orderNumber.slice(-8)} — ${_p1Method}, ${_p1HasPhone ? _dd.phone : ('acct:'+(_dd.account_number||'?'))}, KES ${_dd.fiat_amount || parseFloat(o.totalPrice)}${_keepVision ? ' [vision bank preserved]' : ''}`);
           }
         } catch (_) {}
       })
   );
+
+  // Pre-loop restoration: if an order is in markPaidDoneOrders but somehow lost its
+  // buyPaymentSentAt (ghost misfire or restart edge-case), restore it now so the
+  // fast-path and ensureOrderTabs work correctly for this entire scan cycle.
+  for (const order of sortedBuyOrders) {
+    if (markPaidDoneOrders.has(order.orderNumber) && !buyPaymentSentAt[order.orderNumber]) {
+      buyPaymentSentAt[order.orderNumber] = Date.now() - 120000;
+      savePaidOrder(order.orderNumber, { source: 'pre_loop_restore' });
+      console.log(`[SparkP2P] Pre-loop restore: order ${order.orderNumber.slice(-8)} — markPaidDone set but tracking was missing, restored`);
+      sendBotLog('warn', `Order ...${order.orderNumber.slice(-8)} — already paid (tracking restored). Monitoring for seller release.`);
+    }
+  }
 
   for (const order of sortedBuyOrders) {
     if (pauseNavigation) break;
@@ -3911,7 +4076,7 @@ async function idleScan(page) {
     // yet been paid, skip ALL navigation and state detection for it.
     // This prevents tab-switching from interrupting the active OTP flow and
     // stops stale page DOM from being read for queued orders.
-    const _alreadyPaid = !!buyPaymentSentAt[order.orderNumber] || !!imPaymentDoneMap[order.orderNumber];
+    const _alreadyPaid = !!buyPaymentSentAt[order.orderNumber] || !!imPaymentDoneMap[order.orderNumber] || markPaidDoneOrders.has(order.orderNumber);
     if (!_alreadyPaid && activeBuyPaymentSlot && activeBuyPaymentSlot !== order.orderNumber) {
       const _qPending = sortedBuyOrders.filter(o =>
         !buyPaymentSentAt[o.orderNumber] && !imPaymentFailedOrders.has(o.orderNumber)
@@ -3922,17 +4087,44 @@ async function idleScan(page) {
       continue;
     }
 
+    // Paid orders: ALWAYS skip — never reopen or navigate.
+    // Release detection runs every 30s via checkPaidOrderReleases() background poller.
+    // Post-pay steps (chat + EP-17) are done once in the payment cycle and not retried here.
+    if (buyPaymentSentAt[order.orderNumber]) {
+      const _minsElapsed = Math.floor((Date.now() - buyPaymentSentAt[order.orderNumber]) / 60000);
+      console.log(`[SparkP2P] Order ${order.orderNumber.slice(-8)} — paid ${_minsElapsed}m ago, awaiting seller release`);
+      sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} — paid ${_minsElapsed}m ago, awaiting seller release`);
+      continue;
+    }
+
     console.log(`[SparkP2P] Checking buy order ${order.orderNumber}`);
 
-    // Tab is already parked on this order's URL — bring to front and reload (much faster than goto)
+    // Tab management: bring to front without reloading.
+    // Reloading (domcontentloaded) causes React to be mid-render when state detection runs —
+    // the page may show static "Cancel" text without the "will be cancelled in XX:XX" timer,
+    // which triggers a false cancelled-detection and closes the tab. Just bringToFront instead.
+    if (orderTabs[order.orderNumber] && !orderTabs[order.orderNumber].isClosed()) {
+      try { await orderTabs[order.orderNumber].bringToFront(); } catch (_) {}
+      // If the tab drifted away from this order's page (e.g. Binance redirect), navigate back.
+      const _tabUrl = await orderTabs[order.orderNumber].url().catch(() => '');
+      if (!_tabUrl.includes(order.orderNumber)) {
+        console.log(`[SparkP2P] Tab for ${order.orderNumber.slice(-8)} drifted (${_tabUrl.slice(0,60)}) — navigating back`);
+        await orderTabs[order.orderNumber].goto(
+          `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+          { waitUntil: 'networkidle2', timeout: 20000 }
+        ).catch(() => {});
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    } else {
+      // Tab not open yet — openOrderTab loads the URL
+      await openOrderTab(order.orderNumber);
+      if (!orderTabs[order.orderNumber] || orderTabs[order.orderNumber].isClosed()) {
+        console.log(`[SparkP2P] Could not open tab for order ${order.orderNumber.slice(-8)} — skipping`);
+        continue;
+      }
+      await new Promise(r => setTimeout(r, 2000)); // give React time to render before reading DOM
+    }
     const oPage = orderTabs[order.orderNumber] || page;
-    try { await oPage.bringToFront(); } catch (_) {}
-    await oPage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(async () => {
-      await oPage.goto(
-        `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
-        { waitUntil: 'domcontentloaded', timeout: 15000 }
-      ).catch(() => {});
-    });
     await new Promise(r => setTimeout(r, 1500));
 
     await dismissBinanceModals(oPage);
@@ -4054,8 +4246,36 @@ async function idleScan(page) {
       const minsWaiting = Math.floor((Date.now() - buyPaymentSentAt[order.orderNumber]) / 60000);
       const details = buyOrderDetailsMap[order.orderNumber] || {};
 
+      // Retry post-payment chat if it failed during the payment cycle
+      if (!buyPostPaymentMsgSentOrders.has(order.orderNumber) && details.sellerName) {
+        const _payTime = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+        const _fn = details.sellerName.split(' ')[0];
+        const _a  = Math.floor(parseFloat(details.amount || 0));
+        const _rp = details.referenceId ? ` Ref: ${details.referenceId}.` : '';
+        const _retryMsg = details.accountNumber
+          ? `Hello ${_fn}, I have sent KSh ${_a.toLocaleString()} to your ${details.bankName || 'bank'} account (${details.accountNumber}) at ${_payTime}.${_rp} Please check and release the crypto. Thank you! \u{1F64F}`
+          : `Hello ${_fn}, I have sent KSh ${_a.toLocaleString()} to your M-Pesa (${details.phone}) at ${_payTime}.${_rp} Please check and release the crypto. Thank you! \u{1F64F}`;
+        const _sent = await sendBinanceChatMessage(oPage, _retryMsg);
+        if (_sent) { buyPostPaymentMsgSentOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'postPaymentMsgSent', true); }
+        console.log(`[SparkP2P] Post-pay msg retry for ${order.orderNumber.slice(-8)}: ${_sent ? 'sent' : 'failed'}`);
+      }
+      // Retry EP-17 mark-paid if it failed during the payment cycle
+      if (!markPaidDoneOrders.has(order.orderNumber)) {
+        const _mpRes = await fetch(`${API_BASE}/ext/mark-paid`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ order_number: order.orderNumber }),
+        }).catch(() => null);
+        const _mpOk = _mpRes?.ok ? (await _mpRes.json().catch(() => ({}))).ok : false;
+        if (_mpOk) {
+          markPaidDoneOrders.add(order.orderNumber);
+          _saveOrderFlag(order.orderNumber, 'markPaidDone', true);
+          console.log(`[SparkP2P] EP-17 mark-paid retry success for ${order.orderNumber.slice(-8)}`);
+        }
+      }
+
       if (minsWaiting >= 15) {
-        console.log(`[SparkP2P] ðŸš¨ Buy order ${order.orderNumber} â€" ${minsWaiting} min no release â€" pausing buy ad & notifying trader`);
+        console.log(`[SparkP2P] 🚨 Buy order ${order.orderNumber} — ${minsWaiting} min no release — pausing buy ad & notifying trader`);
         await sendBinanceChatMessage(oPage,
           `Hi ${details.sellerName ? details.sellerName.split(' ')[0] : 'there'}, I sent KSh ${(details.amount || 0).toLocaleString()} ${minsWaiting} minutes ago and the crypto has not been released. I have notified the Binance support team. Please release the crypto at the earliest to avoid a formal dispute. Thank you.`
         );
@@ -4089,11 +4309,22 @@ async function idleScan(page) {
       buyLower.includes('waiting for the seller')
     ) {
       buyPaymentSentAt[order.orderNumber] = Date.now();
-      savePaidOrder(order.orderNumber, { source: 'restored', amount: order.fiatAmount });
+      savePaidOrder(order.orderNumber, { source: 'restored', amount: order.totalPrice || order.fiatAmount });
       console.log(`[SparkP2P] ⚠️ Buy order ${order.orderNumber} — "awaiting release" detected but tracking was lost — restored payment tracking, monitoring next cycle`);
       sendBotLog('warn', `Buy order ${order.orderNumber}: payment tracking restored — awaiting seller release. Will monitor for release or timeout.`);
 
     } else {
+      // -- ALREADY-PAID SAFEGUARD ---------------------------------------------------
+      // markPaidDoneOrders is persisted to disk and survives bot restarts. If we know
+      // this order was already marked paid (EP-17 succeeded), restore the payment
+      // tracking and skip directly to release monitoring without re-paying.
+      if (markPaidDoneOrders.has(order.orderNumber) && !buyPaymentSentAt[order.orderNumber]) {
+        buyPaymentSentAt[order.orderNumber] = Date.now() - 120000; // assume paid 2 min ago
+        savePaidOrder(order.orderNumber, { source: 'restored_markpaid' });
+        sendBotLog('warn', `Order ...${order.orderNumber.slice(-8)} — already paid (restored from disk). Monitoring for seller release.`);
+        console.log(`[SparkP2P] ⚠️ Order ${order.orderNumber} — markPaidDone found but tracking was lost — restored, skipping to release monitoring`);
+        continue;
+      }
       // -- PAYMENT QUEUE GATE -------------------------------------------------------
       // Only ONE Choice Bank payment can be in-flight at a time (OTP + confirmation).
       // If another order already holds the payment slot, queue this one and skip it.
@@ -4122,18 +4353,36 @@ async function idleScan(page) {
           const detail = await detailRes.json().catch(() => null);
           if (detail && detail.ok) {
             if (detail.phone || detail.account_number) {
+              // Derive method from phone/account_number presence — backend may not return method field.
+              // Validate phone is a real KE mobile number (backend sometimes puts account number in phone field).
+              const _isKEPhoneML = (p) => /^(?:(?:0|\+?254)?[17]\d{8})$/.test(String(p||'').replace(/\s/g,''));
+              const _mlHasAcct  = !!(( detail.account_number || '').trim());
+              const _mlHasPhone = _isKEPhoneML(detail.phone);
+              let _mlMethod = (detail.method || '').toLowerCase();
+              if (!_mlMethod || _mlMethod === 'mpesa') {
+                if (_mlHasAcct && !_mlHasPhone) {
+                  _mlMethod = /i\s*&\s*m|i&m/i.test(detail.bank_name || '') ? 'im_bank' : 'other_bank';
+                } else {
+                  _mlMethod = 'mpesa';
+                }
+              }
+              // Preserve Vision-enriched bank name/code from existing cache if Vision already ran.
+              const _prevML = buyPaymentDetailsCache[order.orderNumber];
+              const _keepVisionML = !!_prevML?._bankNameVisionDone;
               buyPaymentDetailsCache[order.orderNumber] = {
-                method: detail.method || 'mpesa',
-                phone: detail.phone || null,
+                method: _mlMethod,
+                phone: _mlHasPhone ? detail.phone : null,
                 account_number: detail.account_number || null,
-                bank_name: detail.bank_name || null,
-                amount: detail.fiat_amount,
+                bank_name: _keepVisionML ? _prevML.bank_name : (detail.bank_name && /[A-Za-z]/.test(detail.bank_name) ? detail.bank_name : null),
+                bank_code: _keepVisionML ? _prevML.bank_code : (detail.bank_code || null),
+                _bankNameVisionDone: _keepVisionML,
+                amount: detail.fiat_amount || parseFloat(order.totalPrice) || 0,
                 name: detail.counterparty_name || '',
                 reference: order.orderNumber,
-                network: /airtel/i.test(detail.method || '') ? 'airtel' : 'safaricom',
+                network: /airtel/i.test(_mlMethod) ? 'airtel' : 'safaricom',
                 _source: 'backend_api',
               };
-              console.log(`[SparkP2P] Backend detail: ${detail.method}, ${detail.phone || detail.account_number}, ${detail.counterparty_name}`);
+              console.log(`[SparkP2P] Backend detail: ${_mlMethod}, ${_mlHasPhone ? detail.phone : ('acct:'+detail.account_number)}, ${detail.counterparty_name}, KES ${detail.fiat_amount || order.totalPrice}${_keepVisionML ? ' [vision bank preserved]' : ''}`);
             }
             if (detail.trades_30d != null || detail.trades_all != null) {
               sellerStats = {
@@ -4186,11 +4435,15 @@ async function idleScan(page) {
       // Payment details — use Binance API result (cached from DD) first; fall back to DOM/Vision
       let paymentDetails = buyPaymentDetailsCache[order.orderNumber] || null;
       if (paymentDetails) {
-        // Always override amount with order.totalPrice (from Binance API via extension).
-        // This is the only truly reliable source — DOM extraction can read a stale tab
-        // belonging to a previously completed order, producing a wrong amount.
-        if (order.totalPrice > 0) paymentDetails.amount = parseFloat(order.totalPrice);
-        console.log(`[SparkP2P] Using API-sourced payment details for ${order.orderNumber} (${paymentDetails._source || 'api'}), amount locked to KES ${paymentDetails.amount}`);
+        // Per-order API sources (phase1_prefetch / backend_api) use the specific-order SAPI
+        // query and are more reliable than order.totalPrice from the orders list. Only
+        // override with order.totalPrice for DOM-sourced amounts where we lack a better value.
+        if (order.totalPrice > 0 && (!paymentDetails._source || paymentDetails._source === 'dom' || paymentDetails._source === 'dom_retry' || paymentDetails._source === 'vision')) {
+          paymentDetails.amount = parseFloat(order.totalPrice);
+        } else if (!paymentDetails.amount && order.totalPrice > 0) {
+          paymentDetails.amount = parseFloat(order.totalPrice);
+        }
+        console.log(`[SparkP2P] Using ${paymentDetails._source || 'api'} payment details for ${order.orderNumber}, KES ${paymentDetails.amount}`);
       }
       if (!paymentDetails) {
       try {
@@ -4243,7 +4496,8 @@ async function idleScan(page) {
             const m = bodyText.match(/(?:^|\n)[ \t]*Name[ \t]*\r?\n[ \t]*([A-Za-z][A-Za-z .'-]{2,60})[ \t]*(?:\r?\n|$)/m);
             return m ? m[1].trim() : null;
           })();
-          const via = getText(/^transfer via$/i) || '';
+          // "Transfer via" label — e.g. "Bank Transfer", "M-Pesa", "I&M Bank Transfer"
+          const via = getText(/^transfer via$/i) || (bodyText.match(/Transfer via\s*\n\s*([^\n]+)/i)||[])[1] || '';
           const ref = getText(/^reference message$/i);
           const amtEl = bodyText.match(/KSh\s*([\d,]+\.?\d*)/);
           const amount = amtEl ? parseFloat(amtEl[1].replace(/,/g, '')) : null;
@@ -4256,18 +4510,23 @@ async function idleScan(page) {
           const rawAcct = rawAcctBody || rawAcctDom;
           const account_number = rawAcct ? rawAcct.replace(/[^0-9]/g, '') : null;
 
-          const bankBodyMatch = bodyText.match(/Bank name[\s\S]{0,5}?\n\s*([^\n]+)\s*\n/i);
-          const bank_name = (bankBodyMatch ? bankBodyMatch[1].trim() : null) || getText(/^bank name$/i) || null;
+          // Bank name must start with a letter — prevents capturing account numbers as bank name
+          const bankBodyMatch = bodyText.match(/Bank name\s*\n\s*([A-Za-z][^\n]{0,40})/i)
+            || bodyText.match(/Bank name[:\s]+([A-Za-z][^\n]{0,40})/i);
+          const bank_name_raw = (bankBodyMatch ? bankBodyMatch[1].trim() : null) || getText(/^bank name$/i) || null;
+          const bank_name = bank_name_raw && /[A-Za-z]/.test(bank_name_raw) ? bank_name_raw : null;
+
           if (!amount) return null;
-          if (!phone && account_number && bank_name) {
-            // Bank transfer order
-            const method = /i\s*&\s*m/i.test(bank_name) ? 'im_bank' : 'other_bank';
-            return { method, phone: null, account_number, bank_name, name: name || '', amount, reference: ref || '', network: null };
+          // Bank transfer: account_number present OR "Transfer via" explicitly says "bank"
+          // bank_name is not required here — Vision will fill it in if missing
+          if (!phone && (account_number || /bank/i.test(via))) {
+            const method = /i\s*&\s*m/i.test(bank_name||'') || /i\s*&\s*m/i.test(via) ? 'im_bank' : 'other_bank';
+            return { method, phone: null, account_number: account_number||null, bank_name: bank_name||null, name: name||'', amount, reference: ref||'', network: null };
           }
           if (!phone) return null;
           const method = /i\s*&\s*m/i.test(via) ? 'im_bank' : /mpesa|safaricom|m-pesa/i.test(via) ? 'mpesa' : 'mpesa';
           const network = /airtel/i.test(via) ? 'airtel' : 'safaricom';
-          return { method, phone, name: name || '', amount, reference: ref || '', network };
+          return { method, phone, name: name||'', amount, reference: ref||'', network };
         }).catch(() => null);
         if (paymentDetails?.phone) console.log(`[SparkP2P] L1 DOM extracted phone: ${paymentDetails.phone}, amount: ${paymentDetails.amount}`);
         else if (paymentDetails?.account_number) console.log(`[SparkP2P] L1 DOM extracted bank account: ${paymentDetails.account_number} (${paymentDetails.bank_name}), amount: ${paymentDetails.amount}`);
@@ -4323,16 +4582,18 @@ Method selection rules:
       }
       } // end: if (!paymentDetails from API cache)
 
-      // After all extraction paths, lock amount to order.totalPrice (authoritative Binance figure).
-      // This overwrites any DOM or Vision-extracted amount that may have come from a stale tab.
-      if (paymentDetails && order.totalPrice > 0) {
+      // After DOM/Vision extraction: only override amount for non-API-sourced amounts.
+      // Phase 1 prefetch and backend_api amounts come from the specific-order SAPI query
+      // and are more reliable than order.totalPrice which is parsed from the orders list.
+      if (paymentDetails && order.totalPrice > 0 && (!paymentDetails._source || paymentDetails._source === 'dom' || paymentDetails._source === 'dom_retry' || paymentDetails._source === 'vision')) {
         paymentDetails.amount = parseFloat(order.totalPrice);
       }
 
       const _localPm = (paymentDetails?.method || 'mpesa').toLowerCase();
       const _localIsBank = _localPm === 'im_bank' || _localPm === 'other_bank';
       const _localMissingPhone = !_localIsBank && (!paymentDetails?.phone || paymentDetails.phone.trim() === '');
-      const _localMissingAccount = _localIsBank && (!paymentDetails?.account_number || !paymentDetails?.bank_name);
+      // bank_name is NOT required here — Vision fills it in for other_bank when lookup fails.
+      const _localMissingAccount = _localIsBank && !paymentDetails?.account_number;
       // Retry DOM extraction once more if still missing (page may not have fully rendered yet)
       if (!paymentDetails || !paymentDetails.amount || _localMissingPhone || _localMissingAccount) {
         console.log(`[SparkP2P] Buy order ${order.orderNumber} — payment details incomplete, retrying DOM in 4s`);
@@ -4344,14 +4605,104 @@ Method selection rules:
           const rAmt = rAmtM ? parseFloat(rAmtM[1].replace(/,/g, '')) : null;
           const rNameM = retryText.match(/(?:^|\n)[ \t]*Name[ \t]*\r?\n[ \t]*([A-Za-z][A-Za-z .'"-]{2,60})[ \t]*(?:\r?\n|$)/m);
           const rName = rNameM ? rNameM[1].trim() : '';
-          const rVia = (retryText.match(/Transfer via[:\s]+([^\n]+)/i) || [])[1] || '';
-          const rMethod = /i\s*&\s*m/i.test(rVia) ? 'im_bank' : 'mpesa';
+          const rVia = (retryText.match(/Transfer via\s*\n\s*([^\n]+)/i)||retryText.match(/Transfer via[:\s]+([^\n]+)/i)||[])[1] || '';
+          const rAcctM = retryText.match(/Bank Card\/Account Number[\s\S]{0,10}?\n\s*([\d\s]+)\s*\n/i) || retryText.match(/Account Number[\s\S]{0,10}?\n\s*([\d\s]+)\s*\n/i);
+          const rAcct = rAcctM ? rAcctM[1].trim().replace(/[^0-9]/g,'') : null;
+          const rBankM = retryText.match(/Bank name\s*\n\s*([A-Za-z][^\n]{0,40})/i);
+          const rBank = rBankM ? rBankM[1].trim() : null;
           if (rAmt && rPhone) {
+            const rMethod = /i\s*&\s*m/i.test(rVia) ? 'im_bank' : 'mpesa';
             paymentDetails = { method: rMethod, phone: rPhone, name: rName, amount: rAmt, reference: order.orderNumber, network: 'safaricom', _source: 'dom_retry' };
-            console.log(`[SparkP2P] DOM retry extracted: ${rPhone}, KES ${rAmt}`);
+            console.log(`[SparkP2P] DOM retry extracted (M-Pesa): ${rPhone}, KES ${rAmt}`);
+          } else if (rAmt && (rAcct || /bank/i.test(rVia))) {
+            const rMethod = /i\s*&\s*m/i.test(rBank||'') || /i\s*&\s*m/i.test(rVia) ? 'im_bank' : 'other_bank';
+            paymentDetails = { method: rMethod, phone: null, account_number: rAcct||null, bank_name: rBank||null, name: rName, amount: rAmt, reference: order.orderNumber, network: null, _source: 'dom_retry' };
+            console.log(`[SparkP2P] DOM retry extracted (bank): ${rAcct} (${rBank}), KES ${rAmt}`);
           }
         } catch(_) {}
       }
+
+      // Vision bank name fallback: when method is other_bank but bank name is missing or
+      // not in the PesaLink lookup table, ask Claude to read the bank name from a screenshot.
+      // This handles cases where the DOM/backend fails to extract the bank name field.
+      if (paymentDetails && paymentDetails.method === 'other_bank' && anthropicApiKey && !paymentDetails._bankNameVisionDone) {
+        const _existingCode = _pesalinkBankCode(paymentDetails.bank_name);
+        if (!paymentDetails.bank_name || !_existingCode) {
+          paymentDetails._bankNameVisionDone = true;
+          console.log(`[SparkP2P] Bank name unknown (${paymentDetails.bank_name||'null'}) — using Vision to identify bank`);
+          try {
+            const _bnSS = await oPage.screenshot({ encoding: 'base64' }).catch(() => null);
+            if (_bnSS) {
+              const _bnRes = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  model: 'claude-haiku-4-5-20251001', max_tokens: 100,
+                  messages: [{ role: 'user', content: [
+                    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: _bnSS } },
+                    { type: 'text', text: `Find the "Bank name" field on this Binance P2P order page and identify the bank. Use ONLY one of these exact names — match aliases to the standard name:
+
+KCB (also: Kenya Commercial Bank)
+Standard Chartered (also: StanChart)
+Absa (also: Barclays)
+Bank of Baroda
+NCBA (also: NIC Bank, CBA, Commercial Bank of Africa)
+Prime Bank
+Cooperative Bank (also: Co-op Bank, Coop)
+National Bank (also: NBK)
+M-Oriental (also: M-Oriental Commercial, Oriental Commercial Bank)
+Citibank
+Habib Bank
+Middle East Bank
+Bank of Africa
+Credit Bank
+Consolidated Bank
+Access Bank (also: Transnational Bank)
+Stanbic
+ABC Bank (also: African Banking Corporation)
+Ecobank
+Paramount Bank
+Kingdom Bank (also: Jamii Bora)
+GT Bank (also: Guaranty Trust)
+Victoria Commercial Bank
+Guardian Bank
+I&M Bank (also: Investment and Mortgage, I and M, IM Bank)
+Development Bank
+SBM Bank (also: Fidelity Bank)
+Housing Finance (also: HF Group, HFCK)
+DTB (also: Diamond Trust Bank)
+Sidian Bank (also: K-Rep)
+Equity Bank (also: Equitel)
+Family Bank
+Gulf African Bank
+Premier Bank Kenya
+Kenya Women (also: KWFT)
+Caritas Microfinance Bank
+Faulu Microfinance Bank
+Loop (also: Loop-NCBA)
+Salaam Microfinance Bank
+UBA (also: United Bank for Africa)
+
+Reply with ONLY the standard name from the list above. Nothing else.` },
+                  ]}],
+                }),
+              }).catch(() => null);
+              if (_bnRes?.ok) {
+                const _bnData = await _bnRes.json();
+                const _visionBank = (_bnData.content?.[0]?.text || '').trim().replace(/['"]/g, '');
+                if (_visionBank && /[A-Za-z]/.test(_visionBank) && _visionBank.length < 50) {
+                  paymentDetails.bank_name = _visionBank;
+                  const _vCode = _pesalinkBankCode(_visionBank);
+                  if (_vCode) paymentDetails.bank_code = _vCode;
+                  console.log(`[SparkP2P] Vision identified bank: "${_visionBank}" → code ${_vCode||'unknown'}`);
+                  sendBotLog('info', `Bank identified via Vision: ${_visionBank}${_vCode ? ' (code '+_vCode+')' : ' (code unknown — will attempt PesaLink)'}`);
+                }
+              }
+            }
+          } catch(_) {}
+        }
+      }
+
       if (!paymentDetails || !paymentDetails.amount || _localMissingPhone || _localMissingAccount) {
         console.log(`[SparkP2P] Buy order ${order.orderNumber} — could not extract payment details, will retry next cycle`);
         continue;
@@ -4361,7 +4712,25 @@ Method selection rules:
       const firstName = (paymentDetails.name || 'Seller').split(' ')[0];
       const amt = Math.floor(parseFloat(paymentDetails.amount));
 
-      console.log(`[SparkP2P] ðŸ'³ Buy order ${order.orderNumber} â€" paying KSh ${amt} to ${paymentDetails.name} via ${method}`);
+      // Sanity check: scraped amount must match the Binance order fiat amount within 2%.
+      // Protects against DOM scraping picking up the wrong KSh value on the page.
+      // Cross-validate: DOM/Vision-extracted amount vs orders-list amount.
+      // Only fires for DOM/Vision sources — API-sourced amounts are already reliable.
+      if (paymentDetails._source === 'dom' || paymentDetails._source === 'dom_retry' || paymentDetails._source === 'vision') {
+        const _orderFiat = parseFloat(order.totalPrice || order.fiatAmount) || 0;
+        if (_orderFiat > 0 && Math.abs(amt - _orderFiat) / _orderFiat > 0.02) {
+          const _mismatchMsg = `⚠️ Order ${order.orderNumber.slice(-8)}: amount mismatch — DOM/Vision says KES ${amt} but order list says KES ${_orderFiat}. PAYMENT BLOCKED to prevent wrong amount.`;
+          sendBotLog('error', _mismatchMsg);
+          console.error(`[SparkP2P] Amount mismatch BLOCKED: dom=${amt}, list=${_orderFiat} (source: ${paymentDetails._source})`);
+          imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
+          activeBuyPaymentSlot = null;
+          continue;
+        }
+      }
+
+      const _methodLabel = method === 'mpesa' ? 'M-Pesa' : (method === 'im_bank' ? 'I&M Bank' : (paymentDetails.bank_name || 'Bank Transfer'));
+      console.log(`[SparkP2P] 💳 Buy order ${order.orderNumber} — paying KSh ${amt} to ${paymentDetails.name} via ${method}`);
+      sendBotLog('info', `Buy order ...${order.orderNumber.slice(-8)}: KES ${amt.toLocaleString()} → ${paymentDetails.name} via ${_methodLabel}${method !== 'mpesa' ? ' (acct: ' + (paymentDetails.account_number || '?') + ')' : ' (' + (paymentDetails.phone || '?') + ')'}`);
 
       // Choice Bank payment (replaced I&M Bank)
       let imResult = { success: false, screenshot: null, referenceId: null };
@@ -4419,14 +4788,13 @@ Method selection rules:
             }
           }
 
-          let buyApproved = false;
-          // Fast-path: if we already confirmed approval in a previous session, skip
-          // Telegram polling entirely and go straight to payment.
-          if (telegramApprovedOrders.has(order.orderNumber)) {
-            buyApproved = true;
-            console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram approval restored from disk, skipping poll`);
-          } else if (!buyApprovalRequestedOrders.has(order.orderNumber)) {
-            const approvalRes = await fetch(API_BASE + '/telegram/request-buy-approval', {
+          // Approval: backend always auto-approves buy orders (no Telegram gate).
+          // Send the notification once as fire-and-forget (purely informational for the trader).
+          // Never block payment waiting for a response — network failures must not stop payment.
+          const buyApproved = true;
+          if (!buyApprovalRequestedOrders.has(order.orderNumber)) {
+            buyApprovalRequestedOrders.add(order.orderNumber);
+            fetch(API_BASE + '/telegram/request-buy-approval', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
               body: JSON.stringify({
@@ -4446,60 +4814,10 @@ Method selection rules:
                 avg_pay_mins: parseFloat(_ss.avgPayMins) || null,
                 advisory,
               }),
-            }).catch(() => null);
-            const approvalData = approvalRes?.ok ? await approvalRes.json().catch(() => ({})) : {};
-            if (approvalData.auto_approved) {
-              buyApproved = true;
-              telegramApprovedOrders.add(order.orderNumber);
-              _saveOrderFlag(order.orderNumber, 'telegramApproved', true);
-              console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram not linked, auto-approving payment`);
-            } else {
-              buyApprovalRequestedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'approvalRequested', true);
-              sendBotLog('info', `Buy order ${order.orderNumber} — waiting for Telegram payment approval`);
-              console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram approval sent immediately, bot on order page`);
-            }
-          } else {
-            // Already requested — poll the status
-            const statusRes = await fetch(
-              `${API_BASE}/telegram/approval-status?order_number=${encodeURIComponent(order.orderNumber)}`,
-              { headers: { 'Authorization': 'Bearer ' + token } }
-            ).catch(() => null);
-            const statusData = statusRes?.ok ? await statusRes.json().catch(() => ({})) : {};
-            const approvalStatus = statusData.status || 'pending';
-            console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram approval status: ${approvalStatus}`);
-
-            if (approvalStatus === 'approved') {
-              buyApproved = true;
-              telegramApprovedOrders.add(order.orderNumber);
-              _saveOrderFlag(order.orderNumber, 'telegramApproved', true);
-              sendBotLog('success', `Buy order ${order.orderNumber} — approved, executing payment`);
-            } else if (approvalStatus === 'rejected') {
-              imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
-              sendBotLog('warning', `Buy order ${order.orderNumber} — payment declined on Telegram. Cancelling via API.`);
-              // EP-9: cancel order via SAPI — no DOM clicking needed
-              await fetch(`${API_BASE}/ext/cancel-order`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ order_number: order.orderNumber }),
-              }).catch(() => null);
-              console.log(`[SparkP2P] Buy order ${order.orderNumber} — cancelled via API (Telegram declined)`);
-              delete orderFirstSeenAt[order.orderNumber]; _removeOrderFlags(order.orderNumber);
-              continue;
-            } else if (approvalStatus === 'timeout') {
-              // Telegram response window expired — but the Binance order is still active (hours remaining).
-              // Don't permanently fail. Clear the stale request so we re-request approval next cycle.
-              buyApprovalRequestedOrders.delete(order.orderNumber);
-              _saveOrderFlag(order.orderNumber, 'approvalRequested', false);
-              sendBotLog('warning', `Buy order ${order.orderNumber} — Telegram approval window closed (no response in 20 min). Re-requesting...`);
-              console.log(`[SparkP2P] Buy ${order.orderNumber} — approval window expired, cleared flag, will re-request next cycle`);
-              continue;
-            } else {
-              // Still pending — come back next poll cycle
-              continue;
-            }
+            }).catch(() => {});
+            console.log(`[SparkP2P] Buy ${order.orderNumber} — Telegram notification sent (proceeding with payment immediately)`);
+            sendBotLog('info', `Buy order ...${order.orderNumber.slice(-8)} — payment notification sent, executing now`);
           }
-
-          if (!buyApproved) continue;
 
           // ── Step 2: Send greeting NOW (after approval, not before) ──
           if (!buyGreetingSentOrders.has(order.orderNumber)) {
@@ -4516,6 +4834,7 @@ Method selection rules:
           }
 
           // ── Step 3: Execute the Choice Bank payment ──
+          await _refreshChoiceBankCodes(); // ensure live bank codes are loaded
           try {
             imResult = await executeChoicePayment({
               phone: paymentDetails.phone, accountNumber: paymentDetails.account_number,
@@ -4531,7 +4850,7 @@ Method selection rules:
             const _errMsg = e.message || 'Unknown error';
             console.error("[SparkP2P] Choice Bank payment error for " + order.orderNumber + ": " + _errMsg);
 
-            const _isOtpTimeout   = /OTP email did not arrive/i.test(_errMsg);
+            const _isOtpTimeout   = /OTP email did not arrive|SMS OTP did not arrive|did not arrive within 60/i.test(_errMsg);
             const _isHardFailure  = !_isOtpTimeout && /insufficient|balance|invalid account|not found|account.*block|cannot transfer/i.test(_errMsg);
 
             if (_isOtpTimeout) {
@@ -4667,7 +4986,10 @@ Method selection rules:
         body: JSON.stringify({ order_number: order.orderNumber, success: true, channel: method === 'mpesa' ? 'MPESA' : 'BANK' }),
       }).catch(() => {});
       stats.actions++;
-      console.log(`[SparkP2P] âœ… Buy order ${order.orderNumber} â€" paid and notified seller`);
+      console.log(`[SparkP2P] ✅ Buy order ${order.orderNumber} — paid and notified seller`);
+      // Close tab immediately — release detection handled by background API poller (no DOM needed)
+      await closeOrderTab(order.orderNumber);
+      console.log(`[SparkP2P] Tab closed for ${order.orderNumber.slice(-8)} — monitoring release via API (30s interval)`);
     }
   }
 
@@ -8957,45 +9279,87 @@ function norm(o) {
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// ── Kenya bank name → PesaLink CBK sort code ────────────────────────────────
-// Binance shows bank name only (never the code). This maps the display name to
-// the CBK institution code Choice Bank needs to route the PesaLink transfer.
+// ── Fetch live bank codes from Choice Bank API (via backend) ─────────────────
+// Choice Bank uses their own 2-digit bank codes, not CBK sort codes.
+// Refreshed every 12 hours; result cached in _choiceBankCodes.
+async function _refreshChoiceBankCodes() {
+  if (!token) return;
+  if (Date.now() - _choiceBankCodesFetchedAt < 12 * 60 * 60 * 1000) return;
+  try {
+    const r = await fetch(`${API_BASE}/ext/bank-codes`, { headers: { 'Authorization': `Bearer ${token}` } }).catch(() => null);
+    if (r?.ok) {
+      const d = await r.json().catch(() => null);
+      if (d?.ok && Array.isArray(d.bank_codes) && d.bank_codes.length > 0) {
+        _choiceBankCodes = d.bank_codes;
+        _choiceBankCodesFetchedAt = Date.now();
+        console.log(`[SparkP2P] Loaded ${d.bank_codes.length} bank codes from Choice Bank API`);
+      }
+    }
+  } catch (_) {}
+}
+
+// ── Kenya bank name → Choice Bank PesaLink bank code ─────────────────────────
+// Tries live codes from Choice Bank API first (most accurate).
+// Falls back to a static alias table for common alternate bank names.
 function _pesalinkBankCode(bankName) {
   if (!bankName) return null;
   const n = bankName.toLowerCase().trim();
+
+  // 1. Try live codes from Choice Bank API — these are the exact codes Choice Bank accepts.
+  //    Match: exact, or live name contains our query, or our query contains live name (minus "limited").
+  for (const b of _choiceBankCodes) {
+    const bn = (b.bankName || '').toLowerCase().replace(/\s*limited\s*$/i, '').trim();
+    if (!bn || !b.bankCode) continue;
+    if (bn === n || bn.includes(n) || n.includes(bn)) return b.bankCode;
+  }
+
+  // 2. Static alias table → Choice Bank codes (2-digit format as returned by their API).
+  //    Only includes banks where the code is confirmed from the Choice Bank API docs.
+  //    For unknown banks, returns null — caller sends a Telegram alert.
+  // Codes confirmed against Choice Bank live API + user verification (Jul 2026).
   const banks = [
-    [['equity'],                                         '068'],
-    [['kcb', 'kenya commercial'],                        '011'],
-    [['cooperative', 'co-operative', 'co operative', 'coop'], '055'],
-    [['stanchart', 'standard chartered'],                '002'],
-    [['absa', 'barclays'],                               '030'],
-    [['ncba', 'nic bank', 'nic/', 'commercial bank of africa', 'cba bank'], '044'],
-    [['i&m', 'i & m', 'im bank'],                        '023'],
-    [['dtb', 'diamond trust'],                           '063'],
-    [['stanbic'],                                        '031'],
-    [['national bank', 'nbk'],                           '012'],
-    [['family bank'],                                    '070'],
-    [['prime bank'],                                     '010'],
-    [['hf group', 'housing finance'],                    '061'],
-    [['gulf african'],                                   '072'],
-    [['sidian'],                                         '066'],
-    [['bank of africa'],                                 '060'],
-    [['ecobank'],                                        '043'],
-    [['abc bank'],                                       '035'],
-    [['consolidated bank'],                              '016'],
-    [['credit bank'],                                    '025'],
-    [['citibank', 'citi bank'],                          '008'],
-    [['mayfair'],                                        '065'],
-    [['uba', 'united bank for africa'],                  '076'],
-    [['gt bank', 'gtbank', 'guaranty trust'],            '053'],
-    [['victoria'],                                       '054'],
-    [['spire bank'],                                     '049'],
-    [['kingdom bank'],                                   '087'],
-    [['postbank', 'post bank'],                          '025'],
-    [['bank of baroda'],                                 '006'],
-    [['bank of india'],                                  '005'],
-    [['middle east bank'],                               '018'],
-    [['oriental'],                                       '014'],
+    [['kcb', 'kenya commercial bank'],                                                    '01'],
+    [['standard chartered', 'stanchart'],                                                 '02'],
+    [['absa', 'barclays'],                                                                '03'],
+    [['bank of baroda'],                                                                  '06'],
+    [['ncba', 'nic bank', 'commercial bank of africa', 'cba bank'],                      '07'],
+    [['prime bank'],                                                                      '10'],
+    [['co-operative', 'cooperative', 'co-op', 'coop'],                                   '11'],
+    [['national bank', 'nbk'],                                                           '12'],
+    [['m-oriental', 'oriental commercial', 'm oriental'],                                 '14'],
+    [['citibank', 'citi bank', 'citi'],                                                   '16'],
+    [['habib'],                                                                           '17'],
+    [['middle east bank'],                                                                '18'],
+    [['bank of africa'],                                                                  '19'],
+    [['credit bank'],                                                                     '25'],
+    [['consolidated bank'],                                                               '23'],
+    [['access bank', 'transnational bank'],                                               '26'],
+    [['stanbic'],                                                                         '31'],
+    [['abc bank', 'african banking corporation', 'african banking corp'],                 '35'],
+    [['ecobank'],                                                                         '43'],
+    [['choice microfinance', 'choice bank'],                                              '46'],
+    [['paramount bank', 'paramount universal'],                                           '50'],
+    [['kingdom bank', 'jamii bora'],                                                      '51'],
+    [['gt bank', 'gtbank', 'guaranty trust'],                                             '53'],
+    [['victoria commercial'],                                                             '54'],
+    [['guardian bank'],                                                                   '55'],
+    [['i&m', 'i & m', 'im bank', 'investment and mortgage', 'i and m'],                  '57'],
+    [['development bank'],                                                                '59'],
+    [['sbm bank', 'sbm kenya', 'state bank of mauritius', 'fidelity bank'],              '60'],
+    [['housing finance', 'hf group', 'hfck'],                                             '61'],
+    [['diamond trust', 'dtb'],                                                            '63'],
+    [['sidian', 'k-rep'],                                                                 '66'],
+    [['equity', 'equitel'],                                                               '68'],
+    [['family bank', 'familia'],                                                          '70'],
+    [['gulf african'],                                                                    '72'],
+    [['premier bank kenya', 'premier bank'],                                              '74'],
+    [['uba', 'united bank for africa'],                                                   '76'],
+    [['kenya women', 'kwft'],                                                             '78'],
+    [['caritas microfinance', 'caritas'],                                                 '84'],
+    [['faulu microfinance', 'faulu'],                                                     '87'],
+    [['postbank', 'post bank', 'posta bank'],                                             '92'],
+    [['loop', 'loop-ncba', 'loop ncba'],                                                  '95'],
+    [['salaam microfinance', 'salaam bank'],                                              '103'],
   ];
   for (const [keywords, code] of banks) {
     if (keywords.some(k => n.includes(k))) return code;
@@ -9056,7 +9420,7 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, bankName, 
       amount: amountRounded,
       payee_name: name || '',
       bank_code: bankCode || '',
-      remark: 'SparkP2P BUY ' + orderNumber.slice(-12),
+      remark: 'ChoiceBuy ' + orderNumber.slice(-12),
     }),
   });
 
@@ -9067,18 +9431,14 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, bankName, 
 
   const data = await res.json();
 
-  // OTP required — read the emailed 4-digit code via IMAP then confirm
+  // OTP required — wait for SMS forwarded by MacroDroid, server confirms automatically
   if (data.status === 'otp_required') {
-    console.log('[SparkP2P] Choice Bank OTP required for transfer applicationId=' + data.application_id);
-    const otp = await readChoiceOTPviaGmail(sentAt);
-    if (!otp) throw new Error('Choice Bank OTP email did not arrive within 8 minutes. Transfer cancelled.');
-
-    const confirmRes = await fetch(API_BASE + '/ext/choice-confirm-otp', {
+    console.log('[SparkP2P] Choice Bank OTP required — waiting for SMS via MacroDroid (applicationId=' + data.application_id + ')');
+    const confirmRes = await fetch(API_BASE + '/ext/choice-pay-confirm-sms', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
       body: JSON.stringify({
         application_id: data.application_id,
-        otp,
         order_number: orderNumber,
         amount: data.amount,
         payee_account_id: data.payee,
@@ -9092,7 +9452,7 @@ async function executeChoicePayment({ phone, accountNumber, bankCode, bankName, 
       throw new Error(err.detail || 'Choice Bank OTP confirmation failed HTTP ' + confirmRes.status);
     }
     const confirmed = await confirmRes.json();
-    console.log('[SparkP2P] Choice Bank OTP confirmed — txId=' + (confirmed.transaction_id || 'n/a'));
+    console.log('[SparkP2P] Choice Bank OTP confirmed via SMS — txId=' + (confirmed.transaction_id || 'n/a'));
     return { success: true, referenceId: confirmed.transaction_id || '', screenshot: confirmed.receipt_image || null };
   }
 
