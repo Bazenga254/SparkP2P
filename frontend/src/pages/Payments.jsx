@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   choiceGetBalance,
-  cbSendMoneyInitiate, cbSendMoneyConfirm,
+  cbSendMoneyInitiate, cbSendMoneyConfirm, cbSendMoneyConfirmSms,
   cbPaybillInitiate, cbPaybillConfirm, cbLookupShortcode,
   cbGetBanks, cbLookupBankAccount, cbLookupMpesaName,
   cbBankTransferInitiate, cbBankTransferConfirm,
@@ -601,14 +601,21 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
   const initiate = async () => {
     setError(''); setBusy(true);
     try {
-      const res = await cbSendMoneyInitiate({
+      await cbSendMoneyInitiate({
         payee_phone: phone.trim(),
         amount: Number(amount),
         payee_name: payee.name || '',
         network,
       });
-      setInfo(res.data?.message || 'OTP sent.');
-      setStep('otp');
+      setStep('waiting');
+      // Auto-confirm: backend waits for SMS OTP from MacroDroid webhook (up to 90s)
+      try {
+        await cbSendMoneyConfirmSms();
+        setStep('done');
+      } catch (e2) {
+        setError(e2.response?.data?.detail || 'OTP confirmation failed. Please try again.');
+        setStep('form');
+      }
     } catch (e) { setError(e.response?.data?.detail || 'Could not start the transfer. Please try again.'); }
     finally { setBusy(false); }
   };
@@ -663,6 +670,13 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
         </>
+      )}
+      {step === 'waiting' && (
+        <div style={{ textAlign: 'center', padding: '32px 0' }}>
+          <div style={{ fontSize: 40, marginBottom: 16 }}>📲</div>
+          <div style={{ color: '#f5a623', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Waiting for OTP…</div>
+          <div style={{ color: '#9aa4b2', fontSize: 13 }}>Choice Bank sent an OTP to your phone.<br />It will be captured automatically.</div>
+        </div>
       )}
       {step === 'otp' && (
         <>
