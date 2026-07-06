@@ -552,17 +552,18 @@ export default function Landing() {
           </div>
           <div className="land-pricing-grid">
             {[
-              { name: 'Starter', price: '3,000', popular: false,
+              { name: 'Bronze', price: '10,000', usd: '$75', popular: false,
                 features: ['Sell-side automation', 'Automatic crypto release', 'M-Pesa payment matching', 'Up to 30 trades/day', 'Telegram notifications'] },
-              { name: 'Starter Pro', price: '5,000', popular: false,
-                features: ['Everything in Starter', 'Buy-side auto-pay', 'Up to 80 trades/day', 'Priority settlement', 'Advanced analytics'] },
-              { name: 'Starter Pro Max', price: '10,000', popular: true,
-                features: ['Everything in Pro', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Priority support', 'Dedicated onboarding'] },
+              { name: 'Silver', price: '11,000', usd: '$85', popular: false,
+                features: ['Everything in Bronze', 'Buy-side auto-pay', 'Up to 80 trades/day', 'Priority settlement', 'Advanced analytics'] },
+              { name: 'Gold', price: '13,000', usd: '$99', popular: true,
+                features: ['Everything in Silver', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Priority support', 'Dedicated onboarding'] },
             ].map(plan => (
               <div key={plan.name} className={`land-price-card${plan.popular ? ' popular' : ''}`}>
                 {plan.popular && <div className="land-price-badge">Most Popular</div>}
                 <h3 className="land-price-name">{plan.name}</h3>
-                <div className="land-price-amount"><span className="land-price-cur">KES</span> {plan.price}<span className="land-price-per">/month</span></div>
+                <div className="land-price-amount"><span className="land-price-cur">{plan.usd}</span><span className="land-price-per">/month</span></div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2, marginBottom: 4 }}>KES {plan.price} via M-Pesa</div>
                 <ul className="land-price-features">
                   {plan.features.map(f => (
                     <li key={f}>

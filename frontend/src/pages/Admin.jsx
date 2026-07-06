@@ -145,7 +145,7 @@ function AdminSmsModal({ target, onClose }) {
 // Admin duration picker for granting / extending a paid subscription. Admin picks a quick
 // duration (1/3/6/12 months) or a custom date+time; expiry is sent to the backend as ISO UTC.
 function TierGrantModal({ grant, onCancel, onApply }) {
-  const tierLabel = grant.tier === 'pro_max' ? 'Starter Pro Max' : grant.tier === 'pro' ? 'Starter Pro' : 'Starter';
+  const tierLabel = grant.tier === 'pro_max' ? 'Gold' : grant.tier === 'pro' ? 'Silver' : 'Bronze';
   const [mode, setMode] = useState('quick');
   const [custom, setCustom] = useState('');
   const [busy, setBusy] = useState(false);
@@ -904,7 +904,7 @@ export default function Admin() {
     const sampleData = {
       amount: '5,000', balance: '12,500', crypto_amount: '45.50',
       currency: 'USDT', fiat_amount: '6,000', code: '482931',
-      plan: 'Starter', expires: 'April 25, 2026', trader_name: 'John Doe',
+      plan: 'Bronze', expires: 'April 25, 2026', trader_name: 'John Doe',
     };
     let preview = body;
     try {
@@ -1973,7 +1973,7 @@ export default function Admin() {
               return colors[Math.abs(h) % colors.length];
             };
             const avatarFg = () => '#c7d2fe';
-            const tierLabel = (tier) => tier === 'pro_max' ? 'Starter Pro Max' : tier === 'pro' ? 'Starter Pro' : tier === 'starter' ? 'Starter' : 'Free';
+            const tierLabel = (tier) => tier === 'pro_max' ? 'Gold' : tier === 'pro' ? 'Silver' : tier === 'starter' ? 'Bronze' : 'Free';
             const tierColor = (tier) => tier === 'advanced' ? { bg: 'rgba(239,68,68,0.15)', color: '#ef4444' }
               : tier === 'pro_max' ? { bg: 'rgba(139,92,246,0.15)', color: '#8b5cf6' }
               : tier === 'pro' ? { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b' }
@@ -2061,7 +2061,7 @@ export default function Admin() {
                         </div>
                         <div style={{ color: '#9ca3af', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 7 }}>Tier</div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 12 }}>
-                          {[['all','All'],['free','Free'],['starter','Starter'],['pro','Starter Pro'],['pro_max','Starter Pro Max']].map(([v,l]) => (
+                          {[['all','All'],['free','Free'],['starter','Bronze'],['pro','Silver'],['pro_max','Gold']].map(([v,l]) => (
                             <button key={v} onClick={() => setTraderTierFilter(v)}
                               style={{ padding: '5px 10px', borderRadius: 12, border: ('0.5px solid ' + (traderTierFilter === v ? '#f59e0b' : '#374151')), background: traderTierFilter === v ? 'rgba(245,158,11,0.15)' : '#111827', color: traderTierFilter === v ? '#f59e0b' : '#9ca3af', fontSize: 11, cursor: 'pointer' }}>{l}</button>
                           ))}
@@ -2160,7 +2160,7 @@ export default function Admin() {
                           </span>
                           {traderDrop?.type === 'tier' && traderDrop?.id === t.id && (
                             <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 4, background: '#1f2937', border: '1px solid #374151', borderRadius: 8, zIndex: 100, minWidth: 90, overflow: 'hidden' }}>
-                              {[['standard','Free'],['starter','Starter'],['pro','Starter Pro'],['pro_max','Starter Pro Max']].map(([v,l]) => (
+                              {[['standard','Free'],['starter','Bronze'],['pro','Silver'],['pro_max','Gold']].map(([v,l]) => (
                                 <button key={v} onClick={(e) => { e.stopPropagation(); handleTierChange(t.id, v); setTraderDrop(null); }}
                                   style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: (t.tier||'standard') === v ? 'rgba(245,158,11,0.1)' : 'none', border: 'none', color: (t.tier||'standard') === v ? '#f59e0b' : '#d1d5db', fontSize: 12, cursor: 'pointer' }}>{l}</button>
                               ))}
@@ -2226,7 +2226,7 @@ export default function Admin() {
               if (n >= 1e3) return (v / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
               return String(v || 0);
             };
-            const tierLabel = t.tier === 'standard' ? 'Free' : t.tier === 'pro_max' ? 'Starter Pro Max' : t.tier === 'pro' ? 'Starter Pro' : t.tier === 'starter' ? 'Starter' : (t.tier || 'Free');
+            const tierLabel = t.tier === 'standard' ? 'Free' : t.tier === 'pro_max' ? 'Gold' : t.tier === 'pro' ? 'Silver' : t.tier === 'starter' ? 'Bronze' : (t.tier || 'Free');
             const MT = { gold: { l: 'Gold Merchant', c: 'var(--gold)' }, silver: { l: 'Silver Merchant', c: '#cbd5e1' }, bronze: { l: 'Bronze Merchant', c: '#d97757' } };
             const merchant = (t.binance_api_key_saved && !t.binance_api_key_invalid) ? MT[(t.binance_merchant_tier || t.binance_p2p_tier || '').toLowerCase()] : null;
             const seen = fmtLastSeen(t.last_seen_at, t.last_web_active || t.last_login);
@@ -2294,7 +2294,7 @@ export default function Admin() {
                           <label>Tier</label>
                           <select value={t.tier || 'standard'} onChange={async (e) => {
                             const v = e.target.value;
-                            const labelMap = { standard: null, starter: 'Starter', pro: 'Starter Pro', pro_max: 'Starter Pro Max' };
+                            const labelMap = { standard: null, starter: 'Bronze', pro: 'Silver', pro_max: 'Gold' };
                             // Optimistic: tier chip + plan label update instantly
                             setViewingTrader(prev => ({ ...prev, tier: v, plan: v === 'standard' ? null : v, plan_label: labelMap[v] }));
                             await handleTierChange(t.id, v);
@@ -2302,9 +2302,9 @@ export default function Admin() {
                             await refreshTraderDetail(t.id);
                           }}>
                             <option value="standard">Free</option>
-                            <option value="starter">Starter — KES 3,000/mo</option>
-                            <option value="pro">Starter Pro — KES 5,000/mo</option>
-                            <option value="pro_max">Starter Pro Max — KES 10,000/mo</option>
+                            <option value="starter">Bronze — KES 10,000/mo</option>
+                            <option value="pro">Silver — KES 11,000/mo</option>
+                            <option value="pro_max">Gold — KES 13,000/mo</option>
                           </select>
                         </div>
                         <div className="field">
@@ -3827,9 +3827,9 @@ export default function Admin() {
                   {/* 4 plan cards */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
                     {[
-                      { key: 'starter', label: 'Starter', color: '#10b981', bg: 'rgba(16,185,129,0.12)', kes: 5000 },
-                      { key: 'pro',     label: 'Pro',     color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', kes: 10000 },
-                      { key: 'pro_max', label: 'Pro Max', color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)', kes: 20000 },
+                      { key: 'starter', label: 'Bronze', color: '#F08A3C', bg: 'rgba(240,138,60,0.12)', kes: 10000 },
+                      { key: 'pro',     label: 'Silver', color: '#D6DBE2', bg: 'rgba(214,219,226,0.12)', kes: 11000 },
+                      { key: 'pro_max', label: 'Gold',   color: '#FFBE52', bg: 'rgba(255,190,82,0.12)', kes: 13000 },
                       { key: 'advanced',label: 'Advanced',color: '#ef4444', bg: 'rgba(239,68,68,0.12)',  kes: 40000 },
                     ].map(p => (
                       <div key={p.key} className="adm-card" style={{ padding: '14px 16px', borderTop: `2px solid ${p.color}` }}>
@@ -4745,7 +4745,7 @@ export default function Admin() {
                 </div>
                 <select className="fin-select" value={revPlan}
                   onChange={e => { setRevPlan(e.target.value); setRevPage(1); loadRevenueBreakdown(revPeriod, e.target.value, 1); }}>
-                  {[['all','All plans'],['starter','Starter'],['pro','Starter Pro'],['pro_max','Starter Pro Max']].map(([val, label]) => (
+                  {[['all','All plans'],['starter','Bronze'],['pro','Silver'],['pro_max','Gold']].map(([val, label]) => (
                     <option key={val} value={val}>{label}</option>
                   ))}
                 </select>
@@ -4861,9 +4861,9 @@ export default function Admin() {
                     </div>
                     <div className="fin-plans">
                       {[
-                        { key: 'starter',  label: 'Starter',         cls: 'fin-p1', kes: 3000  },
-                        { key: 'pro',      label: 'Starter Pro',     cls: 'fin-p2', kes: 5000  },
-                        { key: 'pro_max',  label: 'Starter Pro Max', cls: 'fin-p3', kes: 10000 },
+                        { key: 'starter',  label: 'Bronze', cls: 'fin-p1', kes: 10000 },
+                        { key: 'pro',      label: 'Silver', cls: 'fin-p2', kes: 11000 },
+                        { key: 'pro_max',  label: 'Gold',   cls: 'fin-p3', kes: 13000 },
                       ].map(p => {
                         const cnt = revBreakdown?.summary?.[p.key + '_count'] ?? 0;
                         return (

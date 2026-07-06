@@ -6,6 +6,8 @@ import CostBasisCard from './CostBasisCard';
 // Live Binance P2P competitor order book (admin-gated). Redesigned cockpit UI.
 const TIER_COLOR = { gold: '#FFBE52', silver: '#D6DBE2', bronze: '#F08A3C', normal: '#929AA6' };
 const TIERS = [{ key: 'all', label: 'All' }, { key: 'gold', label: 'Gold' }, { key: 'silver', label: 'Silver' }, { key: 'bronze', label: 'Bronze' }];
+// Subscription plan → which tier tabs the user can access
+const PLAN_TIER_ACCESS = { starter: ['bronze'], pro: ['bronze', 'silver'], pro_max: ['all', 'gold', 'silver', 'bronze'] };
 
 const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const medOf = arr => { const s = [...arr].filter(x => x > 0).sort((a, b) => a - b); const n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0; };
@@ -132,13 +134,20 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
 
   if (!enabled) return null;
 
+  // Subscription-gated tier access
+  const subPlan = profile?.subscription_plan; // 'starter'|'pro'|'pro_max'|null
+  const allowedTierKeys = PLAN_TIER_ACCESS[subPlan] || ['all', 'gold', 'silver', 'bronze'];
+  const visibleTiers = TIERS.filter(t => allowedTierKeys.includes(t.key));
+  // Clamp the selected tier to what the plan allows
+  const effectiveTier = allowedTierKeys.includes(tier) ? tier : allowedTierKeys[0];
+
   const q = query.trim().toLowerCase();
   const meq = me.trim().toLowerCase();
   const isMe = nick => !!meq && (nick || '').trim().toLowerCase() === meq;
   const pick = rows => {
     let scoped = rows || [];
     if (verifiedOnly) scoped = scoped.filter(r => r.tier !== 'normal');
-    if (tier !== 'all') scoped = scoped.filter(r => r.tier === tier);
+    if (effectiveTier !== 'all') scoped = scoped.filter(r => r.tier === effectiveTier);
     // Rank WITHIN the current filter scope (board is already in competitive order), so verified-only
     // shows verified-only ranks rather than positions that count hidden non-merchants.
     const ranked = scoped.map((r, i) => ({ ...r, _rank: i + 1 }));
@@ -295,8 +304,8 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
             <div className="panel panel-gap">
               <div className="track-row">
                 <div className="pill-group">
-                  {TIERS.map(t => (
-                    <button key={t.key} className={`fpill${tier === t.key ? ' on' : ''}`} onClick={() => setTier(t.key)}>
+                  {visibleTiers.map(t => (
+                    <button key={t.key} className={`fpill${effectiveTier === t.key ? ' on' : ''}`} onClick={() => setTier(t.key)}>
                       {t.key !== 'all' && <span className={`d d-${t.key}`} />}{t.label}
                     </button>
                   ))}

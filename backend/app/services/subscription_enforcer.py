@@ -57,18 +57,33 @@ async def subscription_enforcer():
                                 f"[Enforcer] subscription {sub.id} expired for trader {trader.id} "
                                 f"({trader.email}) — locked + config wiped"
                             )
-                            # Disconnection-day SMS.
+                            # Disconnection-day SMS + Telegram.
                             try:
                                 from app.services.billing import account_number
-                                from app.services.plans import plan_price
+                                from app.services.plans import plan_price, plan_label
                                 from app.services.sms import sms_subscription_disconnected
+                                amount = plan_price(sub.plan)
+                                acct = account_number(trader.id)
+                                pb = settings.SUBSCRIPTION_PAYBILL
                                 if trader.phone:
                                     sms_subscription_disconnected(
-                                        trader.phone, trader.full_name, plan_price(sub.plan),
-                                        account_number(trader.id), settings.SUBSCRIPTION_PAYBILL,
+                                        trader.phone, trader.full_name, amount, acct, pb,
                                     )
+                                if getattr(trader, "telegram_chat_id", None):
+                                    from app.api.routes.telegram import notify_trader
+                                    first = (trader.full_name or "").strip().split(" ")[0] or "Customer"
+                                    label = plan_label(sub.plan)
+                                    tg_msg = (
+                                        f"🔴 *SparkP2P — Subscription Disconnected*\n\n"
+                                        f"Hi {first}, your *{label}* subscription has expired and your "
+                                        f"bot has been *disconnected*. Your bot settings have been reset.\n\n"
+                                        f"To restore service, pay *KES {int(amount):,}* via M-Pesa Paybill "
+                                        f"*{pb}*, Account *{acct}*, or from your Choice Bank wallet. "
+                                        f"Then log in to reconfigure your bot."
+                                    )
+                                    await notify_trader(trader, tg_msg)
                             except Exception as _e:
-                                logger.warning(f"[Enforcer] disconnect SMS failed for {trader.id}: {_e}")
+                                logger.warning(f"[Enforcer] disconnect notification failed for {trader.id}: {_e}")
                         else:
                             logger.warning(f"[Enforcer] subscription {sub.id} expired (trader exempt/missing)")
                     await db.commit()

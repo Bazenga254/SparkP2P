@@ -1,11 +1,11 @@
 """Subscription plans — single source of truth for pricing + daily rate limits.
 
-Three tiers (display names keep "Starter"). Daily limits reset at the trading-day boundary
+Three tiers. Daily limits reset at the trading-day boundary
 (00:00 UTC = 03:00 EAT, see app.core.trading_day). A limit of 0 means UNLIMITED.
 
-    Starter         KES 3,000/mo   30 trades/day    100 Telegram alerts/day
-    Starter Pro     KES 5,000/mo   80 trades/day    200 Telegram alerts/day
-    Starter Pro Max KES 10,000/mo  unlimited        unlimited
+    Bronze  $75  KES 10,000/mo   30 trades/day    100 Telegram alerts/day
+    Silver  $85  KES 11,000/mo   80 trades/day    200 Telegram alerts/day
+    Gold    $99  KES 13,000/mo   unlimited        unlimited
 """
 from datetime import datetime, timezone
 from sqlalchemy import select
@@ -15,9 +15,9 @@ from app.models.subscription import SubscriptionPlan, Subscription, Subscription
 UNLIMITED = 0
 
 PLAN_CONFIG = {
-    SubscriptionPlan.STARTER: {"label": "Starter",         "price": 3000,  "daily_trades": 30,        "daily_tg": 100},
-    SubscriptionPlan.PRO:     {"label": "Starter Pro",     "price": 5000,  "daily_trades": 80,        "daily_tg": 200},
-    SubscriptionPlan.PRO_MAX: {"label": "Starter Pro Max", "price": 10000, "daily_trades": UNLIMITED, "daily_tg": UNLIMITED},
+    SubscriptionPlan.STARTER: {"label": "Bronze", "price": 10000, "daily_trades": 30,        "daily_tg": 100},
+    SubscriptionPlan.PRO:     {"label": "Silver", "price": 11000, "daily_trades": 80,        "daily_tg": 200},
+    SubscriptionPlan.PRO_MAX: {"label": "Gold",   "price": 13000, "daily_trades": UNLIMITED, "daily_tg": UNLIMITED},
 }
 # Order shown in UIs. ADVANCED is retired (not offered).
 PLAN_ORDER = [SubscriptionPlan.STARTER, SubscriptionPlan.PRO, SubscriptionPlan.PRO_MAX]
