@@ -610,13 +610,17 @@ function checkForUpdates() {
 
   autoUpdater.on('update-downloaded', (info) => {
     updateReadyToInstall = true;
-    console.log(`[SparkP2P] Update downloaded: v${info.version} — will install on next restart`);
+    console.log(`[SparkP2P] Update downloaded: v${info.version} — installing now and relaunching`);
     if (mainWindow) {
-      // Dispatch event to React UI so it can show a non-blocking banner
       mainWindow.webContents.executeJavaScript(
         `window.dispatchEvent(new CustomEvent('sparkp2p-update-ready', { detail: { version: '${info.version}' } }))`
       ).catch(() => {});
     }
+    // Install immediately — silent install + auto-relaunch.
+    // Bot state is persisted to disk so it recovers cleanly after restart.
+    setTimeout(() => {
+      autoUpdater.quitAndInstall(false, true);
+    }, 3000); // 3s delay so the UI event above can render first
   });
 
   autoUpdater.on('update-not-available', (info) => {
@@ -633,6 +637,11 @@ function checkForUpdates() {
   });
 
   autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+
+  // Re-check every 15 minutes so updates are found without restarting the app
+  setInterval(() => {
+    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+  }, 15 * 60 * 1000);
 }
 app.on('window-all-closed', (e) => e.preventDefault());
 function killChrome() {
