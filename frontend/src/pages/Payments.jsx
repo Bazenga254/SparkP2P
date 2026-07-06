@@ -608,13 +608,14 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
         network,
       });
       setStep('waiting');
-      // Auto-confirm: backend waits for SMS OTP from MacroDroid webhook (up to 90s)
+      // Auto-confirm: backend waits for SMS OTP from MacroDroid webhook (up to 90s).
+      // On timeout fall back to manual OTP entry so the user isn't left stuck.
       try {
         await cbSendMoneyConfirmSms();
         setStep('done');
       } catch (e2) {
-        setError(e2.response?.data?.detail || 'OTP confirmation failed. Please try again.');
-        setStep('form');
+        setInfo('OTP not auto-captured — enter the code from your phone manually.');
+        setStep('otp');
       }
     } catch (e) { setError(e.response?.data?.detail || 'Could not start the transfer. Please try again.'); }
     finally { setBusy(false); }
