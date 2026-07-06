@@ -1390,24 +1390,27 @@ async function openOrderTab(orderNumber) {
     const tab = await browser.newPage();
     await tab.goto(
       `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNumber}`,
-      { waitUntil: 'domcontentloaded', timeout: 20000 }
+      { waitUntil: 'networkidle2', timeout: 25000 }
     ).catch(() => {});
     tab.on('close', () => { delete orderTabs[orderNumber]; });
     orderTabs[orderNumber] = tab;
     console.log(`[SparkP2P] Opened tab for order ${orderNumber}`);
+    sendBotLog('info', `Tab opened for order ...${orderNumber.slice(-8)}`);
     return tab;
   } catch (e) {
     console.log(`[SparkP2P] Could not open tab for order ${orderNumber}: ${e.message?.substring(0, 60)}`);
+    sendBotLog('warn', `Could not open tab for order ...${orderNumber.slice(-8)}: ${e.message?.substring(0, 60)}`);
     return null;
   }
 }
 
-async function closeOrderTab(orderNumber) {
+async function closeOrderTab(orderNumber, reason) {
   const tab = orderTabs[orderNumber];
   if (!tab) return;
   delete orderTabs[orderNumber];
   try { if (!tab.isClosed()) await tab.close(); } catch (_) {}
-  console.log(`[SparkP2P] Closed tab for order ${orderNumber}`);
+  console.log(`[SparkP2P] Closed tab for order ${orderNumber}${reason ? ' ('+reason+')' : ''}`);
+  sendBotLog('info', `Tab closed for order ...${orderNumber.slice(-8)}${reason ? ' — ' + reason : ''}`);
 }
 
 async function ensureOrderTabs(orders) {
@@ -1431,7 +1434,7 @@ async function ensureOrderTabs(orders) {
     // Rule 1: always close tabs for paid orders (background API polling takes over)
     if (buyPaymentSentAt[num] || markPaidDoneOrders.has(num)) {
       delete orderTabAbsenceCounts[num];
-      await closeOrderTab(num);
+      await closeOrderTab(num, 'payment sent — background poller takes over');
       continue;
     }
     // Rule 2: close tabs for orders absent from the active list — but only after 3 consecutive
@@ -1441,8 +1444,11 @@ async function ensureOrderTabs(orders) {
       orderTabAbsenceCounts[num] = (orderTabAbsenceCounts[num] || 0) + 1;
       if (orderTabAbsenceCounts[num] >= 3) {
         console.log(`[SparkP2P] Order ${num.slice(-8)} absent 3+ scans — closing stale tab`);
+        sendBotLog('warn', `Order ...${num.slice(-8)} absent from Binance for 3+ scans — closing tab (order may have been cancelled externally)`);
         delete orderTabAbsenceCounts[num];
-        await closeOrderTab(num);
+        await closeOrderTab(num, 'absent from active list 3+ scans');
+      } else {
+        sendBotLog('info', `Order ...${num.slice(-8)} not in active list (scan ${orderTabAbsenceCounts[num]}/3) — keeping tab, may be a transient hiccup`);
       }
       // else: keep tab open — transient disappearance, not a genuine cancellation
     }
@@ -4152,6 +4158,7 @@ async function idleScan(page) {
     _cycleVision += buyUsedVision ? 1 : 0;
     _cycleDom   += buyUsedVision ? 0 : 1;
     console.log(`[SparkP2P] Buy order ${order.orderNumber} state: ${buyScreen} (via ${buyUsedVision ? 'Vision' : 'DOM'})`);
+    sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} page state: ${buyScreen} (${buyUsedVision ? 'Vision' : 'DOM'})`);
     const buyText = await oPage.evaluate(() => document.body.innerText).catch(() => '');
     const buyLower = buyText.toLowerCase();
     // Safety guard: if the page shows SELL order indicators, this order was misclassified.
@@ -4230,7 +4237,14 @@ async function idleScan(page) {
       buyLower.includes('has been canceled') ||
       (buyLower.includes('cancelled') && buyLower.includes('order number') && !buyLower.includes('will be cancelled'))
     ) {
-      console.log(`[SparkP2P] Buy order ${order.orderNumber} CANCELLED`);
+      const _cancelledWhy = buyScreen === 'order_cancelled' ? 'Vision detected cancelled'
+        : buyLower.includes('order has been cancelled') ? '"order has been cancelled" in page text'
+        : buyLower.includes('order was cancelled') ? '"order was cancelled" in page text'
+        : buyLower.includes('order is cancelled') ? '"order is cancelled" in page text'
+        : buyLower.includes('has been canceled') ? '"has been canceled" in page text'
+        : '"cancelled"+"order number" in page text without "will be cancelled"';
+      console.log(`[SparkP2P] Buy order ${order.orderNumber} CANCELLED (reason: ${_cancelledWhy})`);
+      sendBotLog('warn', `Buy order ...${order.orderNumber.slice(-8)} detected as CANCELLED — reason: ${_cancelledWhy}. Screen: ${buyScreen}`);
       await fetch(`${API_BASE}/ext/report-orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -4239,7 +4253,7 @@ async function idleScan(page) {
       delete buyPaymentSentAt[order.orderNumber];
       buyReminderSentOrders.delete(order.orderNumber);
       if (activeBuyOrderNumber === order.orderNumber) activeBuyOrderNumber = null;
-      closeOrderTab(order.orderNumber);
+      closeOrderTab(order.orderNumber, 'order cancelled');
 
     // â"€â"€ We already paid â€" monitoring for seller release â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     } else if (buyPaymentSentAt[order.orderNumber]) {
@@ -4596,7 +4610,9 @@ Method selection rules:
       const _localMissingAccount = _localIsBank && !paymentDetails?.account_number;
       // Retry DOM extraction once more if still missing (page may not have fully rendered yet)
       if (!paymentDetails || !paymentDetails.amount || _localMissingPhone || _localMissingAccount) {
-        console.log(`[SparkP2P] Buy order ${order.orderNumber} — payment details incomplete, retrying DOM in 4s`);
+        const _missingWhat = !paymentDetails ? 'no details at all' : !paymentDetails.amount ? 'amount missing' : _localMissingPhone ? 'phone missing' : 'account number missing';
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} — payment details incomplete (${_missingWhat}), retrying DOM in 4s`);
+        sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} — payment details incomplete (${_missingWhat}), waiting for page to load fully...`);
         await new Promise(r => setTimeout(r, 4000));
         try {
           const retryText = await oPage.evaluate(() => document.body.innerText).catch(() => '');
@@ -4704,7 +4720,9 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
       }
 
       if (!paymentDetails || !paymentDetails.amount || _localMissingPhone || _localMissingAccount) {
-        console.log(`[SparkP2P] Buy order ${order.orderNumber} — could not extract payment details, will retry next cycle`);
+        const _stillMissing = !paymentDetails ? 'no details' : !paymentDetails.amount ? 'amount' : _localMissingPhone ? 'phone number' : 'account number';
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} — could not extract payment details (${_stillMissing}), will retry next cycle`);
+        sendBotLog('warn', `Order ...${order.orderNumber.slice(-8)} — could not read ${_stillMissing} from page (source: ${paymentDetails?._source || 'none'}). Will retry next cycle.`);
         continue;
       }
 
@@ -4988,7 +5006,7 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
       stats.actions++;
       console.log(`[SparkP2P] ✅ Buy order ${order.orderNumber} — paid and notified seller`);
       // Close tab immediately — release detection handled by background API poller (no DOM needed)
-      await closeOrderTab(order.orderNumber);
+      await closeOrderTab(order.orderNumber, 'payment complete — monitoring release via background poller');
       console.log(`[SparkP2P] Tab closed for ${order.orderNumber.slice(-8)} — monitoring release via API (30s interval)`);
     }
   }
