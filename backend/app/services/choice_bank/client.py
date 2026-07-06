@@ -352,6 +352,7 @@ async def transfer(
     payment_purpose: str = "",
     remark: str = "",
     notify_mobile: str = "",    # Send SMS receipt to payee at this number
+    message_to_beneficiary: str = "",
 ) -> dict:
     """
     Universal transfer — covers M-Pesa B2C, Airtel Money, internal, and PesaLink.
@@ -373,6 +374,8 @@ async def transfer(
         params["paymentPurpose"] = payment_purpose
     if notify_mobile:
         params["payeeMobileForNotification"] = notify_mobile
+    if message_to_beneficiary:
+        params["messageToBeneficiary"] = message_to_beneficiary[:100]
     return await _post("/trans/v2/applyForTransfer", params)
 
 

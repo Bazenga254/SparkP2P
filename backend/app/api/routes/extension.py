@@ -3127,6 +3127,10 @@ async def choice_pay(
     effective_bank_code = data.bank_code if data.bank_code else ("M-PESA" if is_mpesa else "")
     logger.info(f"[ChoiceBank] BUY payment: KES {data.amount} → {data.payee_account_id} (bankCode={effective_bank_code or 'internal'})")
 
+    # For PesaLink (interbank) transfers, set messageToBeneficiary so the recipient sees
+    # a clean description instead of the auto-generated "SPARKP2P BANK TRANSFER FROM ..."
+    msg_to_beneficiary = "P2P bank transfer" if (effective_bank_code and effective_bank_code != "M-PESA") else ""
+
     result = await transfer(
         payer_account_id=trader.choice_account_id,
         payee_account_id=data.payee_account_id,
@@ -3134,6 +3138,7 @@ async def choice_pay(
         payee_bank_code=effective_bank_code,
         payee_name=data.payee_name,
         remark=remark,
+        message_to_beneficiary=msg_to_beneficiary,
     )
 
     code = result.get("code", "")
