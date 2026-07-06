@@ -3204,29 +3204,25 @@ async def choice_pay_confirm_sms(
     import asyncio
     from app.services.choice_bank.client import confirm_otp
 
-    if not trader.choice_account_id:
-        raise HTTPException(status_code=400, detail="No Choice Bank account configured")
+    # Poll _received_sms_otp (populated by /ext/sms-otp which MacroDroid calls).
+    # Only accept an OTP that arrived AFTER this request started (ts > start_ts).
+    start_ts = _time.time()
+    logger.info(f"[ChoiceBank] Waiting for SMS OTP for trader {trader.id} (applicationId={data.application_id})")
+    otp = None
+    for _ in range(60):  # 60 × 2 s = 120 s
+        entry = _received_sms_otp.get(trader.id)
+        if entry and entry.get("ts", 0) > start_ts and entry.get("otp"):
+            otp = entry["otp"]
+            break
+        await asyncio.sleep(2)
 
-    account_last_4 = str(trader.choice_account_id)[-4:]
-    event = asyncio.Event()
-    _pending_sms_otps[account_last_4] = {"event": event, "otp": None}
-    logger.info(f"[ChoiceBank] Waiting for SMS OTP for account ****{account_last_4} (applicationId={data.application_id})")
+    if not otp:
+        raise HTTPException(
+            status_code=408,
+            detail="Choice Bank OTP not received within 120 seconds — check your phone's SMS relay is running",
+        )
 
-    try:
-        try:
-            await asyncio.wait_for(event.wait(), timeout=120.0)
-        except asyncio.TimeoutError:
-            raise HTTPException(
-                status_code=408,
-                detail="Choice Bank OTP not received within 120 seconds — check your phone's SMS relay is running",
-            )
-        otp = _pending_sms_otps[account_last_4].get("otp")
-        if not otp:
-            raise HTTPException(status_code=502, detail="OTP event fired but no code was extracted from SMS")
-    finally:
-        _pending_sms_otps.pop(account_last_4, None)
-
-    logger.info(f"[ChoiceBank] SMS OTP received for ****{account_last_4} — confirming with Choice Bank")
+    logger.info(f"[ChoiceBank] SMS OTP received for trader {trader.id} — confirming with Choice Bank")
     result = await confirm_otp(data.application_id, otp)
     if result.get("code") != "00000":
         raise HTTPException(status_code=400, detail=result.get("msg", "OTP confirmation failed"))
