@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_db, async_session
-from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support, survey, affiliates, telegram, choice_bank, kyc_flow
+from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support, survey, affiliates, telegram, choice_bank, kyc_flow, squads, webhooks
 from app.services.binance.poller import order_poller
 from app.services.message_templates import seed_default_templates
 from app.services import bot_monitor
@@ -369,92 +369,6 @@ async def batch_monitor():
         await _check_stuck_batches()
 
 
-async def _reimburse_trade_tokens():
-    """
-    At midnight EAT:
-    1. Expire all existing trade_tokens_expiring for every trader.
-    2. For traders who generated platform revenue from sell orders in the past 24h:
-       - KES 600–999  → tokens at KES 20/token  (reimbursed, expire next midnight)
-       - KES 1,000+   → tokens at KES 15/token  (reimbursed, expire next midnight)
-    """
-    from app.models import Trader
-    from app.models.trade_tokens import TradeTokenPurchase
-    from app.models.wallet import WalletTransaction, TransactionType
-    from sqlalchemy import select, func
-
-    EAT = timezone(timedelta(hours=3))
-    now_eat = datetime.now(EAT)
-    window_start = now_eat.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
-    window_start_utc = window_start.astimezone(timezone.utc)
-
-    async with async_session() as db:
-        try:
-            # Step 1 — expire all existing reimbursed tokens
-            traders_result = await db.execute(
-                select(Trader).where(Trader.trade_tokens_expiring > 0)
-            )
-            for trader in traders_result.scalars().all():
-                trader.trade_tokens_expiring = 0
-
-            # Step 2 — calculate yesterday's platform fee revenue per trader
-            fee_result = await db.execute(
-                select(
-                    WalletTransaction.trader_id,
-                    func.sum(func.abs(WalletTransaction.amount)).label("total_fees"),
-                )
-                .where(
-                    WalletTransaction.transaction_type == TransactionType.PLATFORM_FEE,
-                    WalletTransaction.created_at >= window_start_utc,
-                )
-                .group_by(WalletTransaction.trader_id)
-            )
-            fee_rows = fee_result.all()
-
-            for row in fee_rows:
-                if row.total_fees < 600:
-                    continue
-
-                trader_result = await db.execute(select(Trader).where(Trader.id == row.trader_id))
-                trader = trader_result.scalar_one_or_none()
-                if not trader:
-                    continue
-
-                if row.total_fees >= 1000:
-                    rate = 15.0
-                else:
-                    rate = 20.0
-
-                tokens = round(row.total_fees / rate)
-                trader.trade_tokens_expiring = tokens
-                trader.trade_tokens_expiring_granted_at = datetime.now(timezone.utc)
-
-                purchase = TradeTokenPurchase(
-                    trader_id=trader.id,
-                    amount_kes=row.total_fees,
-                    tokens_granted=tokens,
-                    rate_per_token=rate,
-                    source="reimbursement",
-                )
-                db.add(purchase)
-
-            await db.commit()
-            logger.info(f"[TokenReimburse] Processed {len(fee_rows)} traders for midnight reimbursement.")
-        except Exception as e:
-            logger.error(f"[TokenReimburse] Failed: {e}")
-
-
-async def token_reimbursement_scheduler():
-    """Run token reimbursement at midnight EAT every day."""
-    EAT = timezone(timedelta(hours=3))
-    while True:
-        now = datetime.now(EAT)
-        # Next midnight EAT
-        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        sleep_secs = (tomorrow - now).total_seconds()
-        logger.info(f"[TokenReimburse] Next run at midnight EAT (in {sleep_secs / 3600:.1f}h)")
-        await asyncio.sleep(sleep_secs)
-        await _reimburse_trade_tokens()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -470,8 +384,47 @@ async def lifespan(app: FastAPI):
     batch_task = asyncio.create_task(batch_scheduler())
     # Start batch stuck-alert + retry monitor (every 30 min)
     batch_monitor_task = asyncio.create_task(batch_monitor())
-    # Start midnight trade token reimbursement scheduler
-    token_reimburse_task = asyncio.create_task(token_reimbursement_scheduler())
+    # Start while-online order tracking poller (every 30s, all online traders)
+    from app.services.tracking import tracking_poller
+    tracking_task = asyncio.create_task(tracking_poller())
+    # Start buy-release monitor — Telegram the trader when a paid buy order isn't released in 10 min.
+    from app.services.buy_release_monitor import buy_release_monitor
+    buy_release_task = asyncio.create_task(buy_release_monitor())
+    # Start cookie-session health monitor — nudge merchants to reconnect Binance when cookies expire.
+    from app.services.cookie_health import cookie_health_poller
+    cookie_health_task = asyncio.create_task(cookie_health_poller())
+    # Start KYC reconciliation poller — auto-captures Choice Bank approvals that land
+    # after the trader leaves the onboarding page (every 5 min).
+    from app.services.kyc_poller import kyc_status_poller
+    kyc_task = asyncio.create_task(kyc_status_poller())
+    # Re-push counterparty filters that never synced (relay was down at save) + self-heal the
+    # Gold Merchant badge — only when the trader's relay is up (every 5 min).
+    from app.services.filter_poller import filter_sync_poller
+    filter_task = asyncio.create_task(filter_sync_poller())
+    # Price Monitor — relay-free rank alerts (every 3 min).
+    from app.services import price_monitor
+    price_monitor_task = asyncio.create_task(price_monitor.start())
+    # Auto-pricing (Live) — relay-gated, moves real ad prices within the margin band (every 2 min).
+    from app.services import autoprice
+    autoprice_task = asyncio.create_task(autoprice.start())
+    # Market history — periodic board snapshots for the Price Tracker trend sparklines (every 1 min).
+    from app.services import market_history
+    market_history_task = asyncio.create_task(market_history.start())
+    # Market flow — 24h estimated trading volume from order-book depletion (every 1 min).
+    from app.services import market_flow
+    market_flow_task = asyncio.create_task(market_flow.start())
+    # Squad Mode — live coordinated team pricing (relay-gated, every 90s).
+    from app.services import squad_pricing
+    squad_pricing_task = asyncio.create_task(squad_pricing.start())
+    # Subscription enforcer — lock + wipe config when a plan expires (every 5 min).
+    from app.services.subscription_enforcer import subscription_enforcer
+    enforcer_task = asyncio.create_task(subscription_enforcer())
+    # Subscription reminders — 5-day / 3-day pre-expiry SMS (hourly).
+    from app.services.subscription_reminder import subscription_reminder
+    reminder_task = asyncio.create_task(subscription_reminder())
+    # PesaLink reconciler — auto-marks failed bank transfers (every 5 min).
+    from app.services.pesalink_reconciler import pesalink_reconciliation_poller
+    pesalink_task = asyncio.create_task(pesalink_reconciliation_poller())
     yield
     # Shutdown
     order_poller.stop()
@@ -479,7 +432,17 @@ async def lifespan(app: FastAPI):
     monitor_task.cancel()
     batch_task.cancel()
     batch_monitor_task.cancel()
-    token_reimburse_task.cancel()
+    tracking_task.cancel()
+    kyc_task.cancel()
+    filter_task.cancel()
+    price_monitor_task.cancel()
+    enforcer_task.cancel()
+    reminder_task.cancel()
+    pesalink_task.cancel()
+    autoprice_task.cancel()
+    market_history_task.cancel()
+    market_flow_task.cancel()
+    squad_pricing_task.cancel()
 
 
 app = FastAPI(
@@ -514,6 +477,8 @@ app.include_router(affiliates.router, prefix="/api/affiliates", tags=["Affiliate
 app.include_router(telegram.router, prefix="/api/telegram", tags=["Telegram"])
 app.include_router(choice_bank.router, prefix="/api", tags=["Choice Bank"])
 app.include_router(kyc_flow.router, prefix="/api", tags=["KYC Flow"])
+app.include_router(squads.router, prefix="/api/squads", tags=["Squad Mode"])
+app.include_router(webhooks.router, prefix="/api/webhooks", tags=["Webhooks"])
 
 @app.get("/api/health")
 async def api_health_check():
@@ -578,6 +543,19 @@ async def download_latest():
         raise
     except Exception:
         raise HTTPException(status_code=502, detail="Could not fetch latest release")
+
+
+# Android app (sideload APK hosted on the VPS, served for download from sparkp2p.com)
+from fastapi.responses import FileResponse
+_APK_PATH = os.path.join(os.path.dirname(__file__), "..", "static", "sparkp2p.apk")
+
+
+@app.get("/api/download/android")
+async def download_android():
+    from fastapi import HTTPException
+    if not os.path.exists(_APK_PATH):
+        raise HTTPException(status_code=404, detail="Android app isn't available yet.")
+    return FileResponse(_APK_PATH, media_type="application/vnd.android.package-archive", filename="SparkP2P.apk")
 
 
 # Serve uploaded support attachments

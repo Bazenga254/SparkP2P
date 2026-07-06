@@ -87,20 +87,43 @@ async def get_bank_codes() -> dict:
 
 # ── OTP ───────────────────────────────────────────────────────────────────────
 
-async def send_otp(onboarding_request_id: str) -> dict:
-    """Trigger OTP SMS for the given onboarding request."""
+async def send_otp(business_id: str, otp_type: str = "SMS") -> dict:
+    """Trigger an OTP for an operation (txId / onboardingRequestId). otpType ("SMS"|"EMAIL") selects
+    the channel AND verifies it — sending EMAIL during onboarding is what marks the registered email
+    as verified, which a later transaction's sendOtp(EMAIL) requires."""
     return await _post("/common/sendOtp", {
-        "businessId": onboarding_request_id,
-        "otpType": "SMS",
+        "businessId": business_id,
+        "otpType": otp_type,
     })
 
 
+async def resend_otp(business_id: str, otp_type: str = "SMS") -> dict:
+    """Re-send an OTP if the first didn't arrive (onboarding / account / transaction operations)."""
+    return await _post("/common/resendOtp", {
+        "businessId": business_id,
+        "otpType": otp_type,
+    })
 
-async def confirm_otp(onboarding_request_id: str, otp: str) -> dict:
-    """Confirm OTP. businessId is the onboardingRequestId."""
+
+async def confirm_otp(business_id: str, otp: str) -> dict:
+    """Confirm an OTP. businessId is the txId / onboardingRequestId / applicationId the OTP was for."""
     return await _post("/common/confirmOperation", {
-        "businessId": onboarding_request_id,
+        "businessId": business_id,
         "otpCode": otp,
+    })
+
+
+async def close_individual_account(account_id: str, closure_reason="9", otp_type: str = "sms") -> dict:
+    """Close a BaaS Wallet/Current account. An OTP validates the request; then Choice staff manually
+    review/approve (result via callback). Returns { applicationId } — confirm the OTP against it.
+    Closing the customer's LAST account sets onboarding to ACCOUNT_CLOSED, enabling a fresh KYC reopen.
+    NOTE: closureReason must be an ARRAY of reason CODES ('1'..'10', e.g. 9 = 'similar account /
+    opening a similar account'), and otpType must be lowercase ('sms'/'email')."""
+    reasons = closure_reason if isinstance(closure_reason, list) else [str(closure_reason)]
+    return await _post("/account/closeIndividualAccount", {
+        "accountId":     account_id,
+        "closureReason": reasons,
+        "otpType":       (otp_type or "sms").lower(),
     })
 
 
@@ -255,6 +278,68 @@ async def get_account_details(account_id: str) -> dict:
     })
 
 
+async def add_or_update_email(
+    document_number: str,
+    email: str,
+    personal_id_type: str = "101",
+    onboard_type: str = "personal",
+) -> dict:
+    """Set or change the email address linked to a customer account.
+    Choice Bank sends a verification OTP to the new email — confirm with confirm_contact_verify().
+    Returns { applicationId }."""
+    params = {
+        "onboardType": onboard_type,
+        "documentNumber": document_number,
+        "email": email,
+    }
+    if onboard_type == "personal":
+        params["personalIdType"] = personal_id_type
+    return await _post("/user/addOrUpdateEmail", params)
+
+
+async def verify_email_address(
+    document_number: str,
+    personal_id_type: str = "101",  # 101=National ID, 102=Alien ID, 103=Passport
+    onboard_type: str = "personal",
+) -> dict:
+    """Send an OTP to the email linked to this account for verification.
+    Uses /account/verifyEmailOrMobile (not /account/verifyEmailAddress which returns 500
+    for existing accounts). Returns { applicationId } — confirm via confirm_otp()."""
+    params = {
+        "onboardType": onboard_type,
+        "documentNumber": document_number,
+        "verifyType": "email",
+    }
+    if onboard_type == "personal":
+        params["personalIdType"] = personal_id_type
+    return await _post("/account/verifyEmailOrMobile", params)
+
+
+async def verify_mobile_number(
+    document_number: str,
+    personal_id_type: str = "101",
+    onboard_type: str = "personal",
+) -> dict:
+    """Send an OTP to the mobile linked to this account for verification.
+    Returns { applicationId } — confirm via confirm_contact_verify()."""
+    params = {
+        "onboardType": onboard_type,
+        "documentNumber": document_number,
+        "verifyType": "mobile",
+    }
+    if onboard_type == "personal":
+        params["personalIdType"] = personal_id_type
+    return await _post("/account/verifyEmailOrMobile", params)
+
+
+async def confirm_contact_verify(application_id: str, otp: str) -> dict:
+    """Confirm the OTP sent by verifyEmailOrMobile / verifyEmailAddress."""
+    return await _post("/common/confirmOtp", {
+        "businessId": application_id,
+        "otpCode": otp,
+    })
+
+
 # ── Transfers ─────────────────────────────────────────────────────────────────
 
 
@@ -278,7 +363,7 @@ async def transfer(
         "payeeAccountId": payee_account_id,
         "currency":       "KES",
         "amount":         f"{float(amount):.2f}",
-        "remark":         remark or "SparkP2P payment",
+        "remark":         remark or "P2P payment",
     }
     if payee_bank_code:
         params["payeeBankCode"] = payee_bank_code
@@ -291,6 +376,32 @@ async def transfer(
     return await _post("/trans/v2/applyForTransfer", params)
 
 
+async def mpesa_business_transfer(
+    payer_account_id: str,
+    business_number: str,         # M-Pesa Paybill or Till/BuyGoods number (payeeShortCode)
+    amount: float,
+    account_number: str = "",     # payeeReferenceNumber — required for Paybill, omitted for Till
+    is_paybill: bool = True,      # payType: True->0 (Paybill), False->1 (Till / Buy Goods)
+    remark: str = "",
+) -> dict:
+    """M-Pesa Paybill / Till (B2B) — TTID0005 via /trans/v2/applyForMpesaBusinessTransfer.
+    Follow with send_otp(txId) -> confirm_otp(txId, otp), then poll getTransResult.
+    Fields per Choice Bank API Details: payerAccountId, payeeShortCode, payType (0=Paybill,
+    1=Till/BuyGoods), payeeReferenceNumber (account number when payType=0), amount (KES),
+    description (message to beneficiary, ≤100 chars). Returns { txId } on code 00000."""
+    params: dict = {
+        "payerAccountId": payer_account_id,
+        "payeeShortCode": business_number,
+        "payType":        0 if is_paybill else 1,
+        "amount":         round(float(amount), 2),
+    }
+    if is_paybill and account_number:
+        params["payeeReferenceNumber"] = account_number
+    if remark:
+        params["description"] = remark[:100]
+    return await _post("/trans/v2/applyForMpesaBusinessTransfer", params)
+
+
 async def large_domestic_interbank_transfer(
     payer_account_id:    str,
     beneficiary_bank_code: str,
@@ -300,7 +411,7 @@ async def large_domestic_interbank_transfer(
     amount:              float,
     payment_channel:     str = "RTGS",   # "RTGS" (instant) or "EFT" (T+1 batch)
     payment_purpose_id:  str = "OTHR",
-    payment_purpose:     str = "SparkP2P withdrawal",
+    payment_purpose:     str = "P2P withdrawal",
     sender_address:      str = "Nairobi, Kenya",
     message_to_beneficiary: str = "",
     beneficiary_email:   str = "",
@@ -369,7 +480,7 @@ async def batch_disburse(
         "payeeBankCode":    str(payee_bank_code),
         "currency":         "KES",
         "amount":           f"{float(amount):.2f}",
-        "remark":           remark or "SparkP2P payment",
+        "remark":           remark or "P2P payment",
     }
     if org_tx_id:
         beneficiary["orgTxId"] = org_tx_id

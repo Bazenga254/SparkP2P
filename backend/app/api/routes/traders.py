@@ -5,17 +5,17 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import select, update as sql_update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import encrypt_data, decode_access_token, create_access_token
+from app.core.trading_day import trading_day_start, trading_day_key, trading_day_date, now_utc, TRADING_DAY_OFFSET_HOURS
 from app.models import Trader, SettlementMethod
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.order import Order, OrderStatus
-from app.models.trade_tokens import TradeTokenPurchase
 from app.services.binance.client import BinanceP2PClient
 from app.services.mpesa.client import mpesa_client
 from app.api.deps import get_current_trader
@@ -76,10 +76,35 @@ class TradingConfigRequest(BaseModel):
     batch_threshold: Optional[int] = None
     bot_trade_mode: Optional[str] = None  # 'both' | 'buy_only' | 'sell_only'
     dd_enabled: Optional[bool] = None
+    bot_full_auto: Optional[bool] = None
     dd_min_30d_trades: Optional[int] = None
     dd_min_all_trades: Optional[int] = None
     dd_auto_cancel_new: Optional[bool] = None
     telegram_approval_enabled: Optional[bool] = None
+    telegram_notify_scope: Optional[str] = None  # both | sell | buy
+    # Counterparty filters (pushed to Binance via EP-7)
+    cf_filters_enabled:        Optional[bool]  = None
+    cf_completion_rate_min:    Optional[float] = None  # ratio 0.0–1.0
+    cf_completion_rate_window: Optional[int]   = None  # 1=Last 30D, 2=All-time
+    cf_all_trades_min:         Optional[int]   = None
+    cf_trade_count_window:     Optional[int]   = None  # 1=Last 30D, 2=All-time
+    cf_completed_trades_min:   Optional[int]   = None
+    cf_buy_trades_min:         Optional[int]   = None
+    cf_sell_trades_min:        Optional[int]   = None
+    cf_volume_min:             Optional[float] = None
+    cf_volume_asset:           Optional[str]   = None
+    cf_volume_window:          Optional[int]   = None  # 1=Last 30D, 2=All-time
+    cf_reg_days_min:           Optional[int]   = None
+    cf_all_trades_min_all:     Optional[int]   = None
+    cf_max_pay_mins:           Optional[int]   = None
+    cf_max_release_mins:       Optional[int]   = None
+    binance_fee_per_usdt:      Optional[float] = None
+
+
+class BinanceApiKeyRequest(BaseModel):
+    api_key: str
+    api_secret: str
+    test_only: bool = False   # verify the key via the relay but don't persist it
 
 
 class DepositRequest(BaseModel):
@@ -127,6 +152,7 @@ class TraderProfileResponse(BaseModel):
     onboarding_complete: bool = False
     security_question: Optional[str] = None
     last_extension_sync: Optional[str] = None
+    last_web_active: Optional[str] = None
     settlement_cooldown_until: Optional[str] = None  # ISO datetime when cooldown ends
     settlement_first_change_free: bool = False  # True if user has a method but never changed it (first post-onboarding change is free)
     password_change_cooldown_until: Optional[str] = None  # ISO datetime, 48hr after last pw change
@@ -139,22 +165,60 @@ class TraderProfileResponse(BaseModel):
     batch_settlement_enabled: bool = True
     batch_threshold: int = 50000
     dd_enabled: bool = False
+    bot_full_auto: bool = False
+    binance_session_expired: bool = False
     dd_min_30d_trades: int = 20
     dd_min_all_trades: int = 0
     dd_auto_cancel_new: bool = False
     binance_merchant_tier: Optional[str] = None  # 'gold', 'silver', 'bronze'
+    binance_api_key_saved: bool = False  # True if API key is stored (never expose the key itself)
+    binance_api_key_invalid: bool = False  # True if Binance rejects the stored key
+    price_tracker_enabled: bool = False  # admin-gated live competitor price tracker
+    binance_nickname: Optional[str] = None  # auto-detected Binance P2P nickname (for "your rank")
+    binance_p2p_tier: Optional[str] = None  # real detected tier (gold/silver/bronze/normal) — drives badge
+    pm_enabled: bool = False
+    pm_target_rank: int = 1
+    pm_scope: str = "all"
+    pm_alert_drop: bool = True
+    pm_alert_top1: bool = False
+    pm_alert_overtaken: bool = False
+    pm_alert_summary: bool = False
+    pm_alert_reached: bool = False
+    pm_alert_anomaly: bool = False
+    pm_alert_watchlist: bool = True
+    pm_watchlist: List[str] = []
+    pm_autoprice: str = "off"
+    pm_margin_min: float = 0.0
+    pm_margin_max: float = 0.0
+    pm_autoprice_error: Optional[str] = None
+    cf_filters_enabled:        bool  = False
+    cf_completion_rate_min:    float = 0.0
+    cf_completion_rate_window: int   = 2
+    cf_all_trades_min:         int   = 0
+    cf_trade_count_window:     int   = 2
+    cf_completed_trades_min:   int   = 0
+    cf_buy_trades_min:         int   = 0
+    cf_sell_trades_min:        int   = 0
+    cf_volume_min:             float = 0.0
+    cf_volume_asset:           str   = 'USDT'
+    cf_volume_window:          int   = 2
+    cf_reg_days_min:           int   = 0
+    cf_all_trades_min_all:     int   = 0
+    cf_max_pay_mins:           int   = 0
+    cf_max_release_mins:       int   = 0
+    binance_fee_per_usdt:      float = 0.25
+    cf_last_pushed_at:         Optional[str] = None
     telegram_connected: bool = False
     telegram_approval_enabled: bool = False
-    trade_tokens: int = 0
-    trade_tokens_expiring: int = 0
+    telegram_notify_scope: str = 'both'
     choice_account_id: Optional[str] = None
     choice_account_number: Optional[str] = None
     choice_kyc_status: Optional[str] = None
     choice_paybill: str = "444174"
 
 
-# In-memory store for phone verification results
-_phone_verifications: dict[str, dict] = {}
+# In-memory store for settlement-phone OTP verification (normalized phone -> {code, expires_at, trader_id, attempts})
+_settle_phone_otps: dict[str, dict] = {}
 
 # In-memory OTP store for Google profile phone verification (phone -> otp)
 _profile_otp_codes: dict[str, str] = {}
@@ -179,99 +243,300 @@ def add_notification(trader_id: int, title: str, message: str, notif_type: str =
     _notifications[trader_id] = _notifications[trader_id][:50]
 
 
-class VerifyPhoneRequest(BaseModel):
+class SendPhoneOtpRequest(BaseModel):
     phone: str
+
+
+class VerifyPhoneOtpRequest(BaseModel):
+    phone: str
+    code: str
 
 
 # ── Routes ────────────────────────────────────────────────────────
 
-@router.post("/verify-phone")
-async def verify_phone(
-    data: VerifyPhoneRequest,
+# (M-Pesa B2C phone verification removed — replaced by SMS OTP below)
+
+
+@router.post("/settlement/send-phone-otp")
+async def send_settlement_phone_otp(
+    data: SendPhoneOtpRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Send a one-time code by SMS to the Safaricom number the trader wants to use for settlement,
+    to confirm they own the line. Replaces the old 'send KES 10 and read the M-Pesa name' check —
+    name/KYC is now handled at the Choice Bank layer."""
+    from app.services.sms import normalize_phone, sms_verification_code
+
+    phone = normalize_phone(data.phone)
+    if not phone.startswith("254") or len(phone) != 12:
+        raise HTTPException(status_code=400, detail="Enter a valid Safaricom number, e.g. 0712345678.")
+
+    code = str(random.randint(100000, 999999))
+    _settle_phone_otps[phone] = {
+        "code": code,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
+        "trader_id": trader.id,
+        "attempts": 0,
+    }
+
+    sent = sms_verification_code(phone, code)
+    if not sent:
+        raise HTTPException(status_code=502, detail="Could not send the SMS code. Please try again.")
+
+    logger.info(f"Settlement phone OTP sent to {phone} for trader {trader.id}")
+    return {"status": "sent", "message": f"Code sent to ***{phone[-3:]}"}
+
+
+@router.post("/settlement/verify-phone-otp")
+async def verify_settlement_phone_otp(
+    data: VerifyPhoneOtpRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Confirm the SMS code for the settlement phone number."""
+    from app.services.sms import normalize_phone
+
+    phone = normalize_phone(data.phone)
+    rec = _settle_phone_otps.get(phone)
+    if not rec or rec.get("trader_id") != trader.id:
+        raise HTTPException(status_code=400, detail="No code was sent to this number. Tap “Send code” first.")
+
+    if datetime.now(timezone.utc) > rec["expires_at"]:
+        _settle_phone_otps.pop(phone, None)
+        raise HTTPException(status_code=400, detail="That code has expired. Tap “Send code” to get a new one.")
+
+    rec["attempts"] = rec.get("attempts", 0) + 1
+    if rec["attempts"] > 5:
+        _settle_phone_otps.pop(phone, None)
+        raise HTTPException(status_code=429, detail="Too many incorrect attempts. Tap “Send code” to get a new one.")
+
+    if data.code.strip() != rec["code"]:
+        raise HTTPException(status_code=401, detail="Incorrect code. Please check and try again.")
+
+    _settle_phone_otps.pop(phone, None)
+    logger.info(f"Settlement phone {phone} verified by OTP for trader {trader.id}")
+    return {"status": "verified"}
+
+
+@router.get("/price-tracker")
+async def get_price_tracker(
+    asset: str = "USDT",
+    fiat: str = "KES",
+    trader: Trader = Depends(get_current_trader),
+):
+    """Live Binance P2P competitor order book (both sides, ranked). Admin-gated per trader."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    from app.services.price_tracker import get_board
+    from app.services.binance import relay_router
+    try:
+        board = await get_board(asset=asset.upper(), fiat=fiat.upper())
+        board["relay_connected"] = bool(relay_router.is_connected(trader.id))
+        return board
+    except Exception as e:
+        logger.warning(f"Price tracker fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not load live prices right now. Please try again.")
+
+
+@router.get("/price-tracker/history")
+async def get_price_tracker_history(
+    hours: float = 6.0,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Recent market snapshots (best ask/bid, medians, liquidity) for the cockpit trend sparklines."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    from app.services.market_history import get_history
+    return {"points": get_history(min(max(hours, 0.5), 48))}
+
+
+@router.get("/market-activity")
+async def get_market_activity(
+    trader: Trader = Depends(get_current_trader),
+):
+    """24h market-activity estimate: traded volume (order-book depletion), average maker spread,
+    liquidity now, and per-merchant flow. Volume is an ESTIMATE (balances/trades aren't public)."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    from app.services.market_flow import get_summary
+    from app.services.market_history import get_history
+    summary = get_summary()
+
+    pts = get_history(24)
+    spreads = [round((p.get("ask_med") or 0) - (p.get("bid_med") or 0), 4) for p in pts if p.get("ask_med") and p.get("bid_med")]
+    mids = [((p.get("ask_med") or 0) + (p.get("bid_med") or 0)) / 2 for p in pts if p.get("ask_med") and p.get("bid_med")]
+    avg_spread = round(sum(spreads) / len(spreads), 3) if spreads else None
+    avg_mid = (sum(mids) / len(mids)) if mids else 0
+    spread_pct = round(avg_spread / avg_mid * 100, 3) if (avg_spread and avg_mid) else None
+    last = pts[-1] if pts else {}
+    summary["avg_spread"] = avg_spread
+    summary["spread_pct"] = spread_pct
+    summary["min_spread"] = round(min(spreads), 3) if spreads else None
+    summary["max_spread"] = round(max(spreads), 3) if spreads else None
+    summary["buy_liq_now"] = last.get("buy_liq")
+    summary["sell_liq_now"] = last.get("sell_liq")
+    return summary
+
+
+class PriceMonitorSettings(BaseModel):
+    enabled: bool = False
+    target_rank: int = 1
+    scope: str = "all"          # 'all' | 'tier'
+    alert_drop: bool = True
+    alert_top1: bool = False
+    alert_overtaken: bool = False
+    alert_summary: bool = False
+    alert_reached: bool = False
+    alert_anomaly: bool = False
+    alert_watchlist: bool = True
+    autoprice: str = "off"      # 'off' | 'sim' | 'live'
+    margin_min: float = 0.0     # KES per USDT
+    margin_max: float = 0.0     # KES per USDT
+
+
+@router.put("/price-monitor/settings")
+async def save_price_monitor_settings(
+    data: PriceMonitorSettings,
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Send KES 1 to the phone number via B2C to retrieve the M-Pesa registered name."""
-    phone = data.phone.strip().replace(" ", "")
-    if phone.startswith("07") or phone.startswith("01"):
-        phone = "254" + phone[1:]
-    if not phone.startswith("254") or len(phone) != 12:
-        raise HTTPException(status_code=400, detail="Invalid phone number")
-
-    try:
-        from app.services.mpesa.client import mpesa_client
-        result = await mpesa_client.send_b2c(
-            phone=phone,
-            amount=10,
-            occasion="SparkP2P phone verification",
-            remarks="Phone name verification",
-        )
-        conv_id = result.get("ConversationID", "")
-        logger.info(f"Phone verification B2C sent to {phone}, ConversationID: {conv_id}")
-
-        # Store pending verification
-        _phone_verifications[phone] = {
-            "conversation_id": conv_id,
-            "trader_id": trader.id,
-            "status": "pending",
-            "mpesa_name": None,
-        }
-
-        return {
-            "status": "sent",
-            "message": f"KES 1 sent to {phone}. Waiting for M-Pesa confirmation...",
-            "conversation_id": conv_id,
-        }
-    except Exception as e:
-        logger.error(f"Phone verification B2C failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to send verification: {str(e)}")
+    """Save the merchant's price-monitor rank-alert settings."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    trader.pm_enabled = bool(data.enabled)
+    trader.pm_target_rank = max(1, min(int(data.target_rank or 1), 50))
+    trader.pm_scope = "tier" if data.scope == "tier" else "all"
+    trader.pm_alert_drop = bool(data.alert_drop)
+    trader.pm_alert_top1 = bool(data.alert_top1)
+    trader.pm_alert_overtaken = bool(data.alert_overtaken)
+    trader.pm_alert_summary = bool(data.alert_summary)
+    trader.pm_alert_reached = bool(data.alert_reached)
+    trader.pm_alert_anomaly = bool(data.alert_anomaly)
+    trader.pm_alert_watchlist = bool(data.alert_watchlist)
+    trader.pm_autoprice = data.autoprice if data.autoprice in ("off", "sim", "live") else "off"
+    trader.pm_margin_min = max(0.0, float(data.margin_min or 0))
+    trader.pm_margin_max = max(0.0, float(data.margin_max or 0))
+    trader.pm_autoprice_error = None   # clear any prior failure so the bot retries with new settings
+    await db.commit()
+    return {"status": "saved"}
 
 
-@router.get("/verify-phone/result")
-async def verify_phone_result(
-    phone: str,
+@router.post("/price-monitor/test")
+async def test_price_monitor_alert(
     trader: Trader = Depends(get_current_trader),
 ):
-    """Check the result of a phone verification — returns M-Pesa name if available."""
-    phone = phone.strip().replace(" ", "")
-    if phone.startswith("07") or phone.startswith("01"):
-        phone = "254" + phone[1:]
-
-    logger.info(f"Checking verification for {phone}, known keys: {list(_phone_verifications.keys())}")
-
-    verification = _phone_verifications.get(phone)
-    if not verification:
-        return {"status": "not_found", "message": "No verification found for this number"}
-
-    if verification["status"] == "pending":
-        return {"status": "pending", "message": "Waiting for M-Pesa response..."}
-
-    mpesa_name = verification.get("mpesa_name", "")
-    registered_name = trader.full_name.upper().strip()
-
-    # Compare names — at least 2 name parts must match
-    if mpesa_name:
-        mpesa_parts = mpesa_name.upper().split()
-        reg_parts = registered_name.split()
-        match_count = sum(1 for p in reg_parts if p in mpesa_parts)
-        name_match = match_count >= 2 or mpesa_name.upper() == registered_name
-
-        return {
-            "status": "verified",
-            "mpesa_name": mpesa_name,
-            "registered_name": registered_name,
-            "name_match": name_match,
-            "match_count": match_count,
-        }
-
-    return {"status": "failed", "message": "Could not retrieve M-Pesa name"}
+    """Send a test Telegram message so the merchant can confirm alerts reach their phone."""
+    from app.api.routes.telegram import notify_trader
+    sent = await notify_trader(trader, "✅ SparkP2P test alert — your Telegram price-tracker notifications are working!")
+    if not sent:
+        raise HTTPException(status_code=400, detail="Couldn't send — link Telegram first in Settings → Notifications.")
+    return {"sent": True}
 
 
-def update_phone_verification(phone: str, mpesa_name: str, status: str = "verified"):
-    """Called by B2C callback to update the verification result."""
-    if phone in _phone_verifications:
-        _phone_verifications[phone]["mpesa_name"] = mpesa_name
-        _phone_verifications[phone]["status"] = status
+class WatchlistAction(BaseModel):
+    nick: str
+    action: str = "add"   # 'add' | 'remove'
+
+
+@router.post("/price-monitor/watchlist")
+async def update_watchlist(
+    data: WatchlistAction,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add/remove a competitor merchant on the trader's price-tracker watchlist (max 25)."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    nick = (data.nick or "").strip()
+    if not nick:
+        raise HTTPException(status_code=400, detail="Merchant name required.")
+    wl = [w for w in (trader.pm_watchlist or []) if w]
+    low = nick.lower()
+    if data.action == "remove":
+        wl = [w for w in wl if w.lower() != low]
+    elif any(w.lower() == low for w in wl):
+        pass  # already tracked — no-op
+    elif len(wl) >= 25:
+        raise HTTPException(status_code=400, detail="Watchlist is full (max 25 merchants).")
+    else:
+        wl.append(nick)
+    trader.pm_watchlist = wl
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(trader, "pm_watchlist")
+    await db.commit()
+    return {"watchlist": wl}
+
+
+async def _cost_basis_status(trader, db):
+    from app.models.order import Order, OrderStatus
+    from app.services.cost_basis import status_for
+    qry = select(Order).where(Order.trader_id == trader.id, Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]))
+    if trader.cb_set_at:
+        qry = qry.where(Order.created_at >= trader.cb_set_at)
+    orders = (await db.execute(qry)).scalars().all()
+    return status_for(trader, orders, min_margin=float(trader.pm_margin_min or 0))
+
+
+@router.get("/cost-basis")
+async def get_cost_basis(trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
+    """Live cost-basis readout: held USDT, weighted-avg cost, phase and sell floor."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    return await _cost_basis_status(trader, db)
+
+
+class CostBasisSettings(BaseModel):
+    enabled: Optional[bool] = None
+    starting_stock: Optional[float] = None
+    starting_cost: Optional[float] = None
+    cleared_buffer: Optional[float] = None
+
+
+@router.put("/cost-basis")
+async def save_cost_basis(data: CostBasisSettings, trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
+    """Enable cost-basis protection and (one-time) set the merchant's current stock + avg cost."""
+    if not getattr(trader, "price_tracker_enabled", False):
+        raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
+    if data.enabled is not None:
+        trader.cb_enabled = bool(data.enabled)
+    if data.cleared_buffer is not None:
+        trader.cb_cleared_buffer = max(0.0, float(data.cleared_buffer))
+    # Re-baseline the inventory whenever the merchant (re)enters their stock/cost.
+    if data.starting_stock is not None or data.starting_cost is not None:
+        trader.cb_starting_stock = max(0.0, float(data.starting_stock or 0))
+        trader.cb_starting_cost = max(0.0, float(data.starting_cost or 0))
+        trader.cb_set_at = datetime.now(timezone.utc)
+    await db.commit()
+    return await _cost_basis_status(trader, db)
+
+
+@router.post("/detect-binance-name")
+async def detect_binance_name(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve + cache the merchant's public Binance nickname from their API (needs the relay online).
+    Used by the price-tracker 'your rank' view so the merchant doesn't have to type their name."""
+    if not trader.binance_api_key:
+        raise HTTPException(status_code=400, detail="Connect your Binance API key first.")
+    from app.core.security import decrypt_data
+    from app.services.binance.sapi_client import get_merchant_ads, relay_trader
+    from app.services.price_tracker import detect_nickname_from_ads
+    relay_trader.set(trader.id)
+    try:
+        ads = await get_merchant_ads(decrypt_data(trader.binance_api_key), decrypt_data(trader.binance_api_secret))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Couldn't reach your Binance ads — open the SparkP2P desktop app so your relay is online, then try again.")
+    nick, p2p_tier = await detect_nickname_from_ads(ads)
+    if not nick:
+        raise HTTPException(status_code=404, detail="No live USDT/KES ad found to read your name from. Post an ad on Binance and try again.")
+    trader.binance_nickname = nick
+    if p2p_tier:
+        trader.binance_p2p_tier = p2p_tier
+        # Keep the merchant badge in sync with the reliable P2P medal (see save_binance_api_key).
+        if p2p_tier in ("gold", "silver", "bronze"):
+            trader.binance_merchant_tier = p2p_tier
+    await db.commit()
+    return {"nickname": nick, "tier": p2p_tier}
 
 
 @router.post("/suspend-self")
@@ -372,6 +637,367 @@ async def mark_notifications_read(trader: Trader = Depends(get_current_trader)):
     return {"status": "ok"}
 
 
+@router.post("/web-heartbeat")
+async def web_heartbeat(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lightweight presence ping from an open dashboard (web or desktop app).
+    Updates last_web_active so admin 'online' reflects an open dashboard in real time."""
+    from datetime import datetime, timezone
+    trader.last_web_active = datetime.now(timezone.utc)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/cf-sync-status")
+async def cf_sync_status(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Live check: read the merchant's SELL ad filters from Binance and compare to the
+    saved DB value, so the UI can show whether filters are actually in sync with Binance."""
+    if not trader.binance_api_key or not trader.binance_api_secret:
+        return {"available": False, "reason": "no_api_key"}
+    expected = int((trader.cf_all_trades_min_all or 0) if trader.cf_filters_enabled else 0)
+    try:
+        from app.core.security import decrypt_data
+        from app.services.binance.sapi_client import get_merchant_ads
+        api_key = decrypt_data(trader.binance_api_key)
+        api_secret = decrypt_data(trader.binance_api_secret)
+        ads = await get_merchant_ads(api_key, api_secret)
+    except Exception as e:
+        # Relay/bot offline or Binance unreachable — can't confirm
+        return {"available": False, "reason": "unreachable", "expected": expected, "detail": str(e)}
+    sell_vals = [int(a.get("userAllTradeCountMin") or 0) for a in ads if (a.get("tradeType") or "").upper() == "SELL"]
+    synced = len(sell_vals) > 0 and all(v == expected for v in sell_vals)
+    return {
+        "available": True,
+        "synced": synced,
+        "expected": expected,
+        "binance_values": sell_vals,
+        "sell_ad_count": len(sell_vals),
+    }
+
+
+@router.get("/profit-breakdown")
+async def profit_breakdown(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    # Subscription gate: profit stats are hidden when the plan is expired (locked).
+    from app.services.enforcement import subscription_locked
+    if await subscription_locked(db, trader):
+        return {"locked": True, "reason": "subscription_expired"}
+    # P and L for today from the central Orders table (orders tracked while bot online).
+    # Centralized: admin reads the same Orders so figures always match.
+    from app.models.order import Order, OrderStatus
+    from app.services.tracking import compute_pnl, today_realized_pnl
+    now = datetime.now(timezone.utc)
+    # Trading day boundary from the central source of truth (00:00 UTC = 03:00 EAT).
+    today_start = trading_day_start(now)
+    # Pull the FULL completed history so today's realized profit is matched against the cost
+    # basis of USDT bought on earlier days (else selling old USDT shows 0 gross).
+    all_rows = (await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+        )
+    )).scalars().all()
+    today_rows = [o for o in all_rows if o.created_at and o.created_at >= today_start]
+    fee = trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25
+    pnl = compute_pnl(today_rows, fee)            # today's buy/sell cards (volume, avg rates, counts)
+    tp = today_realized_pnl(all_rows, fee_per_usdt=fee)   # net = USDT_sold x (margin - fee)
+    pnl["gross_profit"] = tp["gross"]
+    pnl["fees_kes"] = tp["fees"]
+
+    # Sum transaction fees on today's outbound Choice Bank SETTLEMENT payments only.
+    # order_id IS NOT NULL = linked to a P2P trade; personal paybills / withdrawals
+    # / send-money have order_id = NULL and must not affect the trader's P&L.
+    from app.models.payment import Payment as _Pay, PaymentDirection as _PD, PaymentStatus as _PS
+    from app.services.outbound_fees import categorize as _cat, product_total_fee as _ptf
+    out_payments = (await db.execute(
+        select(_Pay).where(
+            _Pay.trader_id == trader.id,
+            _Pay.direction == _PD.OUTBOUND,
+            _Pay.status == _PS.COMPLETED,
+            _Pay.order_id.isnot(None),
+            _Pay.created_at >= today_start,
+        )
+    )).scalars().all()
+    choice_bank_fees = sum(
+        _ptf(_cat(p.transaction_type, p.destination_type), abs(p.amount))
+        for p in out_payments
+    )
+
+    pnl["choice_bank_fees"] = round(choice_bank_fees, 2)
+    pnl["net_profit"] = round(tp["net"] - choice_bank_fees, 2)
+    return {
+        "available": True,
+        "date": today_start.strftime("%Y-%m-%d"),
+        **pnl,
+        "tier": trader.binance_merchant_tier or "bronze",
+    }
+
+
+@router.get("/profit-history")
+async def profit_history(
+    granularity: str = "day",   # day | week | month
+    anchor: str = "",           # any date (YYYY-MM-DD) inside the period to show; default = today (EAT)
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Accumulated profit for ONE period at a time (same cost-basis method as the rest of the app):
+    - granularity=day   -> the single day's profit
+    - granularity=week  -> Mon–Sun total of the week containing `anchor`
+    - granularity=month -> the whole month's total
+    Returns the period's accumulated totals + a label + prev/next anchors for ‹ › navigation.
+    Nothing is deleted — every past day/week/month stays reachable via navigation."""
+    from app.services.enforcement import subscription_locked
+    if await subscription_locked(db, trader):
+        return {"locked": True, "reason": "subscription_expired"}
+    from app.models.order import Order, OrderStatus
+    from app.services.tracking import compute_pnl_daily
+    from datetime import date as _date
+    import calendar as _cal
+
+    rows = (await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+        )
+    )).scalars().all()
+    _fee = trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25
+    daily = compute_pnl_daily(rows, fee_per_usdt=_fee)   # {'YYYY-MM-DD': {gross,fees,net,volume,trades}} — UTC day
+
+    today = _date.fromisoformat(trading_day_date())   # current trading day (central source)
+    try:
+        a = _date.fromisoformat(anchor) if anchor else today
+    except Exception:
+        a = today
+
+    if granularity == "week":
+        start = a - timedelta(days=a.weekday())          # Monday
+        end = start + timedelta(days=6)                  # Sunday
+        label = f"{start.strftime('%b')} {start.day} – {end.strftime('%b')} {end.day}, {end.year}"
+        prev_a = (start - timedelta(days=1))
+        next_a = (end + timedelta(days=1))
+    elif granularity == "month":
+        start = a.replace(day=1)
+        end = a.replace(day=_cal.monthrange(a.year, a.month)[1])
+        label = f"{_cal.month_name[a.month]} {a.year}"
+        prev_a = start - timedelta(days=1)               # last day of previous month
+        next_a = end + timedelta(days=1)                 # first day of next month
+    else:  # day
+        start = end = a
+        label = f"{a.strftime('%a, %b')} {a.day}, {a.year}"
+        prev_a = a - timedelta(days=1)
+        next_a = a + timedelta(days=1)
+
+    s_iso, e_iso = start.isoformat(), end.isoformat()
+    items = [v for k, v in daily.items() if s_iso <= k <= e_iso]
+    g = round(sum(i["gross"] for i in items), 2)
+    f = round(sum(i["fees"] for i in items), 2)
+    agg = {"gross": g, "fees": f, "net": round(g - f, 2),
+           "volume": round(sum(i["volume"] for i in items), 2),
+           "trades": sum(i["trades"] for i in items)}
+
+    keys = sorted(daily.keys())
+    rng = {"min": keys[0] if keys else None, "max": keys[-1] if keys else None}
+
+    return {
+        "granularity": granularity,
+        "anchor": a.isoformat(),
+        "label": label,
+        "start": s_iso, "end": e_iso,
+        **agg,
+        "prev": prev_a.isoformat(),                       # always navigable back
+        "next": next_a.isoformat() if next_a <= today else None,  # no navigating into the future
+        "range": rng,
+        "is_current": start <= today <= end,
+    }
+
+
+@router.get("/profit-series")
+async def profit_series(
+    bucket: str = "day",     # day | week | month  — the size of each bar
+    start: str = "",         # range start (YYYY-MM-DD); default depends on bucket
+    end: str = "",           # range end (YYYY-MM-DD); default today
+    asset: str = "",         # filter to one coin (USDT/USDC/BTC…); "" or "ALL" = all coins
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Time-series for the Profit page charts. Returns a list of buckets across [start, end]
+    at the chosen granularity, each carrying every metric so the frontend can chart Profit,
+    Volume, Spread or Price: {key,label,net,gross,fees,volume,trades,spread,price,buy_rate,
+    sell_rate}. Same cost-basis method as everywhere else."""
+    from app.services.enforcement import subscription_locked
+    if await subscription_locked(db, trader):
+        return {"locked": True, "reason": "subscription_expired"}
+    from app.models.order import Order, OrderStatus
+    from app.services.tracking import compute_pnl_daily
+    from datetime import date as _date
+
+    rows = (await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+        )
+    )).scalars().all()
+    # Coins the trader has actually traded (for the filter dropdown), most-traded first.
+    from collections import Counter as _Counter
+    _counts = _Counter((o.crypto_currency or "USDT").upper() for o in rows)
+    assets = [a for a, _ in _counts.most_common()]
+    _sel = (asset or "").upper()
+    if _sel and _sel != "ALL":
+        rows = [o for o in rows if (o.crypto_currency or "USDT").upper() == _sel]
+    _fee = trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25
+    daily = compute_pnl_daily(rows, fee_per_usdt=_fee)
+
+    today = _date.fromisoformat(trading_day_date())   # current trading day (central source)
+    try:
+        e = _date.fromisoformat(end) if end else today
+    except Exception:
+        e = today
+    try:
+        if start:
+            s = _date.fromisoformat(start)
+        elif bucket == "month":
+            s = e.replace(month=1, day=1)                 # whole year
+        elif bucket == "week":
+            s = (e.replace(day=1)) - timedelta(days=(e.replace(day=1)).weekday())  # ~ this month's weeks
+        else:
+            s = e.replace(day=1)                          # this month, by day
+    except Exception:
+        s = e.replace(day=1)
+
+    def metrics(items):
+        g = round(sum(i["gross"] for i in items), 2)
+        f = round(sum(i["fees"] for i in items), 2)
+        bu = sum(i["buy_usdt"] for i in items); bk = sum(i["buy_kes"] for i in items)
+        su = sum(i["sell_usdt"] for i in items); sk = sum(i["sell_kes"] for i in items)
+        buy_rate = round(bk / bu, 2) if bu else 0.0
+        sell_rate = round(sk / su, 2) if su else 0.0
+        return {
+            "net": round(g - f, 2), "gross": g, "fees": f,
+            "volume": round(sum(i["volume"] for i in items), 2),
+            "buy_volume": round(bk, 2), "sell_volume": round(sk, 2),
+            "trades": sum(i["trades"] for i in items),
+            "buy_rate": buy_rate, "sell_rate": sell_rate,
+            "spread": round(sell_rate - buy_rate, 2) if (buy_rate and sell_rate) else 0.0,
+            "price": sell_rate or buy_rate,
+        }
+
+    out = []
+    if bucket == "hour":
+        # Intraday view for a single day: bucket the selected day's orders by hour and value
+        # each hour's sells at the day's average buy rate (intraday buy price barely moves).
+        # Bucket hours by the trading-day offset (central source) so the intraday day runs from
+        # the same reset boundary as everything else.
+        off = timedelta(hours=TRADING_DAY_OFFSET_HOURS)
+        day_str = e.isoformat()
+        from collections import defaultdict
+        hourly = defaultdict(lambda: {"gross": 0.0, "fees": 0.0, "net": 0.0, "volume": 0.0, "trades": 0,
+                                      "buy_usdt": 0.0, "buy_kes": 0.0, "sell_usdt": 0.0, "sell_kes": 0.0})
+        day_bu = day_bk = 0.0
+        for o in rows:
+            ts = o.created_at + off
+            if ts.strftime("%Y-%m-%d") != day_str:
+                continue
+            u = float(o.crypto_amount or 0); k = float(o.fiat_amount or 0)
+            h = hourly[ts.strftime("%H")]
+            h["volume"] += k; h["trades"] += 1
+            if (o.side.value if o.side else "") == "buy":
+                h["buy_usdt"] += u; h["buy_kes"] += k; day_bu += u; day_bk += k
+            else:
+                h["sell_usdt"] += u; h["sell_kes"] += k
+        day_buy_rate = (day_bk / day_bu) if day_bu else 0.0
+        for hh in range(24):
+            hk = f"{hh:02d}"
+            h = hourly.get(hk)
+            if h is None:
+                if e == today and hh > (datetime.now(timezone.utc) + off).hour:
+                    continue   # don't show future hours of the current day
+                items = []
+            else:
+                gross = h["sell_kes"] - h["sell_usdt"] * day_buy_rate
+                h["fees"] = round(_fee * h["sell_usdt"], 2)   # flat both-sides Binance fee on USDT sold
+                h["gross"] = round(gross, 2); h["net"] = round(gross - h["fees"], 2)
+                items = [h]
+            out.append({"key": f"{day_str} {hk}", "label": f"{hk}:00", **metrics(items)})
+        return {"bucket": bucket, "start": day_str, "end": day_str, "rows": out,
+                "total": metrics(list(hourly.values())),
+                "assets": assets, "asset": _sel or "ALL",
+                "range": {"min": (sorted(daily)[0] if daily else None), "max": (sorted(daily)[-1] if daily else None)}}
+    elif bucket == "month":
+        cur = s.replace(day=1)
+        while cur <= e:
+            mkey = cur.strftime("%Y-%m")
+            items = [v for k, v in daily.items() if k[:7] == mkey]
+            out.append({"key": mkey, "label": cur.strftime("%b"), **metrics(items)})
+            cur = (cur + timedelta(days=32)).replace(day=1)
+    elif bucket == "week":
+        cur = s - timedelta(days=s.weekday())             # Monday on/before start
+        while cur <= e:
+            we = cur + timedelta(days=6)
+            items = [v for k, v in daily.items() if cur.isoformat() <= k <= we.isoformat()]
+            out.append({"key": cur.isoformat(), "label": f"{cur.strftime('%b')} {cur.day}", **metrics(items)})
+            cur = cur + timedelta(days=7)
+    else:  # day
+        cur = s
+        while cur <= e:
+            k = cur.isoformat()
+            items = [daily[k]] if k in daily else []
+            out.append({"key": k, "label": f"{cur.strftime('%a')} {cur.day}", **metrics(items)})
+            cur = cur + timedelta(days=1)
+
+    keys = sorted(daily.keys())
+    return {
+        "bucket": bucket,
+        "start": s.isoformat(), "end": e.isoformat(),
+        "rows": out,
+        "total": metrics([v for k, v in daily.items() if s.isoformat() <= k <= e.isoformat()]),
+        "assets": assets, "asset": _sel or "ALL",
+        "range": {"min": keys[0] if keys else None, "max": keys[-1] if keys else None},
+    }
+
+
+@router.get("/binance-orders")
+async def binance_orders(
+    limit: int = 20,
+    offset: int = 0,
+    side: str = "",
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    # Orders tracked while the bot was online, from the central Orders table.
+    # side: empty=all, incoming=sell, outgoing=buy. Newest first.
+    from app.models.order import Order, OrderSide
+    q = select(Order).where(Order.trader_id == trader.id)
+    if side == "incoming":
+        q = q.where(Order.side == OrderSide.SELL)
+    elif side == "outgoing":
+        q = q.where(Order.side == OrderSide.BUY)
+    q = q.order_by(Order.created_at.desc()).limit(limit).offset(offset)
+    rows = (await db.execute(q)).scalars().all()
+    out = []
+    for o in rows:
+        out.append({
+            "id": o.binance_order_number or o.id,
+            "side": o.side.value if o.side else "sell",
+            "fiat_amount": float(o.fiat_amount or 0),
+            "crypto_amount": float(o.crypto_amount or 0),
+            "crypto_currency": o.crypto_currency or "USDT",
+            "exchange_rate": float(o.exchange_rate or 0),
+            "status": o.status.value if o.status else "",
+            "account_reference": o.binance_order_number or o.account_reference,
+            "counterparty": o.counterparty_name,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+            "_binance": True,
+        })
+    return out
+
+
 @router.get("/me", response_model=TraderProfileResponse)
 async def get_profile(
     trader: Trader = Depends(get_current_trader),
@@ -413,7 +1039,7 @@ async def get_profile(
         email=trader.email,
         phone=trader.phone,
         full_name=trader.full_name,
-        binance_connected=trader.binance_connected,
+        binance_connected=bool(trader.binance_connected or trader.binance_api_key),
         binance_username=trader.binance_username,
         settlement_method=trader.settlement_method.value if trader.settlement_method else None,
         settlement_destination=destination,
@@ -435,6 +1061,7 @@ async def get_profile(
         onboarding_complete=bool(onboarding_complete),
         security_question=trader.security_question,
         last_extension_sync=trader.last_extension_sync.isoformat() if trader.last_extension_sync else None,
+        last_web_active=trader.last_web_active.isoformat() if trader.last_web_active else None,
         settlement_cooldown_until=(
             (trader.settlement_changed_at + timedelta(hours=48)).isoformat()
             if trader.settlement_changed_at and
@@ -459,14 +1086,52 @@ async def get_profile(
         batch_threshold=trader.batch_threshold or 50000,
         bot_trade_mode=trader.bot_trade_mode or 'both',
         dd_enabled=bool(trader.dd_enabled),
+        bot_full_auto=bool(trader.bot_full_auto),
+        binance_session_expired=bool(trader.binance_session_expired),
         dd_min_30d_trades=trader.dd_min_30d_trades or 20,
         dd_min_all_trades=trader.dd_min_all_trades or 0,
         dd_auto_cancel_new=bool(trader.dd_auto_cancel_new),
         binance_merchant_tier=trader.binance_merchant_tier or 'bronze',
+        binance_api_key_saved=bool(trader.binance_api_key),
+        price_tracker_enabled=bool(getattr(trader, "price_tracker_enabled", False)),
+        binance_nickname=getattr(trader, "binance_nickname", None),
+        binance_p2p_tier=getattr(trader, "binance_p2p_tier", None),
+        pm_enabled=bool(getattr(trader, "pm_enabled", False)),
+        pm_target_rank=int(getattr(trader, "pm_target_rank", 1) or 1),
+        pm_scope=getattr(trader, "pm_scope", "all") or "all",
+        pm_alert_drop=bool(getattr(trader, "pm_alert_drop", True)),
+        pm_alert_top1=bool(getattr(trader, "pm_alert_top1", False)),
+        pm_alert_overtaken=bool(getattr(trader, "pm_alert_overtaken", False)),
+        pm_alert_summary=bool(getattr(trader, "pm_alert_summary", False)),
+        pm_alert_reached=bool(getattr(trader, "pm_alert_reached", False)),
+        pm_alert_anomaly=bool(getattr(trader, "pm_alert_anomaly", False)),
+        pm_alert_watchlist=bool(getattr(trader, "pm_alert_watchlist", True)),
+        pm_watchlist=list(getattr(trader, "pm_watchlist", None) or []),
+        pm_autoprice=getattr(trader, "pm_autoprice", "off") or "off",
+        pm_margin_min=float(getattr(trader, "pm_margin_min", 0.0) or 0.0),
+        pm_margin_max=float(getattr(trader, "pm_margin_max", 0.0) or 0.0),
+        pm_autoprice_error=getattr(trader, "pm_autoprice_error", None),
+        binance_api_key_invalid=bool(trader.binance_api_key_invalid),
+        cf_filters_enabled=bool(trader.cf_filters_enabled),
+        cf_completion_rate_min=trader.cf_completion_rate_min or 0.0,
+        cf_completion_rate_window=trader.cf_completion_rate_window or 2,
+        cf_all_trades_min=trader.cf_all_trades_min or 0,
+        cf_trade_count_window=trader.cf_trade_count_window or 2,
+        cf_completed_trades_min=trader.cf_completed_trades_min or 0,
+        cf_buy_trades_min=trader.cf_buy_trades_min or 0,
+        cf_sell_trades_min=trader.cf_sell_trades_min or 0,
+        cf_volume_min=trader.cf_volume_min or 0.0,
+        cf_volume_asset=trader.cf_volume_asset or 'USDT',
+        cf_volume_window=trader.cf_volume_window or 2,
+        cf_reg_days_min=trader.cf_reg_days_min or 0,
+        cf_all_trades_min_all=trader.cf_all_trades_min_all or 0,
+        cf_max_pay_mins=trader.cf_max_pay_mins or 0,
+        cf_max_release_mins=trader.cf_max_release_mins or 0,
+        binance_fee_per_usdt=trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25,
+        cf_last_pushed_at=trader.cf_last_pushed_at.isoformat() if trader.cf_last_pushed_at else None,
         telegram_connected=bool(trader.telegram_chat_id),
         telegram_approval_enabled=bool(trader.telegram_approval_enabled),
-        trade_tokens=trader.trade_tokens or 0,
-        trade_tokens_expiring=trader.trade_tokens_expiring or 0,
+        telegram_notify_scope=trader.telegram_notify_scope or 'both',
         choice_account_id=trader.choice_account_id or None,
         choice_account_number=trader.choice_account_number or None,
         choice_kyc_status=trader.choice_kyc_status or None,
@@ -515,6 +1180,7 @@ async def connect_binance(
     # Encrypt and store credentials
     trader.binance_cookies = encrypt_data(json.dumps(data.cookies))
     trader.binance_csrf_token = encrypt_data(data.csrf_token)
+    trader.binance_session_expired = False   # fresh login — clear the reconnect banner
     if data.bnc_uuid:
         trader.binance_bnc_uuid = encrypt_data(data.bnc_uuid)
     if data.totp_secret:
@@ -783,6 +1449,8 @@ async def update_trading_config(
         trader.bot_trade_mode = data.bot_trade_mode
     if data.dd_enabled is not None:
         trader.dd_enabled = data.dd_enabled
+    if data.bot_full_auto is not None:
+        trader.bot_full_auto = data.bot_full_auto
     if data.dd_min_30d_trades is not None:
         trader.dd_min_30d_trades = data.dd_min_30d_trades
     if data.dd_min_all_trades is not None:
@@ -791,10 +1459,254 @@ async def update_trading_config(
         trader.dd_auto_cancel_new = data.dd_auto_cancel_new
     if data.telegram_approval_enabled is not None:
         trader.telegram_approval_enabled = data.telegram_approval_enabled
+    if data.telegram_notify_scope in ('both', 'sell', 'buy'):
+        trader.telegram_notify_scope = data.telegram_notify_scope
+
+    # Counterparty filters
+    cf_changed = False
+    if data.cf_filters_enabled is not None:
+        trader.cf_filters_enabled = data.cf_filters_enabled
+        cf_changed = True
+    if data.cf_completion_rate_min is not None:
+        trader.cf_completion_rate_min = data.cf_completion_rate_min
+        cf_changed = True
+    if data.cf_completion_rate_window is not None:
+        trader.cf_completion_rate_window = data.cf_completion_rate_window
+        cf_changed = True
+    if data.cf_all_trades_min is not None:
+        trader.cf_all_trades_min = data.cf_all_trades_min
+        cf_changed = True
+    if data.cf_trade_count_window is not None:
+        trader.cf_trade_count_window = data.cf_trade_count_window
+        cf_changed = True
+    if data.cf_completed_trades_min is not None:
+        trader.cf_completed_trades_min = data.cf_completed_trades_min
+        cf_changed = True
+    if data.cf_buy_trades_min is not None:
+        trader.cf_buy_trades_min = data.cf_buy_trades_min
+        cf_changed = True
+    if data.cf_sell_trades_min is not None:
+        trader.cf_sell_trades_min = data.cf_sell_trades_min
+        cf_changed = True
+    if data.cf_volume_min is not None:
+        trader.cf_volume_min = data.cf_volume_min
+        cf_changed = True
+    if data.cf_volume_asset is not None:
+        trader.cf_volume_asset = data.cf_volume_asset
+        cf_changed = True
+    if data.cf_volume_window is not None:
+        trader.cf_volume_window = data.cf_volume_window
+        cf_changed = True
+    if data.cf_reg_days_min is not None:
+        trader.cf_reg_days_min = data.cf_reg_days_min
+        cf_changed = True
+    if data.cf_all_trades_min_all is not None:
+        trader.cf_all_trades_min_all = data.cf_all_trades_min_all
+        cf_changed = True
+    if data.cf_max_pay_mins is not None:
+        trader.cf_max_pay_mins = data.cf_max_pay_mins
+    if data.cf_max_release_mins is not None:
+        trader.cf_max_release_mins = data.cf_max_release_mins
+    if data.binance_fee_per_usdt is not None:
+        trader.binance_fee_per_usdt = data.binance_fee_per_usdt
 
     await db.commit()
 
-    return {"status": "updated"}
+    # Push filters to Binance whenever CF settings changed and API credentials are set.
+    # When disabled, push all-zero values to CLEAR any existing filters from the Binance ad.
+    push_warnings = []
+    if cf_changed and trader.binance_api_key and trader.binance_api_secret:
+        try:
+            from app.core.security import decrypt_data
+            from app.services.binance.sapi_client import get_merchant_ads, push_counterparty_filters, relay_trader
+            relay_trader.set(trader.id)   # route via this trader's desktop in per_trader mode
+            api_key    = decrypt_data(trader.binance_api_key)
+            api_secret = decrypt_data(trader.binance_api_secret)
+            ads = await get_merchant_ads(api_key, api_secret)
+            pushed = 0
+            skipped = 0
+            for ad in ads:
+                adv_no = ad.get("advNo") or ad.get("adsNo")
+                if not adv_no:
+                    continue
+                # Counterparty filters apply ONLY to SELL ads (screening incoming buyers).
+                # Never restrict BUY ads — that would block sellers from trading with us.
+                if (ad.get("tradeType") or "").upper() != "SELL":
+                    continue
+                try:
+                    # Binance EP-7: push All-time filter (userAllTradeCountMin window=2)
+                    # 30D filter is enforced at bot level — bot sends cancel message if buyer fails
+                    min_all = (trader.cf_all_trades_min_all or 0) if trader.cf_filters_enabled else 0
+                    await push_counterparty_filters(
+                        api_key=api_key, api_secret=api_secret, adv_no=adv_no,
+                        completion_rate_min=0.0, completion_rate_window=2,
+                        all_trades_min=min_all,
+                        trade_count_window=2,
+                        completed_trades_min=0,
+                        buy_trades_min=0, sell_trades_min=0,
+                        volume_min=0.0, volume_asset="USDT", volume_window=2, reg_days_min=0,
+                    )
+                    pushed += 1
+                except Exception as ad_err:
+                    logger.warning("Skipping ad %s: %s", adv_no, ad_err)
+                    push_warnings.append(f"ad {adv_no}: {ad_err}")
+            # Verify-after-push: read the ads back and confirm Binance actually has our value
+            synced = True
+            mismatch = None
+            try:
+                expected = int((trader.cf_all_trades_min_all or 0) if trader.cf_filters_enabled else 0)
+                verify_ads = await get_merchant_ads(api_key, api_secret)
+                for vad in verify_ads:
+                    if (vad.get("tradeType") or "").upper() != "SELL":
+                        continue
+                    actual = int(vad.get("userAllTradeCountMin") or 0)
+                    if actual != expected:
+                        synced = False
+                        mismatch = (actual, expected)
+                        break
+            except Exception as ve:
+                synced = False
+                logger.warning("CF verify-after-push failed: %s", ve)
+            if pushed > 0:
+                trader.cf_last_pushed_at = datetime.now(timezone.utc)
+                # A successful EP-7 push only works for Gold Merchants, so tag the tier here too.
+                # This self-heals the badge when the connect-time probe missed it (e.g. the relay
+                # was offline at key-save), without any extra/destructive Binance call.
+                if (trader.binance_merchant_tier or "").lower() != "gold":
+                    trader.binance_merchant_tier = "gold"
+                await db.commit()
+            if synced and not push_warnings:
+                return {"status": "updated", "filters_pushed": pushed, "synced": True}
+            warns = " ".join(push_warnings)
+            # 187040 = Binance rejects editing an ad with no tradable USDT inventory
+            if "187040" in warns:
+                return {"status": "updated", "filters_pushed": pushed, "synced": False, "reason": "no_usdt",
+                        "warning": "Couldn't apply the filter — your sell ad has no USDT available to trade. "
+                                   "Top up your sell ad's USDT on Binance, then click Save again."}
+            if mismatch:
+                return {"status": "updated", "filters_pushed": pushed, "synced": False,
+                        "warning": f"Saved, but Binance still shows {mismatch[0]} (expected {mismatch[1]}). "
+                                   + (f"Binance rejected the change: {warns}" if warns else "Your bot/relay may be offline — keep it running and click Save again.")}
+            return {"status": "updated", "filters_pushed": pushed, "synced": False,
+                    "warning": (f"Saved, but Binance rejected the change: {warns}" if warns else "Saved, but could not confirm the change reached Binance. Keep your bot running and click Save again.")}
+        except Exception as e:
+            logger.warning("Failed to push counterparty filters to Binance: %s", e)
+            push_warnings.append(str(e))
+
+    result = {"status": "updated"}
+    if push_warnings:
+        result["warning"] = f"Settings saved but Binance push failed: {push_warnings[0]}"
+    return result
+
+
+@router.put("/binance-api-key")
+async def save_binance_api_key(
+    data: BinanceApiKeyRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save Binance API key + secret (encrypted). Verifies via EP-4, probes EP-7 for Gold Merchant tier."""
+    from app.core.security import encrypt_data
+    from app.services.binance.sapi_client import (
+        verify_api_credentials, push_counterparty_filters, relay_trader,
+        BinanceApiError, friendly_binance_error,
+    )
+    relay_trader.set(trader.id)   # route via this trader's desktop in per_trader mode
+
+    if not data.api_key.strip() or not data.api_secret.strip():
+        raise HTTPException(status_code=400, detail="API key and secret are required.")
+
+    # Fail fast if the trader's relay isn't online — otherwise verification waits the full ~25s
+    # relay timeout before failing, which looks like the save "hanging". The relay is required
+    # because the server can't reach Binance directly.
+    from app.services.binance import relay_router
+    if not relay_router.is_connected(trader.id):
+        raise HTTPException(
+            status_code=400,
+            detail="Your relay isn't online yet. Turn on the relay on your phone (or open the SparkP2P desktop app), wait until it shows online, then try again.",
+        )
+
+    # Verify credentials actually WORK before saving (EP-4). verify_api_credentials() raises on a
+    # Binance error envelope (e.g. -1022 = secret doesn't match the key) so we reject loudly with a
+    # clear message instead of silently 'saving' a broken key that pulls no data.
+    try:
+        ads = await verify_api_credentials(data.api_key.strip(), data.api_secret.strip())
+    except BinanceApiError as e:
+        raise HTTPException(status_code=400, detail=friendly_binance_error(e.code, e.msg))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not verify API credentials: {e}")
+
+    if ads is None:
+        raise HTTPException(status_code=400, detail="Invalid API credentials — could not fetch ads.")
+
+    # Probe EP-7 to detect Gold Merchant tier (all-zero values = no-op, safe)
+    merchant_capable = False
+    if ads:
+        try:
+            await push_counterparty_filters(
+                data.api_key.strip(),
+                data.api_secret.strip(),
+                ads[0]["advNo"],
+                completion_rate_min=0.0,
+                completion_rate_window=2,
+                all_trades_min=0,
+                trade_count_window=2,
+                completed_trades_min=0,
+            )
+            merchant_capable = True
+            trader.binance_merchant_tier = "gold"
+        except Exception:
+            # -1002 or any error means not Gold Merchant — leave existing tier unchanged
+            pass
+
+    # "Test connection" — credentials verified above; report success without saving them.
+    if data.test_only:
+        return {"status": "verified", "ads_found": len(ads), "merchant_capable": merchant_capable}
+
+    trader.binance_api_key    = encrypt_data(data.api_key.strip())
+    trader.binance_api_secret = encrypt_data(data.api_secret.strip())
+    trader.binance_api_key_invalid = False  # freshly verified key is valid
+
+    # Auto-detect the merchant's public nickname now (relay is online at connect time) so the
+    # price-tracker "your rank" view can match them without a live relay call later.
+    try:
+        from app.services.price_tracker import detect_nickname_from_ads
+        nick, p2p_tier = await detect_nickname_from_ads(ads)
+        if nick:
+            trader.binance_nickname = nick
+        if p2p_tier:
+            trader.binance_p2p_tier = p2p_tier
+            # The public P2P medal (from vipLevel) is the RELIABLE Gold/Silver/Bronze signal. The
+            # EP-7 probe above is fragile — it can fail with 187049 on a valid merchant's ad — so
+            # trust the detected tier for the merchant badge instead of relying only on EP-7.
+            if p2p_tier in ("gold", "silver", "bronze"):
+                trader.binance_merchant_tier = p2p_tier
+    except Exception:
+        pass
+
+    await db.commit()
+
+    from app.api.deps import log_event
+    await log_event(db, trader.id, f"Binance API key connected{' (Gold Merchant)' if merchant_capable else ''}", "success")
+
+    return {"status": "saved", "ads_found": len(ads), "merchant_capable": merchant_capable}
+
+
+@router.delete("/binance-api-key")
+async def delete_binance_api_key(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Completely remove the stored Binance API key + secret from this account, leaving it
+    'neutral' (no key). The actual key/secret are deleted from the database, so the same key
+    can be connected to a different SparkP2P account. Counterparty-filter pushes and
+    background SAPI calls simply stop for this account until a key is connected again."""
+    trader.binance_api_key = None
+    trader.binance_api_secret = None
+    trader.binance_api_key_invalid = False
+    trader.binance_merchant_tier = None   # tier was derived from the key
+    await db.commit()
+    return {"status": "deleted"}
 
 
 # ── Profile, Security Question, Change Password ───────────────────
@@ -950,8 +1862,25 @@ async def change_password(
     )
     _change_pw_otp_codes.pop(trader.email, None)
     await db.commit()
+    from app.api.deps import log_event
+    await log_event(db, trader.id, "Password changed", "warning")
     cooldown_until = (now + timedelta(hours=48)).isoformat()
     return {"message": "Password changed successfully", "cooldown_until": cooldown_until}
+
+
+@router.get("/my-bot-logs")
+async def my_bot_logs(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """The signed-in trader's own activity log (newest first) — server-side account events plus
+    any desktop-pushed lines, persisted in the DB so it survives restarts."""
+    from app.models.bot_log import BotLog
+    rows = (await db.execute(
+        select(BotLog).where(BotLog.trader_id == trader.id)
+        .order_by(BotLog.created_at.desc()).limit(200)
+    )).scalars().all()
+    return [{"level": r.level, "message": r.message, "time": r.time} for r in rows]
 
 
 @router.get("/my-permissions")
@@ -1327,40 +2256,11 @@ async def request_withdrawal(
             "batch_id": batch_result["batch_id"],
         }
 
-    # ── M-PESA traders: immediate B2C (unchanged flow) ────────────────────────
-    from app.services.sweep_service import trigger_im_sweep
-    sweep_ref = f"WD-{trader.email[:20]}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-    sweep_result = await trigger_im_sweep(
-        amount=withdraw_amount,
-        trader_id=trader.id,
-        withdrawal_tx_id=None,
-        reference=sweep_ref,
-        db=db,
+    # ── M-PESA traders: B2C retired — withdrawals now go through Choice Bank ────
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="M-Pesa withdrawals now go through your Choice Bank account. Use Withdraw → Choice Bank → M-Pesa.",
     )
-    if sweep_result.get("success"):
-        logger.info(f"[Sweep] Initiated for KES {withdraw_amount:,.0f} — sweep_id={sweep_result.get('sweep_id')}")
-    elif not sweep_result.get("skipped"):
-        logger.error(f"[Sweep] Failed for trader {trader.id}: {sweep_result.get('error')}")
-
-    engine = SettlementEngine(db)
-    # Force withdraw — bypass batch threshold for manual withdrawals
-    original_threshold = trader.batch_threshold
-    trader.batch_threshold = 0
-    success = await engine.batch_settle(trader.id, amount=withdraw_amount if withdraw_amount < wallet.balance else None)
-    trader.batch_threshold = original_threshold
-
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Withdrawal failed. Please try again.",
-        )
-
-    return {
-        "status": "success",
-        "message": f"KES {net_amount:,.0f} sent to your M-PESA",
-        "amount_sent": net_amount,
-        "transaction_fee": total_fee,
-    }
 
 
 @router.get("/wallet/withdraw/preview")
@@ -1474,12 +2374,10 @@ async def cb_withdraw_initiate(
     if body.amount < 100:
         raise HTTPException(status_code=400, detail="Minimum withdrawal is KES 100")
 
-    WITHDRAWAL_CREDIT_FEE = 20
-    if (trader.trade_tokens or 0) < WITHDRAWAL_CREDIT_FEE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Insufficient credits. Withdrawals cost {WITHDRAWAL_CREDIT_FEE} credits (you have {trader.trade_tokens or 0}).",
-        )
+    # Choice Bank withholds the outbound fee on its side (debits amount + fee from the trader's
+    # account). We compute it here only to show + record it; we do NOT deduct it ourselves.
+    from app.services.outbound_fees import outbound_fee as _outbound_fee
+    _fee = _outbound_fee("BANK", body.amount)
 
     # Block if there's already a PENDING withdrawal in the last 2 hours
     from datetime import datetime, timezone, timedelta
@@ -1500,7 +2398,7 @@ async def cb_withdraw_initiate(
         )
 
     remark = "".join(
-        c for c in f"SparkP2P withdrawal to {trader.cb_withdrawal_bank_name or 'Bank'}"
+        c for c in f"P2P withdrawal to {trader.cb_withdrawal_bank_name or 'Bank'}"
         if c.isalnum() or c == " "
     )[:100]
 
@@ -1530,11 +2428,13 @@ async def cb_withdraw_initiate(
     except Exception as exc:
         logger.warning(f"[ChoiceBank] sendOtp call failed: {exc}")
 
-    _pending_withdrawal_tx[trader.email] = {"tx_id": tx_id, "amount": body.amount}
+    _pending_withdrawal_tx[trader.email] = {"tx_id": tx_id, "amount": body.amount, "fee": _fee}
     masked = trader.phone[-4:] if trader.phone else "****"
     return {
         "status": "otp_sent",
-        "message": f"OTP sent by Choice Bank to your registered phone ending {masked}. Enter it to confirm the transfer.",
+        "fee": _fee,
+        "message": f"OTP sent by Choice Bank to your registered phone ending {masked}. "
+                   f"A transaction fee of KES {_fee} applies (deducted by Choice Bank). Enter the OTP to confirm.",
     }
 
 
@@ -1555,15 +2455,16 @@ async def cb_withdraw_to_mpesa_initiate(
         raise HTTPException(status_code=400, detail="No Choice Bank account linked")
     if not trader.settlement_phone:
         raise HTTPException(status_code=400, detail="No M-Pesa settlement number configured. Please set your M-Pesa number in Settings.")
-    if body.amount < 10:
-        raise HTTPException(status_code=400, detail="Minimum M-Pesa withdrawal is KES 10")
+    from app.services.outbound_fees import outbound_fee as _outbound_fee, MPESA_MIN_WITHDRAWAL
+    if body.amount < MPESA_MIN_WITHDRAWAL:
+        raise HTTPException(status_code=400, detail=f"Minimum M-Pesa withdrawal is KES {MPESA_MIN_WITHDRAWAL:,}")
+    # M-Pesa caps a single transaction at KES 250,000 — larger amounts must go to a bank account.
+    if body.amount > 250000:
+        raise HTTPException(status_code=400, detail="M-Pesa withdrawals are limited to KES 250,000 per transaction. Withdraw to your bank for larger amounts.")
 
-    WITHDRAWAL_CREDIT_FEE = 20
-    if (trader.trade_tokens or 0) < WITHDRAWAL_CREDIT_FEE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Insufficient credits. Withdrawals cost {WITHDRAWAL_CREDIT_FEE} credits (you have {trader.trade_tokens or 0}).",
-        )
+    # Choice Bank withholds the outbound fee on its side (debits amount + fee from the trader's
+    # account). We compute it here only to show + record it; we do NOT deduct it ourselves.
+    _fee = _outbound_fee("MPESA", body.amount)
 
     # Block if there's already a PENDING withdrawal in the last 2 hours
     from datetime import datetime, timezone, timedelta
@@ -1601,7 +2502,7 @@ async def cb_withdraw_to_mpesa_initiate(
             payee_account_id = phone,
             amount           = body.amount,
             payee_bank_code  = "M-PESA",
-            remark           = "SparkP2P withdrawal",
+            remark           = "P2P withdrawal",
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"M-Pesa transfer initiation failed: {exc}")
@@ -1620,11 +2521,13 @@ async def cb_withdraw_to_mpesa_initiate(
     except Exception as exc:
         logger.warning(f"[ChoiceBank] M-Pesa sendOtp failed: {exc}")
 
-    _pending_withdrawal_tx[trader.email] = {"tx_id": tx_id, "amount": body.amount, "channel": "MPESA", "phone": phone}
+    _pending_withdrawal_tx[trader.email] = {"tx_id": tx_id, "amount": body.amount, "channel": "MPESA", "phone": phone, "fee": _fee}
     masked = trader.settlement_phone[-4:] if trader.settlement_phone else "****"
     return {
         "status": "otp_sent",
-        "message": f"OTP sent by Choice Bank to your registered phone. Enter it to confirm the M-Pesa transfer to ...{masked}.",
+        "fee": _fee,
+        "message": f"OTP sent by Choice Bank to your registered phone. A transaction fee of KES {_fee} "
+                   f"applies (deducted by Choice Bank). Enter the OTP to confirm the M-Pesa transfer to ...{masked}.",
     }
 
 
@@ -1718,6 +2621,11 @@ async def get_my_transactions(
             label, icon = "Payment", "💱"
             desc = p.remarks or p.sender_name or label
 
+        tx_fee = 0
+        if direction == "out":
+            from app.services.outbound_fees import categorize as _cat, product_total_fee as _ptf
+            tx_fee = _ptf(_cat(p.transaction_type, p.destination_type), abs(p.amount))
+
         entries.append({
             "id": f"p{p.id}",
             "source": "payment",
@@ -1725,6 +2633,7 @@ async def get_my_transactions(
             "icon": icon,
             "direction": direction,
             "amount": abs(p.amount),
+            "tx_fee": tx_fee,
             "description": desc.strip(" ·"),
             "reference": ref,
             "phone": p.phone or p.destination or "",
@@ -1920,6 +2829,7 @@ async def cb_withdraw_to_bank(
 
     tx_id  = pending.get("tx_id", "")
     amount = pending["amount"]
+    fee    = pending.get("fee", 0)
 
     if not tx_id:
         raise HTTPException(status_code=400, detail="Invalid pending state. Please start over.")
@@ -1937,12 +2847,12 @@ async def cb_withdraw_to_bank(
 
     del _pending_withdrawal_tx[trader.email]
 
-    WITHDRAWAL_CREDIT_FEE = 20
-    trader.trade_tokens = (trader.trade_tokens or 0) - WITHDRAWAL_CREDIT_FEE
-
     import time as _time
     _channel  = pending.get("channel", "BANK")
     _mpesa_ph = pending.get("phone", "")
+
+    # No credit charge on outbound: Choice Bank withholds the KES fee on its side (debits
+    # amount + fee from the trader's account) and remits our markup monthly. We just record it.
     if _channel == "MPESA":
         _dest      = trader.phone or _mpesa_ph  # full phone stored on trader
         _dest_type = "M-Pesa"
@@ -1964,12 +2874,21 @@ async def cb_withdraw_to_bank(
         mpesa_transaction_id=tx_id,
         transaction_type="CHOICE_OUTBOUND",
         amount=amount,
+        fee=fee,
         destination=_dest,
         destination_type=_dest_type,
         sender_name=_ben_name,
         remarks=_remarks,
         status=PaymentStatus.PENDING,
     ))
+    # Ledger row so the withdrawal shows in Recent Activity.
+    try:
+        from app.services.ledger import record_activity
+        from app.models.wallet import TransactionType as _TT
+        await record_activity(db, trader.id, _TT.CHOICE_WITHDRAWAL, -float(amount),
+                              f"Withdrawal to {_tg_dest}", status="pending", mpesa_receipt=tx_id)
+    except Exception:
+        pass
     await db.commit()
 
     try:
@@ -1977,6 +2896,7 @@ async def cb_withdraw_to_bank(
         await notify_trader(trader,
             "📤 KES " + f"{amount:,.0f}" + " withdrawal confirmed" + chr(10) +
             "To: " + _tg_dest + chr(10) +
+            "Fee: KES " + f"{fee:,.0f}" + chr(10) +
             "Ref: " + tx_id + chr(10) +
             "Status: Processing (you'll be notified when funds arrive)"
         )
@@ -2325,6 +3245,38 @@ class SetupTotpVerifyRequest(BaseModel):
     code: str     # 6-digit code user entered from Google Authenticator
 
 
+class SaveBinance2faRequest(BaseModel):
+    secret: str   # the trader's EXISTING Binance Google Authenticator base32 secret
+    code: str     # a current 6-digit code from their Binance app, to prove the secret is correct
+
+
+@router.post("/binance-2fa/save")
+async def save_binance_2fa(
+    data: SaveBinance2faRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Store the trader's EXISTING Binance 2FA secret (so the bot can release crypto via the API
+    hands-free), but ONLY after proving it's the right secret: we check it generates the code they
+    just read off their Binance Authenticator. This stops a wrong/mismatched key being saved silently
+    (which previously failed only later, at release time)."""
+    import pyotp, base64
+    secret = (data.secret or "").strip().replace(" ", "").upper()
+    if not secret:
+        raise HTTPException(status_code=400, detail="Paste your Binance 2FA secret key.")
+    try:
+        base64.b32decode(secret, casefold=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="That isn't a valid 2FA secret. Copy the Base32 key (letters A–Z and digits 2–7) from Binance → Security → Authenticator App → View Key.")
+    if not pyotp.TOTP(secret).verify((data.code or "").strip(), valid_window=1):
+        raise HTTPException(status_code=400, detail="The code doesn't match that secret. Re-check the key and enter the CURRENT 6-digit code from your BINANCE Authenticator (not the SparkP2P one).")
+    from app.core.security import encrypt_data
+    trader.binance_2fa_secret = encrypt_data(secret)
+    trader.binance_verify_method = "totp"
+    await db.commit()
+    return {"success": True, "message": "Binance 2FA verified and linked — the bot can now auto-release your crypto."}
+
+
 @router.get("/setup-totp")
 async def get_totp_setup(trader: Trader = Depends(get_current_trader)):
     """Generate a new TOTP secret and return the otpauth URI for QR code display."""
@@ -2480,23 +3432,21 @@ async def get_today_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Return 24-hour trading statistics that reset at midnight Kenyan time (EAT = UTC+3).
+    Return 24-hour trading statistics that reset at 00:00 UTC (= 03:00 EAT), matching Binance.
     """
-    # Midnight today in EAT (UTC+3)
-    eat_offset = timedelta(hours=3)
-    now_eat = datetime.now(timezone.utc) + eat_offset
-    midnight_eat = now_eat.replace(hour=0, minute=0, second=0, microsecond=0)
-    midnight_utc = midnight_eat - eat_offset  # convert back to UTC for DB query
+    # Trading day boundary from the central source of truth (00:00 UTC = 03:00 EAT).
+    midnight_utc = trading_day_start()
 
-    # Completed orders since midnight EAT (RELEASED = sell done, COMPLETED = buy done)
+    # Full completed history (RELEASED = sell done, COMPLETED = buy done) so today's realized
+    # profit is matched against the cost basis of USDT bought on earlier days.
     orders_q = await db.execute(
         select(Order).where(
             Order.trader_id == trader.id,
             Order.status.in_([OrderStatus.RELEASED, OrderStatus.COMPLETED]),
-            Order.created_at >= midnight_utc,
         )
     )
-    orders_today = orders_q.scalars().all()
+    all_orders = orders_q.scalars().all()
+    orders_today = [o for o in all_orders if o.created_at and o.created_at >= midnight_utc]
 
     trades_count = len(orders_today)
     usdt_traded = sum(o.crypto_amount for o in orders_today)
@@ -2505,23 +3455,15 @@ async def get_today_stats(
     currency_counts = Counter(o.crypto_currency for o in orders_today if o.crypto_currency)
     dominant_currency = currency_counts.most_common(1)[0][0] if currency_counts else 'USDT'
 
-    # Gross profit = KES received (sell credits) - KES paid (buy debits) since midnight EAT
-    txn_q = await db.execute(
-        select(WalletTransaction).where(
-            WalletTransaction.trader_id == trader.id,
-            WalletTransaction.transaction_type.in_([
-                TransactionType.SELL_CREDIT,
-                TransactionType.BUY_DEBIT,
-            ]),
-            WalletTransaction.created_at >= midnight_utc,
-        )
-    )
-    txns_today = txn_q.scalars().all()
-
-    sell_credits = sum(t.amount for t in txns_today if t.transaction_type == TransactionType.SELL_CREDIT)
-    buy_debits = sum(t.amount for t in txns_today if t.transaction_type == TransactionType.BUY_DEBIT)
-    # buy_debit amounts are negative; gross profit = net KES flow from trading
-    gross_profit = sell_credits + buy_debits
+    # Avg rates from today's orders; profit = USDT_sold x (margin - fee) (matches Profit Tracker)
+    from app.services.tracking import compute_pnl, today_realized_pnl
+    _fee = trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25
+    _pnl = compute_pnl(orders_today, _fee)
+    _tp = today_realized_pnl(all_orders, fee_per_usdt=_fee)
+    _pnl["gross_profit"] = _tp["gross"]
+    _pnl["fees_kes"] = _tp["fees"]
+    _pnl["net_profit"] = _tp["net"]
+    gross_profit = _pnl["gross_profit"]
 
     # Treat every stats poll as a web-presence heartbeat so admin can see the trader is online
     trader.last_login = datetime.now(timezone.utc)
@@ -2532,6 +3474,10 @@ async def get_today_stats(
         "usdt_traded": round(usdt_traded, 4),
         "kes_volume": round(kes_volume, 2),
         "gross_profit": round(gross_profit, 2),
+        "avg_buy_rate": _pnl["buy"]["avg_rate"],
+        "avg_sell_rate": _pnl["sell"]["avg_rate"],
+        "fees_kes": _pnl["fees_kes"],
+        "net_profit": _pnl["net_profit"],
         "reset_at": midnight_utc.isoformat(),
         "dominant_currency": dominant_currency,
     }
@@ -2566,332 +3512,30 @@ async def verify_pin_change(data: PinChangeVerifyRequest, trader: Trader = Depen
     return {"authorized": True}
 
 
-# ── Trade Token helpers ──────────────────────────────────────────
-
-def _calc_tokens(amount_kes: float) -> tuple[int, float]:
-    """Return (tokens_granted, rate_per_token) for a given KES purchase amount."""
-    if amount_kes >= 10000:
-        rate = 10.0
-    elif amount_kes >= 5000:
-        rate = 25.0
-    else:
-        rate = 40.0
-    tokens = round(amount_kes / rate)
-    return tokens, rate
-
-
-async def _credit_affiliate_token_revenue(trader: Trader, amount_kes: float, db: AsyncSession):
-    """Credit 10% of token purchase revenue to the trader's referrer affiliate."""
-    if not trader.referred_by_code:
-        return
-    try:
-        from app.models.affiliate import Affiliate, AffiliateEarning
-        result = await db.execute(select(Affiliate).where(Affiliate.referral_code == trader.referred_by_code))
-        affiliate = result.scalar_one_or_none()
-        if not affiliate:
-            return
-        commission = round(amount_kes * 0.10, 2)
-        affiliate.total_earned = (affiliate.total_earned or 0) + commission
-        affiliate.pending_payout = (affiliate.pending_payout or 0) + commission
-        earning = AffiliateEarning(
-            affiliate_id=affiliate.id,
-            referred_trader_id=trader.id,
-            amount=commission,
-            description=f"10% of KES {amount_kes:.0f} trade token purchase",
-        )
-        db.add(earning)
-    except Exception as e:
-        logger.warning(f"Affiliate credit failed for trader {trader.id}: {e}")
-
-
-# ── Trade Token Routes ───────────────────────────────────────────
-
-@router.get("/trade-tokens")
-async def get_trade_tokens(
+@router.get("/rate-limit")
+async def get_rate_limit(
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return current token balance and purchase history."""
-    result = await db.execute(
-        select(TradeTokenPurchase)
-        .where(TradeTokenPurchase.trader_id == trader.id)
-        .order_by(TradeTokenPurchase.created_at.desc())
-        .limit(50)
-    )
-    history = result.scalars().all()
+    """Daily rate-limit status for the dashboard: trades + Telegram alerts vs the trader's
+    subscription-tier caps, with the reset time (03:00 EAT). Used to show usage + a 'limit
+    reached' countdown when exhausted."""
+    from app.services.rate_limits import trade_rate_status, tg_rate_status
+    from app.services.plans import active_plan, plan_label
+    from app.services.enforcement import billing_active
+    plan = await active_plan(db, trader.id)
+    trades = await trade_rate_status(db, trader)
+    telegram = tg_rate_status(plan, trader)
+    active = await billing_active(db, trader)
+    # locked = subscription expired (everything paid is off). daily_trade_blocked = subscribed but
+    # today's trade cap is reached (only new trades are blocked; rest of the app stays usable).
     return {
-        "trade_tokens": trader.trade_tokens or 0,
-        "trade_tokens_expiring": trader.trade_tokens_expiring or 0,
-        "total": (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0),
-        "history": [
-            {
-                "id": p.id,
-                "amount_kes": p.amount_kes,
-                "tokens_granted": p.tokens_granted,
-                "rate_per_token": p.rate_per_token,
-                "source": p.source,
-                "created_at": p.created_at.isoformat() if p.created_at else None,
-            }
-            for p in history
-        ],
+        "plan": plan.value if plan else None,
+        "plan_label": plan_label(plan),
+        "trades": trades,
+        "telegram": telegram,
+        "billing_active": active,
+        "locked": (not active),
+        "exempt": bool(getattr(trader, "billing_exempt", False)),
+        "daily_trade_blocked": bool(active and not trades.get("allowed", True)),
     }
-
-
-class PurchaseTokensRequest(BaseModel):
-    amount_kes: float
-
-
-@router.post("/trade-tokens/purchase")
-async def purchase_trade_tokens(
-    data: PurchaseTokensRequest,
-    trader: Trader = Depends(get_current_trader),
-    db: AsyncSession = Depends(get_db),
-):
-    """Purchase trade tokens by deducting from wallet balance."""
-    if data.amount_kes < 1000:
-        raise HTTPException(status_code=400, detail="Minimum purchase is KES 1,000.")
-
-    # Load wallet
-    result = await db.execute(select(Wallet).where(Wallet.trader_id == trader.id))
-    wallet = result.scalar_one_or_none()
-    if not wallet or wallet.balance < data.amount_kes:
-        raise HTTPException(status_code=400, detail="Insufficient wallet balance.")
-
-    tokens, rate = _calc_tokens(data.amount_kes)
-
-    # Deduct from wallet
-    wallet.balance -= data.amount_kes
-    wallet.total_fees_paid = (wallet.total_fees_paid or 0) + data.amount_kes
-
-    tx = WalletTransaction(
-        wallet_id=wallet.id,
-        trader_id=trader.id,
-        transaction_type=TransactionType.PLATFORM_FEE,
-        amount=-data.amount_kes,
-        description=f"Trade token purchase — {tokens} tokens @ KES {rate:.0f}/token",
-        reference=f"TOKEN-{trader.id}-{int(datetime.now(timezone.utc).timestamp())}",
-    )
-    db.add(tx)
-
-    # Grant tokens (permanent)
-    trader.trade_tokens = (trader.trade_tokens or 0) + tokens
-
-    # Record purchase
-    purchase = TradeTokenPurchase(
-        trader_id=trader.id,
-        amount_kes=data.amount_kes,
-        tokens_granted=tokens,
-        rate_per_token=rate,
-        source="balance",
-    )
-    db.add(purchase)
-
-    await db.commit()
-
-    # Credit affiliate 10%
-    await _credit_affiliate_token_revenue(trader, data.amount_kes, db)
-    try:
-        await db.commit()
-    except Exception:
-        pass
-
-    return {
-        "ok": True,
-        "tokens_granted": tokens,
-        "rate_per_token": rate,
-        "new_balance": trader.trade_tokens,
-    }
-
-
-@router.post("/trade-tokens/consume")
-async def consume_trade_token(
-    trader: Trader = Depends(get_current_trader),
-    db: AsyncSession = Depends(get_db),
-):
-    """Consume 1 token after a bot-completed buy order. Expiring tokens used first."""
-    total = (trader.trade_tokens_expiring or 0) + (trader.trade_tokens or 0)
-    if total <= 0:
-        raise HTTPException(status_code=402, detail="No trade tokens available.")
-
-    if (trader.trade_tokens_expiring or 0) > 0:
-        trader.trade_tokens_expiring -= 1
-    else:
-        trader.trade_tokens -= 1
-
-    await db.commit()
-
-    remaining = (trader.trade_tokens or 0) + (trader.trade_tokens_expiring or 0)
-
-    # Push low-balance notification when dropping below 20
-    if remaining == 19:
-        add_notification(
-            trader.id,
-            "Trade limit low",
-            "You have 19 trade tokens remaining. Purchase more to keep buy orders running.",
-            "warning",
-        )
-
-    return {"ok": True, "remaining": remaining}
-
-
-# ── Credit Purchase Plans ─────────────────────────────────────────────────────
-
-CREDIT_PLANS = {
-    "pay_on_the_go": {"amount": None,   "credits": None, "rate": 40, "min": 500},
-    "starter":       {"amount": 5_000,  "credits": 167,  "rate": 30},
-    "pro":           {"amount": 10_000, "credits": 500,  "rate": 20},
-    "pro_max":       {"amount": 20_000, "credits": 2_000, "rate": 10},
-    "advanced":      {"amount": 40_000, "credits": 8_000, "rate": 5},
-}
-
-# In-memory store for pending STK push purchases (checkout_id -> metadata)
-# Entries are cleaned up on callback resolution. Acceptable since STK resolves
-# within seconds; rare restart loss is handled by the "check your balance" UX hint.
-_pending_credit_stk: dict = {}
-
-
-class CreditPurchaseRequest(BaseModel):
-    plan: str   # starter | pro | pro_max | advanced | pay_on_the_go
-    phone: str
-    custom_amount: Optional[float] = None  # required for pay_on_the_go
-
-
-@router.post("/credits/purchase")
-async def purchase_credits_mpesa(
-    data: CreditPurchaseRequest,
-    trader: Trader = Depends(get_current_trader),
-    db: AsyncSession = Depends(get_db),
-):
-    """Initiate M-Pesa STK push to buy permanent trade credits."""
-    plan_meta = CREDIT_PLANS.get(data.plan)
-    if not plan_meta:
-        raise HTTPException(status_code=400, detail="Invalid plan.")
-
-    if data.plan == "pay_on_the_go":
-        if not data.custom_amount or data.custom_amount < 500:
-            raise HTTPException(status_code=400, detail="Minimum amount for Pay On The Go is KES 500.")
-        buy_amount  = int(data.custom_amount)
-        buy_credits = buy_amount // 40
-        buy_rate    = 40
-    else:
-        buy_amount  = plan_meta["amount"]
-        buy_credits = plan_meta["credits"]
-        buy_rate    = plan_meta["rate"]
-
-    phone = data.phone.strip().replace(" ", "").replace("-", "")
-    if not phone:
-        raise HTTPException(status_code=400, detail="Phone number is required.")
-
-    from app.core.config import settings
-    callback_url = f"{settings.MPESA_CALLBACK_BASE_URL}/api/traders/credits/callback"
-
-    try:
-        result = await mpesa_client.stk_push(
-            phone=phone,
-            amount=buy_amount,
-            account_reference=f"SparkP2P-Credits-{trader.id}",
-            description=f"{data.plan.replace('_', ' ').title()} Credits",
-            callback_url=callback_url,
-        )
-    except Exception as e:
-        logger.error(f"Credits STK push failed for trader {trader.id}: {e}")
-        raise HTTPException(status_code=502, detail="Failed to send M-Pesa prompt. Try again.")
-
-    checkout_id = result.get("CheckoutRequestID")
-    if not checkout_id:
-        raise HTTPException(status_code=502, detail="Invalid response from M-Pesa.")
-
-    _pending_credit_stk[checkout_id] = {
-        "trader_id": trader.id,
-        "plan": data.plan,
-        "amount": buy_amount,
-        "credits": buy_credits,
-        "rate": buy_rate,
-        "status": "pending",
-    }
-
-    logger.info(f"Credits STK initiated: trader={trader.id} plan={data.plan} checkout={checkout_id}")
-    return {
-        "ok": True,
-        "checkout_id": checkout_id,
-        "message": f"STK Push sent to {phone}. Enter your M-Pesa PIN to complete purchase.",
-    }
-
-
-@router.post("/credits/callback")
-async def credits_mpesa_callback(request: Request, db: AsyncSession = Depends(get_db)):
-    """M-Pesa STK Push callback for credit purchases. Called by Safaricom."""
-    data = await request.json()
-    logger.info(f"Credits STK Callback: {data}")
-
-    body = data.get("Body", {}).get("stkCallback", {})
-    result_code = body.get("ResultCode")
-    checkout_id = body.get("CheckoutRequestID")
-
-    if not checkout_id:
-        return {"ResultCode": 0, "ResultDesc": "Accepted"}
-
-    pending = _pending_credit_stk.pop(checkout_id, None)
-    if not pending:
-        logger.warning(f"Credits callback: unknown checkout_id {checkout_id}")
-        return {"ResultCode": 0, "ResultDesc": "Accepted"}
-
-    if result_code != 0:
-        logger.warning(f"Credits STK failed: checkout={checkout_id} code={result_code}")
-        return {"ResultCode": 0, "ResultDesc": "Accepted"}
-
-    # Payment succeeded — grant credits
-    trader_id = pending["trader_id"]
-    credits = pending["credits"]
-    amount = pending["amount"]
-    rate = pending["rate"]
-    plan = pending["plan"]
-
-    # Extract M-Pesa receipt
-    mpesa_code = None
-    for item in body.get("CallbackMetadata", {}).get("Item", []):
-        if item.get("Name") == "MpesaReceiptNumber":
-            mpesa_code = item.get("Value")
-            break
-
-    result = await db.execute(select(Trader).where(Trader.id == trader_id))
-    trader = result.scalar_one_or_none()
-    if not trader:
-        logger.error(f"Credits callback: trader {trader_id} not found")
-        return {"ResultCode": 0, "ResultDesc": "Accepted"}
-
-    trader.trade_tokens = (trader.trade_tokens or 0) + credits
-
-    purchase = TradeTokenPurchase(
-        trader_id=trader_id,
-        amount_kes=amount,
-        tokens_granted=credits,
-        rate_per_token=rate,
-        source=f"mpesa_{plan}",
-    )
-    db.add(purchase)
-    await db.commit()
-
-    add_notification(
-        trader_id,
-        "Credits purchased",
-        f"SparkP2P: {credits} trade credits added to your account ({plan.replace('_', ' ').title()} plan). Balance: {trader.trade_tokens}.",
-        "success",
-    )
-
-    logger.info(f"Credits granted: trader={trader_id} credits={credits} plan={plan} mpesa={mpesa_code}")
-    return {"ResultCode": 0, "ResultDesc": "Accepted"}
-
-
-@router.get("/credits/status/{checkout_id}")
-async def credits_purchase_status(
-    checkout_id: str,
-    trader: Trader = Depends(get_current_trader),
-):
-    """Poll for STK push completion. Returns 'pending' or 'completed'."""
-    if checkout_id in _pending_credit_stk:
-        entry = _pending_credit_stk[checkout_id]
-        if entry["trader_id"] != trader.id:
-            raise HTTPException(status_code=403, detail="Not your purchase.")
-        return {"status": "pending"}
-    return {"status": "completed"}

@@ -3118,7 +3118,7 @@ async def choice_pay(
 
     from app.services.choice_bank.client import send_otp
 
-    remark = data.remark or f"SparkP2P BUY {data.order_number[-12:]}"
+    remark = data.remark or f"ChoiceBuy {data.order_number[-12:]}"
 
     # M-Pesa B2C requires payeeBankCode="M-PESA". PesaLink requires the bank's CBK code.
     # Without the correct bank code Choice Bank treats the call as an internal transfer
@@ -3333,3 +3333,26 @@ async def choice_pay_confirm_sms(
         )
     finally:
         _pending_sms_otps.pop(key, None)
+
+
+@router.get("/bank-codes")
+async def ext_bank_codes(trader: Trader = Depends(get_current_trader)):
+    """Return Choice Bank PesaLink bank code list for desktop bot use."""
+    try:
+        from app.services.choice_bank import client as choice_client
+        result = await choice_client.get_bank_codes()
+        raw = result.get("data") or result
+        if isinstance(raw, dict):
+            raw = raw.get("bankCodeList") or []
+        if not isinstance(raw, list):
+            return {"ok": False, "bank_codes": []}
+        banks = []
+        for b in raw:
+            code = str(b.get("bankCode") or b.get("code") or b.get("bankId") or "").strip()
+            name = (b.get("bankName") or b.get("name") or b.get("bank_name") or "").strip()
+            if code and name and code not in ("M-PESA", "AIRTEL"):
+                banks.append({"bankCode": code, "bankName": name})
+        return {"ok": True, "bank_codes": banks}
+    except Exception as e:
+        logger.warning(f"[ext/bank-codes] Failed: {e}")
+        return {"ok": False, "bank_codes": []}
