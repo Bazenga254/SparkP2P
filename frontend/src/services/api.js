@@ -217,8 +217,10 @@ export const cbLookupMpesaName = (phone) => api.get('/choice/pay/lookup-mpesa-na
 export const cbLookupBankAccount = (account_id, bank_code = '') => api.get('/choice/pay/lookup-account', { params: { account_id, bank_code } });
 export const cbBankTransferInitiate = (body) => api.post('/choice/pay/bank-transfer/initiate', body);
 export const cbBankTransferConfirm = (otp) => api.post('/choice/pay/bank-transfer/confirm', { otp });
+export const cbBankTransferConfirmSms = () => api.post('/choice/pay/bank-transfer/confirm-sms', {}, { timeout: 240000 });
 export const cbRtgsInitiate = (body) => api.post('/choice/pay/rtgs/initiate', body);
 export const cbRtgsConfirm = (otp) => api.post('/choice/pay/rtgs/confirm', { otp });
+export const cbRtgsConfirmSms = () => api.post('/choice/pay/rtgs/confirm-sms', {}, { timeout: 240000 });
 export const cbMpesaToBank = (body) => api.post('/choice/pay/mpesa-to-bank', body);
 export const cbResendOtp = (flow) => api.post('/choice/pay/resend-otp', { flow });
 export const kycCreateSession = () => api.post('/kyc/session');

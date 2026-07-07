@@ -6,8 +6,8 @@ import {
   cbSendMoneyInitiate, cbSendMoneyConfirm, cbSendMoneyConfirmSms,
   cbPaybillInitiate, cbPaybillConfirm, cbLookupShortcode,
   cbGetBanks, cbLookupBankAccount, cbLookupMpesaName,
-  cbBankTransferInitiate, cbBankTransferConfirm,
-  cbRtgsInitiate, cbRtgsConfirm,
+  cbBankTransferInitiate, cbBankTransferConfirm, cbBankTransferConfirmSms,
+  cbRtgsInitiate, cbRtgsConfirm, cbRtgsConfirmSms,
   cbMpesaToBank, cbResendOtp,
 } from '../services/api';
 
@@ -321,7 +321,14 @@ function BankTransfer({ type, title, onDone, onCancel }) {
         remark: remark.trim(),
       });
       setInfo(res.data?.message || 'OTP sent.');
-      setStep('otp');
+      setStep('waiting');
+      try {
+        await cbBankTransferConfirmSms();
+        setStep('done');
+      } catch (e2) {
+        setInfo('OTP not auto-captured — enter the code from your phone manually.');
+        setStep('otp');
+      }
     } catch (e) { setError(e.response?.data?.detail || 'Could not start transfer. Try again.'); }
     finally { setBusy(false); }
   };
@@ -383,6 +390,13 @@ function BankTransfer({ type, title, onDone, onCancel }) {
           <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
         </>
       )}
+      {step === 'waiting' && (
+        <div style={{ textAlign: 'center', padding: '32px 0' }}>
+          <div style={{ fontSize: 40, marginBottom: 16 }}>📲</div>
+          <div style={{ color: '#f5a623', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Waiting for OTP…</div>
+          <div style={{ color: '#9aa4b2', fontSize: 13 }}>Choice Bank sent an OTP to your phone.<br />It will be captured automatically.</div>
+        </div>
+      )}
       {step === 'otp' && (
         <>
           <p className="pm-otpinfo">{info}</p>
@@ -428,7 +442,14 @@ function RTGSTransfer({ onDone, onCancel }) {
         remark: remark.trim(),
       });
       setInfo(res.data?.message || 'OTP sent.');
-      setStep('otp');
+      setStep('waiting');
+      try {
+        await cbRtgsConfirmSms();
+        setStep('done');
+      } catch (e2) {
+        setInfo('OTP not auto-captured — enter the code from your phone manually.');
+        setStep('otp');
+      }
     } catch (e) { setError(e.response?.data?.detail || 'Could not start RTGS transfer. Try again.'); }
     finally { setBusy(false); }
   };
@@ -485,6 +506,13 @@ function RTGSTransfer({ onDone, onCancel }) {
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
         </>
+      )}
+      {step === 'waiting' && (
+        <div style={{ textAlign: 'center', padding: '32px 0' }}>
+          <div style={{ fontSize: 40, marginBottom: 16 }}>📲</div>
+          <div style={{ color: '#f5a623', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Waiting for OTP…</div>
+          <div style={{ color: '#9aa4b2', fontSize: 13 }}>Choice Bank sent an OTP to your phone.<br />It will be captured automatically.</div>
+        </div>
       )}
       {step === 'otp' && (
         <>
