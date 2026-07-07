@@ -1098,19 +1098,14 @@ async def send_money_initiate(body: SendMoneyInitiate, trader: Trader = Depends(
     if not tx_id:
         raise HTTPException(status_code=502, detail="No transaction ID returned")
 
-    otp_channel = "EMAIL"
     try:
-        otp_res = await choice.send_otp(tx_id, otp_type="EMAIL")
+        otp_res = await choice.send_otp(tx_id, otp_type="SMS")
         if otp_res.get("code") != "00000":
-            # Email not verified — fall back to SMS
-            await choice.send_otp(tx_id, otp_type="SMS")
-            otp_channel = "SMS"
+            logger.warning("[ChoiceBank] send-money sendOtp(SMS): " + str(otp_res.get("code")) + " " + str(otp_res.get("msg")))
     except Exception as exc:
-        logger.warning(f"[ChoiceBank] send-money sendOtp failed: {exc}")
+        logger.warning("[ChoiceBank] send-money sendOtp failed: " + str(exc))
 
-    msg = ("Check your email for a 4-digit code from Choice Bank and enter it below to confirm this transfer."
-           if otp_channel == "EMAIL" else
-           "Enter the OTP Choice Bank sent to your registered phone to confirm this transfer.")
+    msg = "Enter the OTP Choice Bank sent to your registered phone to confirm this transfer."
     _pending_send_money[trader.id] = {"tx_id": tx_id, "amount": body.amount, "phone": phone, "name": body.payee_name}
     return {"status": "otp_sent", "message": msg}
 
@@ -1163,6 +1158,82 @@ async def send_money_confirm(body: SendMoneyConfirm, trader: Trader = Depends(ge
     except Exception:
         pass
     return {"status": "success", "tx_id": pending["tx_id"], "amount": pending["amount"]}
+
+
+@router.post("/choice/pay/send-money/confirm-sms")
+async def send_money_confirm_sms(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Auto-capture Choice Bank SMS OTP via MacroDroid webhook for manual send-money flow."""
+    import asyncio as _asyncio
+    from app.api.routes.extension import _pending_sms_otps
+
+    pending = _pending_send_money.get(trader.id)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending transfer. Please start again.")
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+
+    account_last_4 = str(trader.choice_account_id)[-4:]
+    event = _asyncio.Event()
+    _pending_sms_otps[account_last_4] = {"event": event, "otp": None}
+
+    try:
+        try:
+            await _asyncio.wait_for(event.wait(), timeout=120.0)
+        except _asyncio.TimeoutError:
+            logger.warning("[SMS-OTP] send-money 60s timeout for ****" + account_last_4 + " - resending")
+            try:
+                await choice.resend_otp(pending["tx_id"], otp_type="SMS")
+            except Exception as _re:
+                logger.warning("[SMS-OTP] resend_otp failed: " + str(_re))
+            event.clear()
+            _pending_sms_otps[account_last_4]["otp"] = None
+            try:
+                await _asyncio.wait_for(event.wait(), timeout=90.0)
+            except _asyncio.TimeoutError:
+                raise HTTPException(status_code=408, detail="SMS OTP did not arrive. Check your phone and try again.")
+
+        otp = (_pending_sms_otps.get(account_last_4) or {}).get("otp")
+        if not otp:
+            raise HTTPException(status_code=500, detail="SMS OTP event fired but no code stored")
+
+        logger.info("[SMS-OTP] send-money OTP received for ****" + account_last_4 + " - confirming")
+        result = await choice.confirm_otp(pending["tx_id"], otp)
+        if result.get("code") != "00000":
+            raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired OTP"))
+
+        _pending_send_money.pop(trader.id, None)
+        _to = pending.get("name") or ("0" + pending["phone"])
+
+        try:
+            from app.models.payment import Payment as _Pmt, PaymentDirection as _PD, PaymentStatus as _PS
+            db.add(_Pmt(
+                trader_id=trader.id, direction=_PD.OUTBOUND,
+                mpesa_transaction_id=pending["tx_id"], transaction_type="CHOICE_OUTBOUND",
+                amount=float(pending["amount"]), destination=pending.get("phone", ""),
+                destination_type="M-Pesa", remarks="Send money to " + _to + " via Choice Bank",
+                status=_PS.PENDING,
+            ))
+        except Exception:
+            pass
+        try:
+            from app.services.ledger import record_activity
+            from app.models.wallet import TransactionType as _TT
+            await record_activity(db, trader.id, _TT.CHOICE_SEND, -float(pending["amount"]),
+                                  "Sent to " + _to + " via Choice Bank", mpesa_receipt=pending["tx_id"])
+            await db.commit()
+        except Exception:
+            pass
+        try:
+            from app.api.routes.telegram import notify_trader
+            await notify_trader(trader, "KES " + str(int(pending["amount"])) + " sent via Choice Bank to " + _to + " Ref: " + pending["tx_id"])
+        except Exception:
+            pass
+        return {"status": "success", "tx_id": pending["tx_id"], "amount": pending["amount"]}
+    finally:
+        _pending_sms_otps.pop(account_last_4, None)
 
 
 # ── Payments Hub — M-Pesa Paybill / Till (B2B), OTP-confirmed ─────────────────
@@ -1432,9 +1503,9 @@ async def bank_transfer_initiate(body: BankTransferBody, trader: Trader = Depend
     if not tx_id:
         raise HTTPException(status_code=502, detail="No transaction ID returned")
 
-    otp_channel = "EMAIL"
+    otp_channel = "SMS"
     try:
-        otp_res = await choice.send_otp(tx_id, otp_type="EMAIL")
+        otp_res = await choice.send_otp(tx_id, otp_type="SMS")
         if otp_res.get("code") != "00000":
             await choice.send_otp(tx_id, otp_type="SMS")
             otp_channel = "SMS"
@@ -1446,9 +1517,7 @@ async def bank_transfer_initiate(body: BankTransferBody, trader: Trader = Depend
         "tx_id": tx_id, "amount": body.amount,
         "beneficiary": (body.beneficiary_name or "").strip(), "label": label,
     }
-    msg = ("Check your email for a 4-digit code from Choice Bank to confirm this transfer."
-           if otp_channel == "EMAIL" else
-           "Enter the OTP Choice Bank sent to your registered phone to confirm this transfer.")
+    msg = "Enter the OTP Choice Bank sent to your registered phone to confirm this transfer."
     return {"status": "otp_sent", "message": msg}
 
 
@@ -1484,6 +1553,77 @@ async def bank_transfer_confirm(
         pass
     return {"status": "success", "tx_id": pending["tx_id"], "amount": pending["amount"]}
 
+
+
+@router.post("/choice/pay/bank-transfer/confirm-sms")
+async def bank_transfer_confirm_sms(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Auto-capture Choice Bank SMS OTP for PesaLink / internal bank transfer."""
+    import asyncio as _asyncio
+    from app.api.routes.extension import _pending_sms_otps
+
+    pending = _pending_bank_transfer.get(trader.id)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending transfer. Please start again.")
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+
+    account_last_4 = str(trader.choice_account_id)[-4:]
+    cached = _pending_sms_otps.get(account_last_4)
+    import time as _t
+    if cached and cached.get("otp") and cached.get("event") is None and _t.time() - cached.get("ts", 0) < 300:
+        otp = cached["otp"]
+        _pending_sms_otps.pop(account_last_4, None)
+    else:
+        event = _asyncio.Event()
+        _pending_sms_otps[account_last_4] = {"event": event, "otp": None}
+        try:
+            try:
+                await _asyncio.wait_for(event.wait(), timeout=120.0)
+            except _asyncio.TimeoutError:
+                logger.warning("[SMS-OTP] bank-transfer 120s timeout for ****" + account_last_4 + " - resending")
+                try:
+                    await choice.resend_otp(pending["tx_id"], otp_type="SMS")
+                except Exception as _re:
+                    logger.warning("[SMS-OTP] resend_otp failed: " + str(_re))
+                event.clear()
+                _pending_sms_otps[account_last_4]["otp"] = None
+                try:
+                    await _asyncio.wait_for(event.wait(), timeout=90.0)
+                except _asyncio.TimeoutError:
+                    raise HTTPException(status_code=408, detail="SMS OTP did not arrive. Check your phone and try again.")
+            otp = (_pending_sms_otps.get(account_last_4) or {}).get("otp")
+            if not otp:
+                raise HTTPException(status_code=500, detail="SMS OTP event fired but no code stored")
+        finally:
+            _pending_sms_otps.pop(account_last_4, None)
+
+    logger.info("[SMS-OTP] bank-transfer OTP received for ****" + account_last_4 + " - confirming")
+    try:
+        result = await choice.confirm_otp(pending["tx_id"], otp)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OTP confirmation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired OTP"))
+
+    _pending_bank_transfer.pop(trader.id, None)
+    try:
+        from app.services.ledger import record_activity
+        from app.models.wallet import TransactionType as _TT
+        await record_activity(db, trader.id, _TT.CHOICE_BANK_TRANSFER, -float(pending["amount"]),
+                              f"Transfer to {pending['beneficiary']} ({pending['label']}) via Choice Bank",
+                              mpesa_receipt=pending["tx_id"])
+        await db.commit()
+    except Exception:
+        pass
+    try:
+        from app.api.routes.telegram import notify_trader
+        await notify_trader(trader, f"\U0001f3e6 KES {pending['amount']:,.0f} sent to {pending['beneficiary']} ({pending['label']})\nRef: {pending['tx_id']}")
+    except Exception:
+        pass
+    return {"status": "success", "tx_id": pending["tx_id"], "amount": pending["amount"]}
 
 # ── Payments Hub — RTGS ────────────────────────────────────────────────────────
 
@@ -1535,9 +1675,9 @@ async def rtgs_initiate(body: RtgsInitiateBody, trader: Trader = Depends(get_cur
     if not app_id:
         raise HTTPException(status_code=502, detail="No application ID returned")
 
-    otp_channel = "EMAIL"
+    otp_channel = "SMS"
     try:
-        otp_res = await choice.send_otp(app_id, otp_type="EMAIL")
+        otp_res = await choice.send_otp(app_id, otp_type="SMS")
         if otp_res.get("code") != "00000":
             await choice.send_otp(app_id, otp_type="SMS")
             otp_channel = "SMS"
@@ -1550,9 +1690,7 @@ async def rtgs_initiate(body: RtgsInitiateBody, trader: Trader = Depends(get_cur
         "bank": body.bank_name.strip(),
         "account": body.beneficiary_account.strip(),
     }
-    msg = ("Check your email for a 4-digit code from Choice Bank to confirm this RTGS transfer."
-           if otp_channel == "EMAIL" else
-           "Enter the OTP Choice Bank sent to your registered phone to confirm this RTGS transfer.")
+    msg = "Enter the OTP Choice Bank sent to your registered phone to confirm this RTGS transfer."
     return {"status": "otp_sent", "message": msg}
 
 
@@ -1589,6 +1727,77 @@ async def rtgs_confirm(
     return {"status": "success", "application_id": pending["app_id"], "amount": pending["amount"]}
 
 
+
+@router.post("/choice/pay/rtgs/confirm-sms")
+async def rtgs_confirm_sms(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Auto-capture Choice Bank SMS OTP for RTGS transfer."""
+    import asyncio as _asyncio
+    from app.api.routes.extension import _pending_sms_otps
+
+    pending = _pending_rtgs.get(trader.id)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending RTGS transfer. Please start again.")
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+
+    account_last_4 = str(trader.choice_account_id)[-4:]
+    cached = _pending_sms_otps.get(account_last_4)
+    import time as _t
+    if cached and cached.get("otp") and cached.get("event") is None and _t.time() - cached.get("ts", 0) < 300:
+        otp = cached["otp"]
+        _pending_sms_otps.pop(account_last_4, None)
+    else:
+        event = _asyncio.Event()
+        _pending_sms_otps[account_last_4] = {"event": event, "otp": None}
+        try:
+            try:
+                await _asyncio.wait_for(event.wait(), timeout=120.0)
+            except _asyncio.TimeoutError:
+                logger.warning("[SMS-OTP] rtgs 120s timeout for ****" + account_last_4 + " - resending")
+                try:
+                    await choice.resend_otp(pending["app_id"], otp_type="SMS")
+                except Exception as _re:
+                    logger.warning("[SMS-OTP] resend_otp failed: " + str(_re))
+                event.clear()
+                _pending_sms_otps[account_last_4]["otp"] = None
+                try:
+                    await _asyncio.wait_for(event.wait(), timeout=90.0)
+                except _asyncio.TimeoutError:
+                    raise HTTPException(status_code=408, detail="SMS OTP did not arrive. Check your phone and try again.")
+            otp = (_pending_sms_otps.get(account_last_4) or {}).get("otp")
+            if not otp:
+                raise HTTPException(status_code=500, detail="SMS OTP event fired but no code stored")
+        finally:
+            _pending_sms_otps.pop(account_last_4, None)
+
+    logger.info("[SMS-OTP] rtgs OTP received for ****" + account_last_4 + " - confirming")
+    try:
+        result = await choice.confirm_otp(pending["app_id"], otp)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OTP confirmation failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired OTP"))
+
+    _pending_rtgs.pop(trader.id, None)
+    try:
+        from app.services.ledger import record_activity
+        from app.models.wallet import TransactionType as _TT
+        await record_activity(db, trader.id, _TT.CHOICE_RTGS, -float(pending["amount"]),
+                              f"RTGS to {pending['beneficiary']} at {pending['bank']} (acc {pending['account']})",
+                              mpesa_receipt=pending["app_id"])
+        await db.commit()
+    except Exception:
+        pass
+    try:
+        from app.api.routes.telegram import notify_trader
+        await notify_trader(trader, f"\U0001f3db RTGS KES {pending['amount']:,.0f} to {pending['beneficiary']} at {pending['bank']}\nRef: {pending['app_id']}")
+    except Exception:
+        pass
+    return {"status": "success", "application_id": pending["app_id"], "amount": pending["amount"]}
+
 # ── Payments Hub — Generic OTP resend ─────────────────────────────────────────
 
 class ResendOtpBody(BaseModel):
@@ -1613,7 +1822,7 @@ async def resend_payment_otp(body: ResendOtpBody, trader: Trader = Depends(get_c
     if not tx_id:
         raise HTTPException(status_code=400, detail="Missing transaction reference")
     try:
-        await choice.resend_otp(tx_id, otp_type="EMAIL")
+        await choice.resend_otp(tx_id, otp_type="SMS")
     except Exception:
         try:
             await choice.resend_otp(tx_id, otp_type="SMS")
