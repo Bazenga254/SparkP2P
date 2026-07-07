@@ -1426,10 +1426,14 @@ async function ensureOrderTabs(orders) {
   if (!browser) return;
   const activeNums = new Set([...orders.sell, ...orders.buy].map(o => o.orderNumber));
 
-  // Open tabs for all active unpaid orders. Reset absence counter for every order we see.
+  // Open tabs for active unpaid orders. For buy orders: ONE tab at a time (first unpaid only).
+  const _firstUnpaidBuyTab = orders.buy.find(o =>
+    !buyPaymentSentAt[o.orderNumber] && !markPaidDoneOrders.has(o.orderNumber)
+  );
   for (const o of [...orders.sell, ...orders.buy]) {
     orderTabAbsenceCounts[o.orderNumber] = 0; // seen this scan — reset
     if (o.tradeType === 'BUY' && (buyPaymentSentAt[o.orderNumber] || markPaidDoneOrders.has(o.orderNumber))) continue; // paid: no tab needed
+    if (o.tradeType === 'BUY' && _firstUnpaidBuyTab && o.orderNumber !== _firstUnpaidBuyTab.orderNumber) continue; // queue: only open tab for first unpaid buy
     if (!orderTabs[o.orderNumber] || orderTabs[o.orderNumber].isClosed()) {
       await openOrderTab(o.orderNumber);
       await new Promise(r => setTimeout(r, 300));
@@ -4091,22 +4095,26 @@ async function idleScan(page) {
     }
   }
 
+  // One-at-a-time: find the first unpaid buy order this cycle — all others wait
+  const _firstUnpaidBuy = sortedBuyOrders.find(o =>
+    !buyPaymentSentAt[o.orderNumber] &&
+    !imPaymentFailedOrders.has(o.orderNumber) &&
+    !markPaidDoneOrders.has(o.orderNumber)
+  );
+
   for (const order of sortedBuyOrders) {
     if (pauseNavigation) break;
 
-    // ── Phase 2 queue gate (pre-navigation) ──────────────────────────────────
-    // If another order currently holds the payment slot AND this order has not
-    // yet been paid, skip ALL navigation and state detection for it.
-    // This prevents tab-switching from interrupting the active OTP flow and
-    // stops stale page DOM from being read for queued orders.
+    // ── One-at-a-time gate ────────────────────────────────────────────────────
+    // Only the first unpaid buy order gets a tab and payment. All others queue.
     const _alreadyPaid = !!buyPaymentSentAt[order.orderNumber] || !!imPaymentDoneMap[order.orderNumber] || markPaidDoneOrders.has(order.orderNumber);
-    if (!_alreadyPaid && activeBuyPaymentSlot && activeBuyPaymentSlot !== order.orderNumber) {
+    if (!_alreadyPaid && _firstUnpaidBuy && order.orderNumber !== _firstUnpaidBuy.orderNumber) {
       const _qPending = sortedBuyOrders.filter(o =>
         !buyPaymentSentAt[o.orderNumber] && !imPaymentFailedOrders.has(o.orderNumber)
       );
       const _qPos = _qPending.findIndex(o => o.orderNumber === order.orderNumber) + 1;
-      console.log(`[SparkP2P] Order ${order.orderNumber.slice(-8)} queued (pos ${_qPos}/${_qPending.length}) — completing ${activeBuyPaymentSlot.slice(-8)} first`);
-      sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} queued (pos ${_qPos}/${_qPending.length}) — completing ...${activeBuyPaymentSlot.slice(-8)} first`);
+      console.log(`[SparkP2P] Order ${order.orderNumber.slice(-8)} queued (pos ${_qPos}/${_qPending.length}) — completing ${_firstUnpaidBuy.orderNumber.slice(-8)} first`);
+      sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} queued (pos ${_qPos}/${_qPending.length}) — completing ...${_firstUnpaidBuy.orderNumber.slice(-8)} first`);
       continue;
     }
 
