@@ -1422,14 +1422,30 @@ async function closeOrderTab(orderNumber, reason) {
   sendBotLog('info', `Tab closed for order ...${orderNumber.slice(-8)}${reason ? ' — ' + reason : ''}`);
 }
 
+// ── Single source of truth for "which buy order is paid next" ────────────────
+// BOTH the tab manager (ensureOrderTabs) and the payment loop MUST call this
+// same function. Previously each computed its own "first unpaid buy" from a
+// different list with different filters, so they could disagree — which opened
+// two buy tabs at once and caused cross-order payment-detail reads.
+function getFirstUnpaidBuy(buyOrders) {
+  const sorted = [...buyOrders].sort((a, b) =>
+    (orderFirstSeenAt[a.orderNumber] || Number.MAX_SAFE_INTEGER) -
+    (orderFirstSeenAt[b.orderNumber] || Number.MAX_SAFE_INTEGER));
+  return sorted.find(o =>
+    !buyPaymentSentAt[o.orderNumber] &&
+    !imPaymentFailedOrders.has(o.orderNumber) &&
+    !markPaidDoneOrders.has(o.orderNumber)
+  ) || null;
+}
+
 async function ensureOrderTabs(orders) {
   if (!browser) return;
   const activeNums = new Set([...orders.sell, ...orders.buy].map(o => o.orderNumber));
 
   // Open tabs for active unpaid orders. For buy orders: ONE tab at a time (first unpaid only).
-  const _firstUnpaidBuyTab = orders.buy.find(o =>
-    !buyPaymentSentAt[o.orderNumber] && !markPaidDoneOrders.has(o.orderNumber)
-  );
+  // Uses the SAME selector as the payment loop (getFirstUnpaidBuy) so the tab
+  // manager and the payer can never disagree about which order is "first".
+  const _firstUnpaidBuyTab = getFirstUnpaidBuy(orders.buy);
   for (const o of [...orders.sell, ...orders.buy]) {
     orderTabAbsenceCounts[o.orderNumber] = 0; // seen this scan — reset
     if (o.tradeType === 'BUY' && (buyPaymentSentAt[o.orderNumber] || markPaidDoneOrders.has(o.orderNumber))) continue; // paid: no tab needed
@@ -2233,43 +2249,73 @@ async function readOrders(activeOnly = false) {
       }
     } catch(_) {}
 
-    // DOM fallback: navigate to the orders list page and parse text
+    // DOM fallback: ROW-ANCHORED extraction. Order numbers come from the exact
+    // orderNo= value in detail-link hrefs (or a leaf element whose entire text
+    // is an 18-19 digit number), and amounts are read ONLY from that order's
+    // own row element. This prevents the previous ±600-char text-window scan
+    // from picking up an adjacent order's KES amount (root cause of the
+    // "amount mismatch / payment ABORTED" errors) and from gluing stray digits
+    // onto order numbers.
     if (sell.length === 0 && buy.length === 0) {
       await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
       await new Promise(r => setTimeout(r, 3000)); // 3s for React to render orders
-      const activeText = await page.evaluate(() => document.body.innerText).catch(() => '');
-      if (activeText && !activeText.includes('No records') && !activeText.includes('No data')) {
-        const seenActive = new Set();
-        const activeOrderPattern = /\b(\d{18,20})\b/g;
-        let am;
-        while ((am = activeOrderPattern.exec(activeText)) !== null) {
-          const orderNumber = am[1];
-          if (seenActive.has(orderNumber)) continue;
-          const ctxStart = Math.max(0, am.index - 600);
-          const ctxEnd   = Math.min(activeText.length, am.index + 200);
-          const ctx = activeText.slice(ctxStart, ctxEnd);
-          if (/\b(Completed|Cancelled|Canceled)\b/i.test(ctx)) continue;
-          const statusMatch = ctx.match(/\b(Pending Payment|Pending|Paid|Appeal)\b/i);
-          if (!statusMatch) continue;
-          const typeMatch = ctx.match(/\b(Buy|Sell)\b/i);
-          if (!typeMatch) continue;
+      const domOrders = await page.evaluate(() => {
+        const results = [];
+        const seen = new Set();
+
+        const parseRow = (orderNumber, row) => {
+          if (!row || seen.has(orderNumber)) return;
+          if (!/^\d{18,19}$/.test(orderNumber)) return; // strict length — no 20-digit merged blobs
+          const rowText = row.innerText || '';
+          if (/\b(Completed|Cancelled|Canceled)\b/i.test(rowText)) return;
+          const statusMatch = rowText.match(/\b(Pending Payment|Pending|Paid|Appeal)\b/i);
+          if (!statusMatch) return;
+          const typeMatch = rowText.match(/\b(Buy|Sell)\b/i);
+          if (!typeMatch) return;
           const tradeType = typeMatch[1].toUpperCase();
-          const usdtMatch = ctx.match(/([\d,]+\.?\d*)\s*USDT/);
+          const usdtMatch = rowText.match(/([\d,]+\.?\d*)\s*USDT/);
           const crypto = usdtMatch ? parseFloat(usdtMatch[1].replace(/,/g, '')) : 0;
-          const kesValues = [...ctx.matchAll(/([\d,]+\.?\d*)\s*KES/g)].map(m => parseFloat(m[1].replace(/,/g, '')));
+          const kesValues = [...rowText.matchAll(/([\d,]+\.?\d*)\s*KES/g)].map(m => parseFloat(m[1].replace(/,/g, '')));
           const fiat = kesValues.find(v => v >= 1000) || kesValues[0] || 0;
-          const priceGuesses = [...ctx.matchAll(/\b(1[0-9]{2}\.\d{1,4})\b/g)].map(pg => parseFloat(pg[1]));
+          const priceGuesses = [...rowText.matchAll(/\b(1[0-9]{2}\.\d{1,4})\b/g)].map(pg => parseFloat(pg[1]));
           const price = priceGuesses.find(p => p >= 100 && p <= 200) || (crypto > 0 ? fiat / crypto : 0);
-          seenActive.add(orderNumber);
-          const order = { orderNumber, tradeType, totalPrice: fiat, amount: crypto, price, asset: 'USDT', status: statusMatch[1], counterparty: '' };
-          if (order.orderNumber.length >= 15) {
-            if (tradeType === 'SELL') sell.push(order);
-            else buy.push(order);
+          seen.add(orderNumber);
+          results.push({ orderNumber, tradeType, totalPrice: fiat, amount: crypto, price, asset: 'USDT', status: statusMatch[1], counterparty: '' });
+        };
+
+        const findRow = (el) =>
+          el.closest('tr') ||
+          el.closest('[class*="order" i][class*="item" i]') ||
+          el.closest('[class*="row" i]') ||
+          el.parentElement?.parentElement?.parentElement || null;
+
+        // Anchor 1: order-detail links — the href carries the exact order number
+        const links = Array.from(document.querySelectorAll('a[href*="fiatOrderDetail"], a[href*="orderNo="]'));
+        for (const a of links) {
+          const m = (a.getAttribute('href') || '').match(/orderNo=(\d{18,19})(?:\D|$)/);
+          if (!m) continue;
+          parseRow(m[1], findRow(a));
+        }
+
+        // Anchor 2 (fallback): leaf elements whose ENTIRE text is an 18-19 digit number
+        if (results.length === 0) {
+          const leaves = Array.from(document.querySelectorAll('a, span, td, div, p'))
+            .filter(el => el.children.length === 0);
+          for (const el of leaves) {
+            const t = (el.textContent || '').replace(/\s/g, '');
+            if (!/^\d{18,19}$/.test(t)) continue;
+            parseRow(t, findRow(el));
           }
         }
+        return results;
+      }).catch(() => []);
+
+      for (const o of domOrders) {
+        if (o.tradeType === 'SELL') sell.push(o);
+        else buy.push(o);
       }
       if (sell.length > 0 || buy.length > 0) {
-        console.log(`[SparkP2P] DOM order read: ${buy.length} buy, ${sell.length} sell`);
+        console.log(`[SparkP2P] DOM order read (row-anchored): ${buy.length} buy, ${sell.length} sell`);
       }
     }
 
@@ -3462,6 +3508,22 @@ async function cancelOrderOnBinance(page, orderNumber, reason) {
   return true;
 }
 
+// ── Authoritative per-order amount from the backend ───────────────────────────
+// Fresh /ext/order-detail call (specific-order SAPI query). Used to arbitrate
+// when the orders-list amount and the extracted payment amount disagree — the
+// list value can be stale or contaminated, so it must never abort a payment
+// on its own. Returns a number or null if unavailable.
+async function fetchAuthoritativeAmount(orderNumber) {
+  try {
+    const r = await fetch(`${API_BASE}/ext/order-detail?order_number=${encodeURIComponent(orderNumber)}`,
+      { headers: { 'Authorization': `Bearer ${token}` } }).catch(() => null);
+    if (!r?.ok) return null;
+    const d = await r.json().catch(() => null);
+    const amt = d?.ok ? parseFloat(d.fiat_amount) : NaN;
+    return (amt && amt > 0) ? amt : null;
+  } catch (_) { return null; }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function idleScan(page) {
@@ -3702,12 +3764,20 @@ async function idleScan(page) {
     _cycleVision += 0; _cycleDom += 1;
     console.log(`[SparkP2P] Sell order ${order.orderNumber} state: ${screen} (EP-13, ${_isPesaLink ? 'PesaLink' : 'M-Pesa'})`);
 
-    // Tab is already parked on this order's URL — just bring it to front + reload
+    // Bring the order tab to front and GUARANTEE it is on this order's URL
+    // before any chat is typed. If the shared page is used (dedicated tab
+    // missing), it is explicitly navigated to this order first — a chat
+    // message can never land on a different order's page.
     const sPage = orderTabs[order.orderNumber] || page;
+    const _sOrderUrl = `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`;
     const _gotoOrder = async () => {
       try { await sPage.bringToFront(); } catch (_) {}
       try {
-        await sPage.reload({ waitUntil: 'domcontentloaded', timeout: 12000 });
+        if (sPage.url().includes(order.orderNumber)) {
+          await sPage.reload({ waitUntil: 'domcontentloaded', timeout: 12000 });
+        } else {
+          await sPage.goto(_sOrderUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        }
       } catch (_) {}
       await new Promise(r => setTimeout(r, 1500));
     };
@@ -4095,12 +4165,9 @@ async function idleScan(page) {
     }
   }
 
-  // One-at-a-time: find the first unpaid buy order this cycle — all others wait
-  const _firstUnpaidBuy = sortedBuyOrders.find(o =>
-    !buyPaymentSentAt[o.orderNumber] &&
-    !imPaymentFailedOrders.has(o.orderNumber) &&
-    !markPaidDoneOrders.has(o.orderNumber)
-  );
+  // One-at-a-time: find the first unpaid buy order this cycle — all others wait.
+  // MUST stay in sync with ensureOrderTabs — both call getFirstUnpaidBuy().
+  const _firstUnpaidBuy = getFirstUnpaidBuy(sortedBuyOrders);
 
   for (const order of sortedBuyOrders) {
     if (pauseNavigation) break;
@@ -4148,7 +4215,24 @@ async function idleScan(page) {
       }
       await new Promise(r => setTimeout(r, 2000)); // give React time to render before reading DOM
     }
-    const oPage = orderTabs[order.orderNumber] || page;
+    // NEVER fall back to the shared main page for payment-detail extraction —
+    // it may be showing a different order (this caused order A's details to be
+    // used for order B). The dedicated tab must exist AND be parked on THIS
+    // order's URL, otherwise skip and retry next cycle.
+    const oPage = orderTabs[order.orderNumber];
+    if (!oPage || oPage.isClosed()) {
+      console.log(`[SparkP2P] Order ${order.orderNumber.slice(-8)} — dedicated tab unavailable, skipping this cycle (no main-page fallback)`);
+      continue;
+    }
+    if (!oPage.url().includes(order.orderNumber)) {
+      await oPage.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
+        { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 2000));
+      if (!oPage.url().includes(order.orderNumber)) {
+        sendBotLog('warn', `Order ...${order.orderNumber.slice(-8)} — tab is on the wrong URL, skipping this cycle to prevent cross-order reads`);
+        continue;
+      }
+    }
     await new Promise(r => setTimeout(r, 1500));
 
     await dismissBinanceModals(oPage);
@@ -4757,12 +4841,30 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
       if (paymentDetails._source === 'dom' || paymentDetails._source === 'dom_retry' || paymentDetails._source === 'vision') {
         const _orderFiat = parseFloat(order.totalPrice || order.fiatAmount) || 0;
         if (_orderFiat > 0 && Math.abs(amt - _orderFiat) / _orderFiat > 0.02) {
-          const _mismatchMsg = `⚠️ Order ${order.orderNumber.slice(-8)}: amount mismatch — DOM/Vision says KES ${amt} but order list says KES ${_orderFiat}. PAYMENT BLOCKED to prevent wrong amount.`;
-          sendBotLog('error', _mismatchMsg);
-          console.error(`[SparkP2P] Amount mismatch BLOCKED: dom=${amt}, list=${_orderFiat} (source: ${paymentDetails._source})`);
-          imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
-          activeBuyPaymentSlot = null;
-          continue;
+          // The orders-list amount can itself be contaminated (row-overlap on the
+          // list page), so arbitrate with a fresh per-order API call instead of
+          // treating the list as ground truth.
+          const _apiAmt = await fetchAuthoritativeAmount(order.orderNumber);
+          if (_apiAmt && Math.abs(amt - _apiAmt) / _apiAmt <= 0.02) {
+            // API confirms the extracted amount — list value was stale/contaminated
+            console.log(`[SparkP2P] Amount arbitration: API confirms extracted KES ${amt} (list said ${_orderFiat}) — proceeding`);
+            sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} — API confirmed KES ${amt.toLocaleString()} (orders-list value was stale)`);
+            paymentDetails.amount = _apiAmt;
+          } else if (_apiAmt && Math.abs(_orderFiat - _apiAmt) / _apiAmt <= 0.02) {
+            // API confirms the list value — the extracted amount is wrong; re-extract
+            sendBotLog('warn', `Order ...${order.orderNumber.slice(-8)} — extracted KES ${amt} rejected (API says KES ${_apiAmt.toLocaleString()}). Clearing cache, retrying next cycle.`);
+            delete buyPaymentDetailsCache[order.orderNumber];
+            activeBuyPaymentSlot = null;
+            continue;
+          } else {
+            // API unavailable or disagrees with both sources — block for manual review
+            const _mismatchMsg = `⚠️ Order ${order.orderNumber.slice(-8)}: amount mismatch — extracted KES ${amt}, list KES ${_orderFiat}, API ${_apiAmt ?? 'unavailable'}. PAYMENT BLOCKED — check manually.`;
+            sendBotLog('error', _mismatchMsg);
+            console.error(`[SparkP2P] Amount mismatch BLOCKED: extracted=${amt}, list=${_orderFiat}, api=${_apiAmt} (source: ${paymentDetails._source})`);
+            imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
+            activeBuyPaymentSlot = null;
+            continue;
+          }
         }
       }
 
@@ -4794,11 +4896,33 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
           if (_expectedKes > 0 && _extractedKes > 0) {
             const _diff = Math.abs(_extractedKes - _expectedKes);
             const _pct = _diff / _expectedKes;
-            if (_pct > 0.01) { // more than 1% difference
-              sendBotLog('error', `❌ Amount mismatch on buy order ${order.orderNumber}: Binance order says KES ${_expectedKes.toLocaleString()} but payment details extracted KES ${_extractedKes.toLocaleString()} — payment ABORTED to prevent overpayment. Check the order manually.`);
-              delete buyPaymentDetailsCache[order.orderNumber]; // clear stale cache so next cycle re-fetches
-              imPaymentFailedOrders.add(order.orderNumber);
-              continue;
+            if (_pct > 0.01) { // more than 1% difference — arbitrate with a fresh API call
+              const _apiKes = await fetchAuthoritativeAmount(order.orderNumber);
+              if (_apiKes && Math.abs(_extractedKes - _apiKes) / _apiKes <= 0.01) {
+                // API confirms the extracted amount — orders-list value was contaminated.
+                console.log(`[SparkP2P] Pre-pay arbitration: API confirms extracted KES ${_extractedKes} (list said ${_expectedKes}) — proceeding`);
+                sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} — API confirmed KES ${_apiKes.toLocaleString()}, proceeding with payment`);
+                paymentDetails.amount = _apiKes;
+              } else if (_apiKes && Math.abs(_expectedKes - _apiKes) / _apiKes <= 0.01) {
+                // API confirms the list value — extracted details are wrong; re-fetch next cycle
+                sendBotLog('warn', `Order ...${order.orderNumber.slice(-8)} — extracted KES ${_extractedKes.toLocaleString()} rejected (API says KES ${_apiKes.toLocaleString()}). Clearing cache, retrying next cycle.`);
+                delete buyPaymentDetailsCache[order.orderNumber];
+                activeBuyPaymentSlot = null;
+                continue;
+              } else if (!_apiKes) {
+                // API unreachable — soft-skip this cycle, do NOT permanently fail the order
+                sendBotLog('warning', `Order ...${order.orderNumber.slice(-8)} — amount mismatch and API unreachable. Retrying next cycle.`);
+                delete buyPaymentDetailsCache[order.orderNumber];
+                activeBuyPaymentSlot = null;
+                continue;
+              } else {
+                // All three sources disagree — genuine problem, block for manual review
+                sendBotLog('error', `❌ Amount mismatch on buy order ${order.orderNumber}: list KES ${_expectedKes.toLocaleString()}, extracted KES ${_extractedKes.toLocaleString()}, API KES ${_apiKes.toLocaleString()} — payment ABORTED. Check the order manually.`);
+                delete buyPaymentDetailsCache[order.orderNumber];
+                imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
+                activeBuyPaymentSlot = null;
+                continue;
+              }
             }
           }
           } // end amount check guard
