@@ -3624,6 +3624,278 @@ async def admin_confirm_trader_contact_verify(
     return {"status": "verified", "trader_name": trader.full_name}
 
 
+# ── OTP Email Setup: change all Choice Bank sub-account emails to otp+LAST4@otp.sparkp2p.com ──
+
+OTP_EMAIL_DOMAIN = "otp.sparkp2p.com"
+
+# Tracks pending email-change applications awaiting admin OTP entry.
+# Choice Bank sends the OTP to the OLD email, so the admin must enter it manually.
+# trader_id -> {application_id, new_email, account_last_4}
+_email_change_apps: dict[int, dict] = {}
+
+
+@router.post("/choice/traders/{trader_id}/initiate-email-change")
+async def admin_initiate_email_change(
+    trader_id: int,
+    body: dict = {},
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Step 1 of 2: Tell Choice Bank to change a trader's email to otp+LAST4@otp.sparkp2p.com.
+    Choice Bank sends the verification OTP to the trader's OLD email.
+    Returns the new email and the old email so the admin knows where to look.
+    Body: { id_number?: string }  — optional override when KYC submission has no ID on file.
+    Call confirm-email-change with the OTP to complete.
+    """
+    from app.models.kyc_submission import KycSubmission
+    from app.services.choice_bank import client as choice
+
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="Trader has no Choice Bank account")
+
+    # Use explicitly provided ID number, or fall back to KYC submission
+    id_number = str(body.get("id_number") or "").strip() if body else ""
+    if not id_number:
+        sub_res = await db.execute(
+            select(KycSubmission)
+            .where(KycSubmission.trader_id == trader_id)
+            .order_by(KycSubmission.id.desc())
+            .limit(1)
+        )
+        sub = sub_res.scalar_one_or_none()
+        id_number = (sub.id_number or "").strip() if sub else ""
+    if not id_number:
+        raise HTTPException(status_code=400, detail="No KYC submission with ID number for this trader. Provide id_number in request body.")
+
+    account_last_4 = str(trader.choice_account_id)[-4:]
+    new_email = f"otp+{account_last_4}@{OTP_EMAIL_DOMAIN}"
+
+    result = await choice.add_or_update_email(document_number=id_number, email=new_email)
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "addOrUpdateEmail failed"))
+
+    application_id = (result.get("data") or {}).get("applicationId") or ""
+    _email_change_apps[trader_id] = {
+        "application_id": application_id,
+        "new_email": new_email,
+        "account_last_4": account_last_4,
+    }
+    logger.warning(
+        f"[Admin] Email-change initiated for trader {trader_id} ({trader.full_name}) "
+        f"→ {new_email} | appId={application_id} | OTP sent to phone {trader.phone}"
+    )
+    return {
+        "application_id": application_id,
+        "new_email": new_email,
+        "old_email": trader.email or "(unknown)",
+        "phone": trader.phone or "(unknown)",
+    }
+
+
+@router.post("/choice/traders/{trader_id}/confirm-email-change")
+async def admin_confirm_email_change(
+    trader_id: int,
+    body: dict,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Step 2 of 2: Admin enters the OTP the trader received in their old email.
+    Confirms the email change with Choice Bank and clears the pending application.
+    """
+    from app.services.choice_bank import client as choice
+
+    otp = str(body.get("otp") or "").strip()
+    if not otp:
+        raise HTTPException(status_code=400, detail="otp is required")
+
+    # Frontend sends back application_id it received from initiate step (survives backend restarts)
+    application_id = str(body.get("application_id") or "").strip()
+    new_email = str(body.get("new_email") or "").strip()
+
+    # Fall back to in-memory store if frontend didn't send it
+    if not application_id:
+        app_entry = _email_change_apps.get(trader_id)
+        if not app_entry:
+            raise HTTPException(
+                status_code=400,
+                detail="No pending email-change application for this trader. Run initiate-email-change first.",
+            )
+        application_id = app_entry["application_id"]
+        new_email = app_entry.get("new_email", "")
+
+    # Try /common/confirmOperation first (used for most OTP flows),
+    # fall back to /common/confirmOtp (used by verifyEmailOrMobile) if it fails.
+    confirm = await choice.confirm_otp(application_id, otp)
+    if confirm.get("code") != "00000":
+        confirm = await choice.confirm_contact_verify(application_id, otp)
+    if confirm.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=confirm.get("msg", "Email verification failed"))
+
+    _email_change_apps.pop(trader_id, None)
+    trader = await db.get(Trader, trader_id)
+    logger.warning(
+        f"[Admin] Email-change confirmed for trader {trader_id} ({trader.full_name if trader else ''}) → {new_email}"
+    )
+    return {"ok": True, "new_email": new_email}
+
+
+@router.post("/choice/traders/{trader_id}/setup-otp-email")
+async def admin_setup_otp_email(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Change a trader's Choice Bank registered email to otp+LAST4@otp.sparkp2p.com,
+    then automatically confirm the verification OTP that Choice Bank sends to that email
+    (received via Mailgun webhook). The full flow completes in one API call (~10–20s).
+    """
+    import asyncio
+    from app.api.routes.webhooks import pending_email_verifications
+    from app.models.kyc_submission import KycSubmission
+    from app.services.choice_bank import client as choice
+
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="Trader has no Choice Bank account")
+
+    sub_res = await db.execute(
+        select(KycSubmission)
+        .where(KycSubmission.trader_id == trader_id)
+        .order_by(KycSubmission.id.desc())
+        .limit(1)
+    )
+    sub = sub_res.scalar_one_or_none()
+    if not sub or not sub.id_number:
+        raise HTTPException(status_code=400, detail="No KYC submission with ID number for this trader")
+
+    account_last_4 = str(trader.choice_account_id)[-4:]
+    new_email = f"otp+{account_last_4}@{OTP_EMAIL_DOMAIN}"
+
+    # Step 1: tell Choice Bank to change the email
+    result = await choice.add_or_update_email(
+        document_number=sub.id_number,
+        email=new_email,
+    )
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "addOrUpdateEmail failed"))
+
+    application_id = (result.get("data") or {}).get("applicationId") or ""
+    logger.warning(f"[Admin] OTP email change initiated for trader {trader_id} → {new_email} appId={application_id}")
+
+    # Step 2: wait for Choice Bank verification OTP to arrive via Mailgun webhook
+    event = asyncio.Event()
+    pending_email_verifications[account_last_4] = {"event": event, "otp": None}
+    try:
+        try:
+            await asyncio.wait_for(event.wait(), timeout=60.0)
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=408,
+                detail=f"Verification email did not arrive within 60s at {new_email}. "
+                       f"Check Mailgun is receiving emails for otp.sparkp2p.com.",
+            )
+
+        otp = (pending_email_verifications.get(account_last_4) or {}).get("otp")
+        if not otp:
+            raise HTTPException(status_code=500, detail="Email event fired but no OTP was captured")
+
+        # Step 3: confirm the verification OTP
+        confirm = await choice.confirm_contact_verify(application_id, otp)
+        if confirm.get("code") != "00000":
+            raise HTTPException(status_code=400, detail=confirm.get("msg", "Email verification failed"))
+
+        logger.warning(f"[Admin] OTP email verified for trader {trader_id} ({trader.full_name}) → {new_email}")
+        return {
+            "ok": True,
+            "trader_id": trader_id,
+            "trader_name": trader.full_name,
+            "email": new_email,
+            "account_last_4": account_last_4,
+        }
+    finally:
+        pending_email_verifications.pop(account_last_4, None)
+
+
+@router.post("/choice/bulk-setup-otp-emails")
+async def admin_bulk_setup_otp_emails(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Run setup-otp-email for ALL traders who have a Choice Bank account and a KYC submission.
+    Processes one trader at a time. Returns a per-trader result list.
+    """
+    import asyncio
+    from app.api.routes.webhooks import pending_email_verifications
+    from app.models.kyc_submission import KycSubmission
+    from app.services.choice_bank import client as choice
+
+    traders_res = await db.execute(
+        select(Trader).where(Trader.choice_account_id.isnot(None))
+    )
+    traders = traders_res.scalars().all()
+
+    results = []
+    for trader in traders:
+        account_last_4 = str(trader.choice_account_id)[-4:]
+        new_email = f"otp+{account_last_4}@{OTP_EMAIL_DOMAIN}"
+
+        sub_res = await db.execute(
+            select(KycSubmission)
+            .where(KycSubmission.trader_id == trader.id)
+            .order_by(KycSubmission.id.desc())
+            .limit(1)
+        )
+        sub = sub_res.scalar_one_or_none()
+        if not sub or not sub.id_number:
+            results.append({"trader_id": trader.id, "status": "skipped", "reason": "no KYC ID number"})
+            continue
+
+        try:
+            result = await choice.add_or_update_email(document_number=sub.id_number, email=new_email)
+            if result.get("code") != "00000":
+                results.append({"trader_id": trader.id, "status": "error", "reason": result.get("msg")})
+                continue
+
+            application_id = (result.get("data") or {}).get("applicationId") or ""
+            event = asyncio.Event()
+            pending_email_verifications[account_last_4] = {"event": event, "otp": None}
+
+            try:
+                await asyncio.wait_for(event.wait(), timeout=60.0)
+            except asyncio.TimeoutError:
+                results.append({"trader_id": trader.id, "email": new_email, "status": "error", "reason": "verification email timeout"})
+                continue
+            finally:
+                pending_email_verifications.pop(account_last_4, None)
+
+            otp = (pending_email_verifications.get(account_last_4) or {}).get("otp")
+            if not otp:
+                results.append({"trader_id": trader.id, "status": "error", "reason": "OTP not captured"})
+                continue
+
+            confirm = await choice.confirm_contact_verify(application_id, otp)
+            if confirm.get("code") != "00000":
+                results.append({"trader_id": trader.id, "email": new_email, "status": "error", "reason": confirm.get("msg")})
+                continue
+
+            results.append({"trader_id": trader.id, "email": new_email, "status": "ok"})
+            logger.warning(f"[Admin] Bulk OTP email setup: trader {trader.id} → {new_email} ✓")
+
+        except Exception as exc:
+            results.append({"trader_id": trader.id, "status": "error", "reason": str(exc)})
+
+    return {"results": results}
+
+
 # ── KYC Staging Submission Admin Routes ────────────────────────────────────────
 
 @router.get("/kyc/submissions")

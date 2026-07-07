@@ -18,8 +18,9 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 # In-memory stores
 _link_codes: dict = {}         # code -> {trader_id, expires_at}
-_pending_approvals: dict = {}  # order_number -> {chat_id, message_id, status, trader_id, created_at, type?}
-_pending_name_checks: dict = {}  # order_number -> {chat_id, message_id, status, trader_id, created_at}
+_pending_approvals: dict = {}   # order_number -> {chat_id, message_id, status, trader_id, created_at, type?}
+_pending_name_checks: dict = {} # order_number -> {chat_id, message_id, status, trader_id, created_at}
+_pending_otp_acks: dict = {}    # order_number -> {chat_id, message_id, trader_id, created_at}
 
 APPROVAL_TIMEOUT = 2700  # 45 minutes
 
@@ -116,6 +117,39 @@ async def notify_trader(trader, message: str, reply_markup=None, reply_to=None) 
     return result is not None
 
 
+async def send_otp_timeout_alert(trader, order_number: str, amount: float, name: str, method: str = "mpesa") -> bool:
+    """Send an OTP-timeout alert with inline buttons asking if money actually moved.
+    Stores the pending ack so the webhook can dismiss the buttons on reply."""
+    if not getattr(trader, "telegram_chat_id", None):
+        return False
+    method_label = "M-Pesa" if "mpesa" in method.lower() else ("PesaLink" if "im_bank" in method.lower() else "Bank transfer")
+    amt_str = f"KES {int(amount):,}"
+    text = (
+        f"⏱️ <b>OTP Timeout — Choice Bank Transfer</b>\n\n"
+        f"<b>Order:</b> <code>...{order_number[-12:]}</code>\n"
+        f"<b>Amount:</b> {amt_str}\n"
+        f"<b>To:</b> {name}\n"
+        f"<b>Via:</b> {method_label}\n\n"
+        f"The Binance order was <b>cancelled</b> because the Choice Bank OTP didn't "
+        f"arrive within 3 minutes.\n\n"
+        f"⚠️ <b>Did the money actually leave your Choice Bank account?</b>"
+    )
+    keyboard = {"inline_keyboard": [[
+        {"text": "✅ No — it didn't move", "callback_data": f"otp_notmoved:{order_number}"},
+        {"text": "⚠️ Yes — it moved",      "callback_data": f"otp_moved:{order_number}"},
+    ]]}
+    result = await send_trader_message(trader, text, reply_markup=keyboard)
+    if result and result.get("ok"):
+        _pending_otp_acks[order_number] = {
+            "chat_id": str(trader.telegram_chat_id),
+            "message_id": result["result"]["message_id"],
+            "trader_id": getattr(trader, "id", None),
+            "created_at": time.time(),
+        }
+        return True
+    return False
+
+
 # ── Public webhook — Telegram pushes all updates here ───────────────────────
 
 @router.post("/webhook")
@@ -180,6 +214,40 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         cb_id = cb.get("id")
         data = cb.get("data", "")
         parts = data.split(":", 1)
+
+        # ── OTP timeout ack (money moved / not moved) ──
+        if len(parts) == 2 and parts[0] in ("otp_notmoved", "otp_moved"):
+            otp_action, otp_order = parts[0], parts[1]
+            ack = _pending_otp_acks.get(otp_order)
+            chat_id = str(cb.get("message", {}).get("chat", {}).get("id", ""))
+            msg_id = cb.get("message", {}).get("message_id")
+            if otp_action == "otp_notmoved":
+                await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Got it — no action needed."})
+                await _tg_send("editMessageText", {
+                    "chat_id": chat_id,
+                    "message_id": msg_id,
+                    "text": (
+                        f"✅ <b>No money moved — no action needed</b>\n\n"
+                        f"Order <code>...{otp_order[-12:]}</code>\n\n"
+                        f"Choice Bank auto-expired the pending transfer. Binance order was cancelled."
+                    ),
+                    "parse_mode": "HTML",
+                })
+            else:  # otp_moved
+                await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Acknowledged — please handle manually."})
+                await _tg_send("editMessageText", {
+                    "chat_id": chat_id,
+                    "message_id": msg_id,
+                    "text": (
+                        f"⚠️ <b>Money moved — manual action required</b>\n\n"
+                        f"Order <code>...{otp_order[-12:]}</code>\n\n"
+                        f"Your money left Choice Bank but the Binance order was already cancelled. "
+                        f"Contact the seller directly or submit a reversal request through Choice Bank to recover the funds."
+                    ),
+                    "parse_mode": "HTML",
+                })
+            _pending_otp_acks.pop(otp_order, None)
+            return {"ok": True}
 
         # ── Squad invite accept / decline ──
         if len(parts) == 2 and parts[0] in ("squadaccept", "squaddecline"):

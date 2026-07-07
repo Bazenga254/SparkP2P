@@ -3438,14 +3438,14 @@ export default function Dashboard() {
         {/* ==================== BUY CREDITS TAB ==================== */}
         {activeTab === 'credits' && (() => {
           const SUB_PLANS = [
-            { key: 'starter',  name: 'Bronze',  amount: 10000, usdPrice: 75,  cls: '',        ribbon: null,             btn: 'btn-ghost', check: 'check-a',
-              blurb: 'Suited for Bronze merchants.', summary: '30 trades & 100 Telegram alerts per day',
+            { key: 'starter',  name: 'Starter',         amount: 3000,  cls: '',        ribbon: null,             btn: 'btn-ghost', check: 'check-a',
+              blurb: 'For casual traders getting started.', summary: '30 trades & 100 Telegram alerts per day',
               features: ['<b>30 trades</b> per day (buy + sell)', '<b>100</b> Telegram alerts per day', 'Resets daily at 3:00 AM'] },
-            { key: 'pro',      name: 'Silver',  amount: 11000, usdPrice: 85,  cls: 'popular', ribbon: '★ MOST POPULAR', btn: 'btn-amber', check: 'check-a',
-              blurb: 'Suited for Silver merchants.', summary: '80 trades & 200 Telegram alerts per day',
+            { key: 'pro',      name: 'Starter Pro',     amount: 5000,  cls: 'popular', ribbon: '★ MOST POPULAR', btn: 'btn-amber', check: 'check-a',
+              blurb: 'Best balance of volume and value.', summary: '80 trades & 200 Telegram alerts per day',
               features: ['<b>80 trades</b> per day (buy + sell)', '<b>200</b> Telegram alerts per day', 'Resets daily at 3:00 AM'] },
-            { key: 'pro_max',  name: 'Gold',    amount: 13000, usdPrice: 99,  cls: 'best',    ribbon: '★ BEST VALUE',   btn: 'btn-green', check: 'check-g',
-              blurb: 'Suited for Gold merchants.', summary: 'Unlimited trades & Telegram alerts',
+            { key: 'pro_max',  name: 'Starter Pro Max', amount: 10000, cls: 'best',    ribbon: '★ BEST VALUE',   btn: 'btn-green', check: 'check-g',
+              blurb: 'For high-volume power traders.', summary: 'Unlimited trades & Telegram alerts',
               features: ['<b>Unlimited</b> trades per day', '<b>Unlimited</b> Telegram alerts', '<b>Priority</b> support'] },
           ];
           const currentPlanKey = profile?.subscription_plan || null;
@@ -3634,7 +3634,7 @@ export default function Dashboard() {
                           </span>
                         </div>
                       ))}
-                      <div style={{ color: '#6b7280', fontSize: 11, marginTop: 10 }}>Enter the amount for your plan (Bronze KES 10,000 · Silver KES 11,000 · Gold KES 13,000).</div>
+                      <div style={{ color: '#6b7280', fontSize: 11, marginTop: 10 }}>Enter the amount for your plan (KES 3,000 / 5,000 / 10,000).</div>
                     </div>
 
                     {/* Pay with Choice Bank */}
@@ -3696,8 +3696,7 @@ export default function Dashboard() {
                     <div key={p.key} className={`plan ${p.cls} reveal d${idx + 4}`}>
                       {p.ribbon && <div className="ribbon">{p.ribbon}</div>}
                       <div className="name">{p.name}</div>
-                      <div className="price"><span className="cur">$</span><span className="amt">{p.usdPrice}</span><span className="per">/mo</span></div>
-                      <div style={{ fontSize: 11.5, color: 'var(--txt-faint)', marginTop: -4, marginBottom: 6 }}>KES {p.amount.toLocaleString()} via M-Pesa</div>
+                      <div className="price"><span className="cur">KES</span><span className="amt">{p.amount.toLocaleString()}</span><span className="per">/mo</span></div>
                       <div className="blurb">{p.blurb}</div>
                       <ul>
                         {p.features.map((f, i) => (

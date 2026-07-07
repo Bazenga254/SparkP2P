@@ -195,7 +195,7 @@ export default function Landing() {
       <nav className="land-nav">
         <div className="land-nav-inner">
           <div className="land-nav-brand">
-            <img src="/spark-icon.svg" alt="SparkP2P" className="land-nav-logo" />
+            <img src="/logo.png" alt="SparkP2P" className="land-nav-logo" />
             <span className="land-nav-name">SparkP2P</span>
           </div>
           <div className="land-nav-links">
@@ -552,18 +552,17 @@ export default function Landing() {
           </div>
           <div className="land-pricing-grid">
             {[
-              { name: 'Bronze', price: '10,000', usd: '$75', popular: false,
+              { name: 'Starter', price: '3,000', popular: false,
                 features: ['Sell-side automation', 'Automatic crypto release', 'M-Pesa payment matching', 'Up to 30 trades/day', 'Telegram notifications'] },
-              { name: 'Silver', price: '11,000', usd: '$85', popular: false,
-                features: ['Everything in Bronze', 'Buy-side auto-pay', 'Up to 80 trades/day', 'Priority settlement', 'Advanced analytics'] },
-              { name: 'Gold', price: '13,000', usd: '$99', popular: true,
-                features: ['Everything in Silver', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Priority support', 'Dedicated onboarding'] },
+              { name: 'Starter Pro', price: '5,000', popular: false,
+                features: ['Everything in Starter', 'Buy-side auto-pay', 'Up to 80 trades/day', 'Priority settlement', 'Advanced analytics'] },
+              { name: 'Starter Pro Max', price: '10,000', popular: true,
+                features: ['Everything in Pro', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Priority support', 'Dedicated onboarding'] },
             ].map(plan => (
               <div key={plan.name} className={`land-price-card${plan.popular ? ' popular' : ''}`}>
                 {plan.popular && <div className="land-price-badge">Most Popular</div>}
                 <h3 className="land-price-name">{plan.name}</h3>
-                <div className="land-price-amount"><span className="land-price-cur">{plan.usd}</span><span className="land-price-per">/month</span></div>
-                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2, marginBottom: 4 }}>KES {plan.price} via M-Pesa</div>
+                <div className="land-price-amount"><span className="land-price-cur">KES</span> {plan.price}<span className="land-price-per">/month</span></div>
                 <ul className="land-price-features">
                   {plan.features.map(f => (
                     <li key={f}>
@@ -614,7 +613,7 @@ export default function Landing() {
               </div>
               <h3>Windows</h3>
               <p>Windows 10 / 11 &nbsp;·&nbsp; 64-bit</p>
-              <a href="/api/download/latest" download="SparkP2P-Setup.exe" className="land-download-btn">
+              <a href="/api/download/latest" className="land-download-btn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                 </svg>
@@ -629,8 +628,8 @@ export default function Landing() {
                 </svg>
               </div>
               <h3>Android</h3>
-              <p>Phone &amp; tablet &nbsp;·&nbsp; APK sideload</p>
-              <a href="/api/download/android" download="SparkP2P.apk" className="land-download-btn">
+              <p>Phone &amp; tablet &nbsp;·&nbsp; APK</p>
+              <a href="/api/download/android" className="land-download-btn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                 </svg>
@@ -706,7 +705,7 @@ export default function Landing() {
         <div className="land-footer-inner">
           <div className="land-footer-brand-col">
             <div className="land-footer-brand">
-              <img src="/spark-icon.svg" alt="SparkP2P" className="land-footer-logo" />
+              <img src="/logo.png" alt="SparkP2P" className="land-footer-logo" />
               <span>SparkP2P</span>
             </div>
             <p className="land-footer-tagline">

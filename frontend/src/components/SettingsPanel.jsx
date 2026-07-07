@@ -5,7 +5,6 @@ import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
 import RelayConnectStatus from './RelayConnectStatus';
-import BinanceChatTest from './BinanceChatTest';
 import { isNative } from '../mobile/relayAgent';
 import { bioAvailable, bioAuthenticate, bioEnabled, setBioEnabled } from '../mobile/biometric';
 import '@smile_identity/smart-camera-web';
@@ -1223,9 +1222,6 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
           {/* ── Biometric unlock (native app only) ──────────── */}
           <BiometricSetting />
 
-          {/* ── Mobile chat-send test (native app only) ──────── */}
-          <BinanceChatTest />
-
           {/* ── Profile Details ─────────────────────────────── */}
           <div className="card" style={{ marginBottom: 0 }}>
             {/* Card header */}
@@ -2221,12 +2217,9 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
         };
 
         const handleSubmit = async () => {
-          const { firstName, lastName, mobile, idNumber, birthday, gender, email } = cbForm;
+          const { firstName, lastName, mobile, idNumber, birthday, gender } = cbForm;
           if (!firstName || !lastName || !mobile || !idNumber || !birthday) {
             setCbMsg({ type: 'error', text: 'Please fill in all required fields.' }); return;
-          }
-          if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
-            setCbMsg({ type: 'error', text: 'A valid email is required — use the same email as your Binance account (the bot reads OTPs from it).' }); return;
           }
           if (!cbFiles.front || !cbFiles.back || !cbFiles.selfie) {
             setCbMsg({ type: 'error', text: 'Please upload ID front, ID back, and selfie.' }); return;
@@ -2250,9 +2243,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
             });
             setCbRequestId(res.data.onboardingRequestId);
             setCbStep('otp');
-            setCbMsg({ type: 'info', text: res.data.otp_channel === 'email'
-              ? 'An OTP has been sent to your EMAIL (the same one you use for Binance). Enter it below.'
-              : 'An OTP has been sent to your phone. Enter it below.' });
+            setCbMsg({ type: 'info', text: 'An OTP has been sent to your phone. Enter it below.' });
           } catch (err) {
             setCbMsg({ type: 'error', text: err?.response?.data?.detail || 'Onboarding failed. Try again.' });
           }
@@ -2354,7 +2345,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
               </div>
             ) : cbStep === 'otp' ? (
               <div style={{ maxWidth: 400 }}>
-                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 20 }}>Enter the OTP we sent to confirm your identity (check your <strong>email</strong> — the same one you use for Binance — and your phone).</p>
+                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 20 }}>Enter the OTP sent to your registered phone number to confirm your identity.</p>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                   <input type="text" placeholder="6-digit OTP" value={cbOtp} onChange={e => setCbOtp(e.target.value)} maxLength={6}
                     style={{ flex: 1, background: '#13151f', border: '1px solid #374151', borderRadius: 8, color: '#fff', padding: '12px 14px', fontSize: 18, letterSpacing: 6, textAlign: 'center', outline: 'none' }} />
