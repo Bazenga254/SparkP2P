@@ -20,6 +20,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 _link_codes: dict = {}         # code -> {trader_id, expires_at}
 _pending_approvals: dict = {}   # order_number -> {chat_id, message_id, status, trader_id, created_at, type?}
 _pending_name_checks: dict = {} # order_number -> {chat_id, message_id, status, trader_id, created_at}
+_pending_payment_decisions: dict = {} # order_number -> {chat_id, message_id, status, trader_id, created_at} — buy payment stuck: merchant chooses manual/cancel
 _pending_otp_acks: dict = {}    # order_number -> {chat_id, message_id, trader_id, created_at}
 
 APPROVAL_TIMEOUT = 2700  # 45 minutes
@@ -308,6 +309,41 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         })
                     if nc:
                         nc["status"] = "rejected"
+                return {"ok": True}
+
+            # ── Buy payment-issue decision callbacks ─────────────────────────
+            if action in ("pay_manual", "pay_cancel"):
+                pd = _pending_payment_decisions.get(order_number)
+                if action == "pay_manual":
+                    await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "👍 You'll complete this order manually."})
+                    if pd and pd.get("message_id"):
+                        await _tg_send("editMessageText", {
+                            "chat_id": pd["chat_id"], "message_id": pd["message_id"],
+                            "text": f"✍️ MANUAL — Order {order_number}\n\nThe bot will stop trying this order. Please complete or cancel it yourself in Binance P2P.",
+                        })
+                    if pd:
+                        pd["status"] = "manual"
+                else:  # pay_cancel
+                    await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ Cancelling the order on Binance..."})
+                    if pd and pd.get("message_id"):
+                        await _tg_send("editMessageText", {
+                            "chat_id": pd["chat_id"], "message_id": pd["message_id"],
+                            "text": f"❌ CANCELLING — Order {order_number}\n\nThe bot is cancelling this order on Binance now.",
+                        })
+                    if pd:
+                        pd["status"] = "cancel"
+                    # Cancel on Binance server-side via EP-9 (relay-routed)
+                    try:
+                        from sqlalchemy import select as _sel
+                        from app.models.trader import Trader as _Trader
+                        _t = (await db.execute(_sel(_Trader).where(_Trader.id == (pd or {}).get("trader_id", 0)))).scalar_one_or_none()
+                        if _t and _t.binance_api_key and _t.binance_api_secret:
+                            from app.core.security import decrypt_data
+                            from app.services.binance.sapi_client import cancel_order, relay_trader
+                            relay_trader.set(_t.id)
+                            await cancel_order(decrypt_data(_t.binance_api_key), decrypt_data(_t.binance_api_secret), order_number)
+                    except Exception as _ce:
+                        import logging; logging.getLogger(__name__).warning("pay_cancel cancel failed: %s", _ce)
                 return {"ok": True}
 
             # ── Sell / Buy approval callbacks ────────────────────────────────
@@ -763,3 +799,61 @@ async def name_mismatch_alert(
             "created_at": time.time(),
         }
     return {"ok": ok}
+
+
+class PaymentIssueAlert(BaseModel):
+    order_number: str
+    seller_name: str = ""
+    amount: float = 0
+    reason: str = ""
+
+
+@router.post("/payment-issue-alert")
+async def payment_issue_alert(
+    data: PaymentIssueAlert,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Buy payment couldn't complete automatically. Ask the merchant what to do:
+    ✍️ complete manually (bot backs off) or ❌ cancel (bot cancels via EP-9). The bot
+    never cancels on its own — only on this explicit merchant command."""
+    if not trader.telegram_chat_id:
+        return {"ok": False, "reason": "no_telegram"}
+    amt_str = f"KES {int(data.amount):,}" if data.amount else ""
+    text = (
+        f"⚠️ <b>Payment Issue — Your Decision Needed</b>\n\n"
+        f"<b>Order:</b> {data.order_number}\n"
+        + (f"<b>Seller:</b> {data.seller_name}\n" if data.seller_name else "")
+        + (f"<b>Amount:</b> {amt_str}\n" if amt_str else "")
+        + (f"<b>Problem:</b> {data.reason}\n" if data.reason else "")
+        + f"\nThe bot could not complete this payment automatically. How would you like to proceed?"
+    )
+    keyboard = {"inline_keyboard": [[
+        {"text": "✍️ I'll complete it manually", "callback_data": f"pay_manual:{data.order_number}"},
+        {"text": "❌ Cancel the order", "callback_data": f"pay_cancel:{data.order_number}"},
+    ]]}
+    resp = await _tg_send("sendMessage", {
+        "chat_id": trader.telegram_chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "reply_markup": keyboard,
+    })
+    ok = bool(resp and resp.get("ok"))
+    if ok:
+        _pending_payment_decisions[data.order_number] = {
+            "chat_id": str(trader.telegram_chat_id),
+            "message_id": resp["result"]["message_id"],
+            "status": "pending",
+            "trader_id": trader.id,
+            "created_at": time.time(),
+        }
+    return {"ok": ok}
+
+
+@router.get("/payment-decision")
+async def payment_decision(
+    order_number: str,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Desktop polls the merchant's decision for a stuck buy payment: pending | manual | cancel | none."""
+    pd = _pending_payment_decisions.get(order_number)
+    return {"status": (pd or {}).get("status", "none")}

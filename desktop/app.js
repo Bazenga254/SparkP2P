@@ -224,7 +224,9 @@ const imPaymentFailedOrders = new Set(); // orderNums that gave up after max pay
 const buyRetryCount = {};            // orderNum → number of failed payment attempts (retry, never cancel)
 const buyDeprioritizedAt = {};       // orderNum → last-failure timestamp; sends the order to the BACK of the buy queue
 const buyGaveUpMsgSent = new Set();  // orderNums where the polite "please cancel" message was sent to the seller
-const MAX_BUY_PAYMENT_ATTEMPTS = 5;  // after this many failed attempts, politely ask the seller to cancel (never self-cancel)
+const buyAwaitingDecision = new Set(); // orderNums where the bot asked the MERCHANT (Telegram) to choose manual/cancel
+const buyManualOrders = new Set();     // orderNums the merchant chose to complete MANUALLY — bot hands off
+const MAX_BUY_PAYMENT_ATTEMPTS = 3;  // after this many failed attempts, ask the MERCHANT on Telegram (manual/cancel) — never self-cancel
 const reportedCompletedBuyOrders = new Set();  // order numbers already sent as completed_buy_order_numbers — prevents duplicate SMS
 const reportedCompletedSellOrders = new Set(); // order numbers already sent as completed_sell_order_numbers — prevents duplicate SMS
 const sellOrderDetailsCache = {};  // { orderNumber: { state, payment_method, buyer_name, amount, ts, ...ep13 } }
@@ -3816,6 +3818,7 @@ async function idleScan(page) {
       delete imPaymentDoneMap[ghostNum];
       imPaymentFailedOrders.delete(ghostNum);
       delete buyRetryCount[ghostNum]; delete buyDeprioritizedAt[ghostNum]; buyGaveUpMsgSent.delete(ghostNum);
+      buyAwaitingDecision.delete(ghostNum); buyManualOrders.delete(ghostNum);
       buyGreetingSentOrders.delete(ghostNum);
       buyPostPaymentMsgSentOrders.delete(ghostNum);
       markPaidDoneOrders.delete(ghostNum);
@@ -3864,6 +3867,7 @@ async function idleScan(page) {
       delete imPaymentDoneMap[num];
       imPaymentFailedOrders.delete(num);
       delete buyRetryCount[num]; delete buyDeprioritizedAt[num]; buyGaveUpMsgSent.delete(num);
+      buyAwaitingDecision.delete(num); buyManualOrders.delete(num);
       buyGreetingSentOrders.delete(num);
       buyPostPaymentMsgSentOrders.delete(num);
       delete partialPayments[num];
@@ -4429,6 +4433,35 @@ async function idleScan(page) {
 
   for (const order of sortedBuyOrders) {
     if (pauseNavigation) break;
+
+    // ── Merchant decision for a stuck payment (asked on Telegram) ─────────────
+    // The bot never cancels on its own; it only acts on the merchant's Telegram choice.
+    if (buyManualOrders.has(order.orderNumber)) {
+      continue; // merchant is completing this one manually — hands off entirely
+    }
+    if (buyAwaitingDecision.has(order.orderNumber)) {
+      const _pd = await fetch(
+        `${API_BASE}/telegram/payment-decision?order_number=${encodeURIComponent(order.orderNumber)}`,
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      ).then(r => r.json()).catch(() => ({}));
+      if (_pd.status === 'manual') {
+        buyAwaitingDecision.delete(order.orderNumber);
+        buyManualOrders.add(order.orderNumber);
+        sendBotLog('info', `Buy order ...${order.orderNumber.slice(-8)} — you chose to complete it manually. Bot will not touch it.`);
+      } else if (_pd.status === 'cancel') {
+        // Merchant tapped Cancel — the backend already cancelled on Binance via EP-9.
+        buyAwaitingDecision.delete(order.orderNumber);
+        botCancelledOrders.add(order.orderNumber);
+        _saveOrderFlag(order.orderNumber, 'cancelledByBot', true);
+        await fetch(`${API_BASE}/ext/report-orders`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [order.orderNumber] }),
+        }).catch(() => {});
+        sendBotLog('info', `Buy order ...${order.orderNumber.slice(-8)} — you chose to cancel; order cancelled on Binance.`);
+        closeOrderTab(order.orderNumber, 'merchant chose cancel');
+      }
+      continue; // pending / manual / cancel — skip normal processing this cycle
+    }
 
     // ── One-at-a-time gate ────────────────────────────────────────────────────
     // Only the first unpaid buy order gets a tab and payment. All others queue.
@@ -5317,24 +5350,19 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
             activeBuyPaymentSlot = null; // release the slot so other buy orders proceed first
 
             if (_attempts >= MAX_BUY_PAYMENT_ATTEMPTS) {
-              imPaymentFailedOrders.add(order.orderNumber);      // stop retrying (still NOT cancelled)
+              imPaymentFailedOrders.add(order.orderNumber);      // stop auto-payment attempts (NOT cancelled)
               _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
-              if (!buyGaveUpMsgSent.has(order.orderNumber)) {
-                buyGaveUpMsgSent.add(order.orderNumber);
-                const _fn = (paymentDetails.name || 'there').split(' ')[0];
-                const _politeMsg =
-                  `Hello ${_fn}, I am very sorry, but I am unable to complete this order at this ` +
-                  `particular time due to a temporary issue on my end. I kindly request that you ` +
-                  `cancel this order so you can trade with another merchant without any delay. ` +
-                  `I sincerely apologize for the inconvenience and truly appreciate your understanding. Thank you.`;
-                await sendBinanceChatMessage(oPage, _politeMsg).catch(() => {});
-                sendBotLog('warning', `Buy order ...${order.orderNumber.slice(-8)} — ${MAX_BUY_PAYMENT_ATTEMPTS} payment attempts failed (${_errMsg}). Sent polite cancel request to the seller. Order NOT cancelled.`);
-                await fetch(API_BASE + "/ext/report-buy-expired", { method: "POST",
-                  headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+              if (!buyAwaitingDecision.has(order.orderNumber) && !buyManualOrders.has(order.orderNumber)) {
+                buyAwaitingDecision.add(order.orderNumber);
+                // Escalate to the MERCHANT on Telegram — complete manually or cancel. The bot
+                // never decides to cancel on its own; it acts only on the merchant's choice.
+                await fetch(`${API_BASE}/telegram/payment-issue-alert`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                   body: JSON.stringify({ order_number: order.orderNumber, seller_name: paymentDetails.name,
-                    amount: paymentDetails.amount, minutes_waited: 0,
-                    reason: "Payment failed after " + MAX_BUY_PAYMENT_ATTEMPTS + " attempts (" + _errMsg + "). Asked seller to cancel." })
-                }).catch(function(){});
+                    amount: paymentDetails.amount, reason: _errMsg }),
+                }).catch(() => {});
+                sendBotLog('warning', `Buy order ...${order.orderNumber.slice(-8)} — ${MAX_BUY_PAYMENT_ATTEMPTS} payment attempts failed (${_errMsg}). Asked you on Telegram: complete manually or cancel.`);
               }
             } else {
               sendBotLog('warning', `⚠️ Buy order ...${order.orderNumber.slice(-8)} payment attempt ${_attempts}/${MAX_BUY_PAYMENT_ATTEMPTS} failed (${_errMsg}). Moved to back of queue; will retry.`);
