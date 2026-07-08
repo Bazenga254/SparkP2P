@@ -5034,7 +5034,10 @@ Method selection rules:
                 method: 'POST',
                 headers: { 'x-api-key': anthropicApiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  model: 'claude-haiku-4-5-20251001', max_tokens: 100,
+                  // Bank identification is money-critical (a wrong name = failed or misdirected
+                  // payment), so use the stronger Sonnet model here — Haiku 4.5 misread "I&M" as
+                  // "IBM". This call only runs when DOM extraction failed, so it's infrequent.
+                  model: 'claude-sonnet-4-5', max_tokens: 100,
                   messages: [{ role: 'user', content: [
                     { type: 'image', source: { type: 'base64', media_type: 'image/png', data: _bnSS } },
                     { type: 'text', text: `Find the "Bank name" field on this Binance P2P order page and identify the bank. Use ONLY one of these exact names — match aliases to the standard name:
@@ -5086,7 +5089,9 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
               }).catch(() => null);
               if (_bnRes?.ok) {
                 const _bnData = await _bnRes.json();
-                const _visionBank = (_bnData.content?.[0]?.text || '').trim().replace(/['"]/g, '');
+                let _visionBank = (_bnData.content?.[0]?.text || '').trim().replace(/['"]/g, '');
+                // Safety net: there is no "IBM Bank" in Kenya — it's a misread of "I&M Bank".
+                if (/\bibm\b/i.test(_visionBank)) { _visionBank = 'I&M Bank'; console.log('[SparkP2P] Normalised misread "IBM" → "I&M Bank"'); }
                 if (_visionBank && /[A-Za-z]/.test(_visionBank) && _visionBank.length < 50) {
                   paymentDetails.bank_name = _visionBank;
                   const _vCode = _pesalinkBankCode(_visionBank);
