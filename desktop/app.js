@@ -4581,12 +4581,21 @@ async function idleScan(page) {
     // warning. The loose heuristic is removed; only exact past-tense phrases remain.
     // SAFETY: never wipe buyPaymentSentAt if we already paid — a false cancel detection
     // on a Pending-Release order would cause the bot to re-attempt payment on the next cycle.
+    // A genuine cancel is reported by the state detector itself as `cancelled` /
+    // `order_cancelled` (detectOrderState checks verify_payment BEFORE cancelled, so an
+    // active order never resolves to cancelled). The loose page-text phrases are ONLY a
+    // last-resort fallback when the screen is truly `unknown` — trusting them on a
+    // recognised ACTIVE screen (e.g. verify_payment) fired on Binance's own template/
+    // warning text and caused an endless open→detect-cancel→close→reopen loop on payable
+    // orders.
     } else if (
-      buyScreen === 'order_cancelled' ||
-      buyLower.includes('order has been cancelled') ||
-      buyLower.includes('order was cancelled') ||
-      buyLower.includes('order is cancelled') ||
-      buyLower.includes('has been canceled')
+      buyScreen === 'order_cancelled' || buyScreen === 'cancelled' ||
+      (buyScreen === 'unknown' && (
+        buyLower.includes('order has been cancelled') ||
+        buyLower.includes('order was cancelled') ||
+        buyLower.includes('order is cancelled') ||
+        buyLower.includes('has been canceled')
+      ))
     ) {
       if (buyPaymentSentAt[order.orderNumber]) {
         // We already paid — this is almost certainly a false-positive (e.g. a Binance
