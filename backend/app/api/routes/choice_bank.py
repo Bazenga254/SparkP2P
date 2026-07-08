@@ -944,7 +944,7 @@ async def stk_push_deposit(
             transaction_type="CHOICE_DEPOSIT",
             amount=body.amount,
             phone=mobile,
-            sender_name="Choice Bank STK Push",
+            sender_name=(trader.full_name or "").strip() or "M-Pesa Deposit",
             remarks=f"Deposit via M-Pesa STK to Choice Bank bal_before:{bal_before}",
             status=PaymentStatus.PENDING,
         )

@@ -31,12 +31,18 @@ async def deposit_reconcile_poller():
         await asyncio.sleep(_CHECK_EVERY)
         try:
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
+            # Balance-delta reconciliation is only valid while the snapshotted bal_before is
+            # still meaningful. Past ~6h the balance has usually moved on (spent/other deposits),
+            # so a stale check would either false-complete or spam-warn forever. Older pending
+            # deposits are left for manual review instead.
+            cutoff_old = datetime.now(timezone.utc) - timedelta(hours=6)
             async with async_session() as db:
                 rows = (await db.execute(
                     select(Payment).where(
                         Payment.transaction_type == "CHOICE_DEPOSIT",
                         Payment.status == PaymentStatus.PENDING,
                         Payment.created_at <= cutoff,
+                        Payment.created_at >= cutoff_old,
                     )
                 )).scalars().all()
 
