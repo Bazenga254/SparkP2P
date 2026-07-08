@@ -426,6 +426,10 @@ async def lifespan(app: FastAPI):
     # inline 3-min background task fails or the server restarts (every 2 min).
     from app.services.deposit_reconcile_poller import deposit_reconcile_poller
     deposit_reconcile_task = asyncio.create_task(deposit_reconcile_poller())
+    # Active sell-payment detection — polls Choice getTransList to catch inbound payments the
+    # push webhook missed/mis-matched, and records them against the right order (every 30s).
+    from app.services.sell_inbound_poller import sell_inbound_poller
+    sell_inbound_task = asyncio.create_task(sell_inbound_poller())
     yield
     # Shutdown
     order_poller.stop()
@@ -444,6 +448,7 @@ async def lifespan(app: FastAPI):
     market_flow_task.cancel()
     squad_pricing_task.cancel()
     deposit_reconcile_task.cancel()
+    sell_inbound_task.cancel()
 
 
 app = FastAPI(

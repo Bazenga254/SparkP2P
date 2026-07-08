@@ -278,6 +278,34 @@ async def get_account_details(account_id: str) -> dict:
     })
 
 
+async def get_transaction_list(
+    account_id: str,
+    tx_types: list = None,
+    tx_status: list = None,
+    start_ms: int = None,
+    end_ms: int = None,
+    page_no: int = 1,
+    page_size: int = 30,
+    order_by_desc: int = 1,
+) -> dict:
+    """/query/getTransList — list transactions for a sub-account (active polling of
+    incoming payments, independent of the push webhook). Each row includes
+    oppoAccountName (sender name), amount, txType, txStatus (8=success), createTime.
+    Defaults: last 2 hours, success only, newest first."""
+    import time as _time
+    now_ms = int(_time.time() * 1000)
+    return await _post("/query/getTransList", {
+        "accountId": account_id,
+        "txType": tx_types if tx_types is not None else [],
+        "txStatus": tx_status if tx_status is not None else [8],
+        "startTime": start_ms if start_ms is not None else (now_ms - 2 * 60 * 60 * 1000),
+        "endTime": end_ms if end_ms is not None else now_ms,
+        "pageNo": page_no,
+        "pageSize": page_size,
+        "orderByDesc": order_by_desc,
+    })
+
+
 async def verify_email_address(
     document_number: str,
     personal_id_type: str = "101",  # 101=National ID, 102=Alien ID, 103=Passport
