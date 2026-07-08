@@ -388,6 +388,24 @@ async def release_coin(api_key: str, api_secret: str, order_number: str,
     return await _post("/sapi/v1/c2c/orderMatch/releaseCoin", api_key, params, body)
 
 
+async def release_coin_2fa(api_key: str, api_secret: str, order_number: str,
+                           totp_secret: str = None) -> dict:
+    """EP-20 with automatic Google Authenticator (TOTP) handling. Tries a plain release;
+    if Binance returns -9000 ('google verification code is missing'), generates the current
+    TOTP from totp_secret and retries. Lets server-side release work on 2FA-protected accounts.
+    Returns the RAW response of the final attempt."""
+    r = await release_coin(api_key, api_secret, order_number)
+    _needs_2fa = (str(r.get("code")) == "-9000") or ("google" in str(r.get("msg") or "").lower())
+    if _needs_2fa and totp_secret:
+        try:
+            import pyotp
+            code = pyotp.TOTP(totp_secret).now()
+            r = await release_coin(api_key, api_secret, order_number, code=code)
+        except Exception:
+            pass
+    return r
+
+
 def _cookie_str_for_host(trader, host: str) -> str:
     """Build the Cookie header for a specific Binance host using the FULL captured cookie set,
     selecting only cookies whose domain applies to that host (just like the browser does). The flat

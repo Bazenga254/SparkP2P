@@ -282,10 +282,11 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                         from app.models.trader import Trader as _Trader
                         _t = (await db.execute(_sel(_Trader).where(_Trader.id == (nc or {}).get("trader_id", 0)))).scalar_one_or_none()
                         if _t and _t.binance_api_key and _t.binance_api_secret:
-                            from app.core.security import decrypt_data
-                            from app.services.binance.sapi_client import release_coin, relay_trader
+                            from app.core.security import decrypt_data, binance_totp_secret
+                            from app.services.binance.sapi_client import release_coin_2fa, relay_trader
                             relay_trader.set(_t.id)
-                            await release_coin(decrypt_data(_t.binance_api_key), decrypt_data(_t.binance_api_secret), order_number)
+                            _totp = binance_totp_secret(_t)
+                            await release_coin_2fa(decrypt_data(_t.binance_api_key), decrypt_data(_t.binance_api_secret), order_number, totp_secret=_totp)
                     except Exception as _re:
                         import logging; logging.getLogger(__name__).warning("name_approve release failed: %s", _re)
                 else:  # name_reject

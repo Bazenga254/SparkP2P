@@ -1738,10 +1738,15 @@ async def sell_order_state(
     raw_status = d.get("order_status", "")
 
     # Map Binance order status strings → our internal state names
-    _AWAITING  = {"WAS_CREATED", "TRADING", "PENDING", "20", "10"}
-    _VERIFY    = {"TAKER_PAID", "BUYER_PAID", "PAYING", "CONFIRM_RELEASING", "30"}
-    _COMPLETE  = {"COMPLETED", "SELLER_RELEASED", "SUCCESS", "40", "50", "70"}
-    _CANCELLED = {"CANCELLED", "CANCELLED_BY_SYSTEM", "60", "80"}
+    # Binance returns both string names and numeric codes. Two numeric schemes appear:
+    # tens (10/20/30/…) and single digits (1=awaiting, 2=buyer-paid, 4=cancelled, 5=completed).
+    # "2" (buyer marked paid, awaiting release) was previously unmapped → "unknown", so the
+    # bot re-instructed paid orders instead of releasing them. The desktop still re-checks the
+    # actual Choice Bank payment before releasing, so this only controls which branch runs.
+    _AWAITING  = {"WAS_CREATED", "TRADING", "PENDING", "20", "10", "1"}
+    _VERIFY    = {"TAKER_PAID", "BUYER_PAID", "PAYING", "CONFIRM_RELEASING", "30", "2"}
+    _COMPLETE  = {"COMPLETED", "SELLER_RELEASED", "SUCCESS", "40", "50", "70", "5"}
+    _CANCELLED = {"CANCELLED", "CANCELLED_BY_SYSTEM", "60", "80", "4"}
 
     if raw_status in _AWAITING:
         state = "awaiting_payment"
@@ -1839,11 +1844,13 @@ async def release_coin_endpoint(
     db: AsyncSession = Depends(get_db),
 ):
     """EP-20: release crypto to buyer on a SELL order after payment confirmed."""
-    from app.services.binance.sapi_client import release_coin, relay_trader
+    from app.services.binance.sapi_client import release_coin_2fa, relay_trader
+    from app.core.security import binance_totp_secret
     api_key, api_secret = _sapi_creds(trader)
     relay_trader.set(trader.id)
+    _totp = binance_totp_secret(trader)
     try:
-        resp = await release_coin(api_key, api_secret, data.order_number)
+        resp = await release_coin_2fa(api_key, api_secret, data.order_number, totp_secret=_totp)
         ok = resp.get("code") == "000000" or resp.get("success") is True
         if ok:
             # Update our DB record

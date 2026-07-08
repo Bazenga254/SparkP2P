@@ -26,6 +26,19 @@ def decrypt_data(encrypted_data: str) -> str:
     return get_fernet().decrypt(encrypted_data.encode()).decode()
 
 
+def binance_totp_secret(trader) -> Optional[str]:
+    """Decrypted Binance Google Authenticator secret for release 2FA. Prefers the
+    dedicated `binance_2fa_secret` (set when connecting Binance), falling back to the
+    legacy `totp_secret` field. Same preference order the desktop credentials use."""
+    for enc in (getattr(trader, "binance_2fa_secret", None), getattr(trader, "totp_secret", None)):
+        if enc:
+            try:
+                return decrypt_data(enc)
+            except Exception:
+                continue
+    return None
+
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 

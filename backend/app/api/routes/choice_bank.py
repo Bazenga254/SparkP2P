@@ -528,14 +528,16 @@ async def _handle_transaction_result(params: dict, raw: dict):
                 # if the desktop bot is offline. EP-20 via HMAC (relay-routed).
                 _released = False
                 try:
-                    from app.services.binance.sapi_client import release_coin, relay_trader
-                    from app.core.security import decrypt_data
+                    from app.services.binance.sapi_client import release_coin_2fa, relay_trader
+                    from app.core.security import decrypt_data, binance_totp_secret
                     if trader.binance_api_key and trader.binance_api_secret:
                         relay_trader.set(trader.id)
-                        _rr = await release_coin(
+                        _totp = binance_totp_secret(trader)
+                        _rr = await release_coin_2fa(
                             decrypt_data(trader.binance_api_key),
                             decrypt_data(trader.binance_api_secret),
                             order.binance_order_number,
+                            totp_secret=_totp,
                         )
                         _released = (_rr.get("code") == "000000") or (_rr.get("success") is True)
                         if _released:
