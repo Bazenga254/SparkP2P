@@ -275,15 +275,50 @@ async def _handle_transaction_result(params: dict, raw: dict):
                 logger.info(f"[ChoiceBank] 0002 inbound: duplicate webhook txId={tx_id} (Payment {existing.id}) — skipping")
                 return
 
-        # Find trader's pending SELL order (most recent first)
-        order_result = await db.execute(
+        # Match the inbound payment to the correct pending SELL order BY AMOUNT — not just
+        # "most recent". A KES 230,000 payment must go to the 230,000 order, not whatever
+        # order happens to be newest (which caused a 230k payment to hit an 88.5k order,
+        # get flagged as an overpayment, and be discarded).
+        _pend_res = await db.execute(
             select(Order).where(
                 Order.trader_id == trader.id,
                 Order.side == OrderSide.SELL,
                 Order.status == OrderStatus.PENDING,
-            ).order_by(Order.created_at.desc()).limit(1)
+            ).order_by(Order.created_at.desc())
         )
-        order = order_result.scalar_one_or_none()
+        _pending = _pend_res.scalars().all()
+        _amt_int = int(amount)
+        order = None
+        # 1) exact full-amount match (fresh full payment)
+        for _o in _pending:
+            if int(_o.fiat_amount) == _amt_int:
+                order = _o
+                break
+        # 2) exact remaining-balance match (payment completes a partially-paid order)
+        if order is None:
+            for _o in _pending:
+                _recv = (await db.execute(
+                    select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                        Payment.order_id == _o.id,
+                        Payment.direction == PaymentDirection.INBOUND,
+                        Payment.status == PaymentStatus.COMPLETED,
+                        Payment.transaction_type == "CHOICE_INBOUND",
+                    )
+                )).scalar() or 0
+                if int(_o.fiat_amount) - int(_recv) == _amt_int:
+                    order = _o
+                    break
+        # 3) partial toward an order the payment fits within (amount <= order total); oldest first
+        if order is None:
+            _fits = sorted([_o for _o in _pending if _amt_int <= int(_o.fiat_amount) + 5],
+                           key=lambda o: o.created_at)
+            if _fits:
+                order = _fits[0]
+        # If nothing matches by amount, treat as UNMATCHED (below) rather than force-matching a
+        # wrong-amount order — that avoids the discard-as-overpayment bug entirely.
+        if order:
+            logger.info(f"[ChoiceBank] Matched inbound KES {amount:.0f} → order {order.binance_order_number} "
+                        f"(order total KES {order.fiat_amount:.0f}) by amount")
 
         if not order:
             logger.warning(
