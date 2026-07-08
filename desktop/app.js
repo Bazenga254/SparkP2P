@@ -220,7 +220,11 @@ const buyPaymentSentAt = {};        // { orderNum: timestamp } â€" when I&M p
 const buyReminderSentOrders = new Set(); // buy orderNums where we sent the 10-min reminder to seller
 const buyOrderDetailsMap = {};       // { orderNum: { sellerName, amount, phone, method } } â€" for chat/dispute
 const imPaymentDoneMap = {};         // { orderNum: { screenshot, referenceId } } â€" I&M payment done, skip on retry
-const imPaymentFailedOrders = new Set(); // orderNums where I&M payment failed all retries — skip until order clears
+const imPaymentFailedOrders = new Set(); // orderNums that gave up after max payment attempts — no more payment tries (never cancelled)
+const buyRetryCount = {};            // orderNum → number of failed payment attempts (retry, never cancel)
+const buyDeprioritizedAt = {};       // orderNum → last-failure timestamp; sends the order to the BACK of the buy queue
+const buyGaveUpMsgSent = new Set();  // orderNums where the polite "please cancel" message was sent to the seller
+const MAX_BUY_PAYMENT_ATTEMPTS = 5;  // after this many failed attempts, politely ask the seller to cancel (never self-cancel)
 const reportedCompletedBuyOrders = new Set();  // order numbers already sent as completed_buy_order_numbers — prevents duplicate SMS
 const reportedCompletedSellOrders = new Set(); // order numbers already sent as completed_sell_order_numbers — prevents duplicate SMS
 const sellOrderDetailsCache = {};  // { orderNumber: { state, payment_method, buyer_name, amount, ts, ...ep13 } }
@@ -1483,12 +1487,19 @@ async function alertMerchant(message) {
 // different list with different filters, so they could disagree — which opened
 // two buy tabs at once and caused cross-order payment-detail reads.
 function getFirstUnpaidBuy(buyOrders) {
-  const sorted = [...buyOrders].sort((a, b) =>
-    (orderFirstSeenAt[a.orderNumber] || Number.MAX_SAFE_INTEGER) -
-    (orderFirstSeenAt[b.orderNumber] || Number.MAX_SAFE_INTEGER));
+  const _MAX = Number.MAX_SAFE_INTEGER;
+  const sorted = [...buyOrders].sort((a, b) => {
+    // Orders that recently failed a payment are moved to the BACK of the queue so other
+    // orders get a turn first; among failed ones, the oldest failure retries first.
+    const da = buyDeprioritizedAt[a.orderNumber] || 0;
+    const db = buyDeprioritizedAt[b.orderNumber] || 0;
+    if ((da > 0) !== (db > 0)) return da > 0 ? 1 : -1;   // fresh (never-failed) orders first
+    if (da > 0 && db > 0 && da !== db) return da - db;    // among failed, oldest failure first
+    return (orderFirstSeenAt[a.orderNumber] || _MAX) - (orderFirstSeenAt[b.orderNumber] || _MAX);
+  });
   return sorted.find(o =>
     !buyPaymentSentAt[o.orderNumber] &&
-    !imPaymentFailedOrders.has(o.orderNumber) &&
+    !imPaymentFailedOrders.has(o.orderNumber) &&   // gave up after max attempts — no more payment tries
     !markPaidDoneOrders.has(o.orderNumber) &&
     !botCancelledOrders.has(o.orderNumber)
   ) || null;
@@ -3804,6 +3815,7 @@ async function idleScan(page) {
       delete buyOrderDetailsMap[ghostNum];
       delete imPaymentDoneMap[ghostNum];
       imPaymentFailedOrders.delete(ghostNum);
+      delete buyRetryCount[ghostNum]; delete buyDeprioritizedAt[ghostNum]; buyGaveUpMsgSent.delete(ghostNum);
       buyGreetingSentOrders.delete(ghostNum);
       buyPostPaymentMsgSentOrders.delete(ghostNum);
       markPaidDoneOrders.delete(ghostNum);
@@ -3851,6 +3863,7 @@ async function idleScan(page) {
       delete buyOrderDetailsMap[num];
       delete imPaymentDoneMap[num];
       imPaymentFailedOrders.delete(num);
+      delete buyRetryCount[num]; delete buyDeprioritizedAt[num]; buyGaveUpMsgSent.delete(num);
       buyGreetingSentOrders.delete(num);
       buyPostPaymentMsgSentOrders.delete(num);
       delete partialPayments[num];
@@ -4797,10 +4810,10 @@ async function idleScan(page) {
           }
 
           if (failReason) {
-            console.log(`[SparkP2P] DD: seller ${sellerNick} FAILED -- ${failReason}`);
-            await cancelOrderOnBinance(oPage, order.orderNumber, failReason);
-            activeBuyPaymentSlot = null; // release slot — DD failed, order cancelled
-            continue;
+            // Buy orders are NEVER auto-cancelled. DD only flags/logs the risk; the bot
+            // proceeds to pay the seller anyway (trader opted out of DD auto-cancel).
+            console.log(`[SparkP2P] DD: seller ${sellerNick} flagged (${failReason}) — auto-cancel disabled, proceeding to pay`);
+            sendBotLog('info', `Buy order ...${order.orderNumber.slice(-8)} — seller flagged by DD (${failReason}); auto-cancel is OFF, proceeding to pay.`);
           }
           console.log(`[SparkP2P] DD: seller ${sellerNick} passed (30d: ${sellerStats?.trades_30d ?? 'n/a'}, all: ${sellerStats?.trades_all ?? 'n/a'})`);
         }
@@ -5283,50 +5296,43 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
             if (imResult.success) {
               imPaymentDoneMap[order.orderNumber] = { referenceId: imResult.referenceId||"" };
               savePaidOrder(order.orderNumber, { referenceId: imResult.referenceId||"" });
+              delete buyRetryCount[order.orderNumber]; delete buyDeprioritizedAt[order.orderNumber]; // retry succeeded — clear
             }
           } catch(e) {
             const _errMsg = e.message || 'Unknown error';
             console.error("[SparkP2P] Choice Bank payment error for " + order.orderNumber + ": " + _errMsg);
 
-            const _isOtpTimeout   = /OTP email did not arrive|SMS OTP did not arrive|did not arrive within 60/i.test(_errMsg);
-            const _isHardFailure  = !_isOtpTimeout && /insufficient|balance|invalid account|not found|account.*block|cannot transfer/i.test(_errMsg);
+            // NEVER cancel a buy order. Any payment failure (OTP timeout, Choice/I&M error,
+            // network blip) moves the order to the BACK of the queue and retries later. After
+            // MAX_BUY_PAYMENT_ATTEMPTS, send the seller a polite request to cancel and stop
+            // attempting payment — the bot still never cancels it itself.
+            buyRetryCount[order.orderNumber] = (buyRetryCount[order.orderNumber] || 0) + 1;
+            buyDeprioritizedAt[order.orderNumber] = Date.now();
+            const _attempts = buyRetryCount[order.orderNumber];
+            activeBuyPaymentSlot = null; // release the slot so other buy orders proceed first
 
-            if (_isOtpTimeout) {
-              // OTP never arrived in 3 minutes — cancel the Binance order, notify merchant,
-              // release the payment slot so order B can proceed immediately.
-              const _cancelMsg = `⚠️ Order ${order.orderNumber.slice(-8)}: Choice Bank OTP did not arrive within 3 minutes. Binance order CANCELLED. ` +
-                `Check Choice Bank for any pending transfer of KES ${paymentDetails.amount} to ${paymentDetails.name} and cancel it if it has not expired automatically.`;
-              sendBotLog('error', _cancelMsg);
-              console.log(`[SparkP2P] OTP timeout — cancelling Binance order ${order.orderNumber} and moving to next`);
-
-              // Cancel on Binance via SAPI (EP-9)
-              await fetch(`${API_BASE}/ext/cancel-order`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ order_number: order.orderNumber }),
-              }).catch(() => {});
-
-              // Mark permanently so it is not retried
-              imPaymentFailedOrders.add(order.orderNumber);
+            if (_attempts >= MAX_BUY_PAYMENT_ATTEMPTS) {
+              imPaymentFailedOrders.add(order.orderNumber);      // stop retrying (still NOT cancelled)
               _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
-
-              // Release slot immediately — next order in queue can now proceed
-              activeBuyPaymentSlot = null;
-
-            } else if (_isHardFailure) {
-              // Permanent failure — mark and report
-              imPaymentFailedOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'paymentFailed', true);
-              sendBotLog('error', `❌ Choice Bank payment failed (${_errMsg}) — reporting to Telegram`);
-              await fetch(API_BASE + "/ext/report-buy-expired", { method: "POST",
-                headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-                body: JSON.stringify({ order_number: order.orderNumber, seller_name: paymentDetails.name,
-                  amount: paymentDetails.amount, minutes_waited: 0,
-                  reason: "Choice Bank payment failed: " + _errMsg + ". Please complete manually." })
-              }).catch(function(){});
-              activeBuyPaymentSlot = null; // release slot on permanent failure so next order can pay
+              if (!buyGaveUpMsgSent.has(order.orderNumber)) {
+                buyGaveUpMsgSent.add(order.orderNumber);
+                const _fn = (paymentDetails.name || 'there').split(' ')[0];
+                const _politeMsg =
+                  `Hello ${_fn}, I am very sorry, but I am unable to complete this order at this ` +
+                  `particular time due to a temporary issue on my end. I kindly request that you ` +
+                  `cancel this order so you can trade with another merchant without any delay. ` +
+                  `I sincerely apologize for the inconvenience and truly appreciate your understanding. Thank you.`;
+                await sendBinanceChatMessage(oPage, _politeMsg).catch(() => {});
+                sendBotLog('warning', `Buy order ...${order.orderNumber.slice(-8)} — ${MAX_BUY_PAYMENT_ATTEMPTS} payment attempts failed (${_errMsg}). Sent polite cancel request to the seller. Order NOT cancelled.`);
+                await fetch(API_BASE + "/ext/report-buy-expired", { method: "POST",
+                  headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+                  body: JSON.stringify({ order_number: order.orderNumber, seller_name: paymentDetails.name,
+                    amount: paymentDetails.amount, minutes_waited: 0,
+                    reason: "Payment failed after " + MAX_BUY_PAYMENT_ATTEMPTS + " attempts (" + _errMsg + "). Asked seller to cancel." })
+                }).catch(function(){});
+              }
             } else {
-              // Soft failure (network blip etc.) — keep slot so this order retries next cycle.
-              sendBotLog('warning', `⚠️ Choice Bank payment attempt failed (${_errMsg}) — will retry next cycle`);
+              sendBotLog('warning', `⚠️ Buy order ...${order.orderNumber.slice(-8)} payment attempt ${_attempts}/${MAX_BUY_PAYMENT_ATTEMPTS} failed (${_errMsg}). Moved to back of queue; will retry.`);
             }
           } finally {
             // Safety net: if an unhandled exception escaped both try and catch and the slot
