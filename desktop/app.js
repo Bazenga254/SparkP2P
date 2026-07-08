@@ -2312,7 +2312,7 @@ async function readOrders(activeOnly = false) {
 
     // DOM fallback: ROW-ANCHORED extraction. Order numbers come from the exact
     // orderNo= value in detail-link hrefs (or a leaf element whose entire text
-    // is an 18-19 digit number), and amounts are read ONLY from that order's
+    // is an 18-20 digit number), and amounts are read ONLY from that order's
     // own row element. This prevents the previous ±600-char text-window scan
     // from picking up an adjacent order's KES amount (root cause of the
     // "amount mismatch / payment ABORTED" errors) and from gluing stray digits
@@ -2326,7 +2326,7 @@ async function readOrders(activeOnly = false) {
 
         const parseRow = (orderNumber, row) => {
           if (!row || seen.has(orderNumber)) return;
-          if (!/^\d{18,19}$/.test(orderNumber)) return; // strict length — no 20-digit merged blobs
+          if (!/^\d{18,20}$/.test(orderNumber)) return; // real Binance order numbers are 18–20 digits; row-anchored extraction already prevents merged blobs
           const rowText = row.innerText || '';
           if (/\b(Completed|Cancelled|Canceled)\b/i.test(rowText)) return;
           const statusMatch = rowText.match(/\b(Pending Payment|Pending|Paid|Appeal)\b/i);
@@ -2353,7 +2353,7 @@ async function readOrders(activeOnly = false) {
         // Anchor 1: order-detail links — the href carries the exact order number
         const links = Array.from(document.querySelectorAll('a[href*="fiatOrderDetail"], a[href*="orderNo="]'));
         for (const a of links) {
-          const m = (a.getAttribute('href') || '').match(/orderNo=(\d{18,19})(?:\D|$)/);
+          const m = (a.getAttribute('href') || '').match(/orderNo=(\d{18,20})(?:\D|$)/);
           if (!m) continue;
           parseRow(m[1], findRow(a));
         }
@@ -2364,7 +2364,7 @@ async function readOrders(activeOnly = false) {
             .filter(el => el.children.length === 0);
           for (const el of leaves) {
             const t = (el.textContent || '').replace(/\s/g, '');
-            if (!/^\d{18,19}$/.test(t)) continue;
+            if (!/^\d{18,20}$/.test(t)) continue;
             parseRow(t, findRow(el));
           }
         }
@@ -2464,7 +2464,7 @@ async function readOrders(activeOnly = false) {
 
     if (completedText && !completedText.includes('No records') && !completedText.includes('No data')) {
       const seenCompleted = new Set();
-      const completedPattern = /\b(\d{18,19})\b/g;
+      const completedPattern = /\b(\d{18,20})\b/g;
       let cpm;
       while ((cpm = completedPattern.exec(completedText)) !== null) {
         const orderNumber = cpm[1];
@@ -3122,7 +3122,7 @@ async function reconcileStuckOrders(page) {
     let cancelledNums = [];
     if (cancelledText && !cancelledText.includes('No records')) {
       const seenCN = new Set();
-      const cnPat = /\b(\d{18,19})\b/g;
+      const cnPat = /\b(\d{18,20})\b/g;
       let cn;
       while ((cn = cnPat.exec(cancelledText)) !== null) {
         const n = cn[1];
@@ -3159,7 +3159,7 @@ async function reconcileStuckOrders(page) {
     let completedSellNums = [];
     if (completedText && !completedText.includes('No records')) {
       const seenCB = new Set();
-      const cbPat = /\b(\d{18,19})\b/g;
+      const cbPat = /\b(\d{18,20})\b/g;
       let cb;
       while ((cb = cbPat.exec(completedText)) !== null) {
         const orderNumber = cb[1];
