@@ -2970,6 +2970,9 @@ async def choice_payment_received(
         "buyer_real_name": order.counterparty_real_name or "",
         "senders": senders,
         "payments": [{"amount": p.amount, "sender_name": p.sender_name or ""} for p in payments],
+        # Release-gating for the desktop bot: the backend owns the payer name-check + release.
+        "held": order.status == OrderStatus.DISPUTED,           # payer name mismatch — do NOT release
+        "released": order.status in (OrderStatus.RELEASED, OrderStatus.COMPLETED),
         "reason": "paid_in_full" if received else f"partial_{total_paid:.0f}_of_{order.fiat_amount:.0f}",
     }
 

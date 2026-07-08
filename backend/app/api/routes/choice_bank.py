@@ -427,28 +427,28 @@ async def _handle_transaction_result(params: dict, raw: dict):
                 logger.warning(f"[ChoiceBank] partial-payment notify failed: {_e}")
             return
 
-        # Full amount reached — mark order as payment received
-        order.status = OrderStatus.PAYMENT_RECEIVED
+        # Full amount reached.
         order.payment_confirmed_at = datetime.now(timezone.utc)
         if sender_phone:
             order.counterparty_phone = sender_phone
-        if sender_name:
-            order.counterparty_name = sender_name
+        # NOTE: do NOT overwrite counterparty_name with the sender name — the payer name-check
+        # below needs the buyer's Binance name. The sender name is stored on the Payment record.
 
-        # ── Name mismatch check ────────────────────────────────────────────
-        # Compare sender's bank/M-Pesa registered name vs buyer's Binance name.
-        # If they clearly differ, alert the merchant via Telegram before allowing release.
-        _buyer_binance_name = order.counterparty_name or ""  # set above if sender_name arrived first
-        # Get the Binance nickname stored on the order (may differ from counterparty_name)
-        # counterparty_name here is the Choice Bank sender name we just wrote. We need the
-        # Binance nickname separately — stored on the order as a separate field or payment note.
-        # We do a fuzzy word-level check: if no word ≥4 chars in sender_name matches buyer_name, flag.
+        # ── Payer name verification ────────────────────────────────────────
+        # Compare the inbound sender's registered name (full name on M-Pesa/PesaLink inbound
+        # payments) against the buyer's Binance legal name (counterparty_real_name, populated
+        # by EP-13). Word-overlap match; skipped only when the Binance name isn't known yet
+        # (fail-safe — never a false hold).
+        _binance_name = (order.counterparty_real_name or "").strip()
         _name_mismatch = False
-        _stored_buyer_nick = getattr(order, "counterparty_name", "") or ""
-        if sender_name and _stored_buyer_nick and sender_name.strip().lower() != _stored_buyer_nick.strip().lower():
-            _sender_words = {w.lower() for w in sender_name.split() if len(w) >= 4}
-            _buyer_words  = {w.lower() for w in _stored_buyer_nick.split() if len(w) >= 4}
+        if sender_name and _binance_name:
+            _sender_words = {w.lower() for w in sender_name.split() if len(w) >= 3}
+            _buyer_words  = {w.lower() for w in _binance_name.split() if len(w) >= 3}
             _name_mismatch = len(_sender_words & _buyer_words) == 0
+
+        # On mismatch: HOLD (do not release) and alert the merchant (buttons below).
+        # On match: mark received; auto-release happens after the wallet credit + commit.
+        order.status = OrderStatus.DISPUTED if _name_mismatch else OrderStatus.PAYMENT_RECEIVED
 
         # Credit wallet
         wallet_result = await db.execute(select(Wallet).where(Wallet.trader_id == trader.id))
@@ -477,17 +477,16 @@ async def _handle_transaction_result(params: dict, raw: dict):
         await db.commit()
         logger.info(
             f"[ChoiceBank] MATCHED: {tx_id} → order {order.binance_order_number} "
-            f"(Trader: {trader.full_name}, KES {amount}, total KES {total_received:.2f}) → PAYMENT_RECEIVED"
+            f"(Trader: {trader.full_name}, KES {amount}, total KES {total_received:.2f}) → "
+            f"{'HELD — payer name mismatch' if _name_mismatch else 'PAYMENT_RECEIVED'}"
         )
 
         try:
-            from app.api.routes.telegram import notify_trader, name_mismatch_alert
-            from pydantic import BaseModel as _BM
+            from app.api.routes.telegram import notify_trader
             if _name_mismatch:
                 # Determine payment channel for the alert label
                 _pay_method = "pesalink" if _channel and "pesalink" in _channel.lower() else "mpesa"
-                # Use the endpoint logic directly (avoids HTTP round-trip)
-                from app.api.routes.telegram import _pending_name_checks, _tg_send, APPROVAL_TIMEOUT
+                from app.api.routes.telegram import _pending_name_checks, _tg_send
                 import time as _time
                 _method_label = "PesaLink" if _pay_method == "pesalink" else "M-Pesa"
                 _amt_str = f"KES {int(amount):,}"
@@ -496,10 +495,10 @@ async def _handle_transaction_result(params: dict, raw: dict):
                     f"<b>Order:</b> {order.binance_order_number}\n"
                     f"<b>Amount:</b> {_amt_str}\n"
                     f"<b>Method:</b> {_method_label}\n\n"
-                    f"A payment has been received but the sender name does not match the buyer's Binance name:\n\n"
+                    f"A payment has been received but the sender's name does not match the buyer's Binance name:\n\n"
                     f"  • <b>Sender name</b> ({_method_label}): <code>{sender_name}</code>\n"
-                    f"  • <b>Buyer name</b> (Binance): <code>{_stored_buyer_nick or 'Unknown'}</code>\n\n"
-                    f"This may indicate the buyer used a third-party account. Please review carefully.\n\n"
+                    f"  • <b>Buyer name</b> (Binance): <code>{_binance_name or 'Unknown'}</code>\n\n"
+                    f"This may indicate the buyer used a third-party account. Crypto is NOT released.\n\n"
                     f"<b>Release crypto or hold for manual review?</b>"
                 )
                 _keyboard = {"inline_keyboard": [[
@@ -522,12 +521,35 @@ async def _handle_transaction_result(params: dict, raw: dict):
                     }
                 logger.warning(
                     f"[ChoiceBank] Name mismatch on order {order.binance_order_number}: "
-                    f"sender={sender_name!r} vs buyer={_stored_buyer_nick!r} — Telegram alert sent"
+                    f"sender={sender_name!r} vs buyer={_binance_name!r} — HELD, Telegram alert sent"
                 )
             else:
+                # Name matches → auto-release crypto server-side so the sell completes even
+                # if the desktop bot is offline. EP-20 via HMAC (relay-routed).
+                _released = False
+                try:
+                    from app.services.binance.sapi_client import release_coin, relay_trader
+                    from app.core.security import decrypt_data
+                    if trader.binance_api_key and trader.binance_api_secret:
+                        relay_trader.set(trader.id)
+                        _rr = await release_coin(
+                            decrypt_data(trader.binance_api_key),
+                            decrypt_data(trader.binance_api_secret),
+                            order.binance_order_number,
+                        )
+                        _released = (_rr.get("code") == "000000") or (_rr.get("success") is True)
+                        if _released:
+                            order.status = OrderStatus.RELEASED
+                            order.released_at = datetime.now(timezone.utc)
+                            await db.commit()
+                            logger.info(f"[ChoiceBank] Auto-released order {order.binance_order_number} (payer name OK)")
+                        else:
+                            logger.warning(f"[ChoiceBank] Auto-release not ready for {order.binance_order_number}: {_rr}")
+                except Exception as _rele:
+                    logger.warning(f"[ChoiceBank] Auto-release error for {order.binance_order_number}: {_rele}")
                 _tg_msg = (
                     "💰 KES " + f"{amount:,.0f}" +
-                    " received — payment confirmed!" + chr(10) +
+                    (" received — crypto released! ✅" if _released else " received — payment confirmed!") + chr(10) +
                     "From: " + (sender_name or sender_phone or "Unknown") + chr(10) +
                     "Order: " + (order.binance_order_number or "")
                 )
