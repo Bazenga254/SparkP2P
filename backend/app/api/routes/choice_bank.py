@@ -1138,6 +1138,7 @@ async def send_money_confirm(body: SendMoneyConfirm, trader: Trader = Depends(ge
             amount=float(pending["amount"]),
             destination=pending.get("phone", ""),
             destination_type="M-Pesa",
+            sender_name=pending.get("name") or "",
             remarks=f"Send money to {_to} via Choice Bank",
             status=_PS.PENDING,
         ))
@@ -1213,7 +1214,8 @@ async def send_money_confirm_sms(
                 trader_id=trader.id, direction=_PD.OUTBOUND,
                 mpesa_transaction_id=pending["tx_id"], transaction_type="CHOICE_OUTBOUND",
                 amount=float(pending["amount"]), destination=pending.get("phone", ""),
-                destination_type="M-Pesa", remarks="Send money to " + _to + " via Choice Bank",
+                destination_type="M-Pesa", sender_name=pending.get("name") or "",
+                remarks="Send money to " + _to + " via Choice Bank",
                 status=_PS.PENDING,
             ))
         except Exception:
