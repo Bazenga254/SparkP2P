@@ -1707,6 +1707,7 @@ async def get_order_detail(
 async def sell_order_state(
     order_number: str,
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ):
     """EP-13 via SAPI HMAC: return normalised order state + payment method.
     Replaces DOM/Vision state detection in the desktop sell-order loop."""
@@ -1718,6 +1719,21 @@ async def sell_order_state(
     except Exception as e:
         logger.warning("sell-order-state EP-13 failed for %s: %s", order_number, e)
         return {"ok": False, "error": str(e), "state": "unknown"}
+
+    # Persist the counterparty's verified/legal name (best-effort, once) for payer name-match.
+    buyer_real_name = str(d.get("counterparty_real_name") or "").strip()
+    if buyer_real_name:
+        try:
+            _or = await db.execute(select(Order).where(
+                Order.binance_order_number == order_number,
+                Order.trader_id == trader.id,
+            ))
+            _o = _or.scalar_one_or_none()
+            if _o and not _o.counterparty_real_name:
+                _o.counterparty_real_name = buyer_real_name
+                await db.commit()
+        except Exception:
+            pass
 
     raw_status = d.get("order_status", "")
 
@@ -1754,6 +1770,7 @@ async def sell_order_state(
         "raw_status": raw_status,
         "payment_method": payment_method,
         "buyer_name": d.get("counterparty_nickname"),
+        "buyer_real_name": buyer_real_name,
         "amount": d.get("fiat_amount"),
         "trades_30d": d.get("trades_30d"),
         "trades_all": d.get("trades_all"),
@@ -2926,24 +2943,66 @@ async def choice_payment_received(
     if order.status == OrderStatus.PAYMENT_RECEIVED:
         return {"received": True, "reason": "status_payment_received", "total_paid": order.fiat_amount}
 
-    # Sum all confirmed Choice Bank inbound payments for this order
-    total_result = await db.execute(
-        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+    # Fetch all confirmed Choice Bank inbound payments for this order (rows, not just sum)
+    # so the desktop can run the payer name-match anti-fraud check.
+    pay_rows = await db.execute(
+        select(Payment).where(
             Payment.order_id == order.id,
             Payment.direction == PaymentDirection.INBOUND,
             Payment.status == PaymentStatus.COMPLETED,
             Payment.transaction_type == "CHOICE_INBOUND",
-        )
+        ).order_by(Payment.created_at)
     )
-    total_paid = float(total_result.scalar() or 0)
+    payments = pay_rows.scalars().all()
+    total_paid = float(sum(p.amount for p in payments))
     # Whole-figure match: ignore cents only, NO underpayment slack (was amount - 5 KES).
     received = int(total_paid) >= int(order.fiat_amount)
+    # Distinct payer names (for mixed-sender / payer-vs-legal-name checks)
+    senders = []
+    for p in payments:
+        nm = (p.sender_name or "").strip()
+        if nm and nm not in senders:
+            senders.append(nm)
     return {
         "received": received,
         "total_paid": total_paid,
         "order_amount": order.fiat_amount,
+        "buyer_real_name": order.counterparty_real_name or "",
+        "senders": senders,
+        "payments": [{"amount": p.amount, "sender_name": p.sender_name or ""} for p in payments],
         "reason": "paid_in_full" if received else f"partial_{total_paid:.0f}_of_{order.fiat_amount:.0f}",
     }
+
+
+class AlertMerchantRequest(BaseModel):
+    message: str
+
+
+@router.post("/alert-merchant")
+async def alert_merchant(
+    data: AlertMerchantRequest,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Desktop bot fires urgent merchant alerts (payer name mismatch, deficit).
+    In-app notification always; Telegram in real time; SMS fallback if Telegram fails."""
+    try:
+        from app.api.routes.traders import add_notification
+        add_notification(trader.id, "Bot Alert", data.message, "warning")
+    except Exception:
+        pass
+    sent = False
+    try:
+        from app.api.routes.telegram import notify_trader as _tg_notify
+        sent = await _tg_notify(trader, f"\U0001f916 SparkP2P\n\n{data.message}")
+    except Exception as e:
+        logger.warning("alert-merchant telegram failed for trader %s: %s", trader.id, e)
+    if not sent:
+        try:
+            from app.services.sms import send_sms
+            send_sms(trader.phone, f"SparkP2P: {data.message[:140]}")
+        except Exception:
+            pass
+    return {"ok": True}
 
 
 # ── SMS-OTP relay: the phone's SmsReceiver posts incoming OTP texts here ───────

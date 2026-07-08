@@ -1946,6 +1946,7 @@ async def get_desktop_credentials(
         "im_account": trader.settlement_account or "",
         "choice_account_number": trader.choice_account_number or "",
         "choice_account_id": trader.choice_account_id or "",
+        "choice_paybill": settings.CHOICE_BANK_PAYBILL,
     }
 
 
@@ -2626,6 +2627,10 @@ async def get_my_transactions(
             from app.services.outbound_fees import categorize as _cat, product_total_fee as _ptf
             tx_fee = _ptf(_cat(p.transaction_type, p.destination_type), abs(p.amount))
 
+        # Name of the other party: recipient on outbound (payee), sender on inbound.
+        # Stored in Payment.sender_name for both directions (payee_name on Choice payouts).
+        counterparty_name = (p.sender_name or "").strip()
+
         entries.append({
             "id": f"p{p.id}",
             "source": "payment",
@@ -2635,6 +2640,7 @@ async def get_my_transactions(
             "amount": abs(p.amount),
             "tx_fee": tx_fee,
             "description": desc.strip(" ·"),
+            "counterparty_name": counterparty_name,
             "reference": ref,
             "phone": p.phone or p.destination or "",
             "status": status,

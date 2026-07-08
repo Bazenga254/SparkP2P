@@ -48,7 +48,8 @@ class Order(Base):
     unique_amount = Column(Float, nullable=True)  # Fallback matching
 
     # Buyer/Seller info (from Binance)
-    counterparty_name = Column(String(255), nullable=True)
+    counterparty_name = Column(String(255), nullable=True)         # nickname
+    counterparty_real_name = Column(String(255), nullable=True)    # verified/legal name (best-effort, for payer name-match)
     counterparty_phone = Column(String(20), nullable=True)
 
     # Buy side payment details (parsed from Binance)

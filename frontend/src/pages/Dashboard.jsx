@@ -2756,7 +2756,10 @@ export default function Dashboard() {
                         {t.icon || (isIn ? '↙️' : '↗️')}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginBottom: 2 }}>{t.label}</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginBottom: 2 }}>
+                          {t.label}
+                          {t.counterparty_name && <span style={{ color: '#9aa4b2', fontWeight: 500 }}> · {t.counterparty_name}</span>}
+                        </div>
                         <div style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {t.description !== t.label ? t.description : ''}{t.phone ? ' · ' + t.phone : ''} · {dateStr}
                         </div>

@@ -151,6 +151,7 @@ let totpSecret = null;   // Google Authenticator base32 secret â€" stored in 
 let traderAccountNumber = null; // e.g. "P2PT0001" â€" used in paybill payment replies
 let traderChoiceAccountNumber = null; // Choice Bank account number (e.g. CMB00001) — shown to buyers for PesaLink
 let traderChoiceAccountId = null;     // Choice Bank internal account ID — used as payer for BUY transfers
+let traderChoicePaybill = null;       // Choice Bank M-Pesa paybill — fetched from backend, NEVER hardcoded
 let traderPhoneNumber = null;  // Trader's own phone number â€" included in buy greeting message
 let traderImAccount = null;    // Trader's I&M settlement account number â€" used to select debit account
 let _choiceBankCodes = [];        // live bank code list from Choice Bank API
@@ -190,6 +191,8 @@ const buyPaymentDetailsCache = {};              // orderNum → paymentDetails e
 const sellRejectionMsgSent = new Set();         // sell orderNums where the polite cancel request was already sent
 const sellPayInstructSentOrders = new Set();    // sell orderNums where payment instructions sent to buyer
 const lastSellDeficitMsg = {};                  // orderNum → KES deficit last sent to buyer (dedup)
+const sellHeldOrders = new Map();               // orderNum → {reason,detail,heldAt} — paid but held (payer name mismatch)
+const sellHoldDecisionAsked = new Set();        // sell orderNums where the HOLD- merchant decision was already requested
 let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for monitorActiveOrder compat)
 let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
 let botTradeMode = 'both';      // 'both' | 'buy_only' | 'sell_only' — fetched from backend on start
@@ -225,6 +228,7 @@ const buyGreetingSentOrders = new Set();    // orderNums where greeting was alre
 const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent KSh..." was already sent
 const markPaidDoneOrders = new Set();          // orderNums where EP-17 mark-paid was already called — skip on restart
 const telegramApprovedOrders = new Set();      // orderNums where Telegram approval was confirmed — persisted so restart skips re-poll
+const botCancelledOrders = new Set();          // orderNums cancelled by bot (DD failure) — never re-process even if Binance still shows them
 // Restore paid orders from disk on startup (survives bot restarts)
 {
   const _paidOnDisk = loadPaidOrders();
@@ -252,6 +256,7 @@ const telegramApprovedOrders = new Set();      // orderNums where Telegram appro
     if (f.postPaymentMsgSent)  buyPostPaymentMsgSentOrders.add(num);
     if (f.markPaidDone)        markPaidDoneOrders.add(num);
     if (f.reminderSent)        buyReminderSentOrders.add(num);
+    if (f.cancelledByBot)      botCancelledOrders.add(num);
     if (f.paymentFailed) {
       if (!f.markPaidDone && !f.postPaymentMsgSent) {
         // Soft failure (Telegram approval window expired) — payment never went through.
@@ -1422,6 +1427,56 @@ async function closeOrderTab(orderNumber, reason) {
   sendBotLog('info', `Tab closed for order ...${orderNumber.slice(-8)}${reason ? ' — ' + reason : ''}`);
 }
 
+// ── Sell orders are tabless — open a tab ONLY for a brief chat/verify action ──
+// Opens a dedicated tab, guarantees it is on THIS order's page (cross-order guard),
+// runs fn(tab), then always closes it. Returns fn's result, or false if the tab
+// could not be opened / landed on the wrong URL. Keeps sells from ever holding a
+// tab or the foreground while a merchant deliberates or a buyer pays.
+async function withSellTab(orderNumber, fn) {
+  const tab = await openOrderTab(orderNumber);
+  if (!tab || tab.isClosed()) {
+    sendBotLog('warn', `Sell ...${orderNumber.slice(-8)} — could not open tab for chat/verify action`);
+    return false;
+  }
+  try {
+    try { await tab.bringToFront(); } catch (_) {}
+    if (!tab.url().includes(orderNumber)) {
+      await tab.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNumber}`,
+        { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    if (!tab.url().includes(orderNumber)) {
+      sendBotLog('warn', `Sell ...${orderNumber.slice(-8)} — tab on wrong URL, skipping action`);
+      return false;
+    }
+    return await fn(tab);
+  } finally {
+    await closeOrderTab(orderNumber, 'sell action done — back to tabless monitoring');
+  }
+}
+
+// ── Payer name-match (anti-fraud) ─────────────────────────────────────────────
+// Returns true if the two names share at least `minCommonTokens` word(s), false if
+// they clearly differ, or null when it cannot be determined (empty input). null
+// callers treat as "skip" — a missing legal name must never cause a false hold.
+function _namesMatch(nameA, nameB, minCommonTokens = 1) {
+  const norm = s => String(s || '').toUpperCase().replace(/[^A-Z\s]/g, '')
+    .replace(/\s+/g, ' ').trim().split(' ').filter(w => w.length > 1);
+  const a = norm(nameA), b = norm(nameB);
+  if (!a.length || !b.length) return null;
+  return a.filter(w => b.includes(w)).length >= minCommonTokens;
+}
+
+// ── Urgent merchant alert (Telegram + in-app, SMS fallback) ───────────────────
+async function alertMerchant(message) {
+  if (!token) return;
+  await fetch(`${API_BASE}/ext/alert-merchant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({ message }),
+  }).catch(() => {});
+}
+
 // ── Single source of truth for "which buy order is paid next" ────────────────
 // BOTH the tab manager (ensureOrderTabs) and the payment loop MUST call this
 // same function. Previously each computed its own "first unpaid buy" from a
@@ -1434,7 +1489,8 @@ function getFirstUnpaidBuy(buyOrders) {
   return sorted.find(o =>
     !buyPaymentSentAt[o.orderNumber] &&
     !imPaymentFailedOrders.has(o.orderNumber) &&
-    !markPaidDoneOrders.has(o.orderNumber)
+    !markPaidDoneOrders.has(o.orderNumber) &&
+    !botCancelledOrders.has(o.orderNumber)
   ) || null;
 }
 
@@ -1446,10 +1502,14 @@ async function ensureOrderTabs(orders) {
   // Uses the SAME selector as the payment loop (getFirstUnpaidBuy) so the tab
   // manager and the payer can never disagree about which order is "first".
   const _firstUnpaidBuyTab = getFirstUnpaidBuy(orders.buy);
-  for (const o of [...orders.sell, ...orders.buy]) {
+  // BUY tabs only. SELL orders are tabless: the sell loop opens a tab on demand for the
+  // brief moments it must type (instructions / decline / deficit / release), then closes
+  // it — so a merchant deliberating on an approval never hogs a tab or the foreground,
+  // and buys keep paying in the meantime.
+  for (const o of orders.buy) {
     orderTabAbsenceCounts[o.orderNumber] = 0; // seen this scan — reset
-    if (o.tradeType === 'BUY' && (buyPaymentSentAt[o.orderNumber] || markPaidDoneOrders.has(o.orderNumber))) continue; // paid: no tab needed
-    if (o.tradeType === 'BUY' && _firstUnpaidBuyTab && o.orderNumber !== _firstUnpaidBuyTab.orderNumber) continue; // queue: only open tab for first unpaid buy
+    if (buyPaymentSentAt[o.orderNumber] || markPaidDoneOrders.has(o.orderNumber) || botCancelledOrders.has(o.orderNumber)) continue; // paid or bot-cancelled: no tab needed
+    if (_firstUnpaidBuyTab && o.orderNumber !== _firstUnpaidBuyTab.orderNumber) continue; // queue: only open tab for first unpaid buy
     if (!orderTabs[o.orderNumber] || orderTabs[o.orderNumber].isClosed()) {
       await openOrderTab(o.orderNumber);
       await new Promise(r => setTimeout(r, 300));
@@ -1886,7 +1946,8 @@ async function fetchAndApplyCredentials() {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (!res.ok) return;
-    const { verify_method, fund_password, totp_secret, anthropic_api_key, account_number, phone_number, im_account, choice_account_number, choice_account_id } = await res.json();
+    const { verify_method, fund_password, totp_secret, anthropic_api_key, account_number, phone_number, im_account, choice_account_number, choice_account_id, choice_paybill } = await res.json();
+    if (choice_paybill) { traderChoicePaybill = choice_paybill; console.log(`[SparkP2P] Choice paybill: ${traderChoicePaybill}`); }
     if (account_number) { traderAccountNumber = account_number; console.log(`[SparkP2P] Account number: ${traderAccountNumber}`); }
     if (phone_number) { traderPhoneNumber = phone_number; console.log(`[SparkP2P] Trader phone: ${traderPhoneNumber}`); }
     if (im_account) { traderImAccount = im_account; console.log(`[SparkP2P] I&M debit account: ${traderImAccount}`); }
@@ -2332,41 +2393,78 @@ async function readOrders(activeOnly = false) {
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1', { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 2000));
 
-    // Click the "Canceled" filter tab if it exists
-    await page.evaluate(() => {
+    // Click the "Canceled" filter tab if it exists, then verify it actually applied
+    // before scanning for order numbers. Without verification, a failed click leaves
+    // the page showing All/Completed orders — and every number on that page would be
+    // falsely declared cancelled.
+    const _cancelFilterApplied = await page.evaluate(() => {
       const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
       const cancelTab = tabs.find(el => el.textContent.trim() === 'Canceled' || el.textContent.trim() === 'Cancelled');
-      if (cancelTab) cancelTab.click();
-    }).catch(() => {});
-    await new Promise(r => setTimeout(r, 1500));
+      if (!cancelTab) return false;
+      cancelTab.click();
+      return true;
+    }).catch(() => false);
+    if (_cancelFilterApplied) {
+      // Wait for React to re-render the filtered list
+      await new Promise(r => setTimeout(r, 2000));
 
-    const cancelledText = await page.evaluate(() => document.body.innerText).catch(() => '');
+      // Confirm the active filter label is "Canceled/Cancelled" before reading.
+      // If it can't be verified, skip — a false-cancel report is worse than missing one.
+      const _filterConfirmed = await page.evaluate(() => {
+        const active = Array.from(document.querySelectorAll(
+          'div[class*="tab"][class*="active"], div[class*="tab--active"], span[class*="tab"][class*="active"], button[class*="active"], [aria-selected="true"]'
+        ));
+        return active.some(el => {
+          const t = el.textContent.trim().toLowerCase();
+          return t === 'canceled' || t === 'cancelled';
+        });
+      }).catch(() => false);
 
-    if (cancelledText && !cancelledText.includes('No records') && !cancelledText.includes('No data')) {
-      const seenCancelled = new Set();
-      const cancelledPattern = /\b(\d{18,20})\b/g;
-      let cm;
-      while ((cm = cancelledPattern.exec(cancelledText)) !== null) {
-        const n = cm[1];
-        if (!seenCancelled.has(n)) { seenCancelled.add(n); cancelled.push(n); }
+      if (_filterConfirmed) {
+        const cancelledText = await page.evaluate(() => document.body.innerText).catch(() => '');
+        if (cancelledText && !cancelledText.includes('No records') && !cancelledText.includes('No data')) {
+          const seenCancelled = new Set();
+          const cancelledPattern = /\b(\d{18,20})\b/g;
+          let cm;
+          while ((cm = cancelledPattern.exec(cancelledText)) !== null) {
+            const n = cm[1];
+            if (!seenCancelled.has(n)) { seenCancelled.add(n); cancelled.push(n); }
+          }
+        }
+      } else {
+        console.log('[SparkP2P] Canceled filter click did not apply — skipping cancelled scan to avoid false reports');
       }
     }
 
     // â"€â"€ Step 3: Read recently completed BUY orders (tab=1, Completed filter) â"€â"€
     // We're still on tab=1 â€" click the "Completed" filter to find completed buy orders
     let completed_buy = [];
-    await page.evaluate(() => {
+    const _completedApplied = await page.evaluate(() => {
       const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
       const completedTab = tabs.find(el => el.textContent.trim() === 'Completed');
-      if (completedTab) completedTab.click();
-    }).catch(() => {});
-    await new Promise(r => setTimeout(r, 1500));
-
-    const completedText = await page.evaluate(() => document.body.innerText).catch(() => '');
+      if (!completedTab) return false;
+      completedTab.click();
+      return true;
+    }).catch(() => false);
+    let completedText = '';
+    if (_completedApplied) {
+      await new Promise(r => setTimeout(r, 2000));
+      const _completedConfirmed = await page.evaluate(() => {
+        const active = Array.from(document.querySelectorAll(
+          'div[class*="tab"][class*="active"], div[class*="tab--active"], span[class*="tab"][class*="active"], button[class*="active"], [aria-selected="true"]'
+        ));
+        return active.some(el => el.textContent.trim().toLowerCase() === 'completed');
+      }).catch(() => false);
+      if (_completedConfirmed) {
+        completedText = await page.evaluate(() => document.body.innerText).catch(() => '');
+      } else {
+        console.log('[SparkP2P] Completed filter click did not apply - skipping completed scan to avoid mis-tagging');
+      }
+    }
 
     if (completedText && !completedText.includes('No records') && !completedText.includes('No data')) {
       const seenCompleted = new Set();
-      const completedPattern = /\b(\d{18,20})\b/g;
+      const completedPattern = /\b(\d{18,19})\b/g;
       let cpm;
       while ((cpm = completedPattern.exec(completedText)) !== null) {
         const orderNumber = cpm[1];
@@ -2499,6 +2597,12 @@ function scheduleNextPoll(delayMs) {
 // Uses /ext/active-orders API — no page navigation required. When an order disappears from
 // the active list, the seller has released coins; we report it immediately without waiting
 // for the main poll cycle or the 10-poll reconcile pass.
+// Tracks how many consecutive 30s checks each paid order has been absent from the active
+// list. Requires 2 consecutive absences before declaring the order released — same safety
+// margin as the main scan's ghost detection. Prevents a single flaky /ext/active-orders
+// response from wiping all payment memory and reopening the order for a second payment.
+const _paidOrderAbsenceCounts = {};
+
 async function checkPaidOrderReleases() {
   if (!token || !pollerRunning) return;
   const paidNums = Object.keys(buyPaymentSentAt);
@@ -2514,24 +2618,27 @@ async function checkPaidOrderReleases() {
 
     const activeNums = new Set((data.orders || []).map(o => o.orderNumber));
     for (const orderNum of paidNums) {
-      if (activeNums.has(orderNum)) continue; // still active — seller hasn't released yet
+      if (activeNums.has(orderNum)) {
+        // Order is still active — reset absence counter and continue monitoring
+        _paidOrderAbsenceCounts[orderNum] = 0;
+        continue;
+      }
       if (reportedCompletedBuyOrders.has(orderNum)) continue; // already reported
-      // Order gone from active list — seller released coins
+
+      // Order absent this check — require 2 consecutive absences before acting.
+      // One flaky API response must never wipe payment memory (double-payment risk).
+      _paidOrderAbsenceCounts[orderNum] = (_paidOrderAbsenceCounts[orderNum] || 0) + 1;
+      if (_paidOrderAbsenceCounts[orderNum] < 2) {
+        console.log(`[SparkP2P] Release poller: order ${orderNum.slice(-8)} absent (${_paidOrderAbsenceCounts[orderNum]}/2) — waiting one more check`);
+        continue;
+      }
+
+      // 2 consecutive absences — seller has released coins
+      delete _paidOrderAbsenceCounts[orderNum];
       reportedCompletedBuyOrders.add(orderNum);
-      console.log(`[SparkP2P] Release poller: order ${orderNum.slice(-8)} released — reporting`);
-      fetch(`${API_BASE}/ext/report-buy-completed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ order_number: orderNum, notify: true }),
-      }).then(r => {
-        if (r.ok) {
-          saveReportedCompleted(reportedCompletedBuyOrders);
-          sendBotLog('success', `Order ...${orderNum.slice(-8)} — seller released crypto!`);
-        } else {
-          reportedCompletedBuyOrders.delete(orderNum); // retry next check
-        }
-      }).catch(() => { reportedCompletedBuyOrders.delete(orderNum); });
-      // Clean up local tracking state
+      console.log(`[SparkP2P] Release poller: order ${orderNum.slice(-8)} released (2/2 absences) — reporting`);
+
+      // Wipe in-memory tracking immediately (safe — confirmed 2-absence release)
       delete buyPaymentSentAt[orderNum];
       buyReminderSentOrders.delete(orderNum);
       delete buyOrderDetailsMap[orderNum];
@@ -2540,8 +2647,23 @@ async function checkPaidOrderReleases() {
       buyGreetingSentOrders.delete(orderNum);
       buyPostPaymentMsgSentOrders.delete(orderNum);
       markPaidDoneOrders.delete(orderNum);
-      removePaidOrder(orderNum);
-      _removeOrderFlags(orderNum);
+
+      // Disk cleanup happens ONLY after the backend confirms the report — if the
+      // report fails, the disk record survives so the next bot restart can re-track.
+      fetch(`${API_BASE}/ext/report-buy-completed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number: orderNum, notify: true }),
+      }).then(r => {
+        if (r.ok) {
+          removePaidOrder(orderNum);
+          _removeOrderFlags(orderNum);
+          saveReportedCompleted(reportedCompletedBuyOrders);
+          sendBotLog('success', `Order ...${orderNum.slice(-8)} — seller released crypto!`);
+        } else {
+          reportedCompletedBuyOrders.delete(orderNum); // retry next check
+        }
+      }).catch(() => { reportedCompletedBuyOrders.delete(orderNum); });
     }
   } catch (_) {}
 }
@@ -2969,19 +3091,38 @@ async function reconcileStuckOrders(page) {
     await page.goto('https://p2p.binance.com/en/fiatOrder?tab=1&page=1', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 2500));
 
-    // Read cancelled orders (all dates)
-    await page.evaluate(() => {
+    // Read cancelled orders (all dates) - verify the Canceled filter actually applied
+    // before scanning. A blind scan over an All/Completed view would report every
+    // number on the page as cancelled and wipe good orders straight out of the DB.
+    const _cnApplied = await page.evaluate(() => {
       const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
       const t = tabs.find(el => el.textContent.trim() === 'Canceled' || el.textContent.trim() === 'Cancelled');
-      if (t) t.click();
-    }).catch(() => {});
-    await new Promise(r => setTimeout(r, 1500));
-
-    const cancelledText = await page.evaluate(() => document.body.innerText).catch(() => '');
+      if (!t) return false;
+      t.click();
+      return true;
+    }).catch(() => false);
+    let cancelledText = '';
+    if (_cnApplied) {
+      await new Promise(r => setTimeout(r, 2000));
+      const _cnConfirmed = await page.evaluate(() => {
+        const active = Array.from(document.querySelectorAll(
+          'div[class*="tab"][class*="active"], div[class*="tab--active"], span[class*="tab"][class*="active"], button[class*="active"], [aria-selected="true"]'
+        ));
+        return active.some(el => {
+          const t = el.textContent.trim().toLowerCase();
+          return t === 'canceled' || t === 'cancelled';
+        });
+      }).catch(() => false);
+      if (_cnConfirmed) {
+        cancelledText = await page.evaluate(() => document.body.innerText).catch(() => '');
+      } else {
+        console.log('[SparkP2P] Reconcile: Canceled filter unconfirmed - skipping cancelled scan');
+      }
+    }
     let cancelledNums = [];
     if (cancelledText && !cancelledText.includes('No records')) {
       const seenCN = new Set();
-      const cnPat = /\b(\d{18,20})\b/g;
+      const cnPat = /\b(\d{18,19})\b/g;
       let cn;
       while ((cn = cnPat.exec(cancelledText)) !== null) {
         const n = cn[1];
@@ -2989,21 +3130,36 @@ async function reconcileStuckOrders(page) {
       }
     }
 
-    // Read completed BUY orders with full financial details so missing orders can be created in DB
-    await page.evaluate(() => {
+    // Read completed BUY orders with full financial details so missing orders can be
+    // created in DB - verify the Completed filter applied first (same false-tag risk).
+    const _cbApplied = await page.evaluate(() => {
       const tabs = Array.from(document.querySelectorAll('div[class*="tab"], span[class*="tab"], button'));
       const t = tabs.find(el => el.textContent.trim() === 'Completed');
-      if (t) t.click();
-    }).catch(() => {});
-    await new Promise(r => setTimeout(r, 1500));
-
-    const completedText = await page.evaluate(() => document.body.innerText).catch(() => '');
+      if (!t) return false;
+      t.click();
+      return true;
+    }).catch(() => false);
+    let completedText = '';
+    if (_cbApplied) {
+      await new Promise(r => setTimeout(r, 2000));
+      const _cbConfirmed = await page.evaluate(() => {
+        const active = Array.from(document.querySelectorAll(
+          'div[class*="tab"][class*="active"], div[class*="tab--active"], span[class*="tab"][class*="active"], button[class*="active"], [aria-selected="true"]'
+        ));
+        return active.some(el => el.textContent.trim().toLowerCase() === 'completed');
+      }).catch(() => false);
+      if (_cbConfirmed) {
+        completedText = await page.evaluate(() => document.body.innerText).catch(() => '');
+      } else {
+        console.log('[SparkP2P] Reconcile: Completed filter unconfirmed - skipping completed scan');
+      }
+    }
     let completedBuyNums = [];
     let completedBuyOrders = []; // full data for buy orders not yet in DB
     let completedSellNums = [];
     if (completedText && !completedText.includes('No records')) {
       const seenCB = new Set();
-      const cbPat = /\b(\d{18,20})\b/g;
+      const cbPat = /\b(\d{18,19})\b/g;
       let cb;
       while ((cb = cbPat.exec(completedText)) !== null) {
         const orderNumber = cb[1];
@@ -3458,36 +3614,61 @@ async function checkReturningBuyer(nickname) {
 }
 
 async function cancelOrderOnBinance(page, orderNumber, reason) {
-  const cancelled = await page.evaluate(() => {
-    const phrases = ['cancel order', 'cancel', 'cancel the order'];
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-    while (walker.nextNode()) {
-      const el = walker.currentNode;
-      if (el.tagName !== 'BUTTON' && el.tagName !== 'A') continue;
-      const t = (el.textContent || '').trim().toLowerCase();
-      if (phrases.some(p => t === p || t.startsWith(p))) { el.click(); return true; }
-    }
-    return false;
-  }).catch(() => false);
+  // Mark as bot-cancelled FIRST — prevents re-processing on every subsequent scan
+  // even if the actual Binance cancel is slow or queued.
+  botCancelledOrders.add(orderNumber);
+  _saveOrderFlag(orderNumber, 'cancelledByBot', true);
 
-  if (!cancelled) {
-    console.log(`[SparkP2P] DD cancel: cancel button not found for ${orderNumber}`);
-    return false;
+  // Primary: use the SAPI cancel endpoint (same reliable path as OTP-timeout cancellation).
+  // This actually tells Binance to cancel rather than relying on DOM button clicks.
+  let sapiOk = false;
+  try {
+    const r = await fetch(`${API_BASE}/ext/cancel-order`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ order_number: orderNumber }),
+    }).catch(() => null);
+    sapiOk = r?.ok === true;
+  } catch (_) {}
+
+  if (sapiOk) {
+    console.log(`[SparkP2P] DD cancel: SAPI cancel succeeded for ${orderNumber}`);
+  } else {
+    // Fallback: DOM click. Binance shows a reason-selection modal before the final
+    // confirm, so we click cancel → wait for modal → select first radio → confirm.
+    console.log(`[SparkP2P] DD cancel: SAPI failed — falling back to DOM click for ${orderNumber}`);
+    const clickedCancel = await page.evaluate(() => {
+      const phrases = ['cancel order', 'cancel the order'];
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+      while (walker.nextNode()) {
+        const el = walker.currentNode;
+        if (el.tagName !== 'BUTTON' && el.tagName !== 'A') continue;
+        const t = (el.textContent || '').trim().toLowerCase();
+        if (phrases.some(p => t === p || t.startsWith(p))) { el.click(); return true; }
+      }
+      return false;
+    }).catch(() => false);
+
+    if (clickedCancel) {
+      await new Promise(r => setTimeout(r, 1800));
+      // Select first reason radio if the modal appeared, then click confirm.
+      await page.evaluate(() => {
+        const radios = document.querySelectorAll('input[type="radio"]');
+        if (radios.length) radios[0].click();
+        const phrases = ['confirm', 'yes', 'confirm cancel', 'yes, cancel'];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+        while (walker.nextNode()) {
+          const el = walker.currentNode;
+          if (el.tagName !== 'BUTTON') continue;
+          const t = (el.textContent || '').trim().toLowerCase();
+          if (phrases.some(p => t === p || t.startsWith(p))) { el.click(); return; }
+        }
+      }).catch(() => {});
+      await new Promise(r => setTimeout(r, 1500));
+    } else {
+      console.log(`[SparkP2P] DD cancel: DOM cancel button not found for ${orderNumber} — order blocked in botCancelledOrders regardless`);
+    }
   }
-
-  await new Promise(r => setTimeout(r, 2000));
-  await page.evaluate(() => {
-    const phrases = ['confirm', 'yes', 'confirm cancel', 'yes, cancel'];
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-    while (walker.nextNode()) {
-      const el = walker.currentNode;
-      if (el.tagName !== 'BUTTON') continue;
-      const t = (el.textContent || '').trim().toLowerCase();
-      if (phrases.some(p => t === p || t.startsWith(p))) { el.click(); return true; }
-    }
-    return false;
-  }).catch(() => {});
-  await new Promise(r => setTimeout(r, 1500));
 
   delete orderFirstSeenAt[orderNumber];
   orderReminderSent.delete(orderNumber);
@@ -3504,7 +3685,7 @@ async function cancelOrderOnBinance(page, orderNumber, reason) {
   }).catch(() => {});
 
   sendBotLog('warn', `DD screening: cancelled order ${orderNumber} — ${reason}`);
-  console.log(`[SparkP2P] DD: cancelled ${orderNumber} — ${reason}`);
+  console.log(`[SparkP2P] DD: cancelled ${orderNumber} — ${reason} (SAPI: ${sapiOk})`);
   return true;
 }
 
@@ -3764,23 +3945,8 @@ async function idleScan(page) {
     _cycleVision += 0; _cycleDom += 1;
     console.log(`[SparkP2P] Sell order ${order.orderNumber} state: ${screen} (EP-13, ${_isPesaLink ? 'PesaLink' : 'M-Pesa'})`);
 
-    // Bring the order tab to front and GUARANTEE it is on this order's URL
-    // before any chat is typed. If the shared page is used (dedicated tab
-    // missing), it is explicitly navigated to this order first — a chat
-    // message can never land on a different order's page.
-    const sPage = orderTabs[order.orderNumber] || page;
-    const _sOrderUrl = `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`;
-    const _gotoOrder = async () => {
-      try { await sPage.bringToFront(); } catch (_) {}
-      try {
-        if (sPage.url().includes(order.orderNumber)) {
-          await sPage.reload({ waitUntil: 'domcontentloaded', timeout: 12000 });
-        } else {
-          await sPage.goto(_sOrderUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        }
-      } catch (_) {}
-      await new Promise(r => setTimeout(r, 1500));
-    };
+    // Sell orders are tabless: any chat/verify action opens a dedicated tab on demand
+    // via withSellTab() (which guarantees the correct order URL) and closes it after.
 
     // Cleanup all state for a finished/cancelled order
     const _cleanupSellOrder = () => {
@@ -3799,6 +3965,8 @@ async function idleScan(page) {
       sellPayInstructSentOrders.delete(order.orderNumber);
       delete lastSellDeficitMsg[order.orderNumber];
       delete sellOrderDetailsCache[order.orderNumber];
+      sellHeldOrders.delete(order.orderNumber);
+      sellHoldDecisionAsked.delete(order.orderNumber);
     };
 
     // -- Complete -------------------------------------------------------------
@@ -3826,15 +3994,27 @@ async function idleScan(page) {
       continue;
     }
 
-    // -- Buyer marked paid: verify Choice Bank then release -------------------
+    // -- Buyer marked paid: verify Choice Bank (amount + payer name) then release -----
     if (screen === 'verify_payment') {
       delete sellOrderDetailsCache[order.orderNumber]; // force fresh EP-13 next cycle
+
+      // If this order is HELD for a payer-name mismatch, poll the merchant's decision.
+      if (sellHeldOrders.has(order.orderNumber)) {
+        const _hs = await fetch(
+          `${API_BASE}/telegram/approval-status?order_number=${encodeURIComponent('HOLD-' + order.orderNumber)}`,
+          { headers: { 'Authorization': `Bearer ${token}` } }
+        ).then(r => r.json()).catch(() => ({}));
+        if (_hs.status === 'approved') {
+          sendBotLog('warning', `Sell order ${order.orderNumber} -- merchant approved release DESPITE name mismatch`);
+          sellHeldOrders.delete(order.orderNumber); // fall through to release
+        } else {
+          if (_hs.status === 'rejected') console.log(`[SparkP2P] Order ${order.orderNumber} -- kept HELD by merchant (manual handling)`);
+          continue; // stays held; buyer told nothing
+        }
+      }
+
       activeOrderNumber = order.orderNumber;
       activeOrderFiatAmount = _orderAmount;
-
-      // Navigate so merchant sees bot activity
-      await _gotoOrder();
-      if (pauseNavigation) { activeOrderNumber = null; activeOrderFiatAmount = 0; break; }
 
       const _cvRes = await fetch(
         `${API_BASE}/ext/choice-payment-received?order_number=${encodeURIComponent(order.orderNumber)}`,
@@ -3843,13 +4023,67 @@ async function idleScan(page) {
       const _cvPaid = _cvRes.total_paid || 0;
 
       if (_cvRes.received) {
-        // Full payment confirmed via Choice Bank
-        console.log(`[SparkP2P] Choice Bank confirmed KES ${_cvPaid} -- releasing`);
-        await sendBinanceChatMessage(sPage,
-          `Your payment of KES ${_orderAmount.toLocaleString()} has been confirmed via our banking system. Releasing your crypto now -- thank you!`
-        );
-        await new Promise(r => setTimeout(r, 800));
-        if (!pauseNavigation) {
+        // ── ANTI-FRAUD PAYER NAME CHECK (before releasing) ──────────────────
+        const _senders = Array.isArray(_cvRes.senders) ? _cvRes.senders.filter(Boolean) : [];
+        const _binName = _cvRes.buyer_real_name || '';
+        let _mismatch = null;
+        // Check 1 — all payments must come from ONE person (mixed senders = fraud signal)
+        if (_senders.length > 1) {
+          for (let i = 1; i < _senders.length; i++) {
+            if (_namesMatch(_senders[0], _senders[i]) === false) {
+              _mismatch = { type: 'mixed_senders', payer: _senders.join(' / ') };
+              break;
+            }
+          }
+        }
+        // Check 2 — payer vs Binance legal name (skipped when legal name unknown → fail-safe)
+        if (!_mismatch && _binName && _senders.length > 0) {
+          for (const s of _senders) {
+            if (_namesMatch(_binName, s) === false) {
+              _mismatch = { type: 'payer_vs_binance', payer: s };
+              break;
+            }
+          }
+        }
+
+        if (_mismatch) {
+          // SILENT to buyer. Actionable Telegram to merchant. Order HELD (no release).
+          sellHeldOrders.set(order.orderNumber, { reason: 'name_mismatch', detail: _mismatch, heldAt: Date.now() });
+          _saveOrderFlag(order.orderNumber, 'heldNameMismatch', true);
+          if (!sellHoldDecisionAsked.has(order.orderNumber)) {
+            sellHoldDecisionAsked.add(order.orderNumber);
+            await alertMerchant(
+              `🚨 PAYER NAME MISMATCH — sell order …${order.orderNumber.slice(-8)}\n` +
+              `Binance buyer: ${_binName || _buyerBinName || 'unknown'}\n` +
+              (_mismatch.type === 'mixed_senders'
+                ? `Different payers: ${_mismatch.payer}\n`
+                : `Choice Bank payer: ${_mismatch.payer}\n`) +
+              `Received KES ${Math.floor(_cvPaid).toLocaleString()} of KES ${Math.floor(_orderAmount).toLocaleString()}\n\n` +
+              `Crypto NOT released. Buyer has NOT been told why.\n` +
+              `✅ Approve = release anyway   ❌ Reject = keep held`
+            );
+            // Reuse the approval buttons with a HOLD- key (opaque key — no phantom order)
+            await fetch(`${API_BASE}/telegram/request-approval`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+              body: JSON.stringify({
+                order: { orderNumber: `HOLD-${order.orderNumber}`, totalPrice: _cvPaid,
+                         buyerNickname: _buyerBinName, counterparty: _buyerBinName },
+              }),
+            }).catch(() => {});
+          }
+          sendBotLog('error', `Sell order ${order.orderNumber} HELD — payer name mismatch (${_mismatch.payer}). Merchant alerted, buyer told nothing.`);
+          activeOrderNumber = null; activeOrderFiatAmount = 0;
+          continue;
+        }
+
+        // ── Name OK → release (tabless: open a tab for the release, then close) ──
+        console.log(`[SparkP2P] Choice Bank confirmed KES ${_cvPaid} + payer name OK -- releasing`);
+        const _released = await withSellTab(order.orderNumber, async (tab) => {
+          await sendBinanceChatMessage(tab,
+            `Your payment of KES ${_orderAmount.toLocaleString()} has been confirmed via our banking system. Releasing your crypto now -- thank you!`
+          );
+          await new Promise(r => setTimeout(r, 800));
           // EP-12: confirm Binance is ready to release before EP-20
           const _ep12 = await fetch(`${API_BASE}/ext/check-can-release`, {
             method: 'POST',
@@ -3858,11 +4092,10 @@ async function idleScan(page) {
           }).then(r => r.json()).catch(() => ({ can_release: true }));
           if (_ep12.can_release === false) {
             sendBotLog('warning', `Sell order ${order.orderNumber}: EP-12 says not ready -- retrying next cycle`);
-            activeOrderNumber = null; activeOrderFiatAmount = 0;
-            continue;
+            return false;
           }
-          // Click Payment Received (DOM TreeWalker)
-          await page.evaluate(() => {
+          // Click Payment Received on THIS tab (not the shared page)
+          await tab.evaluate(() => {
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
             while (walker.nextNode()) {
               const el = walker.currentNode;
@@ -3871,7 +4104,7 @@ async function idleScan(page) {
               if (t === 'payment received' || t.startsWith('payment received')) { el.click(); return true; }
             }
             return false;
-          });
+          }).catch(() => {});
           await new Promise(r => setTimeout(r, 2000));
           // EP-20 first; Vision fallback
           const _rlRes = await fetch(`${API_BASE}/ext/release-coin`, {
@@ -3882,31 +4115,40 @@ async function idleScan(page) {
           if (_rlRes.ok === true) {
             console.log(`[SparkP2P] EP-20 release success for ${order.orderNumber}`);
           } else {
-            await releaseWithVision(sPage, order.orderNumber, { preChatCodes: { mpesaCodes: [], bankRefs: [] } }, { skipNavigation: true });
+            await releaseWithVision(tab, order.orderNumber, { preChatCodes: { mpesaCodes: [], bankRefs: [] } }, { skipNavigation: true });
           }
-        }
+          return true;
+        });
         activeOrderNumber = null; activeOrderFiatAmount = 0;
-        _cleanupSellOrder();
-        continue;
+        if (_released) {
+          await fetch(`${API_BASE}/ext/report-release`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ order_number: order.orderNumber, success: true }),
+          }).catch(() => {});
+          sendBotLog('success', `Sell order ${order.orderNumber} -- verified (name ✓ amount ✓) and RELEASED`);
+          _cleanupSellOrder();
+        }
+        continue; // if not released (EP-12 not ready / tab failed), retry next cycle
       } else if (_cvPaid > 0) {
-        // Partial payment -- send deficit message (deduplicated)
+        // Partial payment -- send deficit message (tabless, deduplicated)
         const _deficit = Math.round((_orderAmount - _cvPaid) * 100) / 100;
         if (lastSellDeficitMsg[order.orderNumber] !== _deficit) {
-          await sendBinanceChatMessage(sPage,
+          const _sent = await withSellTab(order.orderNumber, (tab) => sendBinanceChatMessage(tab,
             `We have received KES ${_cvPaid.toLocaleString()} of the required KES ${_orderAmount.toLocaleString()}. ` +
             `Please send the remaining KES ${_deficit.toLocaleString()} to complete your transaction. Thank you!`
-          );
-          lastSellDeficitMsg[order.orderNumber] = _deficit;
+          ).then(() => true).catch(() => false));
+          if (_sent) lastSellDeficitMsg[order.orderNumber] = _deficit;
         }
       } else {
-        // No payment yet -- send wait message once then stay silent
+        // No payment yet -- send wait message once then stay silent (tabless)
         const _awaitKey = order.orderNumber + '_awaiting_choice_confirm';
         if (!codeFallbackAskedOrders.has(_awaitKey)) {
-          await sendBinanceChatMessage(sPage,
+          const _sent = await withSellTab(order.orderNumber, (tab) => sendBinanceChatMessage(tab,
             `Thank you! We are verifying your payment through our banking system. ` +
             `Your crypto will be released automatically as soon as the payment is confirmed.`
-          );
-          codeFallbackAskedOrders.add(_awaitKey);
+          ).then(() => true).catch(() => false));
+          if (_sent) codeFallbackAskedOrders.add(_awaitKey);
         }
       }
       activeOrderNumber = null; activeOrderFiatAmount = 0;
@@ -3916,19 +4158,21 @@ async function idleScan(page) {
     // -- Awaiting payment: approval / rejection / payment instructions --------
     if (screen === 'awaiting_payment' || screen === 'unknown') {
 
-      // REJECTED: navigate to page so merchant sees bot typing the excuse, then move on
+      // REJECTED: open tab on demand, type the polite excuse, close. NEVER self-cancel.
       if (sellRejectedOrders.has(order.orderNumber)) {
         if (!sellRejectionMsgSent.has(order.orderNumber)) {
-          await _gotoOrder();
-          if (pauseNavigation) break;
           const rejMsg =
             `Hello, and thank you for your order. I sincerely apologize, but due to a temporary issue ` +
             `with our banking system, we are unable to complete this transaction at this time. To avoid ` +
             `any delay for you, we kindly request that you cancel this order so that you may trade with ` +
             `another merchant. We deeply regret this inconvenience and truly appreciate your understanding. Thank you.`;
-          await sendBinanceChatMessage(sPage, rejMsg).catch(() => {});
-          sellRejectionMsgSent.add(order.orderNumber);
-          sendBotLog('info', `Sell order ${order.orderNumber} rejected -- excuse message sent, awaiting buyer cancellation`);
+          const _sent = await withSellTab(order.orderNumber, (tab) =>
+            sendBinanceChatMessage(tab, rejMsg).then(() => true).catch(() => false));
+          if (_sent) {
+            sellRejectionMsgSent.add(order.orderNumber);
+            _saveOrderFlag(order.orderNumber, 'sellDeclineSent', true);
+            sendBotLog('info', `Sell order ${order.orderNumber} rejected -- excuse message sent, awaiting buyer cancellation`);
+          }
         } else {
           console.log(`[SparkP2P] Order ${order.orderNumber} -- rejected: awaiting buyer cancel / expiry (silent)`);
         }
@@ -3999,9 +4243,9 @@ async function idleScan(page) {
         }
       }
 
-      // STEP 3: Send payment instructions -- navigate first so merchant sees bot typing
+      // STEP 3: Send payment instructions -- open tab on demand, type, close
       if (sellApprovedOrders.has(order.orderNumber) && !sellPayInstructSentOrders.has(order.orderNumber)) {
-        const _PAYBILL = '444174';
+        const _PAYBILL = traderChoicePaybill || '444174';
         const _choiceAccNum = traderChoiceAccountNumber || '';
         let _payMsgs = [];
         if (_isPesaLink) {
@@ -4028,14 +4272,18 @@ async function idleScan(page) {
           ];
         }
         if (_choiceAccNum) {
-          await _gotoOrder();
-          if (pauseNavigation) break;
-          for (let i = 0; i < _payMsgs.length; i++) {
-            await sendBinanceChatMessage(sPage, _payMsgs[i]);
-            if (i < _payMsgs.length - 1) await new Promise(r => setTimeout(r, 1000 + Math.random() * 800));
+          const _sent = await withSellTab(order.orderNumber, async (tab) => {
+            for (let i = 0; i < _payMsgs.length; i++) {
+              await sendBinanceChatMessage(tab, _payMsgs[i]);
+              if (i < _payMsgs.length - 1) await new Promise(r => setTimeout(r, 1000 + Math.random() * 800));
+            }
+            return true;
+          });
+          if (_sent) {
+            sellPayInstructSentOrders.add(order.orderNumber);
+            _saveOrderFlag(order.orderNumber, 'sellInstructionsSent', true);
+            console.log(`[SparkP2P] Order ${order.orderNumber} -- instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'}, paybill ${_PAYBILL}, acct ${_choiceAccNum})`);
           }
-          sellPayInstructSentOrders.add(order.orderNumber);
-          console.log(`[SparkP2P] Order ${order.orderNumber} -- instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'}, paybill ${_PAYBILL}, acct ${_choiceAccNum})`);
         } else {
           console.log(`[SparkP2P] Order ${order.orderNumber} -- Choice Bank account not set, cannot send instructions`);
         }
@@ -4054,14 +4302,11 @@ async function idleScan(page) {
         } else if (_cbPaid > 0) {
           const _deficit = Math.round((_orderAmount - _cbPaid) * 100) / 100;
           if (lastSellDeficitMsg[order.orderNumber] !== _deficit) {
-            await _gotoOrder();
-            if (!pauseNavigation) {
-              await sendBinanceChatMessage(sPage,
-                `Thank you! We have received KES ${_cbPaid.toLocaleString()} so far. ` +
-                `Please send the remaining KES ${_deficit.toLocaleString()} to the same paybill to complete your transaction.`
-              );
-              lastSellDeficitMsg[order.orderNumber] = _deficit;
-            }
+            const _sent = await withSellTab(order.orderNumber, (tab) => sendBinanceChatMessage(tab,
+              `Thank you! We have received KES ${_cbPaid.toLocaleString()} so far. ` +
+              `Please send the remaining KES ${_deficit.toLocaleString()} to the same paybill to complete your transaction.`
+            ).then(() => true).catch(() => false));
+            if (_sent) lastSellDeficitMsg[order.orderNumber] = _deficit;
           }
         } else {
           console.log(`[SparkP2P] Order ${order.orderNumber} -- awaiting Choice Bank payment (${seenMins}m elapsed)`);
@@ -4329,33 +4574,43 @@ async function idleScan(page) {
       if (activeBuyOrderNumber === orderNum) activeBuyOrderNumber = null;
 
     // â"€â"€ Cancelled â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-    // Use Vision screen OR definitive past-tense phrases only.
-    // "order will be cancelled in X mins" is a WARNING â€" not a cancellation.
+    // Only use Vision screen OR unambiguous past-tense phrases. The old heuristic
+    // (cancelled + order number) was a false-positive machine: every Binance order
+    // page contains "Order Number:" in the UI, so it fired on any chat message or
+    // banner that contained the word "cancelled" — including Binance's own restriction
+    // warning. The loose heuristic is removed; only exact past-tense phrases remain.
+    // SAFETY: never wipe buyPaymentSentAt if we already paid — a false cancel detection
+    // on a Pending-Release order would cause the bot to re-attempt payment on the next cycle.
     } else if (
       buyScreen === 'order_cancelled' ||
       buyLower.includes('order has been cancelled') ||
       buyLower.includes('order was cancelled') ||
       buyLower.includes('order is cancelled') ||
-      buyLower.includes('has been canceled') ||
-      (buyLower.includes('cancelled') && buyLower.includes('order number') && !buyLower.includes('will be cancelled'))
+      buyLower.includes('has been canceled')
     ) {
-      const _cancelledWhy = buyScreen === 'order_cancelled' ? 'Vision detected cancelled'
-        : buyLower.includes('order has been cancelled') ? '"order has been cancelled" in page text'
-        : buyLower.includes('order was cancelled') ? '"order was cancelled" in page text'
-        : buyLower.includes('order is cancelled') ? '"order is cancelled" in page text'
-        : buyLower.includes('has been canceled') ? '"has been canceled" in page text'
-        : '"cancelled"+"order number" in page text without "will be cancelled"';
-      console.log(`[SparkP2P] Buy order ${order.orderNumber} CANCELLED (reason: ${_cancelledWhy})`);
-      sendBotLog('warn', `Buy order ...${order.orderNumber.slice(-8)} detected as CANCELLED — reason: ${_cancelledWhy}. Screen: ${buyScreen}`);
-      await fetch(`${API_BASE}/ext/report-orders`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [order.orderNumber] }),
-      }).catch(() => {});
-      delete buyPaymentSentAt[order.orderNumber];
-      buyReminderSentOrders.delete(order.orderNumber);
-      if (activeBuyOrderNumber === order.orderNumber) activeBuyOrderNumber = null;
-      closeOrderTab(order.orderNumber, 'order cancelled');
+      if (buyPaymentSentAt[order.orderNumber]) {
+        // We already paid — this is almost certainly a false-positive (e.g. a Binance
+        // restriction banner on the Pending-Release page). Ignore and keep monitoring.
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} — cancel text detected but buyPaymentSentAt is set; treating as false-positive, continuing to monitor release`);
+        sendBotLog('warn', `Buy order ...${order.orderNumber.slice(-8)} — "cancelled" text detected after payment was sent. Ignoring (false-positive guard). Monitoring for seller release.`);
+      } else {
+        const _cancelledWhy = buyScreen === 'order_cancelled' ? 'Vision detected cancelled'
+          : buyLower.includes('order has been cancelled') ? '"order has been cancelled" in page text'
+          : buyLower.includes('order was cancelled') ? '"order was cancelled" in page text'
+          : buyLower.includes('order is cancelled') ? '"order is cancelled" in page text'
+          : '"has been canceled" in page text';
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} CANCELLED (reason: ${_cancelledWhy})`);
+        sendBotLog('warn', `Buy order ...${order.orderNumber.slice(-8)} detected as CANCELLED — reason: ${_cancelledWhy}. Screen: ${buyScreen}`);
+        await fetch(`${API_BASE}/ext/report-orders`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [order.orderNumber] }),
+        }).catch(() => {});
+        delete buyPaymentSentAt[order.orderNumber];
+        buyReminderSentOrders.delete(order.orderNumber);
+        if (activeBuyOrderNumber === order.orderNumber) activeBuyOrderNumber = null;
+        closeOrderTab(order.orderNumber, 'order cancelled');
+      }
 
     // â"€â"€ We already paid â€" monitoring for seller release â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     } else if (buyPaymentSentAt[order.orderNumber]) {
@@ -4996,6 +5251,18 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
           }
 
           // ── Step 3: Execute the Choice Bank payment ──
+          // Final disk-ledger guard — survives every in-memory wipe scenario (flaky release
+          // poller, Detector A/B false-cancel, bot restart between payment and cleanup).
+          // If this order is already in paid_orders.json we must not pay again.
+          {
+            const _diskLedger = loadPaidOrders();
+            if (_diskLedger[order.orderNumber]) {
+              buyPaymentSentAt[order.orderNumber] = _diskLedger[order.orderNumber].paidAt || Date.now();
+              console.log(`[SparkP2P] ⛔ PAYMENT BLOCKED for ${order.orderNumber} — found in paid_orders.json (double-payment guard)`);
+              sendBotLog('warn', `Order ...${order.orderNumber.slice(-8)} — payment blocked: already in paid ledger. Monitoring for seller release.`);
+              continue;
+            }
+          }
           await _refreshChoiceBankCodes(); // ensure live bank codes are loaded
           try {
             imResult = await executeChoicePayment({
@@ -5378,7 +5645,12 @@ async function monitorActiveOrder(page) {
     const pageText = await page.evaluate(() => document.body.innerText).catch(() => '');
     const lower = pageText.toLowerCase();
 
-    if (lower.includes('cancelled') || lower.includes('canceled')) {
+    // Only past-tense confirmation counts - not warning text like "order will be
+    // cancelled if payment isn't made", which also contains the word 'cancelled'.
+    if (lower.includes('order has been cancelled') || lower.includes('order has been canceled') ||
+        lower.includes('order was cancelled') || lower.includes('order was canceled') ||
+        lower.includes('order canceled') || lower.includes('order cancelled') ||
+        lower.includes('this order is cancelled') || lower.includes('this order is canceled')) {
       console.log(`[SparkP2P] Order ${orderNum} CANCELLED`);
       await fetch(`${API_BASE}/ext/report-orders`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },

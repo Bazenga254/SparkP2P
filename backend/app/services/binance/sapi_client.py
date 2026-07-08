@@ -325,6 +325,14 @@ async def get_order_payment_details(api_key: str, api_secret: str, order_number:
     except Exception:
         fiat_amount = 0.0
     cp = d.get("counterPartyUserInfoVo") or {}
+    # Counterparty's verified/legal name — the "Counterparty name" shown on the order
+    # detail page (e.g. "YVONNE NJERI MATU"), used for the payer name-match anti-fraud
+    # check. Confirmed top-level: buyerName when we SELL, sellerName when we BUY — mirror
+    # the same side logic as cp_nick above.
+    if trade_type == "BUY":
+        cp_real_name = str(d.get("sellerName") or "").strip()
+    else:
+        cp_real_name = str(d.get("buyerName") or "").strip()
     trades_30d = cp.get("lastMonthOrderNum") or cp.get("tradeCount30d")
     trades_all = cp.get("orderCount") or cp.get("tradeCountTotal")
     rate_raw   = cp.get("monthFinishRate") or cp.get("completionRate")
@@ -339,6 +347,7 @@ async def get_order_payment_details(api_key: str, api_secret: str, order_number:
         "fields": fields,
         "raw_pay_type": pay_type,
         "counterparty_nickname": cp_nick,
+        "counterparty_real_name": cp_real_name,
         "taker_user_no": d.get("takerUserNo"),
         "order_status": str(d.get("orderStatus") or "").upper(),
         "fiat_amount": fiat_amount,
