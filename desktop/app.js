@@ -4033,11 +4033,20 @@ async function idleScan(page) {
       activeOrderNumber = order.orderNumber;
       activeOrderFiatAmount = _orderAmount;
 
+      sendBotLog('info', `Sell ...${order.orderNumber.slice(-8)} — buyer marked PAID. Checking Choice Bank for the money…`);
       const _cvRes = await fetch(
         `${API_BASE}/ext/choice-payment-received?order_number=${encodeURIComponent(order.orderNumber)}`,
         { headers: { 'Authorization': `Bearer ${token}` } }
       ).then(r => r.json()).catch(() => ({}));
       const _cvPaid = _cvRes.total_paid || 0;
+      // Stage log — show exactly what the bot sees in the bank.
+      if (_cvRes.received) {
+        sendBotLog('success', `Sell ...${order.orderNumber.slice(-8)} — Choice Bank confirms KES ${Math.floor(_cvPaid).toLocaleString()} received${(_cvRes.senders||[]).length ? ' from ' + _cvRes.senders.join(', ') : ''}. Verifying payer name…`);
+      } else if (_cvPaid > 0) {
+        sendBotLog('warning', `Sell ...${order.orderNumber.slice(-8)} — only KES ${Math.floor(_cvPaid).toLocaleString()} of KES ${Math.floor(_orderAmount).toLocaleString()} in Choice Bank so far. Waiting for the balance.`);
+      } else {
+        sendBotLog('info', `Sell ...${order.orderNumber.slice(-8)} — no money in Choice Bank yet. Will check again next cycle.`);
+      }
 
       if (_cvRes.received) {
         // ── ANTI-FRAUD PAYER NAME CHECK (before releasing) ──────────────────
@@ -4096,6 +4105,7 @@ async function idleScan(page) {
 
         // ── Name OK → release (tabless: open a tab for the release, then close) ──
         console.log(`[SparkP2P] Choice Bank confirmed KES ${_cvPaid} + payer name OK -- releasing`);
+        sendBotLog('success', `Sell ...${order.orderNumber.slice(-8)} — payer name verified ✓ and amount ✓. Releasing crypto now…`);
         const _released = await withSellTab(order.orderNumber, async (tab) => {
           await sendBinanceChatMessage(tab,
             `Your payment of KES ${_orderAmount.toLocaleString()} has been confirmed via our banking system. Releasing your crypto now -- thank you!`
