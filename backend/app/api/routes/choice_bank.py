@@ -1187,6 +1187,26 @@ async def send_money_initiate(body: SendMoneyInitiate, trader: Trader = Depends(
     return {"status": "otp_sent", "message": msg}
 
 
+@router.post("/choice/pay/send-money/resend-email")
+async def send_money_resend_email(trader: Trader = Depends(get_current_trader)):
+    """SMS OTP didn't arrive — resend the SAME transfer's OTP via EMAIL instead (merchant-triggered).
+    The merchant then enters the email code in the normal confirm step (confirm_otp is channel-agnostic)."""
+    pending = _pending_send_money.get(trader.id)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending transfer. Please start again.")
+    try:
+        r = await choice.resend_otp(pending["tx_id"], otp_type="EMAIL")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not send email OTP: {exc}")
+    if r.get("code") != "00000":
+        raise HTTPException(
+            status_code=400,
+            detail=r.get("msg") or "Email OTP isn't available for this account (your email may not be verified with Choice Bank).",
+        )
+    return {"status": "email_otp_sent",
+            "message": "We've sent the OTP to your registered email. Enter it below to complete the transfer."}
+
+
 @router.post("/choice/pay/send-money/confirm")
 async def send_money_confirm(body: SendMoneyConfirm, trader: Trader = Depends(get_current_trader),
                              db: AsyncSession = Depends(get_db)):

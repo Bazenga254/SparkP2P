@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   choiceGetBalance,
-  cbSendMoneyInitiate, cbSendMoneyConfirm, cbSendMoneyConfirmSms,
+  cbSendMoneyInitiate, cbSendMoneyConfirm, cbSendMoneyConfirmSms, cbSendMoneyResendEmail,
   cbPaybillInitiate, cbPaybillConfirm, cbLookupShortcode,
   cbGetBanks, cbLookupBankAccount, cbLookupMpesaName,
   cbBankTransferInitiate, cbBankTransferConfirm, cbBankTransferConfirmSms,
@@ -656,6 +656,19 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
     finally { setBusy(false); }
   };
 
+  // SMS OTP didn't arrive — get the same transfer's code by email instead.
+  const resendEmail = async () => {
+    setError(''); setInfo(''); setBusy(true);
+    try {
+      const r = await cbSendMoneyResendEmail();
+      setInfo(r.data?.message || 'We sent the OTP to your registered email. Enter it below to complete the transfer.');
+      setStep('otp');
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Could not send the email OTP.');
+      setStep('otp');
+    } finally { setBusy(false); }
+  };
+
   if (step === 'done') return (
     <div className="pm-flow pm-success">
       <div style={{ fontSize: 56 }}>✅</div>
@@ -705,6 +718,11 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
           <div style={{ fontSize: 40, marginBottom: 16 }}>📲</div>
           <div style={{ color: '#f5a623', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Waiting for OTP…</div>
           <div style={{ color: '#9aa4b2', fontSize: 13 }}>Choice Bank sent an OTP to your phone.<br />It will be captured automatically.</div>
+          {error && <div className="pm-error" style={{ marginTop: 14 }}>{error}</div>}
+          <button onClick={resendEmail} disabled={busy}
+            style={{ marginTop: 20, background: 'none', border: '1px solid var(--border)', color: '#f59e0b', borderRadius: 9, padding: '9px 16px', fontSize: 13, cursor: 'pointer' }}>
+            {busy ? 'Sending…' : '📧 SMS not arriving? Get the code by email'}
+          </button>
         </div>
       )}
       {step === 'otp' && (
@@ -716,6 +734,10 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!otp || busy} onClick={confirm}>{busy ? 'Confirming…' : `Send ${fmtKES(amount)}`}</button>
           <OtpResend flow="send_money" />
+          <button onClick={resendEmail} disabled={busy}
+            style={{ display: 'block', background: 'none', border: 'none', color: '#f59e0b', fontSize: 13, cursor: 'pointer', textDecoration: 'underline', padding: 0, marginTop: 10 }}>
+            📧 Didn't get the SMS? Get the code by email instead
+          </button>
         </>
       )}
     </div>

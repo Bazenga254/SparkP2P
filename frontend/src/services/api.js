@@ -207,6 +207,7 @@ export const cbWithdrawToMpesaInitiate = (amount) => api.post("/traders/cb-withd
 export const cbSendMoneyInitiate = (body) => api.post('/choice/pay/send-money/initiate', body);
 export const cbSendMoneyConfirm = (otp) => api.post('/choice/pay/send-money/confirm', { otp });
 export const cbSendMoneyConfirmSms = () => api.post('/choice/pay/send-money/confirm-sms', {}, { timeout: 240000 });
+export const cbSendMoneyResendEmail = () => api.post('/choice/pay/send-money/resend-email', {});
 // Payments Hub — M-Pesa Paybill / Till (OTP-confirmed)
 export const cbLookupShortcode = (code) => api.get('/choice/pay/lookup-shortcode', { params: { code } });
 export const cbPaybillInitiate = (body) => api.post('/choice/pay/paybill/initiate', body);
