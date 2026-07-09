@@ -1138,6 +1138,24 @@ async def send_money_initiate(body: SendMoneyInitiate, trader: Trader = Depends(
     if body.amount > limit:
         raise HTTPException(status_code=400, detail=f"{'Airtel' if network == 'airtel' else 'M-Pesa'} transfers are limited to KES {limit:,} per transaction")
 
+    # ── Pre-flight: minimum amount (M-Pesa rejects < KES 10) + balance covers amount + fee ──
+    if body.amount < 10:
+        raise HTTPException(status_code=400,
+            detail=f"Minimum transfer is KES 10 — you entered KES {body.amount:,.0f}. Increase the amount to at least KES 10.")
+    from app.services.outbound_fees import outbound_fee
+    _fee = outbound_fee("AIRTEL" if network == "airtel" else "MPESA", float(body.amount))
+    _needed = float(body.amount) + _fee
+    try:
+        _bal_res = await choice.get_account_details(trader.choice_account_id)
+        _bal = float((_bal_res.get("data") or {}).get("balance") or 0)
+    except Exception:
+        _bal = None
+    if _bal is not None and _bal < _needed:
+        _short = _needed - _bal
+        raise HTTPException(status_code=400,
+            detail=(f"Insufficient balance: KES {_bal:,.0f} available, but KES {_needed:,.0f} needed "
+                    f"(KES {body.amount:,.0f} + KES {_fee:,.0f} fee). Add KES {_short:,.0f} to your Choice account."))
+
     try:
         result = await choice.transfer(
             payer_account_id=trader.choice_account_id,

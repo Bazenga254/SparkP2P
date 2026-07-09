@@ -3153,28 +3153,41 @@ async def choice_pay(
             detail="No Choice Bank account linked. Complete KYC in the Bank Account tab first.",
         )
 
-    from app.services.choice_bank.client import transfer
-
-    # Hard balance gate — never move money the trader doesn't have (prevents a failed transfer that
-    # leaves the seller falsely told "paid" and the order auto-cancelling).
-    bal = await _choice_balance(trader)
-    if bal is not None and bal < data.amount:
-        raise HTTPException(
-            status_code=400,
-            detail=(f"Insufficient Choice balance: KES {bal:,.0f} available, "
-                    f"KES {data.amount:,.0f} needed. Top up your Choice account."),
-        )
-
-    from app.services.choice_bank.client import send_otp
-
-    remark = data.remark or f"Spark BUY {data.order_number[-12:]}"
+    from app.services.choice_bank.client import transfer, send_otp
+    from app.services.outbound_fees import outbound_fee
 
     # M-Pesa B2C requires payeeBankCode="M-PESA". PesaLink requires the bank's CBK code.
     # Without the correct bank code Choice Bank treats the call as an internal transfer
     # and returns success without actually routing the money.
     is_mpesa = not data.bank_code and data.payee_account_id.isdigit() and len(data.payee_account_id) == 9
     effective_bank_code = data.bank_code if data.bank_code else ("M-PESA" if is_mpesa else "")
-    logger.info(f"[ChoiceBank] BUY payment: KES {data.amount} → {data.payee_account_id} (bankCode={effective_bank_code or 'internal'})")
+
+    # ── Pre-flight 1: minimum amount — M-Pesa rejects < KES 10 (returns "Invalid Account") ──
+    if float(data.amount) < 10:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Amount too small: KES {data.amount:,.0f}. The minimum transfer is KES 10 — "
+                    f"increase the amount to at least KES 10 to complete this transaction."),
+        )
+
+    # ── Pre-flight 2: balance must cover amount + FEE (never attempt a transfer that will bounce
+    #    and leave the seller falsely told 'paid'). ──
+    _channel = "MPESA" if (effective_bank_code == "M-PESA") else "PESALINK"
+    _fee = outbound_fee(_channel, float(data.amount))
+    _needed = float(data.amount) + _fee
+    bal = await _choice_balance(trader)
+    if bal is not None and bal < _needed:
+        _short = _needed - bal
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Insufficient Choice balance: KES {bal:,.0f} available, but KES {_needed:,.0f} needed "
+                    f"(KES {data.amount:,.0f} + KES {_fee:,.0f} fee). Add KES {_short:,.0f} to your Choice "
+                    f"account to complete this transaction."),
+        )
+
+    remark = data.remark or f"Spark BUY {data.order_number[-12:]}"
+    logger.info(f"[ChoiceBank] BUY payment: KES {data.amount} → {data.payee_account_id} "
+                f"(bankCode={effective_bank_code or 'internal'}, fee~{_fee}, bal={bal})")
 
     result = await transfer(
         payer_account_id=trader.choice_account_id,
