@@ -1571,6 +1571,49 @@ async def get_active_orders(
                 "counterparty": counterparty,
             })
 
+    # SAPI fallback: cookie sessions expire *silently* (Binance returns an empty list, not an
+    # auth error), which strands active orders — most dangerously a buyer-paid "Please release"
+    # sell the bot must release. The desktop's DOM fallback then misses it too (its status regex
+    # doesn't match "Please release"), so the bot goes Idle and never releases. The API-key path
+    # (via the trader's relay) is reliable, so when the cookie path found nothing, list recent
+    # orders via EP-16 and surface any that are still ACTIVE (not completed/cancelled/appeal).
+    if not orders and trader.binance_api_key and trader.binance_api_secret:
+        try:
+            from app.services.binance.sapi_client import get_user_order_history, relay_trader
+            from app.core.security import decrypt_data
+            relay_trader.set(trader.id)
+            _ak = decrypt_data(trader.binance_api_key)
+            _as = decrypt_data(trader.binance_api_secret)
+            _rows = await get_user_order_history(_ak, _as, page=1, rows=50)
+            # Terminal/handled states we must NOT resurface as "active".
+            _SKIP = {"COMPLETED", "CANCELLED", "CANCELLED_BY_SYSTEM", "EXPIRED",
+                     "APPEAL", "APPEALING", "IN_APPEAL", "OBJECTING", "APPEAL_CANCELLED"}
+            _dbg = []
+            for o in (_rows or []):
+                st = str(o.get("orderStatus") or "").upper()
+                ono = str(o.get("orderNumber") or "")
+                _dbg.append(f"{ono[-8:]}:{st}")
+                if st in _SKIP:
+                    continue
+                if len(ono) < 15 or ono in seen_order_numbers:
+                    continue
+                seen_order_numbers.add(ono)
+                tt = str(o.get("tradeType") or "").upper()
+                orders.append({
+                    "orderNumber": ono,
+                    "tradeType": tt if tt in ("SELL", "BUY") else "SELL",
+                    "totalPrice": float(o.get("totalPrice") or 0),
+                    "amount": float(o.get("amount") or 0),
+                    "price": float(o.get("unitPrice") or 0),
+                    "asset": o.get("asset") or "USDT",
+                    "status": "Pending Payment",
+                    "counterparty": o.get("counterPartNickName") or "",
+                })
+            logger.info("active-orders: cookie path empty; EP-16 SAPI fallback for trader %s surfaced %d active order(s) [recent: %s]",
+                        trader.id, len(orders), ", ".join(_dbg[:8]))
+        except Exception as e:
+            logger.warning("active-orders SAPI fallback failed for trader %s: %s", trader.id, e)
+
     return {"ok": True, "orders": orders}
 
 

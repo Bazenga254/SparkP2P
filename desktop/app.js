@@ -2342,7 +2342,11 @@ async function readOrders(activeOnly = false) {
           if (!/^\d{18,20}$/.test(orderNumber)) return; // real Binance order numbers are 18–20 digits; row-anchored extraction already prevents merged blobs
           const rowText = row.innerText || '';
           if (/\b(Completed|Cancelled|Canceled)\b/i.test(rowText)) return;
-          const statusMatch = rowText.match(/\b(Pending Payment|Pending|Paid|Appeal)\b/i);
+          // Include the BUYER-PAID / release states — when the buyer taps "I've Sent" the
+          // seller's row shows "Please release" / "To be released" / "Pending Release", NONE of
+          // which were matched before, so buyer-paid sells were dropped from detection and never
+          // released. Order the fuller phrases first so status[1] captures them.
+          const statusMatch = rowText.match(/\b(Pending Payment|Pending Release|Please release|To be released|Releasing|Pending|Paid|Appeal)\b/i);
           if (!statusMatch) return;
           const typeMatch = rowText.match(/\b(Buy|Sell)\b/i);
           if (!typeMatch) return;
