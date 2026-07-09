@@ -1207,6 +1207,99 @@ async def send_money_resend_email(trader: Trader = Depends(get_current_trader)):
             "message": "We've sent the OTP to your registered email. Enter it below to complete the transfer."}
 
 
+# ── Email verification (enables the email-OTP fallback) ─────────────────────────
+# Choice's getAccountDetails does NOT expose whether an account's email is verified,
+# so we let merchants verify it on demand and track the result on the trader. Once
+# verified, the "get the code by email" fallback on transfers actually delivers.
+_pending_email_verify: dict[int, str] = {}  # trader_id -> applicationId
+
+
+def _mask_email(email: str | None) -> str | None:
+    if not email or "@" not in email:
+        return email
+    name, _, domain = email.partition("@")
+    head = name[:1] if name else ""
+    return f"{head}{'*' * max(len(name) - 1, 1)}@{domain}"
+
+
+async def _trader_id_number(db: AsyncSession, trader_id: int) -> str | None:
+    """National ID captured at KYC, if we have it (older/admin onboardings may not)."""
+    from app.models.kyc_submission import KycSubmission
+    k = (await db.execute(
+        select(KycSubmission)
+        .where(KycSubmission.trader_id == trader_id,
+               KycSubmission.id_number.isnot(None), KycSubmission.id_number != "")
+        .order_by(KycSubmission.id.desc())
+    )).scalars().first()
+    return (k.id_number.strip() if k and k.id_number else None)
+
+
+class EmailVerifyStart(BaseModel):
+    id_number: str | None = None  # merchant supplies their National ID only if we don't have it
+
+
+@router.get("/choice/email-verify/status")
+async def email_verify_status(trader: Trader = Depends(get_current_trader),
+                              db: AsyncSession = Depends(get_db)):
+    """Whether this account's email is verified (→ email-OTP fallback works) and,
+    if not, whether we already have the National ID needed to start verification."""
+    has_id = bool(await _trader_id_number(db, trader.id))
+    return {
+        "verified": bool(getattr(trader, "choice_email_verified", False)),
+        "email": _mask_email(trader.email),
+        "need_id_number": not has_id,
+    }
+
+
+@router.post("/choice/email-verify/start")
+async def email_verify_start(body: EmailVerifyStart, trader: Trader = Depends(get_current_trader),
+                             db: AsyncSession = Depends(get_db)):
+    """Send an OTP to the account's registered email so the merchant can verify it."""
+    id_number = (body.id_number or "").strip() or await _trader_id_number(db, trader.id)
+    if not id_number:
+        raise HTTPException(status_code=400,
+                            detail="Enter your National ID number to verify your email.")
+    try:
+        r = await choice.verify_email_address(id_number)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not start email verification: {exc}")
+    app_id = None
+    data = r.get("data")
+    if isinstance(data, dict):
+        app_id = data.get("applicationId") or data.get("businessId")
+    if r.get("code") != "00000" or not app_id:
+        raise HTTPException(
+            status_code=400,
+            detail=r.get("msg") or "Couldn't start email verification — check the National ID matches this account.",
+        )
+    _pending_email_verify[trader.id] = str(app_id)
+    return {"status": "otp_sent",
+            "email": _mask_email(trader.email),
+            "message": f"We've sent a verification code to your email ({_mask_email(trader.email) or 'on file'}). Enter it to enable email OTP."}
+
+
+@router.post("/choice/email-verify/confirm")
+async def email_verify_confirm(body: SendMoneyConfirm, trader: Trader = Depends(get_current_trader),
+                               db: AsyncSession = Depends(get_db)):
+    """Confirm the email OTP; on success the email-OTP fallback becomes available."""
+    app_id = _pending_email_verify.get(trader.id)
+    if not app_id:
+        raise HTTPException(status_code=400, detail="No pending verification. Please start again.")
+    try:
+        result = await choice.confirm_contact_verify(app_id, body.otp.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Verification failed: {exc}")
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=400, detail=result.get("msg", "Invalid or expired code"))
+
+    _pending_email_verify.pop(trader.id, None)
+    trader.choice_email_verified = True
+    db.add(trader)
+    await db.commit()
+    return {"status": "verified",
+            "message": "✅ Email verified. You can now receive OTPs by email when SMS doesn't arrive."}
+
+
 @router.post("/choice/pay/send-money/confirm")
 async def send_money_confirm(body: SendMoneyConfirm, trader: Trader = Depends(get_current_trader),
                              db: AsyncSession = Depends(get_db)):

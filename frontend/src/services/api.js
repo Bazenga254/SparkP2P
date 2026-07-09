@@ -208,6 +208,10 @@ export const cbSendMoneyInitiate = (body) => api.post('/choice/pay/send-money/in
 export const cbSendMoneyConfirm = (otp) => api.post('/choice/pay/send-money/confirm', { otp });
 export const cbSendMoneyConfirmSms = () => api.post('/choice/pay/send-money/confirm-sms', {}, { timeout: 240000 });
 export const cbSendMoneyResendEmail = () => api.post('/choice/pay/send-money/resend-email', {});
+// Email verification — enables the email-OTP fallback for transfers
+export const cbEmailVerifyStatus = () => api.get('/choice/email-verify/status');
+export const cbEmailVerifyStart = (id_number) => api.post('/choice/email-verify/start', { id_number: id_number || null });
+export const cbEmailVerifyConfirm = (otp) => api.post('/choice/email-verify/confirm', { otp });
 // Payments Hub — M-Pesa Paybill / Till (OTP-confirmed)
 export const cbLookupShortcode = (code) => api.get('/choice/pay/lookup-shortcode', { params: { code } });
 export const cbPaybillInitiate = (body) => api.post('/choice/pay/paybill/initiate', body);

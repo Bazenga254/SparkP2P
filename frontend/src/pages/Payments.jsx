@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   choiceGetBalance,
   cbSendMoneyInitiate, cbSendMoneyConfirm, cbSendMoneyConfirmSms, cbSendMoneyResendEmail,
+  cbEmailVerifyStatus, cbEmailVerifyStart, cbEmailVerifyConfirm,
   cbPaybillInitiate, cbPaybillConfirm, cbLookupShortcode,
   cbGetBanks, cbLookupBankAccount, cbLookupMpesaName,
   cbBankTransferInitiate, cbBankTransferConfirm, cbBankTransferConfirmSms,
@@ -200,11 +201,112 @@ export default function Payments() {
                 </div>
               </div>
             ))}
+            <EmailOtpBackup />
           </>
         )}
       </div>
 
       {toast && <div className="pm-toast">{toast}</div>}
+    </div>
+  );
+}
+
+// ── Email-OTP backup: verify the account email so email codes can be used ─────
+// SMS OTPs sometimes don't arrive; once the email is verified, transfers offer a
+// "get the code by email" fallback. Merchant-triggered, one-time.
+function EmailOtpBackup() {
+  const [status, setStatus] = useState(null);   // {verified, email, need_id_number}
+  const [step, setStep] = useState('idle');     // idle | id | otp | done
+  const [idNumber, setIdNumber] = useState('');
+  const [otp, setOtp] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [info, setInfo] = useState('');
+
+  useEffect(() => {
+    cbEmailVerifyStatus().then((r) => setStatus(r.data || {})).catch(() => setStatus(null));
+  }, []);
+
+  if (!status || status.verified) {
+    if (status?.verified) return (
+      <div className="pm-section">
+        <div className="pm-eo pm-eo-ok">
+          <span className="pm-eo-ic">✅</span>
+          <div><b>Email OTP backup is on</b><span>If an SMS code doesn't arrive, get it by email instead.</span></div>
+        </div>
+      </div>
+    );
+    return null;  // status not loaded yet
+  }
+
+  const begin = () => {
+    setErr(''); setInfo('');
+    setStep(status.need_id_number ? 'id' : 'sending');
+    if (!status.need_id_number) sendCode('');
+  };
+
+  const sendCode = async (idn) => {
+    setErr(''); setInfo(''); setBusy(true);
+    try {
+      const r = await cbEmailVerifyStart(idn);
+      setInfo(r.data?.message || 'We sent a code to your email. Enter it below.');
+      setStep('otp');
+    } catch (e) {
+      setErr(e.response?.data?.detail || 'Could not start email verification.');
+      setStep(status.need_id_number ? 'id' : 'idle');
+    } finally { setBusy(false); }
+  };
+
+  const confirm = async () => {
+    setErr(''); setInfo(''); setBusy(true);
+    try {
+      const r = await cbEmailVerifyConfirm(otp.trim());
+      setInfo(r.data?.message || 'Email verified.');
+      setStep('done');
+      setStatus((s) => ({ ...(s || {}), verified: true }));
+    } catch (e) {
+      setErr(e.response?.data?.detail || 'Invalid or expired code.');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="pm-section">
+      <div className="pm-eo">
+        <span className="pm-eo-ic">📧</span>
+        <div className="pm-eo-body">
+          <b>Set up email OTP backup</b>
+          <span>SMS codes sometimes don't arrive. Verify your email once so you can get transfer codes by email.</span>
+
+          {err && <div className="pm-eo-err">{err}</div>}
+          {info && <div className="pm-eo-info">{info}</div>}
+
+          {step === 'idle' && (
+            <button className="pm-eo-btn" onClick={begin} disabled={busy}>Enable email backup</button>
+          )}
+
+          {step === 'id' && (
+            <div className="pm-eo-row">
+              <input className="pm-inp" placeholder="National ID number" value={idNumber}
+                     inputMode="numeric" onChange={(e) => setIdNumber(e.target.value.replace(/\D/g, ''))} />
+              <button className="pm-eo-btn" onClick={() => sendCode(idNumber)} disabled={busy || !idNumber}>
+                {busy ? 'Sending…' : 'Send code'}
+              </button>
+            </div>
+          )}
+
+          {step === 'sending' && <div className="pm-eo-info">Sending code…</div>}
+
+          {step === 'otp' && (
+            <div className="pm-eo-row">
+              <input className="pm-inp" placeholder="Email code" value={otp}
+                     inputMode="numeric" onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} />
+              <button className="pm-eo-btn" onClick={confirm} disabled={busy || !otp}>
+                {busy ? 'Verifying…' : 'Verify'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
