@@ -430,6 +430,10 @@ async def lifespan(app: FastAPI):
     # push webhook missed/mis-matched, and records them against the right order (every 30s).
     from app.services.sell_inbound_poller import sell_inbound_poller
     sell_inbound_task = asyncio.create_task(sell_inbound_poller())
+    # Outbound reconciliation — correct transfer statuses that Choice actually FAILED but that
+    # look "completed" in the app, and alert the merchant (every 60s).
+    from app.services.outbound_reconcile_poller import outbound_reconcile_poller
+    outbound_reconcile_task = asyncio.create_task(outbound_reconcile_poller())
     yield
     # Shutdown
     order_poller.stop()
@@ -449,6 +453,7 @@ async def lifespan(app: FastAPI):
     squad_pricing_task.cancel()
     deposit_reconcile_task.cancel()
     sell_inbound_task.cancel()
+    outbound_reconcile_task.cancel()
 
 
 app = FastAPI(

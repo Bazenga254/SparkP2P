@@ -306,6 +306,36 @@ async def get_transaction_list(
     })
 
 
+async def get_transaction_result(tx_id: str) -> dict:
+    """/query/getTransResult — details + status of a single transaction by txId.
+    txStatus: -1=Timeout, 1=Pending, 2=Processing, 4=Failed, 8=SUCCESS."""
+    return await _post("/query/getTransResult", {"txId": tx_id})
+
+
+async def wait_for_transfer_result(tx_id: str, timeout_s: int = 90, interval_s: int = 5) -> str:
+    """Poll getTransResult until an outbound transfer settles. Returns 'success' | 'failed' | 'pending'
+    (pending = still not settled when the timeout elapsed). Lets callers confirm a transfer ACTUALLY
+    completed before treating it as paid — the initiation response only means 'submitted'."""
+    import asyncio as _asyncio
+    import time as _time
+    if not tx_id:
+        return "pending"
+    deadline = _time.time() + timeout_s
+    while _time.time() < deadline:
+        try:
+            r = await get_transaction_result(tx_id)
+            data = r.get("data") if isinstance(r, dict) else None
+            st = str((data or (r if isinstance(r, dict) else {})).get("txStatus") or "")
+            if st in ("8", "success", "completed", "00000"):
+                return "success"
+            if st in ("4", "-1", "failed", "timeout"):
+                return "failed"
+        except Exception:
+            pass
+        await _asyncio.sleep(interval_s)
+    return "pending"
+
+
 async def verify_email_address(
     document_number: str,
     personal_id_type: str = "101",  # 101=National ID, 102=Alien ID, 103=Passport

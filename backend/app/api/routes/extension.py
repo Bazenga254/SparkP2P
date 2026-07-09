@@ -3332,12 +3332,22 @@ async def choice_pay_confirm_sms(
 
 async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_id,
                                     payee_name, order_number, remark, bank_code):
-    """Record the payment in DB and generate a receipt image after OTP is confirmed."""
+    """After OTP confirm, CONFIRM the transfer actually settled before treating it as paid.
+    The OTP-confirm only means 'submitted' — Choice can still reject it (e.g. 'Invalid Account').
+    On a confirmed failure we raise (so the desktop's retry/ask-merchant flow runs and the
+    Binance order is NOT marked paid). Slow failures that don't settle in the window are left
+    PENDING for the reconcile poller to finalise + alert on."""
+    from app.services.choice_bank import client as choice
+    _settle = await choice.wait_for_transfer_result(tx_id, timeout_s=60, interval_s=4) if tx_id else "pending"
+
     _dest_type = "Bank Transfer" if bank_code else "M-Pesa"
+    _pay_status = (PaymentStatus.COMPLETED if _settle == "success"
+                   else PaymentStatus.FAILED if _settle == "failed"
+                   else PaymentStatus.PENDING)
     payment = Payment(
         trader_id=trader.id,
         direction=PaymentDirection.OUTBOUND,
-        status=PaymentStatus.COMPLETED,
+        status=_pay_status,
         amount=amount,
         transaction_type="CHOICE_OUTBOUND",
         phone=payee_account_id,
@@ -3349,6 +3359,20 @@ async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_i
     )
     db.add(payment)
     await db.commit()
+
+    # ── Confirmed FAILURE → do NOT mark the order paid; make the desktop retry/ask-merchant ──
+    if _settle == "failed":
+        logger.warning(f"[ChoiceBank] BUY payment REJECTED by Choice — order {order_number}: "
+                       f"tx {tx_id}, KES {amount} → {payee_account_id}. NOT marking paid.")
+        try:
+            from app.api.routes.telegram import notify_trader as _tg_notify
+            await _tg_notify(trader,
+                f"❌ <b>Payment rejected</b>\n\nKES {int(amount):,} → {payee_name or payee_account_id} was "
+                f"rejected by the bank (order ...{(order_number or '?')[-8:]}). The order was NOT marked paid — "
+                f"the bot will retry or ask you what to do.")
+        except Exception:
+            pass
+        raise HTTPException(status_code=402, detail=f"Choice Bank rejected the transfer (KES {int(amount):,} to {payee_account_id}). Not marked paid.")
 
     receipt_b64 = ""
     try:
