@@ -3332,13 +3332,13 @@ async def choice_pay_confirm_sms(
 
 async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_id,
                                     payee_name, order_number, remark, bank_code):
-    """After OTP confirm, CONFIRM the transfer actually settled before treating it as paid.
-    The OTP-confirm only means 'submitted' — Choice can still reject it (e.g. 'Invalid Account').
-    On a confirmed failure we raise (so the desktop's retry/ask-merchant flow runs and the
-    Binance order is NOT marked paid). Slow failures that don't settle in the window are left
-    PENDING for the reconcile poller to finalise + alert on."""
+    """After OTP confirm the transfer is only SUBMITTED. WAIT for Choice to actually confirm it
+    before returning success — so the desktop never marks the Binance order paid on a transfer
+    that fails (e.g. 'Invalid Account'). A confirmed failure raises 402 → the desktop's
+    retry/ask-merchant flow runs. A rare slow settle is left PENDING for the reconcile poller."""
     from app.services.choice_bank import client as choice
-    _settle = await choice.wait_for_transfer_result(tx_id, timeout_s=60, interval_s=4) if tx_id else "pending"
+    # ~2 min covers the observed settle time; polls stop as soon as it settles either way.
+    _settle = await choice.wait_for_transfer_result(tx_id, timeout_s=120, interval_s=5) if tx_id else "pending"
 
     _dest_type = "Bank Transfer" if bank_code else "M-Pesa"
     _pay_status = (PaymentStatus.COMPLETED if _settle == "success"
@@ -3360,7 +3360,7 @@ async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_i
     db.add(payment)
     await db.commit()
 
-    # ── Confirmed FAILURE → do NOT mark the order paid; make the desktop retry/ask-merchant ──
+    # ── Confirmed FAILURE → do NOT mark paid; raise so the desktop retries / asks the merchant ──
     if _settle == "failed":
         logger.warning(f"[ChoiceBank] BUY payment REJECTED by Choice — order {order_number}: "
                        f"tx {tx_id}, KES {amount} → {payee_account_id}. NOT marking paid.")
@@ -3368,8 +3368,8 @@ async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_i
             from app.api.routes.telegram import notify_trader as _tg_notify
             await _tg_notify(trader,
                 f"❌ <b>Payment rejected</b>\n\nKES {int(amount):,} → {payee_name or payee_account_id} was "
-                f"rejected by the bank (order ...{(order_number or '?')[-8:]}). The order was NOT marked paid — "
-                f"the bot will retry or ask you what to do.")
+                f"rejected by the bank (order ...{(order_number or '?')[-8:]}). Order NOT marked paid — "
+                f"the bot will retry or ask you.")
         except Exception:
             pass
         raise HTTPException(status_code=402, detail=f"Choice Bank rejected the transfer (KES {int(amount):,} to {payee_account_id}). Not marked paid.")
@@ -3384,18 +3384,14 @@ async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_i
     except Exception as e:
         logger.warning(f"choice-pay receipt generation failed: {e}")
 
-    # Notify trader that payment has been sent
     try:
         from app.api.routes.telegram import notify_trader as _tg_notify
         _method_label = "Bank/PesaLink" if bank_code else "M-Pesa"
         _short = order_number[-8:] if order_number else "?"
-        await _tg_notify(
-            trader,
-            f"💸 <b>Payment sent!</b>\n\n"
-            f"KES {int(amount):,} → {payee_name or payee_account_id} ({_method_label})\n"
-            f"Order ref: <code>...{_short}</code>\n"
-            f"<i>Waiting for seller to release crypto...</i>",
-        )
+        _tag = "confirmed" if _settle == "success" else "submitted"
+        await _tg_notify(trader,
+            f"💸 <b>Payment {_tag}!</b>\n\nKES {int(amount):,} → {payee_name or payee_account_id} ({_method_label})\n"
+            f"Order ref: <code>...{_short}</code>\n<i>Waiting for seller to release crypto...</i>")
     except Exception as _ne:
         logger.warning(f"choice-pay sent-notification failed: {_ne}")
 
@@ -3407,3 +3403,35 @@ async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_i
         "remark": remark,
         "receipt_image": receipt_b64,
     }
+
+
+@router.get("/choice-pay-status")
+async def choice_pay_status(
+    tx_id: str,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Poll the real settlement status of an outbound Choice transfer (wait-for-confirmation):
+    success | failed | pending. Keeps the Payment row in sync as it settles."""
+    from app.services.choice_bank import client as choice
+    try:
+        r = await choice.get_transaction_result(tx_id)
+    except Exception as e:
+        return {"status": "pending", "error": str(e)}
+    data = r.get("data") if isinstance(r, dict) and isinstance(r.get("data"), dict) else (r if isinstance(r, dict) else {})
+    st = str((data or {}).get("txStatus") or "")
+    if st in ("8", "success", "completed", "00000"):
+        out = "success"
+    elif st in ("4", "-1", "failed", "timeout"):
+        out = "failed"
+    else:
+        out = "pending"
+    if out in ("success", "failed"):
+        try:
+            _p = (await db.execute(select(Payment).where(Payment.mpesa_transaction_id == tx_id))).scalar_one_or_none()
+            if _p and _p.status == PaymentStatus.PENDING:
+                _p.status = PaymentStatus.COMPLETED if out == "success" else PaymentStatus.FAILED
+                await db.commit()
+        except Exception:
+            pass
+    return {"status": out, "reason": (data or {}).get("errorMsg") or ""}
