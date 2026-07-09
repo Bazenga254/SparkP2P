@@ -1489,22 +1489,35 @@ async def lookup_mpesa_name(phone: str, trader: Trader = Depends(get_current_tra
     p = _normalize_msisdn(phone)
     if len(p) != 9 or not p.isdigit() or p[0] not in ("7", "1"):
         raise HTTPException(status_code=400, detail="Enter a valid Kenyan phone number")
-    try:
-        r = await choice._post("/account/validateAccount", {
-            "accountId": p,
-            "accountType": 3,
-            "bankCode": "M-PESA",
-        })
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Name check unavailable: {exc}")
-    if r.get("code") == "10000":
-        raise HTTPException(status_code=404, detail="Number not found on M-Pesa")
-    if r.get("code") != "00000":
-        raise HTTPException(status_code=404, detail="Could not verify this number")
-    name = ((r.get("data") or {}).get("accountName") or "").strip()
-    if not name:
-        raise HTTPException(status_code=404, detail="No name returned for this number")
-    return {"name": name, "phone": p}
+    import asyncio as _a
+    r = {}
+    # Retry the transient Hakikisha failures (10000 'failed to query mpesa info', 10001 busy) —
+    # these are M-Pesa's name service flaking, NOT a bad number, so a retry usually succeeds.
+    for attempt in range(3):
+        try:
+            r = await choice._post("/account/validateAccount", {
+                "accountId": p, "accountType": 3, "bankCode": "M-PESA",
+            })
+        except Exception as exc:
+            if attempt == 2:
+                raise HTTPException(status_code=503, detail=f"Name check temporarily unavailable: {exc}")
+            await _a.sleep(0.8)
+            continue
+        if r.get("code") in ("10000", "10001") and attempt < 2:
+            await _a.sleep(0.8)
+            continue
+        break
+
+    code = r.get("code")
+    if code == "00000":
+        name = ((r.get("data") or {}).get("accountName") or "").strip()
+        if name:
+            return {"name": name, "phone": p}
+        raise HTTPException(status_code=503, detail="M-Pesa did not return a name — you can still proceed if the number is correct")
+    if code == "13000":  # the only code that means the number genuinely isn't registered
+        raise HTTPException(status_code=404, detail="This number is not registered on M-Pesa")
+    # 10000/10001 after retries, or any other code — transient service issue, not a bad number.
+    raise HTTPException(status_code=503, detail="M-Pesa name check is temporarily unavailable — the number may still be valid, you can proceed")
 
 
 @router.get("/choice/pay/lookup-account")

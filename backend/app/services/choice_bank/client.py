@@ -262,11 +262,12 @@ async def validate_account(account_id: str, bank_code: str) -> dict:
     """
     import asyncio as _asyncio
     params = {"accountId": account_id, "accountType": 4, "bankCode": bank_code}
-    for attempt in range(2):
+    # Retry transient errors: 10001 (busy) and 10000 (M-Pesa/Hakikisha query failed — flaky).
+    for attempt in range(3):
         result = await _post("/account/validateAccount", params)
-        if result.get("code") != "10001":
+        if result.get("code") not in ("10001", "10000"):
             return result
-        if attempt < 1:
+        if attempt < 2:
             await _asyncio.sleep(0.8)
     return result
 
