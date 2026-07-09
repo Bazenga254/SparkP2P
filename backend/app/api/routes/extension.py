@@ -1759,6 +1759,27 @@ async def sell_order_state(
     else:
         state = "unknown"
 
+    # EP-12 authoritative override: the orderStatus string map has proven unreliable at
+    # catching "buyer marked paid" (Binance returns codes not in our sets → awaiting/unknown),
+    # which stalls the desktop in its "waiting for buyer to tap I've Sent" branch forever even
+    # when the money is already in Choice Bank. So when we're still in a pre-release state, ask
+    # Binance directly whether the coin can be released — a definite TRUE means the buyer has
+    # marked the order paid. This lets the desktop enter its release flow (which still re-checks
+    # the Choice Bank money + payer name before actually releasing) regardless of orderStatus.
+    if state in ("awaiting_payment", "unknown"):
+        try:
+            from app.services.binance.sapi_client import check_if_can_release
+            _rel = await check_if_can_release(api_key, api_secret, order_number)
+            _ok = _rel.get("code") == "000000" or _rel.get("success") is True
+            _data = _rel.get("data")
+            _can = _ok and (_data is True or (isinstance(_data, dict) and _data.get("canRelease") is True))
+            if _can:
+                logger.info("sell-order-state %s: EP-12 says releasable — upgrading %s → verify_payment (raw_status=%r)",
+                            order_number, state, raw_status)
+                state = "verify_payment"
+        except Exception as _e:
+            logger.warning("sell-order-state EP-12 probe failed for %s: %s", order_number, _e)
+
     # Determine payment method from EP-13 raw_pay_type / method name
     raw_method = str(d.get("method") or "").lower()
     raw_pay    = str(d.get("raw_pay_type") or "").lower()
