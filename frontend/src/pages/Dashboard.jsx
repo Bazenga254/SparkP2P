@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isNative } from '../mobile/relayAgent';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
@@ -835,6 +835,14 @@ export default function Dashboard() {
   const [cbDepositLoading, setCbDepositLoading] = useState(false);
   const [cbDepositMsg, setCbDepositMsg] = useState('');
   const [cbDepositPhone, setCbDepositPhone] = useState('');
+  // 'waiting' while we watch the STK land, then 'success' | 'failed'
+  const [cbDepositState, setCbDepositState] = useState('');
+  const cbDepositTimers = useRef([]);
+  // Stop watching if the dashboard unmounts mid-poll.
+  useEffect(() => () => {
+    cbDepositTimers.current.forEach((id) => { clearInterval(id); clearTimeout(id); });
+    cbDepositTimers.current = [];
+  }, []);
   const [txFilter, setTxFilter] = useState('all');
   const [showCbWithdrawModal, setShowCbWithdrawModal] = useState(false);
   const [cbWithdrawAmount, setCbWithdrawAmount] = useState('');
@@ -4743,7 +4751,14 @@ export default function Dashboard() {
           <div style={{ background: 'var(--surface)', borderRadius: 16, padding: 28, width: 360, border: '1px solid var(--border)', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <h3 style={{ margin: 0, color: '#fff', fontSize: 18 }}>🏦 Deposit to Choice Bank</h3>
-              <button onClick={() => setShowCbDepositModal(false)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 20 }}>✕</button>
+              <button
+                onClick={() => {
+                  cbDepositTimers.current.forEach((id) => { clearInterval(id); clearTimeout(id); });
+                  cbDepositTimers.current = [];
+                  setShowCbDepositModal(false); setCbDepositState(''); setCbDepositMsg('');
+                }}
+                style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 20 }}
+              >✕</button>
             </div>
             <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 16, lineHeight: 1.5 }}>
               An M-Pesa STK push will be sent to the number below. Enter your M-Pesa PIN to complete the deposit into your Choice Bank account.
@@ -4770,27 +4785,77 @@ export default function Dashboard() {
                 style={{ width: '100%', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: '#fff', fontSize: 16, fontWeight: 600, boxSizing: 'border-box' }}
               />
             </div>
-            {cbDepositMsg && (
-              <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, background: cbDepositMsg.includes('✅') ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${cbDepositMsg.includes('✅') ? '#10b981' : '#ef4444'}44`, color: cbDepositMsg.includes('✅') ? '#10b981' : '#ef4444', fontSize: 13 }}>
-                {cbDepositMsg}
-              </div>
-            )}
+            {cbDepositMsg && (() => {
+              const tone = cbDepositState === 'waiting' ? '#f59e0b'
+                : (cbDepositState === 'success' || cbDepositMsg.includes('✅')) ? '#10b981' : '#ef4444';
+              return (
+                <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, background: `${tone}1a`, border: `1px solid ${tone}44`, color: tone, fontSize: 13, display: 'flex', alignItems: 'center', gap: 9 }}>
+                  {cbDepositState === 'waiting' && (
+                    <span style={{ width: 13, height: 13, flexShrink: 0, borderRadius: '50%', border: '2px solid #f59e0b55', borderTopColor: '#f59e0b', display: 'inline-block', animation: 'cbSpin 0.7s linear infinite' }} />
+                  )}
+                  <span>{cbDepositMsg}</span>
+                  <style>{'@keyframes cbSpin{to{transform:rotate(360deg)}}'}</style>
+                </div>
+              );
+            })()}
             <button
-              disabled={cbDepositLoading || !cbDepositAmount || Number(cbDepositAmount) < 1 || !cbDepositPhone.trim()}
+              disabled={cbDepositLoading || cbDepositState === 'waiting' || !cbDepositAmount || Number(cbDepositAmount) < 1 || !cbDepositPhone.trim()}
               onClick={async () => {
-                setCbDepositLoading(true); setCbDepositMsg('');
+                const amt = Math.floor(Number(cbDepositAmount));
+                setCbDepositLoading(true); setCbDepositMsg(''); setCbDepositState('');
                 try {
-                  await choiceDeposit({ amount: Math.floor(Number(cbDepositAmount)), mobile: cbDepositPhone.trim() });
-                  setCbDepositMsg('✅ STK push sent! Check your phone and enter your M-Pesa PIN.');
+                  const r = await choiceDeposit({ amount: amt, mobile: cbDepositPhone.trim() });
+                  const txId = r?.data?.txId || '';
                   setCbDepositAmount('');
+                  if (!txId) {
+                    // No Choice txId came back — can't watch it; fall back to the old message.
+                    setCbDepositMsg('✅ STK push sent! Check your phone and enter your M-Pesa PIN.');
+                    setCbDepositLoading(false);
+                    return;
+                  }
+                  // Watch the actual transaction until Choice confirms the money landed.
+                  setCbDepositState('waiting');
+                  setCbDepositMsg('Sent to your phone. Enter your M-Pesa PIN — watching for the money…');
+                  const stop = () => {
+                    cbDepositTimers.current.forEach((id) => { clearInterval(id); clearTimeout(id); });
+                    cbDepositTimers.current = [];
+                  };
+                  const iv = setInterval(async () => {
+                    try {
+                      const s = await choiceDepositStatus(txId);
+                      const st = s.data?.status;
+                      if (st === 'success') {
+                        stop();
+                        setCbDepositState('success');
+                        setCbDepositMsg(`✅ Deposit confirmed — KES ${amt.toLocaleString()} is in your Choice Bank account.`);
+                        if (typeof loadData === 'function') loadData();
+                        cbDepositTimers.current.push(setTimeout(() => {
+                          setShowCbDepositModal(false); setCbDepositState(''); setCbDepositMsg('');
+                        }, 1800));
+                      } else if (st === 'failed') {
+                        stop();
+                        setCbDepositState('failed');
+                        setCbDepositMsg('❌ Deposit failed or was cancelled — no money was taken. Please try again.');
+                      }
+                    } catch { /* transient — keep polling */ }
+                  }, 3000);
+                  cbDepositTimers.current.push(iv);
+                  // Give up watching after 3 min; the backend poller still finishes the job.
+                  cbDepositTimers.current.push(setTimeout(() => {
+                    stop();
+                    setCbDepositState((prev) => (prev === 'waiting' ? '' : prev));
+                    setCbDepositMsg((prev) => (prev.startsWith('Sent to your phone')
+                      ? 'Still processing — it will appear in Transactions once confirmed.' : prev));
+                  }, 180000));
                 } catch (e) {
+                  setCbDepositState('failed');
                   setCbDepositMsg(e?.response?.data?.detail || 'Failed to send STK push. Please try again.');
                 }
                 setCbDepositLoading(false);
               }}
-              style={{ width: '100%', padding: '13px 0', borderRadius: 9, border: 'none', background: cbDepositLoading || !cbDepositAmount || !cbDepositPhone.trim() ? '#374151' : 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: cbDepositLoading || !cbDepositAmount || !cbDepositPhone.trim() ? 'not-allowed' : 'pointer' }}
+              style={{ width: '100%', padding: '13px 0', borderRadius: 9, border: 'none', background: cbDepositLoading || cbDepositState === 'waiting' || !cbDepositAmount || !cbDepositPhone.trim() ? '#374151' : 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: cbDepositLoading || cbDepositState === 'waiting' || !cbDepositAmount || !cbDepositPhone.trim() ? 'not-allowed' : 'pointer' }}
             >
-              {cbDepositLoading ? 'Sending STK Push…' : 'Send M-Pesa Prompt'}
+              {cbDepositLoading ? 'Sending STK Push…' : cbDepositState === 'waiting' ? 'Waiting for your PIN…' : 'Send M-Pesa Prompt'}
             </button>
           </div>
         </div>

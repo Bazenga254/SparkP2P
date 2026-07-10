@@ -195,6 +195,8 @@ export const choiceConfirmOtp = (data) => api.post('/choice/onboard/otp', data);
 export const choiceOnboardStatus = (requestId, traderId) => api.get(`/choice/onboard/status/${requestId}`, { params: { trader_id: traderId } });
 export const choiceGetBalance = (traderId) => api.get(`/choice/balance/${traderId}`);
 export const choiceDeposit = (body) => api.post('/choice/deposit', body);
+// Live STK deposit status — lets the UI watch the money land (pending | success | failed)
+export const choiceDepositStatus = (tx_id) => api.get('/choice/deposit/status', { params: { tx_id } });
 export const getMyTransactions = (limit = 100) => api.get(`/traders/my-transactions?limit=${limit}`);
 export const getCbWithdrawalBank = () => api.get('/traders/cb-withdrawal-bank');
 export const verifyBankAccount = (bank_code, account) => api.get('/traders/verify-bank-account', { params: { bank_code, account } });

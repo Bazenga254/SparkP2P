@@ -1023,6 +1023,50 @@ async def stk_push_deposit(
     return {"txId": tx_id, "status": "stk_sent"}
 
 
+@router.get("/choice/deposit/status")
+async def deposit_status(tx_id: str, trader: Trader = Depends(get_current_trader),
+                         db: AsyncSession = Depends(get_db)):
+    """Live status of one STK deposit, so the UI can WATCH the money land rather than
+    telling the merchant 'STK sent' and leaving them guessing. Settles the Payment row too,
+    so a merchant sitting on the modal never waits for the background poller."""
+    tx_id = (tx_id or "").strip()
+    if not tx_id:
+        raise HTTPException(status_code=400, detail="tx_id required")
+
+    p = (await db.execute(select(Payment).where(
+        Payment.mpesa_transaction_id == tx_id,
+        Payment.trader_id == trader.id,
+        Payment.transaction_type == "CHOICE_DEPOSIT",
+    ))).scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Deposit not found")
+
+    # Already settled (by the inline monitor or the poller) — report what we have.
+    if p.status != PaymentStatus.PENDING:
+        return {"status": "success" if p.status == PaymentStatus.COMPLETED else "failed",
+                "amount": float(p.amount)}
+
+    try:
+        r = await choice.get_transaction_result(tx_id)
+        st = str((r.get("data") or {}).get("txStatus") or "")
+    except Exception as exc:
+        logger.warning("[ChoiceDeposit] status check failed for %s: %s", tx_id, exc)
+        return {"status": "pending", "amount": float(p.amount)}
+
+    if st == "8":
+        p.status = PaymentStatus.COMPLETED
+        p.remarks = ((p.remarks or "") + " [tx-verified]").strip()
+        await db.commit()
+        return {"status": "success", "amount": float(p.amount)}
+    if st in ("4", "-1"):
+        p.status = PaymentStatus.FAILED
+        p.remarks = ((p.remarks or "") + " [tx-failed]").strip()
+        await db.commit()
+        return {"status": "failed", "amount": float(p.amount)}
+
+    return {"status": "pending", "amount": float(p.amount)}
+
+
 @router.get("/choice/balance/{trader_id}")
 async def get_trader_balance(trader_id: int, db: AsyncSession = Depends(get_db)):
     """Get the live Choice Bank balance for a trader's sub-account."""
