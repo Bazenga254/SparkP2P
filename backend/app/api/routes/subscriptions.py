@@ -46,6 +46,27 @@ class SubscriptionStatusResponse(BaseModel):
 
 # ── Routes ────────────────────────────────────────────────────────
 
+@router.get("/plans")
+async def list_plans():
+    """Public plan catalogue — label + price straight from plans.py PLAN_CONFIG.
+
+    Every UI (landing page, subscribe page, dashboard cards, admin tier picker) must read
+    prices from here rather than hardcoding a copy. Hardcoded copies drifted before: the
+    cards advertised KES 3,000 while the backend charged KES 10,000.
+    """
+    from app.services.plans import PLAN_ORDER, UNLIMITED
+    return {"plans": [
+        {
+            "key": p.value,
+            "label": PLAN_CONFIG[p]["label"],
+            "price": PLAN_CONFIG[p]["price"],
+            "daily_trades": PLAN_CONFIG[p]["daily_trades"] or None,   # None = unlimited
+            "daily_tg": PLAN_CONFIG[p]["daily_tg"] or None,
+        }
+        for p in PLAN_ORDER
+    ]}
+
+
 @router.post("/initiate")
 async def initiate_subscription(
     data: InitiateSubscriptionRequest,

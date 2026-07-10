@@ -3,6 +3,14 @@ import { useState, useEffect } from 'react';
 import PublicChat from '../components/PublicChat';
 import NativeWelcome from '../components/NativeWelcome';
 import { isNative } from '../mobile/relayAgent';
+import { usePlans } from '../services/plans';
+
+// Presentation only — plan names and prices are fetched from the backend (plans.py).
+const LAND_PLAN_FEATURES = {
+  starter: ['Sell-side automation', 'Automatic crypto release', 'M-Pesa payment matching', 'Up to 30 trades/day', 'Telegram notifications'],
+  pro:     ['Everything in Bronze', 'Buy-side auto-pay', 'Up to 80 trades/day', 'Priority settlement', 'Advanced analytics'],
+  pro_max: ['Everything in Silver', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Priority support', 'Dedicated onboarding'],
+};
 
 const FAQS = [
   {
@@ -154,6 +162,7 @@ function FaqItem({ q, a }) {
 export default function Landing() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [latestVersion, setLatestVersion] = useState(null);
+  const { plans } = usePlans();
 
   const closeMenu = () => setMenuOpen(false);
 
@@ -551,15 +560,16 @@ export default function Landing() {
             <p className="land-section-desc">Pick a plan and automate your Binance P2P trading. Pay with M-Pesa, cancel anytime.</p>
           </div>
           <div className="land-pricing-grid">
-            {[
-              { name: 'Starter', price: '3,000', popular: false,
-                features: ['Sell-side automation', 'Automatic crypto release', 'M-Pesa payment matching', 'Up to 30 trades/day', 'Telegram notifications'] },
-              { name: 'Starter Pro', price: '5,000', popular: false,
-                features: ['Everything in Starter', 'Buy-side auto-pay', 'Up to 80 trades/day', 'Priority settlement', 'Advanced analytics'] },
-              { name: 'Starter Pro Max', price: '10,000', popular: true,
-                features: ['Everything in Pro', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Priority support', 'Dedicated onboarding'] },
-            ].map(plan => (
-              <div key={plan.name} className={`land-price-card${plan.popular ? ' popular' : ''}`}>
+            {/* Prices come from the backend (plans.py) — this page is public, so a hardcoded
+                copy would advertise a price we don't charge. Features/badge stay local. */}
+            {plans.map((pl, i) => ({
+              key: pl.key,
+              name: pl.label,
+              price: pl.price.toLocaleString(),
+              popular: i === plans.length - 1,
+              features: LAND_PLAN_FEATURES[pl.key] || [],
+            })).map(plan => (
+              <div key={plan.key} className={`land-price-card${plan.popular ? ' popular' : ''}`}>
                 {plan.popular && <div className="land-price-badge">Most Popular</div>}
                 <h3 className="land-price-name">{plan.name}</h3>
                 <div className="land-price-amount"><span className="land-price-cur">KES</span> {plan.price}<span className="land-price-per">/month</span></div>
