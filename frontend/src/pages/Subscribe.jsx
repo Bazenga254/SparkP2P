@@ -1,44 +1,39 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { getSubscriptionStatus, initiateSubscription, renewSubscription, getProfile } from '../services/api';
+import { getSubscriptionStatus, initiateSubscription, renewSubscription, getPaymentInfo } from '../services/api';
 import { ArrowLeft, Check, Crown, Zap, Shield, Clock, Rocket } from 'lucide-react';
 
-// Plans mirror backend/app/services/plans.py PLAN_CONFIG.
-// Display prices in USD; M-Pesa charges the KES equivalent in background.
-// The frontend only sends the plan id; the backend sets the actual STK amount.
-const PLANS = [
-  {
-    id: 'starter', name: 'Bronze', usdPrice: 75, kesPrice: 10000, icon: Zap,
-    tier: 'bronze',
+// Presentation only. The plan NAME and PRICE are fetched from the backend
+// (payment-info -> plans, sourced from plans.py PLAN_CONFIG — the same values that set the
+// actual STK amount), so this page can never advertise a price we don't charge.
+const PLAN_UI = {
+  starter: {
+    icon: Zap,
     features: ['Sell-side automation', 'Automatic crypto release', 'M-Pesa payment matching', 'Up to 30 trades/day', 'Telegram notifications'],
-    description: 'Suited for Bronze merchants',
+    disabled: ['Buy-side auto-pay'],
   },
-  {
-    id: 'pro', name: 'Silver', usdPrice: 85, kesPrice: 11000, icon: Crown,
-    tier: 'silver',
+  pro: {
+    icon: Crown,
     features: ['Everything in Bronze', 'Buy-side auto-pay', 'Up to 80 trades/day', 'Priority settlement', 'Advanced analytics'],
-    description: 'Suited for Silver merchants',
   },
-  {
-    id: 'pro_max', name: 'Gold', usdPrice: 99, kesPrice: 13000, icon: Rocket, badge: 'Most Popular',
-    tier: 'gold',
+  pro_max: {
+    icon: Rocket, badge: 'Most Popular',
     features: ['Everything in Silver', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Priority support', 'Dedicated onboarding'],
-    description: 'Suited for Gold merchants',
   },
+};
+// Mirrors plans.py; only used for the first paint, before the backend list arrives.
+const PLAN_FALLBACK = [
+  { key: 'starter', label: 'Bronze', price: 10000 },
+  { key: 'pro',     label: 'Silver', price: 11000 },
+  { key: 'pro_max', label: 'Gold',   price: 13000 },
 ];
-const fmtUsd = n => '$' + Number(n).toLocaleString('en-US');
 const fmtKes = n => 'KES ' + Number(n).toLocaleString('en-KE');
-const planById = id => PLANS.find(p => p.id === id);
-
-// Merchant tier → plan tier mapping
-const TIER_PLAN = { bronze: 'starter', silver: 'pro', gold: 'pro_max' };
 
 export default function Subscribe() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [subscription, setSubscription] = useState(null);
-  const [merchantTier, setMerchantTier] = useState(null); // 'bronze'|'silver'|'gold'|null
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(true);
@@ -46,18 +41,24 @@ export default function Subscribe() {
   const [polling, setPolling] = useState(false);
   const [message, setMessage] = useState(null);
   const [error, setError] = useState(null);
+  const [planList, setPlanList] = useState(PLAN_FALLBACK);
+
+  // Pull the live plan names/prices from the backend so they always match what we charge.
+  useEffect(() => {
+    getPaymentInfo()
+      .then(r => { if (r.data?.plans?.length) setPlanList(r.data.plans); })
+      .catch(() => { /* keep the fallback */ });
+  }, []);
+
+  const PLANS = planList
+    .filter(p => PLAN_UI[p.key])
+    .map(p => ({ id: p.key, name: p.label, price: p.price, ...PLAN_UI[p.key] }));
+  const planById = id => PLANS.find(p => p.id === id);
 
   const loadStatus = async () => {
     try {
-      const [res, profileRes] = await Promise.all([
-        getSubscriptionStatus(),
-        getProfile().catch(() => null),
-      ]);
+      const res = await getSubscriptionStatus();
       setSubscription(res.data);
-      const tier = profileRes?.data?.binance_merchant_tier || null;
-      setMerchantTier(tier);
-      // Auto-select the matching plan when merchant tier is known
-      if (tier && TIER_PLAN[tier]) setSelectedPlan(TIER_PLAN[tier]);
     } catch (err) {
       console.error('Failed to load subscription status:', err);
     }
@@ -83,6 +84,7 @@ export default function Subscribe() {
         // keep polling
       }
     }, 5000);
+    // Stop polling after 2 minutes
     const timeout = setTimeout(() => {
       setPolling(false);
       setMessage({ type: 'warning', text: 'Payment confirmation timeout. If you paid, refresh the page in a minute.' });
@@ -110,17 +112,6 @@ export default function Subscribe() {
     setSubmitting(false);
   };
 
-  // Plans visible to this user: if merchant tier known, show only matching plan; otherwise all
-  const visiblePlans = merchantTier
-    ? PLANS.filter(p => p.tier === merchantTier)
-    : PLANS;
-
-  const isPlanDisabled = (plan) => {
-    // When a merchant tier is known, only the matching plan is selectable
-    if (merchantTier && plan.tier !== merchantTier) return true;
-    return submitting || polling;
-  };
-
   if (loading) {
     return <div className="subscribe-page"><div className="loading">Loading...</div></div>;
   }
@@ -136,11 +127,6 @@ export default function Subscribe() {
           <Crown size={36} className="subscribe-icon" />
           <h1>SparkP2P Subscription</h1>
           <p>Choose a plan to automate your Binance P2P trades</p>
-          {merchantTier && (
-            <div className="tier-detected-badge" style={{ marginTop: 8, fontSize: 13, color: merchantTier === 'gold' ? '#FFBE52' : merchantTier === 'silver' ? '#D6DBE2' : '#F08A3C', fontWeight: 600 }}>
-              Detected: {merchantTier.charAt(0).toUpperCase() + merchantTier.slice(1)} Merchant
-            </div>
-          )}
         </div>
 
         {/* Current Status */}
@@ -149,7 +135,7 @@ export default function Subscribe() {
             <div className="current-plan-info">
               <Shield size={20} />
               <div>
-                <strong>{(planById(subscription.plan)?.name) || 'Bronze'} Plan</strong>
+                <strong>{(planById(subscription.plan)?.name) || 'Your'} Plan</strong>
                 <span className="plan-status active">Active</span>
               </div>
             </div>
@@ -169,15 +155,13 @@ export default function Subscribe() {
 
         {/* Plan Cards */}
         <div className="plan-cards">
-          {visiblePlans.map(plan => {
+          {PLANS.map(plan => {
             const Icon = plan.icon;
-            const disabled = isPlanDisabled(plan);
             return (
               <div
                 key={plan.id}
-                className={`plan-card ${plan.badge ? 'pro' : ''} ${selectedPlan === plan.id ? 'selected' : ''} ${disabled ? 'disabled' : ''}`}
-                onClick={() => !disabled && setSelectedPlan(plan.id)}
-                style={disabled ? { opacity: 0.45, cursor: 'not-allowed' } : {}}
+                className={`plan-card ${plan.badge ? 'pro' : ''} ${selectedPlan === plan.id ? 'selected' : ''}`}
+                onClick={() => setSelectedPlan(plan.id)}
               >
                 {plan.badge && <div className="plan-badge">{plan.badge}</div>}
                 <div className="plan-card-header">
@@ -185,17 +169,12 @@ export default function Subscribe() {
                   <h2>{plan.name}</h2>
                 </div>
                 <div className="plan-price">
-                  <span className="price-amount">{fmtUsd(plan.usdPrice)}</span>
+                  <span className="price-amount">{fmtKes(plan.price)}</span>
                   <span className="price-period">/month</span>
-                </div>
-                <div className="plan-kes-note" style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2, marginBottom: 8 }}>
-                  M-Pesa: {fmtKes(plan.kesPrice)}
-                </div>
-                <div className="plan-desc" style={{ fontSize: 12.5, color: 'var(--text-2)', marginBottom: 12, fontStyle: 'italic' }}>
-                  {plan.description}
                 </div>
                 <ul className="plan-features">
                   {plan.features.map(f => <li key={f}><Check size={16} /> {f}</li>)}
+                  {(plan.disabled || []).map(f => <li key={f} className="feature-disabled">{f}</li>)}
                 </ul>
                 <div className="plan-card-select">
                   {selectedPlan === plan.id ? 'Selected' : 'Select Plan'}
@@ -212,7 +191,7 @@ export default function Subscribe() {
               {subscription?.has_subscription ? 'Renew' : 'Pay'} with M-Pesa
             </h3>
             <p className="payment-summary">
-              {planById(selectedPlan)?.name} Plan — {fmtUsd(planById(selectedPlan)?.usdPrice)} ({fmtKes(planById(selectedPlan)?.kesPrice)} charged via M-Pesa)
+              {planById(selectedPlan)?.name} Plan — {fmtKes(planById(selectedPlan)?.price)}
             </p>
 
             <div className="phone-input-group">
@@ -238,7 +217,7 @@ export default function Subscribe() {
               onClick={handleSubscribe}
               disabled={submitting || polling || !phone}
             >
-              {polling ? 'Waiting for payment...' : submitting ? 'Sending STK Push...' : `Pay ${fmtKes(planById(selectedPlan)?.kesPrice)} via M-Pesa`}
+              {polling ? 'Waiting for payment...' : submitting ? 'Sending STK Push...' : `Pay ${fmtKes(planById(selectedPlan)?.price)}`}
             </button>
 
             {polling && (

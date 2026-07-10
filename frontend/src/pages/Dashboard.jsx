@@ -3448,17 +3448,29 @@ export default function Dashboard() {
         )}
         {/* ==================== BUY CREDITS TAB ==================== */}
         {activeTab === 'credits' && (() => {
-          const SUB_PLANS = [
-            { key: 'starter',  name: 'Starter',         amount: 3000,  cls: '',        ribbon: null,             btn: 'btn-ghost', check: 'check-a',
+          // Presentation only. The plan NAME and PRICE come from the backend (payInfo.plans,
+          // sourced from plans.py PLAN_CONFIG — the same values that set the actual STK amount),
+          // so a server-side price change can never leave these cards showing a stale price.
+          const PLAN_UI = {
+            starter: { cls: '',        ribbon: null,             btn: 'btn-ghost', check: 'check-a',
               blurb: 'For casual traders getting started.', summary: '30 trades & 100 Telegram alerts per day',
               features: ['<b>30 trades</b> per day (buy + sell)', '<b>100</b> Telegram alerts per day', 'Resets daily at 3:00 AM'] },
-            { key: 'pro',      name: 'Starter Pro',     amount: 5000,  cls: 'popular', ribbon: '★ MOST POPULAR', btn: 'btn-amber', check: 'check-a',
+            pro: { cls: 'popular', ribbon: '★ MOST POPULAR', btn: 'btn-amber', check: 'check-a',
               blurb: 'Best balance of volume and value.', summary: '80 trades & 200 Telegram alerts per day',
               features: ['<b>80 trades</b> per day (buy + sell)', '<b>200</b> Telegram alerts per day', 'Resets daily at 3:00 AM'] },
-            { key: 'pro_max',  name: 'Starter Pro Max', amount: 10000, cls: 'best',    ribbon: '★ BEST VALUE',   btn: 'btn-green', check: 'check-g',
+            pro_max: { cls: 'best',    ribbon: '★ BEST VALUE',   btn: 'btn-green', check: 'check-g',
               blurb: 'For high-volume power traders.', summary: 'Unlimited trades & Telegram alerts',
               features: ['<b>Unlimited</b> trades per day', '<b>Unlimited</b> Telegram alerts', '<b>Priority</b> support'] },
+          };
+          // Mirrors plans.py; only used for the first paint before payInfo arrives.
+          const PLAN_FALLBACK = [
+            { key: 'starter', label: 'Bronze', price: 10000 },
+            { key: 'pro',     label: 'Silver', price: 11000 },
+            { key: 'pro_max', label: 'Gold',   price: 13000 },
           ];
+          const SUB_PLANS = (payInfo?.plans?.length ? payInfo.plans : PLAN_FALLBACK)
+            .filter(p => PLAN_UI[p.key])
+            .map(p => ({ key: p.key, name: p.label, amount: p.price, ...PLAN_UI[p.key] }));
           const currentPlanKey = profile?.subscription_plan || null;
           const currentPlan = SUB_PLANS.find(p => p.key === currentPlanKey) || null;
 
@@ -3645,7 +3657,9 @@ export default function Dashboard() {
                           </span>
                         </div>
                       ))}
-                      <div style={{ color: '#6b7280', fontSize: 11, marginTop: 10 }}>Enter the amount for your plan (KES 3,000 / 5,000 / 10,000).</div>
+                      <div style={{ color: '#6b7280', fontSize: 11, marginTop: 10 }}>
+                        Enter the amount for your plan (KES {(payInfo.plans || []).map(p => p.price.toLocaleString()).join(' / ')}).
+                      </div>
                     </div>
 
                     {/* Pay with Choice Bank */}
