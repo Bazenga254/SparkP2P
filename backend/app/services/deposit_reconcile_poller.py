@@ -1,12 +1,17 @@
 """Persistent deposit reconciliation poller.
 
-The STK-push deposit flow creates a CHOICE_DEPOSIT payment with status=PENDING and schedules
-a FastAPI BackgroundTask to verify the balance after 3 minutes. If the server restarts before
-that task completes, the deposit stays pending forever.
+The STK-push deposit flow creates a CHOICE_DEPOSIT payment with status=PENDING and schedules a
+background task that watches the transaction (getTransResult) until it settles. If the server
+restarts before that finishes — or the payer takes longer than the watch window to enter their
+M-Pesa PIN — the deposit would stay pending forever. This poller finishes the job.
 
-This poller runs every 2 minutes and picks up any CHOICE_DEPOSIT payments that have been
-pending for more than 2 minutes, then checks if the Choice Bank balance went up by the
-expected amount. bal_before is stored in the payment's remarks field so it survives restarts.
+It queries the transaction's AUTHORITATIVE status by txId. It deliberately does NOT compare
+account balances: the previous balance-delta heuristic was wrong in both directions, because any
+concurrent movement on the account (the bot paying a buy order, a retry deposit landing) changes
+the balance. It once marked a genuinely FAILED deposit as COMPLETED because the retry's money
+arrived inside the check window.
+
+Choice txStatus: -1=Timeout, 1=Pending, 2=Processing, 4=Failed, 8=SUCCESS.
 """
 
 import asyncio
@@ -18,11 +23,14 @@ from sqlalchemy import select
 
 from app.core.database import async_session
 from app.models.payment import Payment, PaymentStatus
-from app.models.trader import Trader
 
 logger = logging.getLogger(__name__)
 
-_CHECK_EVERY = 120  # seconds between scans
+_CHECK_EVERY = 120          # seconds between scans
+_MIN_AGE_MIN = 2            # give the inline monitor a head start
+_MAX_AGE_DAYS = 7           # don't rescan ancient rows forever
+
+_SETTLED = {"8": PaymentStatus.COMPLETED, "4": PaymentStatus.FAILED, "-1": PaymentStatus.FAILED}
 
 
 async def deposit_reconcile_poller():
@@ -30,19 +38,16 @@ async def deposit_reconcile_poller():
     while True:
         await asyncio.sleep(_CHECK_EVERY)
         try:
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
-            # Balance-delta reconciliation is only valid while the snapshotted bal_before is
-            # still meaningful. Past ~6h the balance has usually moved on (spent/other deposits),
-            # so a stale check would either false-complete or spam-warn forever. Older pending
-            # deposits are left for manual review instead.
-            cutoff_old = datetime.now(timezone.utc) - timedelta(hours=6)
+            now = datetime.now(timezone.utc)
+            rows_cutoff = now - timedelta(minutes=_MIN_AGE_MIN)
+            floor = now - timedelta(days=_MAX_AGE_DAYS)
             async with async_session() as db:
                 rows = (await db.execute(
                     select(Payment).where(
                         Payment.transaction_type == "CHOICE_DEPOSIT",
                         Payment.status == PaymentStatus.PENDING,
-                        Payment.created_at <= cutoff,
-                        Payment.created_at >= cutoff_old,
+                        Payment.created_at <= rows_cutoff,
+                        Payment.created_at >= floor,
                     )
                 )).scalars().all()
 
@@ -52,37 +57,34 @@ async def deposit_reconcile_poller():
                 from app.services.choice_bank import client as choice
 
                 for p in rows:
+                    tx_id = (p.mpesa_transaction_id or "").strip()
+                    if not tx_id or tx_id.startswith("cb_stk_"):
+                        continue  # no Choice txId was returned — nothing authoritative to query
+
                     try:
-                        trader = (await db.execute(
-                            select(Trader).where(Trader.id == p.trader_id)
-                        )).scalar_one_or_none()
-                        if not trader or not trader.choice_account_id:
+                        r = await choice.get_transaction_result(tx_id)
+                        data = r.get("data") if isinstance(r, dict) else None
+                        status_code = str((data or {}).get("txStatus") or "")
+                        new_status = _SETTLED.get(status_code)
+
+                        if new_status is None:
+                            age_mins = int((now - p.created_at).total_seconds() // 60)
+                            logger.info(
+                                "[DepositReconcile] payment %s (KES %s) still in flight after %sm (txStatus=%s)",
+                                p.id, p.amount, age_mins, status_code or "?",
+                            )
                             continue
 
-                        # Parse bal_before from remarks (stored at STK initiation)
-                        bal_before = 0.0
-                        if p.remarks:
-                            m = re.search(r'bal_before:([\d.]+)', p.remarks)
-                            if m:
-                                bal_before = float(m.group(1))
-
-                        bal_result = await choice.get_account_details(trader.choice_account_id)
-                        bal_now = float((bal_result.get("data") or {}).get("balance") or 0)
-
-                        if bal_now >= bal_before + float(p.amount) - 5:
-                            p.status = PaymentStatus.COMPLETED
-                            p.remarks = re.sub(r'\s*bal_before:[\d.]+', '', p.remarks or "").strip() + " [balance-verified]"
-                            await db.commit()
-                            logger.info(
-                                f"[DepositReconcile] Payment {p.id} (KES {p.amount}) confirmed "
-                                f"for trader {trader.id}: balance {bal_before}→{bal_now}"
-                            )
-                        else:
-                            age_mins = int((datetime.now(timezone.utc) - p.created_at).total_seconds() // 60)
-                            logger.warning(
-                                f"[DepositReconcile] Payment {p.id} still unconfirmed after {age_mins}m: "
-                                f"bal_before={bal_before}, now={bal_now}, expected≥{bal_before + float(p.amount) - 5}"
-                            )
+                        p.status = new_status
+                        # Drop any stale bal_before left by the old balance-delta flow.
+                        base = re.sub(r"\s*bal_before:[\d.]+", "", p.remarks or "").strip()
+                        p.remarks = (base + (" [tx-verified]" if new_status is PaymentStatus.COMPLETED
+                                             else " [tx-failed]")).strip()
+                        await db.commit()
+                        logger.info(
+                            "[DepositReconcile] payment %s (KES %s) → %s (txStatus=%s, txId=%s)",
+                            p.id, p.amount, new_status.value, status_code, tx_id,
+                        )
                     except Exception as e:
                         logger.warning(f"[DepositReconcile] Error on payment {p.id}: {e}")
 

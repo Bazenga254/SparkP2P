@@ -941,27 +941,35 @@ def _normalize_mobile(raw: str) -> str:
     return raw
 
 
-async def _reconcile_deposit(account_id: str, payment_id: int, amount: float, bal_before: float):
-    """Wait 3 min then check if Choice Bank balance went up — if so, mark deposit COMPLETED.
-    bal_before is also persisted in the payment remarks so the persistent poller can retry
-    if this background task is killed by a server restart."""
-    await asyncio.sleep(180)
+async def _monitor_deposit(payment_id: int, tx_id: str):
+    """Watch an STK deposit's ACTUAL Choice transaction (getTransResult) until it settles.
+
+    Replaces a blind 3-minute balance-delta check, which was wrong in BOTH directions: any
+    concurrent movement on the account (the bot paying a buy order, a retry deposit landing)
+    could hide a real deposit, or — as actually happened — mark a FAILED deposit as COMPLETED
+    because a *different* credit arrived inside the window. txStatus is authoritative.
+
+    STK needs the payer to enter their M-Pesa PIN, so poll for a few minutes. Anything still
+    unsettled when we give up stays PENDING for deposit_reconcile_poller to keep watching.
+    """
+    if not tx_id:
+        return
+    outcome = await choice.wait_for_transfer_result(tx_id, timeout_s=300, interval_s=5)
+    if outcome == "pending":
+        logger.info("[ChoiceDeposit] payment %s still unsettled after 5m — leaving to the poller", payment_id)
+        return
     try:
         async with async_session() as _db:
             p = await _db.get(Payment, payment_id)
             if not p or p.status != PaymentStatus.PENDING:
                 return
-            bal_result = await choice.get_account_details(account_id)
-            bal_now = float((bal_result.get("data") or {}).get("balance") or 0)
-            if bal_now >= bal_before + amount - 5:  # 5 KES tolerance
-                p.status = PaymentStatus.COMPLETED
-                p.remarks = (p.remarks or "").replace(f" bal_before:{bal_before}", "") + " [balance-verified]"
-                await _db.commit()
-                logger.info(f"[ChoiceDeposit] Reconciled payment {payment_id}: balance {bal_before}→{bal_now}")
-            else:
-                logger.warning(f"[ChoiceDeposit] Balance check failed for payment {payment_id}: before={bal_before}, now={bal_now}, expected ≥{bal_before + amount}")
+            p.status = PaymentStatus.COMPLETED if outcome == "success" else PaymentStatus.FAILED
+            p.remarks = ((p.remarks or "") + f" [tx-{outcome}]").strip()
+            await _db.commit()
+            logger.info("[ChoiceDeposit] payment %s (KES %s) → %s via getTransResult(%s)",
+                        payment_id, p.amount, outcome, tx_id)
     except Exception as e:
-        logger.warning(f"[ChoiceDeposit] Reconcile error for payment {payment_id}: {e}")
+        logger.warning(f"[ChoiceDeposit] monitor error for payment {payment_id}: {e}")
 
 
 @router.post("/choice/deposit")
@@ -982,14 +990,6 @@ async def stk_push_deposit(
     if len(mobile) != 9 or not mobile.isdigit():
         raise HTTPException(status_code=400, detail="Invalid phone number — enter a valid Kenyan number")
 
-    # Snapshot balance before STK so reconciliation can verify the deposit landed
-    bal_before = 0.0
-    try:
-        bal_res = await choice.get_account_details(trader.choice_account_id)
-        bal_before = float((bal_res.get("data") or {}).get("balance") or 0)
-    except Exception:
-        pass
-
     result = await choice.deposit_from_mpesa(trader.choice_account_id, mobile, body.amount)
     tx_id = result.get("data", {}).get("txId") or result.get("txId") or ""
 
@@ -1004,7 +1004,7 @@ async def stk_push_deposit(
             amount=body.amount,
             phone=mobile,
             sender_name=(trader.full_name or "").strip() or "M-Pesa Deposit",
-            remarks=f"Deposit via M-Pesa STK to Choice Bank bal_before:{bal_before}",
+            remarks="Deposit via M-Pesa STK to Choice Bank",
             status=PaymentStatus.PENDING,
         )
         db.add(p)
@@ -1014,11 +1014,11 @@ async def stk_push_deposit(
     except Exception as _log_err:
         logger.warning(f"Failed to log deposit to payments: {_log_err}")
 
-    # After 3 min, check if balance increased and auto-confirm if so
-    if payment_id:
-        background_tasks.add_task(
-            _reconcile_deposit, trader.choice_account_id, payment_id, float(body.amount), bal_before
-        )
+    # Track the real transaction to completion instead of guessing from the balance.
+    if payment_id and tx_id:
+        background_tasks.add_task(_monitor_deposit, payment_id, tx_id)
+    elif payment_id:
+        logger.warning("[ChoiceDeposit] payment %s has no Choice txId — cannot track; left PENDING", payment_id)
 
     return {"txId": tx_id, "status": "stk_sent"}
 
