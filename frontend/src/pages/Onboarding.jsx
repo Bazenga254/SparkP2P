@@ -404,7 +404,7 @@ export default function Onboarding() {
   return (
     <div className="onb-container">
       <div className="onb-header">
-        <img src="/spark-icon.svg" alt="SparkP2P" className="onb-logo" />
+        <img src="/logo.png" alt="SparkP2P" className="onb-logo" />
         <h1>Setup Your Account</h1>
         <p>Complete these steps to start automating your P2P trades</p>
         <button
