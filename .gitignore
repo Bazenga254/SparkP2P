@@ -25,3 +25,8 @@ desktop/*.dmg
 desktop/*.AppImage
 desktop/dist/
 desktop/node_modules/
+
+# Runtime logs — rewritten every run, not source (were churning git status)
+*.log
+relay/*.log
+desktop/midscene_run/
