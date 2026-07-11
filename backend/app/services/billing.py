@@ -12,7 +12,7 @@ import logging
 import re
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.config import settings
 from app.models.subscription import Subscription, SubscriptionStatus
@@ -71,6 +71,13 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
     # with the same M-Pesa receipt. Process it once — skip if we already recorded this receipt.
     if txn_id:
         from app.models.wallet import WalletTransaction
+        # Serialize concurrent processing of the SAME receipt. Without this the two callbacks
+        # (arriving within milliseconds) each run the dup-check below before either commits its
+        # deposit, so both proceed and create a duplicate subscription + charge — exactly what
+        # happened to receipt UGA2WAFXMQ (one KES 13,000 payment counted as two). The advisory
+        # lock is held to end-of-transaction, so the second caller blocks here until the first
+        # commits, then finds the committed row and skips.
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:r))"), {"r": str(txn_id)})
         dup = (await db.execute(
             select(WalletTransaction).where(
                 WalletTransaction.trader_id == trader_id,

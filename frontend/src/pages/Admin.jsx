@@ -2584,7 +2584,15 @@ export default function Admin() {
                         <div className="sub-head">
                           <div>
                             <div className="kv-k">Current Plan</div>
-                            <div className="sub-plan" style={{ color: t.plan ? 'var(--brand)' : 'var(--text-3)' }}>{t.plan_label || 'No active subscription'}</div>
+                            <div className="sub-plan" style={{ color: t.plan ? 'var(--brand)' : 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                              {t.plan_label || 'No active subscription'}
+                              {t.plan_source === 'grant' && (
+                                <span title="Given by an admin — no payment received" style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.4, color: '#f59e0b', background: 'rgba(245,158,11,0.14)', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 20, padding: '2px 8px' }}>ADMIN GRANT</span>
+                              )}
+                              {t.plan_source === 'paid' && (
+                                <span title="Activated by a real M-Pesa payment" style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.4, color: '#10b981', background: 'rgba(16,185,129,0.14)', border: '1px solid rgba(16,185,129,0.35)', borderRadius: 20, padding: '2px 8px' }}>PAID</span>
+                              )}
+                            </div>
                           </div>
                           {t.subscription_expires_at && (
                             <div style={{ textAlign: 'right' }}>
@@ -4832,6 +4840,11 @@ export default function Admin() {
                         <div className="fin-c-label">Outbound fee revenue · our markup</div>
                         <div className="fin-c-value">{fmtKES(obBreakdown?.total?.markup ?? 0)}</div>
                         <div className="fin-c-note">Withheld by Choice Bank, remitted monthly.<br/>Gross fees charged (CB + markup): {fmtKES(obBreakdown?.total?.total_fee ?? 0)}</div>
+                      </div>
+                      <div className="fin-comp-cell">
+                        <div className="fin-c-label">Prepaid balances held</div>
+                        <div className="fin-c-value">{fmtKES(revBreakdown?.summary?.prepaid_held ?? 0)}</div>
+                        <div className="fin-c-note">Partial Paybill payments received but not yet<br/>covering a plan — real money, not counted above.</div>
                       </div>
                     </div>
                   </section>

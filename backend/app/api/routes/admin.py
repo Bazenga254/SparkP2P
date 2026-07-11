@@ -493,12 +493,18 @@ async def get_trader_detail(
             ).order_by(Subscription.expires_at.desc())
         )).scalars().first()
         _sub_expires = _sub.expires_at.isoformat() if (_sub and _sub.expires_at) else None
+        # How did they get this plan? ADMIN_GRANT = we gave it (no money); anything else = a real
+        # M-Pesa payment. Lets the admin tell "extended by us" apart from "actually paid".
+        _sub_source = ("grant" if (_sub and _sub.mpesa_transaction_id == "ADMIN_GRANT")
+                       else "paid" if _sub else None)
     except Exception:
         _sub_expires = None
+        _sub_source = None
 
     return {
         "plan": _plan.value if _plan else None,
         "plan_label": plan_label(_plan),
+        "plan_source": _sub_source,   # 'paid' | 'grant' | None
         "subscription_expires_at": _sub_expires,
         "daily_trade_limit": _trades["limit"],
         "daily_trade_used": _trades["used"],
@@ -2657,6 +2663,14 @@ async def revenue_subscriptions(
         _ob_gross += float(_o.choice_fee or 0)
     summary["outbound_markup"] = round(_ob_markup, 2)   # our revenue (remitted monthly by Choice Bank)
     summary["outbound_gross"] = round(_ob_gross, 2)     # total fees traders paid (for reference)
+
+    # Prepaid subscription balances — real M-Pesa money received via PARTIAL Paybill payments that
+    # haven't yet covered a plan price (so it isn't subscription revenue yet, but it IS money we
+    # hold). Makes "merchant paid part of their plan" visible instead of silently sitting per-trader.
+    _prepaid = (await db.execute(
+        select(func.coalesce(func.sum(Trader.subscription_balance), 0)).where(Trader.subscription_balance > 0)
+    )).scalar_one()
+    summary["prepaid_held"] = round(float(_prepaid or 0), 2)
 
     # Total count for pagination
     total_count = (
