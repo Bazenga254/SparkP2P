@@ -287,6 +287,7 @@ export default function Admin() {
   const [viewingTraderTx, setViewingTraderTx] = useState([]);
   const [viewingTraderOrders, setViewingTraderOrders] = useState([]);
   const [viewingTraderLoading, setViewingTraderLoading] = useState(false);
+  const [traderDetailTab, setTraderDetailTab] = useState('overview');  // overview | bank | revenue | activity
   const [showSecurityAnswer, setShowSecurityAnswer] = useState(false);
   const [traderPnl, setTraderPnl] = useState(null);
   const [pnlPeriod, setPnlPeriod] = useState('today');
@@ -2401,9 +2402,15 @@ export default function Admin() {
                       );
                     })()}
 
-                    {/* ===== GRID2: ACCOUNT INFO + CHOICE BANK ===== */}
-                    <div className="grid2">
-                      {/* Account Information */}
+                    {/* ===== TAB BAR ===== */}
+                    <div className="tdv-tabs">
+                      {[['overview', 'Overview'], ['bank', 'Bank & payouts'], ['revenue', 'Revenue'], ['activity', 'Activity']].map(([k, l]) => (
+                        <button key={k} className={`tdv-tab ${traderDetailTab === k ? 'on' : ''}`} onClick={() => setTraderDetailTab(k)}>{l}</button>
+                      ))}
+                    </div>
+
+                    {/* ===== OVERVIEW: Account Information ===== */}
+                    {traderDetailTab === 'overview' && (
                       <div className="card">
                         <div className="card-h"><h3>Account Information</h3></div>
                         <div className="card-b">
@@ -2431,7 +2438,10 @@ export default function Admin() {
                         </div>
                       </div>
 
-                      {/* Choice Bank */}
+                    )}
+
+                    {/* ===== BANK: Choice Bank ===== */}
+                    {traderDetailTab === 'bank' && (
                       <div className="card">
                         <div className="card-h">
                           <h3>Choice Bank</h3>
@@ -2575,9 +2585,10 @@ export default function Admin() {
                           )}
                         </div>
                       </div>
-                    </div>
+                    )}
 
                     {/* ===== SUBSCRIPTION & DAILY LIMITS ===== */}
+                    {traderDetailTab === 'overview' && (
                     <div className="card">
                       <div className="card-h"><h3>Subscription &amp; Daily Limits</h3></div>
                       <div className="card-b">
@@ -2643,7 +2654,10 @@ export default function Admin() {
                       </div>
                     </div>
 
+                    )}
+
                     {/* ===== REVENUE SIMULATION (BUY ORDERS) ===== */}
+                    {traderDetailTab === 'revenue' && (<>
                     <div className="card">
                       <div className="card-h">
                         <h3>
@@ -2790,7 +2804,10 @@ export default function Admin() {
                       </div>
                     </div>
 
+                    </>)}
+
                     {/* ===== WITHDRAWAL METHOD ===== */}
+                    {traderDetailTab === 'bank' && (<>
                     <div className="card">
                       <div className="card-h">
                         <h3>Withdrawal Method</h3>
@@ -2852,7 +2869,10 @@ export default function Admin() {
                       </div>
                     </div>
 
-                    {/* ===== RESOLVE UNMATCHED PAYMENT ===== */}
+                    </>)}
+
+                    {/* ===== ACTIVITY: Resolve Unmatched Payment ===== */}
+                    {traderDetailTab === 'activity' && (<>
                     <div className="card card--warn">
                       <div className="card-h"><h3 style={{ color: 'var(--brand)' }}>Resolve Unmatched Payment</h3></div>
                       <div className="card-b">
@@ -3033,6 +3053,7 @@ export default function Admin() {
                         </div>
                       );
                     })()}
+                    </>)}
                   </>
                 )}
               </div>

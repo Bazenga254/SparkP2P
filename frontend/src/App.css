@@ -6355,6 +6355,13 @@ body {
 }
 .tdx .num { font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 
+/* Tabbed sections (Overview / Bank / Revenue / Activity) */
+.tdx .tdv-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 4px 0 18px; overflow-x: auto; scrollbar-width: none; }
+.tdx .tdv-tabs::-webkit-scrollbar { display: none; }
+.tdx .tdv-tab { padding: 11px 18px; background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--text-3); font-size: 13.5px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap; margin-bottom: -1px; transition: color .15s; }
+.tdx .tdv-tab:hover { color: var(--text); }
+.tdx .tdv-tab.on { color: var(--brand); border-bottom-color: var(--brand); }
+
 .tdx-back { margin-bottom: 16px; }
 .tdx .back-btn {
   background: var(--s2); border: 1px solid var(--line); color: var(--text-2);
