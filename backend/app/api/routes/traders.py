@@ -317,11 +317,45 @@ async def verify_settlement_phone_otp(
     return {"status": "verified"}
 
 
+# Subscription plan -> which competitor merchant tiers the trader may see the stats for.
+# starter (Bronze) -> bronze only; pro (Silver) -> bronze+silver; pro_max (Gold) -> all.
+_PLAN_TIER_ACCESS = {"starter": ("bronze",), "pro": ("bronze", "silver"), "pro_max": ("gold", "silver", "bronze")}
+
+
+def _allowed_merchant_tiers(plan) -> set:
+    return set(_PLAN_TIER_ACCESS.get(plan, ("gold", "silver", "bronze")))
+
+
+async def _active_sub_plan(db, trader) -> str | None:
+    """The trader's active subscription plan key ('starter'|'pro'|'pro_max') or None."""
+    from app.models.subscription import Subscription, SubscriptionStatus
+    r = await db.execute(
+        select(Subscription).where(
+            Subscription.trader_id == trader.id,
+            Subscription.status == SubscriptionStatus.ACTIVE,
+        ).order_by(Subscription.expires_at.desc())
+    )
+    s = r.scalar_one_or_none()
+    return s.plan.value if (s and s.is_active) else None
+
+
+def _nick_tier_from_board(board: dict) -> dict:
+    """Map nick -> merchant tier from a live board (both sides)."""
+    m = {}
+    for side in ("buy", "sell"):
+        for r in board.get(side) or []:
+            n = r.get("nick")
+            if n:
+                m[n] = r.get("tier", "normal")
+    return m
+
+
 @router.get("/price-tracker")
 async def get_price_tracker(
     asset: str = "USDT",
     fiat: str = "KES",
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ):
     """Live Binance P2P competitor order book (both sides, ranked). Admin-gated per trader."""
     if not getattr(trader, "price_tracker_enabled", False):
@@ -331,7 +365,21 @@ async def get_price_tracker(
     try:
         board = await get_board(asset=asset.upper(), fiat=fiat.upper())
         board["relay_connected"] = bool(relay_router.is_connected(trader.id))
+        # Per-merchant-tier summary (online count + today's est. volume), gated to the plan.
+        try:
+            from app.services.market_flow import get_tier_breakdown
+            allowed = _allowed_merchant_tiers(await _active_sub_plan(db, trader))
+            bd = get_tier_breakdown(_nick_tier_from_board(board))
+            board["tier_stats"] = {
+                t: {"online": bd[t]["online"], "vol": bd[t]["traded"], "avail": bd[t]["avail"]}
+                for t in ("gold", "silver", "bronze") if t in allowed
+            }
+            board["allowed_tiers"] = sorted(allowed)
+        except Exception as _e:
+            logger.warning(f"price-tracker tier stats failed: {_e}")
         return board
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"Price tracker fetch failed: {e}")
         raise HTTPException(status_code=502, detail="Could not load live prices right now. Please try again.")
@@ -352,12 +400,17 @@ async def get_price_tracker_history(
 @router.get("/market-activity")
 async def get_market_activity(
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ):
     """24h market-activity estimate: traded volume (order-book depletion), average maker spread,
-    liquidity now, and per-merchant flow. Volume is an ESTIMATE (balances/trades aren't public)."""
+    liquidity now, and per-merchant flow. Volume is an ESTIMATE (balances/trades aren't public).
+
+    Per-merchant-tier stats are gated by subscription: Bronze plan sees bronze only, Silver sees
+    bronze+silver, Gold sees all. The top-line volume/liquidity/merchant counts reflect only the
+    tiers the plan is allowed to see."""
     if not getattr(trader, "price_tracker_enabled", False):
         raise HTTPException(status_code=403, detail="Price Tracker is not enabled for your account.")
-    from app.services.market_flow import get_summary
+    from app.services.market_flow import get_summary, get_tier_breakdown
     from app.services.market_history import get_history
     summary = get_summary()
 
@@ -374,6 +427,35 @@ async def get_market_activity(
     summary["max_spread"] = round(max(spreads), 3) if spreads else None
     summary["buy_liq_now"] = last.get("buy_liq")
     summary["sell_liq_now"] = last.get("sell_liq")
+
+    # ── Tier tagging + subscription gating ────────────────────────────────────────
+    try:
+        from app.services.price_tracker import get_board
+        board = await get_board(asset="USDT", fiat="KES")
+        nick_tier = _nick_tier_from_board(board)
+        plan = await _active_sub_plan(db, trader)
+        allowed = _allowed_merchant_tiers(plan)
+        full_access = plan in (None, "pro_max")   # Gold plan (or admin/no-plan) sees the whole market
+        bd = get_tier_breakdown(nick_tier)
+
+        # Tag each merchant with its tier for the per-tier tabs + badges.
+        for m in summary.get("merchants", []):
+            m["tier"] = nick_tier.get(m.get("nick"), "normal")
+        summary["by_tier"] = {t: bd[t] for t in ("gold", "silver", "bronze") if t in allowed}
+        summary["allowed_tiers"] = sorted(allowed)
+
+        # Restricted plans: never expose merchants/totals for tiers above the plan. Full-access
+        # plans keep the true whole-market totals for the "All merchants" view.
+        if not full_access:
+            summary["merchants"] = [m for m in summary.get("merchants", []) if m["tier"] in allowed]
+            summary["bought_vol"] = sum(bd[t]["bought"] for t in allowed if t in bd)
+            summary["sold_vol"] = sum(bd[t]["sold"] for t in allowed if t in bd)
+            summary["total_vol"] = summary["bought_vol"] + summary["sold_vol"]
+            summary["active_merchants"] = sum(bd[t]["online"] for t in allowed if t in bd)
+            summary["buy_liq_now"] = sum(bd[t]["avail"] for t in allowed if t in bd)
+    except Exception as _e:
+        logger.warning(f"market-activity tier gating failed: {_e}")
+
     return summary
 
 

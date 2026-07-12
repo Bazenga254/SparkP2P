@@ -20,6 +20,7 @@ const cleanSide = rows => {
   return f.length ? f : arr;
 };
 const fmt2 = n => Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtVol = n => { const v = Number(n) || 0; if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M'; if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K'; return Math.round(v).toLocaleString('en-KE'); };
 const INS_ICON = {
   g: '<path d="M3 17l6-6 4 4 7-7M14 8h7v7"/>',
   a: '<path d="M13 2 4 14h6l-1 8 9-12h-6z"/>',
@@ -263,6 +264,24 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
                   <div className="td">{verifiedOnly ? 'Every metric, graph and list below counts verified merchants only (Gold · Silver · Bronze).' : 'Counting all advertisers — verified merchants and non-merchants.'}</div>
                 </div>
               </div>
+
+              {board?.tier_stats && Object.keys(board.tier_stats).length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Object.keys(board.tier_stats).length}, minmax(0,1fr))`, gap: 10, marginBottom: 18 }}>
+                  {['gold', 'silver', 'bronze'].filter(t => board.tier_stats[t]).map(t => {
+                    const s = board.tier_stats[t]; const on = effectiveTier === t; const col = TIER_COLOR[t];
+                    return (
+                      <button key={t} onClick={() => setTier(on ? 'all' : t)} title={`Show only ${t} merchants in the ranking below`}
+                        style={{ textAlign: 'left', cursor: 'pointer', background: 'var(--card)', border: `1px solid ${on ? col : 'var(--line)'}`, borderRadius: 12, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6, boxShadow: on ? `inset 0 0 0 1px ${col}` : 'none' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: col }}>
+                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: col }} />{t.toUpperCase()}
+                        </span>
+                        <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)' }}>{s.online} <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-3)' }}>online</span></span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)' }}>{fmtVol(s.vol)} <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-3)' }}>USDT today</span></span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
 
               <div className="stats s6">
                 {kpis.map((x, i) => (

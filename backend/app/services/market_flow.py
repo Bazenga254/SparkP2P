@@ -205,6 +205,35 @@ def get_summary() -> dict:
     }
 
 
+def get_tier_breakdown(nick_tier: dict) -> dict:
+    """Per merchant-tier aggregates for today. `nick_tier` maps nick -> tier
+    (gold/silver/bronze/normal) from the live board, so 'online' reflects who is
+    currently advertising. Returns {tier: {traded, bought, sold, avail, online}}."""
+    now = time.time()
+    cut = _day_start(now)
+    tiers = ("gold", "silver", "bronze", "normal")
+    agg = {t: {"traded": 0.0, "bought": 0.0, "sold": 0.0, "avail": 0.0, "online": 0} for t in tiers}
+    # Online-now + advertised inventory, grouped by the tier on the current board.
+    for nick, t in nick_tier.items():
+        tt = t if t in agg else "normal"
+        agg[tt]["online"] += 1
+        agg[tt]["avail"] += _avail_now.get(nick, 0.0)
+    # Today's estimated traded volume, grouped by tier.
+    for b in _buckets.values():
+        if b.get("ts", 0) < cut:
+            continue
+        for nick, v in b.get("m", {}).items():
+            tt = nick_tier.get(nick, "normal")
+            if tt not in agg:
+                tt = "normal"
+            agg[tt]["bought"] += v.get("bought", 0.0)
+            agg[tt]["sold"] += v.get("sold", 0.0)
+    for d in agg.values():
+        d["bought"] = round(d["bought"]); d["sold"] = round(d["sold"])
+        d["traded"] = d["bought"] + d["sold"]; d["avail"] = round(d["avail"])
+    return agg
+
+
 async def start():
     _load()
     logger.info("[MarketFlow] started — every %ss", INTERVAL)

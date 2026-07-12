@@ -9,6 +9,7 @@ export default function MarketActivity({ enabled }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [updatedAt, setUpdatedAt] = useState(null);
+  const [filter, setFilter] = useState('all');   // 'all' | 'gold' | 'silver' | 'bronze'
 
   const load = async () => {
     setLoading(true); setErr('');
@@ -22,12 +23,24 @@ export default function MarketActivity({ enabled }) {
   const upd = new Date(updatedAt || Date.now()).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const partial = data && data.incomplete_day;
 
+  const TIER_COLOR = { gold: '#FFBE52', silver: '#D6DBE2', bronze: '#F08A3C' };
+  const allowedTiers = (data?.allowed_tiers || ['gold', 'silver', 'bronze']).filter(t => t !== 'normal');
+  const byTier = data?.by_tier || {};
+  // Traded / liquidity / active-merchant cards follow the tier filter; spread cards stay market-wide.
+  const bt = filter !== 'all' ? (byTier[filter] || { traded: 0, bought: 0, sold: 0, avail: 0, online: 0 }) : null;
+  const tradedV = bt ? bt.traded : (data?.total_vol || 0);
+  const boughtV = bt ? bt.bought : (data?.bought_vol || 0);
+  const soldV = bt ? bt.sold : (data?.sold_vol || 0);
+  const liqV = bt ? bt.avail : (data?.buy_liq_now || 0);
+  const activeV = bt ? bt.online : (data?.active_merchants ?? 0);
+  const shownMerchants = data ? (filter === 'all' ? (data.merchants || []) : (data.merchants || []).filter(m => m.tier === filter)) : [];
+
   const stats = data ? [
-    { l: 'Est. USDT Traded (today)', v: fmtU(data.total_vol), c: 'amber', hl: true, extra: <><span className="chg-dn">▼ {fmtU(data.bought_vol)} bought</span> &nbsp; <span className="chg-up">▲ {fmtU(data.sold_vol)} sold</span></> },
+    { l: 'Est. USDT Traded (today)', v: fmtU(tradedV), c: 'amber', hl: true, extra: <><span className="chg-dn">▼ {fmtU(boughtV)} bought</span> &nbsp; <span className="chg-up">▲ {fmtU(soldV)} sold</span></> },
     { l: 'Avg Maker Spread', v: data.avg_spread != null ? `KES ${data.avg_spread.toFixed(2)}` : '—', s: data.spread_pct != null ? `${data.spread_pct.toFixed(2)}% of price` : 'building…' },
     { l: 'Spread Range', v: data.min_spread != null ? `${data.min_spread.toFixed(2)}–${data.max_spread.toFixed(2)}` : '—', s: 'KES / USDT' },
-    { l: 'Liquidity Now', v: <span className="green">{fmtU(data.buy_liq_now)}</span>, s: 'USDT for sale' },
-    { l: 'Active Merchants', v: String(data.active_merchants ?? '—'), s: data.new_merchants != null ? `+${data.new_merchants} new today` : 'new-count from 3am' },
+    { l: 'Liquidity Now', v: <span className="green">{fmtU(liqV)}</span>, s: 'USDT for sale' },
+    { l: 'Active Merchants', v: String(activeV ?? '—'), s: filter === 'all' ? (data.new_merchants != null ? `+${data.new_merchants} new today` : 'new-count from 3am') : `${filter} tier only` },
   ] : [];
 
   return (
@@ -49,6 +62,23 @@ export default function MarketActivity({ enabled }) {
               <span><b>Volume is an estimate:</b> Binance doesn't publish merchants' balances or trades, so we infer fills from drops in advertised quantity across all ads. Spoof ads and relist/edit spikes are filtered out. Totals reset daily at <b>3:00 AM EAT</b>.{partial && <> Tracking started after today's reset, so today's totals cover the last <b>{data.tracked_hours}h</b> only.</>}</span>
             </div>
 
+            {allowedTiers.length > 1 && (
+              <div style={{ display: 'flex', gap: 8, margin: '0 0 18px', flexWrap: 'wrap' }}>
+                {['all', ...allowedTiers].map(t => {
+                  const on = filter === t; const col = t === 'all' ? '#FFBE52' : TIER_COLOR[t];
+                  return (
+                    <button key={t} onClick={() => setFilter(t)}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 15px', borderRadius: 999, cursor: 'pointer',
+                        border: `1px solid ${on ? col : 'var(--line)'}`, background: on ? `${col}22` : 'var(--card)',
+                        color: on ? col : 'var(--text-2)', fontSize: 12.5, fontWeight: 700, letterSpacing: 0.3 }}>
+                      {t !== 'all' && <span style={{ width: 8, height: 8, borderRadius: '50%', background: TIER_COLOR[t] }} />}
+                      {t === 'all' ? 'All merchants' : t[0].toUpperCase() + t.slice(1)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             <div className="stats s5">
               {stats.map((x, i) => (
                 <div className={`stat${x.hl ? ' hl' : ''}`} key={i}>
@@ -63,11 +93,11 @@ export default function MarketActivity({ enabled }) {
             <div className="tbl-wrap"><table>
               <thead><tr><th className="l">Merchant</th><th>Est. Traded</th><th>Bought</th><th>Sold</th><th>Avail Now</th><th>Δ today</th></tr></thead>
               <tbody>
-                {(!data.merchants || data.merchants.length === 0)
+                {(shownMerchants.length === 0)
                   ? <tr><td className="l" colSpan="6" style={{ textAlign: 'center', color: 'var(--text-3)' }}>No fills observed yet — give it a few minutes of tracking.</td></tr>
-                  : data.merchants.map((m, i) => (
+                  : shownMerchants.map((m, i) => (
                     <tr key={m.nick + i}>
-                      <td className="l row-head"><span className="rank">{i + 1}</span> <span className="m-name" style={{ marginLeft: 8 }}>{m.nick}</span></td>
+                      <td className="l row-head"><span className="rank">{i + 1}</span> <span className="m-name" style={{ marginLeft: 8 }}>{m.nick}</span>{m.tier && m.tier !== 'normal' && <span style={{ marginLeft: 8, fontSize: 9.5, fontWeight: 800, letterSpacing: 0.4, padding: '2px 6px', borderRadius: 5, color: TIER_COLOR[m.tier], border: `1px solid ${TIER_COLOR[m.tier]}55`, textTransform: 'uppercase' }}>{m.tier}</span>}</td>
                       <td data-label="Est. Traded" className="v-traded">{fmtU(m.traded)}</td>
                       <td data-label="Bought" className="v-bought">{m.bought ? fmtU(m.bought) : <span className="muted">—</span>}</td>
                       <td data-label="Sold" className="v-sold">{m.sold ? fmtU(m.sold) : <span className="muted">—</span>}</td>
