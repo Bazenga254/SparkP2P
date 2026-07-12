@@ -6486,6 +6486,79 @@ body {
 .tdx .danger-btn:disabled { opacity: .6; cursor: default; }
 .tdx .reset-msg { margin-top: 8px; font-size: 12px; text-align: center; }
 
+/* ---- Bank & payouts (redesigned two-column layout, matches mockup) ---- */
+.tdx .tdx-sec-label {
+  font-size: 11px; font-weight: 700; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .06em; margin: 0 0 12px;
+}
+.tdx .bank-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.tdx .bank-actions-desc { font-size: 12.5px; color: var(--text-2); line-height: 1.6; margin: 0 0 14px; }
+.tdx .bank-actions { display: flex; flex-direction: column; gap: 8px; }
+.tdx .act-btn {
+  display: flex; align-items: center; gap: 9px; justify-content: flex-start;
+  width: 100%; padding: 11px 14px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--s2); color: var(--text);
+  font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.tdx .act-btn:hover:not(:disabled) { background: var(--s3); }
+.tdx .act-btn:disabled { opacity: .6; cursor: default; }
+.tdx .act-btn svg { flex-shrink: 0; }
+.tdx .act-btn--danger { color: var(--neg); border-color: rgba(238,106,126,.3); background: rgba(238,106,126,.06); }
+.tdx .act-btn--danger:hover:not(:disabled) { background: rgba(238,106,126,.14); border-color: rgba(238,106,126,.5); }
+.tdx .act-btn--purple { color: #c489f7; border-color: rgba(168,85,247,.35); background: rgba(168,85,247,.08); }
+.tdx .act-btn--purple:hover:not(:disabled) { background: rgba(168,85,247,.16); border-color: rgba(168,85,247,.55); }
+
+/* Bank tab: symmetric 2x2 grid — top row (balance / actions) and bottom
+   row (withdrawal / details) each align, cards stretch to equal height. */
+.tdx .bank-grid2 { display: grid; grid-template-columns: 1fr; gap: 20px; }
+.tdx .bank-cell { display: flex; flex-direction: column; min-width: 0; }
+.tdx .bank-cell > .card { margin: 0; flex: 1; }
+@media (min-width: 861px) {
+  .tdx .bank-grid2 { grid-template-columns: 1fr 1fr; column-gap: 20px; row-gap: 24px; }
+  .tdx .bank-cell--tl { grid-column: 1; grid-row: 1; }
+  .tdx .bank-cell--bl { grid-column: 1; grid-row: 2; }
+  .tdx .bank-cell--tr { grid-column: 2; grid-row: 1; }
+  .tdx .bank-cell--br { grid-column: 2; grid-row: 2; }
+}
+
+/* ---- Revenue tab (redesigned, matches mockup) ---- */
+.tdx .rev-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.tdx .range-toggle {
+  display: inline-flex; gap: 2px; background: var(--s1); padding: 3px;
+  border-radius: 8px; border: 1px solid var(--line); overflow-x: auto;
+  scrollbar-width: none; max-width: 100%;
+}
+.tdx .range-toggle::-webkit-scrollbar { display: none; }
+.tdx .range-btn {
+  padding: 6px 14px; background: transparent; border: none; color: var(--text-3);
+  font-size: 12px; font-weight: 600; border-radius: 6px; cursor: pointer;
+  font-family: inherit; white-space: nowrap; transition: color .15s, background .15s;
+}
+.tdx .range-btn:hover { color: var(--text); }
+.tdx .range-btn.active { background: rgba(242,145,30,.14); color: var(--brand); }
+.tdx .rev-sum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+.tdx .rev-sum-val { font-size: 18px; font-weight: 700; margin-top: 4px; }
+@media (max-width: 640px) { .tdx .rev-sum { grid-template-columns: 1fr; gap: 10px; } }
+
+/* ---- Overview + Security tabs (field lists, plan card, integration rows) ---- */
+.tdx .flist { display: grid; grid-template-columns: 120px 1fr; gap: 11px 16px; font-size: 13px; align-items: baseline; }
+.tdx .flist .fl-k { color: var(--text-2); }
+.tdx .flist .fl-v { color: var(--text); word-break: break-word; }
+@media (max-width: 400px) { .tdx .flist { grid-template-columns: 96px 1fr; gap: 9px 12px; } }
+.tdx .plan-card {
+  background: linear-gradient(180deg, rgba(242,145,30,.12), rgba(242,145,30,.03));
+  border: 1px solid rgba(242,145,30,.3); border-radius: 12px;
+  padding: 14px 16px; margin-bottom: 16px;
+}
+.tdx .plan-card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.tdx .plan-name { font-size: 15px; font-weight: 700; color: var(--brand); }
+.tdx .plan-expiry { font-size: 12px; font-weight: 600; color: var(--brand); opacity: .9; }
+.tdx .plan-expiry--exp { color: var(--neg); opacity: 1; }
+.tdx .plan-sub { font-size: 11.5px; color: var(--brand); opacity: .75; margin-top: 4px; }
+.tdx .intg-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; background: var(--s2); border-radius: 8px; font-size: 13px; }
+.tdx .intg-label { color: var(--text-2); }
+
 /* ---- Subscription ---- */
 .tdx .sub-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
 .tdx .sub-plan { font-size: 18px; font-weight: 800; margin-top: 4px; }
@@ -6599,6 +6672,96 @@ body {
 .tdx .log-badge { min-width: 14px; }
 .tdx .log-time { color: var(--text-3); min-width: 70px; font-size: 10.5px; }
 .tdx .log-msg { flex: 1; word-break: break-word; }
+
+
+/* ============================================================
+   TRADER DETAIL VIEW — mobile responsive pass (matches the
+   redesign mockup). Desktop is untouched; everything below is
+   behind breakpoints so it only affects tablet/phone widths.
+   ============================================================ */
+
+/* ---- Tablet (≤900px): stop the view from overflowing sideways ---- */
+@media (max-width: 900px) {
+  .tdx { overflow-x: hidden; }
+  .tdx .card-h > div { flex-wrap: wrap; }
+  /* Hero: stack the identity block ABOVE the Status/Tier/Role/Price-Tracker controls so
+     the dropdowns never sit on top of the chips. */
+  .tdx .hero { flex-direction: column; align-items: stretch; gap: 16px; }
+  .tdx .hero-main { min-width: 0; align-items: flex-start; }
+  .tdx .hero-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; width: 100%; }
+  .tdx .field { min-width: 0; }
+  .tdx .field select { width: 100%; }
+}
+
+/* ---- Mobile (≤640px) ---- */
+@media (max-width: 640px) {
+  /* Hero: tighter padding + the Status/Tier/Role/Price-Tracker selects go 2-up */
+  .tdx .hero { padding: 16px; }
+  .tdx .hero-main { gap: 12px; }
+  .tdx .hero-name { font-size: 19px; }
+  .tdx .avatar { width: 46px; height: 46px; font-size: 15px; }
+  .tdx .hero-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* KPI cards: 2-up */
+  .tdx .kpi-row { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .tdx .kpi { padding: 12px 14px; }
+  .tdx .kpi-val { font-size: 18px; }
+
+  /* Tighter card interior */
+  .tdx .card-h { padding: 14px 16px; }
+  .tdx .card-b { padding: 16px; }
+
+  /* Key/value grids drop to one column so long values never get clipped */
+  .tdx .kv { grid-template-columns: 1fr; gap: 12px; }
+
+  /* Banner + subscription header */
+  .tdx .banner { padding: 12px 16px; }
+  .tdx .banner-num { font-size: 24px; }
+  .tdx .sub-head { flex-direction: column; align-items: flex-start; }
+
+  /* Wide financial tables (revenue / P&L) stay scrollable but contained */
+  .tdx .tbl-wrap { -webkit-overflow-scrolling: touch; }
+
+  /* ---- Wide ledger tables → stacked cards (Recent Activity / Orders) ---- */
+  .tdx .tbl-wrap--stack { overflow: visible; border: none; border-radius: 0; }
+  .tdx table.tdx-stack,
+  .tdx table.tdx-stack tbody,
+  .tdx table.tdx-stack tr,
+  .tdx table.tdx-stack td { display: block; width: 100%; }
+  .tdx table.tdx-stack { min-width: 0; }
+  .tdx table.tdx-stack thead { display: none; }
+  .tdx table.tdx-stack tr {
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--s2); padding: 10px 12px; margin-bottom: 10px;
+  }
+  .tdx table.tdx-stack tr:hover td { background: transparent; }
+  .tdx table.tdx-stack td {
+    border: none; padding: 5px 0; white-space: normal; overflow-wrap: anywhere;
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    text-align: right; font-size: 13px;
+  }
+  .tdx table.tdx-stack td::before {
+    content: attr(data-label); text-align: left; flex-shrink: 0;
+    color: var(--text-3); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .tdx table.tdx-stack td.empty { display: block; text-align: center; padding: 20px 0; }
+  .tdx table.tdx-stack td.empty::before { content: none; }
+
+  /* Ledger sub-tab bar scrolls instead of wrapping awkwardly */
+  .tdx .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .tdx .tabs::-webkit-scrollbar { display: none; }
+
+  /* Pager wraps and centers */
+  .tdx .pager { flex-wrap: wrap; gap: 8px; justify-content: center; }
+}
+
+/* ---- Tiny (≤380px): single-column everything ---- */
+@media (max-width: 380px) {
+  .tdx .hero-actions { grid-template-columns: 1fr; }
+  .tdx .kpi-row { grid-template-columns: 1fr; }
+  .tdx .kpi-val { font-size: 17px; }
+}
 
 
 /* Download grid: 2-up on tablet (4-up desktop, 1-up mobile) */

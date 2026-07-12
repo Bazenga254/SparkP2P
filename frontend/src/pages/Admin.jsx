@@ -4,7 +4,7 @@ import { usePlans } from '../services/plans';
 import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal, Search } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal, Search, Calendar } from 'lucide-react';
 import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminResetKyc, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense, adminGetKycSubmissions, adminGetKycSubmission, adminApproveKycSubmission, adminRejectKycSubmission, adminConfirmKycOtp, adminResendKycOtp, adminVerifyTraderContact, adminConfirmTraderContactVerify } from '../services/api';
 
 const sidebarSections = [
@@ -2404,63 +2404,188 @@ export default function Admin() {
 
                     {/* ===== TAB BAR ===== */}
                     <div className="tdv-tabs">
-                      {[['overview', 'Overview'], ['bank', 'Bank & payouts'], ['revenue', 'Revenue'], ['activity', 'Activity']].map(([k, l]) => (
+                      {[['overview', 'Overview'], ['bank', 'Bank & payouts'], ['revenue', 'Revenue'], ['activity', 'Activity'], ['security', 'Security']].map(([k, l]) => (
                         <button key={k} className={`tdv-tab ${traderDetailTab === k ? 'on' : ''}`} onClick={() => setTraderDetailTab(k)}>{l}</button>
                       ))}
                     </div>
 
-                    {/* ===== OVERVIEW: Account Information ===== */}
+                    {/* ===== OVERVIEW ===== */}
                     {traderDetailTab === 'overview' && (
-                      <div className="card">
-                        <div className="card-h"><h3>Account Information</h3></div>
-                        <div className="card-b">
-                          <div className="kv">
-                            <div className="kv-row"><span className="kv-k">Email</span><span className="kv-v">{t.email || '—'}</span></div>
-                            <div className="kv-row"><span className="kv-k">Phone</span><span className="kv-v">{t.phone || '—'}</span></div>
-                            <div className="kv-row"><span className="kv-k">Trades</span><span className="kv-v num">{t.total_trades ?? '—'}</span></div>
-                            <div className="kv-row"><span className="kv-k">Volume</span><span className="kv-v num">{fmtKES(t.total_volume)}</span></div>
-                            <div className="kv-row"><span className="kv-k">Joined</span><span className="kv-v">{t.created_at ? fmtDateOnlyEAT(t.created_at) : '—'}</span></div>
-                            <div className="kv-row"><span className="kv-k">Last Login</span><span className="kv-v">{t.last_login ? fmtDateEAT(t.last_login) : '—'}</span></div>
-                            <div className="kv-row"><span className="kv-k">Bot Last Sync</span><span className="kv-v">{t.last_seen_at ? fmtDateEAT(t.last_seen_at) : '—'}</span></div>
-                            <div className="kv-row"><span className="kv-k">Web Last Active</span><span className="kv-v">{t.last_login ? fmtDateEAT(t.last_login) : '—'}</span></div>
-                            <div className="kv-row"><span className="kv-k">Security Q</span><span className="kv-v">{t.security_question || '—'}</span></div>
-                            <div className="kv-row">
-                              <span className="kv-k">Answer</span>
-                              <span className="kv-v" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                {showSecurityAnswer ? (t.security_answer || '—') : '••••••••'}
-                                <button className="mini-btn" onClick={() => setShowSecurityAnswer(v => !v)}>{showSecurityAnswer ? 'Hide' : 'Show'}</button>
-                              </span>
+                      <div className="grid2">
+                        {/* LEFT: contact + lifetime activity */}
+                        <div className="card">
+                          <div className="card-b">
+                            <div className="tdx-sec-label">Contact</div>
+                            <div className="flist" style={{ marginBottom: 22 }}>
+                              <span className="fl-k">Email</span><span className="fl-v">{t.email || '—'}</span>
+                              <span className="fl-k">Phone</span><span className="fl-v num">{t.phone || '—'}</span>
+                              <span className="fl-k">Telegram</span><span className="fl-v">{t.telegram_connected ? <><Check size={13} style={{ color: 'var(--pos)', verticalAlign: '-2px' }} /> Linked</> : <span style={{ color: 'var(--text-3)' }}>Not linked</span>}</span>
+                              <span className="fl-k">Binance API</span><span className="fl-v">{(t.binance_api_key_saved && !t.binance_api_key_invalid) ? <><Check size={13} style={{ color: 'var(--pos)', verticalAlign: '-2px' }} /> Connected</> : t.binance_api_key_invalid ? <span style={{ color: 'var(--neg)' }}>Invalid</span> : <span style={{ color: 'var(--text-3)' }}>Not connected</span>}</span>
                             </div>
-                            {t.google_id && (
-                              <div className="kv-row"><span className="kv-k">Google ID</span><span className="kv-v" style={{ fontSize: 12, wordBreak: 'break-all' }}>{t.google_id}</span></div>
+                            <div className="tdx-sec-label">Lifetime activity</div>
+                            <div className="flist">
+                              <span className="fl-k">Total trades</span><span className="fl-v num">{t.total_trades != null ? t.total_trades.toLocaleString() : '—'}</span>
+                              <span className="fl-k">Total volume</span><span className="fl-v num">{fmtKES(t.total_volume)}</span>
+                              <span className="fl-k">Last login</span><span className="fl-v">{t.last_login ? fmtDateEAT(t.last_login) : '—'}</span>
+                              <span className="fl-k">Bot last sync</span><span className="fl-v">{t.last_seen_at ? fmtDateEAT(t.last_seen_at) : '—'}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* RIGHT: subscription */}
+                        <div className="card">
+                          <div className="card-b">
+                            <div className="tdx-sec-label">Subscription</div>
+                            {t.plan_label ? (
+                              <div className="plan-card">
+                                <div className="plan-card-top">
+                                  <span className="plan-name">{t.plan_label}</span>
+                                  {t.subscription_expires_at && (() => {
+                                    const d = Math.ceil((new Date(t.subscription_expires_at) - new Date()) / 86400000);
+                                    return <span className={`plan-expiry ${d < 0 ? 'plan-expiry--exp' : ''}`}>{d >= 0 ? `${d} days left` : 'expired'}</span>;
+                                  })()}
+                                </div>
+                                <div className="plan-sub">
+                                  {t.plan_source === 'grant' ? 'Admin grant' : t.plan_source === 'paid' ? 'Paid' : 'Subscription'}
+                                  {t.subscription_expires_at && ` · expires ${new Date(t.subscription_expires_at).toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric' })}`}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="plan-card" style={{ background: 'var(--s2)', borderColor: 'var(--line)' }}>
+                                <span className="plan-name" style={{ color: 'var(--text-3)' }}>No active subscription</span>
+                              </div>
                             )}
+                            <div className="flist" style={{ marginBottom: 16 }}>
+                              <span className="fl-k">Balance</span><span className="fl-v num" style={{ color: 'var(--pos)' }}>KES {Number(t.subscription_balance || 0).toLocaleString()}</span>
+                              {t.account_number && (<><span className="fl-k">Paybill acct</span><span className="fl-v num">{t.account_number}</span></>)}
+                              <span className="fl-k">Trades today</span><span className="fl-v">{t.daily_trade_used ?? 0} / {t.daily_trade_unlimited ? 'unlimited' : (t.daily_trade_limit ?? 0)}</span>
+                              <span className="fl-k">Alerts today</span><span className="fl-v">{t.daily_tg_used ?? 0} / {t.daily_tg_unlimited ? 'unlimited' : (t.daily_tg_limit ?? 0)}</span>
+                            </div>
+                            <button className="act-btn" style={{ justifyContent: 'center' }}
+                              onClick={() => setTierGrant({ traderId: t.id, tier: (t.tier && t.tier !== 'standard') ? t.tier : 'starter' })}>
+                              <Calendar size={15} /> {t.subscription_expires_at ? 'Change or extend plan' : 'Grant subscription'}
+                            </button>
+                            <button className="act-btn" style={{ justifyContent: 'center', marginTop: 8 }}
+                              onClick={() => setSmsTarget({ traderId: t.id, name: t.full_name })}>
+                              <MessageSquare size={15} /> Send SMS
+                            </button>
                           </div>
                         </div>
                       </div>
+                    )}
 
+                    {/* ===== SECURITY ===== */}
+                    {traderDetailTab === 'security' && (
+                      <div className="grid2">
+                        {/* LEFT: identity + security question */}
+                        <div>
+                          <div className="tdx-sec-label">Identity</div>
+                          <div className="card">
+                            <div className="card-b">
+                              <div className="flist">
+                                <span className="fl-k">Trader ID</span><span className="fl-v num">#{t.id}</span>
+                                {t.google_id && (<><span className="fl-k">Google ID</span><span className="fl-v num" style={{ fontSize: 12, wordBreak: 'break-all' }}>{t.google_id}</span></>)}
+                                {t.relay_ip && (<><span className="fl-k">Relay IP</span><span className="fl-v num">{t.relay_ip}</span></>)}
+                                <span className="fl-k">Last login</span><span className="fl-v">{t.last_login ? fmtDateEAT(t.last_login) : '—'}</span>
+                                <span className="fl-k">Bot sync</span><span className="fl-v">{t.last_seen_at ? fmtDateEAT(t.last_seen_at) : '—'}</span>
+                                <span className="fl-k">Joined</span><span className="fl-v">{t.created_at ? fmtDateOnlyEAT(t.created_at) : '—'}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="tdx-sec-label" style={{ marginTop: 24 }}>Security question</div>
+                          <div className="card">
+                            <div className="card-b">
+                              <div style={{ fontSize: 12.5, color: 'var(--text-2)', marginBottom: 12 }}>{t.security_question || 'No security question set'}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 14px', background: 'var(--s2)', borderRadius: 8 }}>
+                                <span className="num" style={{ fontSize: 15, letterSpacing: showSecurityAnswer ? 0 : 3 }}>{showSecurityAnswer ? (t.security_answer || '—') : '••••••••'}</span>
+                                <button className="mini-btn" onClick={() => setShowSecurityAnswer(v => !v)}>{showSecurityAnswer ? 'Hide' : 'Show'}</button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* RIGHT: integrations + danger zone */}
+                        <div>
+                          <div className="tdx-sec-label">Integrations &amp; verifications</div>
+                          <div className="card">
+                            <div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              {(() => {
+                                const binOk = t.binance_api_key_saved && !t.binance_api_key_invalid;
+                                const rows = [
+                                  ['Binance API', binOk, t.binance_api_key_invalid ? 'Invalid' : binOk ? 'Connected' : 'Not connected'],
+                                  ['Telegram bot', !!t.telegram_connected, t.telegram_connected ? 'Linked' : 'Not linked'],
+                                  ['Relay', !!t.relay_connected, t.relay_connected ? 'Active' : 'Inactive'],
+                                  ['KYC verification', !!t.choice_account_id, t.choice_account_id ? 'Approved' : (t.choice_kyc_status || 'Not started')],
+                                ];
+                                return rows.map(([label, ok, val]) => (
+                                  <div key={label} className="intg-row">
+                                    <span className="intg-label">{label}</span>
+                                    <span className={`cb-tag ${ok ? 'cb-tag--ok' : 'cb-tag--bad'}`}>{val}</span>
+                                  </div>
+                                ));
+                              })()}
+                            </div>
+                          </div>
+
+                          <div className="tdx-sec-label" style={{ marginTop: 24 }}>Danger zone</div>
+                          <div className="card">
+                            <div className="card-b">
+                              <div style={{ fontSize: 12.5, color: 'var(--text-2)', marginBottom: 12 }}>Irreversible or high-impact actions.</div>
+                              <div className="bank-actions">
+                                <button className="act-btn act-btn--danger"
+                                  onClick={async () => {
+                                    if (!window.confirm(`Suspend ${t.full_name}? Their bot will stop trading.`)) return;
+                                    setViewingTrader(prev => ({ ...prev, status: 'suspended' }));
+                                    await handleStatusChange(t.id, 'suspended');
+                                    await refreshTraderDetail(t.id);
+                                  }}>
+                                  <Shield size={15} /> Suspend trader
+                                </button>
+                                <button className="act-btn act-btn--danger"
+                                  onClick={async () => {
+                                    if (!window.confirm(`Permanently delete "${t.full_name}"?\n\nThis cannot be undone. Traders with orders cannot be deleted — suspend them instead.`)) return;
+                                    try {
+                                      await deleteTrader(t.id);
+                                      setTraders(prev => prev.filter(x => x.id !== t.id));
+                                      setViewingTrader(null);
+                                    } catch (err) {
+                                      alert(err.response?.data?.detail || 'Delete failed.');
+                                    }
+                                  }}>
+                                  <Trash2 size={15} /> Delete account
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     )}
 
                     {/* ===== BANK: Choice Bank ===== */}
                     {traderDetailTab === 'bank' && (
-                      <div className="card">
-                        <div className="card-h">
-                          <h3>Choice Bank</h3>
+                      <div className="bank-grid2">
+                        {/* Choice Bank account (top-left) */}
+                        <div className="bank-cell bank-cell--tl">
+                        <div className="bank-sec-head">
+                          <div className="tdx-sec-label" style={{ margin: 0 }}>Choice Bank account</div>
                           <button className="ghost-btn" disabled={cbBalanceLoading} onClick={() => { setCbBalanceLoading(true); adminGetTraderChoiceBalance(t.id).then(r => { setCbBalance(r.data); setCbBalanceLoading(false); }).catch(() => setCbBalanceLoading(false)); }}>
                             <RefreshCw size={13} /> {cbBalanceLoading ? 'Loading…' : 'Refresh'}
                           </button>
                         </div>
                         <CbBalancePoller traderId={t.id} onData={setCbBalance} />
+                        <div className="card">
                         <div className="card-b">
                           {t.choice_account_id ? (
                             cbBalance ? (
                               <>
-                                <div className="cb-bal-label">Live Balance</div>
                                 <div className="cb-bal num">KES {(parseFloat(cbBalance.balance) || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                                <div className="cb-acct num">{t.choice_account_id}</div>
+                                <div className="cb-acct num">Acct {t.choice_account_id} · paybill {connProfile?.choice_paybill || '444174'}</div>
                                 <div className="cb-tags">
                                   {[['Status', cbBalance.account_status, cbBalance.account_status === 'Normal'],
                                     ['Dormant', cbBalance.dormant_status, cbBalance.dormant_status === 'Normal'],
                                     ['Freeze', cbBalance.freeze_status, cbBalance.freeze_status === 'Normal'],
+                                    ['KYC', t.choice_account_id ? 'Approved' : (t.choice_kyc_status || 'Pending'), !!t.choice_account_id],
                                   ].map(([lbl, val, ok]) => (
                                     <span key={lbl} className={`cb-tag ${ok ? 'cb-tag--ok' : 'cb-tag--bad'}`}>{lbl}: {val}</span>
                                   ))}
@@ -2472,7 +2597,64 @@ export default function Admin() {
                           ) : (
                             <div className="muted">No Choice Bank account</div>
                           )}
-                          <button className="danger-btn" disabled={resetPwLoading}
+                        </div>
+                        </div>
+                        </div>
+
+                        {/* Withdrawal method (bottom-left) */}
+                        <div className="bank-cell bank-cell--bl">
+                        <div className="tdx-sec-label">Withdrawal method</div>
+                        <div className="card">
+                        <div className="card-b">
+                          {(() => {
+                            const method = (t.settlement_method || '').toString().toLowerCase();
+                            const isBank = method === 'bank' || method === 'bank_paybill';
+                            const methodLabel = method === 'mpesa' ? 'M-Pesa' : method === 'paybill' ? 'Paybill' : isBank ? 'I&M Bank' : method || '—';
+                            const pendingMethod = (t.pending_settlement_method || '').toString().toLowerCase();
+                            const isPendBank = pendingMethod === 'bank' || pendingMethod === 'bank_paybill' || pendingMethod === 'im_update';
+                            const pendingLabel = (pendingMethod === 'mpesa' || pendingMethod === 'mpesa_update') ? 'M-Pesa' : pendingMethod === 'paybill' ? 'Paybill' : isPendBank ? 'I&M Bank' : pendingMethod || '';
+                            return (
+                              <>
+                                <div className="wd-head">
+                                  <span className="wd-method">{methodLabel}</span>
+                                  {t.settlement_changed_at && <span className="card-count">Changed {fmtDateOnlyEAT(t.settlement_changed_at)}</span>}
+                                  {pendingMethod && <span className="wd-pending">Pending change → {pendingLabel}</span>}
+                                </div>
+                                <div className="kv">
+                                  {method === 'mpesa' && t.settlement_phone && <div className="kv-row"><span className="kv-k">M-Pesa Phone</span><span className="kv-v">{t.settlement_phone}</span></div>}
+                                  {method === 'paybill' && t.settlement_paybill && <div className="kv-row"><span className="kv-k">Paybill Number</span><span className="kv-v">{t.settlement_paybill}</span></div>}
+                                  {method === 'paybill' && t.settlement_account && <div className="kv-row"><span className="kv-k">Account Reference</span><span className="kv-v">{t.settlement_account}</span></div>}
+                                  {isBank && t.settlement_account && <div className="kv-row"><span className="kv-k">Account Number</span><span className="kv-v">{t.settlement_account}</span></div>}
+                                  {isBank && t.settlement_bank_name && <div className="kv-row"><span className="kv-k">Bank Name</span><span className="kv-v">{t.settlement_bank_name}</span></div>}
+                                  {isBank && t.settlement_phone && <div className="kv-row"><span className="kv-k">M-Pesa Fallback</span><span className="kv-v">{t.settlement_phone}</span></div>}
+                                </div>
+                                {pendingMethod && (
+                                  <div className="wd-pending-box">
+                                    <div className="wd-pending-title">Pending Change (48hr cooldown)</div>
+                                    <div className="kv">
+                                      {pendingMethod === 'mpesa' && t.pending_settlement_phone && <div className="kv-row"><span className="kv-k">New Phone</span><span className="kv-v">{t.pending_settlement_phone}</span></div>}
+                                      {pendingMethod === 'paybill' && t.pending_settlement_paybill && <div className="kv-row"><span className="kv-k">New Paybill</span><span className="kv-v">{t.pending_settlement_paybill}</span></div>}
+                                      {pendingMethod === 'paybill' && t.pending_settlement_account && <div className="kv-row"><span className="kv-k">New Account Ref</span><span className="kv-v">{t.pending_settlement_account}</span></div>}
+                                      {isPendBank && t.pending_settlement_account && <div className="kv-row"><span className="kv-k">New Account</span><span className="kv-v">{t.pending_settlement_account}</span></div>}
+                                      {isPendBank && t.pending_settlement_bank_name && <div className="kv-row"><span className="kv-k">New Bank</span><span className="kv-v">{t.pending_settlement_bank_name}</span></div>}
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
+                        </div>
+                        </div>
+
+                        {/* Account actions (top-right) */}
+                        <div className="bank-cell bank-cell--tr">
+                        <div className="tdx-sec-label" style={{ margin: '0 0 12px' }}>Account actions</div>
+                        <div className="card">
+                        <div className="card-b">
+                          <p className="bank-actions-desc">These operations affect the trader's Choice Bank access.</p>
+                          <div className="bank-actions">
+                          <button className="act-btn act-btn--danger" disabled={resetPwLoading}
                             onClick={async () => {
                               setResetPwLoading(true);
                               try {
@@ -2481,14 +2663,14 @@ export default function Admin() {
                               } catch (e) { setResetPwMsg('Failed to reset password.'); }
                               setResetPwLoading(false);
                             }}>
-                            {resetPwLoading ? 'Resetting…' : 'Reset Password'}
+                            <Lock size={15} /> {resetPwLoading ? 'Resetting…' : 'Reset password'}
                           </button>
                           {resetPwMsg && <div className="reset-msg" style={{ color: resetPwMsg.includes('Failed') ? 'var(--neg)' : 'var(--pos)' }}>{resetPwMsg}</div>}
 
                           {/* Verify Choice Bank Email */}
-                          <button className="danger-btn" style={{ marginTop: 8, background: 'var(--brand)' }}
+                          <button className="act-btn"
                             onClick={() => setCbVerifyEmail(s => ({ ...s, open: !s.open, msg: '', step: 'input' }))}>
-                            Verify Choice Bank Email
+                            <CheckCircle size={15} /> Verify Choice Bank email
                           </button>
                           {cbVerifyEmail.open && (
                             <div style={{ marginTop: 10, background: 'var(--bg-2)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -2533,9 +2715,9 @@ export default function Admin() {
                           {/* Change to OTP Email */}
                           {t.choice_account_id && (
                             <>
-                              <button className="danger-btn" style={{ marginTop: 8, background: '#7c3aed' }}
+                              <button className="act-btn act-btn--purple"
                                 onClick={() => setCbChangeEmail(s => ({ ...s, open: !s.open, step: 'idle', msg: '', otp: '', newEmail: '', oldEmail: '' }))}>
-                                Change to OTP Email
+                                <RotateCcw size={15} /> Change to OTP email
                               </button>
                               {cbChangeEmail.open && (
                                 <div style={{ marginTop: 10, background: 'var(--bg-2)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -2583,90 +2765,114 @@ export default function Admin() {
                               )}
                             </>
                           )}
+                          </div>
+                        </div>
+                        </div>
+                        </div>
+
+                        {/* Account details (bottom-right) */}
+                        <div className="bank-cell bank-cell--br">
+                        <div className="tdx-sec-label" style={{ margin: '0 0 12px' }}>Account details</div>
+                        <div className="card">
+                        <div className="card-b">
+                          <div className="kv">
+                            <div className="kv-row"><span className="kv-k">Account Number</span><span className="kv-v num">{t.choice_account_id || '—'}</span></div>
+                            <div className="kv-row"><span className="kv-k">Paybill</span><span className="kv-v num" style={{ color: 'var(--gold)' }}>{connProfile?.choice_paybill || '444174'}</span></div>
+                            <div className="kv-row"><span className="kv-k">KYC Status</span><span className="kv-v" style={{ color: t.choice_account_id ? 'var(--pos)' : 'var(--warn)' }}>{t.choice_account_id ? 'Approved' : t.choice_kyc_status || 'Not started'}</span></div>
+                            <div className="kv-row"><span className="kv-k">Account Status</span><span className="kv-v" style={{ color: cbBalance?.account_status === 'Normal' ? 'var(--pos)' : cbBalance ? 'var(--neg)' : 'var(--text-3)' }}>{cbBalance?.account_status || '—'}</span></div>
+                          </div>
+                        </div>
+                        </div>
                         </div>
                       </div>
                     )}
 
-                    {/* ===== SUBSCRIPTION & DAILY LIMITS ===== */}
-                    {traderDetailTab === 'overview' && (
-                    <div className="card">
-                      <div className="card-h"><h3>Subscription &amp; Daily Limits</h3></div>
-                      <div className="card-b">
-                        <div className="sub-head">
-                          <div>
-                            <div className="kv-k">Current Plan</div>
-                            <div className="sub-plan" style={{ color: t.plan ? 'var(--brand)' : 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                              {t.plan_label || 'No active subscription'}
-                              {t.plan_source === 'grant' && (
-                                <span title="Given by an admin — no payment received" style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.4, color: '#f59e0b', background: 'rgba(245,158,11,0.14)', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 20, padding: '2px 8px' }}>ADMIN GRANT</span>
-                              )}
-                              {t.plan_source === 'paid' && (
-                                <span title="Activated by a real M-Pesa payment" style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.4, color: '#10b981', background: 'rgba(16,185,129,0.14)', border: '1px solid rgba(16,185,129,0.35)', borderRadius: 20, padding: '2px 8px' }}>PAID</span>
-                              )}
-                            </div>
-                          </div>
-                          {t.subscription_expires_at && (
-                            <div style={{ textAlign: 'right' }}>
-                              <div className="kv-k">Expires</div>
-                              <div className="sub-exp">
-                                {new Date(t.subscription_expires_at).toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric' })}
-                                {(() => { const d = Math.ceil((new Date(t.subscription_expires_at) - new Date()) / 86400000); return d >= 0 ? <span className="sub-days"> · {d}d left</span> : <span className="sub-days sub-days--exp"> · expired</span>; })()}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                        {/* Set / extend the expiry date+time without having to switch plan. For a free
-                            trader, pick a plan via the Tier dropdown above (which opens the same picker). */}
-                        {t.account_number && (
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, padding: '9px 12px', borderRadius: 9, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)' }}>
-                            <span style={{ color: '#9aa4b2', fontSize: 12 }}>Paybill account no.</span>
-                            <b style={{ color: '#f59e0b', fontSize: 14, letterSpacing: 0.5 }}>{t.account_number}</b>
-                          </div>
-                        )}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)' }}>
-                          <span style={{ color: '#9aa4b2', fontSize: 12 }}>Subscription (Paybill) balance</span>
-                          <b style={{ color: '#10b981', fontSize: 15 }}>KES {Number(t.subscription_balance || 0).toLocaleString()}</b>
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                          <button
-                            onClick={() => setTierGrant({ traderId: t.id, tier: (t.tier && t.tier !== 'standard') ? t.tier : 'starter' })}
-                            style={{ flex: 1, padding: '11px', borderRadius: 10, border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.10)', color: '#f59e0b', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>
-                            📅 {t.subscription_expires_at ? 'Change / extend expiry' : 'Grant subscription'}
-                          </button>
-                          <button
-                            onClick={() => setSmsTarget({ traderId: t.id, name: t.full_name })}
-                            style={{ flex: 1, padding: '11px', borderRadius: 10, border: '1px solid #2a3142', background: 'rgba(59,130,246,0.10)', color: '#60a5fa', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>
-                            💬 Send SMS
-                          </button>
-                        </div>
-                        <div className="limit-grid">
-                          {[
-                            ['Trades today', t.daily_trade_unlimited, t.daily_trade_used, t.daily_trade_limit, 'var(--info)'],
-                            ['Telegram alerts today', t.daily_tg_unlimited, t.daily_tg_used, t.daily_tg_limit, 'var(--pos)'],
-                          ].map(([label, unlimited, used, limit, color]) => (
-                            <div key={label} className="limit-card">
-                              <div className="kv-k">{label}</div>
-                              <div className="limit-val num" style={{ color }}>{used ?? 0} <span className="limit-sub">/ {unlimited ? 'unlimited' : (limit ?? 0)}</span></div>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="fine-print">Daily limits reset at 3:00 AM (EAT). Non-subscribers are not blocked.</div>
-                      </div>
-                    </div>
-
-                    )}
+                    {/* Subscription & daily limits now live in the Overview right column */}
 
                     {/* ===== REVENUE SIMULATION (BUY ORDERS) ===== */}
                     {traderDetailTab === 'revenue' && (<>
+                    {/* ===== PROFIT & LOSS (top) ===== */}
+                    <div className="rev-head">
+                      <div className="tdx-sec-label" style={{ margin: 0 }}>Profit &amp; Loss</div>
+                      <div className="range-toggle">
+                        {['today', 'week', 'month'].map(p => (
+                          <button key={p} className={`range-btn ${pnlPeriod === p ? 'active' : ''}`} onClick={async () => { setPnlPeriod(p); await loadTraderPnl(t.id, p); }}>
+                            {p === 'today' ? 'Today' : p === 'week' ? '7 days' : '30 days'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {pnlLoading ? (
+                      <div className="card"><div className="card-b"><div className="muted center">Loading…</div></div></div>
+                    ) : traderPnl ? (() => {
+                      const s = traderPnl.summary;
+                      return (
+                        <>
+                          <div className="kpi-row">
+                            <div className="kpi">
+                              <div className="kpi-label">Gross Revenue</div>
+                              <div className="kpi-val num" style={{ color: 'var(--pos)' }}>+KES {Math.abs(s.revenue).toLocaleString('en-KE', { maximumFractionDigits: 0 })}</div>
+                              <div className="kpi-delta">gross fees earned</div>
+                            </div>
+                            <div className="kpi">
+                              <div className="kpi-label">Fees Paid</div>
+                              <div className="kpi-val num" style={{ color: 'var(--neg)' }}>-KES {Math.abs(s.fees).toLocaleString('en-KE', { maximumFractionDigits: 0 })}</div>
+                              <div className="kpi-delta">rail fees</div>
+                            </div>
+                            <div className="kpi">
+                              <div className="kpi-label">Net P&amp;L</div>
+                              <div className="kpi-val num" style={{ color: s.net > 0 ? 'var(--pos)' : s.net < 0 ? 'var(--neg)' : 'var(--text)' }}>{s.net > 0 ? '+' : s.net < 0 ? '-' : ''}KES {Math.abs(s.net).toLocaleString('en-KE', { maximumFractionDigits: 0 })}</div>
+                              <div className="kpi-delta">after fees</div>
+                            </div>
+                            <div className="kpi">
+                              <div className="kpi-label">Completed Orders</div>
+                              <div className="kpi-val num">{s.completed_orders ?? s.trades}</div>
+                              <div className="kpi-delta" style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                                <span className="tag tag--buy">{s.buy_orders ?? 0} Buy</span>
+                                <span className="tag tag--sell">{s.sell_orders ?? 0} Sell</span>
+                              </div>
+                            </div>
+                          </div>
+                          {traderPnl.daily.length > 1 && (
+                            <div className="card">
+                              <div className="card-h"><h3>Daily breakdown</h3></div>
+                              <div className="card-b">
+                                <div className="tbl-wrap tbl-wrap--stack">
+                                  <table className="tdx-tbl tdx-stack">
+                                    <thead><tr><th>Date</th><th>Orders</th><th className="r">Revenue</th><th className="r">Fees</th><th className="r">Net P&amp;L</th></tr></thead>
+                                    <tbody>
+                                      {[...traderPnl.daily].reverse().map(row => (
+                                        <tr key={row.date}>
+                                          <td data-label="Date" className="dim">{new Date(row.date + 'T12:00:00Z').toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', weekday: 'short', month: 'short', day: 'numeric' })}</td>
+                                          <td data-label="Orders"><span className="pill pill--brand">{row.trades}</span></td>
+                                          <td data-label="Revenue" className="r num" style={{ color: 'var(--pos)' }}>{row.revenue > 0 ? `+KES ${row.revenue.toLocaleString()}` : '—'}</td>
+                                          <td data-label="Fees" className="r num" style={{ color: 'var(--neg)' }}>{row.fees > 0 ? `-KES ${row.fees.toLocaleString()}` : '—'}</td>
+                                          <td data-label="Net P&L" className="r num" style={{ color: row.net >= 0 ? 'var(--info)' : 'var(--neg)', fontWeight: 700 }}>{(row.net != null && row.net !== 0) ? `${row.net >= 0 ? '+' : ''}KES ${(row.net || 0).toLocaleString()}` : '—'}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          {traderPnl.daily.length === 1 && (s.completed_orders ?? s.trades) === 0 && (
+                            <div className="card"><div className="card-b"><div className="muted center">No completed orders today.</div></div></div>
+                          )}
+                        </>
+                      );
+                    })() : null}
+
+                    {/* ===== OUTBOUND FEES BY RAIL (revenue simulation) ===== */}
                     <div className="card">
                       <div className="card-h">
                         <h3>
-                          💰 Revenue Simulation
+                          Outbound fees by rail
                           <span className={`tag ${revMode === 'prod' ? 'tag--buy' : 'tag--out'}`} style={{ marginLeft: 8, verticalAlign: 'middle' }}>
                             {revMode === 'prod' ? 'PRODUCTION' : 'SIMULATION'}
                           </span>
                         </h3>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                           <button
                             onClick={() => {
                               const next = revMode === 'prod' ? 'sim' : 'prod';
@@ -2680,7 +2886,7 @@ export default function Admin() {
                           </button>
                           <div className="seg">
                             {[['auto', 'Auto'], ['mpesa', 'M-Pesa'], ['pesalink', 'Pesalink']].map(([m, lbl]) => (
-                              <button key={m} className={revSimMethod === m ? 'active' : ''} title="Assumed payout rail — inferred from amount, since historical orders don't record it" onClick={async () => { setRevSimMethod(m); await loadTraderRevenueSim(t.id, revSimPeriod, m); }}>
+                              <button key={m} className={revSimMethod === m ? 'active' : ''} title="Filter by the payout rail recorded on the order" onClick={async () => { setRevSimMethod(m); await loadTraderRevenueSim(t.id, revSimPeriod, m); }}>
                                 {lbl}
                               </button>
                             ))}
@@ -2702,32 +2908,27 @@ export default function Admin() {
                           const kes = n => `KES ${Math.round(n || 0).toLocaleString('en-KE')}`;
                           return (
                             <>
-                              <p className="muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 12 }}>
-                                {revMode === 'prod' ? 'Live' : 'Projected'} outbound-fee revenue from <strong>{T.count}</strong> completed buy order{T.count === 1 ? '' : 's'} — the fee earned when we pay the seller from the trader's Choice Bank account. Sell orders carry no outbound fee.
-                                {' '}{revSimMethod === 'auto'
-                                  ? <>Rail is <strong>inferred by amount</strong> — M-Pesa up to KES 250,000/order, Pesalink above (the actual rail isn't recorded on historical orders).</>
-                                  : revSimMethod === 'mpesa'
-                                    ? <>Assuming <strong>every payout via M-Pesa</strong> (what-if).</>
-                                    : <>Assuming <strong>every payout via Pesalink</strong> (what-if).</>}
+                              <p className="muted" style={{ marginTop: 0, marginBottom: 16, fontSize: 12, lineHeight: 1.6 }}>
+                                Actual outbound fees charged on <strong>{T.count}</strong> buy order{T.count === 1 ? '' : 's'} the bot paid out through Choice Bank — the KES withheld when we pay the seller from the trader's Choice Bank account. Orders paid another way, and sell orders, carry no Choice Bank fee.
+                                {revSimMethod === 'mpesa' ? ' Showing M-Pesa payouts only.' : revSimMethod === 'pesalink' ? ' Showing Pesalink payouts only.' : ''}
                               </p>
-                              <div className="pnl-grid">
-                                <div className="pnl-card"><div className="kv-k">Merchant Charged</div><div className="pnl-val num" style={{ color: 'var(--text)' }}>{kes(T.merchant_charged)}</div></div>
-                                <div className="pnl-card"><div className="kv-k">Choice Bank Keeps</div><div className="pnl-val num" style={{ color: 'var(--neg)' }}>{kes(T.choice_keeps)}</div></div>
-                                <div className="pnl-card"><div className="kv-k">SparkP2P Profit</div><div className="pnl-val num" style={{ color: 'var(--pos)' }}>{kes(T.our_profit)}</div></div>
-                                <div className="pnl-card"><div className="kv-k">Buy Orders</div><div className="pnl-val num" style={{ color: 'var(--brand)' }}>{T.count}</div></div>
+                              <div className="rev-sum">
+                                <div><div className="kpi-label">Charged</div><div className="rev-sum-val num" style={{ color: 'var(--text)' }}>{kes(T.merchant_charged)}</div></div>
+                                <div><div className="kpi-label">Choice keeps</div><div className="rev-sum-val num" style={{ color: 'var(--neg)' }}>{kes(T.choice_keeps)}</div></div>
+                                <div><div className="kpi-label">Our profit</div><div className="rev-sum-val num" style={{ color: 'var(--pos)' }}>{kes(T.our_profit)}</div></div>
                               </div>
-                              <div className="tbl-wrap" style={{ marginTop: 12 }}>
-                                <table className="tdx-tbl">
-                                  <thead><tr><th>Method</th><th className="r">Orders</th><th className="r">Volume</th><th className="r">Merchant Charged</th><th className="r">Choice Keeps</th><th className="r">SparkP2P Profit</th></tr></thead>
+                              <div className="tbl-wrap tbl-wrap--stack">
+                                <table className="tdx-tbl tdx-stack">
+                                  <thead><tr><th>Method</th><th className="r">Orders</th><th className="r">Volume</th><th className="r">Charged</th><th className="r">Keeps</th><th className="r">Profit</th></tr></thead>
                                   <tbody>
                                     {[['M-Pesa', M], ['Pesalink', P]].map(([label, c]) => (
                                       <tr key={label}>
-                                        <td><span className={`tag ${label === 'M-Pesa' ? 'tag--buy' : 'tag--sell'}`}>{label}</span></td>
-                                        <td className="r num">{c.count}</td>
-                                        <td className="r num">{kes(c.volume)}</td>
-                                        <td className="r num">{kes(c.merchant_charged)}</td>
-                                        <td className="r num" style={{ color: 'var(--neg)' }}>{kes(c.choice_keeps)}</td>
-                                        <td className="r num" style={{ color: 'var(--pos)', fontWeight: 700 }}>{kes(c.our_profit)}</td>
+                                        <td data-label="Method"><span className={`tag ${label === 'M-Pesa' ? 'tag--buy' : 'tag--sell'}`}>{label}</span></td>
+                                        <td data-label="Orders" className="r num">{c.count}</td>
+                                        <td data-label="Volume" className="r num">{kes(c.volume)}</td>
+                                        <td data-label="Charged" className="r num">{kes(c.merchant_charged)}</td>
+                                        <td data-label="Keeps" className="r num" style={{ color: 'var(--neg)' }}>{kes(c.choice_keeps)}</td>
+                                        <td data-label="Profit" className="r num" style={{ color: 'var(--pos)', fontWeight: 700 }}>{kes(c.our_profit)}</td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -2738,138 +2939,9 @@ export default function Admin() {
                         })() : <div className="muted center">No buy orders in this period.</div>}
                       </div>
                     </div>
-
-                    {/* ===== PROFIT & LOSS ===== */}
-                    <div className="card">
-                      <div className="card-h">
-                        <h3><TrendingUp size={15} style={{ color: 'var(--pos)', verticalAlign: '-2px', marginRight: 6 }} />Profit &amp; Loss</h3>
-                        <div className="seg">
-                          {['today', 'week', 'month'].map(p => (
-                            <button key={p} className={pnlPeriod === p ? 'active' : ''} onClick={async () => { setPnlPeriod(p); await loadTraderPnl(t.id, p); }}>
-                              {p === 'today' ? 'Today' : p === 'week' ? '7 Days' : '30 Days'}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="card-b">
-                        {pnlLoading ? (
-                          <div className="muted center">Loading…</div>
-                        ) : traderPnl ? (() => {
-                          const s = traderPnl.summary;
-                          return (
-                            <>
-                              <div className="pnl-grid">
-                                {[
-                                  { label: 'Gross Revenue', value: s.revenue, color: 'var(--pos)', prefix: '+' },
-                                  { label: 'Fees Paid', value: s.fees, color: 'var(--neg)', prefix: '-' },
-                                  { label: 'Net P&L', value: s.net, color: s.net > 0 ? 'var(--pos)' : s.net < 0 ? 'var(--neg)' : 'var(--text)', prefix: s.net > 0 ? '+' : s.net < 0 ? '-' : '' },
-                                  { label: 'Completed Orders', value: s.completed_orders ?? s.trades, color: 'var(--brand)', isCount: true, breakdown: { buy: s.buy_orders ?? 0, sell: s.sell_orders ?? 0 } },
-                                ].map(({ label, value, color, isCount, prefix, breakdown }) => (
-                                  <div key={label} className="pnl-card">
-                                    <div className="kv-k">{label}</div>
-                                    <div className="pnl-val num" style={{ color }}>{isCount ? value : `${prefix || ''}KES ${Math.abs(value).toLocaleString('en-KE', { maximumFractionDigits: 0 })}`}</div>
-                                    {breakdown && (
-                                      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                                        <span className="tag tag--buy">{breakdown.buy} Buy</span>
-                                        <span className="tag tag--sell">{breakdown.sell} Sell</span>
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                              {traderPnl.daily.length > 1 && (
-                                <div className="tbl-wrap">
-                                  <table className="tdx-tbl">
-                                    <thead><tr><th>Date</th><th>Orders</th><th className="r">Revenue</th><th className="r">Fees</th><th className="r">Net P&amp;L</th></tr></thead>
-                                    <tbody>
-                                      {[...traderPnl.daily].reverse().map(row => (
-                                        <tr key={row.date}>
-                                          <td className="dim">{new Date(row.date + 'T12:00:00Z').toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi', weekday: 'short', month: 'short', day: 'numeric' })}</td>
-                                          <td><span className="pill pill--brand">{row.trades}</span></td>
-                                          <td className="r num" style={{ color: 'var(--pos)' }}>{row.revenue > 0 ? `+KES ${row.revenue.toLocaleString()}` : '—'}</td>
-                                          <td className="r num" style={{ color: 'var(--neg)' }}>{row.fees > 0 ? `-KES ${row.fees.toLocaleString()}` : '—'}</td>
-                                          <td className="r num" style={{ color: row.net >= 0 ? 'var(--info)' : 'var(--neg)', fontWeight: 700 }}>{(row.net != null && row.net !== 0) ? `${row.net >= 0 ? '+' : ''}KES ${(row.net || 0).toLocaleString()}` : '—'}</td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              )}
-                              {traderPnl.daily.length === 1 && (s.completed_orders ?? s.trades) === 0 && (
-                                <div className="muted center">No completed orders today.</div>
-                              )}
-                            </>
-                          );
-                        })() : null}
-                      </div>
-                    </div>
-
                     </>)}
 
-                    {/* ===== WITHDRAWAL METHOD ===== */}
-                    {traderDetailTab === 'bank' && (<>
-                    <div className="card">
-                      <div className="card-h">
-                        <h3>Withdrawal Method</h3>
-                        {t.settlement_changed_at && <span className="card-count">Changed {fmtDateOnlyEAT(t.settlement_changed_at)}</span>}
-                      </div>
-                      <div className="card-b">
-                        {(() => {
-                          const method = (t.settlement_method || '').toString().toLowerCase();
-                          const isBank = method === 'bank' || method === 'bank_paybill';
-                          const methodLabel = method === 'mpesa' ? 'M-Pesa' : method === 'paybill' ? 'Paybill' : isBank ? 'I&M Bank' : method || '—';
-                          const pendingMethod = (t.pending_settlement_method || '').toString().toLowerCase();
-                          const isPendBank = pendingMethod === 'bank' || pendingMethod === 'bank_paybill' || pendingMethod === 'im_update';
-                          const pendingLabel = (pendingMethod === 'mpesa' || pendingMethod === 'mpesa_update') ? 'M-Pesa' : pendingMethod === 'paybill' ? 'Paybill' : isPendBank ? 'I&M Bank' : pendingMethod || '';
-                          return (
-                            <>
-                              <div className="wd-head">
-                                <span className="wd-method">{methodLabel}</span>
-                                {pendingMethod && <span className="wd-pending">Pending change → {pendingLabel}</span>}
-                              </div>
-                              <div className="kv">
-                                {method === 'mpesa' && t.settlement_phone && <div className="kv-row"><span className="kv-k">M-Pesa Phone</span><span className="kv-v">{t.settlement_phone}</span></div>}
-                                {method === 'paybill' && t.settlement_paybill && <div className="kv-row"><span className="kv-k">Paybill Number</span><span className="kv-v">{t.settlement_paybill}</span></div>}
-                                {method === 'paybill' && t.settlement_account && <div className="kv-row"><span className="kv-k">Account Reference</span><span className="kv-v">{t.settlement_account}</span></div>}
-                                {isBank && t.settlement_account && <div className="kv-row"><span className="kv-k">Account Number</span><span className="kv-v">{t.settlement_account}</span></div>}
-                                {isBank && t.settlement_bank_name && <div className="kv-row"><span className="kv-k">Bank Name</span><span className="kv-v">{t.settlement_bank_name}</span></div>}
-                                {isBank && t.settlement_phone && <div className="kv-row"><span className="kv-k">M-Pesa Fallback</span><span className="kv-v">{t.settlement_phone}</span></div>}
-                              </div>
-                              {pendingMethod && (
-                                <div className="wd-pending-box">
-                                  <div className="wd-pending-title">Pending Change (48hr cooldown)</div>
-                                  <div className="kv">
-                                    {pendingMethod === 'mpesa' && t.pending_settlement_phone && <div className="kv-row"><span className="kv-k">New Phone</span><span className="kv-v">{t.pending_settlement_phone}</span></div>}
-                                    {pendingMethod === 'paybill' && t.pending_settlement_paybill && <div className="kv-row"><span className="kv-k">New Paybill</span><span className="kv-v">{t.pending_settlement_paybill}</span></div>}
-                                    {pendingMethod === 'paybill' && t.pending_settlement_account && <div className="kv-row"><span className="kv-k">New Account Ref</span><span className="kv-v">{t.pending_settlement_account}</span></div>}
-                                    {isPendBank && t.pending_settlement_account && <div className="kv-row"><span className="kv-k">New Account</span><span className="kv-v">{t.pending_settlement_account}</span></div>}
-                                    {isPendBank && t.pending_settlement_bank_name && <div className="kv-row"><span className="kv-k">New Bank</span><span className="kv-v">{t.pending_settlement_bank_name}</span></div>}
-                                  </div>
-                                </div>
-                              )}
-                            </>
-                          );
-                        })()}
-                      </div>
-                    </div>
-
-                    {/* ===== CHOICE BANK ACCOUNT ===== */}
-                    <div className="card">
-                      <div className="card-h">
-                        <h3>Choice Bank Account</h3>
-                        <span className="card-count" style={{ color: t.choice_account_id ? 'var(--pos)' : 'var(--warn)' }}>{t.choice_account_id ? 'Approved' : t.choice_kyc_status ? t.choice_kyc_status : 'Not verified'}</span>
-                      </div>
-                      <div className="card-b">
-                        <div className="limit-grid">
-                          <div className="limit-card"><div className="kv-k">Account Number</div><div className="limit-val num">{t.choice_account_id || '—'}</div></div>
-                          <div className="limit-card"><div className="kv-k">Paybill</div><div className="limit-val num" style={{ color: 'var(--gold)' }}>{connProfile?.choice_paybill || '444174'}</div></div>
-                          <div className="limit-card"><div className="kv-k">KYC Status</div><div className="limit-val" style={{ fontSize: 14, color: t.choice_account_id ? 'var(--pos)' : 'var(--warn)' }}>{t.choice_account_id ? 'Approved' : t.choice_kyc_status || 'Not started'}</div></div>
-                          <div className="limit-card"><div className="kv-k">Account Status</div><div className="limit-val" style={{ fontSize: 14, color: cbBalance?.account_status === 'Normal' ? 'var(--pos)' : cbBalance ? 'var(--neg)' : 'var(--text-3)' }}>{cbBalance?.account_status || '—'}</div></div>
-                        </div>
-                      </div>
-                    </div>
-
-                    </>)}
+                    {/* Withdrawal method + Choice Bank details now live in the two-column Bank layout above */}
 
                     {/* ===== ACTIVITY: Resolve Unmatched Payment ===== */}
                     {traderDetailTab === 'activity' && (<>
@@ -2962,22 +3034,22 @@ export default function Admin() {
                           {/* ACTIVITY PANE */}
                           {ledgerTab === 'activity' && (
                             <div className="pane">
-                              <div className="tbl-wrap">
-                                <table className="tdx-tbl">
+                              <div className="tbl-wrap tbl-wrap--stack">
+                                <table className="tdx-tbl tdx-stack">
                                   <thead><tr><th>Type</th><th>Direction</th><th>Amount</th><th>Balance After</th><th>M-Pesa Code</th><th>Description</th><th>Status</th><th>Time</th></tr></thead>
                                   <tbody>
                                     {txSlice.length === 0 ? (
                                       <tr><td colSpan={8} className="empty">No transactions</td></tr>
                                     ) : txSlice.map((tx) => (
                                       <tr key={tx.id}>
-                                        <td style={{ textTransform: 'capitalize' }}>{(tx.transaction_type || '').replace(/_/g, ' ')}</td>
-                                        <td><span className={`tag ${tx.direction === 'inbound' ? 'tag--in' : 'tag--out'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
-                                        <td className="num" style={{ fontWeight: 600, color: tx.direction === 'inbound' ? 'var(--pos)' : 'var(--brand)' }}>{tx.direction === 'inbound' ? '+' : '-'}{fmtKESFee(tx.amount)}</td>
-                                        <td className="dim num">{tx.balance_after != null ? fmtKES(tx.balance_after) : '—'}</td>
-                                        <td className="num" style={{ color: 'var(--brand)', fontSize: 11 }}>{tx.mpesa_transaction_id || tx.bill_ref_number || '—'}</td>
-                                        <td className="dim" style={{ fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.description || '—'}</td>
-                                        <td><span className={`st ${tx.status === 'completed' ? 'st--done' : tx.status === 'failed' ? 'st--cancel' : 'st--pend'}`}>{tx.status}</span></td>
-                                        <td className="dim">{tx.created_at ? fmtDateEAT(tx.created_at) : '—'}</td>
+                                        <td data-label="Type" style={{ textTransform: 'capitalize' }}>{(tx.transaction_type || '').replace(/_/g, ' ')}</td>
+                                        <td data-label="Direction"><span className={`tag ${tx.direction === 'inbound' ? 'tag--in' : 'tag--out'}`}>{tx.direction === 'inbound' ? 'IN' : 'OUT'}</span></td>
+                                        <td data-label="Amount" className="num" style={{ fontWeight: 600, color: tx.direction === 'inbound' ? 'var(--pos)' : 'var(--brand)' }}>{tx.direction === 'inbound' ? '+' : '-'}{fmtKESFee(tx.amount)}</td>
+                                        <td data-label="Balance After" className="dim num">{tx.balance_after != null ? fmtKES(tx.balance_after) : '—'}</td>
+                                        <td data-label="M-Pesa Code" className="num" style={{ color: 'var(--brand)', fontSize: 11 }}>{tx.mpesa_transaction_id || tx.bill_ref_number || '—'}</td>
+                                        <td data-label="Description" className="dim" style={{ fontSize: 12 }}><span style={{ display: 'inline-block', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{tx.description || '—'}</span></td>
+                                        <td data-label="Status"><span className={`st ${tx.status === 'completed' ? 'st--done' : tx.status === 'failed' ? 'st--cancel' : 'st--pend'}`}>{tx.status}</span></td>
+                                        <td data-label="Time" className="dim">{tx.created_at ? fmtDateEAT(tx.created_at) : '—'}</td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -2996,22 +3068,22 @@ export default function Admin() {
                           {/* ORDERS PANE */}
                           {ledgerTab === 'orders' && (
                             <div className="pane">
-                              <div className="tbl-wrap">
-                                <table className="tdx-tbl">
+                              <div className="tbl-wrap tbl-wrap--stack">
+                                <table className="tdx-tbl tdx-stack">
                                   <thead><tr><th>Order #</th><th>Side</th><th>Crypto</th><th>Fiat Amount</th><th>Rate</th><th>Counterparty</th><th>Status</th><th>Created</th></tr></thead>
                                   <tbody>
                                     {ordSlice.length === 0 ? (
                                       <tr><td colSpan={8} className="empty">No orders</td></tr>
                                     ) : ordSlice.map((o) => (
                                       <tr key={o.id}>
-                                        <td className="num" style={{ fontSize: 11 }}>{o.binance_order_number || o.id}</td>
-                                        <td><span className={`tag ${o.side === 'BUY' ? 'tag--buy' : 'tag--sell'}`}>{o.side}</span></td>
-                                        <td className="num" style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset || 'USDT'}</td>
-                                        <td className="num" style={{ fontWeight: 600, color: 'var(--pos)' }}>{fmtKES(o.fiat_amount)}</td>
-                                        <td className="dim num" style={{ fontSize: 12 }}>{o.price ? `${(o.price).toLocaleString()}/${o.asset || 'USDT'}` : '—'}</td>
-                                        <td style={{ fontSize: 12 }}>{o.counterparty || '—'}</td>
-                                        <td><span className={`st ${o.status === 'completed' ? 'st--done' : o.status === 'disputed' ? 'st--cancel' : o.status === 'cancelled' ? 'st--cancel' : 'st--pend'}`}>{o.status}</span></td>
-                                        <td className="dim">{o.created_at ? fmtDateEAT(o.created_at) : '—'}</td>
+                                        <td data-label="Order #" className="num" style={{ fontSize: 11 }}>{o.binance_order_number || o.id}</td>
+                                        <td data-label="Side"><span className={`tag ${o.side === 'BUY' ? 'tag--buy' : 'tag--sell'}`}>{o.side}</span></td>
+                                        <td data-label="Crypto" className="num" style={{ fontWeight: 600 }}>{o.crypto_amount} {o.asset || 'USDT'}</td>
+                                        <td data-label="Fiat Amount" className="num" style={{ fontWeight: 600, color: 'var(--pos)' }}>{fmtKES(o.fiat_amount)}</td>
+                                        <td data-label="Rate" className="dim num" style={{ fontSize: 12 }}>{o.price ? `${(o.price).toLocaleString()}/${o.asset || 'USDT'}` : '—'}</td>
+                                        <td data-label="Counterparty" style={{ fontSize: 12 }}>{o.counterparty || '—'}</td>
+                                        <td data-label="Status"><span className={`st ${o.status === 'completed' ? 'st--done' : o.status === 'disputed' ? 'st--cancel' : o.status === 'cancelled' ? 'st--cancel' : 'st--pend'}`}>{o.status}</span></td>
+                                        <td data-label="Created" className="dim">{o.created_at ? fmtDateEAT(o.created_at) : '—'}</td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -5787,7 +5859,6 @@ export default function Admin() {
               { key: 'withdrawals', label: 'Withdrawals',       icon: Wallet        },
               { key: 'paybill',     label: 'Paybill Txns',      icon: Banknote      },
               { key: 'kyc',         label: 'KYC Verification',  icon: UserCheck     },
-              { key: 'revenue',     label: 'Revenue',           icon: TrendingUp    },
               { key: 'expenses',    label: 'Revenue',           icon: Receipt       },
               { key: 'affiliates',  label: 'Affiliates',        icon: Share2        },
               { key: 'security',    label: 'Security',          icon: Shield        },

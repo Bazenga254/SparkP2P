@@ -236,6 +236,32 @@ def outbound_cb_fee(channel: str, amount: float) -> int:
     return pesalink_cb_fee(amount)
 
 
+# ── Buy-order payout charge (shared by admin revenue view + merchant profit card) ──────
+# M-Pesa caps a single transaction at KES 250,000 — above that a payout must use Pesalink.
+MPESA_TX_CAP = 250000
+
+def infer_payout_channel(amount: float, method: str = "auto") -> str:
+    """Infer the payout rail for a buy-order payout when the actual rail wasn't recorded.
+      method='auto'     -> M-Pesa up to the per-transaction cap, Pesalink above
+      method='mpesa'    -> assume every payout via M-Pesa
+      method='pesalink' -> assume every payout via Pesalink
+    """
+    if method == "mpesa":
+        return "MPESA"
+    if method == "pesalink":
+        return "PESALINK"
+    return "MPESA" if float(amount or 0) <= MPESA_TX_CAP else "PESALINK"
+
+def order_outbound_charge(amount: float, method: str = "auto") -> int:
+    """Total outbound fee charged to the merchant for paying the seller on one buy order
+    (Choice Bank's base cost + our markup), with the rail inferred from the amount.
+
+    Single source of truth: the admin "Outbound fees by rail" view and the merchant-side
+    "Choice Bank Fees" line both derive their totals from this, so the two always agree.
+    """
+    return outbound_fee(infer_payout_channel(amount, method), float(amount or 0))
+
+
 # ── Per-product tariff (revenue breakdown + invoice) ──────────────────────────
 
 PRODUCTS = {

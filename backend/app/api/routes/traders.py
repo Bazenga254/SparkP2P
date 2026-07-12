@@ -711,23 +711,16 @@ async def profit_breakdown(
     pnl["gross_profit"] = tp["gross"]
     pnl["fees_kes"] = tp["fees"]
 
-    # Sum transaction fees on today's outbound Choice Bank SETTLEMENT payments only.
-    # order_id IS NOT NULL = linked to a P2P trade; personal paybills / withdrawals
-    # / send-money have order_id = NULL and must not affect the trader's P&L.
-    from app.models.payment import Payment as _Pay, PaymentDirection as _PD, PaymentStatus as _PS
-    from app.services.outbound_fees import categorize as _cat, product_total_fee as _ptf
-    out_payments = (await db.execute(
-        select(_Pay).where(
-            _Pay.trader_id == trader.id,
-            _Pay.direction == _PD.OUTBOUND,
-            _Pay.status == _PS.COMPLETED,
-            _Pay.order_id.isnot(None),
-            _Pay.created_at >= today_start,
-        )
-    )).scalars().all()
+    # Outbound Choice Bank fees the merchant was ACTUALLY charged today: the KES withheld when the
+    # bot paid the seller out of their Choice Bank account. Order.choice_fee is set (with the real
+    # rail) only for buy orders the bot settled through Choice Bank — orders paid any other way
+    # have choice_fee == 0. This is the SAME source the admin "Outbound fees by rail" reads, so the
+    # merchant total always matches the admin. Only the total is shown to the merchant.
+    from app.models.order import OrderSide as _Side
     choice_bank_fees = sum(
-        _ptf(_cat(p.transaction_type, p.destination_type), abs(p.amount))
-        for p in out_payments
+        float(o.choice_fee or 0)
+        for o in today_rows
+        if o.side == _Side.BUY
     )
 
     pnl["choice_bank_fees"] = round(choice_bank_fees, 2)

@@ -2938,26 +2938,24 @@ async def get_trader_revenue_sim(
         since_day = trading_day_start(now); days = 1
     period_end = since_day + timedelta(days=days)
 
+    # Only orders the bot actually paid out THROUGH Choice Bank carry a real fee (Order.choice_fee,
+    # set at payout time in the extension route). Those are the transactions the merchant was
+    # genuinely charged for — orders paid any other way have choice_fee == 0 and are excluded.
     rows = (await db.execute(
         select(Order).where(
             Order.trader_id == trader_id,
             Order.side == OrderSide.BUY,
             Order.status.in_([OrderStatus.COMPLETED, OrderStatus.RELEASED]),
+            Order.choice_fee > 0,
             Order.created_at >= since_day,
             Order.created_at < period_end,
         )
     )).scalars().all()
 
-    def channel_of(amt: float) -> str:
-        # Each mode is a distinct assumption:
-        #   mpesa    -> assume every payout via M-Pesa
-        #   pesalink -> assume every payout via Pesalink
-        #   auto     -> realistic split: M-Pesa up to the per-transaction cap, Pesalink above
-        if method == "mpesa":
-            return "MPESA"
-        if method == "pesalink":
-            return "PESALINK"
-        return "MPESA" if amt <= MPESA_TX_CAP else "PESALINK"
+    def rail_of(o) -> str:
+        # The rail the bot actually used for the seller payout, recorded on the order.
+        sm = (o.seller_payment_method or "").lower()
+        return "MPESA" if ("mpesa" in sm or "safaricom" in sm) else "PESALINK"
 
     def _blank():
         return {"count": 0, "volume": 0.0, "merchant_charged": 0, "choice_keeps": 0, "our_profit": 0}
@@ -2965,16 +2963,19 @@ async def get_trader_revenue_sim(
     channels = {"MPESA": _blank(), "PESALINK": _blank()}
 
     for o in rows:
+        rail = rail_of(o)
+        # The method segment filters to one rail; 'auto' shows both.
+        if method in ("mpesa", "pesalink") and rail != method.upper():
+            continue
         amt = float(o.fiat_amount or 0)
-        ch = channel_of(amt)
-        fee = outbound_fee(ch, amt)
-        markup = outbound_markup(ch, amt)
-        c = channels[ch]
+        fee = float(o.choice_fee or 0)          # ACTUAL KES withheld by Choice Bank on this payout
+        markup = outbound_markup(rail, amt)     # our tariff portion (remitted to us monthly)
+        c = channels[rail]
         c["count"] += 1
         c["volume"] += amt
         c["merchant_charged"] += fee
-        c["choice_keeps"] += (fee - markup)
         c["our_profit"] += markup
+        c["choice_keeps"] += max(fee - markup, 0)
 
     total = _blank()
     for c in channels.values():
@@ -2983,7 +2984,7 @@ async def get_trader_revenue_sim(
     for c in list(channels.values()) + [total]:
         c["volume"] = round(c["volume"], 2)
 
-    return {"period": period, "method": method, "inferred": True, "channels": channels, "total": total}
+    return {"period": period, "method": method, "inferred": False, "channels": channels, "total": total}
 
 
 @router.get("/traders/{trader_id}/activity")
