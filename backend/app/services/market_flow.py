@@ -120,8 +120,9 @@ async def _flow_once():
             if not adv:
                 continue
             av = float(r.get("available") or 0)
+            price = float(r.get("price") or 0)
             nick = r.get("nick") or ""
-            cur[adv] = (nick, board_side, av)
+            cur[adv] = (nick, board_side, av, price)
             if nick:
                 # "Avail now" = USDT the merchant actually has FOR SALE (their sell ads = board["buy"]).
                 # Buy-ad amounts are inflated monthly buy-limits, so they're excluded from availability.
@@ -129,7 +130,7 @@ async def _flow_once():
                     nick_avail[nick] = nick_avail.get(nick, 0.0) + av
                 _nick_first.setdefault(nick, now)
 
-    for adv, (nick, board_side, av) in cur.items():
+    for adv, (nick, board_side, av, price) in cur.items():
         if adv in _prev:
             delta = _prev[adv] - av
             if delta > 0:
@@ -140,10 +141,14 @@ async def _flow_once():
                 action = "sold" if board_side == "buy" else "bought"
                 b[action] += filled
                 m = b["m"].setdefault(nick, {"bought": 0.0, "sold": 0.0})
-                m[action] += filled
+                m[action] = m.get(action, 0.0) + filled
+                # KES value of the fill at the merchant's own ad price — lets us derive their
+                # volume-weighted average buy/sell price, and thus their daily maker spread.
+                if price > 0:
+                    m[action + "_kes"] = m.get(action + "_kes", 0.0) + filled * price
 
     _prev.clear()
-    _prev.update({adv: av for adv, (n, s, av) in cur.items()})
+    _prev.update({adv: av for adv, (n, s, av, p) in cur.items()})
     _avail_now.clear()
     _avail_now.update(nick_avail)
     _prune(now)
@@ -168,9 +173,11 @@ def get_summary() -> dict:
         bought += b.get("bought", 0.0)
         sold += b.get("sold", 0.0)
         for nick, v in b.get("m", {}).items():
-            mm = merch.setdefault(nick, {"bought": 0.0, "sold": 0.0})
+            mm = merch.setdefault(nick, {"bought": 0.0, "sold": 0.0, "bought_kes": 0.0, "sold_kes": 0.0})
             mm["bought"] += v.get("bought", 0.0)
             mm["sold"] += v.get("sold", 0.0)
+            mm["bought_kes"] += v.get("bought_kes", 0.0)
+            mm["sold_kes"] += v.get("sold_kes", 0.0)
 
     rows = []
     for nick, v in merch.items():
@@ -178,9 +185,14 @@ def get_summary() -> dict:
         availn = _avail_now.get(nick, 0.0)
         base = base_avail.get(nick)
         dpct = round((availn - base) / base * 100, 1) if base else None
+        # The merchant's own maker spread today = volume-weighted avg sell price - avg buy price
+        # (KES/USDT). Needs fills on BOTH sides today; otherwise there's no round trip to price.
+        avg_buy = (v["bought_kes"] / v["bought"]) if v["bought"] > 0 and v["bought_kes"] > 0 else None
+        avg_sell = (v["sold_kes"] / v["sold"]) if v["sold"] > 0 and v["sold_kes"] > 0 else None
+        spread = round(avg_sell - avg_buy, 2) if (avg_buy and avg_sell) else None
         rows.append({
             "nick": nick, "traded": round(traded), "bought": round(v["bought"]), "sold": round(v["sold"]),
-            "avail": round(availn), "delta_pct": dpct,
+            "avail": round(availn), "delta_pct": dpct, "spread": spread,
         })
     rows.sort(key=lambda r: r["traded"], reverse=True)
 

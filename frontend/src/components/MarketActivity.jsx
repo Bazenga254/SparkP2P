@@ -91,7 +91,7 @@ export default function MarketActivity({ enabled }) {
 
             <div className="section-h">Merchant flow — top movers (today, estimated)</div>
             <div className="tbl-wrap"><table>
-              <thead><tr><th className="l">Merchant</th><th>Est. Traded</th><th>Bought</th><th>Sold</th><th>Avail Now</th><th>Δ today</th></tr></thead>
+              <thead><tr><th className="l">Merchant</th><th>Est. Traded</th><th>Bought</th><th>Sold</th><th>Avail Now</th><th>Avg Spread</th></tr></thead>
               <tbody>
                 {(shownMerchants.length === 0)
                   ? <tr><td className="l" colSpan="6" style={{ textAlign: 'center', color: 'var(--text-3)' }}>No fills observed yet — give it a few minutes of tracking.</td></tr>
@@ -102,12 +102,12 @@ export default function MarketActivity({ enabled }) {
                       <td data-label="Bought" className="v-bought">{m.bought ? fmtU(m.bought) : <span className="muted">—</span>}</td>
                       <td data-label="Sold" className="v-sold">{m.sold ? fmtU(m.sold) : <span className="muted">—</span>}</td>
                       <td data-label="Avail Now">{m.avail ? fmtU(m.avail) : <span className="muted">0</span>}</td>
-                      <td data-label="Δ today" style={{ color: m.delta_pct == null ? 'var(--text-3)' : m.delta_pct < 0 ? '#ef6a7e' : 'var(--green-2)', fontWeight: 600 }}>{m.delta_pct == null ? '—' : `${m.delta_pct > 0 ? '+' : ''}${m.delta_pct}%`}</td>
+                      <td data-label="Avg Spread" title="Volume-weighted avg sell price − avg buy price today (needs fills on both sides)" style={{ color: m.spread == null ? 'var(--text-3)' : m.spread < 0 ? '#ef6a7e' : 'var(--green-2)', fontWeight: 600 }}>{m.spread == null ? '—' : `KES ${m.spread.toFixed(2)}`}</td>
                     </tr>
                   ))}
               </tbody>
             </table></div>
-            <div className="footnote">“Est. traded” = USDT inferred filled from drops in this merchant's advertised quantity. “Δ today” = change in their advertised inventory (a top-up shows positive).</div>
+            <div className="footnote">“Est. traded” = USDT inferred filled from drops in this merchant's advertised quantity. “Avail Now” = USDT they currently have listed for sale (updates in real time as they sell or restock). “Avg Spread” = their volume-weighted average sell price minus average buy price today (KES/USDT) — an estimate of their daily margin; shown only when they've filled on both sides.</div>
           </>
         )}
       </div>
