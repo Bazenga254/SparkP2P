@@ -744,7 +744,11 @@ async def cf_sync_status(
     expected = int((trader.cf_all_trades_min_all or 0) if trader.cf_filters_enabled else 0)
     try:
         from app.core.security import decrypt_data
-        from app.services.binance.sapi_client import get_merchant_ads
+        from app.services.binance.sapi_client import get_merchant_ads, relay_trader
+        # Route the EP-4 read through THIS trader's desktop relay (per-trader egress). Without this
+        # the call hits the geo-blocked VPS IP directly, Binance returns no ads, and the UI then
+        # wrongly reports "out of sync (Binance shows ?)". Mirrors the save/verify endpoints.
+        relay_trader.set(trader.id)
         api_key = decrypt_data(trader.binance_api_key)
         api_secret = decrypt_data(trader.binance_api_secret)
         ads = await get_merchant_ads(api_key, api_secret)
@@ -752,7 +756,9 @@ async def cf_sync_status(
         # Relay/bot offline or Binance unreachable — can't confirm
         return {"available": False, "reason": "unreachable", "expected": expected, "detail": str(e)}
     sell_vals = [int(a.get("userAllTradeCountMin") or 0) for a in ads if (a.get("tradeType") or "").upper() == "SELL"]
-    synced = len(sell_vals) > 0 and all(v == expected for v in sell_vals)
+    # With no live sell ads there is nothing to be out of sync with (filters apply when an ad is
+    # posted), so treat an empty result as in-sync rather than flagging a false mismatch.
+    synced = all(v == expected for v in sell_vals)
     return {
         "available": True,
         "synced": synced,
