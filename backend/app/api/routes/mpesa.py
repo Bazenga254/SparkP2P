@@ -191,6 +191,15 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
             await _credit_wallet_deposit(trader_id, amount, txn_id, phone, sender_name, db)
         except (ValueError, IndexError):
             logger.error(f"Invalid deposit reference: {bill_ref}")
+    elif bill_ref.upper().startswith("CR"):
+        # B2C payout-credit top-up (reference CR<trader id>). Grant credits idempotently — this
+        # C2B confirmation and the STK callback both fire; the receipt-keyed lock dedupes them.
+        try:
+            cr_tid = int(re.sub(r'^[Cc][Rr]', '', bill_ref))
+            from app.services.billing import grant_b2c_credits
+            await grant_b2c_credits(db, cr_tid, amount, receipt=txn_id)
+        except Exception as e:
+            logger.error(f"Credit top-up failed for {bill_ref} (amount {amount}): {e}")
     elif _sub_trader_id is not None:
         # SparkP2P subscription payment — account number SPK<trader id>. Covers manual Paybill,
         # STK, and Choice Bank B2B (all land here). Auto-activates/extends + SMS.

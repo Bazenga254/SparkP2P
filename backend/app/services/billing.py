@@ -202,3 +202,43 @@ def _paybill():
 # Backwards-compatible alias (manual Paybill C2B path).
 async def activate_subscription_payment(db, trader_id: int, amount: float, txn_id: str = "", source: str = "mpesa"):
     return await credit_subscription_payment(db, trader_id, amount, txn_id, source, target_plan=None)
+
+
+async def grant_b2c_credits(db, trader_id: int, amount: float, receipt: str = "", checkout_id: str = ""):
+    """Idempotently grant B2C payout credits for a completed top-up: round(amount / 8) credits
+    (1 credit = 1 M-Pesa payout = KES 8). Safe against the STK-callback + C2B-confirmation
+    double-fire — keyed on the M-Pesa receipt via an advisory lock, exactly like subscriptions."""
+    from app.models.subscription import CreditPurchase
+    if receipt:
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:r))"), {"r": "cr:" + str(receipt)})
+        done = (await db.execute(
+            select(CreditPurchase).where(CreditPurchase.mpesa_receipt == receipt,
+                                         CreditPurchase.status == "completed").limit(1)
+        )).scalars().first()
+        if done:
+            logger.info(f"[Credits] top-up {receipt} already granted for trader {trader_id} — skipped")
+            return None
+
+    cp = None
+    if checkout_id:
+        cp = (await db.execute(
+            select(CreditPurchase).where(CreditPurchase.mpesa_checkout_id == checkout_id)
+        )).scalars().first()
+    if cp is None:
+        cp = (await db.execute(
+            select(CreditPurchase).where(CreditPurchase.trader_id == trader_id,
+                                         CreditPurchase.status == "pending")
+            .order_by(CreditPurchase.created_at.desc())
+        )).scalars().first()
+
+    credits = int(round(float(amount or 0) / 8))
+    trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
+    if trader:
+        trader.b2c_credits = int(trader.b2c_credits or 0) + credits
+    if cp and cp.status != "completed":
+        cp.status = "completed"
+        cp.mpesa_receipt = receipt or cp.mpesa_receipt
+        cp.credits = credits
+    await db.commit()
+    logger.warning(f"[Credits] trader {trader_id} +{credits} credits (KES {amount}, receipt {receipt or '—'})")
+    return credits

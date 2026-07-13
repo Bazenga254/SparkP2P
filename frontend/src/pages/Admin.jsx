@@ -2335,6 +2335,21 @@ export default function Admin() {
                             <option value="on">On</option>
                           </select>
                         </div>
+                        <div className="field">
+                          <label title="Let this client run M-Pesa payouts from their OWN paybill. Moves them to the hidden B2C plan (KES 15,000/mo) + credits; they can't downgrade.">B2C Paybill</label>
+                          <select
+                            value={t.b2c_own_paybill_enabled ? 'on' : 'off'}
+                            onChange={async (e) => {
+                              const on = e.target.value === 'on';
+                              if (on && !window.confirm(`Enable B2C-via-own-paybill for ${t.full_name}?\n\nThey'll be moved to the B2C plan (KES 15,000/mo), get 2,000 credits on each renewal, and CANNOT downgrade without support.`)) return;
+                              setViewingTrader(prev => ({ ...prev, b2c_own_paybill_enabled: on }));
+                              try { await api.put(`/admin/traders/${t.id}/b2c-paybill?enabled=${on}`); } catch (_) {}
+                              await refreshTraderDetail(t.id);
+                            }}>
+                            <option value="off">Off</option>
+                            <option value="on">On</option>
+                          </select>
+                        </div>
                       </div>
                     </div>
 

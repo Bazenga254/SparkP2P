@@ -25,6 +25,7 @@ PLAN_TIERS = {
     SubscriptionPlan.STARTER: "standard",
     SubscriptionPlan.PRO: "pro",
     SubscriptionPlan.PRO_MAX: "pro_max",
+    SubscriptionPlan.ADVANCED: "advanced",   # hidden B2C plan
 }
 
 
@@ -33,6 +34,11 @@ PLAN_TIERS = {
 class InitiateSubscriptionRequest(BaseModel):
     plan: str  # "starter" or "pro"
     phone: str
+
+
+class BuyCreditsRequest(BaseModel):
+    phone: str
+    amount: float
 
 
 class SubscriptionStatusResponse(BaseModel):
@@ -81,6 +87,13 @@ async def initiate_subscription(
         raise HTTPException(status_code=400, detail="Invalid plan. Use 'starter', 'pro', or 'pro_max'.")
     if plan not in PLAN_PRICES:
         raise HTTPException(status_code=400, detail="That plan is not available. Use 'starter', 'pro', or 'pro_max'.")
+
+    # B2C own-paybill clients are locked to the hidden B2C plan (no downgrade); everyone else
+    # is blocked from selecting it.
+    if getattr(trader, "b2c_own_paybill_enabled", False):
+        plan = SubscriptionPlan.ADVANCED
+    elif plan == SubscriptionPlan.ADVANCED:
+        raise HTTPException(status_code=403, detail="That plan isn't available on your account.")
 
     # Charge only the difference after the prepaid subscription balance.
     from app.services.billing import account_number as _acct, credit_subscription_payment
@@ -132,6 +145,40 @@ async def initiate_subscription(
         raise HTTPException(status_code=500, detail=f"Failed to send STK Push: {str(e)}")
 
 
+@router.post("/buy-credits")
+async def buy_credits(
+    data: BuyCreditsRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Buy B2C payout credits via STK Push (min KES 5,000; 1 credit = KES 8). Restricted to clients
+    with B2C-via-own-paybill enabled. Reference CR<id> so the callbacks grant credits, not a plan."""
+    if not getattr(trader, "b2c_own_paybill_enabled", False):
+        raise HTTPException(status_code=403, detail="B2C credits are not enabled for your account.")
+    amount = int(float(data.amount or 0))
+    if amount < 5000:
+        raise HTTPException(status_code=400, detail="Minimum credit purchase is KES 5,000.")
+    credits = round(amount / 8)
+    from app.models.subscription import CreditPurchase
+    try:
+        result = await mpesa_client.stk_push(
+            phone=data.phone, amount=amount,
+            account_reference=f"CR{trader.id}", description="B2C Credits",
+        )
+        checkout_id = result.get("CheckoutRequestID")
+    except Exception as e:
+        logger.error(f"Buy-credits STK failed for trader {trader.id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send STK Push: {e}")
+    cp = CreditPurchase(trader_id=trader.id, amount=amount, credits=credits,
+                        mpesa_checkout_id=checkout_id, status="pending")
+    db.add(cp)
+    await db.commit()
+    return {
+        "status": "pending", "checkout_request_id": checkout_id, "credits": credits,
+        "message": f"STK Push of KES {amount:,} sent to {data.phone}. You'll receive {credits:,} credits once paid.",
+    }
+
+
 @router.post("/callback")
 async def subscription_callback(request: Request, db: AsyncSession = Depends(get_db)):
     """M-Pesa STK Push callback for subscription payments."""
@@ -154,7 +201,32 @@ async def subscription_callback(request: Request, db: AsyncSession = Depends(get
     subscription = result.scalar_one_or_none()
 
     if not subscription:
-        logger.warning(f"No subscription found for checkout {checkout_id}")
+        # Maybe a Buy-Credits top-up (B2C own-paybill clients) — granted separately, idempotently.
+        from app.models.subscription import CreditPurchase
+        cp = (await db.execute(
+            select(CreditPurchase).where(CreditPurchase.mpesa_checkout_id == checkout_id)
+        )).scalars().first()
+        if cp:
+            if result_code == 0:
+                meta = body.get("CallbackMetadata", {}).get("Item", [])
+                receipt = ""
+                amt = float(cp.amount or 0)
+                for item in meta:
+                    if item.get("Name") == "MpesaReceiptNumber":
+                        receipt = item.get("Value")
+                    elif item.get("Name") == "Amount":
+                        try:
+                            amt = float(item.get("Value") or amt)
+                        except (TypeError, ValueError):
+                            pass
+                from app.services.billing import grant_b2c_credits
+                await grant_b2c_credits(db, cp.trader_id, amt, receipt=receipt, checkout_id=checkout_id)
+            else:
+                cp.status = "failed"
+                await db.commit()
+                logger.warning(f"Credit purchase {cp.id} failed: code={result_code}")
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+        logger.warning(f"No subscription/credit-purchase found for checkout {checkout_id}")
         return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
     if result_code == 0:
