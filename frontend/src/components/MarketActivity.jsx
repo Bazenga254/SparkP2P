@@ -91,7 +91,7 @@ export default function MarketActivity({ enabled }) {
 
             <div className="section-h">Merchant flow — top movers (today, estimated)</div>
             <div className="tbl-wrap"><table>
-              <thead><tr><th className="l">Merchant</th><th>Est. Traded</th><th>Bought</th><th>Sold</th><th>Avail Now</th><th>Maker Spread</th></tr></thead>
+              <thead><tr><th className="l">Merchant</th><th>Est. Traded</th><th>Bought</th><th>Sold</th><th>Avail Now</th><th>Net Spread</th></tr></thead>
               <tbody>
                 {(shownMerchants.length === 0)
                   ? <tr><td className="l" colSpan="6" style={{ textAlign: 'center', color: 'var(--text-3)' }}>No fills observed yet — give it a few minutes of tracking.</td></tr>
@@ -102,12 +102,12 @@ export default function MarketActivity({ enabled }) {
                       <td data-label="Bought" className="v-bought">{m.bought ? fmtU(m.bought) : <span className="muted">—</span>}</td>
                       <td data-label="Sold" className="v-sold">{m.sold ? fmtU(m.sold) : <span className="muted">—</span>}</td>
                       <td data-label="Avail Now">{m.avail ? fmtU(m.avail) : <span className="muted">0</span>}</td>
-                      <td data-label="Maker Spread" title="Their live posted sell price − buy price (KES/USDT). Shown only when the merchant quotes both sides." style={{ color: m.spread == null ? 'var(--text-3)' : m.spread < 0 ? '#ef6a7e' : 'var(--green-2)', fontWeight: 600 }}>{m.spread == null ? '—' : `KES ${m.spread.toFixed(2)}`}</td>
+                      <td data-label="Net Spread" title="Posted sell price − buy price, minus Binance fees (Gold 0.25 / Silver 0.35 / Bronze 0.40 KES/USDT) — the merchant's net margin per USDT. Shown only when they quote both sides." style={{ color: m.spread == null ? 'var(--text-3)' : m.spread < 0 ? '#ef6a7e' : 'var(--green-2)', fontWeight: 600 }}>{m.spread == null ? '—' : `KES ${m.spread.toFixed(2)}`}</td>
                     </tr>
                   ))}
               </tbody>
             </table></div>
-            <div className="footnote">“Est. traded” = USDT inferred filled from drops in this merchant's advertised quantity. “Avail Now” = USDT they currently have listed for sale (updates in real time as they sell or restock). “Maker Spread” = their live posted sell price minus buy price (KES/USDT) — their current margin per USDT, shown only when the merchant is quoting both sides of the book.</div>
+            <div className="footnote">“Est. traded” = USDT inferred filled from drops in this merchant's advertised quantity. “Avail Now” = USDT they currently have listed for sale (updates in real time as they sell or restock). “Net Spread” = their live posted sell price minus buy price, minus Binance fees for their tier (Gold 0.25 / Silver 0.35 / Bronze 0.40 KES/USDT) — their net margin per USDT after fees, shown only when the merchant is quoting both sides of the book.</div>
           </>
         )}
       </div>

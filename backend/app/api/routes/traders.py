@@ -453,9 +453,16 @@ async def get_market_activity(
             n, p = r.get("nick"), float(r.get("price") or 0)
             if n and p > 0:
                 buy_px[n] = p if n not in buy_px else max(buy_px[n], p)
+        # Net margin = gross posted spread minus the merchant's cumulative Binance fee (both legs),
+        # which depends on their Binance merchant tier: Gold 0.25, Silver 0.35, Bronze 0.40 KES/USDT.
+        _tier_fee = {"gold": 0.25, "silver": 0.35, "bronze": 0.40}
         for m in summary.get("merchants", []):
             s, b = sell_px.get(m.get("nick")), buy_px.get(m.get("nick"))
-            m["spread"] = round(s - b, 2) if (s and b) else None
+            if s and b:
+                fee = _tier_fee.get((m.get("tier") or "").lower(), 0.25)
+                m["spread"] = round(s - b - fee, 2)
+            else:
+                m["spread"] = None
 
         summary["by_tier"] = {t: bd[t] for t in ("gold", "silver", "bronze") if t in allowed}
         summary["allowed_tiers"] = sorted(allowed)
