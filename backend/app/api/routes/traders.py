@@ -174,6 +174,8 @@ class TraderProfileResponse(BaseModel):
     binance_api_key_saved: bool = False  # True if API key is stored (never expose the key itself)
     binance_api_key_invalid: bool = False  # True if Binance rejects the stored key
     price_tracker_enabled: bool = False  # admin-gated live competitor price tracker
+    b2c_own_paybill_enabled: bool = False  # admin-gated B2C-via-own-paybill (hidden B2C plan + credits)
+    b2c_credits: int = 0                   # remaining B2C payout credits (1 credit = 1 payout = KES 8)
     binance_nickname: Optional[str] = None  # auto-detected Binance P2P nickname (for "your rank")
     binance_p2p_tier: Optional[str] = None  # real detected tier (gold/silver/bronze/normal) — drives badge
     pm_enabled: bool = False
@@ -1198,6 +1200,8 @@ async def get_profile(
         binance_merchant_tier=trader.binance_merchant_tier or 'bronze',
         binance_api_key_saved=bool(trader.binance_api_key),
         price_tracker_enabled=bool(getattr(trader, "price_tracker_enabled", False)),
+        b2c_own_paybill_enabled=bool(getattr(trader, "b2c_own_paybill_enabled", False)),
+        b2c_credits=int(getattr(trader, "b2c_credits", 0) or 0),
         binance_nickname=getattr(trader, "binance_nickname", None),
         binance_p2p_tier=getattr(trader, "binance_p2p_tier", None),
         pm_enabled=bool(getattr(trader, "pm_enabled", False)),

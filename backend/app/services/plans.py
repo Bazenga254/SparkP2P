@@ -18,9 +18,15 @@ PLAN_CONFIG = {
     SubscriptionPlan.STARTER: {"label": "Bronze", "price": 10000, "daily_trades": 30,        "daily_tg": 100},
     SubscriptionPlan.PRO:     {"label": "Silver", "price": 11000, "daily_trades": 80,        "daily_tg": 200},
     SubscriptionPlan.PRO_MAX: {"label": "Gold",   "price": 13000, "daily_trades": UNLIMITED, "daily_tg": UNLIMITED},
+    # B2C-via-own-paybill plan — NOT public. Only offered to admin-flagged clients
+    # (trader.b2c_own_paybill_enabled). Kept out of PLAN_ORDER so it never shows on the
+    # public/Landing pricing; surfaced only on the flagged trader's own Subscriptions tab.
+    SubscriptionPlan.ADVANCED: {"label": "B2C",   "price": 15000, "daily_trades": UNLIMITED, "daily_tg": UNLIMITED},
 }
-# Order shown in UIs. ADVANCED is retired (not offered).
+# Order shown in PUBLIC UIs (Landing, plan catalogue). ADVANCED/B2C is intentionally excluded.
 PLAN_ORDER = [SubscriptionPlan.STARTER, SubscriptionPlan.PRO, SubscriptionPlan.PRO_MAX]
+# The hidden, admin-gated B2C plan key (for code that needs to reference it explicitly).
+B2C_PLAN = SubscriptionPlan.ADVANCED
 
 
 def plan_price(plan) -> int:

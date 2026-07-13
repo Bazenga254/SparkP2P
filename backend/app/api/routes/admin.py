@@ -533,6 +533,8 @@ async def get_trader_detail(
         "subscription_balance": float(trader.subscription_balance or 0),
         "binance_api_key_saved": bool(trader.binance_api_key),
         "price_tracker_enabled": bool(getattr(trader, "price_tracker_enabled", False)),
+        "b2c_own_paybill_enabled": bool(getattr(trader, "b2c_own_paybill_enabled", False)),
+        "b2c_credits": int(getattr(trader, "b2c_credits", 0) or 0),
         "telegram_connected": bool(trader.telegram_chat_id),
         "telegram_notify_scope": trader.telegram_notify_scope or 'both',
         "relay_connected": _relaymod.is_connected(trader.id),
@@ -1024,6 +1026,25 @@ async def update_trader_price_tracker(
     await db.commit()
     await write_audit_log(db, admin, "toggle_price_tracker", target_trader_id=trader_id, detail=f"{trader.full_name}: price tracker {'enabled' if enabled else 'disabled'}")
     return {"status": "updated", "trader_id": trader_id, "price_tracker_enabled": bool(enabled)}
+
+
+@router.put("/traders/{trader_id}/b2c-paybill")
+async def update_trader_b2c_paybill(
+    trader_id: int,
+    enabled: bool,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Enable/disable B2C-via-own-paybill for a client. When enabled the trader is moved to the
+    hidden B2C plan (ADVANCED, KES 15,000/mo) and can't downgrade; they pre-pay a KES 8 credit per
+    M-Pesa payout from their own paybill. Disabling only lifts the flag (support handles plan change)."""
+    trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    trader.b2c_own_paybill_enabled = bool(enabled)
+    await db.commit()
+    await write_audit_log(db, admin, "toggle_b2c_paybill", target_trader_id=trader_id, detail=f"{trader.full_name}: B2C own-paybill {'enabled' if enabled else 'disabled'}")
+    return {"status": "updated", "trader_id": trader_id, "b2c_own_paybill_enabled": bool(enabled)}
 
 
 @router.put("/traders/{trader_id}/tier")

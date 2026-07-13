@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import select, text
 
 from app.core.config import settings
-from app.models.subscription import Subscription, SubscriptionStatus
+from app.models.subscription import Subscription, SubscriptionStatus, SubscriptionPlan
 from app.models.trader import Trader
 from app.services.plans import PLAN_CONFIG, plan_label, active_plan
 
@@ -88,6 +88,11 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
             logger.info(f"[Billing] payment {txn_id} already processed for trader {trader_id} — skipped")
             return None
 
+    # Clients on B2C-via-own-paybill are locked to the hidden B2C plan (ADVANCED, KES 15,000): any
+    # subscription payment they make targets that plan, so they can never settle onto a cheaper tier.
+    if getattr(trader, "b2c_own_paybill_enabled", False):
+        target_plan = SubscriptionPlan.ADVANCED
+
     balance = float(trader.subscription_balance or 0) + float(amount or 0)
 
     if target_plan is not None:
@@ -151,6 +156,10 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
         ))
     trader.tier = plan.value
     trader.subscription_balance = max(0.0, balance - price)
+    # B2C plan renewal grants 2,000 free credits (1 credit = 1 M-Pesa payout = KES 8 markup),
+    # every month it's paid/renewed.
+    if plan == SubscriptionPlan.ADVANCED:
+        trader.b2c_credits = int(trader.b2c_credits or 0) + 2000
     # Ledger: record the incoming payment (if any) then the plan charge.
     if float(amount or 0) > 0:
         await record_activity(db, trader_id, _TT.SUBSCRIPTION_DEPOSIT, float(amount),

@@ -86,6 +86,14 @@ class Trader(Base):
     # when the balance covers its price (the price is then deducted). Lets users "pay slowly".
     subscription_balance = Column(Float, default=0.0, server_default="0")
 
+    # B2C-via-own-paybill (admin-enabled, per client): the merchant runs M-Pesa payouts from their
+    # OWN paybill and pre-pays a KES 8 markup per payout as a "credit". While enabled they are on the
+    # B2C plan (ADVANCED, KES 15,000/mo) and cannot downgrade. Each renewal grants 2,000 free
+    # credits; more are bought via STK (KES 8 each). When b2c_credits hits 0, B2C payouts pause
+    # (Pesalink via Choice Bank still works). Daraja B2C credentials are added in Phase 2.
+    b2c_own_paybill_enabled = Column(Boolean, default=False, server_default="false")
+    b2c_credits = Column(Integer, default=0, server_default="0")
+
     # Trading config
     auto_release_enabled = Column(Boolean, default=True)
     auto_pay_enabled = Column(Boolean, default=True)  # Buy side auto-payment
