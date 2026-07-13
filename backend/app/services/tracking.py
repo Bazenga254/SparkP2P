@@ -1071,6 +1071,9 @@ def compute_pnl(orders, fee_per_usdt=0.25):
     so both show identical figures. Gross = USDT sold x (avg sell - avg buy);
     fees = fee_per_usdt x USDT sold (flat both-sides Binance fee, ~0.1%/side x 2 ~= 0.25);
     net = gross - fees."""
+    # Profit is tracked in USDT ONLY — exclude USDC/BTC/etc. so a different coin's price never
+    # mixes into the average rates, volume, or realized profit (keeps every figure consistent).
+    orders = [o for o in orders if (o.crypto_currency or "USDT").upper() == "USDT"]
     buys = [o for o in orders if o.side == OrderSide.BUY]
     sells = [o for o in orders if o.side == OrderSide.SELL]
 
@@ -1142,6 +1145,9 @@ def compute_pnl_daily(orders, fee_per_usdt=0.25):
     # Partition by asset FIRST: each coin (USDT / USDC / BTC …) has its own buy/sell rate, so they
     # must never share an average. Mixing e.g. a 0.02 BTC buy (huge KES, tiny units) into the USDT
     # pool would wildly distort the average buy rate and fabricate large fake losses.
+    # Profit is tracked in USDT ONLY — exclude other assets (USDC/BTC/…) entirely so mixed-asset
+    # prices don't distort the daily gross/net or volume.
+    orders = [o for o in orders if (o.crypto_currency or "USDT").upper() == "USDT"]
     by_asset = defaultdict(list)
     for o in orders:
         by_asset[(o.crypto_currency or "USDT").upper()].append(o)
