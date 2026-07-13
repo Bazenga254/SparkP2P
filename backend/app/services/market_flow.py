@@ -173,11 +173,9 @@ def get_summary() -> dict:
         bought += b.get("bought", 0.0)
         sold += b.get("sold", 0.0)
         for nick, v in b.get("m", {}).items():
-            mm = merch.setdefault(nick, {"bought": 0.0, "sold": 0.0, "bought_kes": 0.0, "sold_kes": 0.0})
+            mm = merch.setdefault(nick, {"bought": 0.0, "sold": 0.0})
             mm["bought"] += v.get("bought", 0.0)
             mm["sold"] += v.get("sold", 0.0)
-            mm["bought_kes"] += v.get("bought_kes", 0.0)
-            mm["sold_kes"] += v.get("sold_kes", 0.0)
 
     rows = []
     for nick, v in merch.items():
@@ -185,14 +183,11 @@ def get_summary() -> dict:
         availn = _avail_now.get(nick, 0.0)
         base = base_avail.get(nick)
         dpct = round((availn - base) / base * 100, 1) if base else None
-        # The merchant's own maker spread today = volume-weighted avg sell price - avg buy price
-        # (KES/USDT). Needs fills on BOTH sides today; otherwise there's no round trip to price.
-        avg_buy = (v["bought_kes"] / v["bought"]) if v["bought"] > 0 and v["bought_kes"] > 0 else None
-        avg_sell = (v["sold_kes"] / v["sold"]) if v["sold"] > 0 and v["sold_kes"] > 0 else None
-        spread = round(avg_sell - avg_buy, 2) if (avg_buy and avg_sell) else None
+        # NOTE: per-merchant "spread" (their posted sell-price − buy-price) is computed from the
+        # live board in the market-activity route, not here (this service has no price context).
         rows.append({
             "nick": nick, "traded": round(traded), "bought": round(v["bought"]), "sold": round(v["sold"]),
-            "avail": round(availn), "delta_pct": dpct, "spread": spread,
+            "avail": round(availn), "delta_pct": dpct,
         })
     rows.sort(key=lambda r: r["traded"], reverse=True)
 

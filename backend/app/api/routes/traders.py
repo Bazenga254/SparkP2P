@@ -441,6 +441,22 @@ async def get_market_activity(
         # Tag each merchant with its tier for the per-tier tabs + badges.
         for m in summary.get("merchants", []):
             m["tier"] = nick_tier.get(m.get("nick"), "normal")
+
+        # Live posted maker spread per merchant = their best sell-ad price minus their best buy-ad
+        # price (KES/USDT). Realistic and real-time; shown only when they quote BOTH sides.
+        sell_px, buy_px = {}, {}
+        for r in (board.get("buy") or []):     # board["buy"] = SELL ads (merchant selling USDT)
+            n, p = r.get("nick"), float(r.get("price") or 0)
+            if n and p > 0:
+                sell_px[n] = p if n not in sell_px else min(sell_px[n], p)
+        for r in (board.get("sell") or []):    # board["sell"] = BUY ads (merchant buying USDT)
+            n, p = r.get("nick"), float(r.get("price") or 0)
+            if n and p > 0:
+                buy_px[n] = p if n not in buy_px else max(buy_px[n], p)
+        for m in summary.get("merchants", []):
+            s, b = sell_px.get(m.get("nick")), buy_px.get(m.get("nick"))
+            m["spread"] = round(s - b, 2) if (s and b) else None
+
         summary["by_tier"] = {t: bd[t] for t in ("gold", "silver", "bronze") if t in allowed}
         summary["allowed_tiers"] = sorted(allowed)
 
