@@ -101,7 +101,7 @@ export const getRateLimit = () => api.get('/traders/rate-limit');
 export const getAdminDashboard = () => api.get('/admin/dashboard');
 export const getAdminTraders = (params = {}) => api.get('/admin/traders', { params });
 export const updateTraderStatus = (id, status) => api.put(`/admin/traders/${id}/status?new_status=${status}`);
-export const updateTraderTier = (id, tier, expiresAt = '') => api.put(`/admin/traders/${id}/tier?tier=${tier}${expiresAt ? `&expires_at=${encodeURIComponent(expiresAt)}` : ''}`);
+export const updateTraderTier = (id, tier, expiresAt = '', credits = 0) => api.put(`/admin/traders/${id}/tier?tier=${tier}${expiresAt ? `&expires_at=${encodeURIComponent(expiresAt)}` : ''}${credits ? `&credits=${credits}` : ''}`);
 export const getDisputedOrders = () => api.get('/admin/orders/disputed');
 export const getUnmatchedPayments = () => api.get('/admin/payments/unmatched');
 export const resolveUnmatchedPayment = (id) => api.delete('/admin/payments/unmatched/' + id);

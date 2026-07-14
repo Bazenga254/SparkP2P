@@ -147,9 +147,11 @@ function AdminSmsModal({ target, onClose }) {
 // duration (1/3/6/12 months) or a custom date+time; expiry is sent to the backend as ISO UTC.
 function TierGrantModal({ grant, onCancel, onApply }) {
   const { planLabel } = usePlans();
-  const tierLabel = planLabel(grant.tier);
+  const isB2C = grant.tier === 'advanced';
+  const tierLabel = isB2C ? 'B2C' : planLabel(grant.tier);
   const [mode, setMode] = useState('quick');
   const [custom, setCustom] = useState('');
+  const [credits, setCredits] = useState('2000');
   const [busy, setBusy] = useState(false);
 
   const fromMonths = (n) => { const d = new Date(); d.setMonth(d.getMonth() + n); return d; };
@@ -157,7 +159,7 @@ function TierGrantModal({ grant, onCancel, onApply }) {
   const apply = async (expiryDate) => {
     if (!expiryDate || isNaN(expiryDate.getTime())) return;
     setBusy(true);
-    try { await onApply(grant.traderId, grant.tier, expiryDate.toISOString()); }
+    try { await onApply(grant.traderId, grant.tier, expiryDate.toISOString(), isB2C ? (parseInt(credits, 10) || 2000) : 0); }
     catch (e) { alert(e?.response?.data?.detail || 'Could not grant subscription.'); setBusy(false); }
   };
   const QUICK = [['1 month', 1], ['3 months', 3], ['6 months', 6], ['1 year', 12]];
@@ -170,6 +172,14 @@ function TierGrantModal({ grant, onCancel, onApply }) {
       <div style={card} onClick={e => e.stopPropagation()}>
         <h3 style={{ margin: 0, color: '#fff', fontSize: 18 }}>Grant {tierLabel}</h3>
         <p style={{ color: '#9aa4b2', fontSize: 12.5, margin: '6px 0 16px' }}>Choose how long this subscription stays active. It expires at the exact date &amp; time you pick.</p>
+        {isB2C && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'block', color: '#9aa4b2', fontSize: 11.5, marginBottom: 6 }}>B2C credits to grant (default 2,000)</label>
+            <input type="number" min="0" value={credits} onChange={e => setCredits(e.target.value)}
+              style={{ width: '100%', padding: '11px 12px', borderRadius: 10, background: '#0a0d14', border: '1px solid #2a3142', color: '#fff', fontSize: 14 }} />
+            <div style={{ fontSize: 11, color: '#7d8794', marginTop: 5 }}>Added to their balance now — not a payment. Logged as an admin grant.</div>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
           <button style={tabBtn(mode === 'quick')} onClick={() => setMode('quick')}>Quick</button>
           <button style={tabBtn(mode === 'custom')} onClick={() => setMode('custom')}>Custom date</button>
@@ -1117,8 +1127,8 @@ export default function Admin() {
   };
 
   // Apply a paid grant with the chosen expiry (ISO). Called from the duration modal.
-  const applyTierGrant = async (traderId, tier, expiresAtISO) => {
-    await updateTraderTier(traderId, tier, expiresAtISO);
+  const applyTierGrant = async (traderId, tier, expiresAtISO, credits = 0) => {
+    await updateTraderTier(traderId, tier, expiresAtISO, credits);
     setTierGrant(null);
     loadData();
     refreshTraderDetail(traderId);
@@ -2477,7 +2487,7 @@ export default function Admin() {
                               <span className="fl-k">Alerts today</span><span className="fl-v">{t.daily_tg_used ?? 0} / {t.daily_tg_unlimited ? 'unlimited' : (t.daily_tg_limit ?? 0)}</span>
                             </div>
                             <button className="act-btn" style={{ justifyContent: 'center' }}
-                              onClick={() => setTierGrant({ traderId: t.id, tier: (t.tier && t.tier !== 'standard') ? t.tier : 'starter' })}>
+                              onClick={() => setTierGrant({ traderId: t.id, tier: t.b2c_own_paybill_enabled ? 'advanced' : ((t.tier && t.tier !== 'standard') ? t.tier : 'starter') })}>
                               <Calendar size={15} /> {t.subscription_expires_at ? 'Change or extend plan' : 'Grant subscription'}
                             </button>
                             <button className="act-btn" style={{ justifyContent: 'center', marginTop: 8 }}

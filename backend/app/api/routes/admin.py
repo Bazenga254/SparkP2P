@@ -1052,17 +1052,20 @@ async def update_trader_tier(
     trader_id: int,
     tier: str,
     expires_at: str = "",   # optional ISO 8601 expiry (e.g. 2026-12-31T20:00:00Z). Default: +30 days.
+    credits: int = 0,       # B2C ('advanced') grants only: credits to add (0 -> default 2,000).
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
     """Update trader's subscription tier. Creates/updates subscription accordingly.
-    Admins may grant any duration by passing expires_at (date + time the plan should lapse)."""
+    Admins may grant any duration by passing expires_at (date + time the plan should lapse).
+    Granting 'advanced' (B2C) also enables B2C-via-own-paybill and adds credits (default 2,000)."""
     from app.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
     from app.services.plans import plan_price
     from datetime import timedelta
 
-    if tier not in ("standard", "starter", "pro", "pro_max"):
+    if tier not in ("standard", "starter", "pro", "pro_max", "advanced"):
         raise HTTPException(status_code=400, detail="Invalid tier")
+    _granted_credits = 0
 
     # Resolve the requested expiry (admin can grant 1mo / 3mo / 1yr / any date+time).
     _custom_exp = None
@@ -1084,7 +1087,7 @@ async def update_trader_tier(
 
     trader.tier = tier
 
-    if tier in ("starter", "pro", "pro_max"):
+    if tier in ("starter", "pro", "pro_max", "advanced"):
         # Check for existing active subscription
         sub_result = await db.execute(
             select(Subscription).where(
@@ -1120,6 +1123,13 @@ async def update_trader_tier(
             )
             db.add(sub)
 
+        # B2C plan: enable own-paybill and grant credits with this admin grant (default 2,000, or
+        # a custom amount). No payment — logged as an admin grant, not counted as revenue.
+        if tier == "advanced":
+            trader.b2c_own_paybill_enabled = True
+            _granted_credits = int(credits) if int(credits or 0) > 0 else 2000
+            trader.b2c_credits = int(trader.b2c_credits or 0) + _granted_credits
+
         # Send notification email
         from app.services.email import send_subscription_activated
         send_subscription_activated(
@@ -1139,9 +1149,10 @@ async def update_trader_tier(
             existing_sub.status = SubscriptionStatus.EXPIRED
 
     await db.commit()
-    await write_audit_log(db, admin, "change_subscription", target_trader_id=trader_id, detail=f"{trader.full_name}: subscription set to {tier}")
+    _detail = f"{trader.full_name}: subscription set to {tier}" + (f" + {_granted_credits} B2C credits granted" if _granted_credits else "")
+    await write_audit_log(db, admin, "change_subscription", target_trader_id=trader_id, detail=_detail)
 
-    return {"status": "updated", "trader_id": trader_id, "tier": tier}
+    return {"status": "updated", "trader_id": trader_id, "tier": tier, "credits_granted": _granted_credits}
 
 
 @router.put("/traders/{trader_id}/im-account")
