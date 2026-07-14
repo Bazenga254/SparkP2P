@@ -315,6 +315,7 @@ export default function Admin() {
   const [txPage, setTxPage] = useState(1);
   const [ordersPage, setOrdersPage] = useState(1);
   const [ledgerTab, setLedgerTab] = useState('activity');
+  const [traderAudit, setTraderAudit] = useState([]);   // admin actions on this trader (audit log)
   const PAGE_SIZE = 15;
   const [addTokensAmount, setAddTokensAmount] = useState('');
   const [addTokensNote, setAddTokensNote] = useState('');
@@ -2310,7 +2311,7 @@ export default function Admin() {
                           <label>Tier</label>
                           <select value={t.tier || 'standard'} onChange={async (e) => {
                             const v = e.target.value;
-                            const labelMap = { standard: null, ...Object.fromEntries(plans.map(p => [p.key, p.label])) };
+                            const labelMap = { standard: null, advanced: 'B2C', ...Object.fromEntries(plans.map(p => [p.key, p.label])) };
                             // Optimistic: tier chip + plan label update instantly
                             setViewingTrader(prev => ({ ...prev, tier: v, plan: v === 'standard' ? null : v, plan_label: labelMap[v] }));
                             await handleTierChange(t.id, v);
@@ -2321,6 +2322,7 @@ export default function Admin() {
                             {plans.map(p => (
                               <option key={p.key} value={p.key}>{p.label} — KES {p.price.toLocaleString()}/mo</option>
                             ))}
+                            <option value="advanced">B2C — KES 15,000/mo</option>
                           </select>
                         </div>
                         <div className="field">
@@ -3045,6 +3047,7 @@ export default function Admin() {
                             <button className={`tab ${ledgerTab === 'activity' ? 'tab--on' : ''}`} onClick={() => setLedgerTab('activity')}>Recent Activity <span className="tab-count">{viewingTraderTx.length}</span></button>
                             <button className={`tab ${ledgerTab === 'orders' ? 'tab--on' : ''}`} onClick={() => setLedgerTab('orders')}>Recent Orders <span className="tab-count">{viewingTraderOrders.length}</span></button>
                             <button className={`tab ${ledgerTab === 'logs' ? 'tab--on' : ''}`} onClick={() => setLedgerTab('logs')}>Bot Activity Logs</button>
+                            <button className={`tab ${ledgerTab === 'admin' ? 'tab--on' : ''}`} onClick={async () => { setLedgerTab('admin'); try { const r = await api.get('/admin/audit-logs', { params: { trader_id: viewingTrader.id, limit: 50 } }); setTraderAudit(r.data || []); } catch (_) {} }}>Admin Actions</button>
                             {ledgerTab === 'logs' && (
                               <button className="ghost-btn tabs-action" onClick={async () => {
                                 setBotLogsLoading(true);
@@ -3141,6 +3144,29 @@ export default function Admin() {
                                       <span className="log-badge" style={{ color }}>{badge}</span>
                                       <span className="log-time num">{time}</span>
                                       <span className="log-msg" style={{ color: log.level === 'error' ? '#fca5a5' : log.level === 'success' ? '#6ee7b7' : (log.level === 'warning' || log.level === 'warn') ? '#fcd34d' : 'var(--text-2)' }}>{log.message}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          {ledgerTab === 'admin' && (
+                            <div className="pane">
+                              <div className="logs">
+                                {traderAudit.length === 0 ? (
+                                  <div className="empty">No admin actions recorded on this account yet.</div>
+                                ) : traderAudit.map((a, i) => {
+                                  const t2 = a.created_at ? new Date(a.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', dateStyle: 'short', timeStyle: 'short' }) : '';
+                                  return (
+                                    <div key={a.id || i} className="log-row">
+                                      <span className="log-badge" style={{ color: 'var(--brand)' }}>◆</span>
+                                      <span className="log-time num" style={{ minWidth: 110 }}>{t2}</span>
+                                      <span className="log-msg" style={{ color: 'var(--text-2)' }}>
+                                        <b style={{ color: 'var(--text)' }}>{(a.action || '').replace(/_/g, ' ')}</b>
+                                        {a.detail ? ` — ${a.detail}` : ''}
+                                        <span style={{ color: 'var(--text-3)' }}> · {a.actor_role || 'admin'} #{a.actor_id}</span>
+                                      </span>
                                     </div>
                                   );
                                 })}

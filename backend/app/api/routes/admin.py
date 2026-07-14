@@ -2060,15 +2060,17 @@ async def close_support_ticket(
 async def get_audit_logs(
     limit: int = Query(default=100, le=500),
     offset: int = 0,
+    trader_id: int = 0,   # optional: only actions performed ON this trader's account
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """View audit logs of admin/employee access to sensitive data."""
+    """View audit logs of admin/employee actions. Pass trader_id to scope to one trader."""
     from app.models.audit_log import AuditLog
     from sqlalchemy import desc
-    result = await db.execute(
-        select(AuditLog).order_by(desc(AuditLog.created_at)).limit(limit).offset(offset)
-    )
+    q = select(AuditLog).order_by(desc(AuditLog.created_at))
+    if trader_id:
+        q = q.where(AuditLog.target_trader_id == trader_id)
+    result = await db.execute(q.limit(limit).offset(offset))
     logs = result.scalars().all()
     return [
         {
