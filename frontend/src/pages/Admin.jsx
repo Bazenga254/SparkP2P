@@ -2348,18 +2348,19 @@ export default function Admin() {
                           </select>
                         </div>
                         <div className="field">
-                          <label title="Let this client run M-Pesa payouts from their OWN paybill. Moves them to the hidden B2C plan (KES 15,000/mo) + credits; they can't downgrade.">B2C Paybill</label>
+                          <label title="Where this client's M-Pesa B2C payouts are sent. Own Paybill = from their own paybill (moves them to the B2C plan KES 15,000/mo + credits, no downgrade). Choice Bank = the default payout route.">B2C Route</label>
                           <select
                             value={t.b2c_own_paybill_enabled ? 'on' : 'off'}
                             onChange={async (e) => {
                               const on = e.target.value === 'on';
-                              if (on && !window.confirm(`Enable B2C-via-own-paybill for ${t.full_name}?\n\nThey'll be moved to the B2C plan (KES 15,000/mo), get 2,000 credits on each renewal, and CANNOT downgrade without support.`)) return;
+                              if (on && !window.confirm(`Switch ${t.full_name} to OWN-PAYBILL B2C?\n\nM-Pesa payouts will go from their own paybill. They'll be moved to the B2C plan (KES 15,000/mo), get 2,000 credits on each renewal, and CANNOT downgrade without support.`)) return;
+                              if (!on && !window.confirm(`Switch ${t.full_name} back to CHOICE BANK for B2C payouts?`)) return;
                               setViewingTrader(prev => ({ ...prev, b2c_own_paybill_enabled: on }));
                               try { await api.put(`/admin/traders/${t.id}/b2c-paybill?enabled=${on}`); } catch (_) {}
                               await refreshTraderDetail(t.id);
                             }}>
-                            <option value="off">Off</option>
-                            <option value="on">On</option>
+                            <option value="off">Choice Bank</option>
+                            <option value="on">Own Paybill</option>
                           </select>
                         </div>
                       </div>
