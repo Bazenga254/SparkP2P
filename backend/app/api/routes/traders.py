@@ -328,17 +328,29 @@ def _allowed_merchant_tiers(plan) -> set:
     return set(_PLAN_TIER_ACCESS.get(plan, ("gold", "silver", "bronze")))
 
 
-async def _active_sub_plan(db, trader) -> str | None:
-    """The trader's active subscription plan key ('starter'|'pro'|'pro_max') or None."""
+async def _active_sub_plan(trader, db=None) -> str | None:
+    """The trader's active subscription plan key ('starter'|'pro'|'pro_max'|'advanced') or None.
+
+    Opens its OWN short-lived session when db is None. The price-tracker / market-activity endpoints
+    call this and must NOT hold a request-scoped DB connection across their slow get_board() relay
+    call — doing so exhausts the connection pool under polling load (QueuePool timeout -> 500s)."""
     from app.models.subscription import Subscription, SubscriptionStatus
-    r = await db.execute(
-        select(Subscription).where(
-            Subscription.trader_id == trader.id,
-            Subscription.status == SubscriptionStatus.ACTIVE,
-        ).order_by(Subscription.expires_at.desc())
-    )
-    s = r.scalar_one_or_none()
-    return s.plan.value if (s and s.is_active) else None
+
+    async def _run(_db):
+        r = await _db.execute(
+            select(Subscription).where(
+                Subscription.trader_id == trader.id,
+                Subscription.status == SubscriptionStatus.ACTIVE,
+            ).order_by(Subscription.expires_at.desc())
+        )
+        s = r.scalar_one_or_none()
+        return s.plan.value if (s and s.is_active) else None
+
+    if db is not None:
+        return await _run(db)
+    from app.core.database import async_session
+    async with async_session() as _db:
+        return await _run(_db)
 
 
 def _nick_tier_from_board(board: dict) -> dict:
@@ -357,7 +369,6 @@ async def get_price_tracker(
     asset: str = "USDT",
     fiat: str = "KES",
     trader: Trader = Depends(get_current_trader),
-    db: AsyncSession = Depends(get_db),
 ):
     """Live Binance P2P competitor order book (both sides, ranked). Admin-gated per trader."""
     if not getattr(trader, "price_tracker_enabled", False):
@@ -370,7 +381,7 @@ async def get_price_tracker(
         # Per-merchant-tier summary (online count + today's est. volume), gated to the plan.
         try:
             from app.services.market_flow import get_tier_breakdown
-            allowed = _allowed_merchant_tiers(await _active_sub_plan(db, trader))
+            allowed = _allowed_merchant_tiers(await _active_sub_plan(trader))
             bd = get_tier_breakdown(_nick_tier_from_board(board))
             board["tier_stats"] = {
                 t: {"online": bd[t]["online"], "vol": bd[t]["traded"], "avail": bd[t]["avail"]}
@@ -402,7 +413,6 @@ async def get_price_tracker_history(
 @router.get("/market-activity")
 async def get_market_activity(
     trader: Trader = Depends(get_current_trader),
-    db: AsyncSession = Depends(get_db),
 ):
     """24h market-activity estimate: traded volume (order-book depletion), average maker spread,
     liquidity now, and per-merchant flow. Volume is an ESTIMATE (balances/trades aren't public).
@@ -435,7 +445,7 @@ async def get_market_activity(
         from app.services.price_tracker import get_board
         board = await get_board(asset="USDT", fiat="KES")
         nick_tier = _nick_tier_from_board(board)
-        plan = await _active_sub_plan(db, trader)
+        plan = await _active_sub_plan(trader)
         allowed = _allowed_merchant_tiers(plan)
         full_access = plan in (None, "pro_max")   # Gold plan (or admin/no-plan) sees the whole market
         bd = get_tier_breakdown(nick_tier)
