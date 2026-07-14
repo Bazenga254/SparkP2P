@@ -99,7 +99,33 @@ class MpesaClient:
         logger.info(f"C2B Simulation: {result}")
         return result
 
-    # ── B2C removed: M-Pesa payouts now go through Choice Bank (cb-withdraw-to-mpesa) ──
+    # ── B2C (Paybill → customer phone) ────────────────────────────
+
+    async def send_b2c(
+        self,
+        phone: str,
+        amount: float,
+        remarks: str = "SparkP2P payout",
+        occasion: str = "",
+        command_id: str = "BusinessPayment",   # BusinessPayment | SalaryPayment | PromotionPayment
+    ) -> dict:
+        """Send money from the Paybill to a customer's phone (B2C). Used by B2C-own-paybill clients
+        to pay P2P sellers from their own paybill. Result arrives async via /payment/b2c/result."""
+        payload = {
+            "InitiatorName": self.initiator_name,
+            "SecurityCredential": self.security_credential,
+            "CommandID": command_id,
+            "Amount": str(int(amount)),
+            "PartyA": self.shortcode,
+            "PartyB": self._format_phone(phone),
+            "Remarks": (remarks or "Payout")[:100],
+            "QueueTimeOutURL": f"{self.callback_base}/api/payment/b2c/timeout",
+            "ResultURL": f"{self.callback_base}/api/payment/b2c/result",
+            "Occasion": (occasion or "")[:100],
+        }
+        result = await self._make_request("/mpesa/b2c/v1/paymentrequest", payload)
+        logger.info(f"B2C sent: {amount} to {phone} - {result}")
+        return result
 
     # ── B2B (Paybill → Paybill/Till) ──────────────────────────────
 

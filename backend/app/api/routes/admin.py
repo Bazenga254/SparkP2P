@@ -1155,6 +1155,25 @@ async def update_trader_tier(
     return {"status": "updated", "trader_id": trader_id, "tier": tier, "credits_granted": _granted_credits}
 
 
+@router.post("/test-b2c")
+async def test_b2c(
+    phone: str,
+    amount: float = 10,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: fire a REAL B2C payout from the SparkP2P paybill (4041355) to validate the B2C
+    engine end-to-end. Sends real money — use a small amount to your own number. Result arrives
+    async in the logs via /payment/b2c/result."""
+    from app.services.mpesa.client import mpesa_client
+    try:
+        result = await mpesa_client.send_b2c(phone=phone, amount=amount, remarks="SparkP2P B2C test")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"B2C send failed: {e}")
+    await write_audit_log(db, admin, "test_b2c", detail=f"B2C test: KES {amount} to {phone} — {result.get('ResponseDescription', result)}")
+    return {"status": "sent", "response": result}
+
+
 @router.put("/traders/{trader_id}/im-account")
 async def update_trader_im_account(
     trader_id: int,

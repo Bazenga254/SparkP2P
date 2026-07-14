@@ -724,6 +724,83 @@ async def b2b_timeout(request: Request, db: AsyncSession = Depends(get_db)):
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
+# ── B2C Callbacks (own-paybill seller payouts) ─────────────────────
+
+@router.post("/b2c/result")
+async def b2c_result(request: Request, db: AsyncSession = Depends(get_db)):
+    """B2C result callback — confirm an own-paybill seller payout, or refund the 1 credit on failure."""
+    from app.models.trader import Trader as _Tr
+    data = await request.json()
+    logger.warning(f"B2C Result: {data}")
+    try:
+        result = data.get("Result", data)
+        result_code = int(result.get("ResultCode", -1))
+        conversation_id = result.get("ConversationID", "")
+        originator_id = result.get("OriginatorConversationID", "")
+        result_desc = result.get("ResultDesc", "unknown")
+        payment = None
+        for cid in [conversation_id, originator_id]:
+            if not cid:
+                continue
+            r = await db.execute(select(Payment).where(Payment.mpesa_transaction_id == cid))
+            payment = r.scalar_one_or_none()
+            if payment:
+                break
+        if not payment:
+            logger.warning(f"B2C result: no payment for conv={conversation_id}/{originator_id} (code {result_code}: {result_desc})")
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+        if result_code == 0:
+            if payment.status != PaymentStatus.COMPLETED:
+                payment.status = PaymentStatus.COMPLETED
+                for it in result.get("ResultParameters", {}).get("ResultParameter", []):
+                    if it.get("Key") == "TransactionReceipt":
+                        payment.mpesa_receipt_number = it.get("Value")
+                await db.commit()
+                logger.info(f"B2C payment {payment.id} confirmed: KES {payment.amount} to {payment.destination}")
+        elif payment.status != PaymentStatus.FAILED:
+            payment.status = PaymentStatus.FAILED
+            # Refund the 1 credit charged at send time (own-paybill payouts only).
+            if (payment.transaction_type or "") == "B2C_OWN_PAYBILL" and payment.trader_id:
+                tr = await db.get(_Tr, payment.trader_id)
+                if tr:
+                    tr.b2c_credits = int(tr.b2c_credits or 0) + 1
+            await db.commit()
+            logger.warning(f"B2C payment {payment.id} FAILED (code {result_code}): {result_desc} — refunded 1 credit")
+    except Exception as e:
+        logger.error(f"B2C result handler error: {e}")
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
+@router.post("/b2c/timeout")
+async def b2c_timeout(request: Request, db: AsyncSession = Depends(get_db)):
+    """B2C timeout — treat as failed and refund the 1 credit."""
+    from app.models.trader import Trader as _Tr
+    data = await request.json()
+    logger.warning(f"B2C Timeout: {data}")
+    try:
+        originator_id = data.get("OriginatorConversationID", "")
+        conversation_id = data.get("ConversationID", "")
+        payment = None
+        for cid in [conversation_id, originator_id]:
+            if not cid:
+                continue
+            r = await db.execute(select(Payment).where(Payment.mpesa_transaction_id == cid))
+            payment = r.scalar_one_or_none()
+            if payment:
+                break
+        if payment and payment.status != PaymentStatus.FAILED:
+            payment.status = PaymentStatus.FAILED
+            if (payment.transaction_type or "") == "B2C_OWN_PAYBILL" and payment.trader_id:
+                tr = await db.get(_Tr, payment.trader_id)
+                if tr:
+                    tr.b2c_credits = int(tr.b2c_credits or 0) + 1
+            await db.commit()
+            logger.warning(f"B2C timeout: payment {payment.id} failed — refunded 1 credit")
+    except Exception as e:
+        logger.error(f"B2C timeout handler error: {e}")
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
+
 # ── Transaction Status Callbacks (used for payment resolution) ─────
 
 @router.post("/status/result")
