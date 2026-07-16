@@ -255,6 +255,76 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
     api.get('/telegram/status').then(r => setTgConnected(r.data.connected === true)).catch(() => {});
   }, []);
 
+  // ── I&M Bot link ──────────────────────────────────────────────────────────
+  // The bot runs on the MERCHANT's own machine and polls us; "online" is simply
+  // whether it has polled recently (its API key's last_used_at is the heartbeat).
+  const [imBot, setImBot] = useState(null);          // { has_key, online, last_seen_at, ... }
+  const [imBotOpen, setImBotOpen] = useState(false);
+  const [imBotKeys, setImBotKeys] = useState([]);
+  const [imBotNewKey, setImBotNewKey] = useState(''); // plaintext — shown ONCE, never refetchable
+  const [imBotBusy, setImBotBusy] = useState(false);
+  const [imBotCopied, setImBotCopied] = useState('');
+
+  const loadImBot = () =>
+    api.get('/im-bot/link-status').then(r => setImBot(r.data)).catch(() => {});
+
+  useEffect(() => {
+    loadImBot();
+    // Offline is the state that costs money: the merchant chose "hold + alert",
+    // so a buy order waits while the bot is down. Keep this honest, not stale.
+    const t = setInterval(loadImBot, 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  const openImBot = async () => {
+    setImBotOpen(true);
+    setImBotNewKey('');
+    try {
+      const r = await api.get('/im-bot/keys');
+      setImBotKeys(r.data.keys || []);
+    } catch { setImBotKeys([]); }
+  };
+
+  const generateImBotKey = async () => {
+    setImBotBusy(true);
+    try {
+      const r = await api.post('/im-bot/keys', { name: 'I&M Bot' });
+      setImBotNewKey(r.data.key);   // the only time this value ever exists here
+      const l = await api.get('/im-bot/keys');
+      setImBotKeys(l.data.keys || []);
+      loadImBot();
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'Could not generate a key');
+    } finally { setImBotBusy(false); }
+  };
+
+  const revokeImBotKey = async (id) => {
+    if (!window.confirm('Revoke this key? A bot using it will stop being able to pull orders.')) return;
+    try {
+      await api.delete(`/im-bot/keys/${id}`);
+      const l = await api.get('/im-bot/keys');
+      setImBotKeys(l.data.keys || []);
+      loadImBot();
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'Could not revoke');
+    }
+  };
+
+  const copyImBot = (text, what) => {
+    navigator.clipboard?.writeText(text);
+    setImBotCopied(what);
+    setTimeout(() => setImBotCopied(''), 1500);
+  };
+
+  const imBotSeen = (iso) => {
+    if (!iso) return 'never';
+    const s = Math.floor((Date.now() - new Date(iso)) / 1000);
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return new Date(iso).toLocaleDateString();
+  };
+
   // Check if I&M PIN is already saved on this device
   useEffect(() => {
     if (window.sparkp2p?.hasImPin) {
@@ -840,6 +910,43 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
               <button onClick={() => { if (!profile?.choice_account_id) { setShowKycGate(true); return; } wasConnectingRef.current = true; window.sparkp2p?.openGmailTab(); }}
                 style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#d1d5db', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
                 {gmailConfigured ? 'Re-connect Gmail' : 'Connect Gmail'}
+              </button>
+            </div>
+
+            {/* I&M Bot — the merchant's own downloadable payout bot.
+                Status is a HEARTBEAT, not a setting: it says whether their bot
+                is actually running right now, because when it isn't, buy orders
+                sit and wait (they chose hold-and-alert over silently switching
+                rails). So this card must never look "fine" when the bot is down. */}
+            <div className="card">
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(59,130,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: 20, height: 20, borderRadius: 4, background: 'rgba(59,130,246,0.2)', border: '1.5px solid #3b82f6' }} />
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
+                  background: imBot?.online ? 'rgba(16,185,129,0.15)' : imBot?.has_key ? 'rgba(245,158,11,0.15)' : 'rgba(107,114,128,0.12)',
+                  color: imBot?.online ? '#10b981' : imBot?.has_key ? '#f59e0b' : '#6b7280' }}>
+                  {imBot?.online ? 'Connected' : imBot?.has_key ? 'Offline' : 'Not set'}
+                </span>
+              </div>
+              <div style={{ fontWeight: 700, color: '#fff', fontSize: 15, marginBottom: 6 }}>I&amp;M Bot</div>
+              <div style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.5, marginBottom: 10 }}>
+                Pays buy orders from your own I&amp;M account, on your own machine.
+                <strong style={{ color: '#9ca3af' }}> Buy orders only</strong> — sells stay on Choice Bank.
+              </div>
+              {imBot?.has_key && (
+                <div style={{ fontSize: 11, color: imBot?.online ? '#10b981' : '#f59e0b', marginBottom: 10 }}>
+                  {imBot?.online
+                    ? `Bot online · seen ${imBotSeen(imBot.last_seen_at)}`
+                    : `Bot not running · last seen ${imBotSeen(imBot.last_seen_at)} — buy orders will wait`}
+                </div>
+              )}
+              <button onClick={openImBot}
+                style={{ width: '100%', padding: '9px 0', borderRadius: 8,
+                  border: imBot?.has_key ? '1px solid #374151' : 'none',
+                  background: imBot?.has_key ? 'transparent' : '#3b82f6',
+                  color: imBot?.has_key ? '#d1d5db' : '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                {imBot?.has_key ? 'Manage' : 'Connect I&M Bot'}
               </button>
             </div>
 
@@ -1855,6 +1962,110 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
       )}
 
       {/* Pause Bot 2FA Modal */}
+      {/* ── I&M Bot connect ────────────────────────────────────────────────
+          Hands the merchant the two things their bot needs (URL + key) and
+          nothing else. The key is shown ONCE: we store only its hash, so this
+          modal is the only moment it exists anywhere outside their machine. */}
+      {imBotOpen && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }} onClick={(e) => { if (e.target === e.currentTarget) setImBotOpen(false); }}>
+          <div style={{ background: '#12141c', border: '1px solid #2a2d3a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 560, maxHeight: '88vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <div style={{ fontWeight: 800, color: '#fff', fontSize: 17 }}>Connect your I&amp;M Bot</div>
+              <button onClick={() => setImBotOpen(false)}
+                style={{ background: 'none', border: 'none', color: '#6b7280', fontSize: 22, cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 16 }}>
+              The bot runs on your own computer, logged into your own I&amp;M account. SparkP2P never logs into your bank.
+            </div>
+
+            <div style={{ background: 'rgba(245,158,11,0.06)', borderLeft: '3px solid #f59e0b', borderRadius: '0 8px 8px 0', padding: '10px 12px', marginBottom: 18 }}>
+              <div style={{ color: '#f59e0b', fontWeight: 700, fontSize: 12, marginBottom: 2 }}>Buy orders only</div>
+              <div style={{ color: '#9ca3af', fontSize: 12, lineHeight: 1.5 }}>
+                I&amp;M can only send money out, so the bot pays sellers when you <strong>buy</strong> crypto.
+                Sell orders keep using the Choice Bank gateway.
+              </div>
+            </div>
+
+            {/* Step 1 — URL */}
+            <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 700, letterSpacing: 0.5, marginBottom: 6 }}>1 · SPARKP2P URL</div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
+              <input readOnly value={window.location.origin}
+                style={{ flex: 1, padding: '9px 11px', borderRadius: 8, border: '1px solid #2a2d3a', background: '#0d0f16', color: '#d1d5db', fontFamily: 'monospace', fontSize: 12 }} />
+              <button onClick={() => copyImBot(window.location.origin, 'url')}
+                style={{ padding: '9px 14px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#d1d5db', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                {imBotCopied === 'url' ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+
+            {/* Step 2 — key */}
+            <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 700, letterSpacing: 0.5, marginBottom: 6 }}>2 · MERCHANT API KEY</div>
+            {imBotNewKey ? (
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                  <input readOnly value={imBotNewKey}
+                    style={{ flex: 1, padding: '9px 11px', borderRadius: 8, border: '1px solid #10b981', background: '#0d0f16', color: '#10b981', fontFamily: 'monospace', fontSize: 12 }} />
+                  <button onClick={() => copyImBot(imBotNewKey, 'key')}
+                    style={{ padding: '9px 14px', borderRadius: 8, border: 'none', background: '#10b981', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                    {imBotCopied === 'key' ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <div style={{ color: '#f59e0b', fontSize: 11, lineHeight: 1.5 }}>
+                  Copy it now — this is the only time it will be shown. We store only a hash of it,
+                  so it cannot be shown again. If you lose it, generate a new one and revoke this.
+                </div>
+              </div>
+            ) : (
+              <button onClick={generateImBotKey} disabled={imBotBusy}
+                style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 700, fontSize: 13, cursor: imBotBusy ? 'not-allowed' : 'pointer', marginBottom: 18 }}>
+                {imBotBusy ? 'Generating…' : 'Generate API key'}
+              </button>
+            )}
+
+            {/* Step 3 — paste */}
+            <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 700, letterSpacing: 0.5, marginBottom: 6 }}>3 · PASTE THEM INTO THE BOT</div>
+            <div style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.6, marginBottom: 18 }}>
+              Open your I&amp;M Bot (<span style={{ fontFamily: 'monospace', color: '#9ca3af' }}>127.0.0.1:8010</span>) →
+              <strong style={{ color: '#9ca3af' }}> Connection</strong> tab → paste both, tick
+              <strong style={{ color: '#9ca3af' }}> Enable the link</strong>, then
+              <strong style={{ color: '#9ca3af' }}> Test connection</strong>. It should show the account it linked to.
+            </div>
+
+            {/* Existing keys */}
+            {imBotKeys.length > 0 && (
+              <>
+                <div style={{ color: '#9ca3af', fontSize: 11, fontWeight: 700, letterSpacing: 0.5, marginBottom: 6 }}>YOUR KEYS</div>
+                <div style={{ marginBottom: 6 }}>
+                  {imBotKeys.map(k => (
+                    <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', border: '1px solid #2a2d3a', borderRadius: 8, marginBottom: 6, opacity: k.revoked ? 0.45 : 1 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#d1d5db' }}>{k.prefix}…</div>
+                        <div style={{ fontSize: 11, color: '#6b7280' }}>
+                          {k.revoked ? 'revoked' : `last used ${imBotSeen(k.last_used_at)}`}
+                          {k.last_used_ip && !k.revoked ? ` · from ${k.last_used_ip}` : ''}
+                        </div>
+                      </div>
+                      {!k.revoked && (
+                        <button onClick={() => revokeImBotKey(k.id)}
+                          style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.4)', background: 'transparent', color: '#ef4444', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                          Revoke
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ color: '#6b7280', fontSize: 11, lineHeight: 1.5 }}>
+                  Revoking takes effect on the bot's next poll. Generate a new key before revoking the old one
+                  if a bot is currently running.
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {showPauseModal && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 9999,
