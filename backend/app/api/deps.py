@@ -149,6 +149,37 @@ async def get_current_trader_id(
     return int(sub)
 
 
+async def get_trader_id_from_api_key(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> int:
+    """Authenticate software the MERCHANT runs themselves (the I&M Bot) via a
+    long-lived API key: `Authorization: Bearer sp2p_…`.
+
+    A JWT cannot do this job — it expires, and the bot runs unattended for weeks
+    on a merchant's own machine.
+
+    Like `get_current_trader_id`, this takes NO `Depends(get_db)`: the I&M Bot
+    poll is a long-poll, and holding a pooled connection for the whole wait would
+    exhaust the pool once several merchants poll back-to-back. `resolve_key`
+    opens and closes its own short-lived session instead.
+
+    The key IS the identity — the trader is resolved FROM the key's hash, never
+    supplied by the caller.
+    """
+    if not credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    from app.services.api_keys import resolve_key
+
+    trader_id = await resolve_key(credentials.credentials, scope="im_bot", client_ip=get_client_ip(request))
+    if trader_id is None:
+        # One message for missing/expired/revoked/wrong-scope: never help a
+        # caller work out WHICH of those a key is.
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked API key")
+    return trader_id
+
+
 async def get_admin_trader(
     request: Request,
     trader: Trader = Depends(get_current_trader),

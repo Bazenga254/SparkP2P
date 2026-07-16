@@ -13,6 +13,7 @@ from app.models.affiliate import Affiliate, AffiliateEarning, AffiliatePayout, A
 from app.models.bot_log import BotLog
 from app.models.squad import Squad, SquadMember
 from app.models.kyc_submission import KycSubmission
+from app.models.api_key import MerchantApiKey
 
 __all__ = [
     "Squad", "SquadMember",
@@ -30,4 +31,5 @@ __all__ = [
     "Affiliate", "AffiliateEarning", "AffiliatePayout", "AffiliateStatus", "AffiliatePayoutStatus",
     "BotLog",
     "KycSubmission",
+    "MerchantApiKey",
 ]

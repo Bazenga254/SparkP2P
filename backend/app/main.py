@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_db, async_session
-from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, support, survey, affiliates, telegram, choice_bank, kyc_flow, squads, webhooks
+from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, im_bot, support, survey, affiliates, telegram, choice_bank, kyc_flow, squads, webhooks
 from app.services.binance.poller import order_poller
 from app.services.message_templates import seed_default_templates
 from app.services import bot_monitor
@@ -482,6 +482,9 @@ app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(extension.router, prefix="/api/ext", tags=["Extension"])
 app.include_router(browser.router, prefix="/api/browser", tags=["Browser Automation"])
 app.include_router(im_bank.router, prefix="/api/im", tags=["I&M Bank"])
+# /api/im-bot is the merchant's own downloadable I&M Bot — distinct from the
+# older /api/im gateway routes above.
+app.include_router(im_bot.router, prefix="/api/im-bot", tags=["I&M Bot"])
 app.include_router(support.router, prefix="/api", tags=["Support"])
 app.include_router(survey.router, prefix="/api/survey", tags=["Survey"])
 app.include_router(affiliates.router, prefix="/api/affiliates", tags=["Affiliates"])
