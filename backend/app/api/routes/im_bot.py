@@ -177,6 +177,39 @@ async def ping(trader_id: int = Depends(get_trader_id_from_api_key)):
     return {"ok": True, "trader_id": trader_id, "buy_orders_only": True}
 
 
+@router.get("/account")
+async def account(
+    trader_id: int = Depends(get_trader_id_from_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """What the merchant's I&M Automation app needs to know about their SparkP2P
+    account — so it can stop asking for things SparkP2P already has.
+
+    DELIBERATELY REPORTS STATUS, NEVER CREDENTIALS. traders.py already says it:
+    "never expose the key itself". The app's API key is scoped to polling buy
+    orders and reporting results; if it could also fetch the merchant's Binance
+    SECRET, then a leaked I&M key would hand over their Binance trading
+    credentials. The app does not need them — when orders come from SparkP2P it
+    never talks to Binance at all.
+    """
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    return {
+        "trader_id": trader.id,
+        "name": trader.full_name,
+        "email": trader.email,
+        "binance": {
+            "saved": bool(trader.binance_api_key),
+            "invalid": bool(trader.binance_api_key_invalid),
+            # binance_connected covers the browser-session route; either counts.
+            "connected": bool(trader.binance_connected or trader.binance_api_key),
+            "nickname": getattr(trader, "binance_nickname", None),
+        },
+        "buy_payout_via_im": bool(trader.buy_payout_via_im),
+    }
+
+
 def _job(order: Order) -> dict:
     """Shape a buy order into a payout job the I&M Bot can act on directly.
 
