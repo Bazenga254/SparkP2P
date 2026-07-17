@@ -475,7 +475,11 @@ async def reset_password_request(data: ResetRequestModel, db: AsyncSession = Dep
         return {"message": "If that email is registered, an OTP has been sent to the linked phone number."}
 
     otp_code = str(random.randint(100000, 999999))
-    _reset_otp_codes[data.email] = otp_code
+    # Keyed on the NORMALISED email, exactly as the account was looked up two
+    # lines above. Keyed raw, a user who typed "Bob@x.com" here and "bob@x.com"
+    # on the confirm step got a real SMS with a code that could never verify —
+    # and the code was never popped, so it lingered valid. Same trap as login.
+    _reset_otp_codes[_norm_email(data.email)] = otp_code
 
     try:
         from app.services.sms import sms_verification_code
@@ -490,7 +494,7 @@ async def reset_password_request(data: ResetRequestModel, db: AsyncSession = Dep
 @router.post("/reset-password/confirm")
 async def reset_password_confirm(data: ResetConfirmModel, db: AsyncSession = Depends(get_db)):
     """Step 2: Verify OTP and set new password (must differ from old)."""
-    stored = _reset_otp_codes.get(data.email)
+    stored = _reset_otp_codes.get(_norm_email(data.email))
     if not stored or stored != data.otp_code:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP code")
 
@@ -509,7 +513,7 @@ async def reset_password_confirm(data: ResetConfirmModel, db: AsyncSession = Dep
     trader.password_hash = hash_password(data.new_password)
     trader.failed_login_attempts = 0
     trader.locked_until = None
-    _reset_otp_codes.pop(data.email, None)
+    _reset_otp_codes.pop(_norm_email(data.email), None)
     await db.commit()
 
     from app.api.deps import log_event
