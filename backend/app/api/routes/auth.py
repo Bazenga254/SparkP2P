@@ -35,7 +35,9 @@ def _norm_email(value) -> str:
 
 # In-memory store for email verification codes (use Redis in production)
 _verification_codes: dict[str, str] = {}
-_login_otp_codes: dict[str, str] = {}  # email -> OTP for login 2FA
+_login_otp_codes: dict[str, str] = {}  # NORMALISED email -> OTP for login 2FA
+# Keyed by _norm_email(): the trader lookup is case-insensitive, so keying this
+# by the raw email would hand out an SMS code that then fails to verify.
 _reset_otp_codes: dict[str, str] = {}  # email -> OTP for password reset
 
 
@@ -292,7 +294,7 @@ async def login(data: LoginRequest, request: Request = None, db: AsyncSession = 
 
     # Step 2: Verify OTP (SMS code OR Google Authenticator TOTP)
     if data.otp_code:
-        sms_valid = _login_otp_codes.get(data.email) == data.otp_code
+        sms_valid = _login_otp_codes.get(_norm_email(data.email)) == data.otp_code
 
         totp_valid = False
         if trader.totp_secret:
@@ -310,7 +312,7 @@ async def login(data: LoginRequest, request: Request = None, db: AsyncSession = 
             )
 
         # OTP valid — issue token, reset lockout counters
-        _login_otp_codes.pop(data.email, None)
+        _login_otp_codes.pop(_norm_email(data.email), None)
         trader.failed_login_attempts = 0
         trader.locked_until = None
         trader.last_login = datetime.now(timezone.utc)
@@ -343,7 +345,7 @@ async def login(data: LoginRequest, request: Request = None, db: AsyncSession = 
 
     # Step 1: Password valid → send OTP to phone
     otp_code = str(random.randint(100000, 999999))
-    _login_otp_codes[data.email] = otp_code
+    _login_otp_codes[_norm_email(data.email)] = otp_code
 
     # Send OTP via SMS
     try:
