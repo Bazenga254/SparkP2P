@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 import { usePlans } from '../services/plans';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getImRevenue, getImBotAccounts, getImCharges, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal, Search, Calendar } from 'lucide-react';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal, Search, Calendar, Bot } from 'lucide-react';
 import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminResetKyc, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense, adminGetKycSubmissions, adminGetKycSubmission, adminApproveKycSubmission, adminRejectKycSubmission, adminConfirmKycOtp, adminResendKycOtp, adminVerifyTraderContact, adminConfirmTraderContactVerify } from '../services/api';
 
 const sidebarSections = [
@@ -21,6 +21,7 @@ const sidebarSections = [
     label: 'TRADERS',
     items: [
       { key: 'traders', icon: Users, label: 'All Traders' },
+      { key: 'imbot', icon: Bot, label: 'I&M Automation' },
       { key: 'disputes', icon: AlertTriangle, label: 'Disputes' },
       { key: 'unmatched', icon: Banknote, label: 'Unmatched Payments' },
       { key: 'affiliates', icon: Share2, label: 'Affiliates' },
@@ -337,7 +338,11 @@ export default function Admin() {
   const [orders, setOrders] = useState({ total: 0, orders: [] });
   const [txPeriod, setTxPeriod] = useState('today');   // fiat period
   const [cryptoPeriod, setCryptoPeriod] = useState('all'); // crypto period — default all
-  const [txType, setTxType] = useState('fiat'); // 'fiat' | 'crypto'
+  const [txType, setTxType] = useState('fiat'); // 'fiat' | 'crypto' | 'imbot'
+  const [imTxPeriod, setImTxPeriod] = useState('all');   // I&M charges period
+  const [imCharges, setImCharges] = useState([]);
+  const [imChargesTotal, setImChargesTotal] = useState(0);
+  const [imChargesLoading, setImChargesLoading] = useState(false);
   const [ordersSearch, setOrdersSearch] = useState('');
   const [cryptoPage, setCryptoPage] = useState(1);
   const [fiatPage, setFiatPage] = useState(1);
@@ -408,6 +413,13 @@ export default function Admin() {
   const [invoiceEndDate, setInvoiceEndDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [invoiceBusy, setInvoiceBusy] = useState(false);
   const [expSubView, setExpSubView] = useState('revenue');
+
+  // I&M Automation admin section
+  const [imRevenue, setImRevenue] = useState(null);
+  const [imAccounts, setImAccounts] = useState([]);
+  const [imAccountsTotal, setImAccountsTotal] = useState(0);
+  const [imPeriod, setImPeriod] = useState('all');
+  const [imLoading, setImLoading] = useState(false);
 
   // Auto-Sweeps (M-Pesa paybill → I&M Bank)
   const [sweeps, setSweeps] = useState([]);
@@ -792,6 +804,25 @@ export default function Admin() {
     setWdActionLoading(null);
   };
 
+  const loadImBot = async (period = imPeriod) => {
+    setImLoading(true);
+    setImPeriod(period);
+    try {
+      const [rev, accts] = await Promise.allSettled([
+        getImRevenue({ period }),
+        getImBotAccounts({ page: 1, limit: 100 }),
+      ]);
+      if (rev.status === 'fulfilled') setImRevenue(rev.value.data);
+      if (accts.status === 'fulfilled') {
+        setImAccounts(accts.value.data.accounts || []);
+        setImAccountsTotal(accts.value.data.total || 0);
+      }
+    } catch (err) {
+      console.error('I&M load error:', err);
+    }
+    setImLoading(false);
+  };
+
   const loadRevenueBreakdown = async (period = revPeriod, plan = revPlan, page = revPage) => {
     setRevLoading(true);
     try {
@@ -1019,9 +1050,10 @@ export default function Admin() {
       adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {});
       adminGetKycSubmissions().then(r => setKycSubmissions(r.data.submissions || [])).catch(() => {});
     }
-    if (activeTab === 'expenses') { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); loadRevenueBreakdown('today', 'all', 1); setExpSubView('revenue'); }
+    if (activeTab === 'expenses') { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); loadRevenueBreakdown('today', 'all', 1); loadImBot('today'); setExpSubView('revenue'); }
     if (activeTab === 'settings') { loadEmployees(); }
     if (activeTab === 'affiliates') { loadAffiliates(); }
+    if (activeTab === 'imbot') { loadImBot('all'); }
   }, [activeTab]);
 
   useEffect(() => {
@@ -1098,10 +1130,28 @@ export default function Admin() {
     if (activeTab !== 'transactions') return;
     const poll = setInterval(() => {
       if (txType === 'crypto') loadOrders(cryptoPeriod, ordersSearch);
+      else if (txType === 'imbot') loadImCharges(imTxPeriod);
       else loadTransactions(txPeriod, txnSearch);
     }, 10000);
     return () => clearInterval(poll);
-  }, [activeTab, txType, cryptoPeriod, txPeriod]);
+  }, [activeTab, txType, cryptoPeriod, txPeriod, imTxPeriod]);
+
+  // Load the I&M charge ledger when its tab is opened or its period changes.
+  useEffect(() => {
+    if (activeTab === 'transactions' && txType === 'imbot') loadImCharges(imTxPeriod);
+  }, [activeTab, txType, imTxPeriod]);
+
+  const loadImCharges = async (period = imTxPeriod) => {
+    setImChargesLoading(true);
+    try {
+      const res = await getImCharges({ period, page: 1, limit: 100 });
+      setImCharges(res.data.charges || []);
+      setImChargesTotal(res.data.total || 0);
+    } catch (err) {
+      console.error('I&M charges load error:', err);
+    }
+    setImChargesLoading(false);
+  };
 
   // Keep the dashboard's "Recent orders" widget live — it otherwise only loads
   // once on mount and freezes, so new orders never appear until a manual reload.
@@ -1226,6 +1276,7 @@ export default function Admin() {
   const pageTitles = {
     dashboard: 'Dashboard',
     traders: 'All Traders',
+    imbot: 'I&M Automation',
     disputes: 'Disputes',
     unmatched: 'Unmatched Payments',
     transactions: 'Transactions',
@@ -1746,7 +1797,7 @@ export default function Admin() {
                   <h3>All Transactions</h3>
                   {/* Type toggle */}
                   <div style={{ display: 'flex', gap: 4, background: 'var(--bg)', borderRadius: 8, padding: 4, border: '1px solid var(--border)' }}>
-                    {[['fiat', 'Fiat (Choice Bank)'], ['crypto', 'Crypto (Binance)']].map(([key, label]) => (
+                    {[['fiat', 'Fiat (Choice Bank)'], ['crypto', 'Crypto (Binance)'], ['imbot', 'I&M Bot']].map(([key, label]) => (
                       <button key={key}
                         onClick={() => setTxType(key)}
                         style={{ padding: '5px 14px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
@@ -1758,11 +1809,11 @@ export default function Admin() {
                     ))}
                   </div>
                 </div>
-                {/* Period filter — drives fiat or crypto depending on active type */}
+                {/* Period filter — drives fiat, crypto or I&M depending on active type */}
                 <div className="adm-period-filter">
                   {['today', 'week', 'month', 'year', 'all'].map((p) => {
-                    const activePeriod = txType === 'fiat' ? txPeriod : cryptoPeriod;
-                    const setter = txType === 'fiat' ? setTxPeriod : setCryptoPeriod;
+                    const activePeriod = txType === 'fiat' ? txPeriod : txType === 'imbot' ? imTxPeriod : cryptoPeriod;
+                    const setter = txType === 'fiat' ? setTxPeriod : txType === 'imbot' ? setImTxPeriod : setCryptoPeriod;
                     return (
                       <button key={p} className={`adm-period-btn ${activePeriod === p ? 'active' : ''}`}
                         onClick={() => setter(p)}>
@@ -1950,6 +2001,62 @@ export default function Admin() {
                           style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)', background: cryptoPage === totalPages ? 'transparent' : 'var(--bg)', color: cryptoPage === totalPages ? '#4b5563' : '#fff', cursor: cryptoPage === totalPages ? 'default' : 'pointer', fontSize: 13 }}>
                           Next →
                         </button>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+
+              {/* ---- I&M BOT (charge ledger) ---- */}
+              {txType === 'imbot' && (() => {
+                const totalBilled = imCharges.reduce((s, c) => s + (c.rate || 0), 0);
+                const totalMoved = imCharges.reduce((s, c) => s + (c.payout_amount || 0), 0);
+                const fmtAmt = v => 'KES ' + (v || 0).toLocaleString('en-KE', { minimumFractionDigits: 0 });
+                return (
+                  <>
+                    <div style={{ padding: '12px 20px', display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 13, color: 'var(--text-3)' }}>
+                      <span>{imChargesTotal} payouts billed</span>
+                      <span>Revenue <b style={{ color: 'var(--pos)' }}>{fmtAmt(totalBilled)}</b></span>
+                      <span>Volume moved <b>{fmtAmt(totalMoved)}</b></span>
+                    </div>
+                    {imChargesLoading ? (
+                      <div style={{ padding: 20, color: 'var(--text-3)' }}>Loading…</div>
+                    ) : imCharges.length === 0 ? (
+                      <div style={{ padding: 20, color: 'var(--text-3)', fontSize: 13 }}>
+                        No I&amp;M Bot payouts billed in this period.
+                      </div>
+                    ) : (
+                      <div style={{ overflowX: 'auto' }}>
+                        <table className="adm-table" style={{ width: '100%', fontSize: 13 }}>
+                          <thead>
+                            <tr>
+                              <th style={{ textAlign: 'left' }}>When</th>
+                              <th style={{ textAlign: 'left' }}>Order</th>
+                              <th style={{ textAlign: 'left' }}>Billed to</th>
+                              <th style={{ textAlign: 'left' }}>Type</th>
+                              <th style={{ textAlign: 'right' }}>Payout</th>
+                              <th style={{ textAlign: 'right' }}>Fee</th>
+                              <th style={{ textAlign: 'left' }}>Ref</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {imCharges.map(c => (
+                              <tr key={c.id}>
+                                <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{c.charged_at ? fmtDateEAT(c.charged_at) : '—'}</td>
+                                <td style={{ textAlign: 'left', fontFamily: 'monospace' }}>…{String(c.order_id).slice(-8)}</td>
+                                <td style={{ textAlign: 'left' }}>{c.who || '—'}</td>
+                                <td style={{ textAlign: 'left' }}>
+                                  <span className={`chip ${c.account_type === 'bot_only' ? '' : 'chip--pos'}`} style={{ fontSize: 10 }}>
+                                    {c.account_type === 'bot_only' ? 'bot-only' : (c.plan || 'no sub')}
+                                  </span>
+                                </td>
+                                <td style={{ textAlign: 'right' }}>{fmtAmt(c.payout_amount)}</td>
+                                <td style={{ textAlign: 'right', color: 'var(--pos)' }}>KES {c.rate}</td>
+                                <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{c.bank_ref || '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </>
@@ -2287,6 +2394,9 @@ export default function Admin() {
                               return <span title={title} className={`chip ${connected ? 'chip--pos' : 'chip--neg'}`}>{label}</span>;
                             })()}
                             <span title={t.telegram_connected ? `Telegram connected${t.telegram_notify_scope && t.telegram_notify_scope !== 'both' ? ` (${t.telegram_notify_scope} alerts)` : ''}` : 'Telegram not connected'} className={`chip ${t.telegram_connected ? 'chip--pos' : 'chip--neg'}`}>{t.telegram_connected ? 'Telegram ✓' : 'Telegram ✗'}</span>
+                            {t.im_bot_connected && (
+                              <span title={`I&M Automation connected${t.im_bot_last_seen ? ` — last seen ${new Date(t.im_bot_last_seen).toLocaleString()}` : ''}${t.im_bot_payouts ? ` · ${t.im_bot_payouts} payouts · KES ${Number(t.im_bot_revenue).toLocaleString()} billed` : ''}`} className="chip chip--pos">I&amp;M ✓</span>
+                            )}
                             <span title={t.relay_connected ? 'Relay connected — Binance calls run from this trader’s own IP' : 'Relay not connected'} className={`chip ${t.relay_connected ? 'chip--pos' : ''}`}>{t.relay_connected ? 'Relay ✓' : 'Relay ✗'}</span>
                             {t.relay_ip && (
                               <span title={t.relay_connected ? "Trader's live relay IP (their real connection)" : "Trader's last-known relay IP"} className="chip" style={{ fontFamily: 'monospace' }}>
@@ -2449,6 +2559,7 @@ export default function Admin() {
                               <span className="fl-k">Phone</span><span className="fl-v num">{t.phone || '—'}</span>
                               <span className="fl-k">Telegram</span><span className="fl-v">{t.telegram_connected ? <><Check size={13} style={{ color: 'var(--pos)', verticalAlign: '-2px' }} /> Linked</> : <span style={{ color: 'var(--text-3)' }}>Not linked</span>}</span>
                               <span className="fl-k">Binance API</span><span className="fl-v">{(t.binance_api_key_saved && !t.binance_api_key_invalid) ? <><Check size={13} style={{ color: 'var(--pos)', verticalAlign: '-2px' }} /> Connected</> : t.binance_api_key_invalid ? <span style={{ color: 'var(--neg)' }}>Invalid</span> : <span style={{ color: 'var(--text-3)' }}>Not connected</span>}</span>
+                              <span className="fl-k">I&amp;M Automation</span><span className="fl-v">{t.im_bot_connected ? <><Check size={13} style={{ color: 'var(--pos)', verticalAlign: '-2px' }} /> Connected{t.im_bot_payouts ? ` · ${t.im_bot_payouts} payouts · KES ${Number(t.im_bot_revenue).toLocaleString()}` : ''}</> : <span style={{ color: 'var(--text-3)' }}>Not connected</span>}</span>
                             </div>
                             <div className="tdx-sec-label">Lifetime activity</div>
                             <div className="flist">
@@ -4622,6 +4733,112 @@ export default function Admin() {
             </div>
           )}
           {/* ==================== AFFILIATES ==================== */}
+          {activeTab === 'imbot' && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                <Bot size={18} style={{ color: 'var(--accent)' }} />
+                <h2 style={{ margin: 0, fontSize: 18 }}>I&amp;M Automation</h2>
+              </div>
+              <p style={{ color: 'var(--text-3)', fontSize: 13, margin: '0 0 18px' }}>
+                Revenue from the downloadable I&amp;M payout bot, and the merchants who use it but are
+                <b> not SparkP2P clients</b> (billed KES 12/payout). Bot-only accounts are kept separate
+                from your traders on purpose.
+              </p>
+
+              {/* period filter */}
+              <div className="rev-period" style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                {['today', 'week', 'month', 'all'].map(p => (
+                  <button key={p} onClick={() => loadImBot(p)}
+                    className={`chip ${imPeriod === p ? 'chip--pos' : ''}`}
+                    style={{ cursor: 'pointer', textTransform: 'capitalize', padding: '6px 14px' }}>
+                    {p === 'all' ? 'All time' : p}
+                  </button>
+                ))}
+              </div>
+
+              {/* revenue split: SparkP2P traders vs bot-only */}
+              {(() => {
+                const card = { background: 'var(--card, #1a1a1f)', border: '1px solid var(--border, #2a2a33)', borderRadius: 10, padding: '16px 18px' };
+                const lbl = { fontSize: 12, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 };
+                const val = { fontSize: 24, fontWeight: 700 };
+                const sub = { fontSize: 12, color: 'var(--text-3)', marginTop: 6 };
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14, marginBottom: 24 }}>
+                    <div style={card}>
+                      <div style={lbl}>Total I&amp;M revenue</div>
+                      <div style={{ ...val, color: 'var(--pos)' }}>{fmtKES(imRevenue?.total?.revenue)}</div>
+                      <div style={sub}>{imRevenue?.total?.payouts || 0} payouts · {fmtKES(imRevenue?.total?.volume)} moved</div>
+                    </div>
+                    <div style={card}>
+                      <div style={lbl}>SparkP2P traders</div>
+                      <div style={val}>{fmtKES(imRevenue?.sparkp2p?.revenue)}</div>
+                      <div style={sub}>{imRevenue?.sparkp2p?.payouts || 0} payouts · rates 5–10</div>
+                    </div>
+                    <div style={card}>
+                      <div style={lbl}>Bot-only (non-clients)</div>
+                      <div style={val}>{fmtKES(imRevenue?.bot_only?.revenue)}</div>
+                      <div style={sub}>{imRevenue?.bot_only?.payouts || 0} payouts · KES 12 each</div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* bot-only registrants */}
+              <div className="tdx-sec-label" style={{ marginBottom: 10 }}>
+                Bot-only registrants ({imAccountsTotal})
+              </div>
+              {imLoading ? (
+                <p style={{ color: 'var(--text-3)' }}>Loading…</p>
+              ) : imAccounts.length === 0 ? (
+                <p style={{ color: 'var(--text-3)', fontSize: 13 }}>
+                  No bot-only accounts yet. People who sign up in the desktop app without a SparkP2P
+                  account will appear here.
+                </p>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="adm-table" style={{ width: '100%', fontSize: 13 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left' }}>Email</th>
+                        <th style={{ textAlign: 'left' }}>Name</th>
+                        <th>Status</th>
+                        <th style={{ textAlign: 'right' }}>Payouts</th>
+                        <th style={{ textAlign: 'right' }}>Billed</th>
+                        <th style={{ textAlign: 'right' }}>Volume</th>
+                        <th style={{ textAlign: 'left' }}>Last seen</th>
+                        <th style={{ textAlign: 'left' }}>Joined</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {imAccounts.map(a => (
+                        <tr key={a.id}>
+                          <td style={{ textAlign: 'left' }}>
+                            {a.email}
+                            {a.linked_trader_id && (
+                              <span title={`Became SparkP2P trader #${a.linked_trader_id} — now billed as that trader`}
+                                className="chip chip--pos" style={{ marginLeft: 6, fontSize: 10 }}>→ trader</span>
+                            )}
+                          </td>
+                          <td style={{ textAlign: 'left' }}>{a.full_name || '—'}</td>
+                          <td style={{ textAlign: 'center' }}>
+                            {!a.verified ? <span className="chip chip--neg" style={{ fontSize: 10 }}>unverified</span>
+                              : a.status !== 'active' ? <span className="chip chip--neg" style={{ fontSize: 10 }}>{a.status}</span>
+                              : <span className="chip chip--pos" style={{ fontSize: 10 }}>active</span>}
+                          </td>
+                          <td style={{ textAlign: 'right' }}>{a.payouts}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(a.revenue)}</td>
+                          <td style={{ textAlign: 'right' }}>{fmtKES(a.volume)}</td>
+                          <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{a.last_seen ? fmtDateEAT(a.last_seen) : '—'}</td>
+                          <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{a.created_at ? fmtDateEAT(a.created_at) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
           {activeTab === 'affiliates' && (
             <div>
               {affiliateActionMsg && (
@@ -4906,7 +5123,7 @@ export default function Admin() {
                   <div className="fin-segment">
                     {[['today','Today'],['week','This week'],['month','This month'],['all','All time']].map(([val, label]) => (
                       <button key={val} className={revPeriod === val ? 'on' : ''}
-                        onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1); }}>
+                        onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1); loadImBot(val); }}>
                         {label}
                       </button>
                     ))}
@@ -4924,7 +5141,8 @@ export default function Admin() {
               {(() => {
                 const subRevenue = revBreakdown?.summary?.total ?? 0;
                 const outboundRevenue = obBreakdown?.total?.markup ?? 0;
-                const totalRevenue = subRevenue + outboundRevenue;
+                const imRev = imRevenue?.total?.revenue ?? 0;   // I&M Automation payouts
+                const totalRevenue = subRevenue + outboundRevenue + imRev;
                 const totalExpenses = expensesTotal ?? 0;
                 const netProfit = totalRevenue - totalExpenses;
                 const isProfit = netProfit >= 0;
@@ -4933,7 +5151,7 @@ export default function Admin() {
                     <div className="fin-kpi fin-kpi-rev">
                       <div className="fin-k-label">Total revenue</div>
                       <div className="fin-k-value">{fmtKES(totalRevenue)}</div>
-                      <div className="fin-k-note">Subscriptions {fmtKES(subRevenue)} + outbound fees {fmtKES(outboundRevenue)}</div>
+                      <div className="fin-k-note">Subscriptions {fmtKES(subRevenue)} · Choice Bank {fmtKES(outboundRevenue)} · I&amp;M Bot {fmtKES(imRev)}</div>
                     </div>
                     <div className="fin-kpi fin-kpi-exp">
                       <div className="fin-k-label">Total expenses</div>

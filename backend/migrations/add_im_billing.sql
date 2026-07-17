@@ -84,3 +84,20 @@ CREATE INDEX IF NOT EXISTS ix_im_charges_bot_time    ON im_charges (bot_account_
 CREATE INDEX IF NOT EXISTS ix_im_charges_account_type ON im_charges (account_type, charged_at);
 -- The intro-allowance count: this trader's rows at the intro rate (10).
 CREATE INDEX IF NOT EXISTS ix_im_charges_trader_rate  ON im_charges (trader_id, rate);
+
+-- OWNERSHIP: this migration is run by the postgres superuser, so the tables come
+-- out owned by postgres — and the APP connects as a different role (sparkp2p),
+-- which then gets "permission denied for table im_charges" on every query. The
+-- app's own create_all() never hits this because it creates tables AS the app
+-- role; a hand-run migration must hand ownership over explicitly. Every other
+-- table in this database is owned by the app role, so match that. The DO block
+-- makes it a no-op on any environment whose app role is not literally 'sparkp2p'.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sparkp2p') THEN
+    ALTER TABLE im_bot_accounts OWNER TO sparkp2p;
+    ALTER TABLE im_charges OWNER TO sparkp2p;
+    ALTER SEQUENCE im_bot_accounts_id_seq OWNER TO sparkp2p;
+    ALTER SEQUENCE im_charges_id_seq OWNER TO sparkp2p;
+  END IF;
+END $$;

@@ -501,6 +501,31 @@ async def get_trader_detail(
         _sub_expires = None
         _sub_source = None
 
+    # I&M Automation: is this trader's downloadable bot connected (an un-revoked
+    # im_bot key), and what has it billed? Like the Telegram ✓, this is a STATUS —
+    # a live key is the bot's heartbeat (it authenticates on every poll).
+    from app.models.api_key import MerchantApiKey
+    from app.models.im_charge import ImCharge
+    _im_key = (await db.execute(
+        select(MerchantApiKey.last_used_at)
+        .where(MerchantApiKey.trader_id == trader_id,
+               MerchantApiKey.scope == "im_bot",
+               MerchantApiKey.revoked_at.is_(None))
+        .order_by(MerchantApiKey.last_used_at.desc().nullslast())
+        .limit(1)
+    )).scalar_one_or_none()
+    _im_connected = _im_key is not None or (await db.execute(
+        select(func.count()).select_from(MerchantApiKey)
+        .where(MerchantApiKey.trader_id == trader_id,
+               MerchantApiKey.scope == "im_bot",
+               MerchantApiKey.revoked_at.is_(None))
+    )).scalar_one() > 0
+    _im_stats = (await db.execute(
+        select(func.count(ImCharge.id), func.coalesce(func.sum(ImCharge.rate), 0),
+               func.coalesce(func.sum(ImCharge.payout_amount), 0))
+        .where(ImCharge.trader_id == trader_id)
+    )).one()
+
     return {
         "plan": _plan.value if _plan else None,
         "plan_label": plan_label(_plan),
@@ -537,6 +562,12 @@ async def get_trader_detail(
         "b2c_credits": int(getattr(trader, "b2c_credits", 0) or 0),
         "telegram_connected": bool(trader.telegram_chat_id),
         "telegram_notify_scope": trader.telegram_notify_scope or 'both',
+        # I&M Automation connection + what its bot has billed this trader.
+        "im_bot_connected": bool(_im_connected),
+        "im_bot_last_seen": _im_key.isoformat() if _im_key else None,
+        "im_bot_payouts": int(_im_stats[0] or 0),
+        "im_bot_revenue": int(_im_stats[1] or 0),
+        "im_bot_volume": int(_im_stats[2] or 0),
         "relay_connected": _relaymod.is_connected(trader.id),
         "relay_ip": _relaymod.last_ip(trader.id),
         "pending_orders_count": int(getattr(trader, "pending_orders_count", 0) or 0),
@@ -2775,6 +2806,163 @@ async def revenue_subscriptions(
             for t in txns
         ],
     }
+
+
+# ── I&M Automation ───────────────────────────────────────────────────────────
+
+@router.get("/im/revenue")
+async def im_revenue(
+    period: str = Query("all"),   # today | week | month | all
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """I&M Automation revenue, split by the two populations that pay it:
+    SparkP2P traders (5/7/8/9/10) and bot-only accounts (12).
+
+    Read straight off the charge ledger — im_charges IS the bill, so this can
+    never disagree with what was actually charged. Revenue = sum(rate); it is one
+    row per payout, each row the KES we took for it."""
+    from app.models.im_charge import ImCharge
+
+    now = datetime.now(timezone.utc)
+    period_starts = {
+        "today": trading_day_start(now),
+        "week":  now - timedelta(days=7),
+        "month": now - timedelta(days=30),
+    }
+    start = period_starts.get(period)
+    where = [ImCharge.charged_at >= start] if start else []
+
+    rows = (await db.execute(
+        select(
+            ImCharge.account_type,
+            func.count(ImCharge.id),
+            func.coalesce(func.sum(ImCharge.rate), 0),
+            func.coalesce(func.sum(ImCharge.payout_amount), 0),
+        ).where(*where).group_by(ImCharge.account_type)
+    )).all()
+
+    by_pop = {r[0]: {"payouts": int(r[1]), "revenue": int(r[2]), "volume": int(r[3])} for r in rows}
+    sparkp2p = by_pop.get("sparkp2p", {"payouts": 0, "revenue": 0, "volume": 0})
+    bot_only = by_pop.get("bot_only", {"payouts": 0, "revenue": 0, "volume": 0})
+    return {
+        "period": period,
+        "sparkp2p": sparkp2p,
+        "bot_only": bot_only,
+        "total": {
+            "payouts": sparkp2p["payouts"] + bot_only["payouts"],
+            "revenue": sparkp2p["revenue"] + bot_only["revenue"],
+            "volume": sparkp2p["volume"] + bot_only["volume"],
+        },
+    }
+
+
+@router.get("/im/charges")
+async def im_charges_list(
+    period: str = Query("all"),   # today | week | month | year | all
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, le=200),
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """The I&M charge ledger, one row per billed payout — for the Transactions
+    tab. Joins each charge to whoever it billed (a trader by name, or a bot-only
+    account by email) so the admin sees who paid without a second lookup."""
+    from app.models.im_charge import ImCharge
+    from app.models.im_bot_account import ImBotAccount
+
+    now = datetime.now(timezone.utc)
+    period_starts = {
+        "today": trading_day_start(now),
+        "week":  now - timedelta(days=7),
+        "month": now - timedelta(days=30),
+        "year":  now - timedelta(days=365),
+    }
+    start = period_starts.get(period)
+    where = [ImCharge.charged_at >= start] if start else []
+
+    total = (await db.execute(select(func.count()).select_from(ImCharge).where(*where))).scalar_one()
+
+    # Left-join both possible owners; exactly one is set per row.
+    rows = (await db.execute(
+        select(ImCharge, Trader.full_name, ImBotAccount.email)
+        .outerjoin(Trader, Trader.id == ImCharge.trader_id)
+        .outerjoin(ImBotAccount, ImBotAccount.id == ImCharge.bot_account_id)
+        .where(*where)
+        .order_by(ImCharge.charged_at.desc())
+        .offset((page - 1) * limit).limit(limit)
+    )).all()
+
+    charges = []
+    for c, trader_name, bot_email in rows:
+        charges.append({
+            "id": c.id,
+            "order_id": c.order_id,
+            "account_type": c.account_type,
+            "who": trader_name if c.account_type == "sparkp2p" else (bot_email or "bot-only"),
+            "rate": c.rate,
+            "payout_amount": c.payout_amount,
+            "plan": c.plan,
+            "bank_ref": c.bank_ref,
+            "charged_at": c.charged_at.isoformat() if c.charged_at else None,
+        })
+    return {"total": total, "page": page, "limit": limit, "charges": charges}
+
+
+@router.get("/im/accounts")
+async def im_bot_accounts(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, le=200),
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bot-only registrants — people who use I&M Automation but are NOT SparkP2P
+    clients. Kept SEPARATE from the trader list on purpose: they are a different
+    population, billed 12, and must not pad the trader counts.
+
+    Each row carries what its bot has billed so an admin can see who is active.
+    A row with linked_trader_id has since become a real SparkP2P client — shown
+    so a support query is answerable, but they now bill as that trader."""
+    from app.models.im_bot_account import ImBotAccount
+    from app.models.im_charge import ImCharge
+    from app.models.api_key import MerchantApiKey
+
+    total = (await db.execute(select(func.count()).select_from(ImBotAccount))).scalar_one()
+
+    accts = (await db.execute(
+        select(ImBotAccount)
+        .order_by(ImBotAccount.created_at.desc())
+        .offset((page - 1) * limit).limit(limit)
+    )).scalars().all()
+
+    out = []
+    for a in accts:
+        stats = (await db.execute(
+            select(func.count(ImCharge.id), func.coalesce(func.sum(ImCharge.rate), 0),
+                   func.coalesce(func.sum(ImCharge.payout_amount), 0))
+            .where(ImCharge.bot_account_id == a.id)
+        )).one()
+        last_seen = (await db.execute(
+            select(func.max(MerchantApiKey.last_used_at))
+            .where(MerchantApiKey.bot_account_id == a.id, MerchantApiKey.revoked_at.is_(None))
+        )).scalar_one_or_none()
+        out.append({
+            "id": a.id,
+            "email": a.email,
+            "full_name": a.full_name,
+            "phone": a.phone,
+            "status": a.status,
+            "verified": a.email_verified_at is not None,
+            "linked_trader_id": a.linked_trader_id,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+            "last_login_at": a.last_login_at.isoformat() if a.last_login_at else None,
+            "last_seen": last_seen.isoformat() if last_seen else None,
+            "payouts": int(stats[0] or 0),
+            "revenue": int(stats[1] or 0),
+            "volume": int(stats[2] or 0),
+            "rate": 12,   # bot-only is always 12
+        })
+    return {"total": total, "page": page, "limit": limit, "accounts": out}
 
 
 # ── Credit / Trade Token Purchases ───────────────────────────────────────────
