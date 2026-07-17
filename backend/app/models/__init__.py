@@ -14,6 +14,8 @@ from app.models.bot_log import BotLog
 from app.models.squad import Squad, SquadMember
 from app.models.kyc_submission import KycSubmission
 from app.models.api_key import MerchantApiKey
+from app.models.im_bot_account import ImBotAccount
+from app.models.im_charge import ImCharge
 
 __all__ = [
     "Squad", "SquadMember",
