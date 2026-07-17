@@ -17,7 +17,9 @@ Deliberately its own table rather than columns on `traders`:
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Index
+from sqlalchemy import (
+    Column, Integer, String, DateTime, ForeignKey, Index, CheckConstraint,
+)
 
 from app.core.database import Base
 
@@ -26,7 +28,14 @@ class MerchantApiKey(Base):
     __tablename__ = "merchant_api_keys"
 
     id = Column(Integer, primary_key=True, index=True)
-    trader_id = Column(Integer, ForeignKey("traders.id"), nullable=False, index=True)
+
+    # Exactly ONE owner — enforced by ck_merchant_api_keys_one_owner below.
+    # A SparkP2P trader (billed 5/7/8/9, or 10 while they use up the intro)...
+    trader_id = Column(Integer, ForeignKey("traders.id"), nullable=True, index=True)
+    # ...or a bot-only account: someone who runs I&M Automation standalone with
+    # their own Binance keys and is not a SparkP2P client (billed 12). They have
+    # no trader row, but still need a credential to report payouts for billing.
+    bot_account_id = Column(Integer, ForeignKey("im_bot_accounts.id"), nullable=True, index=True)
 
     # The key is NEVER stored. Only its SHA-256 hash, which is what an
     # incoming key is matched against — so a database leak cannot be replayed
@@ -52,7 +61,20 @@ class MerchantApiKey(Base):
     def active(self) -> bool:
         return self.revoked_at is None
 
+    __table_args__ = (
+        # A key with no owner would authenticate a payout nobody can be billed
+        # for; a key with both owners is ambiguous about who to charge, at two
+        # different rates. Neither is recoverable after the fact, so the
+        # database refuses both.
+        CheckConstraint(
+            "(trader_id IS NOT NULL AND bot_account_id IS NULL) OR "
+            "(trader_id IS NULL AND bot_account_id IS NOT NULL)",
+            name="ck_merchant_api_keys_one_owner",
+        ),
+    )
+
 
 # Serving a merchant's live keys is the hot path (every poll), so index the way
-# it is actually queried: this trader's un-revoked keys.
+# it is actually queried: this owner's un-revoked keys.
 Index("ix_merchant_api_keys_trader_active", MerchantApiKey.trader_id, MerchantApiKey.revoked_at)
+Index("ix_merchant_api_keys_bot_account", MerchantApiKey.bot_account_id, MerchantApiKey.revoked_at)

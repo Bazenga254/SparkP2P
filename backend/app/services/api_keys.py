@@ -63,12 +63,28 @@ def prefix_of(plaintext: str) -> str:
     return plaintext[:PREFIX_SHOWN]
 
 
-async def create_key(trader_id: int, name: str | None = None, scope: str = "im_bot") -> tuple[str, MerchantApiKey]:
-    """Mint a key for a trader. Returns (plaintext, row) — the plaintext is the
-    ONLY copy that will ever exist; the caller must show it and drop it."""
+async def create_key(
+    trader_id: int | None = None,
+    name: str | None = None,
+    scope: str = "im_bot",
+    bot_account_id: int | None = None,
+) -> tuple[str, MerchantApiKey]:
+    """Mint a key for EXACTLY ONE owner — a trader, or a bot-only account.
+
+    Returns (plaintext, row) — the plaintext is the ONLY copy that will ever
+    exist; the caller must show it and drop it.
+
+    The one-owner rule is checked here as well as by the database, so a caller
+    gets a clear error instead of an IntegrityError from three layers down. A key
+    with no owner would authenticate a payout nobody can be billed for; a key
+    with both is ambiguous about who to charge, at two different rates.
+    """
+    if (trader_id is None) == (bot_account_id is None):
+        raise ValueError("a key needs exactly one owner: trader_id XOR bot_account_id")
     plaintext = generate_key()
     row = MerchantApiKey(
         trader_id=trader_id,
+        bot_account_id=bot_account_id,
         key_hash=hash_key(plaintext),
         key_prefix=prefix_of(plaintext),
         name=(name or "I&M Bot")[:100],
@@ -78,12 +94,24 @@ async def create_key(trader_id: int, name: str | None = None, scope: str = "im_b
         db.add(row)
         await db.commit()
         await db.refresh(row)
-    logger.info("api_key: minted %s… for trader %s (scope=%s)", row.key_prefix, trader_id, scope)
+    logger.info(
+        "api_key: minted %s… for %s (scope=%s)",
+        row.key_prefix,
+        f"trader {trader_id}" if trader_id else f"bot_account {bot_account_id}",
+        scope,
+    )
     return plaintext, row
 
 
-async def resolve_key(plaintext: str, scope: str = "im_bot", client_ip: str | None = None) -> int | None:
-    """Plaintext key -> trader_id, or None.
+async def resolve_key_owner(
+    plaintext: str, scope: str = "im_bot", client_ip: str | None = None
+) -> tuple[str, int] | None:
+    """Plaintext key -> (account_type, owner_id), or None.
+
+    THE primitive: one lookup, one copy of the revoke/scope/heartbeat rules.
+    account_type is one of im_pricing.ACCOUNT_* and is what decides the rate, so
+    it comes from the KEY and never from the caller — a bot that could name its
+    own account type could name its own price.
 
     Opens and closes its OWN short-lived session on purpose. The I&M Bot poll is
     a long-poll; if authentication held a pooled connection for the whole wait,
@@ -106,10 +134,21 @@ async def resolve_key(plaintext: str, scope: str = "im_bot", client_ip: str | No
         if row is None:
             return None
         if row.revoked_at is not None:
-            logger.warning("api_key: REVOKED key %s… presented (trader %s)", row.key_prefix, row.trader_id)
+            logger.warning("api_key: REVOKED key %s… presented", row.key_prefix)
             return None
         if row.scope != scope:
             logger.warning("api_key: key %s… has scope=%s, wanted %s", row.key_prefix, row.scope, scope)
+            return None
+
+        if row.trader_id is not None:
+            owner = ("sparkp2p", row.trader_id)
+        elif row.bot_account_id is not None:
+            owner = ("bot_only", row.bot_account_id)
+        else:
+            # ck_merchant_api_keys_one_owner forbids this, so it should be
+            # unreachable. If it ever happens, refuse rather than guess: an
+            # ownerless key authenticates a payout nobody can be billed for.
+            logger.error("api_key: key %s… has NO owner — refusing", row.key_prefix)
             return None
 
         # last_used_at is the bot's heartbeat — the poller authenticates on every
@@ -125,7 +164,22 @@ async def resolve_key(plaintext: str, scope: str = "im_bot", client_ip: str | No
             )
             await db.commit()
 
-        return row.trader_id
+        return owner
+
+
+async def resolve_key(plaintext: str, scope: str = "im_bot", client_ip: str | None = None) -> int | None:
+    """Plaintext key -> TRADER id, or None.
+
+    NOTE THE NAME: this answers "which trader is this?", so a valid BOT-ONLY key
+    returns None — a bot-only account has no trader row and must never be
+    mistaken for one. The 401 that produces on a trader-only endpoint is correct;
+    it is a refusal, not an error. Endpoints serving both populations must call
+    resolve_key_owner() instead.
+    """
+    owner = await resolve_key_owner(plaintext, scope=scope, client_ip=client_ip)
+    if owner is None or owner[0] != "sparkp2p":
+        return None
+    return owner[1]
 
 
 async def list_keys(trader_id: int, scope: str = "im_bot") -> list[MerchantApiKey]:
