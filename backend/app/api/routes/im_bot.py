@@ -8,7 +8,6 @@ exposed on the merchant's PC.
 Mounted at /api/im-bot (NOT /api/im — that belongs to the older im_bank.py
 gateway routes).
 
-This file currently covers step 1 of the link: merchant API keys.
   Merchant, from the browser (JWT auth):
     POST   /api/im-bot/keys          mint a key (plaintext shown ONCE)
     GET    /api/im-bot/keys          list this merchant's keys (never the key)
@@ -16,27 +15,50 @@ This file currently covers step 1 of the link: merchant API keys.
     GET    /api/im-bot/link-status   is my bot online?
   The bot itself (API-key auth):
     GET    /api/im-bot/ping          proves a key works end-to-end
+    GET    /api/im-bot/poll          pending BUY orders to pay (leased)
+    POST   /api/im-bot/result        report PAID / FAILED / UNKNOWN
 
 BUY ORDERS ONLY. I&M can only send money out, so the bot pays sellers when the
 merchant BUYS crypto. Sell orders stay on the Choice Bank gateway.
+
+SAFETY — a buy order = we send fiat, then tell Binance we paid, then the seller
+releases crypto, so a wrong answer is expensive both ways. Three independent
+guards against paying a seller twice, and one rule against lying about it:
+  * The poll only serves a trader whose buy_payout_via_im flag is ON (default
+    OFF), so nothing here can touch the existing merchants.
+  * A served order is LEASED, so it is not handed out again while in flight.
+  * /result moves an order PENDING -> PAYMENT_SENT exactly once; a repeat is a
+    no-op. This is the authoritative, persistent guard.
+  * PAID marks the order paid. FAILED leaves it PENDING to retry. UNKNOWN (the
+    bot could not tell whether money moved) NEVER marks paid — it alerts a human.
 """
 
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_trader_id_from_api_key
+from app.api.deps import get_trader_id_from_api_key, get_client_ip
 from app.api.routes.traders import get_current_trader
-from app.models import Trader
+from app.core.database import get_db, async_session
+from app.models import Trader, Order
+from app.models.order import OrderSide, OrderStatus
 from app.services import api_keys as keysvc
+from app.services import im_bot_lease as lease
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # A bot polls well inside this, so a longer gap means it is not running.
 ONLINE_WINDOW_S = 90
+
+# Terminal result words the bot may report. Only PAID transitions the order.
+RESULT_PAID = "PAID"
+RESULT_FAILED = "FAILED"
+RESULT_UNKNOWN = "UNKNOWN"
 
 
 class CreateKeyRequest(BaseModel):
@@ -153,3 +175,176 @@ async def ping(trader_id: int = Depends(get_trader_id_from_api_key)):
     another merchant's orders from this merchant's bank account.
     """
     return {"ok": True, "trader_id": trader_id, "buy_orders_only": True}
+
+
+def _job(order: Order) -> dict:
+    """Shape a buy order into a payout job the I&M Bot can act on directly.
+
+    order_id is the Binance order number — the bot uses it as its idempotency
+    key (it records it and refuses to pay the same one twice), so it MUST be the
+    stable per-order identifier, never a row id.
+    """
+    method = (order.seller_payment_method or "").lower()
+    # Map SparkP2P's stored method to what the bot's router expects. The bot
+    # resolves the exact rail/bank itself; we hand it clean, explicit fields.
+    if method in ("mpesa", "m-pesa", "safaricom"):
+        rail_method = "M-PESA Kenya (Safaricom)"
+    elif method in ("airtel",):
+        rail_method = "M-PESA Kenya (Safaricom)"  # bot treats telco per number
+    else:
+        rail_method = "Bank Transfer"
+
+    return {
+        "order_id": order.binance_order_number,
+        "amount": round(order.fiat_amount or 0),   # KES, whole shillings
+        "method": rail_method,
+        "raw_method": order.seller_payment_method,
+        "destination": order.seller_payment_destination,   # phone or account no.
+        "name": order.seller_payment_name or order.counterparty_real_name,
+        # For a bank payout the bot needs the bank name; carry whatever we have.
+        "bank": order.seller_payment_name if rail_method == "Bank Transfer" else None,
+        "expected_name": order.seller_payment_name or order.counterparty_real_name,
+    }
+
+
+@router.get("/poll")
+async def poll(
+    request: Request,
+    trader_id: int = Depends(get_trader_id_from_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """The bot asks for buy orders to pay.
+
+    Short (non-blocking) poll for now — returns the current pending set or an
+    empty list. Only serves a trader whose buy_payout_via_im flag is ON, so a
+    trader who has not opted in (all existing ones) gets nothing and the desktop
+    app keeps paying their buys unchanged.
+
+    Every returned order is LEASED, so a rapid re-poll or a second bot instance
+    does not get the same order while a payment is in flight.
+    """
+    trader = await db.get(Trader, trader_id)
+    if not trader or not trader.buy_payout_via_im:
+        # Opted out (or unknown): nothing to do. Not an error — the bot just idles.
+        return {"jobs": [], "enabled": False}
+
+    rows = (
+        await db.execute(
+            select(Order).where(
+                Order.trader_id == trader_id,
+                Order.side == OrderSide.BUY,
+                Order.status == OrderStatus.PENDING,
+            ).order_by(Order.created_at.asc())
+        )
+    ).scalars().all()
+
+    jobs = []
+    for o in rows:
+        # Skip anything already in flight to this (or another) bot instance.
+        if not lease.try_lease(o.binance_order_number, trader_id):
+            continue
+        jobs.append(_job(o))
+
+    if jobs:
+        logger.info("im-bot poll: served %d job(s) to trader %s", len(jobs), trader_id)
+    return {"jobs": jobs, "enabled": True}
+
+
+class ResultRequest(BaseModel):
+    order_id: str                 # Binance order number
+    result: str                   # PAID | FAILED | UNKNOWN
+    bank_ref: str | None = None   # I&M reference, when there is one
+    channel: str | None = None    # MPESA | BANK — rail used, for the fee record
+    amount: float | None = None   # what the bot actually paid, for cross-check
+    detail: str | None = None     # error text / note
+
+
+@router.post("/result")
+async def result(
+    data: ResultRequest,
+    request: Request,
+    trader_id: int = Depends(get_trader_id_from_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """The bot reports the outcome of a payout.
+
+    PAID    -> order becomes PAYMENT_SENT (once), which hands off to the existing
+               mark-paid-on-Binance + release + settlement flow untouched.
+    FAILED  -> order stays PENDING so it can be retried; merchant is alerted.
+    UNKNOWN -> the bot could not tell whether money moved. NEVER marked paid;
+               a human is alerted to check the bank before anything is reported
+               to Binance. This is the READY/no-ref case we saw live.
+    """
+    verdict = (data.result or "").upper()
+    if verdict not in (RESULT_PAID, RESULT_FAILED, RESULT_UNKNOWN):
+        raise HTTPException(status_code=400, detail="result must be PAID, FAILED or UNKNOWN")
+
+    order = (
+        await db.execute(
+            select(Order).where(
+                Order.binance_order_number == data.order_id,
+                Order.trader_id == trader_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if not order:
+        # The lease (if any) is on an order we can't find for this trader — drop it.
+        lease.release(data.order_id)
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # The order is resolved either way now — let the lease go so a legitimate
+    # future retry (after a FAILED) is not blocked.
+    lease.release(data.order_id)
+
+    if verdict == RESULT_PAID:
+        # IDEMPOTENT + NON-DOWNGRADING: only PENDING advances. If it is already
+        # PAYMENT_SENT/RELEASED/COMPLETED, a duplicate PAID is a no-op — this is
+        # the authoritative guard against a double "paid".
+        applied = order.status == OrderStatus.PENDING
+        if applied:
+            order.status = OrderStatus.PAYMENT_SENT
+            order.payment_sent_at = datetime.now(timezone.utc)
+            try:
+                from app.services.outbound_fees import outbound_fee as _outbound_fee
+                order.choice_fee = _outbound_fee((data.channel or "MPESA").upper(), order.fiat_amount or 0)
+            except Exception as _e:
+                logger.warning("im-bot result: fee record failed for %s: %s", data.order_id, _e)
+            await db.commit()
+            logger.info("im-bot result: order %s PAID (ref=%s) -> PAYMENT_SENT", data.order_id, data.bank_ref)
+            await _alert(trader_id, f"✅ I&M Bot paid buy order …{data.order_id[-8:]} — KES {int(order.fiat_amount or 0):,}. Ref {data.bank_ref or 'n/a'}.")
+        else:
+            # Already advanced by an earlier result — a duplicate PAID is a no-op.
+            # 'applied' must reflect what THIS call did, so the bot never reads a
+            # duplicate as a fresh success.
+            logger.info("im-bot result: duplicate PAID for %s (status=%s) — no-op", data.order_id, order.status)
+        return {"ok": True, "status": order.status.value, "applied": applied, "duplicate": not applied}
+
+    if verdict == RESULT_FAILED:
+        # Leave it PENDING so it can be retried. Do NOT touch Binance.
+        logger.warning("im-bot result: order %s FAILED — %s", data.order_id, data.detail)
+        await _alert(trader_id, f"❌ I&M Bot could not pay buy order …{data.order_id[-8:]}: {data.detail or 'unknown error'}. It will retry.")
+        return {"ok": True, "status": order.status.value, "applied": False}
+
+    # UNKNOWN — the dangerous case. Never mark paid; get a human to check the bank.
+    logger.error("im-bot result: order %s UNKNOWN (ref=%s) — human check needed", data.order_id, data.bank_ref)
+    await _alert(
+        trader_id,
+        f"⚠️ I&M Bot is UNSURE whether buy order …{data.order_id[-8:]} was paid "
+        f"(KES {int(order.fiat_amount or 0):,}, ref {data.bank_ref or 'none'}). "
+        f"NOT marked paid. Check your I&M account before releasing.",
+    )
+    return {"ok": True, "status": order.status.value, "applied": False, "needs_human": True}
+
+
+async def _alert(trader_id: int, text: str) -> None:
+    """Telegram alert to the trader; never let a notification failure break the
+    result path (the money decision has already been recorded)."""
+    try:
+        async with async_session() as db:
+            trader = await db.get(Trader, trader_id)
+        if trader:
+            from app.api.routes.telegram import notify_trader
+            await notify_trader(trader, text)
+    except Exception as _e:
+        logger.warning("im-bot alert failed for trader %s: %s", trader_id, _e)

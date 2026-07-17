@@ -103,6 +103,11 @@ class Trader(Base):
 
     # Bot trade mode: 'both' | 'buy_only' | 'sell_only'
     bot_trade_mode = Column(String(20), default='both')
+    # Route BUY-order seller payments through the trader's own downloadable I&M
+    # Bot (M-Pesa/PesaLink) instead of Choice Bank B2C. DEFAULT FALSE: the poll
+    # serves nothing until a trader opts in, and turning it on must be paired
+    # with the desktop app no longer paying that trader's buys (or both pay).
+    buy_payout_via_im = Column(Boolean, nullable=False, default=False, server_default="false")
     # Full-auto mode: when True, the bot strictly enforces screening with NO manual Telegram
     # approval — orders that pass are auto-processed, orders that fail are auto-rejected (excuse).
     bot_full_auto = Column(Boolean, default=False)
