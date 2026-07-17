@@ -41,7 +41,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_trader_id_from_api_key, get_client_ip
+from app.api.deps import get_trader_id_from_api_key, get_owner_from_api_key, get_client_ip
 from app.api.routes.traders import get_current_trader
 from app.core.database import get_db, async_session
 from app.models import Trader, Order
@@ -352,6 +352,35 @@ async def result(
                 order.choice_fee = _outbound_fee((data.channel or "MPESA").upper(), order.fiat_amount or 0)
             except Exception as _e:
                 logger.warning("im-bot result: fee record failed for %s: %s", data.order_id, _e)
+
+            # Bill this payout, in the SAME transaction as the status advance:
+            # either the order is PAYMENT_SENT and on the ledger, or neither. The
+            # rate is resolved inside record_charge from the trader's real
+            # subscription — never trusted from the bot.
+            from app.services.im_billing import record_charge, AlreadyBilled
+            from app.services.im_pricing import ACCOUNT_SPARKP2P
+            try:
+                await record_charge(
+                    db,
+                    account_type=ACCOUNT_SPARKP2P,
+                    order_id=data.order_id,
+                    payout_amount=int(order.fiat_amount or 0),
+                    trader_id=trader_id,
+                    bank_ref=data.bank_ref,
+                )
+            except AlreadyBilled:
+                # The order was PENDING but somehow already billed (e.g. a prior
+                # crash between commit and this line on an earlier build). Advance
+                # it anyway; do not bill twice.
+                logger.info("im-bot result: order %s already billed — advancing without a second charge", data.order_id)
+            except Exception as _e:
+                # Billing must not lose a payment that already left the bank. If
+                # we cannot write the charge, still advance the order (the money
+                # moved) and shout — an unbilled payout is a revenue leak a human
+                # can reconcile, but a lost release is a lost customer.
+                logger.error("im-bot result: FAILED TO BILL paid order %s: %s", data.order_id, _e)
+                await _alert(trader_id, f"⚠️ Paid buy order …{data.order_id[-8:]} but could NOT record its I&M charge — admin to reconcile.")
+
             await db.commit()
             logger.info("im-bot result: order %s PAID (ref=%s) -> PAYMENT_SENT", data.order_id, data.bank_ref)
             await _alert(trader_id, f"✅ I&M Bot paid buy order …{data.order_id[-8:]} — KES {int(order.fiat_amount or 0):,}. Ref {data.bank_ref or 'n/a'}.")
@@ -377,6 +406,75 @@ async def result(
         f"NOT marked paid. Check your I&M account before releasing.",
     )
     return {"ok": True, "status": order.status.value, "applied": False, "needs_human": True}
+
+
+class PayoutReport(BaseModel):
+    order_id: str                 # Binance order number the bot paid
+    result: str                   # PAID | FAILED | UNKNOWN
+    amount: float | None = None   # KES that left the bank (required for PAID)
+    bank_ref: str | None = None   # I&M reference, when there is one
+    detail: str | None = None
+
+
+@router.post("/report-payout")
+async def report_payout(
+    data: PayoutReport,
+    owner: tuple = Depends(get_owner_from_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """A BOT-ONLY account reports a completed payout for billing.
+
+    Bot-only users are not SparkP2P clients: we do not track their Binance orders,
+    so there is no order to advance — the report itself is the billable event.
+    Only PAID is charged (at KES 12); FAILED/UNKNOWN record nothing, exactly as
+    for traders.
+
+    Traders must NOT use this — they bill through /result, which also advances
+    their tracked order. A trader key here is refused so a payout is never billed
+    twice by a client calling both.
+    """
+    account_type, owner_id = owner
+    from app.services.im_pricing import ACCOUNT_BOT_ONLY, should_bill
+
+    if account_type != ACCOUNT_BOT_ONLY:
+        raise HTTPException(
+            status_code=403,
+            detail="Traders bill through /result. This endpoint is for bot-only accounts.",
+        )
+
+    verdict = (data.result or "").upper()
+    if verdict not in (RESULT_PAID, RESULT_FAILED, RESULT_UNKNOWN):
+        raise HTTPException(status_code=400, detail="result must be PAID, FAILED or UNKNOWN")
+
+    # Only a payout that moved money is billed. FAILED and UNKNOWN are recorded
+    # nowhere on the ledger — same rule as traders.
+    if not should_bill(verdict):
+        logger.info("im-bot report-payout: bot#%s order %s %s — not billed", owner_id, data.order_id, verdict)
+        return {"ok": True, "billed": False, "outcome": verdict}
+
+    amount = int(data.amount or 0)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="a PAID payout must report a positive amount")
+
+    from app.services.im_billing import record_charge, AlreadyBilled
+    try:
+        charge = await record_charge(
+            db,
+            account_type=ACCOUNT_BOT_ONLY,
+            order_id=data.order_id,
+            payout_amount=amount,
+            bot_account_id=owner_id,
+            bank_ref=data.bank_ref,
+        )
+        await db.commit()
+    except AlreadyBilled as e:
+        # A duplicate report — the payout is already on the ledger. Idempotent:
+        # report success with the charge that already exists, bill nothing more.
+        logger.info("im-bot report-payout: bot#%s order %s already billed — no-op", owner_id, data.order_id)
+        return {"ok": True, "billed": False, "duplicate": True, "rate": e.existing.rate}
+
+    logger.info("im-bot report-payout: bot#%s billed KES %s for order %s", owner_id, charge.rate, data.order_id)
+    return {"ok": True, "billed": True, "rate": charge.rate, "outcome": verdict}
 
 
 async def _alert(trader_id: int, text: str) -> None:

@@ -175,9 +175,36 @@ async def get_trader_id_from_api_key(
     trader_id = await resolve_key(credentials.credentials, scope="im_bot", client_ip=get_client_ip(request))
     if trader_id is None:
         # One message for missing/expired/revoked/wrong-scope: never help a
-        # caller work out WHICH of those a key is.
+        # caller work out WHICH of those a key is. A valid BOT-ONLY key also lands
+        # here (resolve_key returns None for it) — correct, this dependency guards
+        # trader-only endpoints.
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked API key")
     return trader_id
+
+
+async def get_owner_from_api_key(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> tuple[str, int]:
+    """Authenticate an I&M Bot key and return (account_type, owner_id) — serving
+    BOTH populations: SparkP2P traders and bot-only accounts.
+
+    Use this only on endpoints that legitimately serve both (e.g. reporting a
+    payout for billing). Endpoints that touch a trader's orders/balance must keep
+    using get_trader_id_from_api_key, which refuses bot-only keys.
+
+    account_type comes from the KEY, never from the caller — a bot that could name
+    its own account type could name its own price.
+    """
+    if not credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    from app.services.api_keys import resolve_key_owner
+
+    owner = await resolve_key_owner(credentials.credentials, scope="im_bot", client_ip=get_client_ip(request))
+    if owner is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked API key")
+    return owner
 
 
 async def get_admin_trader(
