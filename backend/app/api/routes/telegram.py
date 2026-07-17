@@ -6,11 +6,12 @@ import time
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import update
+from sqlalchemy import update, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_trader, get_db
 from app.models.trader import Trader
+from app.models.order import Order
 
 router = APIRouter()
 
@@ -682,17 +683,70 @@ class BuyApprovalRequest(BaseModel):
     advisory: str = ""             # e.g. "Looks good" or "Caution"
 
 
+async def _persist_payment_details(db: AsyncSession, trader: Trader, data: BuyApprovalRequest) -> None:
+    """Record where this buy order's seller gets paid, onto the order itself.
+
+    The desktop sends method as 'mpesa' | 'im_bank' | 'other_bank':
+      mpesa       -> pay the PHONE
+      im_bank     -> PesaLink to an account AT I&M
+      other_bank  -> PesaLink to an account at bank_name
+
+    Never overwrites a populated field with a blank: this endpoint can be called
+    more than once for an order, and a later call with an empty bank_name must
+    not erase a destination we already know.
+
+    Must never break the notification — a payment is about to happen either way.
+    """
+    try:
+        order = (
+            await db.execute(
+                select(Order).where(
+                    Order.binance_order_number == data.order_number,
+                    Order.trader_id == trader.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not order:
+            return
+
+        method = (data.method or "").strip().lower()
+        dest = (data.phone or "").strip() if method == "mpesa" else (data.account_number or "").strip()
+        # An I&M seller is paid at I&M; for any other bank, take the reported name.
+        bank = "I&M Bank" if method == "im_bank" else (data.bank_name or "").strip()
+
+        if method:
+            order.seller_payment_method = method
+        if dest:
+            order.seller_payment_destination = dest
+        if (data.seller_name or "").strip():
+            order.seller_payment_name = data.seller_name.strip()
+        if bank:
+            order.seller_payment_bank = bank
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"could not persist payment details for {data.order_number}: {e}")
+
+
 @router.post("/request-buy-approval")
 async def request_buy_approval(
     data: BuyApprovalRequest,
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Notify trader of an incoming buy order and auto-pay immediately (no approval gate).
     Previously required Telegram YES/NO — removed because with multiple concurrent orders
     the approval response was being mis-matched to the wrong order. The bot now pays
     automatically and the merchant only receives informational alerts (before + after payment).
+
+    ALSO PERSISTS WHERE THE SELLER IS PAID. The desktop already extracts this from
+    Binance and sends it here; until now we only formatted a Telegram message and
+    threw it away, so every buy order had seller_payment_* = NULL and the I&M Bot's
+    /poll had nothing real to serve. This is the only place the server ever learns
+    a seller's payment details, so record them.
     """
+    await _persist_payment_details(db, trader, data)
+
     if not trader.telegram_chat_id:
         return {"ok": True, "auto_approved": True}
 

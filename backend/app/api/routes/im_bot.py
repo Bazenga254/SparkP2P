@@ -184,15 +184,20 @@ def _job(order: Order) -> dict:
     key (it records it and refuses to pay the same one twice), so it MUST be the
     stable per-order identifier, never a row id.
     """
+    # The desktop reports method as 'mpesa' | 'im_bank' | 'other_bank'
+    # (see telegram.py request-buy-approval, which is where we learn this).
     method = (order.seller_payment_method or "").lower()
-    # Map SparkP2P's stored method to what the bot's router expects. The bot
-    # resolves the exact rail/bank itself; we hand it clean, explicit fields.
-    if method in ("mpesa", "m-pesa", "safaricom"):
-        rail_method = "M-PESA Kenya (Safaricom)"
-    elif method in ("airtel",):
-        rail_method = "M-PESA Kenya (Safaricom)"  # bot treats telco per number
+    if method in ("mpesa", "m-pesa", "safaricom", "airtel"):
+        rail_method = "M-PESA Kenya (Safaricom)"   # bot detects the telco from the number
+        bank = None
     else:
         rail_method = "Bank Transfer"
+        # NEVER fall back to the seller's NAME as the bank — that was a real bug
+        # here, and the bot rightly refuses to guess a bank (banks.js once
+        # resolved "coop bank" to Ecobank). No bank -> the bot fails loudly with
+        # BANK_REQUIRED, which is correct: better a visible failure than paying
+        # the wrong bank.
+        bank = order.seller_payment_bank
 
     return {
         "order_id": order.binance_order_number,
@@ -201,8 +206,7 @@ def _job(order: Order) -> dict:
         "raw_method": order.seller_payment_method,
         "destination": order.seller_payment_destination,   # phone or account no.
         "name": order.seller_payment_name or order.counterparty_real_name,
-        # For a bank payout the bot needs the bank name; carry whatever we have.
-        "bank": order.seller_payment_name if rail_method == "Bank Transfer" else None,
+        "bank": bank,
         "expected_name": order.seller_payment_name or order.counterparty_real_name,
     }
 
@@ -234,6 +238,11 @@ async def poll(
                 Order.trader_id == trader_id,
                 Order.side == OrderSide.BUY,
                 Order.status == OrderStatus.PENDING,
+                # Only serve an order we actually know how to pay. The server
+                # only learns the seller's destination when the desktop reports
+                # it (telegram.py request-buy-approval); until then the bot would
+                # just fail the job and re-poll it forever.
+                Order.seller_payment_destination.isnot(None),
             ).order_by(Order.created_at.asc())
         )
     ).scalars().all()

@@ -53,9 +53,13 @@ class Order(Base):
     counterparty_phone = Column(String(20), nullable=True)
 
     # Buy side payment details (parsed from Binance)
-    seller_payment_method = Column(String(50), nullable=True)  # mpesa, bank
+    seller_payment_method = Column(String(50), nullable=True)  # mpesa | im_bank | other_bank
     seller_payment_destination = Column(String(100), nullable=True)  # Phone or account
     seller_payment_name = Column(String(255), nullable=True)
+    # Bank name for a bank/PesaLink payout. Required by the I&M Bot, which
+    # refuses to guess a bank (see engine/banks.js: a fuzzy match once resolved
+    # "coop bank" to Ecobank). Populated from what the desktop already reports.
+    seller_payment_bank = Column(String(100), nullable=True)
 
     # Chat message to send before releasing (set by C2B callback)
     pending_chat_message = Column(Text, nullable=True)
