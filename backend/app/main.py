@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_db, async_session
-from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, im_bot, support, survey, affiliates, telegram, choice_bank, kyc_flow, squads, webhooks
+from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, im_bot, im_account, support, survey, affiliates, telegram, choice_bank, kyc_flow, squads, webhooks
 from app.services.binance.poller import order_poller
 from app.services.message_templates import seed_default_templates
 from app.services import bot_monitor
@@ -485,6 +485,9 @@ app.include_router(im_bank.router, prefix="/api/im", tags=["I&M Bank"])
 # /api/im-bot is the merchant's own downloadable I&M Bot — distinct from the
 # older /api/im gateway routes above.
 app.include_router(im_bot.router, prefix="/api/im-bot", tags=["I&M Bot"])
+# /api/im-account is sign-in for BOT-ONLY accounts (not SparkP2P clients) — kept
+# apart from /api/auth (traders) so the two populations never blur.
+app.include_router(im_account.router, prefix="/api/im-account", tags=["I&M Bot Accounts"])
 app.include_router(support.router, prefix="/api", tags=["Support"])
 app.include_router(survey.router, prefix="/api/survey", tags=["Survey"])
 app.include_router(affiliates.router, prefix="/api/affiliates", tags=["Affiliates"])
