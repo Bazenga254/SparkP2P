@@ -10,7 +10,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel, EmailStr, field_validator
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 
@@ -22,6 +22,16 @@ from app.models.wallet import Wallet
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+def _norm_email(value) -> str:
+    """Emails are case-insensitive in practice, and phone keyboards capitalise the
+    first letter. Matching exactly meant such a user could NEVER log in — and
+    since 3 failures lock the account for 24 hours, a capital letter locked
+    people out of their own account. Compare on lower(email) everywhere.
+    """
+    return (value or "").strip().lower()
+
+
 
 # In-memory store for email verification codes (use Redis in production)
 _verification_codes: dict[str, str] = {}
@@ -103,7 +113,7 @@ async def send_verification_code(data: SendVerificationRequest, db: AsyncSession
     """Send email verification code."""
     # Check if email already registered
     result = await db.execute(
-        select(Trader).where(Trader.email == data.email)
+        select(Trader).where(func.lower(Trader.email) == _norm_email(data.email))
     )
     if result.scalar_one_or_none():
         raise HTTPException(
@@ -139,7 +149,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     # Check if email or phone already exists
     result = await db.execute(
         select(Trader).where(
-            (Trader.email == data.email) | (Trader.phone == data.phone)
+            (func.lower(Trader.email) == _norm_email(data.email)) | (Trader.phone == data.phone)
         )
     )
     if result.scalar_one_or_none():
@@ -166,7 +176,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
             referred_by_code = data.referral_code.upper()
 
     trader = Trader(
-        email=data.email,
+        email=_norm_email(data.email),
         phone=data.phone,
         full_name=full_name,
         password_hash=hash_password(data.password),
@@ -209,7 +219,7 @@ async def login(data: LoginRequest, request: Request = None, db: AsyncSession = 
     Lockout: 3 failed attempts locks account for 24 hours.
     """
     result = await db.execute(
-        select(Trader).where(Trader.email == data.email)
+        select(Trader).where(func.lower(Trader.email) == _norm_email(data.email))
     )
     trader = result.scalar_one_or_none()
 
@@ -357,7 +367,7 @@ async def extension_login(data: LoginRequest, db: AsyncSession = Depends(get_db)
     The extension already has Binance cookies which is stronger auth.
     """
     result = await db.execute(
-        select(Trader).where(Trader.email == data.email)
+        select(Trader).where(func.lower(Trader.email) == _norm_email(data.email))
     )
     trader = result.scalar_one_or_none()
 
@@ -383,7 +393,7 @@ async def extension_login(data: LoginRequest, db: AsyncSession = Depends(get_db)
 async def employee_login(data: EmployeeLoginRequest, request: Request = None, db: AsyncSession = Depends(get_db)):
     """Login as an employee (support staff)."""
     result = await db.execute(
-        select(Trader).where(Trader.email == data.email)
+        select(Trader).where(func.lower(Trader.email) == _norm_email(data.email))
     )
     employee = result.scalar_one_or_none()
 
@@ -455,7 +465,7 @@ class ResetConfirmModel(BaseModel):
 @router.post("/reset-password/request")
 async def reset_password_request(data: ResetRequestModel, db: AsyncSession = Depends(get_db)):
     """Step 1: Send OTP to trader's registered phone for password reset."""
-    result = await db.execute(select(Trader).where(Trader.email == data.email))
+    result = await db.execute(select(Trader).where(func.lower(Trader.email) == _norm_email(data.email)))
     trader = result.scalar_one_or_none()
 
     # Always return success to prevent email enumeration
@@ -482,7 +492,7 @@ async def reset_password_confirm(data: ResetConfirmModel, db: AsyncSession = Dep
     if not stored or stored != data.otp_code:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP code")
 
-    result = await db.execute(select(Trader).where(Trader.email == data.email))
+    result = await db.execute(select(Trader).where(func.lower(Trader.email) == _norm_email(data.email)))
     trader = result.scalar_one_or_none()
     if not trader:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -649,14 +659,14 @@ async def google_callback(code: str = None, state: str = None, error: str = None
         return _oauth_redirect(platform, sid, {"error": "no_email"})
 
     # Check if user exists
-    result = await db.execute(select(Trader).where(Trader.email == email))
+    result = await db.execute(select(Trader).where(func.lower(Trader.email) == _norm_email(email)))
     trader = result.scalar_one_or_none()
 
     if not trader:
         # Auto-register with Google account
         google_id = google_user.get("id", secrets.token_urlsafe(16))
         trader = Trader(
-            email=email,
+            email=_norm_email(email),
             full_name=name.upper(),
             phone=f"g_{google_id[-12:]}",  # unique placeholder (14 chars max) — replaced when user adds real phone
             password_hash=hash_password(secrets.token_urlsafe(32)),
