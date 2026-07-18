@@ -92,3 +92,37 @@ def consume_bot(acct, n: int = 1) -> int:
     bal = max(0, bot_balance(acct) - int(n))
     acct.credits = bal
     return bal
+
+
+async def grant_bot_credits(db, bot_account_id: int, amount: float, receipt: str = ""):
+    """Idempotently top up a BOT-ONLY account's credits from a paybill payment
+    (reference CB<id>). Priced at the flat 12 rate: round(amount / 12).
+
+    Idempotent per M-Pesa receipt, the SAME way trader credits are: an advisory
+    lock serialises the C2B + STK double-fire, and a completed credit_purchases
+    row records the receipt so a later redelivery grants nothing. credit_purchases
+    now carries bot_account_id, so bot receipts have a durable home."""
+    from sqlalchemy import text as _text, select as _select
+    from app.models.im_bot_account import ImBotAccount
+    from app.models.subscription import CreditPurchase
+
+    rate = credit_rate_bot_only()
+    granted = credits_for(amount, rate)
+    if receipt:
+        await db.execute(_text("SELECT pg_advisory_xact_lock(hashtext(:r))"), {"r": "cr:" + str(receipt)})
+        done = (await db.execute(
+            _select(CreditPurchase).where(CreditPurchase.mpesa_receipt == receipt,
+                                          CreditPurchase.status == "completed").limit(1)
+        )).scalars().first()
+        if done:
+            logger.info("[Credits] bot top-up %s already granted — skipped", receipt)
+            return None
+
+    acct = await db.get(ImBotAccount, bot_account_id)
+    if acct is not None:
+        acct.credits = int(acct.credits or 0) + granted
+    db.add(CreditPurchase(bot_account_id=bot_account_id, amount=amount, credits=granted,
+                          mpesa_receipt=receipt or None, status="completed"))
+    await db.commit()
+    logger.warning("[Credits] bot#%s +%s credits (KES %s, receipt %s)", bot_account_id, granted, amount, receipt or "—")
+    return granted

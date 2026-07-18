@@ -573,11 +573,13 @@ async def credits_status(
         balance = creditsvc.bot_balance(acct) if acct else 0
         rate = creditsvc.credit_rate_bot_only()
         enabled = True
+        account_ref = f"CB{owner_id}"   # pay to the paybill with this reference
     else:
         trader = await db.get(Trader, owner_id)
         enabled = bool(trader and creditsvc.trader_credits_enabled(trader))
         balance = creditsvc.trader_balance(trader) if trader else 0
         rate = await creditsvc.credit_rate_for_trader(db, owner_id) if enabled else None
+        account_ref = f"CR{owner_id}"
 
     return {
         "credits_enabled": enabled,
@@ -586,6 +588,7 @@ async def credits_status(
         "paused_no_credits": bool(enabled and balance <= 0),
         "min_deposit": creditsvc.MIN_DEPOSIT_KES,
         "paybill": settings.SUBSCRIPTION_PAYBILL,
+        "account_ref": account_ref,
         "account_type": account_type,
     }
 

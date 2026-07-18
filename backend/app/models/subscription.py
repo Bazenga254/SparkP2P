@@ -12,15 +12,21 @@ class SubscriptionPlan(str, enum.Enum):
 
 
 class CreditPurchase(Base):
-    """A B2C-payout credit top-up (B2C own-paybill clients). Paid via STK to the subscription
-    paybill with reference CR<trader_id>; 1 credit = KES 8. Tracked so the STK callback and the
-    C2B confirmation (which both fire) grant the credits exactly once, keyed on the M-Pesa receipt."""
+    """A prepaid payout-credit top-up. Paid to paybill 4041355; 1 credit = 1 payout,
+    priced at the buyer's rate (round(amount / rate)). Tracked so the STK callback
+    and the C2B confirmation (which both fire) grant exactly once, keyed on the
+    M-Pesa receipt.
+
+    Serves BOTH populations — a SparkP2P trader (reference CR<trader_id>) or a
+    bot-only account (reference CB<bot_account_id>). Exactly one owner is set."""
     __tablename__ = "credit_purchases"
 
     id = Column(Integer, primary_key=True, index=True)
-    trader_id = Column(Integer, ForeignKey("traders.id"), nullable=False, index=True)
+    # Exactly one of these — a trader (CR…) or a bot-only account (CB…).
+    trader_id = Column(Integer, ForeignKey("traders.id"), nullable=True, index=True)
+    bot_account_id = Column(Integer, ForeignKey("im_bot_accounts.id"), nullable=True, index=True)
     amount = Column(Float, nullable=False)              # KES paid
-    credits = Column(Integer, default=0)               # credits granted = round(amount / 8)
+    credits = Column(Integer, default=0)               # credits granted = round(amount / rate)
     mpesa_checkout_id = Column(String(100), nullable=True, index=True)
     mpesa_receipt = Column(String(100), nullable=True, index=True)
     status = Column(String(20), default="pending")     # pending | completed | failed

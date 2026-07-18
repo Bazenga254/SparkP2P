@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isNative } from '../mobile/relayAgent';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
@@ -796,6 +796,22 @@ export default function Dashboard() {
   const [profile, setProfile] = useState(null);
   const [rateLimit, setRateLimit] = useState(null);   // daily trade/telegram caps + reset (for the banner)
   const [rlNow, setRlNow] = useState(Date.now());     // ticks the limit-reached countdown
+
+  // Prepaid I&M payout credits (only on the I&M / own-paybill rails).
+  const [credits, setCredits] = useState(null);       // { credits_enabled, credits, credit_rate, ... }
+  const [showBuyCredits, setShowBuyCredits] = useState(false);
+  const [buyCreditsAmount, setBuyCreditsAmount] = useState(1000);
+  const [buyCreditsPhone, setBuyCreditsPhone] = useState('');
+  const [buyCreditsBusy, setBuyCreditsBusy] = useState(false);
+  const [buyCreditsMsg, setBuyCreditsMsg] = useState('');
+  const loadCredits = async () => {
+    try { const r = await getCredits(); setCredits(r.data); } catch (_) {}
+  };
+  useEffect(() => {
+    loadCredits();
+    const t = setInterval(loadCredits, 20000);   // keep the balance live as payouts consume
+    return () => clearInterval(t);
+  }, []);
 
   // Fetch Choice Bank balance — poll every 10s when account is verified
   useEffect(() => {
@@ -2236,6 +2252,49 @@ export default function Dashboard() {
                 )}
               </div>
             </div>
+
+            {/* Prepaid I&M payout credits — only on the I&M / own-paybill rails.
+                Choice Bank traders never see this (credits_enabled=false). */}
+            {credits?.credits_enabled && (() => {
+              const bal = credits.credits ?? 0;
+              const rate = credits.credit_rate || 0;
+              const paused = credits.paused_no_credits;
+              const low = !paused && bal > 0 && bal <= 20;
+              const accent = paused ? '#ef4444' : low ? '#f59e0b' : '#8b5cf6';
+              return (
+                <div className="card" style={{ marginBottom: 16, border: `1px solid ${accent}44`, background: paused ? 'rgba(239,68,68,0.06)' : '#0f0f16' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                      <div style={{ width: 46, height: 46, borderRadius: 12, background: `${accent}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>🎟️</div>
+                      <div>
+                        <div style={{ fontSize: 12, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '.5px', fontWeight: 600 }}>I&amp;M Automation credits</div>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 2 }}>
+                          <span style={{ fontSize: 30, fontWeight: 800, color: accent }}>{bal.toLocaleString()}</span>
+                          <span style={{ fontSize: 13, color: '#9ca3af' }}>credits · {bal.toLocaleString()} payout{bal === 1 ? '' : 's'} left</span>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                          1 credit = 1 payout · KES {rate} each · pay to Paybill {credits.paybill}
+                        </div>
+                      </div>
+                    </div>
+                    <button onClick={() => { setBuyCreditsMsg(''); setBuyCreditsPhone(profile?.phone || ''); setShowBuyCredits(true); }}
+                      style={{ padding: '11px 22px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 700, background: accent, color: '#fff', flexShrink: 0 }}>
+                      + Buy credits
+                    </button>
+                  </div>
+                  {paused && (
+                    <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 10, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', fontSize: 13, fontWeight: 600 }}>
+                      ⏸ Automation paused — you're out of credits. New Binance orders are ignored until you top up.
+                    </div>
+                  )}
+                  {low && (
+                    <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 10, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', color: '#f59e0b', fontSize: 13, fontWeight: 600 }}>
+                      ⚠ Running low — {bal} payout{bal === 1 ? '' : 's'} left. Top up to avoid a pause.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Row 2: Quick Stats */}
             <div className="overview-stats-row">
@@ -4033,6 +4092,60 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* Buy Credits Modal — STK to Paybill 4041355, rate-based estimate */}
+      {showBuyCredits && (() => {
+        const rate = credits?.credit_rate || 0;
+        const amt = Math.max(0, parseInt(buyCreditsAmount, 10) || 0);
+        const est = rate > 0 ? Math.round(amt / rate) : 0;
+        const min = credits?.min_deposit || 1000;
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}
+            onClick={() => !buyCreditsBusy && setShowBuyCredits(false)}>
+            <div style={{ background: 'var(--card-bg, #1a1d27)', borderRadius: 16, padding: 28, width: '100%', maxWidth: 420, border: '1px solid var(--border, #2a2d3a)' }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 4 }}>Buy I&amp;M credits</div>
+              <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20 }}>
+                1 credit = 1 payout · KES {rate} each. Paid to Paybill <b style={{ color: '#e5e7eb' }}>{credits?.paybill}</b> via STK.
+              </div>
+
+              <label style={{ fontSize: 12, color: '#9ca3af', fontWeight: 600 }}>Amount (KES)</label>
+              <input type="number" min={min} step={100} value={buyCreditsAmount}
+                onChange={e => setBuyCreditsAmount(e.target.value)}
+                style={{ width: '100%', padding: '11px 12px', marginTop: 6, marginBottom: 6, borderRadius: 10, border: '1px solid #2a2d3a', background: '#0f0f16', color: '#fff', fontSize: 15 }} />
+              <div style={{ fontSize: 12, color: est > 0 ? '#8b5cf6' : '#6b7280', marginBottom: 16, fontWeight: 600 }}>
+                {amt < min ? `Minimum is KES ${min.toLocaleString()}` : `≈ ${est.toLocaleString()} credits (${est.toLocaleString()} payouts)`}
+              </div>
+
+              <label style={{ fontSize: 12, color: '#9ca3af', fontWeight: 600 }}>M-Pesa phone</label>
+              <input type="tel" placeholder="2547XXXXXXXX" value={buyCreditsPhone}
+                onChange={e => setBuyCreditsPhone(e.target.value)}
+                style={{ width: '100%', padding: '11px 12px', marginTop: 6, marginBottom: 16, borderRadius: 10, border: '1px solid #2a2d3a', background: '#0f0f16', color: '#fff', fontSize: 15 }} />
+
+              {buyCreditsMsg && <div style={{ fontSize: 13, color: buyCreditsMsg.startsWith('✔') ? '#10b981' : '#ef4444', marginBottom: 14 }}>{buyCreditsMsg}</div>}
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => !buyCreditsBusy && setShowBuyCredits(false)}
+                  style={{ flex: 1, padding: '11px', borderRadius: 10, border: '1px solid #2a2d3a', background: 'transparent', color: '#9ca3af', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+                <button disabled={buyCreditsBusy || amt < min || !buyCreditsPhone.trim()}
+                  onClick={async () => {
+                    setBuyCreditsBusy(true); setBuyCreditsMsg('');
+                    try {
+                      const r = await buyCredits(amt, buyCreditsPhone.trim());
+                      setBuyCreditsMsg('✔ ' + (r.data?.message || `STK sent. You'll get ${est} credits once paid.`));
+                      setTimeout(() => { loadCredits(); }, 4000);
+                    } catch (e) {
+                      setBuyCreditsMsg(e?.response?.data?.detail || 'Could not send STK. Please try again.');
+                    } finally { setBuyCreditsBusy(false); }
+                  }}
+                  style={{ flex: 2, padding: '11px', borderRadius: 10, border: 'none', background: (amt < min || !buyCreditsPhone.trim()) ? '#4b5563' : '#8b5cf6', color: '#fff', fontWeight: 700, cursor: buyCreditsBusy ? 'wait' : 'pointer' }}>
+                  {buyCreditsBusy ? 'Sending…' : `Send STK · KES ${amt.toLocaleString()}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Deposit Modal */}
       {showDepositModal && (

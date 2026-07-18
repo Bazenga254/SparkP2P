@@ -89,6 +89,8 @@ export const createOrder = (data) => api.post('/orders', data);
 // Subscriptions
 export const initiateSubscription = (plan, phone) => api.post('/subscriptions/initiate', { plan, phone });
 export const getSubscriptionStatus = () => api.get('/subscriptions/status');
+export const getCredits = () => api.get('/subscriptions/credits');
+export const buyCredits = (amount, phone) => api.post('/subscriptions/buy-credits', { amount, phone });
 export const getPaymentInfo = () => api.get('/subscriptions/payment-info');
 export const subscriptionDepositInitiate = (amount, phone) => api.post('/subscriptions/deposit/initiate', { amount, phone });
 export const payChoiceInitiate = (plan) => api.post('/subscriptions/pay-choice/initiate', { plan });
