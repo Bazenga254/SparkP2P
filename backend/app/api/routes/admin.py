@@ -2922,6 +2922,26 @@ async def im_revenue(
     by_pop = {r[0]: {"payouts": int(r[1]), "revenue": int(r[2]), "volume": int(r[3])} for r in rows}
     sparkp2p = by_pop.get("sparkp2p", {"payouts": 0, "revenue": 0, "volume": 0})
     bot_only = by_pop.get("bot_only", {"payouts": 0, "revenue": 0, "volume": 0})
+
+    # DEPOSITS: the KES merchants actually PAID to buy credits (completed
+    # CreditPurchase). This is money in the door — it lands at purchase, whereas
+    # "revenue" above is only recognised as payouts consume credits. A trader who
+    # tops up KES 1,000 but hasn't paid anyone yet shows deposits 1,000, revenue 0.
+    from app.models.subscription import CreditPurchase
+    dep_where = [CreditPurchase.status == "completed"]
+    if start:
+        dep_where.append(CreditPurchase.created_at >= start)
+    dep_trader = int((await db.execute(
+        select(func.coalesce(func.sum(CreditPurchase.amount), 0))
+        .where(*dep_where, CreditPurchase.trader_id.isnot(None))
+    )).scalar_one() or 0)
+    dep_bot = int((await db.execute(
+        select(func.coalesce(func.sum(CreditPurchase.amount), 0))
+        .where(*dep_where, CreditPurchase.bot_account_id.isnot(None))
+    )).scalar_one() or 0)
+    sparkp2p["deposits"] = dep_trader
+    bot_only["deposits"] = dep_bot
+
     return {
         "period": period,
         "sparkp2p": sparkp2p,
@@ -2930,6 +2950,7 @@ async def im_revenue(
             "payouts": sparkp2p["payouts"] + bot_only["payouts"],
             "revenue": sparkp2p["revenue"] + bot_only["revenue"],
             "volume": sparkp2p["volume"] + bot_only["volume"],
+            "deposits": dep_trader + dep_bot,
         },
     }
 
@@ -3019,6 +3040,11 @@ async def im_bot_accounts(
                    func.coalesce(func.sum(ImCharge.payout_amount), 0))
             .where(ImCharge.bot_account_id == a.id)
         )).one()
+        from app.models.subscription import CreditPurchase
+        deposited = int((await db.execute(
+            select(func.coalesce(func.sum(CreditPurchase.amount), 0))
+            .where(CreditPurchase.bot_account_id == a.id, CreditPurchase.status == "completed")
+        )).scalar_one() or 0)
         last_seen = (await db.execute(
             select(func.max(MerchantApiKey.last_used_at))
             .where(MerchantApiKey.bot_account_id == a.id, MerchantApiKey.revoked_at.is_(None))
@@ -3034,6 +3060,8 @@ async def im_bot_accounts(
             "created_at": a.created_at.isoformat() if a.created_at else None,
             "last_login_at": a.last_login_at.isoformat() if a.last_login_at else None,
             "last_seen": last_seen.isoformat() if last_seen else None,
+            "credits": int(getattr(a, "credits", 0) or 0),
+            "deposited": deposited,
             "payouts": int(stats[0] or 0),
             "revenue": int(stats[1] or 0),
             "volume": int(stats[2] or 0),
@@ -3082,6 +3110,13 @@ async def im_configured_traders(
                    func.coalesce(func.sum(ImCharge.payout_amount), 0))
             .where(ImCharge.trader_id == tid)
         )).one()
+        # What this trader has PAID to buy credits (completed top-ups) and their
+        # current balance — so the admin sees money-in, not just payouts-made.
+        from app.models.subscription import CreditPurchase
+        deposited = int((await db.execute(
+            select(func.coalesce(func.sum(CreditPurchase.amount), 0))
+            .where(CreditPurchase.trader_id == tid, CreditPurchase.status == "completed")
+        )).scalar_one() or 0)
         last_seen = (await db.execute(
             select(func.max(MerchantApiKey.last_used_at))
             .where(MerchantApiKey.trader_id == tid,
@@ -3104,6 +3139,8 @@ async def im_configured_traders(
                             else "choice_bank"),
             "online": online,
             "last_seen": last_seen.isoformat() if last_seen else None,
+            "credits": int(getattr(trader, "b2c_credits", 0) or 0),
+            "deposited": deposited,
             "payouts": int(stats[0] or 0),
             "revenue": int(stats[1] or 0),
             "volume": int(stats[2] or 0),

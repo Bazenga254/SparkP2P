@@ -4782,10 +4782,15 @@ export default function Admin() {
                 const sub = { fontSize: 12, color: 'var(--text-3)', marginTop: 6 };
                 return (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14, marginBottom: 24 }}>
+                    <div style={{ ...card, borderColor: '#14b8a688' }}>
+                      <div style={lbl}>Deposits (money in)</div>
+                      <div style={{ ...val, color: '#14b8a6' }}>{fmtKES(imRevenue?.total?.deposits)}</div>
+                      <div style={sub}>paid to buy credits · traders {fmtKES(imRevenue?.sparkp2p?.deposits)} · bot-only {fmtKES(imRevenue?.bot_only?.deposits)}</div>
+                    </div>
                     <div style={card}>
-                      <div style={lbl}>Total I&amp;M revenue</div>
+                      <div style={lbl}>I&amp;M revenue (earned)</div>
                       <div style={{ ...val, color: 'var(--pos)' }}>{fmtKES(imRevenue?.total?.revenue)}</div>
-                      <div style={sub}>{imRevenue?.total?.payouts || 0} payouts · {fmtKES(imRevenue?.total?.volume)} moved</div>
+                      <div style={sub}>{imRevenue?.total?.payouts || 0} payouts billed · {fmtKES(imRevenue?.total?.volume)} moved</div>
                     </div>
                     <div style={card}>
                       <div style={lbl}>SparkP2P traders</div>
@@ -4834,6 +4839,8 @@ export default function Admin() {
                           <th style={{ textAlign: 'right' }}>Rate</th>
                           <th style={{ textAlign: 'left' }}>Rail</th>
                           <th>Bot</th>
+                          <th style={{ textAlign: 'right' }}>Credits</th>
+                          <th style={{ textAlign: 'right' }}>Deposited</th>
                           <th style={{ textAlign: 'right' }}>Payouts</th>
                           <th style={{ textAlign: 'right' }}>Billed</th>
                           <th style={{ textAlign: 'right' }}>Volume</th>
@@ -4861,6 +4868,8 @@ export default function Admin() {
                               <td style={{ textAlign: 'center' }}>
                                 <span className={`chip ${t.online ? 'chip--pos' : ''}`} style={{ fontSize: 10 }}>{t.online ? 'online' : 'offline'}</span>
                               </td>
+                              <td style={{ textAlign: 'right', color: (t.credits ?? 0) <= 0 ? 'var(--neg)' : '#e5e7eb', fontWeight: 700 }}>{(t.credits ?? 0).toLocaleString()}</td>
+                              <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(t.deposited)}</td>
                               <td style={{ textAlign: 'right' }}>{t.payouts}</td>
                               <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(t.revenue)}</td>
                               <td style={{ textAlign: 'right' }}>{fmtKES(t.volume)}</td>
@@ -4896,6 +4905,8 @@ export default function Admin() {
                         <th style={{ textAlign: 'left' }}>Email</th>
                         <th style={{ textAlign: 'left' }}>Name</th>
                         <th>Status</th>
+                        <th style={{ textAlign: 'right' }}>Credits</th>
+                        <th style={{ textAlign: 'right' }}>Deposited</th>
                         <th style={{ textAlign: 'right' }}>Payouts</th>
                         <th style={{ textAlign: 'right' }}>Billed</th>
                         <th style={{ textAlign: 'right' }}>Volume</th>
@@ -4919,6 +4930,8 @@ export default function Admin() {
                               : a.status !== 'active' ? <span className="chip chip--neg" style={{ fontSize: 10 }}>{a.status}</span>
                               : <span className="chip chip--pos" style={{ fontSize: 10 }}>active</span>}
                           </td>
+                          <td style={{ textAlign: 'right', color: (a.credits ?? 0) <= 0 ? 'var(--neg)' : '#e5e7eb', fontWeight: 700 }}>{(a.credits ?? 0).toLocaleString()}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(a.deposited)}</td>
                           <td style={{ textAlign: 'right' }}>{a.payouts}</td>
                           <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(a.revenue)}</td>
                           <td style={{ textAlign: 'right' }}>{fmtKES(a.volume)}</td>
@@ -5302,8 +5315,8 @@ export default function Admin() {
                         <div className="fin-c-label">I&amp;M Automation · payout fees</div>
                         <div className="fin-c-value">{fmtKES(imRevenue?.total?.revenue ?? 0)}</div>
                         <div className="fin-c-note">
-                          {(imRevenue?.total?.payouts ?? 0).toLocaleString()} payouts · {fmtKES(imRevenue?.total?.volume ?? 0)} moved.<br/>
-                          SparkP2P traders {fmtKES(imRevenue?.sparkp2p?.revenue ?? 0)} · bot-only {fmtKES(imRevenue?.bot_only?.revenue ?? 0)}
+                          {(imRevenue?.total?.payouts ?? 0).toLocaleString()} payouts billed · earned as credits are used.<br/>
+                          <b style={{ color: '#14b8a6' }}>Credit deposits (money in): {fmtKES(imRevenue?.total?.deposits ?? 0)}</b>
                         </div>
                       </div>
                       <div className="fin-comp-cell">

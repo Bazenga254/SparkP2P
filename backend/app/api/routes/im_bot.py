@@ -567,6 +567,8 @@ async def credits_status(
     from app.services import credits as creditsvc
     account_type, owner_id = owner
 
+    from app.models.subscription import CreditPurchase
+    from sqlalchemy import func as _func
     if account_type == pricing_ACCOUNT_BOT_ONLY():
         from app.models.im_bot_account import ImBotAccount
         acct = await db.get(ImBotAccount, owner_id)
@@ -574,12 +576,20 @@ async def credits_status(
         rate = creditsvc.credit_rate_bot_only()
         enabled = True
         account_ref = f"CB{owner_id}"   # pay to the paybill with this reference
+        deposited = int((await db.execute(
+            select(_func.coalesce(_func.sum(CreditPurchase.amount), 0))
+            .where(CreditPurchase.bot_account_id == owner_id, CreditPurchase.status == "completed")
+        )).scalar_one() or 0)
     else:
         trader = await db.get(Trader, owner_id)
         enabled = bool(trader and creditsvc.trader_credits_enabled(trader))
         balance = creditsvc.trader_balance(trader) if trader else 0
         rate = await creditsvc.credit_rate_for_trader(db, owner_id) if enabled else None
         account_ref = f"CR{owner_id}"
+        deposited = int((await db.execute(
+            select(_func.coalesce(_func.sum(CreditPurchase.amount), 0))
+            .where(CreditPurchase.trader_id == owner_id, CreditPurchase.status == "completed")
+        )).scalar_one() or 0)
 
     return {
         "credits_enabled": enabled,
@@ -590,6 +600,7 @@ async def credits_status(
         "paybill": settings.SUBSCRIPTION_PAYBILL,
         "account_ref": account_ref,
         "account_type": account_type,
+        "deposited": deposited,   # total KES this account has paid to buy credits
     }
 
 
