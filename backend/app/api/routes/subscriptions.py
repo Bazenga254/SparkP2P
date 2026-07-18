@@ -257,8 +257,14 @@ async def subscription_callback(request: Request, db: AsyncSession = Depends(get
                             amt = float(item.get("Value") or amt)
                         except (TypeError, ValueError):
                             pass
-                from app.services.billing import grant_b2c_credits
-                await grant_b2c_credits(db, cp.trader_id, amt, receipt=receipt, checkout_id=checkout_id)
+                # Route to the right population: a trader purchase (trader_id) or
+                # a bot-only one (bot_account_id). Both idempotent per receipt.
+                if cp.bot_account_id is not None:
+                    from app.services.credits import grant_bot_credits
+                    await grant_bot_credits(db, cp.bot_account_id, amt, receipt=receipt)
+                else:
+                    from app.services.billing import grant_b2c_credits
+                    await grant_b2c_credits(db, cp.trader_id, amt, receipt=receipt, checkout_id=checkout_id)
             else:
                 cp.status = "failed"
                 await db.commit()

@@ -598,6 +598,68 @@ def pricing_ACCOUNT_BOT_ONLY():
     return ACCOUNT_BOT_ONLY
 
 
+class BotBuyCreditsRequest(BaseModel):
+    amount: int
+    phone: str
+
+
+@router.post("/buy-credits")
+async def bot_buy_credits(
+    data: BotBuyCreditsRequest,
+    owner: tuple = Depends(get_owner_from_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """STK-push credit top-up FROM THE DESKTOP BOT — authenticated by the API key,
+    not a JWT (the bot has no session). Serves both populations: a trader
+    (reference CR<id>, plan rate) or a bot-only account (CB<id>, flat 12). The
+    STK callback grants the credits idempotently once paid, exactly like the
+    dashboard's buy-credits."""
+    from app.core.config import settings
+    from app.services import credits as creditsvc
+    from app.services.mpesa.client import mpesa_client
+    from app.models.subscription import CreditPurchase
+
+    account_type, owner_id = owner
+    amount = int(data.amount or 0)
+    if amount < creditsvc.MIN_DEPOSIT_KES:
+        raise HTTPException(status_code=400, detail=f"Minimum credit purchase is KES {creditsvc.MIN_DEPOSIT_KES:,}.")
+    phone = (data.phone or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="An M-Pesa phone number is required.")
+
+    if account_type == pricing_ACCOUNT_BOT_ONLY():
+        rate = creditsvc.credit_rate_bot_only()
+        ref = f"CB{owner_id}"
+        cp = CreditPurchase(bot_account_id=owner_id, amount=amount, status="pending")
+    else:
+        trader = await db.get(Trader, owner_id)
+        if not trader or not creditsvc.trader_credits_enabled(trader):
+            raise HTTPException(status_code=403, detail="Credits are only for the I&M Bot or Own-Paybill rails.")
+        rate = await creditsvc.credit_rate_for_trader(db, owner_id)
+        ref = f"CR{owner_id}"
+        cp = CreditPurchase(trader_id=owner_id, amount=amount, status="pending")
+
+    est = creditsvc.credits_for(amount, rate)
+    try:
+        result = await mpesa_client.stk_push(
+            phone=phone, amount=amount, account_reference=ref, description="I&M Credits",
+        )
+        checkout_id = result.get("CheckoutRequestID")
+    except Exception as e:
+        logger.error("im-bot buy-credits STK failed for %s %s: %s", account_type, owner_id, e)
+        raise HTTPException(status_code=500, detail=f"Failed to send STK Push: {e}")
+
+    cp.mpesa_checkout_id = checkout_id
+    cp.credits = est
+    db.add(cp)
+    await db.commit()
+    logger.info("im-bot buy-credits: %s %s STK KES %s -> ~%s credits (ref %s)", account_type, owner_id, amount, est, ref)
+    return {
+        "status": "pending", "checkout_request_id": checkout_id, "credits": est,
+        "message": f"STK of KES {amount:,} sent to {phone}. You'll get ~{est:,} credits once paid.",
+    }
+
+
 async def _alert(trader_id: int, text: str) -> None:
     """Telegram alert to the trader; never let a notification failure break the
     result path (the money decision has already been recorded)."""
