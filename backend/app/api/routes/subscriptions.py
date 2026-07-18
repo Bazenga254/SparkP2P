@@ -145,20 +145,58 @@ async def initiate_subscription(
         raise HTTPException(status_code=500, detail=f"Failed to send STK Push: {str(e)}")
 
 
+@router.get("/credits")
+async def get_credits(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """The merchant's credit balance for the SparkP2P dashboard card. Only
+    meaningful on the prepaid rails (I&M Bot / Own-Paybill) — a Choice Bank trader
+    gets credits_enabled=false and no card is shown."""
+    from app.services.credits import trader_credits_enabled, trader_balance, credit_rate_for_trader, MIN_DEPOSIT_KES
+    from app.core.config import settings
+    from app.models.subscription import CreditPurchase
+    enabled = trader_credits_enabled(trader)
+    balance = trader_balance(trader)
+    rate = await credit_rate_for_trader(db, trader.id) if enabled else None
+    recent = (await db.execute(
+        select(CreditPurchase).where(CreditPurchase.trader_id == trader.id,
+                                     CreditPurchase.status == "completed")
+        .order_by(CreditPurchase.created_at.desc()).limit(10)
+    )).scalars().all()
+    return {
+        "credits_enabled": enabled,
+        "credits": balance,
+        "credit_rate": rate,
+        "paused_no_credits": bool(enabled and balance <= 0),
+        "min_deposit": MIN_DEPOSIT_KES,
+        "paybill": settings.SUBSCRIPTION_PAYBILL,
+        "history": [
+            {"amount": int(c.amount or 0), "credits": int(c.credits or 0),
+             "receipt": c.mpesa_receipt, "at": c.created_at.isoformat() if c.created_at else None}
+            for c in recent
+        ],
+    }
+
+
 @router.post("/buy-credits")
 async def buy_credits(
     data: BuyCreditsRequest,
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    """Buy B2C payout credits via STK Push (min KES 5,000; 1 credit = KES 8). Restricted to clients
-    with B2C-via-own-paybill enabled. Reference CR<id> so the callbacks grant credits, not a plan."""
-    if not getattr(trader, "b2c_own_paybill_enabled", False):
-        raise HTTPException(status_code=403, detail="B2C credits are not enabled for your account.")
+    """Buy prepaid payout credits via STK Push to paybill 4041355. 1 credit = 1
+    payout, priced at the trader's plan rate (round(amount / rate)); min KES 1,000.
+    Only for the prepaid rails (I&M Bot or Own-Paybill/B2C) — a Choice Bank trader
+    has no credit balance. Reference CR<id> so the callbacks grant credits."""
+    from app.services.credits import trader_credits_enabled, credit_rate_for_trader, credits_for, MIN_DEPOSIT_KES
+    if not trader_credits_enabled(trader):
+        raise HTTPException(status_code=403, detail="Credits are only for the I&M Bot or Own-Paybill payout rails.")
     amount = int(float(data.amount or 0))
-    if amount < 5000:
-        raise HTTPException(status_code=400, detail="Minimum credit purchase is KES 5,000.")
-    credits = round(amount / 8)
+    if amount < MIN_DEPOSIT_KES:
+        raise HTTPException(status_code=400, detail=f"Minimum credit purchase is KES {MIN_DEPOSIT_KES:,}.")
+    rate = await credit_rate_for_trader(db, trader.id)
+    credits = credits_for(amount, rate)
     from app.models.subscription import CreditPurchase
     try:
         result = await mpesa_client.stk_push(

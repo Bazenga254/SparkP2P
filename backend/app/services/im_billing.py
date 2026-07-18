@@ -121,6 +121,24 @@ async def record_charge(
         if again is not None:
             raise AlreadyBilled(again)
         raise  # a different integrity problem — do not swallow it
+
+    # Consume ONE prepaid credit for this payout, in the SAME transaction as the
+    # charge — so credits and the ledger can never disagree, and the AlreadyBilled
+    # path above means a duplicate PAID spends nothing. A bot-only account always
+    # runs on the prepaid I&M rail; a trader only if they're on I&M / own-paybill
+    # (a Choice Bank trader has no credit balance and consumes none).
+    from app.services import credits as creditsvc
+    from app.models.im_bot_account import ImBotAccount
+    from app.models.trader import Trader
+    if account_type == ACCOUNT_BOT_ONLY:
+        acct = await db.get(ImBotAccount, bot_account_id)
+        if acct is not None:
+            creditsvc.consume_bot(acct, 1)
+    else:
+        trader = await db.get(Trader, trader_id)
+        if trader is not None and creditsvc.trader_credits_enabled(trader):
+            creditsvc.consume_trader(trader, 1)
+
     logger.info(
         "im_billing: charged %s %s KES %s for payout %s (amount %s)",
         account_type,

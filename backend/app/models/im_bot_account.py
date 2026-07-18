@@ -59,6 +59,12 @@ class ImBotAccount(Base):
     # "active" | "suspended" — an admin's off switch for a non-trader.
     status = Column(String(16), nullable=False, default="active", index=True)
 
+    # Prepaid payout credits. 1 credit = 1 I&M payout (bought at the KES 12
+    # bot-only rate: round(deposit / 12)). Each payout consumes 1; at 0 the bot
+    # stops paying and ignores new orders until they top up. This is the bot-only
+    # analogue of trader.b2c_credits — the two populations keep their own balance.
+    credits = Column(Integer, nullable=False, default=0, server_default="0")
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 

@@ -143,7 +143,7 @@ async def revoke_api_key(key_id: int, trader: Trader = Depends(get_current_trade
 
 
 @router.get("/link-status")
-async def link_status(trader: Trader = Depends(get_current_trader)):
+async def link_status(trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
     """What the Settings card shows: is this merchant's bot connected?"""
     rows = await keysvc.list_keys(trader.id)
     live = [r for r in rows if r.revoked_at is None]
@@ -152,6 +152,10 @@ async def link_status(trader: Trader = Depends(get_current_trader)):
     newest = max(
         (r for r in live if r.last_used_at), key=lambda r: keysvc.as_utc(r.last_used_at), default=None
     )
+    from app.services import credits as creditsvc
+    credits_enabled = creditsvc.trader_credits_enabled(trader)
+    balance = creditsvc.trader_balance(trader)
+    rate = await creditsvc.credit_rate_for_trader(db, trader.id) if credits_enabled else None
     return {
         "has_key": len(live) > 0,
         "online": _online(newest),
@@ -168,6 +172,11 @@ async def link_status(trader: Trader = Depends(get_current_trader)):
             else "im_bot" if trader.buy_payout_via_im
             else "choice_bank"
         ),
+        # Prepaid credits (only on the I&M / own-paybill rails; Choice Bank has none).
+        "credits_enabled": credits_enabled,
+        "credits": balance,
+        "credit_rate": rate,
+        "paused_no_credits": bool(credits_enabled and balance <= 0),
     }
 
 
@@ -321,6 +330,16 @@ async def poll(
     if not trader or not trader.buy_payout_via_im:
         # Opted out (or unknown): nothing to do. Not an error — the bot just idles.
         return {"jobs": [], "enabled": False}
+
+    # PAUSE AT ZERO CREDITS. A trader on a prepaid rail (I&M / own-paybill) must
+    # have a credit for the next payout. At zero we serve NO jobs — the bot idles
+    # and new Binance orders are ignored until they top up — rather than pay an
+    # order we can't bill. Choice Bank traders never reach here (they can't have
+    # buy_payout_via_im and Choice Bank at once).
+    from app.services import credits as creditsvc
+    if creditsvc.trader_credits_enabled(trader) and creditsvc.trader_balance(trader) <= 0:
+        logger.info("im-bot poll: trader %s has 0 credits — paused, no jobs served", trader_id)
+        return {"jobs": [], "enabled": True, "paused": True, "reason": "no_credits", "credits": 0}
 
     rows = (
         await db.execute(
@@ -532,6 +551,48 @@ async def report_payout(
 
     logger.info("im-bot report-payout: bot#%s billed KES %s for order %s", owner_id, charge.rate, data.order_id)
     return {"ok": True, "billed": True, "rate": charge.rate, "outcome": verdict}
+
+
+@router.get("/credits")
+async def credits_status(
+    owner: tuple = Depends(get_owner_from_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """The bot's credits taskbar. Serves BOTH populations by key:
+        - a trader key  -> their b2c_credits, priced at their plan rate
+        - a bot-only key -> im_bot_accounts.credits, priced at the flat 12
+    Returns enough for the bot to show the balance, pause at zero, and open a
+    top-up (min deposit, the paybill to pay)."""
+    from app.core.config import settings
+    from app.services import credits as creditsvc
+    account_type, owner_id = owner
+
+    if account_type == pricing_ACCOUNT_BOT_ONLY():
+        from app.models.im_bot_account import ImBotAccount
+        acct = await db.get(ImBotAccount, owner_id)
+        balance = creditsvc.bot_balance(acct) if acct else 0
+        rate = creditsvc.credit_rate_bot_only()
+        enabled = True
+    else:
+        trader = await db.get(Trader, owner_id)
+        enabled = bool(trader and creditsvc.trader_credits_enabled(trader))
+        balance = creditsvc.trader_balance(trader) if trader else 0
+        rate = await creditsvc.credit_rate_for_trader(db, owner_id) if enabled else None
+
+    return {
+        "credits_enabled": enabled,
+        "credits": balance,
+        "credit_rate": rate,
+        "paused_no_credits": bool(enabled and balance <= 0),
+        "min_deposit": creditsvc.MIN_DEPOSIT_KES,
+        "paybill": settings.SUBSCRIPTION_PAYBILL,
+        "account_type": account_type,
+    }
+
+
+def pricing_ACCOUNT_BOT_ONLY():
+    from app.services.im_pricing import ACCOUNT_BOT_ONLY
+    return ACCOUNT_BOT_ONLY
 
 
 async def _alert(trader_id: int, text: str) -> None:

@@ -231,11 +231,23 @@ async def grant_b2c_credits(db, trader_id: int, amount: float, receipt: str = ""
             .order_by(CreditPurchase.created_at.desc())
         )).scalars().first()
 
-    credits = int(round(float(amount or 0) / 8))
+    # Credits are priced at the trader's PLAN rate (Gold 7 / Silver 8 / Bronze 9
+    # / B2C 5 / no-sub 10 / …), not a flat 8 — round(deposit / rate). The rate is
+    # locked in here, at purchase.
+    from app.services.credits import credit_rate_for_trader, credits_for
+    rate = await credit_rate_for_trader(db, trader_id)
+    credits = credits_for(amount, rate)
     trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
     if trader:
         trader.b2c_credits = int(trader.b2c_credits or 0) + credits
-    if cp and cp.status != "completed":
+    if cp is None:
+        # No prior pending purchase — e.g. the merchant paid the paybill directly
+        # (C2B) without going through Buy Credits. Create a completed row so the
+        # RECEIPT is recorded; otherwise the receipt-idempotency check at the top
+        # has nothing to find and a redelivery would grant the credits twice.
+        cp = CreditPurchase(trader_id=trader_id, amount=amount, credits=0, status="pending")
+        db.add(cp)
+    if cp.status != "completed":
         cp.status = "completed"
         cp.mpesa_receipt = receipt or cp.mpesa_receipt
         cp.credits = credits
