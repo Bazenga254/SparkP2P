@@ -979,4 +979,37 @@ async def stk_push_callback(request: Request, db: AsyncSession = Depends(get_db)
 
             return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
+        # Not a subscription — maybe a credit top-up (CreditPurchase). Buy-credits
+        # STK lands HERE (the default callback), so this is where its credits must
+        # be granted. Idempotent per receipt, so the parallel C2B confirmation for
+        # the same payment is a no-op.
+        from app.models.subscription import CreditPurchase
+        cp = (await db.execute(
+            select(CreditPurchase).where(CreditPurchase.mpesa_checkout_id == checkout_id)
+        )).scalars().first()
+        if cp:
+            if result_code == 0:
+                meta = body.get("CallbackMetadata", {}).get("Item", [])
+                receipt = ""
+                amt = float(cp.amount or 0)
+                for item in meta:
+                    if item.get("Name") == "MpesaReceiptNumber":
+                        receipt = item.get("Value")
+                    elif item.get("Name") == "Amount":
+                        try:
+                            amt = float(item.get("Value") or amt)
+                        except (TypeError, ValueError):
+                            pass
+                if cp.bot_account_id is not None:
+                    from app.services.credits import grant_bot_credits
+                    await grant_bot_credits(db, cp.bot_account_id, amt, receipt=receipt)
+                else:
+                    from app.services.billing import grant_b2c_credits
+                    await grant_b2c_credits(db, cp.trader_id, amt, receipt=receipt, checkout_id=checkout_id)
+            else:
+                cp.status = "failed"
+                await db.commit()
+                logger.warning(f"Credit purchase {cp.id} failed via STK callback: code={result_code}")
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
