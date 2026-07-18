@@ -4782,25 +4782,25 @@ export default function Admin() {
                 const sub = { fontSize: 12, color: 'var(--text-3)', marginTop: 6 };
                 return (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14, marginBottom: 24 }}>
-                    <div style={{ ...card, borderColor: '#14b8a688' }}>
-                      <div style={lbl}>Deposits (money in)</div>
-                      <div style={{ ...val, color: '#14b8a6' }}>{fmtKES(imRevenue?.total?.deposits)}</div>
-                      <div style={sub}>paid to buy credits · traders {fmtKES(imRevenue?.sparkp2p?.deposits)} · bot-only {fmtKES(imRevenue?.bot_only?.deposits)}</div>
-                    </div>
-                    <div style={card}>
-                      <div style={lbl}>I&amp;M revenue (earned)</div>
-                      <div style={{ ...val, color: 'var(--pos)' }}>{fmtKES(imRevenue?.total?.revenue)}</div>
-                      <div style={sub}>{imRevenue?.total?.payouts || 0} payouts billed · {fmtKES(imRevenue?.total?.volume)} moved</div>
+                    <div style={{ ...card, borderColor: 'var(--pos)66' }}>
+                      <div style={lbl}>I&amp;M revenue (credit sales)</div>
+                      <div style={{ ...val, color: 'var(--pos)' }}>{fmtKES(imRevenue?.total?.deposits)}</div>
+                      <div style={sub}>money in from credit top-ups</div>
                     </div>
                     <div style={card}>
                       <div style={lbl}>SparkP2P traders</div>
-                      <div style={val}>{fmtKES(imRevenue?.sparkp2p?.revenue)}</div>
-                      <div style={sub}>{imRevenue?.sparkp2p?.payouts || 0} payouts · rates 5–10</div>
+                      <div style={val}>{fmtKES(imRevenue?.sparkp2p?.deposits)}</div>
+                      <div style={sub}>credit sales · rates 5–10</div>
                     </div>
                     <div style={card}>
                       <div style={lbl}>Bot-only (non-clients)</div>
-                      <div style={val}>{fmtKES(imRevenue?.bot_only?.revenue)}</div>
-                      <div style={sub}>{imRevenue?.bot_only?.payouts || 0} payouts · KES 12 each</div>
+                      <div style={val}>{fmtKES(imRevenue?.bot_only?.deposits)}</div>
+                      <div style={sub}>credit sales · KES 12 each</div>
+                    </div>
+                    <div style={card}>
+                      <div style={lbl}>Credits used</div>
+                      <div style={{ ...val, color: 'var(--text-3)' }}>{fmtKES(imRevenue?.total?.revenue)}</div>
+                      <div style={sub}>{imRevenue?.total?.payouts || 0} payouts · {fmtKES(imRevenue?.total?.volume)} moved</div>
                     </div>
                   </div>
                 );
@@ -4842,7 +4842,7 @@ export default function Admin() {
                           <th style={{ textAlign: 'right' }}>Credits</th>
                           <th style={{ textAlign: 'right' }}>Deposited</th>
                           <th style={{ textAlign: 'right' }}>Payouts</th>
-                          <th style={{ textAlign: 'right' }}>Billed</th>
+                          <th style={{ textAlign: 'right' }}>Used</th>
                           <th style={{ textAlign: 'right' }}>Volume</th>
                           <th style={{ textAlign: 'left' }}>Last seen</th>
                         </tr>
@@ -4908,7 +4908,7 @@ export default function Admin() {
                         <th style={{ textAlign: 'right' }}>Credits</th>
                         <th style={{ textAlign: 'right' }}>Deposited</th>
                         <th style={{ textAlign: 'right' }}>Payouts</th>
-                        <th style={{ textAlign: 'right' }}>Billed</th>
+                        <th style={{ textAlign: 'right' }}>Used</th>
                         <th style={{ textAlign: 'right' }}>Volume</th>
                         <th style={{ textAlign: 'left' }}>Last seen</th>
                         <th style={{ textAlign: 'left' }}>Joined</th>
@@ -5248,7 +5248,10 @@ export default function Admin() {
               {(() => {
                 const subRevenue = revBreakdown?.summary?.total ?? 0;
                 const outboundRevenue = obBreakdown?.total?.markup ?? 0;
-                const imRev = imRevenue?.total?.revenue ?? 0;   // I&M Automation payouts
+                // I&M revenue = money IN from credit sales (deposits), recognised
+                // at purchase. NOT the payout-fee figure — that's consumption of
+                // credits already paid for; counting both would double-count.
+                const imRev = imRevenue?.total?.deposits ?? 0;
                 const totalRevenue = subRevenue + outboundRevenue + imRev;
                 const totalExpenses = expensesTotal ?? 0;
                 const netProfit = totalRevenue - totalExpenses;
@@ -5312,11 +5315,11 @@ export default function Admin() {
                         <div className="fin-c-note">Withheld by Choice Bank, remitted monthly.<br/>Gross fees charged (CB + markup): {fmtKES(obBreakdown?.total?.total_fee ?? 0)}</div>
                       </div>
                       <div className="fin-comp-cell fin-comp-im">
-                        <div className="fin-c-label">I&amp;M Automation · payout fees</div>
-                        <div className="fin-c-value">{fmtKES(imRevenue?.total?.revenue ?? 0)}</div>
+                        <div className="fin-c-label">I&amp;M Automation · credit sales</div>
+                        <div className="fin-c-value">{fmtKES(imRevenue?.total?.deposits ?? 0)}</div>
                         <div className="fin-c-note">
-                          {(imRevenue?.total?.payouts ?? 0).toLocaleString()} payouts billed · earned as credits are used.<br/>
-                          <b style={{ color: '#14b8a6' }}>Credit deposits (money in): {fmtKES(imRevenue?.total?.deposits ?? 0)}</b>
+                          Money in from credit top-ups.<br/>
+                          {(imRevenue?.total?.payouts ?? 0).toLocaleString()} payouts used so far ({fmtKES(imRevenue?.total?.revenue ?? 0)} of credit)
                         </div>
                       </div>
                       <div className="fin-comp-cell">
