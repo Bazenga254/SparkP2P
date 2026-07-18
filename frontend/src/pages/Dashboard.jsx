@@ -804,14 +804,36 @@ export default function Dashboard() {
   const [buyCreditsPhone, setBuyCreditsPhone] = useState('');
   const [buyCreditsBusy, setBuyCreditsBusy] = useState(false);
   const [buyCreditsMsg, setBuyCreditsMsg] = useState('');
+  // The progress bar shows credits left as a fraction of the MOST you've had
+  // (the peak, remembered across reloads). It fills on load, then drains as
+  // payouts consume credits. barReady flips on after mount so width animates 0→N.
+  const [creditsPeak, setCreditsPeak] = useState(() => Number(localStorage.getItem('imCreditsPeak') || 0));
+  const [barReady, setBarReady] = useState(false);
   const loadCredits = async () => {
-    try { const r = await getCredits(); setCredits(r.data); } catch (_) {}
+    try {
+      const r = await getCredits();
+      setCredits(r.data);
+      const bal = r.data?.credits ?? 0;
+      setCreditsPeak(prev => {
+        // Peak grows on a top-up; once fully drained to 0, reset so the NEXT
+        // top-up starts a fresh full bar rather than a tiny sliver of an old peak.
+        const p = bal <= 0 ? 0 : Math.max(prev, bal);
+        localStorage.setItem('imCreditsPeak', String(p));
+        return p;
+      });
+    } catch (_) {}
   };
   useEffect(() => {
     loadCredits();
     const t = setInterval(loadCredits, 20000);   // keep the balance live as payouts consume
     return () => clearInterval(t);
   }, []);
+  useEffect(() => {
+    if (credits?.credits_enabled && !barReady) {
+      const t = setTimeout(() => setBarReady(true), 80);   // let width transition from 0
+      return () => clearTimeout(t);
+    }
+  }, [credits, barReady]);
 
   // Fetch Choice Bank balance — poll every 10s when account is verified
   useEffect(() => {
@@ -2261,6 +2283,8 @@ export default function Dashboard() {
               const paused = credits.paused_no_credits;
               const low = !paused && bal > 0 && bal <= 20;
               const accent = paused ? '#ef4444' : low ? '#f59e0b' : '#8b5cf6';
+              const peak = Math.max(creditsPeak, bal, 1);
+              const pct = barReady ? Math.min(100, Math.round((bal / peak) * 100)) : 0;
               return (
                 <div className="card" style={{ marginBottom: 16, border: `1px solid ${accent}44`, background: paused ? 'rgba(239,68,68,0.06)' : '#0f0f16' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
@@ -2281,6 +2305,14 @@ export default function Dashboard() {
                       style={{ padding: '11px 22px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 700, background: accent, color: '#fff', flexShrink: 0 }}>
                       + Buy credits
                     </button>
+                  </div>
+                  {/* Animated usage bar: fills on load, drains as payouts consume credits. */}
+                  <div style={{ marginTop: 16, height: 9, borderRadius: 6, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%', width: pct + '%', borderRadius: 6,
+                      background: paused ? '#ef4444' : low ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' : 'linear-gradient(90deg,#8b5cf6,#a78bfa)',
+                      transition: 'width 0.9s cubic-bezier(.34,.1,.2,1)',
+                    }} />
                   </div>
                   {paused && (
                     <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 10, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', fontSize: 13, fontWeight: 600 }}>
