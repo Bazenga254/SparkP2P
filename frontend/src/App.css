@@ -7536,6 +7536,7 @@ body {
 .fin-c-value{font-size:26px;font-weight:700;letter-spacing:-.4px;margin:10px 0 8px}
 .fin-comp-sub .fin-c-value{color:var(--fin-green)}
 .fin-comp-fee .fin-c-value{color:var(--fin-blue)}
+.fin-comp-im .fin-c-value{color:#f59e0b}
 .fin-c-note{font-size:12px;color:var(--fin-dim);line-height:1.55}
 .fin-table{width:100%;border-collapse:collapse}
 .fin-table thead th{text-align:left;font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;

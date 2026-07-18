@@ -5117,7 +5117,7 @@ export default function Admin() {
               <div className="fin-page-head">
                 <div>
                   <h1>Revenue</h1>
-                  <p>Revenue from subscriptions and outbound transaction fees</p>
+                  <p>Three sources: subscriptions, Choice Bank outbound fees, and I&amp;M Automation payout fees</p>
                 </div>
                 <div className="fin-head-actions">
                   <div className="fin-segment">
@@ -5200,9 +5200,17 @@ export default function Admin() {
                         <div className="fin-c-note">Excludes admin-granted plans</div>
                       </div>
                       <div className="fin-comp-cell fin-comp-fee">
-                        <div className="fin-c-label">Outbound fee revenue · our markup</div>
+                        <div className="fin-c-label">Choice Bank fees · our markup</div>
                         <div className="fin-c-value">{fmtKES(obBreakdown?.total?.markup ?? 0)}</div>
                         <div className="fin-c-note">Withheld by Choice Bank, remitted monthly.<br/>Gross fees charged (CB + markup): {fmtKES(obBreakdown?.total?.total_fee ?? 0)}</div>
+                      </div>
+                      <div className="fin-comp-cell fin-comp-im">
+                        <div className="fin-c-label">I&amp;M Automation · payout fees</div>
+                        <div className="fin-c-value">{fmtKES(imRevenue?.total?.revenue ?? 0)}</div>
+                        <div className="fin-c-note">
+                          {(imRevenue?.total?.payouts ?? 0).toLocaleString()} payouts · {fmtKES(imRevenue?.total?.volume ?? 0)} moved.<br/>
+                          SparkP2P traders {fmtKES(imRevenue?.sparkp2p?.revenue ?? 0)} · bot-only {fmtKES(imRevenue?.bot_only?.revenue ?? 0)}
+                        </div>
                       </div>
                       <div className="fin-comp-cell">
                         <div className="fin-c-label">Prepaid balances held</div>
