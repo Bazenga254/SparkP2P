@@ -171,6 +171,7 @@ async def get_credits(
         "paused_no_credits": bool(enabled and balance <= 0),
         "min_deposit": MIN_DEPOSIT_KES,
         "paybill": settings.SUBSCRIPTION_PAYBILL,
+        "account_ref": f"CR{trader.id}",   # manual-paybill account number
         "history": [
             {"amount": int(c.amount or 0), "credits": int(c.credits or 0),
              "receipt": c.mpesa_receipt, "at": c.created_at.isoformat() if c.created_at else None}

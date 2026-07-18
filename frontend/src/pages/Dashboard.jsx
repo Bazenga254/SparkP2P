@@ -4152,6 +4152,19 @@ export default function Dashboard() {
                   {buyCreditsBusy ? 'Sending…' : `Send STK · KES ${amt.toLocaleString()}`}
                 </button>
               </div>
+
+              {/* Manual paybill — the reliable fallback if the STK prompt won't
+                  come through (e.g. the number is briefly locked after another STK). */}
+              <div style={{ marginTop: 16, padding: '13px 14px', borderRadius: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid #2a2d3a' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', marginBottom: 5 }}>Or pay the paybill manually</div>
+                <div style={{ fontSize: 12.5, color: '#9ca3af', lineHeight: 1.7 }}>
+                  Lipa na M-Pesa → Pay Bill<br/>
+                  Business no.: <b style={{ color: '#e5e7eb', fontFamily: 'monospace' }}>{credits?.paybill}</b><br/>
+                  Account no.: <b style={{ color: '#e5e7eb', fontFamily: 'monospace' }}>{credits?.account_ref}</b><br/>
+                  Amount: <b style={{ color: '#e5e7eb' }}>min KES {min.toLocaleString()}</b>
+                  <span style={{ display: 'block', color: '#6b7280', marginTop: 3 }}>Credits update automatically once paid.</span>
+                </div>
+              </div>
             </div>
           </div>
         );
