@@ -559,6 +559,9 @@ async def get_trader_detail(
         "binance_api_key_saved": bool(trader.binance_api_key),
         "price_tracker_enabled": bool(getattr(trader, "price_tracker_enabled", False)),
         "b2c_own_paybill_enabled": bool(getattr(trader, "b2c_own_paybill_enabled", False)),
+        # Which rail pays this trader's BUY orders: True = their own I&M Bot,
+        # False = Choice Bank (default). Sells always stay on Choice Bank.
+        "buy_payout_via_im": bool(getattr(trader, "buy_payout_via_im", False)),
         "b2c_credits": int(getattr(trader, "b2c_credits", 0) or 0),
         "telegram_connected": bool(trader.telegram_chat_id),
         "telegram_notify_scope": trader.telegram_notify_scope or 'both',
@@ -1076,6 +1079,32 @@ async def update_trader_b2c_paybill(
     await db.commit()
     await write_audit_log(db, admin, "toggle_b2c_paybill", target_trader_id=trader_id, detail=f"{trader.full_name}: B2C own-paybill {'enabled' if enabled else 'disabled'}")
     return {"status": "updated", "trader_id": trader_id, "b2c_own_paybill_enabled": bool(enabled)}
+
+
+@router.put("/traders/{trader_id}/buy-payout")
+async def update_trader_buy_payout(
+    trader_id: int,
+    via_im: bool,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Choose which rail pays this trader's BUY orders: their own I&M Bot
+    (via_im=true) or Choice Bank (via_im=false, the default). Sells always stay
+    on Choice Bank.
+
+    This is the 'flip the switch' — it redirects real money. When ON, the I&M
+    poll starts serving this trader's buy orders and the desktop stops paying
+    them via Choice Bank. Admin can flip either way; unlike the merchant's own
+    control there is no bot-configured gate here, so support can pre-arm a trader
+    before their bot is up (the orders simply wait for the bot to poll)."""
+    trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    trader.buy_payout_via_im = bool(via_im)
+    await db.commit()
+    await write_audit_log(db, admin, "toggle_buy_payout_via_im", target_trader_id=trader_id,
+                          detail=f"{trader.full_name}: buy payouts via {'I&M Bot' if via_im else 'Choice Bank'}")
+    return {"status": "updated", "trader_id": trader_id, "buy_payout_via_im": bool(via_im)}
 
 
 @router.put("/traders/{trader_id}/tier")

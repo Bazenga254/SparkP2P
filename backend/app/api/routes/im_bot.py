@@ -158,7 +158,43 @@ async def link_status(trader: Trader = Depends(get_current_trader)):
         "last_seen_at": newest.last_used_at.isoformat() if newest and newest.last_used_at else None,
         "last_seen_ip": newest.last_used_ip if newest else None,
         "buy_orders_only": True,
+        # Which rail pays this merchant's BUY orders right now: True = their own
+        # I&M Bot, False = Choice Bank (the default). Sells always stay on Choice
+        # Bank regardless.
+        "buy_payout_via_im": bool(trader.buy_payout_via_im),
     }
+
+
+class PayoutMethodRequest(BaseModel):
+    via_im: bool   # True = pay buy orders via the merchant's own I&M Bot; False = Choice Bank
+
+
+@router.post("/payout-method")
+async def set_payout_method(
+    data: PayoutMethodRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """The merchant chooses how their BUY orders are paid out: their own I&M Bot
+    or Choice Bank. Sells are unaffected — they always settle on Choice Bank.
+
+    Turning I&M ON requires a configured bot (a live key): otherwise buy orders
+    would route to a bot that will never poll and sit unpaid forever. Turning it
+    OFF (back to Choice Bank) is always allowed — it is the safe default and must
+    never be blocked, so a merchant can always fall back if their bot dies.
+    """
+    if data.via_im:
+        live = [r for r in await keysvc.list_keys(trader.id) if r.revoked_at is None]
+        if not live:
+            raise HTTPException(
+                status_code=400,
+                detail="Connect your I&M Bot first — buy orders can't route to a bot that isn't set up.",
+            )
+
+    trader.buy_payout_via_im = bool(data.via_im)
+    await db.commit()
+    logger.info("im-bot: trader %s set buy payout via_im=%s", trader.id, data.via_im)
+    return {"ok": True, "buy_payout_via_im": bool(data.via_im)}
 
 
 # ═══════════════════════════════════════════════════════════

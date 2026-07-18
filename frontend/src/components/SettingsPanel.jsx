@@ -268,6 +268,21 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const loadImBot = () =>
     api.get('/im-bot/link-status').then(r => setImBot(r.data)).catch(() => {});
 
+  // Choose how BUY orders are paid: the merchant's own I&M Bot, or Choice Bank.
+  const [payoutBusy, setPayoutBusy] = useState(false);
+  const setPayoutMethod = async (viaIm) => {
+    if (payoutBusy || (imBot?.buy_payout_via_im ?? false) === viaIm) return;
+    setPayoutBusy(true);
+    try {
+      await api.post('/im-bot/payout-method', { via_im: viaIm });
+      await loadImBot();
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'Could not change your payout method. Please try again.');
+    } finally {
+      setPayoutBusy(false);
+    }
+  };
+
   useEffect(() => {
     loadImBot();
     // Offline is the state that costs money: the merchant chose "hold + alert",
@@ -1072,6 +1087,82 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
               <span style={{ fontSize: 13, lineHeight: 1 }}>ⓘ</span>
               <span>Limits reset every 24 hours at 00:00 EAT</span>
             </div>
+          </div>
+
+          {/* ── Payout method ─────────────────────────────────────────────────── */}
+          <div className="card" style={{ border: '1px solid rgba(139,92,246,0.18)', background: '#09090f' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 9, background: 'rgba(139,92,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, flexShrink: 0 }}>💸</div>
+              <div>
+                <div style={{ fontWeight: 700, color: '#fff', fontSize: 15 }}>Payout method</div>
+                <div style={{ color: '#8b5cf6', fontSize: 11, marginTop: 1 }}>Which rail pays your buy orders</div>
+              </div>
+            </div>
+            <div style={{ color: '#6b7280', fontSize: 12, margin: '4px 0 14px', lineHeight: 1.5 }}>
+              Choose how sellers are paid on your <b style={{ color: '#9ca3af' }}>buy</b> orders. Selling always settles on Choice Bank.
+            </div>
+
+            {(() => {
+              const viaIm = imBot?.buy_payout_via_im ?? false;
+              const hasBot = !!imBot?.has_key;
+              const online = !!imBot?.online;
+              const pill = (text, color) => (
+                <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: `${color}22`, color, letterSpacing: '.3px', flexShrink: 0 }}>{text}</span>
+              );
+              const Option = ({ selected, disabled, onClick, accent, icon, title, desc, badge }) => (
+                <button type="button" onClick={disabled ? undefined : onClick} disabled={disabled || payoutBusy}
+                  style={{
+                    width: '100%', textAlign: 'left', display: 'flex', alignItems: 'flex-start', gap: 12,
+                    padding: '14px 16px', marginBottom: 10, borderRadius: 12,
+                    cursor: disabled ? 'not-allowed' : (payoutBusy ? 'wait' : 'pointer'),
+                    border: `1.5px solid ${selected ? accent : 'rgba(255,255,255,0.08)'}`,
+                    background: selected ? `${accent}14` : 'rgba(255,255,255,0.02)',
+                    opacity: disabled ? 0.5 : 1, transition: 'border-color .15s, background .15s',
+                  }}>
+                  <div style={{ width: 20, height: 20, borderRadius: '50%', flexShrink: 0, marginTop: 2, border: `2px solid ${selected ? accent : '#4b5563'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {selected && <div style={{ width: 10, height: 10, borderRadius: '50%', background: accent }} />}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 15, lineHeight: 1 }}>{icon}</span>
+                      <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{title}</span>
+                      {badge}
+                    </div>
+                    <div style={{ color: '#9ca3af', fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>{desc}</div>
+                  </div>
+                </button>
+              );
+              return (
+                <>
+                  <Option selected={!viaIm} accent="#3b82f6" icon="🏦" onClick={() => setPayoutMethod(false)}
+                    title="Choice Bank"
+                    badge={!viaIm ? pill('ACTIVE', '#3b82f6') : pill('Default', '#6b7280')}
+                    desc="We pay sellers from your Choice Bank balance automatically. No setup — always available." />
+
+                  <Option selected={viaIm} disabled={!hasBot} accent="#f59e0b" icon="🤖" onClick={() => setPayoutMethod(true)}
+                    title="I&M Bot — your own I&M account"
+                    badge={viaIm ? pill('ACTIVE', '#f59e0b') : (!hasBot ? pill('Connect bot first', '#6b7280') : null)}
+                    desc={hasBot
+                      ? 'Your downloadable bot pays sellers from your own I&M account, on your machine. Buy orders only.'
+                      : 'Connect your I&M Bot in the card above, then choose this to pay buy orders from your own I&M account.'} />
+
+                  {/* B2C own-paybill — the rail exists on the plan but self-serve setup isn't live yet. */}
+                  <Option selected={false} disabled accent="#10b981" icon="📲"
+                    title="M-Pesa B2C — your own Paybill"
+                    badge={pill('B2C plan', '#10b981')}
+                    desc="Pay sellers straight from your own M-Pesa Paybill. Available on the B2C plan — contact support to set it up." />
+
+                  {viaIm && !online && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 4, padding: '10px 12px', borderRadius: 10, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
+                      <span style={{ fontSize: 13, lineHeight: 1.3 }}>⚠️</span>
+                      <span style={{ color: '#f59e0b', fontSize: 12, lineHeight: 1.5 }}>
+                        Your I&amp;M Bot is offline, so buy orders will <b>wait</b> until it's running. Start the bot on your machine, or switch back to Choice Bank to pay now.
+                      </span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
 
           {/* ── Binance API Key Card ──────────────────────────────────────────── */}

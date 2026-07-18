@@ -2473,6 +2473,22 @@ export default function Admin() {
                             <option value="on">Own Paybill / I&amp;M Bot</option>
                           </select>
                         </div>
+                        <div className="field">
+                          <label title="Which rail pays this trader's BUY orders. I&M Bot = their own downloadable bot pays sellers from their own I&M account (buy orders only; sells always stay on Choice Bank). Choice Bank = the default — the platform pays from their Choice Bank balance. Flipping this redirects real money on the next buy order.">Buy Payout</label>
+                          <select
+                            value={t.buy_payout_via_im ? 'im' : 'cb'}
+                            onChange={async (e) => {
+                              const viaIm = e.target.value === 'im';
+                              if (viaIm && !window.confirm(`Route ${t.full_name}'s BUY orders to their own I&M Bot?\n\nFrom their next buy order, the platform STOPS paying sellers via Choice Bank — their own bot pays from their own I&M account instead. If the bot is offline, those orders WAIT.\n\nSells are unaffected.`)) return;
+                              if (!viaIm && !window.confirm(`Route ${t.full_name}'s BUY orders back to CHOICE BANK?`)) return;
+                              setViewingTrader(prev => ({ ...prev, buy_payout_via_im: viaIm }));
+                              try { await api.put(`/admin/traders/${t.id}/buy-payout?via_im=${viaIm}`); } catch (_) {}
+                              await refreshTraderDetail(t.id);
+                            }}>
+                            <option value="cb">Choice Bank</option>
+                            <option value="im">I&amp;M Bot</option>
+                          </select>
+                        </div>
                       </div>
                     </div>
 
