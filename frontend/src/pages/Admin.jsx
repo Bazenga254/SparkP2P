@@ -5413,6 +5413,23 @@ export default function Admin() {
                           </div>
                         );
                       })}
+                      {/* B2C/VIP (ADVANCED) — hidden from the public plan catalogue, so it
+                          has no entry in `plans`; tracked here from the revenue summary. */}
+                      {(() => {
+                        const cnt = revBreakdown?.summary?.advanced_count ?? 0;
+                        const price = revBreakdown?.summary?.advanced_price ?? 0;
+                        const label = revBreakdown?.summary?.advanced_label || 'B2C';
+                        return (
+                          <div className="fin-plan fin-p4">
+                            <div className="fin-p-name">{label} · VIP</div>
+                            <div className="fin-p-subs"><b>{cnt}</b><span>paid subscriber{cnt !== 1 ? 's' : ''}</span></div>
+                            <div className="fin-p-rev">
+                              <div className="fin-p-rev-amt">{fmtKES(revBreakdown?.summary?.advanced ?? 0)}</div>
+                              <div className="fin-p-rev-per">{fmtKES(price)} / mo each</div>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </section>
 

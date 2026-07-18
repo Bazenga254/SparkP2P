@@ -2823,6 +2823,14 @@ async def revenue_subscriptions(
     )).scalar_one()
     summary["prepaid_held"] = round(float(_prepaid or 0), 2)
 
+    # The B2C/VIP plan (ADVANCED) is hidden from the public plan catalogue, so the
+    # frontend's `plans` list has no card for it — but the admin revenue page must
+    # still track it. Surface its price + label from PLAN_CONFIG (never hardcode a
+    # plan price in the frontend) so the B2C card can render server-sourced values.
+    from app.services.plans import plan_price, plan_label
+    summary["advanced_price"] = plan_price(SubscriptionPlan.ADVANCED)
+    summary["advanced_label"] = plan_label(SubscriptionPlan.ADVANCED)
+
     # Total count for pagination
     total_count = (
         await db.execute(

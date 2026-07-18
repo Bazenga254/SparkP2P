@@ -7560,19 +7560,21 @@ body {
 .fin-month-input{background:var(--fin-surface2);border:1px solid var(--border);color:#e6ebf2;
   font-family:inherit;font-size:13px;padding:7px 12px;border-radius:9px;colorScheme:dark}
 .fin-range-lbl{font-size:12px;color:var(--fin-dim);font-weight:600}
-.fin-plans{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.fin-plans{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
 .fin-plan{background:var(--surface);border:1px solid var(--border);border-radius:var(--fin-radius);
   padding:20px 22px;position:relative}
 .fin-plan::before{content:"";position:absolute;left:0;top:18px;bottom:18px;width:3px;border-radius:3px}
 .fin-p1::before{background:var(--fin-green)}
 .fin-p2::before{background:var(--fin-orange)}
 .fin-p3::before{background:var(--fin-purple)}
+.fin-p4::before{background:#14b8a6}
 .fin-p-name{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--fin-muted);font-weight:600}
 .fin-p-subs{display:flex;align-items:baseline;gap:8px;margin:12px 0 2px}
 .fin-p-subs b{font-size:28px;font-weight:700;letter-spacing:-.5px}
 .fin-p1 .fin-p-subs b{color:var(--fin-green)}
 .fin-p2 .fin-p-subs b{color:var(--fin-orange)}
 .fin-p3 .fin-p-subs b{color:var(--fin-purple)}
+.fin-p4 .fin-p-subs b{color:#14b8a6}
 .fin-p-subs span{font-size:12px;color:var(--fin-dim)}
 .fin-p-rev{margin-top:14px;padding-top:14px;border-top:1px solid var(--fin-border-soft)}
 .fin-p-rev-amt{font-size:18px;font-weight:700;color:#e6ebf2}
