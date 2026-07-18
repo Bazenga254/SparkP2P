@@ -647,7 +647,8 @@ async def bot_buy_credits(
         checkout_id = result.get("CheckoutRequestID")
     except Exception as e:
         logger.error("im-bot buy-credits STK failed for %s %s: %s", account_type, owner_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to send STK Push: {e}")
+        from app.services.mpesa.client import stk_error_message
+        raise HTTPException(status_code=502, detail=stk_error_message(e))
 
     cp.mpesa_checkout_id = checkout_id
     cp.credits = est

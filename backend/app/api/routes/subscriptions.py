@@ -206,7 +206,8 @@ async def buy_credits(
         checkout_id = result.get("CheckoutRequestID")
     except Exception as e:
         logger.error(f"Buy-credits STK failed for trader {trader.id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to send STK Push: {e}")
+        from app.services.mpesa.client import stk_error_message
+        raise HTTPException(status_code=502, detail=stk_error_message(e))
     cp = CreditPurchase(trader_id=trader.id, amount=amount, credits=credits,
                         mpesa_checkout_id=checkout_id, status="pending")
     db.add(cp)

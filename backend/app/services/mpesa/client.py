@@ -244,5 +244,19 @@ class MpesaClient:
         return phone
 
 
+def stk_error_message(e) -> str:
+    """Turn a raw Daraja STK failure into a message a merchant can act on. The
+    client surfaces Safaricom's error dict; only the code is useful to a human."""
+    s = str(e)
+    if "500.001.1001" in s or "lock subscriber" in s.lower():
+        return ("A previous M-Pesa prompt for this number is still pending. Wait a "
+                "minute and try again, or pay the paybill manually.")
+    if "400.002.02" in s or ("invalid" in s.lower() and "phone" in s.lower()):
+        return "That phone number wasn't accepted by M-Pesa. Check it and try again."
+    if "insufficient" in s.lower():
+        return "The M-Pesa request was declined for insufficient funds."
+    return "M-Pesa couldn't send the prompt right now. Try again shortly, or pay the paybill manually."
+
+
 # Singleton
 mpesa_client = MpesaClient()
