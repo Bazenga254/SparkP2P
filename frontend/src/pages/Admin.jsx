@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 import { usePlans } from '../services/plans';
-import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getImRevenue, getImBotAccounts, getImCharges, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
+import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getImRevenue, getImBotAccounts, getImTraders, getImCharges, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal, Search, Calendar, Bot } from 'lucide-react';
@@ -418,6 +418,8 @@ export default function Admin() {
   const [imRevenue, setImRevenue] = useState(null);
   const [imAccounts, setImAccounts] = useState([]);
   const [imAccountsTotal, setImAccountsTotal] = useState(0);
+  const [imTraders, setImTraders] = useState([]);          // SparkP2P clients configured on I&M
+  const [imTradersTotal, setImTradersTotal] = useState(0);
   const [imPeriod, setImPeriod] = useState('all');
   const [imLoading, setImLoading] = useState(false);
 
@@ -808,14 +810,19 @@ export default function Admin() {
     setImLoading(true);
     setImPeriod(period);
     try {
-      const [rev, accts] = await Promise.allSettled([
+      const [rev, accts, traders] = await Promise.allSettled([
         getImRevenue({ period }),
         getImBotAccounts({ page: 1, limit: 100 }),
+        getImTraders(),
       ]);
       if (rev.status === 'fulfilled') setImRevenue(rev.value.data);
       if (accts.status === 'fulfilled') {
         setImAccounts(accts.value.data.accounts || []);
         setImAccountsTotal(accts.value.data.total || 0);
+      }
+      if (traders.status === 'fulfilled') {
+        setImTraders(traders.value.data.traders || []);
+        setImTradersTotal(traders.value.data.total || 0);
       }
     } catch (err) {
       console.error('I&M load error:', err);
@@ -4794,10 +4801,86 @@ export default function Admin() {
                 );
               })()}
 
+              {/* SparkP2P clients configured on I&M — billed at their PLAN rate */}
+              <div className="tdx-sec-label" style={{ marginBottom: 6, marginTop: 26 }}>
+                SparkP2P clients on I&amp;M ({imTradersTotal})
+              </div>
+              <p style={{ color: 'var(--text-3)', fontSize: 12, margin: '0 0 12px', lineHeight: 1.5 }}>
+                Traders who configured I&amp;M Automation through SparkP2P. They bill at their <b>plan</b> rate —
+                Gold 7 · Silver 8 · Bronze 9 · B2C/VIP (KES 15,000) 5 · no subscription 10 (then 12).
+              </p>
+              {imLoading ? (
+                <p style={{ color: 'var(--text-3)' }}>Loading…</p>
+              ) : imTraders.length === 0 ? (
+                <p style={{ color: 'var(--text-3)', fontSize: 13 }}>
+                  No SparkP2P clients have connected their I&amp;M Bot yet. They appear here once they mint a key in Settings.
+                </p>
+              ) : (() => {
+                // Plan → colour + display, so a Gold merchant reads at a glance.
+                const planStyle = (plan, rate) => {
+                  if (plan === 'pro_max') return { label: 'Gold', color: 'var(--gold, #f5b301)' };
+                  if (plan === 'pro') return { label: 'Silver', color: '#cbd5e1' };
+                  if (plan === 'starter') return { label: 'Bronze', color: '#d97757' };
+                  if (plan === 'advanced') return { label: 'B2C · VIP', color: '#10b981' };
+                  return { label: rate === 10 ? 'No sub · intro' : 'No sub', color: '#6b7280' };
+                };
+                return (
+                  <div style={{ overflowX: 'auto', marginBottom: 8 }}>
+                    <table className="adm-table" style={{ width: '100%', fontSize: 13 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left' }}>Trader</th>
+                          <th style={{ textAlign: 'left' }}>Plan</th>
+                          <th style={{ textAlign: 'right' }}>Rate</th>
+                          <th style={{ textAlign: 'left' }}>Rail</th>
+                          <th>Bot</th>
+                          <th style={{ textAlign: 'right' }}>Payouts</th>
+                          <th style={{ textAlign: 'right' }}>Billed</th>
+                          <th style={{ textAlign: 'right' }}>Volume</th>
+                          <th style={{ textAlign: 'left' }}>Last seen</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {imTraders.map(t => {
+                          const ps = planStyle(t.plan, t.rate);
+                          const railLabel = { own_paybill: 'Own Paybill', im_bot: 'I&M Bot', choice_bank: 'Choice Bank' }[t.payout_rail] || t.payout_rail;
+                          return (
+                            <tr key={t.id} style={{ cursor: 'pointer' }} onClick={() => { setActiveTab('traders'); openTraderPage({ id: t.id, full_name: t.full_name }); }}>
+                              <td style={{ textAlign: 'left' }}>
+                                <div style={{ color: '#e5e7eb', fontWeight: 600 }}>{t.full_name || '—'}</div>
+                                <div style={{ color: 'var(--text-3)', fontSize: 11 }}>{t.email}</div>
+                              </td>
+                              <td style={{ textAlign: 'left' }}>
+                                <span className="chip" style={{ fontSize: 10, color: ps.color, borderColor: ps.color }}>{ps.label}</span>
+                                {t.plan === null && t.intro_remaining > 0 && (
+                                  <div style={{ color: 'var(--text-3)', fontSize: 10, marginTop: 2 }}>{t.intro_remaining} intro left</div>
+                                )}
+                              </td>
+                              <td style={{ textAlign: 'right', fontWeight: 800, color: ps.color }}>KES {t.rate}</td>
+                              <td style={{ textAlign: 'left', color: t.payout_rail === 'im_bot' ? 'var(--pos)' : 'var(--text-3)' }}>{railLabel}</td>
+                              <td style={{ textAlign: 'center' }}>
+                                <span className={`chip ${t.online ? 'chip--pos' : ''}`} style={{ fontSize: 10 }}>{t.online ? 'online' : 'offline'}</span>
+                              </td>
+                              <td style={{ textAlign: 'right' }}>{t.payouts}</td>
+                              <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(t.revenue)}</td>
+                              <td style={{ textAlign: 'right' }}>{fmtKES(t.volume)}</td>
+                              <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{t.last_seen ? fmtDateEAT(t.last_seen) : '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+
               {/* bot-only registrants */}
-              <div className="tdx-sec-label" style={{ marginBottom: 10 }}>
+              <div className="tdx-sec-label" style={{ marginBottom: 6, marginTop: 26 }}>
                 Bot-only registrants ({imAccountsTotal})
               </div>
+              <p style={{ color: 'var(--text-3)', fontSize: 12, margin: '0 0 12px', lineHeight: 1.5 }}>
+                People who use the bot but are <b>not</b> SparkP2P clients — a flat KES 12/payout.
+              </p>
               {imLoading ? (
                 <p style={{ color: 'var(--text-3)' }}>Loading…</p>
               ) : imAccounts.length === 0 ? (

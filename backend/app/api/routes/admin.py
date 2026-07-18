@@ -3032,6 +3032,78 @@ async def im_bot_accounts(
     return {"total": total, "page": page, "limit": limit, "accounts": out}
 
 
+@router.get("/im/traders")
+async def im_configured_traders(
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """SparkP2P clients who have configured I&M Automation — i.e. they hold a live
+    im_bot key, minted from their own Settings. Separate from the bot-only list:
+    these ARE traders, and they bill at their PLAN rate, not the flat 12.
+
+    Each row carries the rate resolved from their REAL subscription state
+    (rate_for_trader → active_plan, never billing_active), so the admin sees
+    exactly what a Gold merchant pays (7), Silver (8), Bronze (9), a B2C/VIP
+    client (5), and an unsubscribed trader on the intro allowance (10 → 12)."""
+    from app.models.api_key import MerchantApiKey
+    from app.models.im_charge import ImCharge
+    from app.services import im_pricing as pricing
+    from app.services.api_keys import as_utc
+
+    # Traders with at least one un-revoked im_bot key = "configured I&M".
+    trader_ids = (await db.execute(
+        select(MerchantApiKey.trader_id)
+        .where(MerchantApiKey.trader_id.isnot(None),
+               MerchantApiKey.scope == "im_bot",
+               MerchantApiKey.revoked_at.is_(None))
+        .distinct()
+    )).scalars().all()
+
+    out = []
+    now = datetime.now(timezone.utc)
+    for tid in trader_ids:
+        trader = (await db.execute(select(Trader).where(Trader.id == tid))).scalar_one_or_none()
+        if not trader:
+            continue
+        # Rate from their real plan (5/7/8/9, or the 10→12 intro allowance).
+        info = await pricing.rate_for_trader(db, tid)
+        stats = (await db.execute(
+            select(func.count(ImCharge.id), func.coalesce(func.sum(ImCharge.rate), 0),
+                   func.coalesce(func.sum(ImCharge.payout_amount), 0))
+            .where(ImCharge.trader_id == tid)
+        )).one()
+        last_seen = (await db.execute(
+            select(func.max(MerchantApiKey.last_used_at))
+            .where(MerchantApiKey.trader_id == tid,
+                   MerchantApiKey.scope == "im_bot",
+                   MerchantApiKey.revoked_at.is_(None))
+        )).scalar_one_or_none()
+        # Online = the bot polled within the last 3 minutes (its heartbeat).
+        online = bool(last_seen and (now - as_utc(last_seen)).total_seconds() < 180) if last_seen else False
+        out.append({
+            "id": trader.id,
+            "full_name": trader.full_name,
+            "email": trader.email,
+            "phone": trader.phone,
+            "plan": info.get("plan"),               # 'pro_max' | 'pro' | 'starter' | 'advanced' | None
+            "plan_label": info.get("label"),        # 'Gold' | 'Silver' | 'Bronze' | 'B2C' | 'No subscription…'
+            "rate": info.get("rate"),               # 7 | 8 | 9 | 5 | 10 | 12
+            "intro_remaining": info.get("intro_remaining", 0),
+            "payout_rail": ("own_paybill" if getattr(trader, "b2c_own_paybill_enabled", False)
+                            else "im_bot" if getattr(trader, "buy_payout_via_im", False)
+                            else "choice_bank"),
+            "online": online,
+            "last_seen": last_seen.isoformat() if last_seen else None,
+            "payouts": int(stats[0] or 0),
+            "revenue": int(stats[1] or 0),
+            "volume": int(stats[2] or 0),
+        })
+
+    # Busiest first — most payouts billed.
+    out.sort(key=lambda r: r["payouts"], reverse=True)
+    return {"total": len(out), "traders": out}
+
+
 # ── Credit / Trade Token Purchases ───────────────────────────────────────────
 
 @router.get("/sweeps")
