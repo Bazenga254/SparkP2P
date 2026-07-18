@@ -158,10 +158,16 @@ async def link_status(trader: Trader = Depends(get_current_trader)):
         "last_seen_at": newest.last_used_at.isoformat() if newest and newest.last_used_at else None,
         "last_seen_ip": newest.last_used_ip if newest else None,
         "buy_orders_only": True,
-        # Which rail pays this merchant's BUY orders right now: True = their own
-        # I&M Bot, False = Choice Bank (the default). Sells always stay on Choice
-        # Bank regardless.
+        # The ONE rail paying this merchant's BUY orders. Sells always stay on
+        # Choice Bank regardless. own_paybill (the B2C plan) is admin-managed —
+        # the merchant sees it but can't set it from here.
         "buy_payout_via_im": bool(trader.buy_payout_via_im),
+        "on_b2c_plan": bool(getattr(trader, "b2c_own_paybill_enabled", False)),
+        "payout_rail": (
+            "own_paybill" if getattr(trader, "b2c_own_paybill_enabled", False)
+            else "im_bot" if trader.buy_payout_via_im
+            else "choice_bank"
+        ),
     }
 
 
@@ -178,11 +184,21 @@ async def set_payout_method(
     """The merchant chooses how their BUY orders are paid out: their own I&M Bot
     or Choice Bank. Sells are unaffected — they always settle on Choice Bank.
 
+    Not allowed while on the B2C own-paybill plan: that rail is part of a paid
+    plan and is admin-managed, so a merchant can't silently switch off what
+    they're paying for. They're told to contact support.
+
     Turning I&M ON requires a configured bot (a live key): otherwise buy orders
     would route to a bot that will never poll and sit unpaid forever. Turning it
     OFF (back to Choice Bank) is always allowed — it is the safe default and must
     never be blocked, so a merchant can always fall back if their bot dies.
     """
+    if getattr(trader, "b2c_own_paybill_enabled", False):
+        raise HTTPException(
+            status_code=409,
+            detail="Your payout rail is set by your B2C plan (own Paybill). Contact support to change it.",
+        )
+
     if data.via_im:
         live = [r for r in await keysvc.list_keys(trader.id) if r.revoked_at is None]
         if not live:
@@ -192,6 +208,11 @@ async def set_payout_method(
             )
 
     trader.buy_payout_via_im = bool(data.via_im)
+    # Belt and braces: keep the two rail flags mutually exclusive. (b2c is already
+    # False here — the guard above returned otherwise — but never let I&M coexist
+    # with own-paybill.)
+    if data.via_im:
+        trader.b2c_own_paybill_enabled = False
     await db.commit()
     logger.info("im-bot: trader %s set buy payout via_im=%s", trader.id, data.via_im)
     return {"ok": True, "buy_payout_via_im": bool(data.via_im)}

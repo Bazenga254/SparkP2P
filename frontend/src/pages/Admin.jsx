@@ -2457,36 +2457,31 @@ export default function Admin() {
                             <option value="on">On</option>
                           </select>
                         </div>
+                        {/* ONE buy-order payout rail — three mutually-exclusive values.
+                            Replaces the old B2C Route + Buy Payout pair, which could be set
+                            to contradictory rails. The backend clears the other flags when
+                            one is chosen, so a conflict is impossible. */}
                         <div className="field">
-                          <label title="Where this client's M-Pesa B2C payouts are sent. Own Paybill / I&M Bot = from their own paybill (moves them to the B2C plan KES 15,000/mo + credits, no downgrade) and bills I&M Automation payouts at the best rate, KES 5. Choice Bank = the default payout route.">B2C Route</label>
+                          <label title="The ONE rail that pays this trader's BUY orders. Choice Bank = the platform pays from their Choice Bank balance (default). I&M Bot = their own downloadable bot pays from their own I&M account. Own Paybill (B2C) = their own M-Pesa Paybill, the KES 15,000/mo B2C plan (bills I&M payouts at the best rate, KES 5). Only one can be active — picking one clears the others. Sells always stay on Choice Bank. Redirects real money on the next buy order.">Buy Payout</label>
                           <select
-                            value={t.b2c_own_paybill_enabled ? 'on' : 'off'}
+                            value={t.payout_rail || (t.b2c_own_paybill_enabled ? 'own_paybill' : t.buy_payout_via_im ? 'im_bot' : 'choice_bank')}
                             onChange={async (e) => {
-                              const on = e.target.value === 'on';
-                              if (on && !window.confirm(`Switch ${t.full_name} to OWN-PAYBILL B2C?\n\nM-Pesa payouts will go from their own paybill. They'll be moved to the B2C plan (KES 15,000/mo), get 2,000 credits on each renewal, and CANNOT downgrade without support.\n\nI&M Automation payouts drop to KES 5 each (the best rate) from their very next payout.`)) return;
-                              if (!on && !window.confirm(`Switch ${t.full_name} back to CHOICE BANK for B2C payouts?`)) return;
-                              setViewingTrader(prev => ({ ...prev, b2c_own_paybill_enabled: on }));
-                              try { await api.put(`/admin/traders/${t.id}/b2c-paybill?enabled=${on}`); } catch (_) {}
+                              const rail = e.target.value;
+                              const cur = t.payout_rail || (t.b2c_own_paybill_enabled ? 'own_paybill' : t.buy_payout_via_im ? 'im_bot' : 'choice_bank');
+                              if (rail === cur) return;
+                              const msgs = {
+                                choice_bank: `Route ${t.full_name}'s BUY orders to CHOICE BANK?\n\nThe platform pays sellers from their Choice Bank balance. This also clears any I&M Bot / own-paybill routing.`,
+                                im_bot: `Route ${t.full_name}'s BUY orders to their own I&M Bot?\n\nFrom their next buy order, their own bot pays sellers from their own I&M account — the platform STOPS paying via Choice Bank. If the bot is offline, those orders WAIT. Sells are unaffected.`,
+                                own_paybill: `Move ${t.full_name} to OWN-PAYBILL (B2C)?\n\nBuy-order payouts go from their own M-Pesa Paybill. They belong on the B2C plan (KES 15,000/mo, 2,000 credits/renewal, no self-downgrade), and I&M payouts bill at KES 5. This clears any I&M Bot routing.`,
+                              };
+                              if (!window.confirm(msgs[rail])) return;
+                              setViewingTrader(prev => ({ ...prev, payout_rail: rail, buy_payout_via_im: rail === 'im_bot', b2c_own_paybill_enabled: rail === 'own_paybill' }));
+                              try { await api.put(`/admin/traders/${t.id}/payout-rail?rail=${rail}`); } catch (_) {}
                               await refreshTraderDetail(t.id);
                             }}>
-                            <option value="off">Choice Bank</option>
-                            <option value="on">Own Paybill / I&amp;M Bot</option>
-                          </select>
-                        </div>
-                        <div className="field">
-                          <label title="Which rail pays this trader's BUY orders. I&M Bot = their own downloadable bot pays sellers from their own I&M account (buy orders only; sells always stay on Choice Bank). Choice Bank = the default — the platform pays from their Choice Bank balance. Flipping this redirects real money on the next buy order.">Buy Payout</label>
-                          <select
-                            value={t.buy_payout_via_im ? 'im' : 'cb'}
-                            onChange={async (e) => {
-                              const viaIm = e.target.value === 'im';
-                              if (viaIm && !window.confirm(`Route ${t.full_name}'s BUY orders to their own I&M Bot?\n\nFrom their next buy order, the platform STOPS paying sellers via Choice Bank — their own bot pays from their own I&M account instead. If the bot is offline, those orders WAIT.\n\nSells are unaffected.`)) return;
-                              if (!viaIm && !window.confirm(`Route ${t.full_name}'s BUY orders back to CHOICE BANK?`)) return;
-                              setViewingTrader(prev => ({ ...prev, buy_payout_via_im: viaIm }));
-                              try { await api.put(`/admin/traders/${t.id}/buy-payout?via_im=${viaIm}`); } catch (_) {}
-                              await refreshTraderDetail(t.id);
-                            }}>
-                            <option value="cb">Choice Bank</option>
-                            <option value="im">I&amp;M Bot</option>
+                            <option value="choice_bank">Choice Bank</option>
+                            <option value="im_bot">I&amp;M Bot</option>
+                            <option value="own_paybill">Own Paybill / B2C</option>
                           </select>
                         </div>
                       </div>

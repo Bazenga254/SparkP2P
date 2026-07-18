@@ -1103,7 +1103,9 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
             </div>
 
             {(() => {
-              const viaIm = imBot?.buy_payout_via_im ?? false;
+              const rail = imBot?.payout_rail || (imBot?.buy_payout_via_im ? 'im_bot' : 'choice_bank');
+              const onB2c = !!imBot?.on_b2c_plan || rail === 'own_paybill';
+              const viaIm = rail === 'im_bot';
               const hasBot = !!imBot?.has_key;
               const online = !!imBot?.online;
               const pill = (text, color) => (
@@ -1132,25 +1134,39 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                   </div>
                 </button>
               );
+              // On the B2C plan, the rail is part of what they pay for — it's
+              // admin-managed, so every option is locked and they're pointed at
+              // support. Otherwise they freely pick Choice Bank or I&M.
               return (
                 <>
-                  <Option selected={!viaIm} accent="#3b82f6" icon="🏦" onClick={() => setPayoutMethod(false)}
+                  <Option selected={rail === 'choice_bank'} disabled={onB2c} accent="#3b82f6" icon="🏦" onClick={() => setPayoutMethod(false)}
                     title="Choice Bank"
-                    badge={!viaIm ? pill('ACTIVE', '#3b82f6') : pill('Default', '#6b7280')}
+                    badge={rail === 'choice_bank' ? pill('ACTIVE', '#3b82f6') : pill('Default', '#6b7280')}
                     desc="We pay sellers from your Choice Bank balance automatically. No setup — always available." />
 
-                  <Option selected={viaIm} disabled={!hasBot} accent="#f59e0b" icon="🤖" onClick={() => setPayoutMethod(true)}
+                  <Option selected={viaIm} disabled={onB2c || !hasBot} accent="#f59e0b" icon="🤖" onClick={() => setPayoutMethod(true)}
                     title="I&M Bot — your own I&M account"
                     badge={viaIm ? pill('ACTIVE', '#f59e0b') : (!hasBot ? pill('Connect bot first', '#6b7280') : null)}
                     desc={hasBot
                       ? 'Your downloadable bot pays sellers from your own I&M account, on your machine. Buy orders only.'
                       : 'Connect your I&M Bot in the card above, then choose this to pay buy orders from your own I&M account.'} />
 
-                  {/* B2C own-paybill — the rail exists on the plan but self-serve setup isn't live yet. */}
-                  <Option selected={false} disabled accent="#10b981" icon="📲"
+                  {/* B2C own-paybill — admin-managed (a paid plan). Active if they're on it. */}
+                  <Option selected={onB2c} disabled accent="#10b981" icon="📲"
                     title="M-Pesa B2C — your own Paybill"
-                    badge={pill('B2C plan', '#10b981')}
-                    desc="Pay sellers straight from your own M-Pesa Paybill. Available on the B2C plan — contact support to set it up." />
+                    badge={onB2c ? pill('ACTIVE', '#10b981') : pill('B2C plan', '#10b981')}
+                    desc={onB2c
+                      ? 'Buy orders are paid from your own M-Pesa Paybill on your B2C plan. Managed with support.'
+                      : 'Pay sellers straight from your own M-Pesa Paybill. Available on the B2C plan — contact support to set it up.'} />
+
+                  {onB2c && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 4, padding: '10px 12px', borderRadius: 10, background: 'rgba(16,185,129,0.07)', border: '1px solid rgba(16,185,129,0.2)' }}>
+                      <span style={{ fontSize: 13, lineHeight: 1.3 }}>🔒</span>
+                      <span style={{ color: '#10b981', fontSize: 12, lineHeight: 1.5 }}>
+                        Your payout rail is set by your <b>B2C plan</b>. Contact support to change it.
+                      </span>
+                    </div>
+                  )}
 
                   {viaIm && !online && (
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 4, padding: '10px 12px', borderRadius: 10, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
