@@ -3788,32 +3788,10 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {b2cEnabled && (
-                <div style={{ border: '1px solid rgba(245,158,11,0.4)', background: 'linear-gradient(180deg, rgba(245,158,11,0.08), rgba(245,158,11,0.02))', borderRadius: 12, padding: '18px 20px', marginBottom: 20 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
-                    <div style={{ fontWeight: 800, color: '#f59e0b', fontSize: 16 }}>⚡ B2C Payout Credits</div>
-                    <div style={{ fontSize: 12, color: '#9aa4b2' }}>1 credit = 1 M-Pesa payout · KES 8 each</div>
-                  </div>
-                  <div style={{ margin: '14px 0 6px', display: 'flex', justifyContent: 'space-between', fontSize: 13, flexWrap: 'wrap', gap: 6 }}>
-                    <span style={{ color: '#e5e7eb', fontWeight: 700 }}>{b2cCredits.toLocaleString()} credits left</span>
-                    {b2cCredits <= 0 && <span style={{ color: '#ef4444', fontWeight: 700 }}>B2C paused — top up to resume (Pesalink still works)</span>}
-                  </div>
-                  <div style={{ height: 10, borderRadius: 6, background: '#1f2937', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${Math.min(100, (b2cCredits / 2000) * 100)}%`, background: b2cCredits <= 0 ? '#ef4444' : 'linear-gradient(90deg,#f59e0b,#fbbf24)', transition: 'width .3s' }} />
-                  </div>
-                  <div style={{ fontSize: 11, color: '#6b7280', marginTop: 6 }}>You get 2,000 free credits on every monthly renewal of the B2C plan. Buy more below (min KES 5,000; KES 8 per credit).</div>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-                    <input value={b2cAmt} onChange={e => setB2cAmt(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Amount (min 5,000)" inputMode="numeric"
-                      style={{ flex: '1 1 160px', minWidth: 0, background: '#0d1117', border: '1px solid #2a3142', borderRadius: 8, color: '#fff', padding: '10px 12px', fontSize: 14 }} />
-                    <button onClick={handleBuyCredits} disabled={b2cBusy}
-                      style={{ background: '#f59e0b', color: '#1a1109', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 800, fontSize: 14, cursor: b2cBusy ? 'default' : 'pointer', whiteSpace: 'nowrap', opacity: b2cBusy ? 0.7 : 1 }}>
-                      {b2cBusy ? 'Sending…' : 'Buy Credits'}
-                    </button>
-                  </div>
-                  {b2cAmt && parseInt(b2cAmt, 10) >= 5000 && <div style={{ fontSize: 12, color: '#10b981', marginTop: 6 }}>= {Math.round(parseInt(b2cAmt, 10) / 8).toLocaleString()} credits</div>}
-                  {b2cMsg && <div style={{ fontSize: 12.5, marginTop: 8, color: b2cMsg.type === 'error' ? '#ef4444' : b2cMsg.type === 'success' ? '#10b981' : '#60a5fa' }}>{b2cMsg.text}</div>}
-                </div>
-              )}
+              {/* The old B2C-only credits block was removed — the unified "I&M
+                  Automation credits" card on the Overview tab now handles credits
+                  for ALL prepaid rails (rate-based, min KES 1,000, no free credits),
+                  so keeping this one meant two credit UIs with conflicting math. */}
 
               {!b2cEnabled && (<>
               <div className="plans-head reveal d3">

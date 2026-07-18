@@ -156,10 +156,9 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
         ))
     trader.tier = plan.value
     trader.subscription_balance = max(0.0, balance - price)
-    # B2C plan renewal grants 2,000 free credits (1 credit = 1 M-Pesa payout = KES 8 markup),
-    # every month it's paid/renewed.
-    if plan == SubscriptionPlan.ADVANCED:
-        trader.b2c_credits = int(trader.b2c_credits or 0) + 2000
+    # NO free credits on any plan. Everyone starts at 0 and buys prepaid payout
+    # credits themselves (see credits.py) — so every user is prompted to top up
+    # rather than handed a balance. (Was: B2C renewal granted 2,000 free credits.)
     # Ledger: record the incoming payment (if any) then the plan charge.
     if float(amount or 0) > 0:
         await record_activity(db, trader_id, _TT.SUBSCRIPTION_DEPOSIT, float(amount),

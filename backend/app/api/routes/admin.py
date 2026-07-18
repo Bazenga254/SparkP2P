@@ -1221,12 +1221,14 @@ async def update_trader_tier(
             )
             db.add(sub)
 
-        # B2C plan: enable own-paybill and grant credits with this admin grant (default 2,000, or
-        # a custom amount). No payment — logged as an admin grant, not counted as revenue.
+        # B2C plan: enable own-paybill. NO free credits by default — everyone
+        # starts at 0 and buys their own (the admin may still gift some by passing
+        # an explicit `credits` amount, but the default is none).
         if tier == "advanced":
             trader.b2c_own_paybill_enabled = True
-            _granted_credits = int(credits) if int(credits or 0) > 0 else 2000
-            trader.b2c_credits = int(trader.b2c_credits or 0) + _granted_credits
+            _granted_credits = int(credits or 0)
+            if _granted_credits > 0:
+                trader.b2c_credits = int(trader.b2c_credits or 0) + _granted_credits
 
         # Send notification email
         from app.services.email import send_subscription_activated

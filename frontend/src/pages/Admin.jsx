@@ -152,7 +152,7 @@ function TierGrantModal({ grant, onCancel, onApply }) {
   const tierLabel = isB2C ? 'B2C' : planLabel(grant.tier);
   const [mode, setMode] = useState('quick');
   const [custom, setCustom] = useState('');
-  const [credits, setCredits] = useState('2000');
+  const [credits, setCredits] = useState('0');   // no free credits by default — everyone buys their own
   const [busy, setBusy] = useState(false);
 
   const fromMonths = (n) => { const d = new Date(); d.setMonth(d.getMonth() + n); return d; };
@@ -160,7 +160,7 @@ function TierGrantModal({ grant, onCancel, onApply }) {
   const apply = async (expiryDate) => {
     if (!expiryDate || isNaN(expiryDate.getTime())) return;
     setBusy(true);
-    try { await onApply(grant.traderId, grant.tier, expiryDate.toISOString(), isB2C ? (parseInt(credits, 10) || 2000) : 0); }
+    try { await onApply(grant.traderId, grant.tier, expiryDate.toISOString(), isB2C ? (parseInt(credits, 10) || 0) : 0); }
     catch (e) { alert(e?.response?.data?.detail || 'Could not grant subscription.'); setBusy(false); }
   };
   const QUICK = [['1 month', 1], ['3 months', 3], ['6 months', 6], ['1 year', 12]];
@@ -2479,7 +2479,7 @@ export default function Admin() {
                               const msgs = {
                                 choice_bank: `Route ${t.full_name}'s BUY orders to CHOICE BANK?\n\nThe platform pays sellers from their Choice Bank balance. This also clears any I&M Bot / own-paybill routing.`,
                                 im_bot: `Route ${t.full_name}'s BUY orders to their own I&M Bot?\n\nFrom their next buy order, their own bot pays sellers from their own I&M account — the platform STOPS paying via Choice Bank. If the bot is offline, those orders WAIT. Sells are unaffected.`,
-                                own_paybill: `Move ${t.full_name} to OWN-PAYBILL (B2C)?\n\nBuy-order payouts go from their own M-Pesa Paybill. They belong on the B2C plan (KES 15,000/mo, 2,000 credits/renewal, no self-downgrade), and I&M payouts bill at KES 5. This clears any I&M Bot routing.`,
+                                own_paybill: `Move ${t.full_name} to OWN-PAYBILL (B2C)?\n\nBuy-order payouts go from their own M-Pesa Paybill. They belong on the B2C plan (KES 15,000/mo, no self-downgrade), and pay KES 5 per payout in prepaid credits (they start at 0 and buy their own). This clears any I&M Bot routing.`,
                               };
                               if (!window.confirm(msgs[rail])) return;
                               setViewingTrader(prev => ({ ...prev, payout_rail: rail, buy_payout_via_im: rail === 'im_bot', b2c_own_paybill_enabled: rail === 'own_paybill' }));
