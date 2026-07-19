@@ -65,6 +65,65 @@ class CreateKeyRequest(BaseModel):
     name: str | None = None
 
 
+# ── One-click launch handoff ──────────────────────────────────────────────────
+# A merchant already signed into SparkP2P clicks "Launch I&M Bot"; SparkP2P mints
+# a short-lived, one-time handoff CODE and opens the desktop app via a deep link.
+# The app exchanges the code for its API key and lands signed-in — no second
+# login. Same shape as the Google OAuth sid handoff: a code, not a credential.
+import secrets, time as _time
+
+_HANDOFF_TTL_S = 120                      # a code is good for two minutes
+_handoff_codes: dict[str, tuple[int, float]] = {}  # code -> (trader_id, expires_at)
+
+
+def _prune_handoffs():
+    now = _time.time()
+    for c in [c for c, (_, exp) in _handoff_codes.items() if exp < now]:
+        _handoff_codes.pop(c, None)
+
+
+@router.post("/handoff")
+async def create_handoff(trader: Trader = Depends(get_current_trader)):
+    """Mint a one-time code for launching the desktop app already signed in.
+    Requires a live SparkP2P session — the code just carries that identity across
+    to the app, it is not itself a credential."""
+    _prune_handoffs()
+    code = secrets.token_urlsafe(24)
+    _handoff_codes[code] = (trader.id, _time.time() + _HANDOFF_TTL_S)
+    return {
+        "code": code,
+        "deeplink": f"im-automation://handoff?code={code}",
+        "expires_in": _HANDOFF_TTL_S,
+    }
+
+
+class HandoffExchange(BaseModel):
+    code: str
+
+
+@router.post("/handoff/exchange")
+async def exchange_handoff(data: HandoffExchange, db: AsyncSession = Depends(get_db)):
+    """The desktop app exchanges the handoff code for its API key. Public (the app
+    has no session yet), but the code is one-time and short-lived, so only the app
+    that just received the deep link can use it — and only once."""
+    _prune_handoffs()
+    entry = _handoff_codes.pop(data.code, None)   # one-time: pop on use
+    if not entry or entry[1] < _time.time():
+        raise HTTPException(status_code=401, detail="This launch link has expired. Click Launch again.")
+    trader_id = entry[0]
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    plaintext, row = await keysvc.create_key(trader_id, name="I&M Automation (launched from SparkP2P)")
+    logger.info("im-bot handoff: trader %s launched the app, minted key %s…", trader_id, row.key_prefix)
+    return {
+        "ok": True,
+        "api_key": plaintext,
+        "username": trader.full_name or trader.email,
+        "mode": "sparkp2p",
+    }
+
+
 def _public(row) -> dict:
     """A key row as the UI may see it — prefix only. The key itself does not
     exist anywhere to return."""

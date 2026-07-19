@@ -268,6 +268,27 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const loadImBot = () =>
     api.get('/im-bot/link-status').then(r => setImBot(r.data)).catch(() => {});
 
+  // One-click launch: mint a short-lived handoff code, then open the desktop app
+  // via its im-automation:// deep link. The app exchanges the code for its key and
+  // signs the user in automatically — they just connect their I&M and go.
+  const [imLaunching, setImLaunching] = useState(false);
+  const [imLaunchMsg, setImLaunchMsg] = useState('');
+  const launchImBot = async () => {
+    setImLaunching(true); setImLaunchMsg('');
+    try {
+      const r = await api.post('/im-bot/handoff');
+      const link = r.data?.deeplink;
+      if (!link) throw new Error('no link');
+      // Opening the custom scheme hands off to the OS, which launches the app.
+      window.location.href = link;
+      setImLaunchMsg("✓ Opening I&M Automation… If nothing happens, the app isn't installed — download it, then click Launch again.");
+    } catch (e) {
+      setImLaunchMsg('Could not start the launch. Please try again.');
+    } finally {
+      setTimeout(() => setImLaunching(false), 1500);
+    }
+  };
+
   // Choose how BUY orders are paid: the merchant's own I&M Bot, or Choice Bank.
   const [payoutBusy, setPayoutBusy] = useState(false);
   const setPayoutMethod = async (viaIm) => {
@@ -956,12 +977,25 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                     : `Bot not running · last seen ${imBotSeen(imBot.last_seen_at)} — buy orders will wait`}
                 </div>
               )}
+              {/* One-click launch: mint a handoff code, then open the desktop app
+                  via its deep link. The app exchanges the code and lands signed in —
+                  no second login. */}
+              <button onClick={launchImBot} disabled={imLaunching}
+                style={{ width: '100%', padding: '9px 0', borderRadius: 8, marginBottom: 8,
+                  border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 700, fontSize: 13,
+                  cursor: imLaunching ? 'wait' : 'pointer' }}>
+                {imLaunching ? 'Launching…' : '🚀 Launch I&M Bot'}
+              </button>
+              {imLaunchMsg && (
+                <div style={{ fontSize: 11, color: imLaunchMsg.startsWith('✓') ? '#10b981' : '#f59e0b', marginBottom: 8, lineHeight: 1.5 }}>
+                  {imLaunchMsg}
+                </div>
+              )}
               <button onClick={openImBot}
                 style={{ width: '100%', padding: '9px 0', borderRadius: 8,
-                  border: imBot?.has_key ? '1px solid #374151' : 'none',
-                  background: imBot?.has_key ? 'transparent' : '#3b82f6',
-                  color: imBot?.has_key ? '#d1d5db' : '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
-                {imBot?.has_key ? 'Manage' : 'Connect I&M Bot'}
+                  border: '1px solid #374151', background: 'transparent',
+                  color: '#d1d5db', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                {imBot?.has_key ? 'Manage keys' : 'Set up manually'}
               </button>
             </div>
 
