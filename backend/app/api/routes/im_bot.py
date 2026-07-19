@@ -356,8 +356,13 @@ async def poll(
         )
     ).scalars().all()
 
+    from app.services.ad_automation import is_automated
     jobs = []
     for o in rows:
+        # Respect the per-ad config: if this order's ad is set to sell_only/off,
+        # don't pay it. No config for the ad -> falls back to the global mode.
+        if not await is_automated(db, trader, o.binance_ad_number, "buy"):
+            continue
         # Skip anything already in flight to this (or another) bot instance.
         if not lease.try_lease(o.binance_order_number, trader_id):
             continue

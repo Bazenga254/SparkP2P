@@ -3663,3 +3663,90 @@ async def get_rate_limit(
         "exempt": bool(getattr(trader, "billing_exempt", False)),
         "daily_trade_blocked": bool(active and not trades.get("allowed", True)),
     }
+
+
+# ── Ad automation: which of a merchant's Binance ads the bot runs, per side ────
+
+@router.get("/ads")
+async def list_ads(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """The merchant's live Binance ads, each with its automation mode. A mode of
+    null means 'default' — the ad follows the trader's global bot_trade_mode
+    (i.e. it IS automated, exactly as today). Only ads with a saved override
+    differ."""
+    from app.models.ad_automation import AdAutomation
+
+    configs = {r.adv_no: r.mode for r in (await db.execute(
+        select(AdAutomation).where(AdAutomation.trader_id == trader.id)
+    )).scalars().all()}
+
+    ads_out, connected, err = [], False, None
+    if trader.binance_api_key and trader.binance_api_secret:
+        try:
+            from app.core.security import decrypt_data
+            from app.services.binance.sapi_client import get_merchant_ads, relay_trader
+            relay_trader.set(trader.id)
+            ads = await get_merchant_ads(decrypt_data(trader.binance_api_key),
+                                         decrypt_data(trader.binance_api_secret))
+            connected = True
+            for ad in ads or []:
+                adv = ad.get("advNo") or ad.get("adsNo")
+                if not adv:
+                    continue
+                ads_out.append({
+                    "adv_no": str(adv),
+                    "trade_type": (ad.get("tradeType") or "").upper(),   # BUY | SELL
+                    "asset": ad.get("asset"),
+                    "fiat": ad.get("fiatUnit") or ad.get("fiat"),
+                    "price": ad.get("price"),
+                    "status": ad.get("advStatus"),                       # 1=online, 3=offline
+                    "surplus": ad.get("surplusAmount"),
+                    "mode": configs.get(str(adv)),                       # None = default
+                })
+        except Exception as e:
+            err = str(e)
+            logger.warning("list_ads: could not fetch ads for trader %s: %s", trader.id, e)
+
+    return {
+        "connected": connected,
+        "global_mode": trader.bot_trade_mode or "both",
+        "ads": ads_out,
+        "error": err,
+    }
+
+
+class AdModeRequest(BaseModel):
+    mode: str   # 'both' | 'buy_only' | 'sell_only' | 'off' | 'default'
+
+
+@router.put("/ads/{adv_no}")
+async def set_ad_mode(
+    adv_no: str,
+    data: AdModeRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set one ad's automation mode. 'default' clears the override so the ad
+    follows the global mode again. Anything else pins it."""
+    from app.models.ad_automation import AdAutomation, AD_MODES
+
+    mode = (data.mode or "").strip()
+    if mode not in AD_MODES and mode != "default":
+        raise HTTPException(status_code=400, detail=f"mode must be one of {AD_MODES} or 'default'")
+
+    existing = (await db.execute(
+        select(AdAutomation).where(AdAutomation.trader_id == trader.id,
+                                   AdAutomation.adv_no == str(adv_no))
+    )).scalar_one_or_none()
+
+    if mode == "default":
+        if existing:
+            await db.delete(existing)
+    elif existing:
+        existing.mode = mode
+    else:
+        db.add(AdAutomation(trader_id=trader.id, adv_no=str(adv_no), mode=mode))
+    await db.commit()
+    return {"ok": True, "adv_no": str(adv_no), "mode": None if mode == "default" else mode}

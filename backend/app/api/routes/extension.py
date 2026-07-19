@@ -559,35 +559,38 @@ async def get_pending_actions(
     if not _allowed:
         return {"actions": [], "locked": _reason}
 
-    # Sell side: payment received, needs release — only if mode allows sell automation
-    sell_automated = (trader.bot_trade_mode or 'both') in ('both', 'sell_only')
-    if sell_automated:
-        result = await db.execute(
-            select(Order).where(
-                Order.trader_id == trader.id,
-                Order.side == OrderSide.SELL,
-                Order.status == OrderStatus.PAYMENT_RECEIVED,
-            )
-        )
-        for order in result.scalars().all():
-            if trader.auto_release_enabled:
-                actions.append({
-                    "action": "release",
-                    "order_number": order.binance_order_number,
-                })
+    # The automation mode is now resolved PER AD: an ad configured on the Ads
+    # page overrides the trader's global bot_trade_mode; an ad with no config
+    # falls back to that global mode (today's behaviour). is_automated() does
+    # both, so a trader who never opens the Ads page is unaffected.
+    from app.services.ad_automation import is_automated
 
-    # Buy side: orders where VPS already sent B2C payment, extension needs to mark as paid
-    # Only if mode allows buy automation
-    buy_automated = (trader.bot_trade_mode or 'both') in ('both', 'buy_only')
-    if buy_automated:
-        result = await db.execute(
-            select(Order).where(
-                Order.trader_id == trader.id,
-                Order.side == OrderSide.BUY,
-                Order.status == OrderStatus.PAYMENT_SENT,
-            )
+    # Sell side: payment received, needs release — per-ad sell automation.
+    result = await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.side == OrderSide.SELL,
+            Order.status == OrderStatus.PAYMENT_RECEIVED,
         )
-        for order in result.scalars().all():
+    )
+    for order in result.scalars().all():
+        if trader.auto_release_enabled and await is_automated(db, trader, order.binance_ad_number, "sell"):
+            actions.append({
+                "action": "release",
+                "order_number": order.binance_order_number,
+            })
+
+    # Buy side: orders where VPS already sent B2C payment, extension needs to mark
+    # as paid — per-ad buy automation.
+    result = await db.execute(
+        select(Order).where(
+            Order.trader_id == trader.id,
+            Order.side == OrderSide.BUY,
+            Order.status == OrderStatus.PAYMENT_SENT,
+        )
+    )
+    for order in result.scalars().all():
+        if await is_automated(db, trader, order.binance_ad_number, "buy"):
             actions.append({
                 "action": "mark_as_paid",
                 "order_number": order.binance_order_number,
@@ -1307,7 +1310,8 @@ async def _process_reported_sell_order(
                 logger.info(f"Order {order_number} marked {existing.status.value} from Binance status")
             return None
         # Already tracked — check if payment was received and needs release
-        sell_automated = (trader.bot_trade_mode or 'both') in ('both', 'sell_only')
+        from app.services.ad_automation import is_automated
+        sell_automated = await is_automated(db, trader, existing.binance_ad_number, "sell")
         if existing.status == OrderStatus.PAYMENT_RECEIVED and trader.auto_release_enabled and sell_automated:
             existing.status = OrderStatus.RELEASING
             # Include confirmation chat message if pending
@@ -1353,8 +1357,10 @@ async def _process_reported_sell_order(
 
     logger.info(f"New sell order tracked: {order_number} for trader {trader.full_name}")
 
-    # Only send payment instructions if sell automation is enabled
-    sell_automated = (trader.bot_trade_mode or 'both') in ('both', 'sell_only')
+    # Only send payment instructions if sell automation is enabled for THIS ad
+    # (per-ad config, falling back to the trader's global mode).
+    from app.services.ad_automation import is_automated
+    sell_automated = await is_automated(db, trader, order_data.advNo, "sell")
     if not sell_automated:
         return None
 
@@ -1412,8 +1418,9 @@ async def _process_reported_buy_order(
     existing = result.scalar_one_or_none()
 
     if existing:
-        # If we already sent payment, tell extension to mark as paid (only if buy mode active)
-        buy_automated = (trader.bot_trade_mode or 'both') in ('both', 'buy_only')
+        # If we already sent payment, tell extension to mark as paid (per-ad buy mode)
+        from app.services.ad_automation import is_automated
+        buy_automated = await is_automated(db, trader, existing.binance_ad_number, "buy")
         if existing.status == OrderStatus.PAYMENT_SENT and buy_automated:
             return {"action": "mark_as_paid", "order_number": order_number}
         return None
