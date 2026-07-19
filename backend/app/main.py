@@ -576,18 +576,47 @@ async def download_android():
 
 
 # I&M Automation — the companion Windows desktop bot (paid-buy-orders-from-I&M rail).
-# Shipped as a separate product; the NSIS installer is hosted on the VPS at a stable
-# path so the "Our Products" download link and the in-app "Download I&M Bot" button
-# both always point at the current build.
-_IM_BOT_PATH = os.path.join(os.path.dirname(__file__), "..", "static", "im-automation-setup.exe")
+# Shipped as a separate product with its OWN public releases repo, so the installer
+# is NOT hosted on the VPS (storage) — the "Download for Windows" link redirects to
+# the latest GitHub release asset, exactly like the SparkP2P desktop download. The
+# app also auto-updates from this same repo via electron-updater.
+_IM_GITHUB_REPO = "Bazenga254/IM-Automation-releases"
+_im_release_cache: dict = {}
+
+
+async def _fetch_latest_im_release() -> dict:
+    now = _time.time()
+    if _im_release_cache.get("cached_at") and now - _im_release_cache["cached_at"] < _CACHE_TTL:
+        return _im_release_cache
+    async with _httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"https://api.github.com/repos/{_IM_GITHUB_REPO}/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    exe = next((a for a in data.get("assets", []) if a["name"].endswith(".exe")), None)
+    _im_release_cache.update({
+        "version": data.get("tag_name", "").lstrip("v"),
+        "url": exe["browser_download_url"] if exe else None,
+        "cached_at": now,
+    })
+    return _im_release_cache
 
 
 @app.get("/api/download/im-bot")
 async def download_im_bot():
     from fastapi import HTTPException
-    if not os.path.exists(_IM_BOT_PATH):
-        raise HTTPException(status_code=404, detail="I&M Automation isn't available yet.")
-    return FileResponse(_IM_BOT_PATH, media_type="application/octet-stream", filename="IM-Automation-Setup.exe")
+    try:
+        info = await _fetch_latest_im_release()
+        if not info.get("url"):
+            raise HTTPException(status_code=404, detail="No .exe asset in the latest I&M Automation release yet.")
+        return RedirectResponse(info["url"], status_code=302)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not fetch the latest I&M Automation release.")
 
 
 # Serve uploaded support attachments
