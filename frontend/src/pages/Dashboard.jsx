@@ -899,6 +899,9 @@ export default function Dashboard() {
   const [withdrawalPage, setWithdrawalPage] = useState(1);
   const [sweepSecondsLeft, setSweepSecondsLeft] = useState(0);
   const [activeTab, setActiveTab] = useState('overview');
+  // Affiliates hidden from merchants (paused). Backend data is untouched; flip to
+  // true to restore the tab, the sidebar link, and the overview earnings card.
+  const AFFILIATES_ENABLED = false;
   const [ptView, setPtView] = useState('tracker');  // Price Tracker page sub-view: 'tracker' | 'activity'
   const [mobMoreOpen, setMobMoreOpen] = useState(false);
   const [creditPlan, setCreditPlan] = useState(null);
@@ -1870,7 +1873,7 @@ export default function Dashboard() {
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
-        {affiliateData?.affiliate && (
+        {AFFILIATES_ENABLED && affiliateData?.affiliate && (
           <button
             className={`tab-btn ${activeTab === 'affiliates' ? 'active' : ''}`}
             onClick={() => setActiveTab('affiliates')}
@@ -2034,7 +2037,7 @@ export default function Dashboard() {
           >
             <Megaphone size={16} /><span>Ads</span>
           </button>
-          {affiliateData?.affiliate && (
+          {AFFILIATES_ENABLED && affiliateData?.affiliate && (
             <button
               className={`dsb-nav-item${activeTab === 'affiliates' ? ' dsb-active' : ''}`}
               onClick={() => setActiveTab('affiliates')}
@@ -2457,7 +2460,7 @@ export default function Dashboard() {
             )}
 
             {/* Affiliate Quick-Action Card */}
-            {affiliateData !== null && (
+            {AFFILIATES_ENABLED && affiliateData !== null && (
               <div className="card" style={{ marginBottom: 16 }}>
                 <div className="card-header" style={{ cursor: 'pointer' }} onClick={() => setActiveTab('affiliates')}>
                   <Share2 size={20} style={{ color: '#f59e0b' }} />
@@ -3337,7 +3340,7 @@ export default function Dashboard() {
           );
         })()}
 
-        {activeTab === 'affiliates' && (
+        {AFFILIATES_ENABLED && activeTab === 'affiliates' && (
           <div>
             {/* No affiliate record yet — Apply form */}
             {!affiliateData?.affiliate && (
