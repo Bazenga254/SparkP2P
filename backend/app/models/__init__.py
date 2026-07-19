@@ -17,6 +17,7 @@ from app.models.api_key import MerchantApiKey
 from app.models.im_bot_account import ImBotAccount
 from app.models.im_charge import ImCharge
 from app.models.ad_automation import AdAutomation
+from app.models.platform_setting import PlatformSetting
 
 __all__ = [
     "Squad", "SquadMember",

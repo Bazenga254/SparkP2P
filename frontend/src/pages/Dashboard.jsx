@@ -899,9 +899,10 @@ export default function Dashboard() {
   const [withdrawalPage, setWithdrawalPage] = useState(1);
   const [sweepSecondsLeft, setSweepSecondsLeft] = useState(0);
   const [activeTab, setActiveTab] = useState('overview');
-  // Affiliates hidden from merchants (paused). Backend data is untouched; flip to
-  // true to restore the tab, the sidebar link, and the overview earnings card.
-  const AFFILIATES_ENABLED = false;
+  // Whether merchants see the Affiliates tab — controlled by the admin at runtime
+  // (Admin → Affiliates → toggle). Defaults OFF until the flag loads, so it never
+  // flashes visible on a slow fetch.
+  const [affiliatesEnabled, setAffiliatesEnabled] = useState(false);
   const [ptView, setPtView] = useState('tracker');  // Price Tracker page sub-view: 'tracker' | 'activity'
   const [mobMoreOpen, setMobMoreOpen] = useState(false);
   const [creditPlan, setCreditPlan] = useState(null);
@@ -1157,6 +1158,11 @@ export default function Dashboard() {
   };
 
   const loadAffiliateData = async () => {
+    // Is the program switched on for merchants at all? (admin-controlled)
+    try {
+      const flag = await api.get('/affiliates/enabled');
+      setAffiliatesEnabled(!!flag.data?.enabled);
+    } catch (e) { setAffiliatesEnabled(false); }
     try {
       const res = await getMyAffiliate();
       setAffiliateData(res.data);
@@ -1873,7 +1879,7 @@ export default function Dashboard() {
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
-        {AFFILIATES_ENABLED && affiliateData?.affiliate && (
+        {affiliatesEnabled && affiliateData?.affiliate && (
           <button
             className={`tab-btn ${activeTab === 'affiliates' ? 'active' : ''}`}
             onClick={() => setActiveTab('affiliates')}
@@ -2037,7 +2043,7 @@ export default function Dashboard() {
           >
             <Megaphone size={16} /><span>Ads</span>
           </button>
-          {AFFILIATES_ENABLED && affiliateData?.affiliate && (
+          {affiliatesEnabled && affiliateData?.affiliate && (
             <button
               className={`dsb-nav-item${activeTab === 'affiliates' ? ' dsb-active' : ''}`}
               onClick={() => setActiveTab('affiliates')}
@@ -2460,7 +2466,7 @@ export default function Dashboard() {
             )}
 
             {/* Affiliate Quick-Action Card */}
-            {AFFILIATES_ENABLED && affiliateData !== null && (
+            {affiliatesEnabled && affiliateData !== null && (
               <div className="card" style={{ marginBottom: 16 }}>
                 <div className="card-header" style={{ cursor: 'pointer' }} onClick={() => setActiveTab('affiliates')}>
                   <Share2 size={20} style={{ color: '#f59e0b' }} />
@@ -3340,7 +3346,7 @@ export default function Dashboard() {
           );
         })()}
 
-        {AFFILIATES_ENABLED && activeTab === 'affiliates' && (
+        {affiliatesEnabled && activeTab === 'affiliates' && (
           <div>
             {/* No affiliate record yet — Apply form */}
             {!affiliateData?.affiliate && (

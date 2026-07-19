@@ -4954,6 +4954,45 @@ export default function Admin() {
                 </div>
               )}
 
+              {/* Program on/off — controls whether merchants see the Affiliates tab.
+                  Visibility only; affiliate records and balances are never touched. */}
+              {affiliateStats && (() => {
+                const on = !!affiliateStats.affiliates_enabled;
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap',
+                    padding: '14px 18px', borderRadius: 12, marginBottom: 16,
+                    background: on ? 'rgba(16,185,129,0.06)' : 'rgba(107,114,128,0.06)',
+                    border: `1px solid ${on ? 'rgba(16,185,129,0.3)' : 'rgba(107,114,128,0.3)'}` }}>
+                    <div>
+                      <div style={{ fontWeight: 700, color: '#fff', fontSize: 15 }}>
+                        Merchant Affiliates tab — {on ? 'ON' : 'OFF'}
+                      </div>
+                      <div style={{ color: '#9ca3af', fontSize: 12.5, marginTop: 2 }}>
+                        {on ? 'Merchants can see their referral earnings.' : 'Hidden from all merchants. Records and balances are untouched.'}
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        const next = !on;
+                        if (!window.confirm(next
+                          ? 'Turn the Affiliates tab ON for all merchants? They will be able to see their referral earnings.'
+                          : 'Turn the Affiliates tab OFF for all merchants? It will be hidden everywhere (records/balances stay intact).')) return;
+                        setAffiliateStats(s => ({ ...s, affiliates_enabled: next }));
+                        try { await api.put('/affiliates/admin/enabled', { enabled: next }); }
+                        catch (e) { setAffiliateStats(s => ({ ...s, affiliates_enabled: on })); alert('Could not update. Please retry.'); }
+                        loadAffiliates();
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 6px 8px 14px', borderRadius: 24,
+                        border: 'none', cursor: 'pointer', background: on ? '#10b981' : '#374151', color: '#fff', fontWeight: 700, fontSize: 13 }}>
+                      <span>{on ? 'On' : 'Off'}</span>
+                      <span style={{ width: 40, height: 22, borderRadius: 12, background: 'rgba(0,0,0,0.25)', position: 'relative', display: 'inline-block' }}>
+                        <span style={{ position: 'absolute', top: 2, left: on ? 20 : 2, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left .15s' }} />
+                      </span>
+                    </button>
+                  </div>
+                );
+              })()}
+
               {/* Stats row */}
               {affiliateStats && (
                 <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>

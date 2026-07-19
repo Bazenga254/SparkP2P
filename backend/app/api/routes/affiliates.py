@@ -57,6 +57,14 @@ async def validate_referral_code(code: str, db: AsyncSession = Depends(get_db)):
     return {"valid": True, "affiliate_name": trader.full_name.split()[0].title()}
 
 
+@router.get("/enabled")
+async def affiliates_enabled_flag(db: AsyncSession = Depends(get_db)):
+    """Whether the merchant-facing Affiliates program is switched on. Read by the
+    merchant dashboard to show/hide the tab. Just a UI visibility flag, so no auth."""
+    from app.services import platform_settings as ps
+    return {"enabled": await ps.get_bool(db, ps.AFFILIATES_ENABLED, default=False)}
+
+
 # ── Trader-facing endpoints ───────────────────────────────────────────────────
 
 class ApplyRequest(BaseModel):
@@ -342,12 +350,36 @@ async def admin_affiliate_stats(
     approved = await db.execute(select(func.count(Affiliate.id)).where(Affiliate.status == AffiliateStatus.APPROVED))
     total_owed = await db.execute(select(func.sum(Affiliate.pending_balance)).where(Affiliate.status == AffiliateStatus.APPROVED))
 
+    from app.services import platform_settings as ps
     return {
         "total": total.scalar() or 0,
         "pending": pending.scalar() or 0,
         "approved": approved.scalar() or 0,
         "total_owed": round(total_owed.scalar() or 0.0, 2),
+        # Whether merchants currently see the Affiliates tab (admin-controlled).
+        "affiliates_enabled": await ps.get_bool(db, ps.AFFILIATES_ENABLED, default=False),
     }
+
+
+class AffiliatesToggle(BaseModel):
+    enabled: bool
+
+
+@router.put("/admin/enabled")
+async def admin_set_affiliates_enabled(
+    data: AffiliatesToggle,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn the merchant-facing Affiliates program on or off, platform-wide.
+
+    Visibility only: OFF hides the tab, the earnings card and the sidebar link
+    from every merchant. Affiliate records, statuses and accrued balances are all
+    untouched — flipping it back ON restores exactly what was there."""
+    from app.services import platform_settings as ps
+    await ps.set_bool(db, ps.AFFILIATES_ENABLED, bool(data.enabled))
+    logger.info("admin %s set affiliates_enabled=%s", admin.id, data.enabled)
+    return {"affiliates_enabled": bool(data.enabled)}
 
 
 # ── Commission crediting (called by billing engine on subscription activation) ─
