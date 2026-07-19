@@ -2,17 +2,27 @@ import { useState, useEffect } from 'react';
 import { Megaphone, RefreshCw, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
 import api from '../services/api';
 
-// Per-ad automation. A merchant with several Binance ads chooses, per ad, whether
-// the bot automates it and on which side. An ad left on "Default" follows the
-// global trading mode — i.e. it's automated as before — so doing nothing here
-// changes nothing.
-const MODE_OPTS = [
-  { key: 'default',   label: 'Default (all)' },
-  { key: 'both',      label: 'Buy & Sell' },
-  { key: 'buy_only',  label: 'Buy only' },
-  { key: 'sell_only', label: 'Sell only' },
-  { key: 'off',       label: 'Off' },
+// Per-ad automation. Each Binance ad is EITHER a buy ad or a sell ad — never
+// both — so the only meaningful choices are: follow the global setting (Default),
+// automate this ad, or leave it off. We never offer the opposite side (no "Sell"
+// on a buy ad), and "Automate" maps to the ad's own side under the hood.
+const OPTS = [
+  { key: 'default',  label: 'Default (all)' },
+  { key: 'automate', label: 'Automate' },
+  { key: 'off',      label: 'Off' },
 ];
+
+// The stored backend mode for "Automate" depends on the ad's side.
+const automateMode = (tradeType) => (tradeType === 'BUY' ? 'buy_only' : 'sell_only');
+
+// Map a stored mode back to one of the 3 choices, tolerant of legacy 'both'.
+function choiceOf(ad) {
+  const m = ad.mode;
+  if (!m) return 'default';
+  if (m === 'off') return 'off';
+  const on = ad.trade_type === 'BUY' ? ['both', 'buy_only'] : ['both', 'sell_only'];
+  return on.includes(m) ? 'automate' : 'off';
+}
 
 export default function AdsPanel() {
   const [data, setData] = useState(null);
@@ -31,12 +41,15 @@ export default function AdsPanel() {
   };
   useEffect(() => { load(); }, []);
 
-  const setMode = async (advNo, mode) => {
-    setSaving(advNo);
-    // optimistic
-    setData(d => ({ ...d, ads: d.ads.map(a => a.adv_no === advNo ? { ...a, mode: mode === 'default' ? null : mode } : a) }));
+  const setChoice = async (ad, choice) => {
+    // Translate the 3-way choice into the backend mode for this ad's side.
+    const mode = choice === 'default' ? 'default'
+      : choice === 'off' ? 'off'
+      : automateMode(ad.trade_type);
+    setSaving(ad.adv_no);
+    setData(d => ({ ...d, ads: d.ads.map(a => a.adv_no === ad.adv_no ? { ...a, mode: mode === 'default' ? null : mode } : a) }));
     try {
-      await api.put(`/traders/ads/${encodeURIComponent(advNo)}`, { mode });
+      await api.put(`/traders/ads/${encodeURIComponent(ad.adv_no)}`, { mode });
     } catch (e) {
       setErr(e?.response?.data?.detail || 'Could not save. Please retry.');
       load();   // resync on failure
@@ -84,7 +97,7 @@ export default function AdsPanel() {
           {data.ads.map(ad => {
             const isBuy = ad.trade_type === 'BUY';
             const online = String(ad.status) === '1';
-            const cur = ad.mode || 'default';
+            const cur = choiceOf(ad);   // 'default' | 'automate' | 'off'
             const off = cur === 'off';
             return (
               <div key={ad.adv_no}
@@ -111,17 +124,18 @@ export default function AdsPanel() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                   <label style={{ color: '#6b7280', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px' }}>Automate</label>
                   <select value={cur} disabled={saving === ad.adv_no}
-                    onChange={e => setMode(ad.adv_no, e.target.value)}
+                    onChange={e => setChoice(ad, e.target.value)}
                     style={{ padding: '8px 12px', borderRadius: 8, border: `1px solid ${off ? 'rgba(239,68,68,0.4)' : '#2a2d3a'}`, background: '#0f0f16', color: off ? '#ef4444' : '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', minWidth: 130 }}>
-                    {MODE_OPTS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                    {OPTS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
                   </select>
                 </div>
               </div>
             );
           })}
           <p style={{ color: '#6b7280', fontSize: 12, marginTop: 4, lineHeight: 1.6 }}>
-            <b>Off</b> stops the bot from touching that ad entirely. <b>Buy only</b> / <b>Sell only</b> automate just
-            that side. Changes take effect on the next order — sells always settle on Choice Bank regardless.
+            <b>Default</b> follows your global mode. <b>Automate</b> runs the bot on that ad; <b>Off</b> leaves it
+            alone entirely. Each ad only offers its own side. Changes take effect on the next order — sells always
+            settle on Choice Bank regardless.
           </p>
         </div>
       )}

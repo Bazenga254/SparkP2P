@@ -178,9 +178,27 @@ async def get_merchant_ads(api_key: str, api_secret: str) -> list:
         api_key, params, {"page": 1, "rows": 50}
     )
 
-    raw = data.get("data", [])
-    ads = raw.get("content", []) if isinstance(raw, dict) else raw
-    return ads
+    # A Binance error envelope (e.g. -2008 "Invalid Api-Key ID.") must NOT be
+    # swallowed into an empty list — that hides a dead/misconfigured key as "no
+    # ads". Raise it so the caller can show the real reason.
+    err = _binance_envelope_error(data)
+    if err:
+        raise BinanceApiError(err[0], err[1])
+
+    # Otherwise the ads can arrive in several shapes:
+    #   {"data": {"content": [...]}}   paginated envelope
+    #   {"data": [...]}                flat list
+    #   [...]                          bare list
+    if isinstance(data, list):
+        return data
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("data")
+    if isinstance(raw, dict):
+        return raw.get("content") or raw.get("list") or raw.get("rows") or []
+    if isinstance(raw, list):
+        return raw
+    return []
 
 
 # Binance c2c success code is the string "000000"; anything else (e.g. -1022, -2008) is an error.

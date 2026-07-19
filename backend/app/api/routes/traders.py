@@ -3682,32 +3682,59 @@ async def list_ads(
         select(AdAutomation).where(AdAutomation.trader_id == trader.id)
     )).scalars().all()}
 
+    def _shape(ad):
+        adv = ad.get("advNo") or ad.get("adsNo")
+        if not adv:
+            return None
+        return {
+            "adv_no": str(adv),
+            "trade_type": (ad.get("tradeType") or ad.get("advType") or "").upper(),  # BUY | SELL
+            "asset": ad.get("asset"),
+            "fiat": ad.get("fiatUnit") or ad.get("fiat"),
+            "price": ad.get("price") or (ad.get("adv", {}) or {}).get("price"),
+            "status": ad.get("advStatus"),                       # 1=online, 3=offline
+            "surplus": ad.get("surplusAmount"),
+            "mode": configs.get(str(adv)),                       # None = default
+        }
+
     ads_out, connected, err = [], False, None
+
+    # 1) HMAC API key (via the relay) — PRIMARY. It's the reliable, canonical way
+    #    to read a merchant's ads: signed, IP-routed through the desktop, no
+    #    browser-session fragility. A valid key makes this the one true path.
     if trader.binance_api_key and trader.binance_api_secret:
         try:
             from app.core.security import decrypt_data
-            from app.services.binance.sapi_client import get_merchant_ads, relay_trader
+            from app.services.binance.sapi_client import get_merchant_ads, relay_trader, BinanceApiError, friendly_binance_error
             relay_trader.set(trader.id)
-            ads = await get_merchant_ads(decrypt_data(trader.binance_api_key),
-                                         decrypt_data(trader.binance_api_secret))
-            connected = True
-            for ad in ads or []:
-                adv = ad.get("advNo") or ad.get("adsNo")
-                if not adv:
-                    continue
-                ads_out.append({
-                    "adv_no": str(adv),
-                    "trade_type": (ad.get("tradeType") or "").upper(),   # BUY | SELL
-                    "asset": ad.get("asset"),
-                    "fiat": ad.get("fiatUnit") or ad.get("fiat"),
-                    "price": ad.get("price"),
-                    "status": ad.get("advStatus"),                       # 1=online, 3=offline
-                    "surplus": ad.get("surplusAmount"),
-                    "mode": configs.get(str(adv)),                       # None = default
-                })
+            try:
+                ads = await get_merchant_ads(decrypt_data(trader.binance_api_key),
+                                             decrypt_data(trader.binance_api_secret))
+                connected = True
+                ads_out = [s for s in (_shape(a) for a in (ads or [])) if s]
+            except BinanceApiError as be:
+                # e.g. -2008 dead key. Remember the reason, then try the cookie
+                # session below so a merchant with a dead key still sees ads.
+                connected = True
+                err = friendly_binance_error(be.code, be.msg)
+                logger.warning("list_ads: Binance rejected key for trader %s: %s", trader.id, be)
         except Exception as e:
             err = str(e)
-            logger.warning("list_ads: could not fetch ads for trader %s: %s", trader.id, e)
+            logger.warning("list_ads: HMAC ads fetch failed for trader %s: %s", trader.id, e)
+
+    # 2) Cookie session — FALLBACK only. Used when there's no key or the key was
+    #    rejected, so trading (which runs on the browser session) still surfaces
+    #    ads here. If this succeeds we clear the key error, since ads DID load.
+    if not ads_out and trader.binance_connected and trader.binance_cookies:
+        try:
+            from app.services.binance.client import BinanceP2PClient
+            ads = await BinanceP2PClient.from_trader(trader).get_my_ads()
+            connected = True
+            ads_out = [s for s in (_shape(a) for a in (ads or [])) if s]
+            if ads_out:
+                err = None
+        except Exception as e:
+            logger.warning("list_ads: cookie get_my_ads fallback failed for trader %s: %s", trader.id, e)
 
     return {
         "connected": connected,
