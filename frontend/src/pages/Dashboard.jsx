@@ -3,8 +3,9 @@ import { useAuth } from '../context/AuthContext';
 import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isNative } from '../mobile/relayAgent';
-import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi, Megaphone } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
+import AdsPanel from '../components/AdsPanel';
 import { kycCreateSession } from '../services/api';
 import SupportChat from '../components/SupportChat';
 import PriceTracker from '../components/PriceTracker';
@@ -2027,6 +2028,12 @@ export default function Dashboard() {
           >
             <Settings size={16} /><span>Settings</span>
           </button>
+          <button
+            className={`dsb-nav-item${activeTab === 'ads' ? ' dsb-active' : ''}`}
+            onClick={() => setActiveTab('ads')}
+          >
+            <Megaphone size={16} /><span>Ads</span>
+          </button>
           {affiliateData?.affiliate && (
             <button
               className={`dsb-nav-item${activeTab === 'affiliates' ? ' dsb-active' : ''}`}
@@ -2758,6 +2765,8 @@ export default function Dashboard() {
 
 
         {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} initialSection={settingsInitialSection} />}
+
+        {activeTab === 'ads' && <AdsPanel />}
 
         {/* ── Profit Tab ── */}
         {activeTab === 'profit' && (rateLimit?.locked
