@@ -147,6 +147,12 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
         latest.amount = price
         latest.expires_at = new_exp
         latest.mpesa_transaction_id = txn_id or latest.mpesa_transaction_id
+        # started_at is what the Revenue report attributes the payment date to. On
+        # a renewal it MUST advance to now — otherwise today's payment stays
+        # stamped with the ORIGINAL subscription date and never shows up in
+        # "Today"/"This week" revenue (a renewal that fell outside the window
+        # would vanish from the report entirely, even though real money came in).
+        latest.started_at = now
         latest.reminder_5d_sent = False
         latest.reminder_3d_sent = False
     else:
