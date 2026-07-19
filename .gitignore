@@ -30,3 +30,7 @@ desktop/node_modules/
 *.log
 relay/*.log
 desktop/midscene_run/
+
+# Hosted product binaries (served from VPS, never committed)
+backend/static/*.exe
+backend/static/*.apk

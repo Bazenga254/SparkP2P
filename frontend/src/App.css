@@ -1694,6 +1694,125 @@ body {
   font-size: 14px;
 }
 
+/* ── Our Products ─────────────────────────────────────────── */
+.land-products {
+  padding: 80px 32px;
+  background: var(--surface-2, var(--surface));
+}
+.land-products-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+  max-width: 940px;
+  margin: 40px auto 0;
+}
+.land-product-card {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.2s, transform 0.2s;
+}
+.land-product-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.land-product-badge {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  padding: 5px 12px;
+  border-radius: 999px;
+  margin-bottom: 18px;
+}
+.land-product-badge.alt {
+  color: var(--text-dim);
+  background: var(--border);
+}
+.land-product-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.land-product-logo {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #000;
+  background: var(--accent);
+}
+.land-product-logo.im {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.land-product-head h3 {
+  font-size: 20px;
+  margin: 0 0 2px;
+}
+.land-product-head p {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0;
+}
+.land-product-desc {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  margin-bottom: 18px;
+}
+.land-product-features {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 24px;
+  display: grid;
+  gap: 10px;
+}
+.land-product-features li {
+  position: relative;
+  padding-left: 26px;
+  font-size: 13.5px;
+  color: var(--text);
+}
+.land-product-features li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23f59e0b' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+}
+.land-product-card .land-download-btn {
+  margin-top: auto;
+  text-align: center;
+}
+.land-product-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  margin-top: 12px;
+}
+@media (max-width: 720px) {
+  .land-products { padding: 56px 0; }
+  .land-products-grid { grid-template-columns: 1fr; gap: 16px; padding: 0 20px; }
+}
+
 /* Hero badge dot */
 .land-hero-badge {
   display: inline-flex;

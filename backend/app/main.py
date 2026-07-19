@@ -575,6 +575,21 @@ async def download_android():
     return FileResponse(_APK_PATH, media_type="application/vnd.android.package-archive", filename="SparkP2P.apk")
 
 
+# I&M Automation — the companion Windows desktop bot (paid-buy-orders-from-I&M rail).
+# Shipped as a separate product; the NSIS installer is hosted on the VPS at a stable
+# path so the "Our Products" download link and the in-app "Download I&M Bot" button
+# both always point at the current build.
+_IM_BOT_PATH = os.path.join(os.path.dirname(__file__), "..", "static", "im-automation-setup.exe")
+
+
+@app.get("/api/download/im-bot")
+async def download_im_bot():
+    from fastapi import HTTPException
+    if not os.path.exists(_IM_BOT_PATH):
+        raise HTTPException(status_code=404, detail="I&M Automation isn't available yet.")
+    return FileResponse(_IM_BOT_PATH, media_type="application/octet-stream", filename="IM-Automation-Setup.exe")
+
+
 # Serve uploaded support attachments
 _uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(os.path.join(_uploads_dir, "support"), exist_ok=True)

@@ -213,6 +213,7 @@ export default function Landing() {
             <a href="#how-it-works">How It Works</a>
             <a href="#pricing">Pricing</a>
             <a href="#download">Download</a>
+            <a href="#products">Products</a>
             <a href="#faq">FAQ</a>
             <Link to="/blog">Blog</Link>
             <Link to="/contact">Contact</Link>
@@ -240,6 +241,7 @@ export default function Landing() {
         <a href="#how-it-works" onClick={closeMenu}>How It Works</a>
         <a href="#pricing" onClick={closeMenu}>Pricing</a>
         <a href="#download" onClick={closeMenu}>Download</a>
+        <a href="#products" onClick={closeMenu}>Products</a>
         <a href="#faq" onClick={closeMenu}>FAQ</a>
         <Link to="/blog" onClick={closeMenu}>Blog</Link>
         <Link to="/contact" onClick={closeMenu}>Contact</Link>
@@ -678,6 +680,74 @@ export default function Landing() {
                 Need help installing? View step-by-step guide →
               </Link>
             </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Our Products ───────────────────────────────────────── */}
+      <section className="land-products" id="products">
+        <div className="land-section-inner">
+          <div className="land-section-header">
+            <span className="land-section-tag">Our Products</span>
+            <h2>The SparkP2P <span className="land-highlight">Product Suite</span></h2>
+            <p className="land-section-desc">
+              SparkP2P is the platform. <strong>I&amp;M Automation</strong> is an optional companion for merchants who pay their buy orders straight from their own I&amp;M Bank account.
+            </p>
+          </div>
+          <div className="land-products-grid">
+            {/* SparkP2P — the core platform */}
+            <div className="land-product-card">
+              <span className="land-product-badge">Core platform</span>
+              <div className="land-product-head">
+                <div className="land-product-logo">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>
+                  </svg>
+                </div>
+                <div>
+                  <h3>SparkP2P</h3>
+                  <p>Binance P2P automation for Kenya</p>
+                </div>
+              </div>
+              <p className="land-product-desc">
+                Auto-release crypto, match M-Pesa payments, and run your P2P desk hands-free. Sell-side and buy-side automation with Choice Bank payouts built in.
+              </p>
+              <ul className="land-product-features">
+                <li>Automatic crypto release &amp; payment matching</li>
+                <li>Buy &amp; sell automation, 24/7</li>
+                <li>Choice Bank payouts included</li>
+                <li>Windows &amp; Android apps, auto-updating</li>
+              </ul>
+              <a href="#download" className="land-download-btn">Download SparkP2P</a>
+              <p className="land-product-note">Free account · Windows 10 / 11 &amp; Android</p>
+            </div>
+
+            {/* I&M Automation — the companion bot */}
+            <div className="land-product-card">
+              <span className="land-product-badge alt">Companion · optional</span>
+              <div className="land-product-head">
+                <div className="land-product-logo im">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 10l9-6 9 6M5 10v9h14v-9M9 19v-5h6v5"/>
+                  </svg>
+                </div>
+                <div>
+                  <h3>I&amp;M Automation</h3>
+                  <p>Pay buy orders from your I&amp;M account</p>
+                </div>
+              </div>
+              <p className="land-product-desc">
+                A lightweight desktop bot that pays your Binance buy orders directly from your own I&amp;M Bank account over M-Pesa &amp; PesaLink — fully automated. Links to SparkP2P in one click, and your bank login never leaves your computer.
+              </p>
+              <ul className="land-product-features">
+                <li>Buy-order M-Pesa &amp; PesaLink payouts</li>
+                <li>One-click launch &amp; sign-in from SparkP2P</li>
+                <li>Prepaid payout credits, pay as you go</li>
+                <li>Your bank credentials stay on your machine</li>
+              </ul>
+              <a href="/api/download/im-bot" className="land-download-btn">Download for Windows</a>
+              <p className="land-product-note">Windows 10 / 11 · 64-bit · Requires a SparkP2P account</p>
+            </div>
           </div>
         </div>
       </section>
