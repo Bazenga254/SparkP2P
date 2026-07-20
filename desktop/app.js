@@ -2499,11 +2499,20 @@ async function readOrders(activeOnly = false) {
     }
 
     console.log(`[SparkP2P] Orders: ${sell.length} sell, ${buy.length} buy, ${cancelled.length} cancelled, ${completed_buy.length} completed buy`);
+    // ALWAYS return to the ACTIVE orders page (tab=0). The history scan above leaves
+    // the browser parked on tab=1 (All Orders / Completed), which stalls new-order
+    // detection and is exactly the "it comes back to tab=1 and pauses" bug. Release
+    // checking is done via API (checkPaidOrderReleases), so we never need to sit on
+    // the history tab.
+    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
     return { sell, buy, cancelled, completed_buy };
 
   } catch (e) {
     console.error('[SparkP2P] Read orders error:', e.message?.substring(0, 60));
     _ordersTabOpen = false;
+    // Recover to the active-orders page even on error, so a failed history scan
+    // can't strand the browser on tab=1.
+    try { await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }); } catch {}
     return { sell: [], buy: [], cancelled: [], completed_buy: [] };
   } finally {
     _ordersTabOpen = false;
@@ -4706,7 +4715,30 @@ async function idleScan(page) {
     // â"€â"€ We already paid â€" monitoring for seller release â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     } else if (buyPaymentSentAt[order.orderNumber]) {
       const minsWaiting = Math.floor((Date.now() - buyPaymentSentAt[order.orderNumber]) / 60000);
-      const details = buyOrderDetailsMap[order.orderNumber] || {};
+      let details = buyOrderDetailsMap[order.orderNumber] || {};
+
+      // FALLBACK: if we have no cached seller details (the I&M Bot paid this order and
+      // the desktop first saw it already at "awaiting release", so the payment cycle
+      // that normally caches them never ran), fetch them from the API so the
+      // "I have sent — please release" message still goes out. Without this the
+      // message was silently skipped for I&M orders — exactly the missing-message bug.
+      if (!details.sellerName && !buyPostPaymentMsgSentOrders.has(order.orderNumber)) {
+        try {
+          const _dr = await fetch(`${API_BASE}/ext/order-detail?order_number=${encodeURIComponent(order.orderNumber)}`,
+            { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).catch(() => null);
+          if (_dr && _dr.ok) {
+            details = {
+              sellerName: _dr.counterparty_name || details.sellerName,
+              amount: _dr.fiat_amount || order.totalPrice || order.fiatAmount || details.amount,
+              phone: _dr.phone || details.phone || null,
+              accountNumber: _dr.account_number || details.accountNumber || null,
+              bankName: _dr.bank_name || details.bankName || null,
+              orderNumber: order.orderNumber,
+            };
+            buyOrderDetailsMap[order.orderNumber] = details;
+          }
+        } catch (_) {}
+      }
 
       // Retry post-payment chat if it failed during the payment cycle
       if (!buyPostPaymentMsgSentOrders.has(order.orderNumber) && details.sellerName) {
