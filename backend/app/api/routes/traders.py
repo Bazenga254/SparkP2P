@@ -2765,7 +2765,44 @@ async def get_my_transactions(
             "created_at": p.created_at.isoformat() if p.created_at else "",
         })
 
-    return entries
+    # I&M Bot payouts — from the dedicated im_payouts ledger (NOT the Payment
+    # table, so it never touches Choice Bank balance or revenue math). Shows
+    # completed / failed / pending buy-order payouts made from the merchant's own
+    # I&M account, alongside their Choice Bank movements.
+    from app.models.im_payout import ImPayout
+    im_rows = (
+        await db.execute(
+            select(ImPayout)
+            .where(ImPayout.trader_id == trader.id)
+            .order_by(ImPayout.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    for r in im_rows:
+        rail = "PesaLink" if (r.channel or "").upper() == "BANK" else "M-Pesa"
+        dest = (r.destination or "").strip()
+        desc = f"I&M · {rail}" + (f" · {dest}" if dest else "")
+        if r.status == "failed" and r.detail:
+            desc += f" — {r.detail[:60]}"
+        entries.append({
+            "id": f"im{r.id}",
+            "source": "im_payout",
+            "label": "I&M Payout",
+            "icon": "💸",
+            "direction": "out",
+            "amount": float(r.amount or 0),
+            "tx_fee": 0,
+            "description": desc,
+            "counterparty_name": "",
+            "reference": r.bank_ref or "",
+            "phone": dest,
+            "status": r.status,   # completed | failed | pending
+            "created_at": r.created_at.isoformat() if r.created_at else "",
+        })
+
+    # Merge Choice Bank + I&M into one time-ordered feed, newest first.
+    entries.sort(key=lambda e: e.get("created_at") or "", reverse=True)
+    return entries[:limit]
 
 
 

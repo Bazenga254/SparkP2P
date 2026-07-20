@@ -441,6 +441,59 @@ class ResultRequest(BaseModel):
     detail: str | None = None     # error text / note
 
 
+async def _record_im_payout(
+    db: AsyncSession,
+    trader_id: int,
+    order_number: str,
+    status: str,
+    *,
+    amount: int = 0,
+    channel: str | None = None,
+    bank_ref: str | None = None,
+    destination: str | None = None,
+    detail: str | None = None,
+) -> None:
+    """Upsert the Transactions-dashboard ledger row for an I&M payout.
+
+    Best-effort and fully isolated: it commits on its own, and any failure here is
+    logged but NEVER raised — a display-ledger hiccup must not fail a real payout
+    report (or, worse, make the bot re-pay). One row per (trader, order), so a
+    FAILED that later succeeds updates the same line failed -> completed. Kept out
+    of the Payment table on purpose — see app/models/im_payout.py.
+    """
+    from app.models.im_payout import ImPayout
+    try:
+        row = (
+            await db.execute(
+                select(ImPayout).where(
+                    ImPayout.trader_id == trader_id,
+                    ImPayout.binance_order_number == order_number,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = ImPayout(trader_id=trader_id, binance_order_number=order_number, status=status)
+            db.add(row)
+        row.status = status
+        if amount:
+            row.amount = int(amount)
+        if channel:
+            row.channel = channel
+        if bank_ref:
+            row.bank_ref = bank_ref
+        if destination:
+            row.destination = destination
+        row.detail = detail
+        row.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+    except Exception as _e:
+        logger.warning("im-bot: could not record payout ledger for %s: %s", order_number, _e)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+
 @router.post("/result")
 async def result(
     data: ResultRequest,
@@ -529,12 +582,27 @@ async def result(
             # 'applied' must reflect what THIS call did, so the bot never reads a
             # duplicate as a fresh success.
             logger.info("im-bot result: duplicate PAID for %s (status=%s) — no-op", data.order_id, order.status)
+        # Surface it on the merchant's Transactions dashboard (completed).
+        await _record_im_payout(
+            db, trader_id, data.order_id, "completed",
+            amount=int(order.fiat_amount or 0),
+            channel=(data.channel or "MPESA").upper(),
+            bank_ref=data.bank_ref,
+            destination=order.seller_payment_destination,
+        )
         return {"ok": True, "status": order.status.value, "applied": applied, "duplicate": not applied}
 
     if verdict == RESULT_FAILED:
         # Leave it PENDING so it can be retried. Do NOT touch Binance.
         logger.warning("im-bot result: order %s FAILED — %s", data.order_id, data.detail)
         await _alert(trader_id, f"❌ I&M Bot could not pay buy order …{data.order_id[-8:]}: {data.detail or 'unknown error'}. It will retry.")
+        await _record_im_payout(
+            db, trader_id, data.order_id, "failed",
+            amount=int(order.fiat_amount or 0),
+            channel=(data.channel or None),
+            detail=data.detail,
+            destination=order.seller_payment_destination,
+        )
         return {"ok": True, "status": order.status.value, "applied": False}
 
     # UNKNOWN — the dangerous case. Never mark paid; get a human to check the bank.
@@ -544,6 +612,15 @@ async def result(
         f"⚠️ I&M Bot is UNSURE whether buy order …{data.order_id[-8:]} was paid "
         f"(KES {int(order.fiat_amount or 0):,}, ref {data.bank_ref or 'none'}). "
         f"NOT marked paid. Check your I&M account before releasing.",
+    )
+    # Show it as pending on the dashboard — money may or may not have moved.
+    await _record_im_payout(
+        db, trader_id, data.order_id, "pending",
+        amount=int(order.fiat_amount or 0),
+        channel=(data.channel or None),
+        bank_ref=data.bank_ref,
+        detail=data.detail,
+        destination=order.seller_payment_destination,
     )
     return {"ok": True, "status": order.status.value, "applied": False, "needs_human": True}
 
