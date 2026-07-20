@@ -381,24 +381,38 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                             from app.core.security import decrypt_data
                             from app.services.binance.sapi_client import cancel_order, relay_trader
                             relay_trader.set(_t.id)
-                            await cancel_order(decrypt_data(_t.binance_api_key), decrypt_data(_t.binance_api_secret), order_number)
-                            # CRITICAL: reflect the cancel in OUR world immediately.
-                            # Without this the order stays PENDING, so /im-bot/poll keeps
-                            # serving it and the I&M Bot PAYS A CANCELLED ORDER (real money
-                            # loss), and the release monitor keeps telling the merchant to
-                            # "appeal" an order that no longer exists. Mark it CANCELLED and
-                            # drop any in-flight I&M lease so no bot instance re-pays it.
+                            _cresp = await cancel_order(decrypt_data(_t.binance_api_key), decrypt_data(_t.binance_api_secret), order_number)
+                            _cancel_ok = (_cresp or {}).get("code") == "000000" or (_cresp or {}).get("success") is True
                             try:
                                 from app.models.order import Order as _Order, OrderStatus as _OS
+                                from app.services import im_bot_lease as _im_lease
                                 _o = (await db.execute(_sel(_Order).where(
                                     _Order.trader_id == _t.id,
                                     _Order.binance_order_number == order_number,
                                 ))).scalar_one_or_none()
-                                if _o and _o.status not in (_OS.COMPLETED, _OS.RELEASED):
-                                    _o.status = _OS.CANCELLED
-                                    await db.commit()
-                                from app.services import im_bot_lease as _im_lease
-                                _im_lease.release(order_number)
+                                _already_done = bool(_o and _o.status in (_OS.PAYMENT_SENT, _OS.RELEASING, _OS.RELEASED, _OS.SETTLING, _OS.COMPLETED))
+                                if _cancel_ok and not _already_done:
+                                    # Binance really cancelled it AND we hadn't paid — reflect that
+                                    # so /im-bot/poll stops serving it and the release monitor stops.
+                                    if _o:
+                                        _o.status = _OS.CANCELLED
+                                        await db.commit()
+                                    _im_lease.release(order_number)
+                                else:
+                                    # Binance REFUSED (order already paid/releasing) OR we already
+                                    # paid it. Do NOT mark it CANCELLED — that is what produced the
+                                    # "cancelled — not completed" vs "Buy done" contradiction. Tell
+                                    # the truth: it will complete, the payment is not lost.
+                                    if pd and pd.get("message_id"):
+                                        await _tg_send("editMessageText", {
+                                            "chat_id": pd["chat_id"], "message_id": pd["message_id"],
+                                            "text": (f"⚠️ Could NOT cancel order {order_number} — it is already paid and "
+                                                     f"the seller is releasing the crypto. It will complete normally; your "
+                                                     f"payment is not lost."),
+                                        })
+                                    import logging; logging.getLogger(__name__).info(
+                                        "pay_cancel: not marking %s CANCELLED (cancel_ok=%s already_done=%s) — order is completing",
+                                        order_number, _cancel_ok, _already_done)
                             except Exception as _ue:
                                 import logging; logging.getLogger(__name__).warning("pay_cancel DB update failed: %s", _ue)
                     except Exception as _ce:
