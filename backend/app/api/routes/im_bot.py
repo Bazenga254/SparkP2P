@@ -60,6 +60,26 @@ RESULT_PAID = "PAID"
 RESULT_FAILED = "FAILED"
 RESULT_UNKNOWN = "UNKNOWN"
 
+# ── Retry-storm guard ──────────────────────────────────────────────────────────
+# A permanently-failing order (e.g. a seller bank we cannot resolve) would be
+# re-served on every 5s poll forever — dozens of "failed" attempts and a Telegram
+# alert each time. Track consecutive failures per order; after MAX we STOP serving
+# it (paused) and alert ONCE, instead of flooding. Cleared on a real PAID or a
+# cancel, or when the app restarts.
+_MAX_IM_ATTEMPTS = 3
+_im_attempts: dict[str, int] = {}
+
+def _im_attempts_bump(order_id: str) -> int:
+    n = _im_attempts.get(order_id, 0) + 1
+    _im_attempts[order_id] = n
+    return n
+
+def _im_attempts_clear(order_id: str) -> None:
+    _im_attempts.pop(order_id, None)
+
+def _im_attempts_exceeded(order_id: str) -> bool:
+    return _im_attempts.get(order_id, 0) >= _MAX_IM_ATTEMPTS
+
 
 class CreateKeyRequest(BaseModel):
     name: str | None = None
@@ -433,6 +453,10 @@ async def poll(
         # don't pay it. No config for the ad -> falls back to the global mode.
         if not await is_automated(db, trader, o.binance_ad_number, "buy"):
             continue
+        # Retry-storm guard: an order that has already failed MAX times is PAUSED —
+        # do not keep re-serving it (that is the 60-failures / Telegram-flood bug).
+        if _im_attempts_exceeded(o.binance_order_number):
+            continue
         # Skip anything already in flight to this (or another) bot instance.
         if not lease.try_lease(o.binance_order_number, trader_id):
             continue
@@ -599,6 +623,7 @@ async def result(
     lease.release(data.order_id)
 
     if verdict == RESULT_PAID:
+        _im_attempts_clear(data.order_id)   # success — reset the retry-storm counter
         # IDEMPOTENT + NON-DOWNGRADING: only PENDING advances. If it is already
         # PAYMENT_SENT/RELEASED/COMPLETED, a duplicate PAID is a no-op — this is
         # the authoritative guard against a double "paid".
@@ -699,9 +724,21 @@ async def result(
         return {"ok": True, "status": order.status.value, "applied": applied, "duplicate": not applied}
 
     if verdict == RESULT_FAILED:
-        # Leave it PENDING so it can be retried. Do NOT touch Binance.
-        logger.warning("im-bot result: order %s FAILED — %s", data.order_id, data.detail)
-        await _alert(trader_id, f"❌ I&M Bot could not pay buy order …{data.order_id[-8:]}: {data.detail or 'unknown error'}. It will retry.")
+        # Leave it PENDING so it can be retried. Do NOT touch Binance. But cap the
+        # retries: alert on the first try and once more when we PAUSE it — never on
+        # every retry (that was the Telegram flood).
+        n = _im_attempts_bump(data.order_id)
+        logger.warning("im-bot result: order %s FAILED (attempt %d/%d) — %s",
+                       data.order_id, n, _MAX_IM_ATTEMPTS, data.detail)
+        if n == 1:
+            await _alert(trader_id, f"❌ I&M Bot could not pay buy order …{data.order_id[-8:]}: {data.detail or 'unknown error'}. Retrying…")
+        elif n >= _MAX_IM_ATTEMPTS:
+            await _alert(
+                trader_id,
+                f"⛔ I&M Bot PAUSED buy order …{data.order_id[-8:]} after {n} failed tries: "
+                f"{data.detail or 'unknown error'}.\nIt will NOT keep retrying. Fix the issue "
+                f"(often the seller's bank could not be matched) or cancel the order.",
+            )
         await _record_im_payout(
             db, trader_id, data.order_id, "failed",
             amount=int(order.fiat_amount or 0),
@@ -709,16 +746,21 @@ async def result(
             detail=data.detail,
             destination=order.seller_payment_destination,
         )
-        return {"ok": True, "status": order.status.value, "applied": False}
+        return {"ok": True, "status": order.status.value, "applied": False, "paused": n >= _MAX_IM_ATTEMPTS}
 
     # UNKNOWN — the dangerous case. Never mark paid; get a human to check the bank.
-    logger.error("im-bot result: order %s UNKNOWN (ref=%s) — human check needed — detail: %s", data.order_id, data.bank_ref, data.detail)
-    await _alert(
-        trader_id,
-        f"⚠️ I&M Bot is UNSURE whether buy order …{data.order_id[-8:]} was paid "
-        f"(KES {int(order.fiat_amount or 0):,}, ref {data.bank_ref or 'none'}). "
-        f"NOT marked paid. Check your I&M account before releasing.",
-    )
+    # Same retry cap + alert dedupe as FAILED so an unresolvable order can't flood.
+    n = _im_attempts_bump(data.order_id)
+    logger.error("im-bot result: order %s UNKNOWN (attempt %d/%d, ref=%s) — human check needed — detail: %s",
+                 data.order_id, n, _MAX_IM_ATTEMPTS, data.bank_ref, data.detail)
+    if n == 1 or n >= _MAX_IM_ATTEMPTS:
+        _tail = ("\nIt will NOT keep retrying — fix the issue or cancel the order." if n >= _MAX_IM_ATTEMPTS else "")
+        await _alert(
+            trader_id,
+            f"⚠️ I&M Bot is UNSURE whether buy order …{data.order_id[-8:]} was paid "
+            f"(KES {int(order.fiat_amount or 0):,}, ref {data.bank_ref or 'none'}). "
+            f"NOT marked paid. Check your I&M account before releasing.{_tail}",
+        )
     # Show it as pending on the dashboard — money may or may not have moved.
     await _record_im_payout(
         db, trader_id, data.order_id, "pending",

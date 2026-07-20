@@ -1658,13 +1658,38 @@ async def get_order_detail(
                 if not bank_name and "bank" in lbl:
                     bank_name = val
             phone = phone or d.get("pay_account") or None
-            method_raw = str(d.get("method") or "").lower()
-            if any(k in method_raw for k in ("pesalink", "equity", "kcb", "coop", "i&m", "im bank")):
+            method_raw = str(d.get("method") or "").strip()
+            _ml = method_raw.lower()
+            _GENERIC = ("bank transfer", "bank", "bank account", "bank transfer (kes)")
+            _BANK_KEYS = (
+                "pesalink", "equity", "kcb", "co-op", "coop", "co op", "cooperative",
+                "i&m", "im bank", "stanbic", "absa", "ncba", "dtb", "diamond trust",
+                "family", "gulf", "sbm", "housing finance", "national bank", "prime",
+                "sidian", "guardian", "victoria", "consolidated", "access bank", "ecobank",
+                "paramount", "kingdom", "gt bank", "postbank", "faulu", "caritas", "kwft",
+                "uba", "premier", "credit bank", "development bank", "bank",
+            )
+            _is_mpesa = any(k in _ml for k in ("mpesa", "m-pesa", "safaricom", "airtel"))
+            _is_bank = (not _is_mpesa) and (any(k in _ml for k in _BANK_KEYS) or _ml.endswith("bank"))
+            if _is_bank:
                 method = "other_bank"
-            elif any(k in method_raw for k in ("mpesa", "m-pesa", "safaricom")):
+                # The bank name is usually the trade-method name itself (Binance shows
+                # it as "Transfer via: Equity Bank"), NOT a separate field. Use it,
+                # unless it is the generic "Bank Transfer" label with no real bank.
+                if not bank_name and _ml not in _GENERIC:
+                    bank_name = method_raw
+            elif _is_mpesa:
                 method = "mpesa"
             else:
                 method = "mpesa"
+            # If it is a bank order but we still cannot name the bank, log the raw
+            # detail so we can see exactly where the bank lives (the field label /
+            # method) and stop it failing silently as BANK_UNRESOLVED.
+            if method == "other_bank" and not bank_name:
+                import logging as _lg
+                _lg.getLogger(__name__).warning(
+                    "order-detail: could NOT resolve seller bank for %s — method=%r fields=%r",
+                    order_number, d.get("method"), d.get("fields"))
             return {
                 "ok": True,
                 "method": method,
