@@ -4978,7 +4978,16 @@ async function idleScan(page) {
           const bankBodyMatch = bodyText.match(/Bank name\s*\n\s*([A-Za-z][^\n]{0,40})/i)
             || bodyText.match(/Bank name[:\s]+([A-Za-z][^\n]{0,40})/i);
           const bank_name_raw = (bankBodyMatch ? bankBodyMatch[1].trim() : null) || getText(/^bank name$/i) || null;
-          const bank_name = bank_name_raw && /[A-Za-z]/.test(bank_name_raw) ? bank_name_raw : null;
+          let bank_name = bank_name_raw && /[A-Za-z]/.test(bank_name_raw) ? bank_name_raw : null;
+          // If there is no separate "Bank name" field, the bank IS the "Transfer via"
+          // value — Binance shows e.g. "Transfer via: Equity Bank". Use it, unless it
+          // is the generic category label. This is the fix for named banks (Equity,
+          // KCB, ABSA, Standard Chartered, Co-op, …) failing as BANK_UNRESOLVED.
+          if (!bank_name) {
+            const _via = (via || '').trim();
+            const _generic = /^(bank transfer|bank|m-?pesa|mpesa|mobile money|mobile transfer)$/i.test(_via);
+            if (_via && !_generic && /[A-Za-z]/.test(_via)) bank_name = _via;
+          }
 
           if (!amount) return null;
           // Bank transfer: account_number present OR "Transfer via" explicitly says "bank"
@@ -5075,7 +5084,11 @@ Method selection rules:
           const rAcctM = retryText.match(/Bank Card\/Account Number[\s\S]{0,10}?\n\s*([\d\s]+)\s*\n/i) || retryText.match(/Account Number[\s\S]{0,10}?\n\s*([\d\s]+)\s*\n/i);
           const rAcct = rAcctM ? rAcctM[1].trim().replace(/[^0-9]/g,'') : null;
           const rBankM = retryText.match(/Bank name\s*\n\s*([A-Za-z][^\n]{0,40})/i);
-          const rBank = rBankM ? rBankM[1].trim() : null;
+          let rBank = rBankM ? rBankM[1].trim() : null;
+          if (!rBank) {   // no "Bank name" field -> the bank is the "Transfer via" value
+            const _rv = (rVia || '').trim();
+            if (_rv && !/^(bank transfer|bank|m-?pesa|mpesa|mobile money|mobile transfer)$/i.test(_rv) && /[A-Za-z]/.test(_rv)) rBank = _rv;
+          }
           if (rAmt && rPhone) {
             const rMethod = /i\s*&\s*m/i.test(rVia) ? 'im_bank' : 'mpesa';
             paymentDetails = { method: rMethod, phone: rPhone, name: rName, amount: rAmt, reference: order.orderNumber, network: 'safaricom', _source: 'dom_retry' };
