@@ -33,6 +33,10 @@ class ImPayout(Base):
     destination = Column(String(120), nullable=True)      # seller's phone / account
     detail = Column(String(255), nullable=True)           # error text / note (failed/unknown)
 
+    # Automatic timing for judging end-to-end latency (the API-detection decision).
+    detected_to_paid_ms = Column(Integer, nullable=True)  # order first seen -> I&M paid
+    markpaid_ms = Column(Integer, nullable=True)          # EP-17 mark-paid-on-Binance round trip
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(
         DateTime(timezone=True),

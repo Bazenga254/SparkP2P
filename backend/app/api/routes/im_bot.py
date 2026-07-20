@@ -452,6 +452,8 @@ async def _record_im_payout(
     bank_ref: str | None = None,
     destination: str | None = None,
     detail: str | None = None,
+    detected_to_paid_ms: int | None = None,
+    markpaid_ms: int | None = None,
 ) -> None:
     """Upsert the Transactions-dashboard ledger row for an I&M payout.
 
@@ -483,6 +485,10 @@ async def _record_im_payout(
             row.bank_ref = bank_ref
         if destination:
             row.destination = destination
+        if detected_to_paid_ms is not None:
+            row.detected_to_paid_ms = int(detected_to_paid_ms)
+        if markpaid_ms is not None:
+            row.markpaid_ms = int(markpaid_ms)
         row.detail = detail
         row.updated_at = datetime.now(timezone.utc)
         await db.commit()
@@ -537,9 +543,19 @@ async def result(
         # PAYMENT_SENT/RELEASED/COMPLETED, a duplicate PAID is a no-op — this is
         # the authoritative guard against a double "paid".
         applied = order.status == OrderStatus.PENDING
+        _detected_to_paid_ms = None
+        _markpaid_ms = None
         if applied:
             order.status = OrderStatus.PAYMENT_SENT
             order.payment_sent_at = datetime.now(timezone.utc)
+            # Automatic end-to-end timing: order first seen -> paid. order.created_at
+            # is when the desktop first reported it (≈ detection). This is the number
+            # we need to judge whether API-based detection is worth building.
+            try:
+                if order.created_at:
+                    _detected_to_paid_ms = int((order.payment_sent_at - order.created_at).total_seconds() * 1000)
+            except Exception:
+                _detected_to_paid_ms = None
             try:
                 from app.services.outbound_fees import outbound_fee as _outbound_fee
                 order.choice_fee = _outbound_fee((data.channel or "MPESA").upper(), order.fiat_amount or 0)
@@ -575,8 +591,12 @@ async def result(
                 await _alert(trader_id, f"⚠️ Paid buy order …{data.order_id[-8:]} but could NOT record its I&M charge — admin to reconcile.")
 
             await db.commit()
-            logger.info("im-bot result: order %s PAID (ref=%s) -> PAYMENT_SENT", data.order_id, data.bank_ref)
-            await _alert(trader_id, f"✅ I&M Bot paid buy order …{data.order_id[-8:]} — KES {int(order.fiat_amount or 0):,}. Ref {data.bank_ref or 'n/a'}.")
+            _timing = f" ⏱ detected→paid {_detected_to_paid_ms/1000:.1f}s." if _detected_to_paid_ms is not None else ""
+            logger.info(
+                "im-bot timing: order %s detected→paid %s ms (created_at=%s, paid=%s)",
+                data.order_id, _detected_to_paid_ms, order.created_at, order.payment_sent_at,
+            )
+            await _alert(trader_id, f"✅ I&M Bot paid buy order …{data.order_id[-8:]} — KES {int(order.fiat_amount or 0):,}. Ref {data.bank_ref or 'n/a'}.{_timing}")
 
             # Mark the order PAID on Binance ourselves (EP-17, server-side HMAC).
             # In the I&M-Bot flow the DESKTOP does not pay the seller, so it also
@@ -591,9 +611,11 @@ async def result(
                 _tr = await db.get(Trader, trader_id)
                 _ak, _as = _sapi_creds(_tr)
                 relay_trader.set(trader_id)
+                _mp_start = _time.monotonic()
                 _mp = await mark_order_as_paid(_ak, _as, data.order_id)
+                _markpaid_ms = int((_time.monotonic() - _mp_start) * 1000)
                 _ok = _mp.get("code") == "000000" or _mp.get("success") is True
-                logger.info("im-bot result: EP-17 mark-paid for %s -> %s", data.order_id, "ok" if _ok else _mp)
+                logger.info("im-bot result: EP-17 mark-paid for %s -> %s (%s ms)", data.order_id, "ok" if _ok else _mp, _markpaid_ms)
                 if not _ok:
                     await _alert(trader_id, f"⚠️ I&M paid buy order …{data.order_id[-8:]} but marking it PAID on Binance failed. Mark it as paid on Binance manually so the seller releases.")
             except Exception as _e:
@@ -611,6 +633,8 @@ async def result(
             channel=(data.channel or "MPESA").upper(),
             bank_ref=data.bank_ref,
             destination=order.seller_payment_destination,
+            detected_to_paid_ms=_detected_to_paid_ms,
+            markpaid_ms=_markpaid_ms,
         )
         return {"ok": True, "status": order.status.value, "applied": applied, "duplicate": not applied}
 
