@@ -484,24 +484,36 @@ async def poll(
                     logger.info("im-bot poll: order %s Binance status=%s (not 1/pending) — not serving", o.binance_order_number, st)
                 elif payable:
                     # ── API is the source of truth for the payout details ──
-                    # We already have the authoritative order detail in hand, so use
-                    # its bank + account to OVERRIDE whatever fragile DOM scraping
-                    # reported. This is why named banks (Equity, KCB, ABSA, Standard
-                    # Chartered …) resolve reliably now instead of arriving as the
-                    # generic "Bank Transfer".
+                    # We already have the authoritative order detail in hand, so use it
+                    # to OVERRIDE whatever fragile DOM scraping reported — for BOTH
+                    # rails: the bank + account for a bank transfer (named banks like
+                    # Equity/KCB/ABSA/Standard Chartered now resolve instead of arriving
+                    # as generic "Bank Transfer"), AND the phone for M-Pesa. Each field
+                    # is validated so a stray API value can't corrupt a good one.
+                    _method = (o.seller_payment_method or "").lower()
                     _api_bank = (det.get("bank_name") or "").strip()
                     _api_acct = (det.get("account_number") or "").strip()
+                    _api_phone = (det.get("pay_account") or "").strip()
                     _changed = False
-                    if _api_bank and _api_bank.lower() not in ("bank transfer", "bank", "bank account") and (o.seller_payment_bank or "") != _api_bank:
-                        o.seller_payment_bank = _api_bank
-                        _changed = True
-                    if _api_acct and (o.seller_payment_method or "") in ("other_bank", "im_bank", "bank") and (o.seller_payment_destination or "") != _api_acct:
-                        o.seller_payment_destination = _api_acct
-                        _changed = True
+                    if _method in ("mpesa", "m-pesa", "safaricom", "airtel"):
+                        # M-Pesa: trust the API phone only if it looks like a KE mobile.
+                        _digits = "".join(ch for ch in _api_phone if ch.isdigit())
+                        _is_phone = 9 <= len(_digits) <= 12 and (_digits.startswith(("07", "01", "2547", "2541", "7", "1")))
+                        if _api_phone and _is_phone and (o.seller_payment_destination or "") != _api_phone:
+                            o.seller_payment_destination = _api_phone
+                            _changed = True
+                    else:
+                        # Bank transfer: the bank name + the account number.
+                        if _api_bank and _api_bank.lower() not in ("bank transfer", "bank", "bank account") and (o.seller_payment_bank or "") != _api_bank:
+                            o.seller_payment_bank = _api_bank
+                            _changed = True
+                        if _api_acct and (o.seller_payment_destination or "") != _api_acct:
+                            o.seller_payment_destination = _api_acct
+                            _changed = True
                     if _changed:
                         await db.commit()
-                        logger.info("im-bot poll: order %s enriched from API — bank=%r acct=%r",
-                                    o.binance_order_number, o.seller_payment_bank, o.seller_payment_destination)
+                        logger.info("im-bot poll: order %s enriched from API — method=%s bank=%r dest=%r",
+                                    o.binance_order_number, _method, o.seller_payment_bank, o.seller_payment_destination)
         except Exception as _e:
             logger.warning("im-bot poll: could not verify Binance status for %s (%s) — NOT serving this cycle (fail-closed)",
                            o.binance_order_number, _e)
