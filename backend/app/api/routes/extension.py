@@ -3218,6 +3218,19 @@ async def choice_pay(
     Called by the desktop bot for BUY order payments to sellers.
     Deducts from the trader's own Choice Bank sub-account (not SparkP2P wallet).
     """
+    # ── Payout-rail guard: prevent double payment ──
+    # If this trader pays buy orders from their OWN I&M account (the standalone
+    # I&M Bot polls /im-bot/poll and pays), SparkP2P must NOT also pay the seller
+    # via Choice Bank — that pays them twice, on two rails, from two machines that
+    # can't see each other's ledgers. The desktop skips this call for I&M-route
+    # traders; this is the server-side backstop that holds even for an old desktop.
+    if getattr(trader, "buy_payout_via_im", False):
+        logger.info("choice-pay refused for %s order %s — trader is on the I&M Bot rail", trader.id, data.order_number)
+        raise HTTPException(
+            status_code=409,
+            detail="This account pays buy orders via the I&M Bot. Choice Bank buy payments are disabled here to prevent double payment.",
+        )
+
     if not trader.choice_account_id:
         raise HTTPException(
             status_code=400,

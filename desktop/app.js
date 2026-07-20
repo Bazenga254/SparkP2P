@@ -196,6 +196,7 @@ const sellHoldDecisionAsked = new Set();        // sell orderNums where the HOLD
 let codeFallbackAskedForOrder = null; // Legacy single-order reference (kept for monitorActiveOrder compat)
 let pauseNavigation = false;    // When true, bot pauses all polling/navigation so user can use Chrome freely
 let botTradeMode = 'both';      // 'both' | 'buy_only' | 'sell_only' — fetched from backend on start
+let buyPayoutViaIm = false;     // buy orders paid by the standalone I&M Bot — desktop must NOT pay via Choice Bank (double-pay guard)
 let ddEnabled = false;          // Counterparty screening on/off
 let botFullAuto = false;        // Strict full-auto: auto-reject failed orders, no manual approval
 let ddMin30d = 20;              // Tier 1: minimum 30-day trade count
@@ -231,6 +232,7 @@ const reportedCompletedBuyOrders = new Set();  // order numbers already sent as 
 const reportedCompletedSellOrders = new Set(); // order numbers already sent as completed_sell_order_numbers — prevents duplicate SMS
 const sellOrderDetailsCache = {};  // { orderNumber: { state, payment_method, buyer_name, amount, ts, ...ep13 } }
 const buyGreetingSentOrders = new Set();    // orderNums where greeting was already sent
+const buyImHandoffLogged = new Set();       // orderNums we've logged as "paid via I&M Bot" (avoid per-cycle log spam)
 const buyPostPaymentMsgSentOrders = new Set(); // orderNums where "I have sent KSh..." was already sent
 const markPaidDoneOrders = new Set();          // orderNums where EP-17 mark-paid was already called — skip on restart
 const telegramApprovedOrders = new Set();      // orderNums where Telegram approval was confirmed — persisted so restart skips re-poll
@@ -3744,6 +3746,7 @@ async function idleScan(page) {
         }
         ddEnabled       = modeData.dd_enabled        || false;
         botFullAuto     = modeData.bot_full_auto      || false;
+        buyPayoutViaIm  = modeData.buy_payout_via_im  || false;
         ddMin30d        = modeData.dd_min_30d_trades  || 20;
         ddMinAll        = modeData.dd_min_all_trades  || 0;
         ddAutoCancelNew = modeData.dd_auto_cancel_new || false;
@@ -5322,6 +5325,23 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
             await sendBinanceChatMessage(oPage, greetMsg);
             console.log(`[SparkP2P] ðŸ'‹ Greeting sent for buy order ${order.orderNumber} (after Telegram approval)`);
             await new Promise(r => setTimeout(r, 800));
+          }
+
+          // ── I&M rail guard: the standalone I&M Bot pays this seller, not us ──
+          // Never pay via Choice Bank when the trader is on the I&M rail — that
+          // pays the seller twice (Choice + I&M) from two machines that can't see
+          // each other. The order and seller destination were already reported to
+          // the backend above, so the I&M Bot will poll and pay it, and the backend
+          // then marks it paid on Binance (EP-17). We just release the slot and move
+          // on. (The backend also refuses /ext/choice-pay for this trader as a
+          // second line of defence, so an old desktop still can't double-pay.)
+          if (buyPayoutViaIm) {
+            if (!buyImHandoffLogged.has(order.orderNumber)) {
+              buyImHandoffLogged.add(order.orderNumber);
+              sendBotLog('info', `Buy order ...${order.orderNumber.slice(-8)} — paid by your I&M Bot (Choice Bank payment skipped to avoid double payment).`);
+            }
+            if (activeBuyPaymentSlot === order.orderNumber) activeBuyPaymentSlot = null;
+            continue;
           }
 
           // ── Step 3: Execute the Choice Bank payment ──

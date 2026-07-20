@@ -577,6 +577,28 @@ async def result(
             await db.commit()
             logger.info("im-bot result: order %s PAID (ref=%s) -> PAYMENT_SENT", data.order_id, data.bank_ref)
             await _alert(trader_id, f"✅ I&M Bot paid buy order …{data.order_id[-8:]} — KES {int(order.fiat_amount or 0):,}. Ref {data.bank_ref or 'n/a'}.")
+
+            # Mark the order PAID on Binance ourselves (EP-17, server-side HMAC).
+            # In the I&M-Bot flow the DESKTOP does not pay the seller, so it also
+            # never marks the order paid — without this the seller is never asked
+            # to release. Best-effort: on failure we alert the merchant to mark it
+            # manually rather than fail the payout report (the money already left
+            # the bank). Only on the first advance (applied), so a duplicate PAID
+            # never re-marks.
+            try:
+                from app.api.routes.extension import _sapi_creds
+                from app.services.binance.sapi_client import mark_order_as_paid, relay_trader
+                _tr = await db.get(Trader, trader_id)
+                _ak, _as = _sapi_creds(_tr)
+                relay_trader.set(trader_id)
+                _mp = await mark_order_as_paid(_ak, _as, data.order_id)
+                _ok = _mp.get("code") == "000000" or _mp.get("success") is True
+                logger.info("im-bot result: EP-17 mark-paid for %s -> %s", data.order_id, "ok" if _ok else _mp)
+                if not _ok:
+                    await _alert(trader_id, f"⚠️ I&M paid buy order …{data.order_id[-8:]} but marking it PAID on Binance failed. Mark it as paid on Binance manually so the seller releases.")
+            except Exception as _e:
+                logger.error("im-bot result: EP-17 mark-paid errored for %s: %s", data.order_id, _e)
+                await _alert(trader_id, f"⚠️ I&M paid buy order …{data.order_id[-8:]} but could not mark it PAID on Binance ({_e}). Mark it as paid manually so the seller releases.")
         else:
             # Already advanced by an earlier result — a duplicate PAID is a no-op.
             # 'applied' must reflect what THIS call did, so the bot never reads a
