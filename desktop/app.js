@@ -1433,6 +1433,19 @@ async function closeOrderTab(orderNumber, reason) {
   try { if (!tab.isClosed()) await tab.close(); } catch (_) {}
   console.log(`[SparkP2P] Closed tab for order ${orderNumber}${reason ? ' ('+reason+')' : ''}`);
   sendBotLog('info', `Tab closed for order ...${orderNumber.slice(-8)}${reason ? ' — ' + reason : ''}`);
+  // Put the browser back on the ACTIVE-orders page (tab=0) and bring it to the
+  // front — never leave the visible tab parked on an order-detail page after a
+  // paid order. Release checking is API-only (checkPaidOrderReleases), so we never
+  // need to sit on an order page waiting for the seller.
+  try {
+    const _mp = await getPage('binance.com');
+    if (_mp && !_mp.isClosed()) {
+      if (!/fiatOrder\?tab=0/.test(_mp.url())) {
+        await _mp.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+      }
+      await _mp.bringToFront().catch(() => {});
+    }
+  } catch (_) {}
 }
 
 // ── Sell orders are tabless — open a tab ONLY for a brief chat/verify action ──
@@ -4804,8 +4817,34 @@ async function idleScan(page) {
     ) {
       buyPaymentSentAt[order.orderNumber] = Date.now();
       savePaidOrder(order.orderNumber, { source: 'restored', amount: order.totalPrice || order.fiatAmount });
-      console.log(`[SparkP2P] ⚠️ Buy order ${order.orderNumber} — "awaiting release" detected but tracking was lost — restored payment tracking, monitoring next cycle`);
-      sendBotLog('warn', `Buy order ${order.orderNumber}: payment tracking restored — awaiting seller release. Will monitor for release or timeout.`);
+      // Send the "I have sent — please release" message RIGHT NOW, while this order
+      // tab (oPage) is still open — the tab is closed the instant buyPaymentSentAt is
+      // set (paid orders move to API-only release monitoring), so a later cycle can
+      // never send it. This is why the message was missing for I&M orders. Fetch the
+      // seller details from the API if we don't have them cached.
+      if (!buyPostPaymentMsgSentOrders.has(order.orderNumber)) {
+        try {
+          let d = buyOrderDetailsMap[order.orderNumber] || {};
+          if (!d.sellerName) {
+            const _dr = await fetch(`${API_BASE}/ext/order-detail?order_number=${encodeURIComponent(order.orderNumber)}`,
+              { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).catch(() => null);
+            if (_dr && _dr.ok) d = { sellerName: _dr.counterparty_name, amount: _dr.fiat_amount || order.totalPrice || order.fiatAmount,
+              phone: _dr.phone, accountNumber: _dr.account_number, bankName: _dr.bank_name };
+          }
+          if (d.sellerName) {
+            const _fn = String(d.sellerName).split(' ')[0];
+            const _a = Math.floor(parseFloat(d.amount || order.totalPrice || order.fiatAmount || 0));
+            const _msg = d.accountNumber
+              ? `Hello ${_fn}, I have sent KSh ${_a.toLocaleString()} to your ${d.bankName || 'bank'} account (${d.accountNumber}). Please check and release the crypto. Thank you! \u{1F64F}`
+              : `Hello ${_fn}, I have sent KSh ${_a.toLocaleString()} to your M-Pesa (${d.phone || ''}). Please check and release the crypto. Thank you! \u{1F64F}`;
+            const _sent = await sendBinanceChatMessage(oPage, _msg);
+            if (_sent) { buyPostPaymentMsgSentOrders.add(order.orderNumber); _saveOrderFlag(order.orderNumber, 'postPaymentMsgSent', true); }
+            sendBotLog(_sent ? 'info' : 'warn', `Buy order ...${order.orderNumber.slice(-8)} — "please release" message ${_sent ? 'sent to seller' : 'could not be sent'}.`);
+          }
+        } catch (_) {}
+      }
+      console.log(`[SparkP2P] ⚠️ Buy order ${order.orderNumber} — "awaiting release" detected but tracking was lost — restored payment tracking, monitoring via API`);
+      sendBotLog('warn', `Buy order ${order.orderNumber}: payment confirmed — awaiting seller release (monitoring via API, tab will close).`);
 
     } else {
       // -- ALREADY-PAID SAFEGUARD ---------------------------------------------------
