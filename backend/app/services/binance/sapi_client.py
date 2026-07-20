@@ -320,6 +320,8 @@ async def get_order_payment_details(api_key: str, api_secret: str, order_number:
     fields = []
     name = None
     pay_account = None
+    bank_name = None
+    account_number = None
     if chosen:
         for f in (chosen.get("fields") or []):
             val = (f.get("fieldValue") or "").strip()
@@ -328,10 +330,22 @@ async def get_order_payment_details(api_key: str, api_secret: str, order_number:
             label = f.get("fieldName") or ""
             fields.append({"label": label, "value": val})
             ctype = (f.get("fieldContentType") or "").lower()
-            if ctype == "payee" or "name" in label.lower():
+            _ll = label.lower()
+            if ctype == "payee" or "name" in _ll:
                 name = name or val
-            if ctype == "pay_account" or any(w in label.lower() for w in ["account number", "phone", "card"]):
+            if ctype == "pay_account" or any(w in _ll for w in ["account number", "phone", "card"]):
                 pay_account = pay_account or val
+            if not account_number and any(w in _ll for w in ["account number", "card"]):
+                account_number = val
+            if not bank_name and "bank" in _ll and ctype != "pay_account":
+                bank_name = val
+    # Bank name for a bank transfer: usually the trade-method name itself — Binance
+    # shows "Transfer via: Equity Bank" — not a separate field. Use it, unless it is
+    # the generic category label. This is what the I&M Bot needs to resolve the bank
+    # RELIABLY (API), instead of fragile DOM scraping.
+    _method_name = ((chosen or {}).get("tradeMethodName") or pay_type or "").strip()
+    if not bank_name and _method_name and _method_name.lower() not in ("bank transfer", "bank", "bank account", "bank transfer (kes)"):
+        bank_name = _method_name
     # Full (unmasked) counterparty nickname — depends on our side of the trade.
     trade_type = (d.get("tradeType") or "").upper()
     if trade_type == "BUY":
@@ -362,6 +376,8 @@ async def get_order_payment_details(api_key: str, api_secret: str, order_number:
         "method": (chosen or {}).get("tradeMethodName") or pay_type,
         "name": name,
         "pay_account": pay_account,
+        "bank_name": bank_name,             # resolved bank for a bank transfer (API, reliable)
+        "account_number": account_number,   # bank account number, when present
         "fields": fields,
         "raw_pay_type": pay_type,
         "counterparty_nickname": cp_nick,

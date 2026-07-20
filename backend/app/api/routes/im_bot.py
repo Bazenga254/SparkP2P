@@ -482,6 +482,26 @@ async def poll(
                                    o.binance_order_number, st, o.status.value)
                 elif not payable:
                     logger.info("im-bot poll: order %s Binance status=%s (not 1/pending) — not serving", o.binance_order_number, st)
+                elif payable:
+                    # ── API is the source of truth for the payout details ──
+                    # We already have the authoritative order detail in hand, so use
+                    # its bank + account to OVERRIDE whatever fragile DOM scraping
+                    # reported. This is why named banks (Equity, KCB, ABSA, Standard
+                    # Chartered …) resolve reliably now instead of arriving as the
+                    # generic "Bank Transfer".
+                    _api_bank = (det.get("bank_name") or "").strip()
+                    _api_acct = (det.get("account_number") or "").strip()
+                    _changed = False
+                    if _api_bank and _api_bank.lower() not in ("bank transfer", "bank", "bank account") and (o.seller_payment_bank or "") != _api_bank:
+                        o.seller_payment_bank = _api_bank
+                        _changed = True
+                    if _api_acct and (o.seller_payment_method or "") in ("other_bank", "im_bank", "bank") and (o.seller_payment_destination or "") != _api_acct:
+                        o.seller_payment_destination = _api_acct
+                        _changed = True
+                    if _changed:
+                        await db.commit()
+                        logger.info("im-bot poll: order %s enriched from API — bank=%r acct=%r",
+                                    o.binance_order_number, o.seller_payment_bank, o.seller_payment_destination)
         except Exception as _e:
             logger.warning("im-bot poll: could not verify Binance status for %s (%s) — NOT serving this cycle (fail-closed)",
                            o.binance_order_number, _e)
