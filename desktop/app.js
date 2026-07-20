@@ -5409,6 +5409,37 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
             }
           } catch(e) {
             const _errMsg = e.message || 'Unknown error';
+
+            // The server refuses Choice Bank buy payments for I&M-rail traders (409) to
+            // prevent double payment — that is NOT a failure, the I&M Bot pays this order.
+            // Treat it exactly like the buy_payout_via_im skip (record seller details so
+            // the "please release" message fires once the bot pays and it is marked paid),
+            // set the flag so later cycles skip earlier, and move on WITHOUT retrying or
+            // asking to cancel. Makes the desktop correct even before the profile flag loads.
+            if (/I&M Bot|Choice Bank buy payments are disabled/i.test(_errMsg)) {
+              buyPayoutViaIm = true;
+              if (!buyImHandoffLogged.has(order.orderNumber)) {
+                buyImHandoffLogged.add(order.orderNumber);
+                sendBotLog('info', `Buy order ...${order.orderNumber.slice(-8)} — paid by your I&M Bot (Choice Bank payment not used).`);
+              }
+              if (!buyOrderDetailsMap[order.orderNumber]) {
+                const _imIsBank = !!(paymentDetails.account_number && (paymentDetails.bank_code || paymentDetails.bank_name));
+                buyOrderDetailsMap[order.orderNumber] = {
+                  sellerName: paymentDetails.name,
+                  amount: paymentDetails.amount,
+                  phone: paymentDetails.phone || null,
+                  accountNumber: paymentDetails.account_number || null,
+                  bankName: paymentDetails.bank_name || null,
+                  method: _imIsBank ? (paymentDetails.bank_name || 'Bank Transfer') : 'M-Pesa',
+                  orderNumber: order.orderNumber,
+                };
+              }
+              delete buyRetryCount[order.orderNumber];
+              delete buyDeprioritizedAt[order.orderNumber];
+              if (activeBuyPaymentSlot === order.orderNumber) activeBuyPaymentSlot = null;
+              continue;
+            }
+
             console.error("[SparkP2P] Choice Bank payment error for " + order.orderNumber + ": " + _errMsg);
 
             // NEVER cancel a buy order. Any payment failure (OTP timeout, Choice/I&M error,
