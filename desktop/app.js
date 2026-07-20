@@ -4475,11 +4475,15 @@ async function idleScan(page) {
           { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).catch(() => null);
         const _st = _od && (_od.order_status != null ? String(_od.order_status) : '');
         if (_st === '2' || _st === '3' || _st === '4') {
-          buyPaymentSentAt[order.orderNumber] = Date.now() - 120000;
-          savePaidOrder(order.orderNumber, { source: 'api_status_restore' });
+          // Use the ACTUAL time we paid it (from the backend) so "paid N min ago"
+          // is correct — not a hardcoded ~2 min guess.
+          const _paidMs = _od.paid_at ? Date.parse(_od.paid_at) : NaN;
+          buyPaymentSentAt[order.orderNumber] = Number.isFinite(_paidMs) ? _paidMs : (Date.now() - 120000);
+          savePaidOrder(order.orderNumber, { source: 'api_status_restore', paidAt: buyPaymentSentAt[order.orderNumber] });
           if (orderTabs[order.orderNumber]) await closeOrderTab(order.orderNumber, 'already paid per Binance API');
-          console.log(`[SparkP2P] Order ${order.orderNumber.slice(-8)} — already paid per API (status ${_st}); skipping, no page navigation`);
-          sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} — already paid per Binance (status ${_st}). Monitoring release via API.`);
+          const _mins = Math.floor((Date.now() - buyPaymentSentAt[order.orderNumber]) / 60000);
+          console.log(`[SparkP2P] Order ${order.orderNumber.slice(-8)} — already paid per API (status ${_st}, ${_mins}m ago); skipping, no page navigation`);
+          sendBotLog('info', `Order …${order.orderNumber.slice(-8)} paid ${_mins} min ago. Waiting for the seller to release — moving to the next order.`);
         }
       } catch (_) {}
     }
@@ -4540,7 +4544,7 @@ async function idleScan(page) {
     if (buyPaymentSentAt[order.orderNumber]) {
       const _minsElapsed = Math.floor((Date.now() - buyPaymentSentAt[order.orderNumber]) / 60000);
       console.log(`[SparkP2P] Order ${order.orderNumber.slice(-8)} — paid ${_minsElapsed}m ago, awaiting seller release`);
-      sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} — paid ${_minsElapsed}m ago, awaiting seller release`);
+      sendBotLog('info', `Order …${order.orderNumber.slice(-8)} paid ${_minsElapsed} min ago. Waiting for the seller to release — moving to the next order.`);
       continue;
     }
 

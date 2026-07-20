@@ -1628,12 +1628,27 @@ async def get_active_orders(
 async def get_order_detail(
     order_number: str,
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ):
     """Return full order detail including payment info.
 
     Tries SAPI (API key) first — works even when session cookies are expired.
     Falls back to cookie-based client if SAPI is unavailable.
     """
+    # Our own record of WHEN this order was paid (the I&M Bot / desktop), so the
+    # desktop can show an accurate "paid N min ago" instead of guessing ~2 min.
+    _paid_at = None
+    try:
+        from app.models.order import Order as _OrderPA
+        _opa = (await db.execute(select(_OrderPA).where(
+            _OrderPA.trader_id == trader.id,
+            _OrderPA.binance_order_number == order_number,
+        ))).scalar_one_or_none()
+        if _opa and _opa.payment_sent_at:
+            _paid_at = _opa.payment_sent_at.isoformat()
+    except Exception:
+        _paid_at = None
+
     # ── SAPI path (API key) — preferred, no cookie dependency ────────────────
     if trader.binance_api_key and trader.binance_api_secret:
         try:
@@ -1700,6 +1715,7 @@ async def get_order_detail(
                 # opening the order page: 1=pending payment, 2=buyer paid,
                 # 3=releasing, 4=completed, 5=cancelled, 6=expired.
                 "order_status": d.get("order_status"),
+                "paid_at": _paid_at,   # ISO time we paid it, for an accurate "paid N min ago"
                 "fiat_amount": d.get("fiat_amount"),
                 "counterparty_name": d.get("name") or d.get("counterparty_nickname"),
                 "trades_30d": d.get("trades_30d"),
