@@ -814,8 +814,17 @@ async def request_buy_approval(
         dest = f"M-Pesa {data.phone or '?'}"
 
     amt_str = f"KES {int(data.amount):,}"
-    bal_str = f"KES {int(data.choice_balance):,}" if data.choice_balance else "?"
     name = data.seller_name or "Unknown seller"
+    # Balance line — RAIL AWARE. An I&M-rail trader pays sellers from their own I&M
+    # account using prepaid I&M credits, NOT Choice Bank — so "CB Balance" was
+    # misleading. Show the relevant balance for the rail they're actually on.
+    if getattr(trader, "buy_payout_via_im", False):
+        from app.services import credits as _creditsvc
+        _bal_label = "I&M Credits"
+        _bal_val = f"{_creditsvc.trader_balance(trader):,} payouts left"
+    else:
+        _bal_label = "CB Balance"
+        _bal_val = f"KES {int(data.choice_balance):,}" if data.choice_balance else "?"
 
     profile_lines = []
     if data.trades_30d is not None:
@@ -836,7 +845,7 @@ async def request_buy_approval(
         f"<b>Amount:</b> {amt_str}\n"
         f"<b>Seller:</b> {name}\n"
         f"<b>Paying to:</b> {dest}\n"
-        f"<b>CB Balance:</b> {bal_str}\n"
+        f"<b>{_bal_label}:</b> {_bal_val}\n"
         f"<b>Order:</b> <code>...{data.order_number[-12:]}</code>"
         f"{profile_section}"
         f"{advisory_section}\n\n"
