@@ -3788,6 +3788,31 @@ async function idleScan(page) {
   const orders = await readOrders(true); // activeOnly=true
   stats.orders = orders.sell.length + orders.buy.length;
   console.log(`[SparkP2P] Orders found: ${orders.sell.length} sell, ${orders.buy.length} buy`);
+
+  // ── PAID PRE-SCAN (API) — BEFORE we open any tab ──────────────────────────────
+  // Ask the backend the live Binance status of each buy order. Any order that is
+  // already paid (2/3) or completed (4) gets flagged as paid NOW — so ensureOrderTabs
+  // (which skips markPaidDone/buyPaymentSent orders) never opens its page, and the
+  // buy loop skips it. Release is watched SERVER-SIDE (buy_release_monitor via the
+  // API), so the desktop must never navigate to a paid order's page again.
+  for (const bo of (orders.buy || [])) {
+    if (buyPaymentSentAt[bo.orderNumber] || markPaidDoneOrders.has(bo.orderNumber)) continue;
+    try {
+      const _od = await fetch(`${API_BASE}/ext/order-detail?order_number=${encodeURIComponent(bo.orderNumber)}`,
+        { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).catch(() => null);
+      const _st = _od && (_od.order_status != null ? String(_od.order_status) : '');
+      if (_st === '2' || _st === '3' || _st === '4') {
+        const _paidMs = _od.paid_at ? Date.parse(_od.paid_at) : NaN;
+        buyPaymentSentAt[bo.orderNumber] = Number.isFinite(_paidMs) ? _paidMs : (Date.now() - 120000);
+        markPaidDoneOrders.add(bo.orderNumber);   // persistent skip — never reopen this order's page
+        savePaidOrder(bo.orderNumber, { source: 'api_prescan', paidAt: buyPaymentSentAt[bo.orderNumber] });
+        if (orderTabs[bo.orderNumber]) await closeOrderTab(bo.orderNumber, 'already paid per API — backend monitors release');
+        const _mins = Math.floor((Date.now() - buyPaymentSentAt[bo.orderNumber]) / 60000);
+        console.log(`[SparkP2P] Pre-scan: order ${bo.orderNumber.slice(-8)} already paid per API (status ${_st}, ${_mins}m ago) — no tab, backend watches release`);
+      }
+    } catch (_) {}
+  }
+
   await ensureOrderTabs(orders); // open/close per-order tabs to match active order list
 
   const hasActiveOrders = orders.sell.length > 0 || orders.buy.length > 0;

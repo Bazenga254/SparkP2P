@@ -1,9 +1,17 @@
-"""Buy-order release monitor.
+"""Buy-order release monitor — SERVER-SIDE, API-driven.
 
-When a trader has PAID a seller on a BUY order (status PAYMENT_SENT) but the seller hasn't released
-the crypto within DELAY_MINUTES, Telegram the trader so they can follow up / appeal. This runs
-SERVER-SIDE (not in the desktop), so the alert fires whether the trader is on desktop or phone —
-the mobile relay doesn't run the desktop trading loop that used to trigger this.
+For every BUY order the trader has PAID (status PAYMENT_SENT), this poller asks the
+Binance API for the live order status and acts on it — so the desktop NEVER has to
+navigate back to the order page to watch for the seller's release:
+
+  * status 4 (completed / released) -> mark the order done + "Buy done" (via
+    _complete_buy_order), exactly as the old desktop ghost-detection did.
+  * status 5/6 (cancelled / expired) -> reflect that and stop watching.
+  * status 2/3 (paid / releasing) and > DELAY_MINUTES old -> nag the trader once.
+
+Runs whether the trader is on desktop or phone (the mobile relay doesn't run the
+desktop trading loop). Needs the trader's Binance API key + relay to reach Binance;
+if it can't (relay down), it simply retries next tick.
 """
 
 import asyncio
@@ -18,20 +26,17 @@ from app.models.trader import Trader
 
 logger = logging.getLogger(__name__)
 
-DELAY_MINUTES = 10          # alert once the seller is this many minutes late releasing
-MAX_AGE_MINUTES = 60        # stop alerting once the order is this old — by now it's resolved/cancelled
-                            # or the trader has long since seen it (also caps restart re-spam)
-_CHECK_EVERY = 60           # seconds between scans
-_notified: set[int] = set()  # order ids already alerted (in-memory; resets on restart)
+DELAY_MINUTES = 10          # nag once the seller is this many minutes late releasing
+MAX_AGE_MINUTES = 180       # keep watching a paid order for up to 3h, then give up
+_CHECK_EVERY = 25           # seconds between scans (release should surface within ~25s)
+_notified: set[int] = set()  # order ids already nagged (in-memory; resets on restart)
 
 
 async def buy_release_monitor():
-    """Every minute, alert traders whose paid BUY orders haven't been released within DELAY_MINUTES."""
-    logger.info("[BuyReleaseMonitor] started (%d-min threshold)", DELAY_MINUTES)
+    logger.info("[BuyReleaseMonitor] started — API release detection + %d-min nag", DELAY_MINUTES)
     while True:
         try:
             now = datetime.now(timezone.utc)
-            cutoff = now - timedelta(minutes=DELAY_MINUTES)
             floor = now - timedelta(minutes=MAX_AGE_MINUTES)
             async with async_session() as db:
                 rows = (await db.execute(
@@ -39,21 +44,56 @@ async def buy_release_monitor():
                         Order.side == OrderSide.BUY,
                         Order.status == OrderStatus.PAYMENT_SENT,
                         Order.payment_sent_at.isnot(None),
-                        Order.payment_sent_at <= cutoff,
-                        Order.payment_sent_at >= floor,   # don't nag dead/old orders forever
-                        Order.settled_at.is_(None),       # skip if _complete_buy_order already ran
+                        Order.payment_sent_at >= floor,
+                        Order.settled_at.is_(None),
                     )
                 )).scalars().all()
 
                 for o in rows:
-                    if o.id in _notified:
-                        continue
                     trader = (await db.execute(
                         select(Trader).where(Trader.id == o.trader_id)
                     )).scalar_one_or_none()
                     if not trader:
                         continue
-                    mins = int((datetime.now(timezone.utc) - o.payment_sent_at).total_seconds() // 60)
+
+                    # ── API release detection: has the seller released the crypto? ──
+                    try:
+                        from app.api.routes.extension import _sapi_creds
+                        from app.services.binance.sapi_client import get_order_payment_details, relay_trader
+                        _ak, _as = _sapi_creds(trader)
+                        relay_trader.set(trader.id)
+                        det = await get_order_payment_details(_ak, _as, o.binance_order_number)
+                        st = str(det.get("order_status") or "").strip()
+                        if st == "4":
+                            # Seller released — complete it and fire "Buy done" (same path
+                            # the desktop used to call). This is the authoritative signal.
+                            from app.api.routes.extension import _complete_buy_order
+                            await _complete_buy_order(o, trader, db, notify=True)
+                            _notified.discard(o.id)
+                            logger.info("[BuyReleaseMonitor] order %s RELEASED (status 4) — completed",
+                                        o.binance_order_number)
+                            continue
+                        if st in ("5", "6"):
+                            o.status = OrderStatus.CANCELLED if st == "5" else OrderStatus.EXPIRED
+                            await db.commit()
+                            _notified.discard(o.id)
+                            logger.info("[BuyReleaseMonitor] order %s is now %s (status %s) — stop watching",
+                                        o.binance_order_number, o.status.value, st)
+                            continue
+                        # st in ("2","3") -> still awaiting release; fall through to the nag.
+                    except Exception as _e:
+                        # Can't verify right now (relay down / transient). Don't nag on a
+                        # failed check — just retry next tick.
+                        logger.debug("[BuyReleaseMonitor] status check failed for %s: %s",
+                                     o.binance_order_number, _e)
+                        continue
+
+                    # ── Nag: still awaiting release after DELAY_MINUTES ──
+                    if o.payment_sent_at > now - timedelta(minutes=DELAY_MINUTES):
+                        continue
+                    if o.id in _notified:
+                        continue
+                    mins = int((now - o.payment_sent_at).total_seconds() // 60)
                     msg = (
                         "⏳ Crypto not released yet" + chr(10) +
                         "You paid KES " + f"{float(o.fiat_amount or 0):,.0f}" +
@@ -66,10 +106,8 @@ async def buy_release_monitor():
                         from app.api.routes.telegram import notify_trader
                         await notify_trader(trader, msg)
                         _notified.add(o.id)
-                        logger.info(
-                            "[BuyReleaseMonitor] alerted trader %s for buy order %s (%dm unreleased)",
-                            trader.id, o.binance_order_number, mins,
-                        )
+                        logger.info("[BuyReleaseMonitor] nagged trader %s for buy order %s (%dm unreleased)",
+                                    trader.id, o.binance_order_number, mins)
                     except Exception as e:
                         logger.warning("[BuyReleaseMonitor] notify failed for order %s: %s", o.id, e)
         except Exception as e:
