@@ -564,17 +564,21 @@ async def result(
     if verdict not in (RESULT_PAID, RESULT_FAILED, RESULT_UNKNOWN):
         raise HTTPException(status_code=400, detail="result must be PAID, FAILED or UNKNOWN")
 
-    # Slow-payment diagnosis. The bot only sends timing_ms/steps when the I&M
-    # wizard was slow (>20s). Log the per-step trace at WARNING so it surfaces in
-    # journalctl — this is how we find WHICH step ate the time (e.g. the 90s
-    # result-wait) and fix that step precisely instead of guessing.
-    if data.timing_ms and data.timing_ms > 20000:
+    # Wizard diagnosis. The bot forwards timing_ms/steps when a payment was SLOW
+    # (>20s) OR when it FAILED/was UNSURE — logged at WARNING so it surfaces in
+    # journalctl. This is how we find WHICH step ate the time (e.g. the 90s
+    # result-wait) or WHERE the recurring ~4.4s first-attempt failure dies, and
+    # fix that step precisely instead of guessing.
+    _slow = bool(data.timing_ms and data.timing_ms > 20000)
+    _fail_trace = verdict in (RESULT_FAILED, RESULT_UNKNOWN) and bool(data.steps)
+    if _slow or _fail_trace:
         try:
             _trace = " | ".join(f"+{int(s.get('at', 0))}ms {s.get('msg', '')}" for s in (data.steps or [])[:50])
         except Exception:
             _trace = "(unparseable steps)"
-        logger.warning("im-bot SLOW PAYMENT: order %s took %.1fs (trader %s) — trace: %s",
-                       data.order_id, float(data.timing_ms) / 1000.0, trader_id, _trace)
+        _secs = (float(data.timing_ms) / 1000.0) if data.timing_ms else 0.0
+        logger.warning("im-bot WIZARD TRACE: order %s %s in %.1fs (trader %s) — detail: %s — trace: %s",
+                       data.order_id, verdict, _secs, trader_id, data.detail, _trace)
 
     order = (
         await db.execute(
@@ -708,7 +712,7 @@ async def result(
         return {"ok": True, "status": order.status.value, "applied": False}
 
     # UNKNOWN — the dangerous case. Never mark paid; get a human to check the bank.
-    logger.error("im-bot result: order %s UNKNOWN (ref=%s) — human check needed", data.order_id, data.bank_ref)
+    logger.error("im-bot result: order %s UNKNOWN (ref=%s) — human check needed — detail: %s", data.order_id, data.bank_ref, data.detail)
     await _alert(
         trader_id,
         f"⚠️ I&M Bot is UNSURE whether buy order …{data.order_id[-8:]} was paid "
