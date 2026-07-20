@@ -1696,6 +1696,10 @@ async def get_order_detail(
                 "phone": phone,
                 "account_number": account_number or None,
                 "bank_name": bank_name or None,
+                # Binance order status so the desktop can tell "already paid" WITHOUT
+                # opening the order page: 1=pending payment, 2=buyer paid,
+                # 3=releasing, 4=completed, 5=cancelled, 6=expired.
+                "order_status": d.get("order_status"),
                 "fiat_amount": d.get("fiat_amount"),
                 "counterparty_name": d.get("name") or d.get("counterparty_nickname"),
                 "trades_30d": d.get("trades_30d"),

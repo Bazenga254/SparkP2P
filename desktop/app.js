@@ -4463,6 +4463,25 @@ async function idleScan(page) {
       savePaidOrder(order.orderNumber, { source: 'pre_loop_restore' });
       console.log(`[SparkP2P] Pre-loop restore: order ${order.orderNumber.slice(-8)} — markPaidDone set but tracking was missing, restored`);
       sendBotLog('warn', `Order ...${order.orderNumber.slice(-8)} — already paid (tracking restored). Monitoring for seller release.`);
+    } else if (!buyPaymentSentAt[order.orderNumber]) {
+      // API-AUTHORITATIVE "already paid?" check — BEFORE we ever open the order tab.
+      // Ask the backend for the live Binance status; if the buyer already paid
+      // (2=paid, 3=releasing, 4=completed — e.g. the I&M Bot paid it and the backend
+      // marked it paid, or we lost the in-memory flag on a reconnect), treat it as
+      // paid so the buy loop SKIPS it and NEVER navigates to the order page. This is
+      // what keeps the browser on tab=0 for a paid order instead of parking on it.
+      try {
+        const _od = await fetch(`${API_BASE}/ext/order-detail?order_number=${encodeURIComponent(order.orderNumber)}`,
+          { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json()).catch(() => null);
+        const _st = _od && (_od.order_status != null ? String(_od.order_status) : '');
+        if (_st === '2' || _st === '3' || _st === '4') {
+          buyPaymentSentAt[order.orderNumber] = Date.now() - 120000;
+          savePaidOrder(order.orderNumber, { source: 'api_status_restore' });
+          if (orderTabs[order.orderNumber]) await closeOrderTab(order.orderNumber, 'already paid per Binance API');
+          console.log(`[SparkP2P] Order ${order.orderNumber.slice(-8)} — already paid per API (status ${_st}); skipping, no page navigation`);
+          sendBotLog('info', `Order ...${order.orderNumber.slice(-8)} — already paid per Binance (status ${_st}). Monitoring release via API.`);
+        }
+      } catch (_) {}
     }
   }
 
