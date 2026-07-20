@@ -689,40 +689,13 @@ export default function Landing() {
         <div className="land-section-inner">
           <div className="land-section-header">
             <span className="land-section-tag">Our Products</span>
-            <h2>The SparkP2P <span className="land-highlight">Product Suite</span></h2>
+            <h2>I&amp;M <span className="land-highlight">Automation</span></h2>
             <p className="land-section-desc">
-              SparkP2P is the platform. <strong>I&amp;M Automation</strong> is an optional companion for merchants who pay their buy orders straight from their own I&amp;M Bank account.
+              An optional companion to SparkP2P for merchants who pay their buy orders straight from their own I&amp;M Bank account.
             </p>
           </div>
           <div className="land-products-grid">
-            {/* SparkP2P — the core platform */}
-            <div className="land-product-card">
-              <span className="land-product-badge">Core platform</span>
-              <div className="land-product-head">
-                <div className="land-product-logo">
-                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>
-                  </svg>
-                </div>
-                <div>
-                  <h3>SparkP2P</h3>
-                  <p>Binance P2P automation for Kenya</p>
-                </div>
-              </div>
-              <p className="land-product-desc">
-                Auto-release crypto, match M-Pesa payments, and run your P2P desk hands-free. Sell-side and buy-side automation with Choice Bank payouts built in.
-              </p>
-              <ul className="land-product-features">
-                <li>Automatic crypto release &amp; payment matching</li>
-                <li>Buy &amp; sell automation, 24/7</li>
-                <li>Choice Bank payouts included</li>
-                <li>Windows &amp; Android apps, auto-updating</li>
-              </ul>
-              <a href="#download" className="land-download-btn">Download SparkP2P</a>
-              <p className="land-product-note">Free account · Windows 10 / 11 &amp; Android</p>
-            </div>
-
-            {/* I&M Automation — the companion bot */}
+            {/* I&M Automation — the companion bot (SparkP2P itself lives in the Download section) */}
             <div className="land-product-card">
               <span className="land-product-badge alt">Companion · optional</span>
               <div className="land-product-head">

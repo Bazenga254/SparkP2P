@@ -1701,7 +1701,8 @@ body {
 }
 .land-products-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: minmax(0, 480px);
+  justify-content: center;
   gap: 24px;
   max-width: 940px;
   margin: 40px auto 0;
