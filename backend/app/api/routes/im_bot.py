@@ -416,6 +416,17 @@ async def poll(
     ).scalars().all()
 
     from app.services.ad_automation import is_automated
+    from app.api.routes.extension import _sapi_creds
+    from app.services.binance.sapi_client import get_order_payment_details, relay_trader
+
+    # Creds for the live status re-check below (see the SAFETY block). If the trader
+    # has no usable API key we CANNOT verify an order is still payable — and paying a
+    # cancelled order loses real money — so we serve nothing rather than guess.
+    try:
+        _ak, _as = _sapi_creds(trader)
+    except Exception:
+        _ak = _as = None
+
     jobs = []
     for o in rows:
         # Respect the per-ad config: if this order's ad is set to sell_only/off,
@@ -425,6 +436,37 @@ async def poll(
         # Skip anything already in flight to this (or another) bot instance.
         if not lease.try_lease(o.binance_order_number, trader_id):
             continue
+
+        # ── SAFETY: is this order STILL payable on Binance, right now? ──
+        # Our DB only says PENDING. The buyer may have CANCELLED or let the order
+        # EXPIRE, or a prior "unsure" (UNKNOWN) attempt may actually have gone
+        # through — in every one of those cases paying (again) loses money. Only
+        # Binance orderStatus 1 (pending payment) is payable; 2/3=already paid or
+        # releasing, 5=cancelled, 6=expired. FAIL CLOSED: if we can't verify, we do
+        # NOT serve it (release the lease so a later poll can re-verify).
+        payable = False
+        try:
+            if _ak:
+                relay_trader.set(trader_id)
+                det = await get_order_payment_details(_ak, _as, o.binance_order_number)
+                st = (det.get("order_status") or "").strip()
+                payable = (st == "1")
+                if st in ("5", "6"):
+                    o.status = OrderStatus.CANCELLED if st == "5" else OrderStatus.EXPIRED
+                    await db.commit()
+                    logger.warning("im-bot poll: order %s is %s on Binance (5=cancelled/6=expired) — NOT paying; marked %s",
+                                   o.binance_order_number, st, o.status.value)
+                elif not payable:
+                    logger.info("im-bot poll: order %s Binance status=%s (not 1/pending) — not serving", o.binance_order_number, st)
+        except Exception as _e:
+            logger.warning("im-bot poll: could not verify Binance status for %s (%s) — NOT serving this cycle (fail-closed)",
+                           o.binance_order_number, _e)
+            payable = False
+
+        if not payable:
+            lease.release(o.binance_order_number)   # let a later poll re-verify a valid order
+            continue
+
         jobs.append(_job(o))
 
     if jobs:

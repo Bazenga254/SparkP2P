@@ -325,11 +325,50 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                     if pd:
                         pd["status"] = "manual"
                 else:  # pay_cancel
+                    # ── Pre-cancel safety: has money already gone out for this order? ──
+                    # If the payment is already sent, or is in flight to the seller right
+                    # now, cancelling FORFEITS that cash — the seller keeps the money and you
+                    # get no crypto. This is the single biggest way to lose money here, so
+                    # warn and require a SECOND tap to confirm before we cancel.
+                    from sqlalchemy import select as _sel
+                    from app.models.order import Order as _Order, OrderStatus as _OS
+                    from app.services import im_bot_lease as _im_lease
+                    _tid = (pd or {}).get("trader_id", 0)
+                    _ord = (await db.execute(_sel(_Order).where(
+                        _Order.binance_order_number == order_number,
+                        _Order.trader_id == _tid,
+                    ))).scalar_one_or_none()
+                    _paid_states = (_OS.PAYMENT_SENT, _OS.RELEASING, _OS.RELEASED, _OS.SETTLING, _OS.COMPLETED)
+                    _already_paid = bool(_ord and _ord.status in _paid_states)
+                    _in_flight = _im_lease.is_leased(order_number)
+                    _amt = int((_ord.fiat_amount if _ord else 0) or 0)
+
+                    if (_already_paid or _in_flight) and not (pd or {}).get("cancel_armed"):
+                        if pd is not None:
+                            pd["cancel_armed"] = True
+                        _lead = "You have ALREADY PAID" if _already_paid else "A payment is being sent RIGHT NOW —"
+                        await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "⚠️ Payment already sent — please read"})
+                        if pd and pd.get("message_id"):
+                            await _tg_send("editMessageText", {
+                                "chat_id": pd["chat_id"], "message_id": pd["message_id"],
+                                "text": (f"⚠️ WAIT — {_lead} KES {_amt:,} to the seller for order {order_number}.\n\n"
+                                         f"Cancelling now will NOT refund you: the seller keeps the money and you receive no crypto.\n\n"
+                                         f"Only tap ❌ again if you accept losing KES {_amt:,}."),
+                                "reply_markup": {"inline_keyboard": [
+                                    [{"text": "❌ Cancel anyway — I accept the loss", "callback_data": f"pay_cancel:{order_number}"}],
+                                    [{"text": "✅ Keep the order", "callback_data": f"pay_manual:{order_number}"}],
+                                ]},
+                            })
+                        return {"ok": True}
+
+                    _risky = _already_paid or _in_flight
                     await _tg_send("answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ Cancelling the order on Binance..."})
                     if pd and pd.get("message_id"):
+                        _hdr = (f"❌ CANCELLING — you had already sent KES {_amt:,}; that money is now at risk with the seller"
+                                if _risky else "❌ CANCELLING")
                         await _tg_send("editMessageText", {
                             "chat_id": pd["chat_id"], "message_id": pd["message_id"],
-                            "text": f"❌ CANCELLING — Order {order_number}\n\nThe bot is cancelling this order on Binance now.",
+                            "text": f"{_hdr}\nOrder {order_number}\n\nThe bot is cancelling this order on Binance now.",
                         })
                     if pd:
                         pd["status"] = "cancel"
@@ -343,6 +382,25 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                             from app.services.binance.sapi_client import cancel_order, relay_trader
                             relay_trader.set(_t.id)
                             await cancel_order(decrypt_data(_t.binance_api_key), decrypt_data(_t.binance_api_secret), order_number)
+                            # CRITICAL: reflect the cancel in OUR world immediately.
+                            # Without this the order stays PENDING, so /im-bot/poll keeps
+                            # serving it and the I&M Bot PAYS A CANCELLED ORDER (real money
+                            # loss), and the release monitor keeps telling the merchant to
+                            # "appeal" an order that no longer exists. Mark it CANCELLED and
+                            # drop any in-flight I&M lease so no bot instance re-pays it.
+                            try:
+                                from app.models.order import Order as _Order, OrderStatus as _OS
+                                _o = (await db.execute(_sel(_Order).where(
+                                    _Order.trader_id == _t.id,
+                                    _Order.binance_order_number == order_number,
+                                ))).scalar_one_or_none()
+                                if _o and _o.status not in (_OS.COMPLETED, _OS.RELEASED):
+                                    _o.status = _OS.CANCELLED
+                                    await db.commit()
+                                from app.services import im_bot_lease as _im_lease
+                                _im_lease.release(order_number)
+                            except Exception as _ue:
+                                import logging; logging.getLogger(__name__).warning("pay_cancel DB update failed: %s", _ue)
                     except Exception as _ce:
                         import logging; logging.getLogger(__name__).warning("pay_cancel cancel failed: %s", _ce)
                 return {"ok": True}

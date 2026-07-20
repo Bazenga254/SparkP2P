@@ -4651,28 +4651,47 @@ async function idleScan(page) {
     // recognised ACTIVE screen (e.g. verify_payment) fired on Binance's own template/
     // warning text and caused an endless open→detect-cancel→close→reopen loop on payable
     // orders.
+    } else if (buyScreen === 'order_cancelled' || buyScreen === 'cancelled') {
+      // RELIABLE cancel — the order page itself shows "Order Canceled" (a real
+      // state classification, not the loose text fallback). Trust it EVEN IF we
+      // thought we paid: a payment that landed on a cancelled order is a genuine
+      // loss (the merchant is alerted separately), and we must stop chasing a
+      // release that will never come, close the tab, and report it cancelled.
+      // Previously this was ignored whenever buyPaymentSentAt was set, which left
+      // the tab open and had the bot telling the merchant to "appeal" a cancelled
+      // order forever.
+      if (buyPaymentSentAt[order.orderNumber]) {
+        sendBotLog('warn', `Buy order ...${order.orderNumber.slice(-8)} — CANCELLED after a payment was sent. Stopping release monitoring and closing the tab. Check your I&M account: the payment went to a cancelled order.`);
+      } else {
+        sendBotLog('warn', `Buy order ...${order.orderNumber.slice(-8)} detected as CANCELLED (order page shows "Order Canceled"). Closing tab.`);
+      }
+      await fetch(`${API_BASE}/ext/report-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ sell_orders: [], buy_orders: [], cancelled_order_numbers: [order.orderNumber] }),
+      }).catch(() => {});
+      delete buyPaymentSentAt[order.orderNumber];
+      buyReminderSentOrders.delete(order.orderNumber);
+      if (activeBuyOrderNumber === order.orderNumber) activeBuyOrderNumber = null;
+      closeOrderTab(order.orderNumber, 'order cancelled');
+
     } else if (
-      buyScreen === 'order_cancelled' || buyScreen === 'cancelled' ||
-      (buyScreen === 'unknown' && (
+      buyScreen === 'unknown' && (
         buyLower.includes('order has been cancelled') ||
         buyLower.includes('order was cancelled') ||
         buyLower.includes('order is cancelled') ||
         buyLower.includes('has been canceled')
-      ))
+      )
     ) {
+      // LOOSE text on a page we could NOT classify — keep the false-positive guard,
+      // because Binance shows restriction/warning banners on the Pending-Release
+      // page that contain this text on orders that are perfectly fine.
       if (buyPaymentSentAt[order.orderNumber]) {
-        // We already paid — this is almost certainly a false-positive (e.g. a Binance
-        // restriction banner on the Pending-Release page). Ignore and keep monitoring.
-        console.log(`[SparkP2P] Buy order ${order.orderNumber} — cancel text detected but buyPaymentSentAt is set; treating as false-positive, continuing to monitor release`);
-        sendBotLog('warn', `Buy order ...${order.orderNumber.slice(-8)} — "cancelled" text detected after payment was sent. Ignoring (false-positive guard). Monitoring for seller release.`);
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} — loose cancel text but buyPaymentSentAt is set; false-positive guard, continuing to monitor release`);
+        sendBotLog('warn', `Buy order ...${order.orderNumber.slice(-8)} — "cancelled" text on an unclassified page after payment. Ignoring (false-positive guard). Monitoring for seller release.`);
       } else {
-        const _cancelledWhy = buyScreen === 'order_cancelled' ? 'Vision detected cancelled'
-          : buyLower.includes('order has been cancelled') ? '"order has been cancelled" in page text'
-          : buyLower.includes('order was cancelled') ? '"order was cancelled" in page text'
-          : buyLower.includes('order is cancelled') ? '"order is cancelled" in page text'
-          : '"has been canceled" in page text';
-        console.log(`[SparkP2P] Buy order ${order.orderNumber} CANCELLED (reason: ${_cancelledWhy})`);
-        sendBotLog('warn', `Buy order ...${order.orderNumber.slice(-8)} detected as CANCELLED — reason: ${_cancelledWhy}. Screen: ${buyScreen}`);
+        console.log(`[SparkP2P] Buy order ${order.orderNumber} CANCELLED (loose page text, not yet paid)`);
+        sendBotLog('warn', `Buy order ...${order.orderNumber.slice(-8)} detected as CANCELLED (page text). Closing tab.`);
         await fetch(`${API_BASE}/ext/report-orders`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
