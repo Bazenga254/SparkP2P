@@ -481,6 +481,8 @@ class ResultRequest(BaseModel):
     channel: str | None = None    # MPESA | BANK — rail used, for the fee record
     amount: float | None = None   # what the bot actually paid, for cross-check
     detail: str | None = None     # error text / note
+    timing_ms: float | None = None      # total wizard time, sent only when slow
+    steps: list | None = None            # per-step trace [{at, msg}], sent only when slow
 
 
 async def _record_im_payout(
@@ -561,6 +563,18 @@ async def result(
     verdict = (data.result or "").upper()
     if verdict not in (RESULT_PAID, RESULT_FAILED, RESULT_UNKNOWN):
         raise HTTPException(status_code=400, detail="result must be PAID, FAILED or UNKNOWN")
+
+    # Slow-payment diagnosis. The bot only sends timing_ms/steps when the I&M
+    # wizard was slow (>20s). Log the per-step trace at WARNING so it surfaces in
+    # journalctl — this is how we find WHICH step ate the time (e.g. the 90s
+    # result-wait) and fix that step precisely instead of guessing.
+    if data.timing_ms and data.timing_ms > 20000:
+        try:
+            _trace = " | ".join(f"+{int(s.get('at', 0))}ms {s.get('msg', '')}" for s in (data.steps or [])[:50])
+        except Exception:
+            _trace = "(unparseable steps)"
+        logger.warning("im-bot SLOW PAYMENT: order %s took %.1fs (trader %s) — trace: %s",
+                       data.order_id, float(data.timing_ms) / 1000.0, trader_id, _trace)
 
     order = (
         await db.execute(
