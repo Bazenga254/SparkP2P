@@ -1433,17 +1433,21 @@ async function closeOrderTab(orderNumber, reason) {
   try { if (!tab.isClosed()) await tab.close(); } catch (_) {}
   console.log(`[SparkP2P] Closed tab for order ${orderNumber}${reason ? ' ('+reason+')' : ''}`);
   sendBotLog('info', `Tab closed for order ...${orderNumber.slice(-8)}${reason ? ' — ' + reason : ''}`);
-  // Put the browser back on the ACTIVE-orders page (tab=0) and bring it to the
-  // front — never leave the visible tab parked on an order-detail page after a
-  // paid order. Release checking is API-only (checkPaidOrderReleases), so we never
-  // need to sit on an order page waiting for the seller.
+  // Park the main page back on the ACTIVE-orders tab (tab=0) so we never leave it
+  // on an order-detail page after a paid order. Release checking is API-only
+  // (checkPaidOrderReleases), so we never need to sit on an order page.
+  //
+  // Deliberately do NOT bringToFront() here: that raises the whole Chromium
+  // window above the user's other apps every time a paid order's tab closes,
+  // so the browser "never disappears into the background". The goto below parks
+  // the page correctly WITHOUT stealing focus — closing the order tab already
+  // lets Chromium fall back to tab=0 on its own.
   try {
     const _mp = await getPage('binance.com');
     if (_mp && !_mp.isClosed()) {
       if (!/fiatOrder\?tab=0/.test(_mp.url())) {
         await _mp.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
       }
-      await _mp.bringToFront().catch(() => {});
     }
   } catch (_) {}
 }
