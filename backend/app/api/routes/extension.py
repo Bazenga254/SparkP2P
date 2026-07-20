@@ -233,8 +233,16 @@ async def report_orders(
         reactivate = react_result.scalar_one_or_none()
         if reactivate:
             old_status = reactivate.status.value
-            reactivate.status = OrderStatus.PENDING
-            logger.info(f"Order {order_number} reactivated ({old_status} → PENDING) — bot is actively processing it on Binance")
+            # If this order was ALREADY PAID (I&M/Choice), it must NOT go back to
+            # PENDING — that invites a re-serve and resets the release timer to 0.
+            # Restore it to its paid state and let the server-side release monitor
+            # keep watching for the seller's release via the Binance API.
+            if reactivate.payment_sent_at is not None:
+                reactivate.status = OrderStatus.PAYMENT_SENT
+                logger.info(f"Order {order_number} reactivated ({old_status} → PAYMENT_SENT) — already paid, release monitored server-side")
+            else:
+                reactivate.status = OrderStatus.PENDING
+                logger.info(f"Order {order_number} reactivated ({old_status} → PENDING) — bot is actively processing it on Binance")
 
     # Update last sync timestamp — used by frontend to detect initial scan complete
     trader.last_extension_sync = datetime.now(timezone.utc)

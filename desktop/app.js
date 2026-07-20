@@ -3966,6 +3966,22 @@ async function idleScan(page) {
     for (const a of (actions || [])) {
       const isBuyAction = ['pay', 'mark_as_paid'].includes(a.action);
       const isSellAction = a.action === 'release';
+      // HARD RULE: once a buy order is PAID, the visible window must NEVER navigate
+      // back to its order-detail page. execAction() does a full-page nav to
+      // fiatOrderDetail for every action, which is exactly the "returns to the order
+      // page" behaviour. Release is now watched SERVER-SIDE via the Binance API
+      // (buy_release_monitor), so skip any action targeting an already-paid order.
+      if (a.order_number && (buyPaymentSentAt[a.order_number] || markPaidDoneOrders.has(a.order_number))) {
+        console.log(`[SparkP2P] Skipping ${a.action} for paid order ${a.order_number} — release monitored via API, not re-opening the order page`);
+        continue;
+      }
+      // I&M-rail buy orders are paid by the standalone I&M Bot — the desktop must
+      // not run the pay/mark_as_paid wizard (double-pay guard) NOR navigate to the
+      // order page to do so.
+      if (buyPayoutViaIm && isBuyAction) {
+        console.log(`[SparkP2P] Skipping ${a.action} for order ${a.order_number} — buy payouts handled by I&M Bot`);
+        continue;
+      }
       if (botTradeMode === 'sell_only' && isBuyAction) {
         console.log(`[SparkP2P] Skipping ${a.action} for order ${a.order_number} — mode: sell_only`);
         continue;
@@ -9867,8 +9883,9 @@ Method selection rules:
       await takeScreenshot(action.reason || 'Manual screenshot request');
     }
 
-    // Navigate back to orders page for next poll
-    await navigateTo('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES');
+    // Navigate back to the ACTIVE-ORDERS page for next poll (NOT the ads/market
+    // page — that left the visible window parked on /trade/all-payments).
+    await navigateTo('https://p2p.binance.com/en/fiatOrder?tab=0&page=1');
 
   } catch (e) {
     stats.errors++;
@@ -9924,8 +9941,8 @@ async function aiScan() {
 
     console.log(`[SparkP2P] AI scan: ${balances.length} bal, ${activeAds.length} ads, ${pendingOrders.length} orders, user: ${scanData.profile?.nickname || 'unknown'}`);
 
-    // Navigate back to orders page for polling
-    await page.goto('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+    // Navigate back to the ACTIVE-ORDERS page for polling (NOT the ads/market page).
+    await page.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
 
   } catch (e) {
     console.error('[SparkP2P] AI scan error:', e.message?.substring(0, 80));
@@ -9967,8 +9984,8 @@ async function reportAccountData() {
 
     console.log(`[SparkP2P] Account: ${balances.length} bal, ${completed.length} orders`);
 
-    // Navigate back to active orders page for next poll
-    await navigateTo('https://p2p.binance.com/en/trade/all-payments/USDT?fiat=KES');
+    // Navigate back to the ACTIVE-ORDERS page for next poll (NOT the ads/market page).
+    await navigateTo('https://p2p.binance.com/en/fiatOrder?tab=0&page=1');
 
   } catch (e) {
     console.error('[SparkP2P] Account data error:', e.message?.substring(0, 60));

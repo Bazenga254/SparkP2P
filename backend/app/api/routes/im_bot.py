@@ -664,7 +664,12 @@ async def result(
         _markpaid_ms = None
         if applied:
             order.status = OrderStatus.PAYMENT_SENT
-            order.payment_sent_at = datetime.now(timezone.utc)
+            # Preserve the ORIGINAL payment time. If this order was paid before and
+            # got bounced back to PENDING (e.g. reactivation after a transient
+            # cancel) then re-reported, do NOT move the clock forward — otherwise
+            # the "paid N min ago" timer resets to 0 on every reconnect/resume.
+            if not order.payment_sent_at:
+                order.payment_sent_at = datetime.now(timezone.utc)
             # Automatic end-to-end timing: order first seen -> paid. order.created_at
             # is when the desktop first reported it (≈ detection). This is the number
             # we need to judge whether API-based detection is worth building.
