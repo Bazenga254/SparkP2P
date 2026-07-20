@@ -5340,6 +5340,24 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
               buyImHandoffLogged.add(order.orderNumber);
               sendBotLog('info', `Buy order ...${order.orderNumber.slice(-8)} — paid by your I&M Bot (Choice Bank payment skipped to avoid double payment).`);
             }
+            // Record the seller's details even though WE don't pay. Once the I&M Bot
+            // pays and the backend marks the order paid on Binance, the order shows
+            // "awaiting release" and the existing release-monitoring path (which
+            // requires buyOrderDetailsMap) sends the "I have sent KES X — please
+            // release" message and chases the seller. Without this the seller only
+            // saw the greeting and no payment confirmation.
+            if (!buyOrderDetailsMap[order.orderNumber]) {
+              const _imIsBank = !!(paymentDetails.account_number && (paymentDetails.bank_code || paymentDetails.bank_name));
+              buyOrderDetailsMap[order.orderNumber] = {
+                sellerName: paymentDetails.name,
+                amount: paymentDetails.amount,
+                phone: paymentDetails.phone || null,
+                accountNumber: paymentDetails.account_number || null,
+                bankName: paymentDetails.bank_name || null,
+                method: _imIsBank ? (paymentDetails.bank_name || 'Bank Transfer') : 'M-Pesa',
+                orderNumber: order.orderNumber,
+              };
+            }
             if (activeBuyPaymentSlot === order.orderNumber) activeBuyPaymentSlot = null;
             continue;
           }
