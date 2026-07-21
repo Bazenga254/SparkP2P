@@ -580,16 +580,19 @@ async def _record_im_payout(
         if amount:
             row.amount = int(amount)
         if channel:
-            row.channel = channel
+            row.channel = str(channel)[:8]
         if bank_ref:
-            row.bank_ref = bank_ref
+            row.bank_ref = str(bank_ref)[:64]
         if destination:
-            row.destination = destination
+            row.destination = str(destination)[:120]
         if detected_to_paid_ms is not None:
             row.detected_to_paid_ms = int(detected_to_paid_ms)
         if markpaid_ms is not None:
             row.markpaid_ms = int(markpaid_ms)
-        row.detail = detail
+        # detail is a String(255): a Playwright error carries its full call log
+        # (1,600-3,000 chars), which overflowed the column and made THIS insert
+        # (and the whole /result request) 500. Keep the useful head of the message.
+        row.detail = (str(detail)[:255] if detail else None)
         row.updated_at = datetime.now(timezone.utc)
         await db.commit()
     except Exception as _e:
