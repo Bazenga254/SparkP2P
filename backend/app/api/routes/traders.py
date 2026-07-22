@@ -2921,6 +2921,14 @@ async def set_cb_auto_withdraw(
             )
         trader.cb_auto_withdraw_enabled = True
         trader.cb_auto_withdraw_threshold = float(body.threshold)
+        # Enabling (or re-saving) is an explicit "try now" — clear any failure
+        # back-off so the next poll (<=60s) attempts a sweep instead of waiting
+        # out a 10-minute cooldown from an earlier missed OTP.
+        try:
+            from app.services.auto_withdraw_poller import _retry_after
+            _retry_after.pop(trader.id, None)
+        except Exception:
+            pass
     else:
         trader.cb_auto_withdraw_enabled = False
         # keep the threshold value so re-enabling remembers it

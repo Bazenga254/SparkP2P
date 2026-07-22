@@ -27,10 +27,10 @@ from app.models import Trader
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL = 120          # seconds between balance checks
+POLL_INTERVAL = 60           # seconds between balance checks (near-immediate)
 FEE_BUFFER = 5               # KES shaved off so amount + Choice's withheld fee <= balance
 MIN_SWEEP = 100              # Choice Bank's own floor for a PesaLink transfer
-FAIL_BACKOFF = 1800          # seconds to wait after a failed sweep before retrying that trader
+FAIL_BACKOFF = 600           # seconds to wait after a failed sweep before retrying that trader
 
 # Traders currently mid-sweep — a sweep spans several await points (balance,
 # initiate, wait-for-OTP, confirm) and a cycle could lap itself on a slow relay.
