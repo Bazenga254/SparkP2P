@@ -14,7 +14,7 @@ billing ledger (successful, billed payouts only — no failed/pending, no rail).
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
 
 from app.core.database import Base
 
@@ -31,7 +31,7 @@ class ImPayout(Base):
     status = Column(String(12), nullable=False)           # completed | failed | pending
     bank_ref = Column(String(64), nullable=True)          # I&M reference, when there is one
     destination = Column(String(120), nullable=True)      # seller's phone / account
-    detail = Column(String(255), nullable=True)           # error text / note (failed/unknown)
+    detail = Column(Text, nullable=True)           # error text / note (failed/unknown)
 
     # Automatic timing for judging end-to-end latency (the API-detection decision).
     detected_to_paid_ms = Column(Integer, nullable=True)  # order first seen -> I&M paid

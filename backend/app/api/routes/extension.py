@@ -1186,6 +1186,16 @@ async def _complete_buy_order(order: Order, trader: Trader, db: AsyncSession, no
     trader.total_trades += 1
     trader.total_volume += order.fiat_amount
 
+    # COMMIT NOW — before any notification. The UPDATE above locked this order row
+    # (and the trader row, via the stat bump). The Telegram send below is an
+    # awaited external HTTP call that can hang; holding these locks across it left
+    # the transaction "idle in transaction" for 35 MINUTES, blocking every other
+    # UPDATE to that order/trader and draining the entire DB pool — which 500'd the
+    # owner's login. A notification is best-effort and must NEVER hold a DB lock.
+    # Committing per-completion is also correct: each is an independent event, so a
+    # later order's failure should not roll back a valid completion.
+    await db.commit()
+
     logger.info(
         f"Buy order {order.binance_order_number} COMPLETED — "
         f"{order.crypto_amount} {order.crypto_currency} received by trader {trader.full_name}"
@@ -1238,6 +1248,13 @@ async def _complete_sell_order(order: Order, trader: Trader, db: AsyncSession) -
     trader.total_trades += 1
     trader.total_volume += order.fiat_amount
     # Credits retired — billing is now subscription + per-tier rate limits (no per-order charge).
+
+    # COMMIT NOW — before the notification (and settlement). Same fix as the buy
+    # path: holding the order/trader row locks across the awaited Telegram send
+    # (external HTTP that can hang) can leave the transaction idle-in-transaction
+    # holding locks, blocking everything and draining the DB pool. Settlement below
+    # runs in its own transaction on the already-committed order.
+    await db.commit()
 
     logger.info(
         f"Sell order {order.binance_order_number} RELEASED (reconcile) — "

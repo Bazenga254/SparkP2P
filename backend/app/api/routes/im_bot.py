@@ -420,6 +420,23 @@ async def poll(
         logger.info("im-bot poll: trader %s has 0 credits — paused, no jobs served", trader_id)
         return {"jobs": [], "enabled": True, "paused": True, "reason": "no_credits", "credits": 0}
 
+    # ── RELAY PRESENCE GUARD (protects the DB pool) ──────────────────────────
+    # In per_trader mode every live Binance status-check below is forwarded to
+    # THIS trader's desktop and blocks up to _RESULT_TIMEOUT (25s) if the desktop
+    # is not answering. A flapping relay (repeated connect/disconnect) therefore
+    # makes each poll pin a DB connection for 25s PER pending order — enough
+    # concurrent polls drain the whole pool, and then EVERY request (including the
+    # owner's login) queues behind them and 500s with "QueuePool ... timed out".
+    # If the relay is offline we cannot verify an order is still payable anyway,
+    # and fail-closed already means "don't serve" — so return immediately, with no
+    # 25s calls and no connection held. A later poll retries once the relay is up.
+    from app.services.binance import sapi_client as _sapi
+    if getattr(_sapi, "_RELAY_MODE", None) == "per_trader":
+        from app.services.binance import relay_router as _relay_router
+        if not _relay_router.is_connected(trader_id):
+            logger.info("im-bot poll: trader %s relay offline — nothing served this cycle (skipping the 25s status calls that would pin DB connections)", trader_id)
+            return {"jobs": [], "enabled": True, "relay_offline": True}
+
     rows = (
         await db.execute(
             select(Order).where(
@@ -589,10 +606,12 @@ async def _record_im_payout(
             row.detected_to_paid_ms = int(detected_to_paid_ms)
         if markpaid_ms is not None:
             row.markpaid_ms = int(markpaid_ms)
-        # detail is a String(255): a Playwright error carries its full call log
-        # (1,600-3,000 chars), which overflowed the column and made THIS insert
-        # (and the whole /result request) 500. Keep the useful head of the message.
-        row.detail = (str(detail)[:255] if detail else None)
+        # detail is now TEXT. Playwright puts the REASON for a click failure at the
+        # END of its call log ("...intercepts pointer events", "element is not
+        # stable"), so truncating to 255 threw away the only useful part. Keep a
+        # generous 8k - enough for a full trace, bounded so a runaway string can
+        # never bloat the row.
+        row.detail = (str(detail)[:8000] if detail else None)
         row.updated_at = datetime.now(timezone.utc)
         await db.commit()
     except Exception as _e:
