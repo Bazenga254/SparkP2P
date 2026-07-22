@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawToBankAuto, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isNative } from '../mobile/relayAgent';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi, Megaphone } from 'lucide-react';
@@ -890,6 +890,7 @@ export default function Dashboard() {
   const [cbWithdrawChannel, setCbWithdrawChannel] = useState('mpesa'); // 'mpesa' | 'bank'
   const [cbWithdrawOtpLoading, setCbWithdrawOtpLoading] = useState(false);
   const [cbWithdrawLoading, setCbWithdrawLoading] = useState(false);
+  const [cbWithdrawAutoWaiting, setCbWithdrawAutoWaiting] = useState(false); // waiting on the SMS relay
   const [cbWithdrawMsg, setCbWithdrawMsg] = useState('');
   const [cbWithdrawBank, setCbWithdrawBank] = useState(null);
   const [allTxns, setAllTxns] = useState([]);
@@ -2822,6 +2823,10 @@ export default function Dashboard() {
             {(() => {
               const inTotal  = allTxns.filter(t => t.direction === 'in').reduce((s, t) => s + t.amount, 0);
               const outTotal = allTxns.filter(t => t.direction === 'out').reduce((s, t) => s + t.amount, 0);
+              // Withdrawals are the merchant moving their OWN float out of Choice
+              // Bank, not money paid to a seller. They are part of outTotal above
+              // (they really did leave the account) and are only broken out here.
+              const wdTotal  = allTxns.filter(t => t.kind === 'withdrawal').reduce((s, t) => s + t.amount, 0);
               const fmt = v => 'KES ' + v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
               return (
                 <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
@@ -2833,6 +2838,10 @@ export default function Dashboard() {
                     <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Total Outbound</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#ef4444' }}>{fmt(outTotal)}</div>
                   </div>
+                  <div style={{ flex: 1, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 12, padding: '14px 18px' }}>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Withdrawn</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: '#f59e0b' }}>{fmt(wdTotal)}</div>
+                  </div>
                   <div style={{ flex: 1, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 12, padding: '14px 18px' }}>
                     <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Net</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: (inTotal - outTotal) >= 0 ? '#10b981' : '#ef4444' }}>{fmt(inTotal - outTotal)}</div>
@@ -2843,7 +2852,7 @@ export default function Dashboard() {
 
             {/* Filters + Refresh */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-              {[['all', 'All'], ['in', 'Inbound'], ['out', 'Outbound']].map(([v, l]) => (
+              {[['all', 'All'], ['in', 'Inbound'], ['out', 'Outbound'], ['withdrawal', 'Withdrawals']].map(([v, l]) => (
                 <button key={v} onClick={() => setTxFilter(v)} style={{ padding: '6px 16px', borderRadius: 20, border: '1px solid', borderColor: txFilter === v ? '#10b981' : 'var(--border)', background: txFilter === v ? 'rgba(16,185,129,0.15)' : 'transparent', color: txFilter === v ? '#10b981' : '#6b7280', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                   {l}
                 </button>
@@ -2865,7 +2874,8 @@ export default function Dashboard() {
                 <div style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>No transactions yet</div>
               )}
               {allTxns
-                .filter(t => txFilter === 'all' || t.direction === txFilter)
+                .filter(t => txFilter === 'all'
+                  || (txFilter === 'withdrawal' ? t.kind === 'withdrawal' : t.direction === txFilter))
                 .map((t, i, arr) => {
                   const isIn = t.direction === 'in';
                   const dateStr = new Date(t.created_at).toLocaleString('en-KE', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true });
@@ -4930,9 +4940,32 @@ export default function Dashboard() {
                   </>
                 ) : (
                   <>
+                    {/* Hands-free confirm: wait for the Choice Bank SMS OTP to
+                        arrive over the MacroDroid relay (same relay the buy-order
+                        payments already use) and confirm automatically. Falls back
+                        to the manual field below on timeout. */}
+                    <button
+                      disabled={cbWithdrawAutoWaiting || cbWithdrawLoading}
+                      onClick={async () => {
+                        setCbWithdrawAutoWaiting(true); setCbWithdrawMsg('⏳ Waiting for the OTP SMS… keep MacroDroid running on the Choice Bank phone.');
+                        try {
+                          const r = await cbWithdrawToBankAuto();
+                          setCbWithdrawMsg(r.data?.message || 'Withdrawal initiated!');
+                          setTimeout(() => setShowCbWithdrawModal(false), 2500);
+                        } catch (e) {
+                          setCbWithdrawMsg((e.response?.data?.detail || 'Auto-confirm failed') + ' — enter the code manually below.');
+                        }
+                        setCbWithdrawAutoWaiting(false);
+                      }}
+                      style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: cbWithdrawAutoWaiting ? '#374151' : 'linear-gradient(135deg,#6366f1,#4f46e5)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: cbWithdrawAutoWaiting ? 'wait' : 'pointer', marginBottom: 12 }}
+                    >
+                      {cbWithdrawAutoWaiting ? '⏳ Waiting for SMS OTP…' : '⚡ Auto-confirm from SMS'}
+                    </button>
+                    <div style={{ textAlign: 'center', color: '#6b7280', fontSize: 11, marginBottom: 12 }}>— or enter the code manually —</div>
                     <input type="text" maxLength={8} placeholder="Enter OTP from Choice Bank"
                       value={cbWithdrawOtp}
                       onChange={e => setCbWithdrawOtp(e.target.value.replace(/\D/g, ''))}
+                      disabled={cbWithdrawAutoWaiting}
                       style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 20, fontWeight: 700, letterSpacing: 3, textAlign: 'center', marginBottom: 12, boxSizing: 'border-box' }}
                     />
                     <button

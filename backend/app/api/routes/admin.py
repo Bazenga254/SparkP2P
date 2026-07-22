@@ -2554,7 +2554,21 @@ async def _compute_outbound_breakdown(db, start=None, end=None):
     from app.models.order import OrderSide as _OS
     prods = {k: {"count": 0, "volume": 0.0, "cb_fee": 0.0, "markup": 0.0} for k in PRODUCTS}
 
-    pw = [Payment.direction == PaymentDirection.OUTBOUND, Payment.status != PaymentStatus.FAILED]
+    # coalesce() so NULL remarks are '' (a NULL would make ~ilike() NULL and drop
+    # the row from the WHERE by accident).
+    _rem = func.coalesce(Payment.remarks, "")
+    pw = [
+        Payment.direction == PaymentDirection.OUTBOUND,
+        Payment.status != PaymentStatus.FAILED,
+        # Seller payouts (remarks "BUY <order>: name") are counted from the Orders
+        # loop below via order.choice_fee. Counting them here too double-counted
+        # every Choice-settled buy order — 57 of 58 live orders were in both.
+        ~_rem.ilike("BUY %"),
+        # A merchant moving their OWN float out of Choice Bank is not product
+        # revenue. It has its own Withdrawals section on the Transactions page;
+        # folding it in here inflated "PesaLink / Bank" by the withdrawal volume.
+        ~_rem.ilike("Choice Bank withdrawal%"),
+    ]
     if start: pw.append(Payment.created_at >= start)
     if end:   pw.append(Payment.created_at < end)
     for p in (await db.execute(

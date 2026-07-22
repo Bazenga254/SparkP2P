@@ -759,11 +759,18 @@ async def result(
                     _detected_to_paid_ms = int((order.payment_sent_at - order.created_at).total_seconds() * 1000)
             except Exception:
                 _detected_to_paid_ms = None
-            try:
-                from app.services.outbound_fees import outbound_fee as _outbound_fee
-                order.choice_fee = _outbound_fee((data.channel or "MPESA").upper(), order.fiat_amount or 0)
-            except Exception as _e:
-                logger.warning("im-bot result: fee record failed for %s: %s", data.order_id, _e)
+            # This payout went through the merchant's OWN I&M account, NOT Choice
+            # Bank — so it incurs NO Choice Bank fee. It is billed by record_charge
+            # below (I&M credits / subscription). Setting order.choice_fee here was
+            # a double count: the merchant's "Choice Bank Fees" line and the admin
+            # "Revenue by product" both sum choice_fee, so every I&M-paid order was
+            # ALSO counted as phantom Choice Bank revenue (a KES 3M day of I&M
+            # M-Pesa payouts showed up as "M-Pesa B2C" that never happened).
+            #
+            # choice_fee must stay 0 for I&M-paid orders. Force it, in case a
+            # Choice attempt set it before the order was rerouted to I&M — the
+            # money left via I&M, so no Choice fee applies.
+            order.choice_fee = 0
 
             # Bill this payout, in the SAME transaction as the status advance:
             # either the order is PAYMENT_SENT and on the ledger, or neither. The

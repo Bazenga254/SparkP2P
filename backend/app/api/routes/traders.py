@@ -2724,14 +2724,32 @@ async def get_my_transactions(
         status = p.status.value if hasattr(p.status, "value") else str(p.status)
         ref = p.mpesa_transaction_id or p.mpesa_receipt_number or ""
 
+        # What KIND of movement is this? Every Choice Bank outbound - a seller
+        # payout, a paybill payment and the merchant withdrawing their own float
+        # to their own bank - is written with transaction_type CHOICE_OUTBOUND,
+        # so the type alone cannot tell them apart. The remarks each writer sets
+        # can. Only the withdrawal endpoint in this file writes the "Choice Bank
+        # withdrawal" prefix (see withdraw_to_bank below) - if that wording ever
+        # changes, change it here too or withdrawals silently stop being tagged.
+        _rem = (p.remarks or "").strip()
+        kind = "other"
+
         if ttype == "CHOICE_DEPOSIT":
             label, icon = "Choice Bank Deposit", "🏦"
             desc = f"M-Pesa STK to Choice Bank · {p.phone or ''}"
+            kind = "deposit"
+        elif ttype == "CHOICE_OUTBOUND" and _rem.lower().startswith("choice bank withdrawal"):
+            label, icon = "Withdrawal", "🏧"
+            bank = p.destination_type or "Bank"
+            acct = p.destination or ""
+            desc = f"Choice Bank → {bank}" + (f" · {acct}" if acct else "")
+            kind = "withdrawal"
         elif ttype == "CHOICE_OUTBOUND":
             label, icon = "Bank Transfer", "🏛"
             bank = p.destination_type or "Bank"
             acct = p.destination or ""
             desc = f"{bank} · {acct}" if acct else bank
+            kind = "payout"
         elif ttype in ("C2B", "CHOICE_INBOUND", "") and direction == "in":
             label, icon = "M-Pesa Received", "💳"
             desc = p.sender_name or p.remarks or "Payment received"
@@ -2751,11 +2769,15 @@ async def get_my_transactions(
         # Stored in Payment.sender_name for both directions (payee_name on Choice payouts).
         counterparty_name = (p.sender_name or "").strip()
 
+        if kind == "other":
+            kind = "received" if direction == "in" else "payout"
+
         entries.append({
             "id": f"p{p.id}",
             "source": "payment",
             "label": label,
             "icon": icon,
+            "kind": kind,
             "direction": direction,
             "amount": abs(p.amount),
             "tx_fee": tx_fee,
@@ -2791,6 +2813,7 @@ async def get_my_transactions(
             "source": "im_payout",
             "label": "I&M Payout",
             "icon": "💸",
+            "kind": "payout",
             "direction": "out",
             "amount": float(r.amount or 0),
             "tx_fee": 0,
@@ -3031,6 +3054,10 @@ async def cb_withdraw_to_bank(
         _tg_dest   = f"{trader.cb_withdrawal_bank_name or ''} {trader.cb_withdrawal_account or ''}"
         _done_msg  = f"KES {amount:,.0f} transfer confirmed. Funds will arrive at {trader.cb_withdrawal_bank_name} shortly."
 
+    # NOTE: get_my_transactions() tags a row as a WITHDRAWAL by the "Choice Bank
+    # withdrawal" prefix on these remarks - it is the only thing that separates a
+    # merchant moving their own float out from a seller payout, since both are
+    # CHOICE_OUTBOUND. Change the wording here and change it there too.
     db.add(Payment(
         trader_id=trader.id,
         direction=PaymentDirection.OUTBOUND,
@@ -3071,6 +3098,67 @@ async def cb_withdraw_to_bank(
         "status": "processing",
         "message": _done_msg,
     }
+
+@router.post("/cb-withdraw-to-bank/auto")
+async def cb_withdraw_to_bank_auto(
+    trader: Trader = Depends(get_current_trader),
+    db:     AsyncSession = Depends(get_db),
+):
+    """
+    Step 2, hands-free: wait for the Choice Bank SMS OTP to arrive over the
+    MacroDroid relay, then confirm the withdrawal with it.
+
+    Deliberately does NOT re-implement the confirmation. It obtains the code and
+    then calls cb_withdraw_to_bank() exactly as the manual flow does, so the
+    Choice Bank call, the Payment row, the ledger entry and the Telegram notice
+    can never drift apart between the two paths - this endpoint moves real money.
+
+    Same relay the Choice Bank buy-order flow already uses (see
+    choice_bank.send_money_confirm_sms): webhooks.py drops the SMS code into
+    _pending_sms_otps keyed on the last 4 of the account and sets the event.
+    """
+    import asyncio as _asyncio
+    from app.api.routes.extension import _pending_sms_otps
+
+    pending = _pending_withdrawal_tx.get(trader.email)
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending withdrawal. Please request a new OTP.")
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked")
+
+    account_last_4 = str(trader.choice_account_id)[-4:]
+
+    # The SMS can beat us here — webhooks.py caches the code even with no waiter,
+    # so check for an already-delivered one before sitting down to wait.
+    cached = _pending_sms_otps.get(account_last_4) or {}
+    otp = cached.get("otp")
+
+    if not otp:
+        event = _asyncio.Event()
+        _pending_sms_otps[account_last_4] = {"event": event, "otp": None}
+        try:
+            await _asyncio.wait_for(event.wait(), timeout=120.0)
+        except _asyncio.TimeoutError:
+            _pending_sms_otps.pop(account_last_4, None)
+            raise HTTPException(
+                status_code=504,
+                detail="OTP not received from the SMS relay after 2 minutes. "
+                       "Check MacroDroid is running on the phone with the Choice Bank SIM, "
+                       "or enter the code manually.",
+            )
+        otp = (_pending_sms_otps.get(account_last_4) or {}).get("otp")
+
+    _pending_sms_otps.pop(account_last_4, None)
+
+    if not otp:
+        raise HTTPException(status_code=504, detail="SMS relay fired but carried no OTP. Enter the code manually.")
+
+    return await cb_withdraw_to_bank(
+        CbWithdrawBody(otp=str(otp).strip(), amount=float(pending["amount"])),
+        trader,
+        db,
+    )
+
 
 @router.get("/wallet/transactions")
 async def get_wallet_transactions(

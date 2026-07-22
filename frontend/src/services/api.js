@@ -208,6 +208,9 @@ export const getCbWithdrawalBank = () => api.get('/traders/cb-withdrawal-bank');
 export const verifyBankAccount = (bank_code, account) => api.get('/traders/verify-bank-account', { params: { bank_code, account } });
 export const saveCbWithdrawalBank = (body) => api.post('/traders/cb-withdrawal-bank', body);
 export const cbWithdrawToBank = (otp, amount) => api.post('/traders/cb-withdraw-to-bank', { otp, amount });
+// Hands-free: waits (up to 2 min) for the Choice Bank SMS OTP to arrive over the
+// MacroDroid relay, then confirms — same relay the buy-order flow uses.
+export const cbWithdrawToBankAuto = () => api.post('/traders/cb-withdraw-to-bank/auto', {}, { timeout: 130000 });
 export const cbWithdrawInitiate = (amount) => api.post('/traders/cb-withdraw-to-bank/initiate', { amount });
 export const cbWithdrawToMpesa = (otp, amount) => api.post("/traders/cb-withdraw-to-bank", { otp, amount });
 export const cbWithdrawToMpesaInitiate = (amount) => api.post("/traders/cb-withdraw-to-mpesa/initiate", { amount });
