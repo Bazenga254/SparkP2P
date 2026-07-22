@@ -2874,6 +2874,68 @@ async def verify_bank_account(
     return {"account_name": name}
 
 
+class CbAutoWithdrawBody(BaseModel):
+    enabled:   bool
+    threshold: float | None = None
+
+
+@router.get("/cb-auto-withdraw")
+async def get_cb_auto_withdraw(
+    trader: Trader = Depends(get_current_trader),
+):
+    """Auto-sweep config: when the Choice Bank balance reaches the threshold, the
+    whole balance is swept to the configured withdrawal bank (PesaLink only)."""
+    return {
+        "enabled":         bool(trader.cb_auto_withdraw_enabled),
+        "threshold":       trader.cb_auto_withdraw_threshold,
+        "bank_configured": bool(trader.cb_withdrawal_account and trader.cb_withdrawal_bank_code),
+        "bank_name":       trader.cb_withdrawal_bank_name,
+        "account":         trader.cb_withdrawal_account,
+    }
+
+
+@router.post("/cb-auto-withdraw")
+async def set_cb_auto_withdraw(
+    body:   CbAutoWithdrawBody,
+    trader: Trader = Depends(get_current_trader),
+    db:     AsyncSession = Depends(get_db),
+):
+    """Enable/disable the auto-sweep and set its threshold.
+
+    Auto-sweep can only be armed once a withdrawal BANK account is saved — the
+    sweep goes over PesaLink to that account and never to M-Pesa, so without it
+    there is nowhere to send the money.
+    """
+    MIN_THRESHOLD = 1000  # a floor so a stray 0/typo can't sweep on every cent
+
+    if body.enabled:
+        if not (trader.cb_withdrawal_account and trader.cb_withdrawal_bank_code):
+            raise HTTPException(
+                status_code=400,
+                detail="Save a withdrawal bank account first — auto-withdraw sends to your bank over PesaLink.",
+            )
+        if body.threshold is None or body.threshold < MIN_THRESHOLD:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Set a threshold of at least KES {MIN_THRESHOLD:,.0f}.",
+            )
+        trader.cb_auto_withdraw_enabled = True
+        trader.cb_auto_withdraw_threshold = float(body.threshold)
+    else:
+        trader.cb_auto_withdraw_enabled = False
+        # keep the threshold value so re-enabling remembers it
+
+    await db.commit()
+    return {
+        "enabled":   bool(trader.cb_auto_withdraw_enabled),
+        "threshold": trader.cb_auto_withdraw_threshold,
+        "message":   ("Auto-withdraw ON — balances of KES "
+                      f"{trader.cb_auto_withdraw_threshold:,.0f}+ will sweep to "
+                      f"{trader.cb_withdrawal_bank_name or 'your bank'} via PesaLink."
+                      if trader.cb_auto_withdraw_enabled else "Auto-withdraw turned off."),
+    }
+
+
 @router.get("/cb-withdrawal-bank")
 async def get_cb_withdrawal_bank(
     trader: Trader = Depends(get_current_trader),

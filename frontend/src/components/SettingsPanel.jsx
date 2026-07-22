@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, saveBinance2fa, getTotpSetup, verifyAndSaveTotp, removeTotp, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank, verifyBankAccount } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, saveBinance2fa, getTotpSetup, verifyAndSaveTotp, removeTotp, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank, verifyBankAccount, getCbAutoWithdraw, setCbAutoWithdraw } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -446,6 +446,11 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const [cbBankVerifying, setCbBankVerifying] = useState(false);
   const [cbBankVerified, setCbBankVerified]   = useState(false);
   const [cbBankLookupRef, setCbBankLookupRef] = useState({ timer: null });
+  // Auto-sweep to bank
+  const [autoWd, setAutoWd] = useState({ enabled: false, threshold: '', bank_configured: false });
+  const [autoWdLoaded, setAutoWdLoaded] = useState(false);
+  const [autoWdSaving, setAutoWdSaving] = useState(false);
+  const [autoWdMsg, setAutoWdMsg] = useState('');
 
   // CB withdrawal bank cooldown countdown — placed AFTER all cbBank states
   useEffect(() => {
@@ -2547,6 +2552,96 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                 </button>
               </div>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Auto-withdraw (sweep to bank at a threshold) ─────────────────────── */}
+      {activeSection === 'bank' && !autoWdLoaded && (() => {
+        getCbAutoWithdraw().then(r => {
+          if (r.data) setAutoWd({
+            enabled: !!r.data.enabled,
+            threshold: r.data.threshold ? String(r.data.threshold) : '',
+            bank_configured: !!r.data.bank_configured,
+          });
+          setAutoWdLoaded(true);
+        }).catch(() => setAutoWdLoaded(true));
+        return null;
+      })()}
+
+      {activeSection === 'bank' && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <h3 style={{ margin: 0 }}>⚡ Auto-withdraw to bank</h3>
+            {autoWd.enabled && (
+              <span style={{ fontSize: 10, background: 'rgba(16,185,129,0.15)', color: '#10b981', padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>ON</span>
+            )}
+          </div>
+          <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 16 }}>
+            When your Choice Bank balance reaches the amount below, the <b style={{ color: '#9ca3af' }}>whole balance</b> is
+            swept to your withdrawal bank account over <b style={{ color: '#9ca3af' }}>PesaLink</b> automatically — the OTP is
+            confirmed for you from the SMS. M-Pesa is never used.
+          </p>
+
+          {!autoWd.bank_configured ? (
+            <div style={{ padding: 12, borderRadius: 8, background: 'rgba(245,158,11,0.1)', border: '1px solid #f59e0b', fontSize: 12, color: '#f59e0b' }}>
+              Save a <b>withdrawal bank account</b> above first — the sweep sends there.
+            </div>
+          ) : (
+            <>
+              <label style={{ display: 'block', fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>Sweep when balance reaches (KES)</label>
+              <input
+                type="text" inputMode="numeric" placeholder="e.g. 500000"
+                value={autoWd.threshold ? Number(autoWd.threshold).toLocaleString('en-KE') : ''}
+                onChange={e => setAutoWd(s => ({ ...s, threshold: e.target.value.replace(/[^\d]/g, '') }))}
+                style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 16, fontWeight: 700, boxSizing: 'border-box', marginBottom: 10 }}
+              />
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+                {[100000, 500000, 900000].map(v => (
+                  <button key={v} onClick={() => setAutoWd(s => ({ ...s, threshold: String(v) }))}
+                    style={{ padding: '6px 14px', borderRadius: 20, border: '1px solid', borderColor: String(v) === autoWd.threshold ? '#10b981' : 'var(--border)', background: String(v) === autoWd.threshold ? 'rgba(16,185,129,0.15)' : 'transparent', color: String(v) === autoWd.threshold ? '#10b981' : '#9ca3af', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    KES {v.toLocaleString('en-KE')}
+                  </button>
+                ))}
+              </div>
+
+              {autoWdMsg && (
+                <p style={{ color: autoWdMsg.includes('ON') || autoWdMsg.includes('off') ? '#10b981' : '#ef4444', fontSize: 12, marginBottom: 10 }}>{autoWdMsg}</p>
+              )}
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  disabled={autoWdSaving || (!autoWd.enabled && (!autoWd.threshold || Number(autoWd.threshold) < 1000))}
+                  onClick={async () => {
+                    setAutoWdSaving(true); setAutoWdMsg('');
+                    try {
+                      const turnOn = !autoWd.enabled;
+                      const r = await setCbAutoWithdraw(turnOn, turnOn ? Number(autoWd.threshold) : null);
+                      setAutoWd(s => ({ ...s, enabled: !!r.data.enabled, threshold: r.data.threshold ? String(r.data.threshold) : s.threshold }));
+                      setAutoWdMsg(r.data.message || 'Saved.');
+                    } catch (e) { setAutoWdMsg(e.response?.data?.detail || 'Could not save'); }
+                    setAutoWdSaving(false);
+                  }}
+                  style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: 'none', background: autoWd.enabled ? 'linear-gradient(135deg,#ef4444,#dc2626)' : 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}
+                >
+                  {autoWdSaving ? 'Saving…' : autoWd.enabled ? 'Turn OFF auto-withdraw' : 'Turn ON auto-withdraw'}
+                </button>
+                {autoWd.enabled && (
+                  <button
+                    disabled={autoWdSaving || !autoWd.threshold || Number(autoWd.threshold) < 1000}
+                    onClick={async () => {
+                      setAutoWdSaving(true); setAutoWdMsg('');
+                      try {
+                        const r = await setCbAutoWithdraw(true, Number(autoWd.threshold));
+                        setAutoWdMsg(r.data.message || 'Threshold updated.');
+                      } catch (e) { setAutoWdMsg(e.response?.data?.detail || 'Could not update'); }
+                      setAutoWdSaving(false);
+                    }}
+                    style={{ padding: '11px 18px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                  >Update threshold</button>
+                )}
+              </div>
+            </>
           )}
         </div>
       )}

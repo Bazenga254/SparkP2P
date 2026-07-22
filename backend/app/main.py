@@ -413,6 +413,10 @@ async def lifespan(app: FastAPI):
     # Market flow — 24h estimated trading volume from order-book depletion (every 1 min).
     from app.services import market_flow
     market_flow_task = asyncio.create_task(market_flow.start())
+    # Auto-withdraw sweep — empties a merchant's Choice Bank balance to their bank
+    # (PesaLink) once it reaches their configured threshold (every 2 min).
+    from app.services.auto_withdraw_poller import auto_withdraw_poller
+    auto_withdraw_task = asyncio.create_task(auto_withdraw_poller())
     # Squad Mode — live coordinated team pricing (relay-gated, every 90s).
     from app.services import squad_pricing
     squad_pricing_task = asyncio.create_task(squad_pricing.start())

@@ -79,6 +79,12 @@ class Trader(Base):
     cb_withdrawal_account_name = Column(String(100), nullable=True)   # account holder name
     cb_withdrawal_changed_at   = Column(DateTime(timezone=True),  nullable=True)   # last save timestamp (48h cooldown anchor)
 
+    # Auto-sweep: when the Choice Bank balance reaches the threshold, sweep the
+    # whole balance out to the configured withdrawal bank account (PesaLink only,
+    # never M-Pesa), confirming the OTP automatically via the MacroDroid relay.
+    cb_auto_withdraw_enabled   = Column(Boolean, default=False, nullable=False)
+    cb_auto_withdraw_threshold = Column(Float, nullable=True)   # KES; sweep fires at balance >= this
+
     # Billing enforcement: exempt accounts (admins/test/grandfathered) bypass subscription gating
     # and are never locked out / config-wiped on expiry.
     billing_exempt = Column(Boolean, default=False, server_default="false")

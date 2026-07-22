@@ -211,6 +211,10 @@ export const cbWithdrawToBank = (otp, amount) => api.post('/traders/cb-withdraw-
 // Hands-free: waits (up to 2 min) for the Choice Bank SMS OTP to arrive over the
 // MacroDroid relay, then confirms — same relay the buy-order flow uses.
 export const cbWithdrawToBankAuto = () => api.post('/traders/cb-withdraw-to-bank/auto', {}, { timeout: 130000 });
+// Auto-sweep config: when the Choice Bank balance reaches `threshold`, sweep the
+// whole balance to the configured bank over PesaLink (never M-Pesa).
+export const getCbAutoWithdraw = () => api.get('/traders/cb-auto-withdraw');
+export const setCbAutoWithdraw = (enabled, threshold) => api.post('/traders/cb-auto-withdraw', { enabled, threshold });
 export const cbWithdrawInitiate = (amount) => api.post('/traders/cb-withdraw-to-bank/initiate', { amount });
 export const cbWithdrawToMpesa = (otp, amount) => api.post("/traders/cb-withdraw-to-bank", { otp, amount });
 export const cbWithdrawToMpesaInitiate = (amount) => api.post("/traders/cb-withdraw-to-mpesa/initiate", { amount });
