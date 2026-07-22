@@ -3207,13 +3207,18 @@ async def cb_withdraw_to_bank_auto(
         event = _asyncio.Event()
         _pending_sms_otps[account_last_4] = {"event": event, "otp": None}
         try:
-            await _asyncio.wait_for(event.wait(), timeout=120.0)
+            # Choice Bank's OTP SMS is slow in practice — observed arriving 4-6
+            # minutes after the transfer was initiated (and the code is valid for
+            # 20 min), so wait well past that rather than give up at 2 min and
+            # abandon an OTP that was about to land.
+            await _asyncio.wait_for(event.wait(), timeout=420.0)
         except _asyncio.TimeoutError:
             _pending_sms_otps.pop(account_last_4, None)
             raise HTTPException(
                 status_code=504,
-                detail="OTP not received from the SMS relay after 2 minutes. "
-                       "Check MacroDroid is running on the phone with the Choice Bank SIM, "
+                detail="OTP not received from the SMS relay after 7 minutes. "
+                       "Check MacroDroid is running on the phone with the Choice Bank SIM "
+                       "and is forwarding to https://sparkp2p.com/api/webhooks/sms-otp, "
                        "or enter the code manually.",
             )
         otp = (_pending_sms_otps.get(account_last_4) or {}).get("otp")
