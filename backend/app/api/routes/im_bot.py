@@ -471,8 +471,36 @@ async def poll(
     except Exception:
         _ak = _as = None
 
+    # ── NEVER RE-SERVE AN ORDER WHOSE LAST ATTEMPT WAS "UNSURE" ──────────────
+    # A KES 150,000 order was paid TWICE: attempt 1 entered the PIN, the bank's
+    # response did not arrive inside the 90s window, so the bot correctly reported
+    # UNKNOWN ("money may have moved") — but the retry cap still allowed it to be
+    # served again 90 seconds later, and it paid a second time. The money HAD
+    # moved (two bank refs, 4904UXLP3499 and 4904OXAL3590).
+    #
+    # UNKNOWN is recorded as a 'pending' im_payout row. That is durable (it
+    # survives a backend restart, unlike the in-memory attempt counter), so use it
+    # as the guard: if a previous attempt on this order might have moved money, it
+    # is NEVER handed out again. A human resolves it — a wrong "skip" costs a
+    # delay, a wrong "serve" costs the merchant the whole amount again.
+    from app.models.im_payout import ImPayout
+    _unsure = set(
+        (await db.execute(
+            select(ImPayout.binance_order_number).where(
+                ImPayout.trader_id == trader_id,
+                ImPayout.status == "pending",
+            )
+        )).scalars().all()
+    )
+
     jobs = []
     for o in rows:
+        if o.binance_order_number in _unsure:
+            logger.error(
+                "im-bot poll: order %s had an UNSURE attempt (money may already have moved) — NOT serving it again",
+                o.binance_order_number,
+            )
+            continue
         # Respect the per-ad config: if this order's ad is set to sell_only/off,
         # don't pay it. No config for the ad -> falls back to the global mode.
         if not await is_automated(db, trader, o.binance_ad_number, "buy"):
@@ -839,18 +867,24 @@ async def result(
         return {"ok": True, "status": order.status.value, "applied": False, "paused": n >= _MAX_IM_ATTEMPTS}
 
     # UNKNOWN — the dangerous case. Never mark paid; get a human to check the bank.
-    # Same retry cap + alert dedupe as FAILED so an unresolvable order can't flood.
-    n = _im_attempts_bump(data.order_id)
-    logger.error("im-bot result: order %s UNKNOWN (attempt %d/%d, ref=%s) — human check needed — detail: %s",
-                 data.order_id, n, _MAX_IM_ATTEMPTS, data.bank_ref, data.detail)
-    if n == 1 or n >= _MAX_IM_ATTEMPTS:
-        _tail = ("\nIt will NOT keep retrying — fix the issue or cancel the order." if n >= _MAX_IM_ATTEMPTS else "")
-        await _alert(
-            trader_id,
-            f"⚠️ I&M Bot is UNSURE whether buy order …{data.order_id[-8:]} was paid "
-            f"(KES {int(order.fiat_amount or 0):,}, ref {data.bank_ref or 'none'}). "
-            f"NOT marked paid. Check your I&M account before releasing.{_tail}",
-        )
+    #
+    # AND NEVER RETRY IT. This used to share the FAILED path's 3-attempt cap, which
+    # let an order that had ALREADY entered the PIN be served again 90s later — a
+    # KES 150,000 order went out TWICE that way (refs 4904UXLP3499 + 4904OXAL3590).
+    # The 'pending' payout row written below is what /poll now checks to make sure
+    # this order is never handed out again. A retry here can cost the merchant the
+    # entire amount a second time; waiting for a human costs only time.
+    _im_attempts_bump(data.order_id)
+    logger.error("im-bot result: order %s UNKNOWN (ref=%s) — STOPPED, human check needed — detail: %s",
+                 data.order_id, data.bank_ref, data.detail)
+    await _alert(
+        trader_id,
+        f"⚠️ I&M Bot is UNSURE whether buy order …{data.order_id[-8:]} was paid "
+        f"(KES {int(order.fiat_amount or 0):,}, ref {data.bank_ref or 'none'}).\n"
+        f"The PIN was submitted, so THE MONEY MAY ALREADY HAVE GONE OUT.\n"
+        f"This order has been STOPPED and will NOT be retried — check your I&M "
+        f"statement first. If it did not go out, pay it by hand; do not restart the bot to retry it.",
+    )
     # Show it as pending on the dashboard — money may or may not have moved.
     await _record_im_payout(
         db, trader_id, data.order_id, "pending",
