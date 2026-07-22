@@ -2563,11 +2563,11 @@ async def _compute_outbound_breakdown(db, start=None, end=None):
         # Seller payouts (remarks "BUY <order>: name") are counted from the Orders
         # loop below via order.choice_fee. Counting them here too double-counted
         # every Choice-settled buy order — 57 of 58 live orders were in both.
+        # This is the ONLY exclusion: merchant WITHDRAWALS stay in, because Choice
+        # withholds a real fee on each one and remits us a markup — they are
+        # genuine outbound revenue (a bank withdrawal lands under PesaLink / Bank,
+        # an M-Pesa one under B2C, by rail). Excluding them undercounted the page.
         ~_rem.ilike("BUY %"),
-        # A merchant moving their OWN float out of Choice Bank is not product
-        # revenue. It has its own Withdrawals section on the Transactions page;
-        # folding it in here inflated "PesaLink / Bank" by the withdrawal volume.
-        ~_rem.ilike("Choice Bank withdrawal%"),
     ]
     if start: pw.append(Payment.created_at >= start)
     if end:   pw.append(Payment.created_at < end)
