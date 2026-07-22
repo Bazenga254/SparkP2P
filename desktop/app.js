@@ -1516,7 +1516,19 @@ function getFirstUnpaidBuy(buyOrders) {
     const db = buyDeprioritizedAt[b.orderNumber] || 0;
     if ((da > 0) !== (db > 0)) return da > 0 ? 1 : -1;   // fresh (never-failed) orders first
     if (da > 0 && db > 0 && da !== db) return da - db;    // among failed, oldest failure first
-    return (orderFirstSeenAt[a.orderNumber] || _MAX) - (orderFirstSeenAt[b.orderNumber] || _MAX);
+    // OLDEST FIRST — the order closest to expiry must be paid first.
+    const sa = orderFirstSeenAt[a.orderNumber] || _MAX;
+    const sb = orderFirstSeenAt[b.orderNumber] || _MAX;
+    if (sa !== sb) return sa - sb;
+    // Same first-seen time = we met them in the same scan, which is what happens
+    // to EVERY open order after a restart (they all get stamped "now", so true
+    // age is lost and the pick looked arbitrary). Binance order numbers increase
+    // over time, so the smaller number is the older order — a restart-proof
+    // tiebreak. Compared as BigInt: these are 20-digit ids, past Number safety.
+    try {
+      const na = BigInt(a.orderNumber), nb = BigInt(b.orderNumber);
+      return na < nb ? -1 : na > nb ? 1 : 0;
+    } catch { return 0; }
   });
   return sorted.find(o =>
     !buyPaymentSentAt[o.orderNumber] &&

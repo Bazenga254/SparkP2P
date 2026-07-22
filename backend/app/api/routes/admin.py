@@ -3003,8 +3003,59 @@ async def im_charges_list(
             "plan": c.plan,
             "bank_ref": c.bank_ref,
             "charged_at": c.charged_at.isoformat() if c.charged_at else None,
+            "status": "completed",
+            "channel": None,
+            "detail": None,
         })
-    return {"total": total, "page": page, "limit": limit, "charges": charges}
+
+    # FAILED / PENDING payouts have NO charge row — we only bill a success — so
+    # they were structurally invisible here: an admin could not see that a
+    # client's payouts were failing at all (a client hit 26 failures before
+    # anyone noticed). Merge them in from the im_payouts ledger, billed at 0 and
+    # tagged with the reason, so this tab shows what actually happened, not just
+    # what earned revenue.
+    from app.models.im_payout import ImPayout
+    pay_where = [ImPayout.status != "completed"]
+    if start:
+        pay_where.append(ImPayout.created_at >= start)
+    prows = (await db.execute(
+        select(ImPayout, Trader.full_name)
+        .outerjoin(Trader, Trader.id == ImPayout.trader_id)
+        .where(*pay_where)
+        .order_by(ImPayout.created_at.desc())
+        .limit(limit)
+    )).all()
+    failed_total = (await db.execute(
+        select(func.count()).select_from(ImPayout).where(*pay_where)
+    )).scalar_one()
+
+    for p, trader_name in prows:
+        charges.append({
+            "id": f"p{p.id}",
+            "order_id": p.binance_order_number,
+            "account_type": "sparkp2p",
+            "who": trader_name or "—",
+            "rate": 0,                       # a failure is never billed
+            "payout_amount": p.amount,
+            "plan": None,
+            "bank_ref": p.bank_ref,
+            "charged_at": p.created_at.isoformat() if p.created_at else None,
+            "status": p.status,              # failed | pending
+            "channel": p.channel,            # MPESA | BANK
+            "detail": ((p.detail or "").replace("\n", " ").replace("\x1b", "")[:160] or None),
+        })
+
+    # One time-ordered feed, newest first, so a failure sits next to the payouts
+    # around it instead of in a separate list.
+    charges.sort(key=lambda c: c.get("charged_at") or "", reverse=True)
+
+    return {
+        "total": total,
+        "failed_total": failed_total,
+        "page": page,
+        "limit": limit,
+        "charges": charges,
+    }
 
 
 @router.get("/im/accounts")

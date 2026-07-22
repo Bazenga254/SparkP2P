@@ -443,12 +443,19 @@ async def poll(
                 Order.trader_id == trader_id,
                 Order.side == OrderSide.BUY,
                 Order.status == OrderStatus.PENDING,
-                # Only serve an order we actually know how to pay. The server
-                # only learns the seller's destination when the desktop reports
-                # it (telegram.py request-buy-approval); until then the bot would
-                # just fail the job and re-poll it forever.
-                Order.seller_payment_destination.isnot(None),
-            ).order_by(Order.created_at.asc())
+                # NOTE: we deliberately do NOT require seller_payment_destination
+                # here any more. That column is only filled when the DESKTOP
+                # reports an order (telegram.py request-buy-approval), and the
+                # desktop does that one order at a time — so the bot only ever saw
+                # 1-2 jobs and could not see (or pre-warm for) what was coming
+                # next. We already fetch the authoritative payment details from
+                # the Binance API below, so the server can fill this in itself for
+                # the WHOLE queue. An order we still cannot resolve a destination
+                # for is skipped further down rather than filtered out here.
+            )
+            # OLDEST FIRST. This is the queue the merchant sees and the bot works
+            # through: the order closest to expiry must be paid first.
+            .order_by(Order.created_at.asc())
         )
     ).scalars().all()
 
@@ -511,6 +518,21 @@ async def poll(
                     _api_bank = (det.get("bank_name") or "").strip()
                     _api_acct = (det.get("account_number") or "").strip()
                     _api_phone = (det.get("pay_account") or "").strip()
+                    # The desktop may never have reported this order (we now serve
+                    # the whole queue, not just desktop-reported ones), so INFER
+                    # the rail from the API detail. Getting this wrong sends an
+                    # M-Pesa payout down the bank wizard, so infer only from an
+                    # unambiguous signal: a KE mobile number means M-Pesa, a bank
+                    # name + account number means a bank transfer.
+                    if not _method:
+                        _d = "".join(ch for ch in _api_phone if ch.isdigit())
+                        if _d and 9 <= len(_d) <= 12 and _d.startswith(("07", "01", "2547", "2541", "7", "1")):
+                            _method = "mpesa"
+                        elif _api_acct:
+                            _method = "bank"
+                        if _method:
+                            o.seller_payment_method = _method
+                            logger.info("im-bot poll: order %s rail inferred from API as %s", o.binance_order_number, _method)
                     _changed = False
                     if _method in ("mpesa", "m-pesa", "safaricom", "airtel"):
                         # M-Pesa: trust the API phone only if it looks like a KE mobile.
@@ -538,6 +560,15 @@ async def poll(
 
         if not payable:
             lease.release(o.binance_order_number)   # let a later poll re-verify a valid order
+            continue
+
+        # We now serve the whole queue, so an order may still have no destination
+        # (neither the desktop nor the API gave us one). Serving it would just make
+        # the bot fail the job and re-poll it forever, so skip it — a later poll
+        # retries once the details resolve.
+        if not (o.seller_payment_destination or "").strip():
+            logger.info("im-bot poll: order %s has no payable destination yet — skipping", o.binance_order_number)
+            lease.release(o.binance_order_number)
             continue
 
         jobs.append(_job(o))

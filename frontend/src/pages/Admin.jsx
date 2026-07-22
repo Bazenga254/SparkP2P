@@ -2016,8 +2016,11 @@ export default function Admin() {
 
               {/* ---- I&M BOT (charge ledger) ---- */}
               {txType === 'imbot' && (() => {
-                const totalBilled = imCharges.reduce((s, c) => s + (c.rate || 0), 0);
-                const totalMoved = imCharges.reduce((s, c) => s + (c.payout_amount || 0), 0);
+                const okRows = imCharges.filter(c => (c.status || 'completed') === 'completed');
+                const badRows = imCharges.filter(c => (c.status || 'completed') !== 'completed');
+                const totalBilled = okRows.reduce((s, c) => s + (c.rate || 0), 0);
+                const totalMoved = okRows.reduce((s, c) => s + (c.payout_amount || 0), 0);
+                const failedMoved = badRows.reduce((s, c) => s + (c.payout_amount || 0), 0);
                 const fmtAmt = v => 'KES ' + (v || 0).toLocaleString('en-KE', { minimumFractionDigits: 0 });
                 return (
                   <>
@@ -2025,6 +2028,9 @@ export default function Admin() {
                       <span>{imChargesTotal} payouts billed</span>
                       <span>Revenue <b style={{ color: 'var(--pos)' }}>{fmtAmt(totalBilled)}</b></span>
                       <span>Volume moved <b>{fmtAmt(totalMoved)}</b></span>
+                      {badRows.length > 0 && (
+                        <span>Not paid <b style={{ color: 'var(--neg)' }}>{badRows.length}</b> ({fmtAmt(failedMoved)})</span>
+                      )}
                     </div>
                     {imChargesLoading ? (
                       <div style={{ padding: 20, color: 'var(--text-3)' }}>Loading…</div>
@@ -2043,11 +2049,15 @@ export default function Admin() {
                               <th style={{ textAlign: 'left' }}>Type</th>
                               <th style={{ textAlign: 'right' }}>Payout</th>
                               <th style={{ textAlign: 'right' }}>Fee</th>
+                              <th style={{ textAlign: 'left' }}>Result</th>
                               <th style={{ textAlign: 'left' }}>Ref</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {imCharges.map(c => (
+                            {imCharges.map(c => {
+                              const st = c.status || 'completed';
+                              const ok = st === 'completed';
+                              return (
                               <tr key={c.id}>
                                 <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{c.charged_at ? fmtDateEAT(c.charged_at) : '—'}</td>
                                 <td style={{ textAlign: 'left', fontFamily: 'monospace' }}>…{String(c.order_id).slice(-8)}</td>
@@ -2056,12 +2066,30 @@ export default function Admin() {
                                   <span className={`chip ${c.account_type === 'bot_only' ? '' : 'chip--pos'}`} style={{ fontSize: 10 }}>
                                     {c.account_type === 'bot_only' ? 'bot-only' : (c.plan || 'no sub')}
                                   </span>
+                                  {c.channel && (
+                                    <span className="chip" style={{ fontSize: 10, marginLeft: 4 }}>
+                                      {String(c.channel).toUpperCase() === 'BANK' ? 'PesaLink' : 'M-Pesa'}
+                                    </span>
+                                  )}
                                 </td>
                                 <td style={{ textAlign: 'right' }}>{fmtAmt(c.payout_amount)}</td>
-                                <td style={{ textAlign: 'right', color: 'var(--pos)' }}>KES {c.rate}</td>
+                                <td style={{ textAlign: 'right', color: ok ? 'var(--pos)' : 'var(--text-3)' }}>
+                                  {ok ? `KES ${c.rate}` : '—'}
+                                </td>
+                                <td style={{ textAlign: 'left' }}>
+                                  <span className={`chip ${ok ? 'chip--pos' : 'chip--neg'}`} style={{ fontSize: 10 }}>
+                                    {ok ? 'paid' : st}
+                                  </span>
+                                  {/* Why it failed — the whole point of showing these rows. */}
+                                  {!ok && c.detail && (
+                                    <div title={c.detail} style={{ fontSize: 11, color: 'var(--neg)', marginTop: 3, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {c.detail}
+                                    </div>
+                                  )}
+                                </td>
                                 <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{c.bank_ref || '—'}</td>
                               </tr>
-                            ))}
+                            );})}
                           </tbody>
                         </table>
                       </div>
