@@ -420,7 +420,7 @@ export default function Admin() {
   const [imAccountsTotal, setImAccountsTotal] = useState(0);
   const [imTraders, setImTraders] = useState([]);          // SparkP2P clients configured on I&M
   const [imTradersTotal, setImTradersTotal] = useState(0);
-  const [imPeriod, setImPeriod] = useState('all');
+  const [imPeriod, setImPeriod] = useState('today');
   const [imLoading, setImLoading] = useState(false);
 
   // Auto-Sweeps (M-Pesa paybill → I&M Bank)
@@ -1060,7 +1060,7 @@ export default function Admin() {
     if (activeTab === 'expenses') { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); loadRevenueBreakdown('today', 'all', 1); loadImBot('today'); setExpSubView('revenue'); }
     if (activeTab === 'settings') { loadEmployees(); }
     if (activeTab === 'affiliates') { loadAffiliates(); }
-    if (activeTab === 'imbot') { loadImBot('all'); }
+    if (activeTab === 'imbot') { loadImBot('today'); }
   }, [activeTab]);
 
   useEffect(() => {
