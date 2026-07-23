@@ -3596,21 +3596,49 @@ async def get_trader_revenue_detail(
     )).one()
     credits = {"used_kes": int(cr[1] or 0), "payouts": int(cr[0] or 0), "volume": int(cr[2] or 0)}
 
-    # ── 3. Subscription payment ledger (recent) ──────────────────────────────
-    subs_rows = (await db.execute(
+    # ── 3. Subscription payments — REAL, successful, deduped ──────────────────
+    # A single M-Pesa payment can spawn several subscription rows (a plan switch
+    # leaves a cancelled + an active row on the SAME receipt), and admin-granted
+    # plans carry a placeholder ref "ADMIN_GRANT" — no money changed hands. So a
+    # "payment" is a row with a genuine M-Pesa code, deduped by that code, kept
+    # only when it actually took (active / expired). That strips the noise the
+    # admin was seeing (cancelled, cancelled, cancelled) down to what was paid.
+    _status_rank = {"active": 3, "expired": 2, "pending": 1, "cancelled": 0}
+    def _sval(s):
+        return (s.status.value if hasattr(s.status, "value") else str(s.status)).lower()
+    all_subs = (await db.execute(
         select(Subscription).where(Subscription.trader_id == trader_id)
-        .order_by(Subscription.created_at.desc()).limit(12)
+        .order_by(Subscription.created_at.desc())
     )).scalars().all()
+    by_ref: dict[str, object] = {}
+    for s in all_subs:
+        ref = (s.mpesa_transaction_id or "").strip()
+        if not ref or ref.upper() == "ADMIN_GRANT":
+            continue                      # not a real money payment
+        cur = by_ref.get(ref)
+        if cur is None or _status_rank.get(_sval(s), 0) > _status_rank.get(_sval(cur), 0):
+            by_ref[ref] = s               # keep the best-status row for this receipt
+    paid_subs = [s for s in by_ref.values() if _sval(s) in ("active", "expired")]
+    paid_subs.sort(key=lambda s: (s.started_at or s.created_at or now), reverse=True)
+
     subscriptions = [{
         "plan": (s.plan.value if hasattr(s.plan, "value") else str(s.plan)),
         "label": _plan_label(s.plan),
         "amount": int(s.amount or 0),
-        "status": (s.status.value if hasattr(s.status, "value") else str(s.status)),
+        "status": _sval(s),
+        "ref": (s.mpesa_transaction_id or "").strip(),
         "date": (s.started_at or s.created_at).isoformat() if (s.started_at or s.created_at) else None,
         "expires": s.expires_at.isoformat() if s.expires_at else None,
-    } for s in subs_rows]
+    } for s in paid_subs]
 
-    # ── 4. I&M credit top-ups (recent) ───────────────────────────────────────
+    # Subscription revenue that lands IN the period (counted on the pay date).
+    sub_period = 0
+    for s in paid_subs:
+        when = s.started_at or s.created_at
+        if when and start <= when < end:
+            sub_period += int(s.amount or 0)
+
+    # ── 4. I&M credit top-ups ────────────────────────────────────────────────
     tops = (await db.execute(
         select(CreditPurchase).where(
             CreditPurchase.trader_id == trader_id, CreditPurchase.status == "completed")
@@ -3618,6 +3646,7 @@ async def get_trader_revenue_detail(
     )).scalars().all()
     im_purchases = [{
         "amount": int(p.amount or 0), "credits": int(p.credits or 0),
+        "ref": (p.mpesa_receipt or "").strip(),      # M-Pesa code the deposit came in on
         "date": p.created_at.isoformat() if p.created_at else None,
     } for p in tops]
     im = {
@@ -3625,9 +3654,27 @@ async def get_trader_revenue_detail(
         "credits_purchased": sum(p["credits"] for p in im_purchases),
         "purchases": im_purchases,
     }
+    # I&M deposits that land IN the period (for the revenue total).
+    im_period = int((await db.execute(
+        select(func.coalesce(func.sum(CreditPurchase.amount), 0)).where(
+            CreditPurchase.trader_id == trader_id, CreditPurchase.status == "completed",
+            CreditPurchase.created_at >= start, CreditPurchase.created_at < end)
+    )).scalar_one() or 0)
+
+    # ── Total revenue this period ────────────────────────────────────────────
+    # subscription paid + our Choice Bank profit + I&M money deposited. Credits
+    # are NOT added — they are prepaid via the I&M deposit already counted here;
+    # the credits segment only breaks down how that prepaid balance is spent.
+    total_revenue = {
+        "subscription": sub_period,
+        "choice_bank": int(cb_total["profit"]),
+        "im": im_period,
+        "total": sub_period + int(cb_total["profit"]) + im_period,
+    }
 
     return {
         "period": period,
+        "total_revenue": total_revenue,
         "choice_bank": {"products": products, "total": cb_total},
         "credits": credits,
         "subscriptions": subscriptions,

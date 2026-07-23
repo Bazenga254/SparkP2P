@@ -3083,6 +3083,27 @@ export default function Admin() {
                         </div>
                       </div>
                       <div className="card-b">
+                        {/* TOTAL REVENUE headline — subscription + Choice profit + I&M deposits, for the period */}
+                        {revDetail?.total_revenue && (() => {
+                          const tr = revDetail.total_revenue;
+                          const kes = n => `KES ${Math.round(n || 0).toLocaleString('en-KE')}`;
+                          const perLbl = revDetailPeriod === 'today' ? 'today' : revDetailPeriod === 'week' ? 'last 7 days' : 'last 30 days';
+                          return (
+                            <div style={{ position: 'relative', overflow: 'hidden', border: '1px solid rgba(61,207,142,.28)', background: 'rgba(61,207,142,.06)', borderRadius: 'var(--rad)', padding: '16px 18px', marginBottom: 16 }}>
+                              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: 'var(--pos)' }} />
+                              <div className="kpi-label">Total revenue · {perLbl}</div>
+                              <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: '-.02em', color: 'var(--pos)', margin: '6px 0 8px' }}>{kes(tr.total)}</div>
+                              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-2)' }}>
+                                <span>Subscription <b style={{ color: 'var(--text)' }}>{kes(tr.subscription)}</b></span>
+                                <span style={{ color: 'var(--text-3)' }}>+</span>
+                                <span>Choice Bank <b style={{ color: 'var(--text)' }}>{kes(tr.choice_bank)}</b></span>
+                                <span style={{ color: 'var(--text-3)' }}>+</span>
+                                <span>I&amp;M deposits <b style={{ color: 'var(--text)' }}>{kes(tr.im)}</b></span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         {/* segment switcher */}
                         <div className="tdx-seg" style={{ marginBottom: 16 }}>
                           {[['choice_bank', 'Choice Bank'], ['credits', 'Credits'], ['subscriptions', 'Subscriptions'], ['im', 'I&M']].map(([k, lbl]) => (
@@ -3149,19 +3170,20 @@ export default function Admin() {
                             if (!subs.length) return <div className="muted center">No subscription payments yet.</div>;
                             return (<>
                               <p className="muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 12, lineHeight: 1.6 }}>
-                                Subscription payment history — most recent first.
+                                Successful subscription payments only — most recent first. Cancelled attempts and admin-granted plans are excluded.
                               </p>
                               <div className="tbl-wrap tbl-wrap--stack">
                                 <table className="tdx-tbl tdx-stack">
-                                  <thead><tr><th>Plan</th><th className="r">Amount</th><th>Paid</th><th>Expires</th><th>Status</th></tr></thead>
+                                  <thead><tr><th>Plan</th><th className="r">Amount</th><th>M-Pesa code</th><th>Paid</th><th>Expires</th><th>Status</th></tr></thead>
                                   <tbody>
                                     {subs.map((s, i) => (
                                       <tr key={i}>
                                         <td data-label="Plan"><span className="tag tag--buy">{s.label}</span></td>
                                         <td data-label="Amount" className="r num" style={{ color: 'var(--pos)', fontWeight: 700 }}>{kes(s.amount)}</td>
+                                        <td data-label="M-Pesa code" className="num" style={{ fontFamily: 'monospace', color: 'var(--text-2)' }}>{s.ref || '—'}</td>
                                         <td data-label="Paid">{dateEAT(s.date)}</td>
                                         <td data-label="Expires">{dateEAT(s.expires)}</td>
-                                        <td data-label="Status"><span className={`tag ${s.status === 'active' ? 'tag--sell' : 'tag--out'}`}>{s.status}</span></td>
+                                        <td data-label="Status"><span className={`tag ${s.status === 'active' ? 'tag--sell' : 'tag--out'}`}>{s.status === 'active' ? 'active · paid' : s.status === 'expired' ? 'paid · expired' : s.status}</span></td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -3183,11 +3205,12 @@ export default function Admin() {
                             {im.purchases.length ? (
                               <div className="tbl-wrap tbl-wrap--stack">
                                 <table className="tdx-tbl tdx-stack">
-                                  <thead><tr><th>Date</th><th className="r">Deposited</th><th className="r">Credits</th></tr></thead>
+                                  <thead><tr><th>Date</th><th>M-Pesa code</th><th className="r">Deposited</th><th className="r">Credits</th></tr></thead>
                                   <tbody>
                                     {im.purchases.map((pu, i) => (
                                       <tr key={i}>
                                         <td data-label="Date">{dateEAT(pu.date)}</td>
+                                        <td data-label="M-Pesa code" className="num" style={{ fontFamily: 'monospace', color: 'var(--text-2)' }}>{pu.ref || '—'}</td>
                                         <td data-label="Deposited" className="r num" style={{ color: 'var(--pos)' }}>{kes(pu.amount)}</td>
                                         <td data-label="Credits" className="r num" style={{ color: 'var(--brand)', fontWeight: 700 }}>{(pu.credits || 0).toLocaleString('en-KE')}</td>
                                       </tr>
