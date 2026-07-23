@@ -3494,6 +3494,147 @@ async def get_trader_revenue_sim(
     return {"period": period, "method": method, "inferred": False, "channels": channels, "total": total}
 
 
+@router.get("/traders/{trader_id}/revenue-detail")
+async def get_trader_revenue_detail(
+    trader_id: int,
+    period: str = Query("today"),   # today | week | month
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Everything this trader has earned us, in four segments:
+
+      choice_bank   — outbound Choice Bank fees, broken down by PRODUCT (only the
+                      products they actually used appear), INCLUDING withdrawals of
+                      their own float. charged / choice_keeps / our_profit.
+      credits       — I&M Automation credits they consumed (KES of credit spent).
+      subscriptions — their subscription payment ledger (recent).
+      im            — their I&M credit top-ups: KES deposited + credits bought.
+
+    choice_bank and credits are scoped to the period; subscriptions and im are
+    infrequent ledgers, shown as recent history regardless of period.
+    """
+    from app.models.order import OrderSide
+    from app.models import Payment, PaymentDirection, PaymentStatus
+    from app.models.subscription import CreditPurchase, Subscription
+    from app.models.im_charge import ImCharge
+    from app.services.outbound_fees import (
+        categorize, product_cb_fee, product_markup, product_total_fee,
+        outbound_markup, PRODUCTS,
+    )
+    from app.services.plans import plan_label as _plan_label
+
+    now = datetime.now(timezone.utc)
+    if period == "week":
+        start = trading_day_start(now - timedelta(days=6)); days = 7
+    elif period == "month":
+        start = trading_day_start(now - timedelta(days=29)); days = 30
+    else:
+        start = trading_day_start(now); days = 1
+    end = start + timedelta(days=days)
+
+    # ── 1. Choice Bank outbound fees, by product ─────────────────────────────
+    prods: dict[str, dict] = {}
+    def _bump(prod, count, volume, charged, keeps, profit):
+        d = prods.setdefault(prod, {"count": 0, "volume": 0.0, "charged": 0.0, "keeps": 0.0, "profit": 0.0})
+        d["count"] += count; d["volume"] += volume
+        d["charged"] += charged; d["keeps"] += keeps; d["profit"] += profit
+
+    # Seller payouts come from the orders (order.choice_fee is the ACTUAL fee).
+    rail_product = {"MPESA": "B2C", "PESALINK": "PESALINK"}
+    buy_rows = (await db.execute(
+        select(Order.fiat_amount, Order.choice_fee, Order.seller_payment_method).where(
+            Order.trader_id == trader_id, Order.side == OrderSide.BUY,
+            Order.choice_fee > 0, Order.created_at >= start, Order.created_at < end,
+        )
+    )).all()
+    for amt, fee, sm in buy_rows:
+        amt = float(amt or 0); fee = float(fee or 0)
+        rail = "MPESA" if ("mpesa" in (sm or "").lower() or "safaricom" in (sm or "").lower()) else "PESALINK"
+        markup = outbound_markup(rail, amt)
+        _bump(rail_product[rail], 1, amt, fee, max(fee - markup, 0), markup)
+
+    # Everything else outbound (withdrawals, paybill, manual send-money) from the
+    # Payment ledger — categorised by product. BUY seller-payout rows are already
+    # counted above, so exclude them; withdrawals STAY (we earn a markup on them).
+    _rem = func.coalesce(Payment.remarks, "")
+    pay_rows = (await db.execute(
+        select(Payment.amount, Payment.transaction_type, Payment.destination_type).where(
+            Payment.trader_id == trader_id,
+            Payment.direction == PaymentDirection.OUTBOUND,
+            Payment.status != PaymentStatus.FAILED,
+            ~_rem.ilike("BUY %"),
+            Payment.created_at >= start, Payment.created_at < end,
+        )
+    )).all()
+    for amt, tt, dt in pay_rows:
+        prod = categorize(tt, dt)
+        if prod not in PRODUCTS:
+            continue
+        amt = abs(float(amt or 0))
+        cb = product_cb_fee(prod, amt); mk = product_markup(prod, amt)
+        _bump(prod, 1, amt, cb + mk, cb, mk)
+
+    products = []
+    cb_total = {"count": 0, "volume": 0.0, "charged": 0.0, "keeps": 0.0, "profit": 0.0}
+    for key, d in prods.items():
+        if d["count"] == 0:
+            continue
+        products.append({
+            "key": key, "label": PRODUCTS.get(key, key),
+            "count": d["count"], "volume": round(d["volume"], 2),
+            "charged": round(d["charged"]), "keeps": round(d["keeps"]), "profit": round(d["profit"]),
+        })
+        for k in cb_total: cb_total[k] += d[k]
+    products.sort(key=lambda p: p["profit"], reverse=True)
+    cb_total = {k: (round(v, 2) if k == "volume" else round(v)) for k, v in cb_total.items()}
+
+    # ── 2. I&M credits consumed (period) ─────────────────────────────────────
+    cr = (await db.execute(
+        select(func.count(ImCharge.id), func.coalesce(func.sum(ImCharge.rate), 0),
+               func.coalesce(func.sum(ImCharge.payout_amount), 0))
+        .where(ImCharge.trader_id == trader_id, ImCharge.charged_at >= start, ImCharge.charged_at < end)
+    )).one()
+    credits = {"used_kes": int(cr[1] or 0), "payouts": int(cr[0] or 0), "volume": int(cr[2] or 0)}
+
+    # ── 3. Subscription payment ledger (recent) ──────────────────────────────
+    subs_rows = (await db.execute(
+        select(Subscription).where(Subscription.trader_id == trader_id)
+        .order_by(Subscription.created_at.desc()).limit(12)
+    )).scalars().all()
+    subscriptions = [{
+        "plan": (s.plan.value if hasattr(s.plan, "value") else str(s.plan)),
+        "label": _plan_label(s.plan),
+        "amount": int(s.amount or 0),
+        "status": (s.status.value if hasattr(s.status, "value") else str(s.status)),
+        "date": (s.started_at or s.created_at).isoformat() if (s.started_at or s.created_at) else None,
+        "expires": s.expires_at.isoformat() if s.expires_at else None,
+    } for s in subs_rows]
+
+    # ── 4. I&M credit top-ups (recent) ───────────────────────────────────────
+    tops = (await db.execute(
+        select(CreditPurchase).where(
+            CreditPurchase.trader_id == trader_id, CreditPurchase.status == "completed")
+        .order_by(CreditPurchase.created_at.desc()).limit(12)
+    )).scalars().all()
+    im_purchases = [{
+        "amount": int(p.amount or 0), "credits": int(p.credits or 0),
+        "date": p.created_at.isoformat() if p.created_at else None,
+    } for p in tops]
+    im = {
+        "deposited": sum(p["amount"] for p in im_purchases),
+        "credits_purchased": sum(p["credits"] for p in im_purchases),
+        "purchases": im_purchases,
+    }
+
+    return {
+        "period": period,
+        "choice_bank": {"products": products, "total": cb_total},
+        "credits": credits,
+        "subscriptions": subscriptions,
+        "im": im,
+    }
+
+
 @router.get("/traders/{trader_id}/activity")
 async def get_trader_activity(
     trader_id: int,

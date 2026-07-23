@@ -308,6 +308,11 @@ export default function Admin() {
   const [revSimPeriod, setRevSimPeriod] = useState('today');
   const [revSimMethod, setRevSimMethod] = useState('auto'); // auto | mpesa | pesalink
   const [revSimLoading, setRevSimLoading] = useState(false);
+  // Revenue-by-segment panel (Choice Bank / Credits / Subscriptions / I&M)
+  const [revDetail, setRevDetail] = useState(null);
+  const [revSeg, setRevSeg] = useState('choice_bank'); // choice_bank | credits | subscriptions | im
+  const [revDetailPeriod, setRevDetailPeriod] = useState('today');
+  const [revDetailLoading, setRevDetailLoading] = useState(false);
   // Total Trades / Volume period filter (24h | 7d | 30d | all) — default to today (since 03:00 EAT reset)
   const [activityPeriod, setActivityPeriod] = useState('24h');
   const [activity, setActivity] = useState(null); // { trades, volume } for the selected window
@@ -1228,6 +1233,16 @@ export default function Admin() {
     setRevSimLoading(false);
   };
 
+  const loadTraderRevenueDetail = async (traderId, period) => {
+    setRevDetailLoading(true);
+    setRevDetailPeriod(period);
+    try {
+      const r = await api.get(`/admin/traders/${traderId}/revenue-detail?period=${period}`);
+      setRevDetail(r.data);
+    } catch (e) { console.error('Revenue detail load error:', e); }
+    setRevDetailLoading(false);
+  };
+
   const loadTraderActivity = async (traderId, period) => {
     if (period === 'all') { setActivity(null); return; }   // Lifetime uses the trader's own totals
     setActivityLoading(true);
@@ -1247,6 +1262,9 @@ export default function Admin() {
     setTraderRevSim(null);
     setRevSimPeriod('today');
     setRevSimMethod('auto');
+    setRevSeg('choice_bank');
+    setRevDetailPeriod('today');
+    loadTraderRevenueDetail(trader.id, 'today');
     setActivityPeriod('24h');
     setActivity(null);
     loadTraderActivity(trader.id, '24h');   // show today's trades/volume by default
@@ -3048,80 +3066,138 @@ export default function Admin() {
                       );
                     })() : null}
 
-                    {/* ===== OUTBOUND FEES BY RAIL (revenue simulation) ===== */}
+                    {/* ===== REVENUE BY SEGMENT (Choice Bank / Credits / Subscriptions / I&M) ===== */}
                     <div className="card">
                       <div className="card-h">
                         <h3>
-                          Outbound fees by rail
-                          <span className={`tag ${revMode === 'prod' ? 'tag--buy' : 'tag--out'}`} style={{ marginLeft: 8, verticalAlign: 'middle' }}>
-                            {revMode === 'prod' ? 'PRODUCTION' : 'SIMULATION'}
-                          </span>
+                          Revenue from this trader
+                          <span className="tag tag--buy" style={{ marginLeft: 8, verticalAlign: 'middle' }}>PRODUCTION</span>
                         </h3>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <button
-                            onClick={() => {
-                              const next = revMode === 'prod' ? 'sim' : 'prod';
-                              if (next === 'prod' && !window.confirm('Switch revenue tracking to PRODUCTION?\n\nUse this only once Choice Microfinance approval is live and we are actually collecting these fees.')) return;
-                              setRevMode(next);
-                              localStorage.setItem('sparkp2p_revenue_mode', next);
-                            }}
-                            style={{ padding: '5px 12px', borderRadius: 7, border: '1px solid var(--line)', background: 'var(--s2)', color: 'var(--text-2)', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
-                          >
-                            {revMode === 'prod' ? 'Back to Simulation' : 'Switch to Production'}
-                          </button>
-                          <div className="seg">
-                            {[['auto', 'Auto'], ['mpesa', 'M-Pesa'], ['pesalink', 'Pesalink']].map(([m, lbl]) => (
-                              <button key={m} className={revSimMethod === m ? 'active' : ''} title="Filter by the payout rail recorded on the order" onClick={async () => { setRevSimMethod(m); await loadTraderRevenueSim(t.id, revSimPeriod, m); }}>
-                                {lbl}
-                              </button>
-                            ))}
-                          </div>
-                          <div className="seg">
-                            {['today', 'week', 'month'].map(p => (
-                              <button key={p} className={revSimPeriod === p ? 'active' : ''} onClick={async () => { setRevSimPeriod(p); await loadTraderRevenueSim(t.id, p, revSimMethod); }}>
-                                {p === 'today' ? 'Today' : p === 'week' ? '7 Days' : '30 Days'}
-                              </button>
-                            ))}
-                          </div>
+                        <div className="seg">
+                          {['today', 'week', 'month'].map(pd => (
+                            <button key={pd} className={revDetailPeriod === pd ? 'active' : ''}
+                              onClick={() => loadTraderRevenueDetail(t.id, pd)}>
+                              {pd === 'today' ? 'Today' : pd === 'week' ? '7 Days' : '30 Days'}
+                            </button>
+                          ))}
                         </div>
                       </div>
                       <div className="card-b">
-                        {revSimLoading ? (
+                        {/* segment switcher */}
+                        <div className="tdx-seg" style={{ marginBottom: 16 }}>
+                          {[['choice_bank', 'Choice Bank'], ['credits', 'Credits'], ['subscriptions', 'Subscriptions'], ['im', 'I&M']].map(([k, lbl]) => (
+                            <button key={k} className={`tdx-seg-btn ${revSeg === k ? 'is-active' : ''}`} onClick={() => setRevSeg(k)}>{lbl}</button>
+                          ))}
+                        </div>
+
+                        {revDetailLoading ? (
                           <div className="muted center">Loading…</div>
-                        ) : traderRevSim ? (() => {
-                          const T = traderRevSim.total, M = traderRevSim.channels.MPESA, P = traderRevSim.channels.PESALINK;
+                        ) : !revDetail ? (
+                          <div className="muted center">No data.</div>
+                        ) : (() => {
                           const kes = n => `KES ${Math.round(n || 0).toLocaleString('en-KE')}`;
-                          return (
-                            <>
-                              <p className="muted" style={{ marginTop: 0, marginBottom: 16, fontSize: 12, lineHeight: 1.6 }}>
-                                Actual outbound fees charged on <strong>{T.count}</strong> buy order{T.count === 1 ? '' : 's'} the bot paid out through Choice Bank — the KES withheld when we pay the seller from the trader's Choice Bank account. Orders paid another way, and sell orders, carry no Choice Bank fee.
-                                {revSimMethod === 'mpesa' ? ' Showing M-Pesa payouts only.' : revSimMethod === 'pesalink' ? ' Showing Pesalink payouts only.' : ''}
+                          const dateEAT = d => d ? fmtDateEAT(d) : '—';
+
+                          if (revSeg === 'choice_bank') {
+                            const cb = revDetail.choice_bank; const T = cb.total;
+                            if (!cb.products.length) return <div className="muted center">No Choice Bank activity in this period.</div>;
+                            return (<>
+                              <p className="muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 12, lineHeight: 1.6 }}>
+                                What this trader was charged on Choice Bank outbound payments (seller payouts, paybill/till, and their own withdrawals) — and what we earned. Only the products they actually used are shown.
                               </p>
                               <div className="rev-sum">
-                                <div><div className="kpi-label">Charged</div><div className="rev-sum-val num" style={{ color: 'var(--text)' }}>{kes(T.merchant_charged)}</div></div>
-                                <div><div className="kpi-label">Choice keeps</div><div className="rev-sum-val num" style={{ color: 'var(--neg)' }}>{kes(T.choice_keeps)}</div></div>
-                                <div><div className="kpi-label">Our profit</div><div className="rev-sum-val num" style={{ color: 'var(--pos)' }}>{kes(T.our_profit)}</div></div>
+                                <div><div className="kpi-label">Charged</div><div className="rev-sum-val num" style={{ color: 'var(--text)' }}>{kes(T.charged)}</div></div>
+                                <div><div className="kpi-label">Choice keeps</div><div className="rev-sum-val num" style={{ color: 'var(--neg)' }}>{kes(T.keeps)}</div></div>
+                                <div><div className="kpi-label">Our profit</div><div className="rev-sum-val num" style={{ color: 'var(--pos)' }}>{kes(T.profit)}</div></div>
                               </div>
                               <div className="tbl-wrap tbl-wrap--stack">
                                 <table className="tdx-tbl tdx-stack">
-                                  <thead><tr><th>Method</th><th className="r">Orders</th><th className="r">Volume</th><th className="r">Charged</th><th className="r">Keeps</th><th className="r">Profit</th></tr></thead>
+                                  <thead><tr><th>Product</th><th className="r">Count</th><th className="r">Volume</th><th className="r">Charged</th><th className="r">Keeps</th><th className="r">Profit</th></tr></thead>
                                   <tbody>
-                                    {[['M-Pesa', M], ['Pesalink', P]].map(([label, c]) => (
-                                      <tr key={label}>
-                                        <td data-label="Method"><span className={`tag ${label === 'M-Pesa' ? 'tag--buy' : 'tag--sell'}`}>{label}</span></td>
-                                        <td data-label="Orders" className="r num">{c.count}</td>
-                                        <td data-label="Volume" className="r num">{kes(c.volume)}</td>
-                                        <td data-label="Charged" className="r num">{kes(c.merchant_charged)}</td>
-                                        <td data-label="Keeps" className="r num" style={{ color: 'var(--neg)' }}>{kes(c.choice_keeps)}</td>
-                                        <td data-label="Profit" className="r num" style={{ color: 'var(--pos)', fontWeight: 700 }}>{kes(c.our_profit)}</td>
+                                    {cb.products.map(pr => (
+                                      <tr key={pr.key}>
+                                        <td data-label="Product"><span className="tag tag--sell">{pr.label}</span></td>
+                                        <td data-label="Count" className="r num">{pr.count}</td>
+                                        <td data-label="Volume" className="r num">{kes(pr.volume)}</td>
+                                        <td data-label="Charged" className="r num">{kes(pr.charged)}</td>
+                                        <td data-label="Keeps" className="r num" style={{ color: 'var(--neg)' }}>{kes(pr.keeps)}</td>
+                                        <td data-label="Profit" className="r num" style={{ color: 'var(--pos)', fontWeight: 700 }}>{kes(pr.profit)}</td>
                                       </tr>
                                     ))}
                                   </tbody>
                                 </table>
                               </div>
-                            </>
-                          );
-                        })() : <div className="muted center">No buy orders in this period.</div>}
+                            </>);
+                          }
+
+                          if (revSeg === 'credits') {
+                            const c = revDetail.credits;
+                            return (<>
+                              <p className="muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 12, lineHeight: 1.6 }}>
+                                I&amp;M Automation credits this trader consumed — the KES of prepaid credit spent paying sellers from their own I&amp;M account.
+                              </p>
+                              <div className="rev-sum">
+                                <div><div className="kpi-label">Credits used</div><div className="rev-sum-val num" style={{ color: 'var(--brand)' }}>{kes(c.used_kes)}</div></div>
+                                <div><div className="kpi-label">Payouts</div><div className="rev-sum-val num" style={{ color: 'var(--text)' }}>{(c.payouts || 0).toLocaleString('en-KE')}</div></div>
+                                <div><div className="kpi-label">Volume moved</div><div className="rev-sum-val num" style={{ color: 'var(--text-2)' }}>{kes(c.volume)}</div></div>
+                              </div>
+                            </>);
+                          }
+
+                          if (revSeg === 'subscriptions') {
+                            const subs = revDetail.subscriptions;
+                            if (!subs.length) return <div className="muted center">No subscription payments yet.</div>;
+                            return (<>
+                              <p className="muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 12, lineHeight: 1.6 }}>
+                                Subscription payment history — most recent first.
+                              </p>
+                              <div className="tbl-wrap tbl-wrap--stack">
+                                <table className="tdx-tbl tdx-stack">
+                                  <thead><tr><th>Plan</th><th className="r">Amount</th><th>Paid</th><th>Expires</th><th>Status</th></tr></thead>
+                                  <tbody>
+                                    {subs.map((s, i) => (
+                                      <tr key={i}>
+                                        <td data-label="Plan"><span className="tag tag--buy">{s.label}</span></td>
+                                        <td data-label="Amount" className="r num" style={{ color: 'var(--pos)', fontWeight: 700 }}>{kes(s.amount)}</td>
+                                        <td data-label="Paid">{dateEAT(s.date)}</td>
+                                        <td data-label="Expires">{dateEAT(s.expires)}</td>
+                                        <td data-label="Status"><span className={`tag ${s.status === 'active' ? 'tag--sell' : 'tag--out'}`}>{s.status}</span></td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </>);
+                          }
+
+                          // im
+                          const im = revDetail.im;
+                          return (<>
+                            <p className="muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 12, lineHeight: 1.6 }}>
+                              I&amp;M credit top-ups — money this trader deposited to buy payout credits, and how many credits it bought.
+                            </p>
+                            <div className="rev-sum">
+                              <div><div className="kpi-label">Total deposited</div><div className="rev-sum-val num" style={{ color: 'var(--pos)' }}>{kes(im.deposited)}</div></div>
+                              <div><div className="kpi-label">Credits bought</div><div className="rev-sum-val num" style={{ color: 'var(--brand)' }}>{(im.credits_purchased || 0).toLocaleString('en-KE')}</div></div>
+                            </div>
+                            {im.purchases.length ? (
+                              <div className="tbl-wrap tbl-wrap--stack">
+                                <table className="tdx-tbl tdx-stack">
+                                  <thead><tr><th>Date</th><th className="r">Deposited</th><th className="r">Credits</th></tr></thead>
+                                  <tbody>
+                                    {im.purchases.map((pu, i) => (
+                                      <tr key={i}>
+                                        <td data-label="Date">{dateEAT(pu.date)}</td>
+                                        <td data-label="Deposited" className="r num" style={{ color: 'var(--pos)' }}>{kes(pu.amount)}</td>
+                                        <td data-label="Credits" className="r num" style={{ color: 'var(--brand)', fontWeight: 700 }}>{(pu.credits || 0).toLocaleString('en-KE')}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : <div className="muted center">No credit top-ups yet.</div>}
+                          </>);
+                        })()}
                       </div>
                     </div>
                     </>)}
