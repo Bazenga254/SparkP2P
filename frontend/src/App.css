@@ -6611,6 +6611,14 @@ body {
   font-size: 11px; font-weight: 700; color: var(--text-3);
   text-transform: uppercase; letter-spacing: .06em; margin: 0 0 12px;
 }
+/* Segmented period control (Today / Week / Month / All) */
+.tdx .tdx-seg { display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 12px;
+  background: var(--s1); border: 1px solid var(--line); width: fit-content; max-width: 100%; flex-wrap: wrap; }
+.tdx .tdx-seg-btn { appearance: none; border: 0; background: transparent; color: var(--text-2);
+  font: 600 12.5px/1 "Hanken Grotesk", system-ui, sans-serif; padding: 8px 16px; border-radius: 9px;
+  cursor: pointer; transition: background .14s, color .14s; }
+.tdx .tdx-seg-btn:hover { color: var(--text); }
+.tdx .tdx-seg-btn.is-active { background: var(--brand); color: #1a1206; box-shadow: 0 1px 0 rgba(0,0,0,.25); }
 .tdx .bank-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .tdx .bank-actions-desc { font-size: 12.5px; color: var(--text-2); line-height: 1.6; margin: 0 0 14px; }
 .tdx .bank-actions { display: flex; flex-direction: column; gap: 8px; }

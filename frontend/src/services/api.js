@@ -144,7 +144,7 @@ export const getRevenueBreakdown = (params = {}) => api.get("/admin/revenue/brea
 export const getSubscriptionRevenue = (params = {}) => api.get("/admin/revenue/subscriptions", { params });
 export const getImRevenue = (params = {}) => api.get("/admin/im/revenue", { params });
 export const getImBotAccounts = (params = {}) => api.get("/admin/im/accounts", { params });
-export const getImTraders = () => api.get("/admin/im/traders");
+export const getImTraders = (params = {}) => api.get("/admin/im/traders", { params });
 export const getImCharges = (params = {}) => api.get("/admin/im/charges", { params });
 export const markWithdrawalComplete = (txId) => api.put(`/admin/withdrawals/${txId}/complete`);
 export const markWithdrawalPending = (txId) => api.put(`/admin/withdrawals/${txId}/pending`);

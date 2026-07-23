@@ -3137,6 +3137,7 @@ async def im_bot_accounts(
 
 @router.get("/im/traders")
 async def im_configured_traders(
+    period: str = Query("all"),   # today | week | month | all
     admin: Trader = Depends(get_employee_or_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -3164,23 +3165,37 @@ async def im_configured_traders(
 
     out = []
     now = datetime.now(timezone.utc)
+    # Same window the revenue cards use, so the per-trader table agrees with the
+    # totals above it. payouts/used/volume/deposited become period-scoped; the
+    # bot's current credit balance / online / last-seen stay "now" facts.
+    period_starts = {
+        "today": trading_day_start(now),
+        "week":  now - timedelta(days=7),
+        "month": now - timedelta(days=30),
+    }
+    start = period_starts.get(period)
     for tid in trader_ids:
         trader = (await db.execute(select(Trader).where(Trader.id == tid))).scalar_one_or_none()
         if not trader:
             continue
         # Rate from their real plan (5/7/8/9, or the 10→12 intro allowance).
         info = await pricing.rate_for_trader(db, tid)
+        _charge_where = [ImCharge.trader_id == tid]
+        if start:
+            _charge_where.append(ImCharge.charged_at >= start)
         stats = (await db.execute(
             select(func.count(ImCharge.id), func.coalesce(func.sum(ImCharge.rate), 0),
                    func.coalesce(func.sum(ImCharge.payout_amount), 0))
-            .where(ImCharge.trader_id == tid)
+            .where(*_charge_where)
         )).one()
-        # What this trader has PAID to buy credits (completed top-ups) and their
-        # current balance — so the admin sees money-in, not just payouts-made.
+        # What this trader PAID to buy credits (completed top-ups) in the window —
+        # so "who topped up KES 1,000 today" reads straight off this column.
         from app.models.subscription import CreditPurchase
+        _dep_where = [CreditPurchase.trader_id == tid, CreditPurchase.status == "completed"]
+        if start:
+            _dep_where.append(CreditPurchase.created_at >= start)
         deposited = int((await db.execute(
-            select(func.coalesce(func.sum(CreditPurchase.amount), 0))
-            .where(CreditPurchase.trader_id == tid, CreditPurchase.status == "completed")
+            select(func.coalesce(func.sum(CreditPurchase.amount), 0)).where(*_dep_where)
         )).scalar_one() or 0)
         last_seen = (await db.execute(
             select(func.max(MerchantApiKey.last_used_at))
@@ -3213,7 +3228,7 @@ async def im_configured_traders(
 
     # Busiest first — most payouts billed.
     out.sort(key=lambda r: r["payouts"], reverse=True)
-    return {"total": len(out), "traders": out}
+    return {"total": len(out), "traders": out, "period": period}
 
 
 # ── Credit / Trade Token Purchases ───────────────────────────────────────────

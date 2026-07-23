@@ -813,7 +813,7 @@ export default function Admin() {
       const [rev, accts, traders] = await Promise.allSettled([
         getImRevenue({ period }),
         getImBotAccounts({ page: 1, limit: 100 }),
-        getImTraders(),
+        getImTraders({ period }),
       ]);
       if (rev.status === 'fulfilled') setImRevenue(rev.value.data);
       if (accts.status === 'fulfilled') {
@@ -4778,58 +4778,56 @@ export default function Admin() {
               </div>
             </div>
           )}
-          {/* ==================== AFFILIATES ==================== */}
+          {/* ==================== I&M AUTOMATION ==================== */}
           {activeTab === 'imbot' && (
-            <div>
+            <div className="tdx">
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                <Bot size={18} style={{ color: 'var(--accent)' }} />
-                <h2 style={{ margin: 0, fontSize: 18 }}>I&amp;M Automation</h2>
+                <Bot size={18} style={{ color: 'var(--brand)' }} />
+                <h2 style={{ margin: 0, fontSize: 18, color: 'var(--text)' }}>I&amp;M Automation</h2>
               </div>
-              <p style={{ color: 'var(--text-3)', fontSize: 13, margin: '0 0 18px' }}>
+              <p style={{ color: 'var(--text-2)', fontSize: 13, margin: '0 0 18px', lineHeight: 1.6 }}>
                 Revenue from the downloadable I&amp;M payout bot, and the merchants who use it but are
-                <b> not SparkP2P clients</b> (billed KES 12/payout). Bot-only accounts are kept separate
+                <b style={{ color: 'var(--text)' }}> not SparkP2P clients</b> (billed KES 12/payout). Bot-only accounts are kept separate
                 from your traders on purpose.
               </p>
 
-              {/* period filter */}
-              <div className="rev-period" style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              {/* period filter — segmented control */}
+              <div className="tdx-seg" style={{ marginBottom: 18 }}>
                 {['today', 'week', 'month', 'all'].map(p => (
                   <button key={p} onClick={() => loadImBot(p)}
-                    className={`chip ${imPeriod === p ? 'chip--pos' : ''}`}
-                    style={{ cursor: 'pointer', textTransform: 'capitalize', padding: '6px 14px' }}>
-                    {p === 'all' ? 'All time' : p}
+                    className={`tdx-seg-btn ${imPeriod === p ? 'is-active' : ''}`}>
+                    {p === 'all' ? 'All time' : p[0].toUpperCase() + p.slice(1)}
                   </button>
                 ))}
+                <span style={{ marginLeft: 'auto', alignSelf: 'center', fontSize: 11.5, color: 'var(--text-3)' }}>
+                  {imLoading ? 'Loading…' : `Showing ${imPeriod === 'all' ? 'all time' : 'this ' + imPeriod}`}
+                </span>
               </div>
 
               {/* revenue split: SparkP2P traders vs bot-only */}
               {(() => {
-                const card = { background: 'var(--card, #1a1a1f)', border: '1px solid var(--border, #2a2a33)', borderRadius: 10, padding: '16px 18px' };
-                const lbl = { fontSize: 12, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8 };
-                const val = { fontSize: 24, fontWeight: 700 };
-                const sub = { fontSize: 12, color: 'var(--text-3)', marginTop: 6 };
+                const accent = {
+                  bar: (c) => ({ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, borderRadius: '3px 0 0 3px', background: c }),
+                };
+                const Card = ({ label, value, color, sub, subColor }) => (
+                  <div className="kpi" style={{ position: 'relative', overflow: 'hidden' }}>
+                    <div style={accent.bar(color)} />
+                    <div className="kpi-label">{label}</div>
+                    <div className="kpi-val" style={{ color: color || 'var(--text)' }}>{value}</div>
+                    <div className="kpi-delta" style={subColor ? { color: subColor } : undefined}>{sub}</div>
+                  </div>
+                );
                 return (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14, marginBottom: 24 }}>
-                    <div style={{ ...card, borderColor: 'var(--pos)66' }}>
-                      <div style={lbl}>I&amp;M revenue (credit sales)</div>
-                      <div style={{ ...val, color: 'var(--pos)' }}>{fmtKES(imRevenue?.total?.deposits)}</div>
-                      <div style={sub}>money in from credit top-ups</div>
-                    </div>
-                    <div style={card}>
-                      <div style={lbl}>SparkP2P traders</div>
-                      <div style={val}>{fmtKES(imRevenue?.sparkp2p?.deposits)}</div>
-                      <div style={sub}>credit sales · rates 5–10</div>
-                    </div>
-                    <div style={card}>
-                      <div style={lbl}>Bot-only (non-clients)</div>
-                      <div style={val}>{fmtKES(imRevenue?.bot_only?.deposits)}</div>
-                      <div style={sub}>credit sales · KES 12 each</div>
-                    </div>
-                    <div style={card}>
-                      <div style={lbl}>Credits used</div>
-                      <div style={{ ...val, color: 'var(--text-3)' }}>{fmtKES(imRevenue?.total?.revenue)}</div>
-                      <div style={sub}>{imRevenue?.total?.payouts || 0} payouts · {fmtKES(imRevenue?.total?.volume)} moved</div>
-                    </div>
+                  <div className="kpi-row" style={{ marginBottom: 24 }}>
+                    <Card label="I&M revenue (credit sales)" color="var(--pos)"
+                      value={fmtKES(imRevenue?.total?.deposits)} sub="money in from credit top-ups" />
+                    <Card label="SparkP2P traders" color="var(--gold)"
+                      value={fmtKES(imRevenue?.sparkp2p?.deposits)} sub="credit sales · rates 5–10" />
+                    <Card label="Bot-only (non-clients)" color="var(--info)"
+                      value={fmtKES(imRevenue?.bot_only?.deposits)} sub="credit sales · KES 12 each" />
+                    <Card label="Credits used" color="var(--brand)"
+                      value={fmtKES(imRevenue?.total?.revenue)}
+                      sub={`${imRevenue?.total?.payouts || 0} payouts · ${fmtKES(imRevenue?.total?.volume)} moved`} />
                   </div>
                 );
               })()}
