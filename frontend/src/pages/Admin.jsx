@@ -3183,7 +3183,7 @@ export default function Admin() {
                                         <td data-label="M-Pesa code" className="num" style={{ fontFamily: 'monospace', color: 'var(--text-2)' }}>{s.ref || '—'}</td>
                                         <td data-label="Paid">{dateEAT(s.date)}</td>
                                         <td data-label="Expires">{dateEAT(s.expires)}</td>
-                                        <td data-label="Status"><span className={`tag ${s.status === 'active' ? 'tag--sell' : 'tag--out'}`}>{s.status === 'active' ? 'active · paid' : s.status === 'expired' ? 'paid · expired' : s.status}</span></td>
+                                        <td data-label="Status"><span className={`tag ${s.status === 'active' ? 'tag--buy' : 'tag--out'}`}>{s.status === 'active' ? 'active · paid' : s.status === 'expired' ? 'paid · expired' : s.status}</span></td>
                                       </tr>
                                     ))}
                                   </tbody>
