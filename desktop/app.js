@@ -150,6 +150,7 @@ let traderPin = null;    // Binance fund/trading password â€" stored in memor
 let totpSecret = null;   // Google Authenticator base32 secret â€" stored in memory only
 let traderAccountNumber = null; // e.g. "P2PT0001" â€" used in paybill payment replies
 let traderChoiceAccountNumber = null; // Choice Bank account number (e.g. CMB00001) — shown to buyers for PesaLink
+let traderChoiceAccountName = null;   // Account holder name — shown to buyers so they can confirm who they pay
 let traderChoiceAccountId = null;     // Choice Bank internal account ID — used as payer for BUY transfers
 let traderChoicePaybill = null;       // Choice Bank M-Pesa paybill — fetched from backend, NEVER hardcoded
 let traderPhoneNumber = null;  // Trader's own phone number â€" included in buy greeting message
@@ -1990,7 +1991,8 @@ async function fetchAndApplyCredentials() {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (!res.ok) return;
-    const { verify_method, fund_password, totp_secret, anthropic_api_key, account_number, phone_number, im_account, choice_account_number, choice_account_id, choice_paybill } = await res.json();
+    const { verify_method, fund_password, totp_secret, anthropic_api_key, account_number, phone_number, im_account, choice_account_number, choice_account_id, choice_paybill, choice_account_name } = await res.json();
+    if (choice_account_name) { traderChoiceAccountName = choice_account_name; }
     if (choice_paybill) { traderChoicePaybill = choice_paybill; console.log(`[SparkP2P] Choice paybill: ${traderChoicePaybill}`); }
     if (account_number) { traderAccountNumber = account_number; console.log(`[SparkP2P] Account number: ${traderAccountNumber}`); }
     if (phone_number) { traderPhoneNumber = phone_number; console.log(`[SparkP2P] Trader phone: ${traderPhoneNumber}`); }
@@ -4360,28 +4362,57 @@ async function idleScan(page) {
       if (sellApprovedOrders.has(order.orderNumber) && !sellPayInstructSentOrders.has(order.orderNumber)) {
         const _PAYBILL = traderChoicePaybill || '444174';
         const _choiceAccNum = traderChoiceAccountNumber || '';
+        const _accName = traderChoiceAccountName || '';
+        // One "Payment details" block the buyer can read top-to-bottom, then the
+        // two values they must actually type sent as their OWN messages — Binance
+        // chat lets you tap-copy a whole message, so a bare number is one tap
+        // while the same number buried in a paragraph has to be hand-typed (and
+        // mistyped). The 👇 points at those copy-paste messages.
+        const _nameLine = _accName ? `\nAccount Name: ${_accName}` : '';
         let _payMsgs = [];
         if (_isPesaLink) {
           _payMsgs = [
-            `Hello! Please send KES ${_orderAmount.toLocaleString()} via PesaLink to Choice Microfinance Bank`,
-            `Bank: Choice Microfinance Bank`,
-            `Account Number: ${_choiceAccNum}`,
-            `Once sent, please type your bank reference number here so we can verify your payment. Your crypto is released automatically. Thank you!`,
+            `Hello! Please send KES ${_orderAmount.toLocaleString()} via PesaLink to Choice Microfinance Bank. Your crypto is released automatically once payment is confirmed.`,
+            `Payment details are as follows:\n\n` +
+            `Bank: Choice Microfinance Bank\n` +
+            `Account number: ${_choiceAccNum}${_nameLine}\n\n` +
+            `Copy paste 👇`,
+            `${_choiceAccNum}`,
+            `Once sent, please type your bank reference number here so we can verify your payment. Thank you! 🙏`,
+            `Hi 👋\nPlease proceed, I'm online for fast release.`,
           ];
         } else if (_orderAmount > 250000) {
           const _second = _orderAmount - 250000;
           _payMsgs = [
-            `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa in TWO transactions`,
-            `Paybill Number: ${_PAYBILL}`,
-            `Account Number: ${_choiceAccNum}`,
-            `1. Send KES 250,000 first, then 2. Send KES ${_second.toLocaleString()} to the same Paybill and account. Once done, type both M-Pesa confirmation codes here (e.g. SAX1234567). Thank you!`,
+            `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa in TWO transactions. Your crypto is released automatically once payment is confirmed.`,
+            `Payment details are as follows:\n\n` +
+            `Choice Bank\n` +
+            `Account number: ${_choiceAccNum}${_nameLine}\n\n` +
+            `Mode: M-Pesa Paybill\n` +
+            `Paybill: ${_PAYBILL}\n` +
+            `Account number: ${_choiceAccNum}\n\n` +
+            `1. Send KES 250,000 first\n` +
+            `2. Then send KES ${_second.toLocaleString()} to the same Paybill and account\n\n` +
+            `Copy paste 👇👇`,
+            `${_choiceAccNum}`,
+            `${_PAYBILL}`,
+            `Once done, please type BOTH M-Pesa confirmation codes here (e.g. SAX1234567). Thank you! 🙏`,
+            `Hi 👋\nPlease proceed, I'm online for fast release.`,
           ];
         } else {
           _payMsgs = [
             `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa to the Paybill below. Your crypto is released automatically once payment is confirmed.`,
-            `Paybill Number: ${_PAYBILL}`,
-            `Account Number: ${_choiceAccNum}`,
-            `Once sent, please type your M-Pesa confirmation code (e.g. SAX1234567) here. Thank you!`,
+            `Payment details are as follows:\n\n` +
+            `Choice Bank\n` +
+            `Account number: ${_choiceAccNum}${_nameLine}\n\n` +
+            `Mode: M-Pesa Paybill\n` +
+            `Paybill: ${_PAYBILL}\n` +
+            `Account number: ${_choiceAccNum}\n\n` +
+            `Copy paste 👇👇`,
+            `${_choiceAccNum}`,
+            `${_PAYBILL}`,
+            `Once sent, please type your M-Pesa confirmation code (e.g. SAX1234567) here. Thank you! 🙏`,
+            `Hi 👋\nPlease proceed, I'm online for fast release.`,
           ];
         }
         if (_choiceAccNum) {

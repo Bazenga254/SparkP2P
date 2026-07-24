@@ -2067,6 +2067,9 @@ async def get_desktop_credentials(
         "choice_account_number": trader.choice_account_number or "",
         "choice_account_id": trader.choice_account_id or "",
         "choice_paybill": settings.CHOICE_BANK_PAYBILL,
+        # Shown to the buyer in the sell-order payment instructions ("Account
+        # Name: …") so they can confirm who they are paying before sending.
+        "choice_account_name": trader.full_name or "",
     }
 
 
