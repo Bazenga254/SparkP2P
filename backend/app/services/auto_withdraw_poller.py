@@ -40,6 +40,14 @@ _in_flight: set[int] = set()
 # cycle and pile up unconfirmed Choice-side pending transfers.
 _retry_after: dict[int, float] = {}
 
+# A drain that has already been TRIGGERED (balance hit the threshold) must finish
+# emptying the account even if it takes several cycles — e.g. a big balance needs
+# multiple PesaLink legs and one leg fails, leaving a remainder BELOW the
+# threshold. Without this, that remainder would be stuck (it can't re-trigger on
+# its own) until the balance climbed back over the threshold. While this flag is
+# set we keep sweeping regardless of the threshold, until the account is empty.
+_draining: dict[int, bool] = {}
+
 # PesaLink settles INSTANTLY only up to ~1M per transfer; above that a Choice
 # withdrawal routes to RTGS (slow / next-day), which is exactly what a merchant
 # does NOT want. So a sweep bigger than this cap is split into several instant
@@ -98,15 +106,24 @@ async def _sweep_one(trader_id: int):
         balance = await _choice_balance(trader)
         if balance is None:
             return  # balance unavailable this cycle — try again later
-        if balance < threshold:
-            return  # not yet
+
+        # Trigger on threshold; but if a drain is already underway (a prior sweep
+        # left a remainder below the threshold), keep going regardless — a drain
+        # empties the account, it doesn't stop at the threshold.
+        draining = _draining.get(trader_id, False)
+        if balance < threshold and not draining:
+            return  # not yet, and not finishing an earlier drain
 
         # Plan the sweep as instant PesaLink legs (≤ ~1M each) that drain the
         # WHOLE balance — so a large balance goes out instantly, not via RTGS.
         legs = _plan_legs(int(balance))
         if not legs:
-            logger.info("[auto-withdraw] trader %s over threshold but nothing sweepable — skip", trader_id)
+            _draining.pop(trader_id, None)   # nothing left worth sweeping — drain done
+            if not draining:
+                logger.info("[auto-withdraw] trader %s over threshold but nothing sweepable — skip", trader_id)
             return
+
+        _draining[trader_id] = True   # a drain is in progress until the account is empty
 
         logger.info("[auto-withdraw] trader %s: balance %.0f >= threshold %.0f -> sweeping KES %s in %d leg(s) %s to %s (PesaLink)",
                     trader_id, balance, threshold, sum(legs), len(legs), legs, trader.cb_withdrawal_bank_name)
@@ -143,6 +160,11 @@ async def _sweep_one(trader_id: int):
                 await asyncio.sleep(_LEG_GAP_S)   # let the leg settle before the next
 
         _retry_after.pop(trader_id, None)
+        # Every planned leg went out, so the balance at trigger time is fully
+        # drained — the drain is complete. Any money that landed DURING the sweep
+        # is evaluated fresh against the threshold next cycle. (On a leg FAILURE
+        # we return above without clearing this, so an unfinished drain resumes.)
+        _draining.pop(trader_id, None)
         logger.info("[auto-withdraw] trader %s: sweep complete (%d leg(s), KES %s)", trader_id, len(legs), sum(legs))
 
 
