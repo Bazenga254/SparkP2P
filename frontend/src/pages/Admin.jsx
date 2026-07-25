@@ -351,6 +351,7 @@ export default function Admin() {
   const [ordersSearch, setOrdersSearch] = useState('');
   const [cryptoPage, setCryptoPage] = useState(1);
   const [fiatPage, setFiatPage] = useState(1);
+  const [expandedFiatId, setExpandedFiatId] = useState(null);   // which fiat row is expanded
   const [fiatDirFilter, setFiatDirFilter] = useState('all');
   const [txLastUpdated, setTxLastUpdated] = useState(null);
   const [fiatLastUpdated, setFiatLastUpdated] = useState(null);
@@ -1137,7 +1138,10 @@ export default function Admin() {
   useEffect(() => { loadTransactions(txPeriod, '', true); }, [txPeriod]);
   useEffect(() => { loadOrders(cryptoPeriod, '', true); }, [cryptoPeriod]);
 
-  // Real-time polling when on transactions tab
+  // Real-time polling when on transactions tab. txnSearch/ordersSearch ARE in the
+  // deps: without them the interval closes over the empty search from mount and
+  // overwrites the merchant's active search results every 10s (they'd flash then
+  // vanish). With them, the live refresh keeps whatever they searched for.
   useEffect(() => {
     if (activeTab !== 'transactions') return;
     const poll = setInterval(() => {
@@ -1146,7 +1150,7 @@ export default function Admin() {
       else loadTransactions(txPeriod, txnSearch);
     }, 10000);
     return () => clearInterval(poll);
-  }, [activeTab, txType, cryptoPeriod, txPeriod, imTxPeriod]);
+  }, [activeTab, txType, cryptoPeriod, txPeriod, imTxPeriod, txnSearch, ordersSearch]);
 
   // Load the I&M charge ledger when its tab is opened or its period changes.
   useEffect(() => {
@@ -1911,37 +1915,93 @@ export default function Admin() {
                       </span>
                       {fiatLastUpdated && <span style={{ fontSize: 11, color: '#4b5563' }}>Last: {fmtTimeEAT(fiatLastUpdated)}</span>}
                     </div>
-                    <div>
+                    <div style={{ overflowX: 'auto', fontFamily: '"Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif' }}>
                       {fiatSlice.length === 0 ? (
-                        <div style={{ textAlign: 'center', padding: '30px 0', color: '#6b7280', fontSize: 13 }}>No fiat transactions found</div>
-                      ) : fiatSlice.map((tx, i) => {
-                        const isIn = tx.direction === 'inbound';
-                        const cpName = tx.sender_name !== '-' ? tx.sender_name : tx.destination !== '-' ? tx.destination : null;
-                        const txPhone = tx.phone !== '-' ? tx.phone : null;
-                        const txId = tx.mpesa_transaction_id !== '-' ? tx.mpesa_transaction_id : null;
-                        return (
-                          <div key={tx.id} style={{ padding: '11px 20px', borderBottom: i < fiatSlice.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                              <span className={`adm-badge ${isIn ? 'green' : 'yellow'}`} style={{ flexShrink: 0, minWidth: 36, textAlign: 'center' }}>{isIn ? 'IN' : 'OUT'}</span>
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ color: '#e5e7eb', fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.trader_name || '—'}</div>
-                                <div style={{ color: '#6b7280', fontSize: 11, marginTop: 1 }}>{tx.created_at ? fmtDateEAT(tx.created_at) : '—'}</div>
-                              </div>
-                              <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                                <div style={{ color: isIn ? '#10b981' : '#f59e0b', fontWeight: 700, fontSize: 14 }}>{isIn ? '+' : '-'}{fmtKES(tx.amount)}</div>
-                                <span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`} style={{ marginTop: 3, display: 'inline-block', textTransform: 'capitalize' }}>{tx.status}</span>
-                              </div>
-                            </div>
-                            {(cpName || txPhone || txId) && (
-                              <div style={{ display: 'flex', gap: 8, marginTop: 5, paddingLeft: 46, flexWrap: 'wrap' }}>
-                                {cpName && <span style={{ color: '#9ca3af', fontSize: 10 }}>{cpName}</span>}
-                                {txPhone && <span style={{ color: '#4b5563', fontSize: 10 }}>· {txPhone}</span>}
-                                {txId && <span style={{ color: '#f59e0b', fontSize: 10, fontFamily: 'monospace' }}>{txId}</span>}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                        <div style={{ textAlign: 'center', padding: '40px 0', color: '#6b7280', fontSize: 13 }}>No fiat transactions found</div>
+                      ) : (
+                        <table className="cbtx" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                          <thead>
+                            <tr style={{ textAlign: 'left', color: '#8a93a6', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                              <th style={{ padding: '10px 8px 10px 20px', fontWeight: 600, width: 28 }}></th>
+                              <th style={{ padding: '10px 8px', fontWeight: 600 }}>Transaction ID</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 600 }}>Account Name</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 600 }}>Type</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 600 }}>Create Time</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 600, textAlign: 'right' }}>Amount</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 600, textAlign: 'right' }}>Fee</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 600 }}>Method</th>
+                              <th style={{ padding: '10px 20px 10px 8px', fontWeight: 600 }}>Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fiatSlice.map((tx) => {
+                              const isIn = tx.direction === 'inbound';
+                              const open = expandedFiatId === tx.id;
+                              const txId = tx.mpesa_transaction_id && tx.mpesa_transaction_id !== '-' ? tx.mpesa_transaction_id : null;
+                              const ref = tx.reference && tx.reference !== '-' ? tx.reference : null;
+                              const cpName = tx.sender_name !== '-' ? tx.sender_name : (tx.destination !== '-' ? tx.destination : null);
+                              const method = tx.destination_type && tx.destination_type !== '-' ? tx.destination_type
+                                : (isIn ? 'Pay Bill' : 'Transfer');
+                              const typeLabel = isIn ? 'Transfer In' : 'Transfer Out';
+                              const rowBg = open ? 'rgba(245,158,11,0.05)' : 'transparent';
+                              return (
+                                <React.Fragment key={tx.id}>
+                                  <tr
+                                    onClick={() => setExpandedFiatId(open ? null : tx.id)}
+                                    style={{ borderTop: '1px solid rgba(255,255,255,0.05)', background: rowBg, cursor: 'pointer', transition: 'background .12s' }}
+                                    onMouseEnter={e => { if (!open) e.currentTarget.style.background = 'rgba(255,255,255,0.025)'; }}
+                                    onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}
+                                  >
+                                    <td style={{ padding: '12px 8px 12px 20px', color: '#6b7280' }}>
+                                      <span style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>›</span>
+                                    </td>
+                                    <td style={{ padding: '12px 8px', fontFamily: 'ui-monospace, monospace', color: '#9aa4b2', fontSize: 11.5 }}>
+                                      {txId ? (txId.length > 22 ? txId.slice(0, 22) + '…' : txId) : '—'}
+                                    </td>
+                                    <td style={{ padding: '12px 8px', color: '#e5e7eb', fontWeight: 600 }}>{tx.trader_name || '—'}</td>
+                                    <td style={{ padding: '12px 8px' }}>
+                                      <span style={{ fontSize: 11, fontWeight: 600, color: isIn ? '#3dcf8e' : '#f59e0b' }}>{typeLabel}</span>
+                                    </td>
+                                    <td style={{ padding: '12px 8px', color: '#8a93a6', fontSize: 11.5, whiteSpace: 'nowrap' }}>{tx.created_at ? fmtDateEAT(tx.created_at) : '—'}</td>
+                                    <td style={{ padding: '12px 8px', textAlign: 'right', fontWeight: 700, color: isIn ? '#3dcf8e' : '#f59e0b', whiteSpace: 'nowrap' }}>
+                                      {isIn ? '+' : '−'}{fmtKES(tx.amount)}
+                                    </td>
+                                    <td style={{ padding: '12px 8px', textAlign: 'right', color: '#6b7280', fontSize: 11.5 }}>{tx.fee ? fmtKES(tx.fee) : '0'}</td>
+                                    <td style={{ padding: '12px 8px', color: '#9aa4b2', fontSize: 11.5, textTransform: 'capitalize' }}>{method}</td>
+                                    <td style={{ padding: '12px 20px 12px 8px' }}>
+                                      <span className={`adm-badge ${tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'dim'}`} style={{ textTransform: 'capitalize' }}>{tx.status}</span>
+                                    </td>
+                                  </tr>
+                                  {open && (
+                                    <tr style={{ background: 'rgba(245,158,11,0.04)' }}>
+                                      <td colSpan={9} style={{ padding: '4px 20px 18px 48px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: '10px 28px', fontSize: 12 }}>
+                                          {[
+                                            ['Reference Number', ref, ref ? '#f59e0b' : '#6b7280', true],
+                                            ['Counterparty Name', cpName, '#e5e7eb'],
+                                            ['Counterparty Bank', isIn ? 'M-PESA' : (tx.destination_type || '—'), '#9aa4b2'],
+                                            ['Phone', tx.phone !== '-' ? tx.phone : null, '#9aa4b2'],
+                                            ['Transaction ID', txId, '#9aa4b2', true],
+                                            ['Account No.', tx.bill_ref_number !== '-' ? tx.bill_ref_number : null, '#9aa4b2', true],
+                                            ['Fee', tx.fee ? fmtKES(tx.fee) : 'KES 0', '#9aa4b2'],
+                                            ['Narrative', tx.remarks !== '-' ? tx.remarks : null, '#9aa4b2'],
+                                            ['Complete Time', tx.created_at ? fmtDateEAT(tx.created_at) : null, '#9aa4b2'],
+                                          ].map(([label, val, color, mono], k) => (
+                                            <div key={k}>
+                                              <div style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 3 }}>{label}</div>
+                                              <div style={{ color: color || '#e5e7eb', fontWeight: label === 'Reference Number' ? 700 : 500, fontFamily: mono ? 'ui-monospace, monospace' : 'inherit', wordBreak: 'break-all' }}>{val || '—'}</div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )}
+                                </React.Fragment>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      )}
                     </div>
                     {fiatTotalPages > 1 && (
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
