@@ -123,6 +123,24 @@ async def find_transaction(db, trader, query: str = "", amount: float | None = N
                                 return _fmt_row(tx, "bank")
                         except (TypeError, ValueError):
                             pass
+                # getTransList rows do NOT carry the reference number (externalTxId
+                # = the M-Pesa code the merchant sees). So when searching by a code,
+                # pull each candidate's full detail and match on it. Bounded so a
+                # lookup never fans out to hundreds of calls.
+                if q:
+                    for tx in rows[:15]:
+                        tid = str(tx.get("txId") or "")
+                        if not tid:
+                            continue
+                        try:
+                            det = (await choice.get_transaction_result(tid)).get("data") or {}
+                        except Exception:
+                            continue
+                        ext = det.get("extInfo") if isinstance(det.get("extInfo"), dict) else {}
+                        code = _norm(det.get("externalTxId") or ext.get("externalTxId") or "")
+                        if code and code == q:
+                            det["oppoAccountName"] = det.get("oppoAccountName") or ext.get("counterpartyName")
+                            return _fmt_row(det, "bank")
                 if len(rows) < 50:
                     break
     except Exception as e:

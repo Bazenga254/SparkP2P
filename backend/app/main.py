@@ -417,6 +417,11 @@ async def lifespan(app: FastAPI):
     # (PesaLink) once it reaches their configured threshold (every 2 min).
     from app.services.auto_withdraw_poller import auto_withdraw_poller
     auto_withdraw_task = asyncio.create_task(auto_withdraw_poller())
+    # Reconcile EVERY Choice Bank credit onto the Transactions page — records
+    # inbound payments the webhook/order-matcher missed (e.g. after a cancelled
+    # order), with their reference numbers (every 3 min).
+    from app.services.choice_reconcile_poller import choice_reconcile_poller
+    choice_reconcile_task = asyncio.create_task(choice_reconcile_poller())
     # Squad Mode — live coordinated team pricing (relay-gated, every 90s).
     from app.services import squad_pricing
     squad_pricing_task = asyncio.create_task(squad_pricing.start())

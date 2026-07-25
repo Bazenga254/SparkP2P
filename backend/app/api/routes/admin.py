@@ -1498,11 +1498,15 @@ async def admin_transactions(
     if category == "choice":
         query = query.where(Payment.transaction_type.in_(["CHOICE_INBOUND", "CHOICE_OUTBOUND", "CHOICE_DEPOSIT"]))
 
-    # Search filter
+    # Search filter — include mpesa_receipt_number (the externalTxId / M-Pesa code
+    # the bank portal shows as "Reference Number") and bill_ref_number, so a code
+    # like UGP5N0ICZ3 actually finds its transaction.
     if search and search.strip():
         s = f"%{search.strip()}%"
         query = query.where(
             (Payment.mpesa_transaction_id.ilike(s)) |
+            (Payment.mpesa_receipt_number.ilike(s)) |
+            (Payment.bill_ref_number.ilike(s)) |
             (Payment.phone.ilike(s)) |
             (Payment.sender_name.ilike(s)) |
             (Payment.destination.ilike(s)) |
@@ -1524,6 +1528,8 @@ async def admin_transactions(
         s = f"%{search.strip()}%"
         count_query = count_query.join(Trader, Payment.trader_id == Trader.id, isouter=True).where(
             (Payment.mpesa_transaction_id.ilike(s)) |
+            (Payment.mpesa_receipt_number.ilike(s)) |
+            (Payment.bill_ref_number.ilike(s)) |
             (Payment.phone.ilike(s)) |
             (Payment.sender_name.ilike(s)) |
             (Payment.destination.ilike(s)) |
@@ -1549,6 +1555,7 @@ async def admin_transactions(
                 "bill_ref_number": p.bill_ref_number or "-",
                 "status": p.status.value if p.status else "unknown",
                 "mpesa_transaction_id": p.mpesa_transaction_id or "-",
+                "reference": p.mpesa_receipt_number or "-",   # externalTxId / M-Pesa code
                 "created_at": p.created_at.isoformat() if p.created_at else "",
             }
             for p, trader_name, trader_phone in rows
