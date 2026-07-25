@@ -40,40 +40,36 @@ _in_flight: set[int] = set()
 # cycle and pile up unconfirmed Choice-side pending transfers.
 _retry_after: dict[int, float] = {}
 
+# A sweep, once TRIGGERED (balance hit the threshold), empties the account — even
+# across cycles. If a big balance needs several legs and one fails, the remainder
+# can drop BELOW the threshold and could never re-trigger on its own; this flag
+# keeps sweeping regardless of the threshold until the account is empty.
+_draining: dict[int, bool] = {}
+
 # PesaLink settles INSTANTLY only up to ~1M per transfer; above that a Choice
 # withdrawal routes to RTGS (slow / next-day), which is exactly what a merchant
 # does NOT want. So a sweep bigger than this cap is split into several instant
 # PesaLink legs, a minute apart. 900k (below the ~1M ceiling) leaves headroom.
 _LEG_CAP = 900_000
 _LEG_GAP_S = 60          # wait between legs (let the previous one settle + OTP)
-# Small slack on the "still above threshold?" test so the ~25 fee a leg costs
-# doesn't tip a would-be full second leg under the line (e.g. after a 900k leg on
-# 1.8M the remainder is 899,975 — that must still count as ≥ a 900k threshold).
-_THRESHOLD_SLACK = 200
 
 
-def _plan_legs(balance: int, threshold: int):
-    """Withdraw one THRESHOLD-sized chunk at a time WHILE the balance is still
-    at/above the threshold — then STOP and leave the remainder to accumulate. The
-    threshold is both the trigger and the withdrawal amount: set it to 500k and
-    each sweep takes 500k, leaving anything under 500k to wait.
+def _plan_legs(balance: int):
+    """Drain the WHOLE balance in instant PesaLink legs (≤ cap each). The
+    threshold is only the TRIGGER; once a sweep fires it empties the account —
+    it does NOT stop at the threshold. Each leg's amount + Choice's withheld fee
+    never exceeds the money left, so a leg can never fail for insufficient funds.
 
-    A chunk is capped at PesaLink's instant limit (so it never routes to RTGS); a
-    threshold above that cap is itself split into cap-sized legs. Each leg's
-    amount + Choice's withheld fee never exceeds the money left, so a leg can
-    never fail for insufficient funds.
-
-        900,000 / thr 500,000   -> [500,000]            (400k left, waits)
-      1,200,000 / thr 900,000   -> [900,000]            (300k left, waits)
-      1,800,000 / thr 900,000   -> [900,000, 899,950]   (both chunks ≥ threshold)
+        750,000   -> [749,970]                (whole balance, under the cap)
+      1,200,000   -> [900,000, 299,945]       (two legs; ~0 left)
+      1,800,000   -> [900,000, 899,945]       (two legs; ~0 left)
     """
     from app.services.outbound_fees import outbound_fee
-    chunk = min(int(threshold), _LEG_CAP)   # amount taken per sweep (PesaLink-capped)
     legs, remaining = [], int(balance)
-    while remaining >= threshold - _THRESHOLD_SLACK and remaining >= MIN_SWEEP and len(legs) < 20:
-        gross = min(chunk, remaining)
+    while remaining >= MIN_SWEEP and len(legs) < 20:
+        gross = min(_LEG_CAP, remaining)
         fee = int(outbound_fee("BANK", gross))
-        # If the chunk + its fee wouldn't fit, shave it to leave room for the fee.
+        # If the leg + its fee wouldn't fit, shave it to leave room for the fee.
         if gross + fee > remaining:
             gross = remaining - fee - FEE_BUFFER
         if gross < MIN_SWEEP:
@@ -110,15 +106,21 @@ async def _sweep_one(trader_id: int):
         balance = await _choice_balance(trader)
         if balance is None:
             return  # balance unavailable this cycle — try again later
-        if balance < threshold:
-            return  # below the threshold — do nothing (the threshold is the trigger)
 
-        # Withdraw instant PesaLink legs WHILE the balance stays at/above the
-        # threshold; any sub-threshold remainder is left to accumulate.
-        legs = _plan_legs(int(balance), int(threshold))
+        # Trigger on the threshold; but if a drain is already underway (a prior
+        # sweep left a remainder below the threshold), keep going — a sweep empties
+        # the account, it does not stop at the threshold.
+        draining = _draining.get(trader_id, False)
+        if balance < threshold and not draining:
+            return  # below the threshold and not finishing an earlier drain
+
+        # Drain the WHOLE balance in instant PesaLink legs (≤ ~1M each).
+        legs = _plan_legs(int(balance))
         if not legs:
-            logger.info("[auto-withdraw] trader %s over threshold but nothing sweepable — skip", trader_id)
+            _draining.pop(trader_id, None)   # nothing left worth sweeping — done
             return
+
+        _draining[trader_id] = True   # a drain is in progress until the account is empty
 
         logger.info("[auto-withdraw] trader %s: balance %.0f >= threshold %.0f -> sweeping KES %s in %d leg(s) %s to %s (PesaLink)",
                     trader_id, balance, threshold, sum(legs), len(legs), legs, trader.cb_withdrawal_bank_name)
@@ -155,10 +157,12 @@ async def _sweep_one(trader_id: int):
                 await asyncio.sleep(_LEG_GAP_S)   # let the leg settle before the next
 
         _retry_after.pop(trader_id, None)
-        # All planned legs went out. If a leg had FAILED we'd have returned above;
-        # in that case the remaining balance is still ≥ threshold (a failed full
-        # leg leaves a threshold-sized amount), so the next cycle's threshold check
-        # re-triggers and finishes it — no special "resume" state needed.
+        # Every planned leg went out, so the balance at trigger time is drained.
+        # (On a leg FAILURE we return above WITHOUT clearing _draining, so the next
+        # cycle keeps draining even if the leftover is now below the threshold.)
+        # Money that landed DURING the sweep is judged fresh against the threshold
+        # next cycle.
+        _draining.pop(trader_id, None)
         logger.info("[auto-withdraw] trader %s: sweep complete (%d leg(s), KES %s)", trader_id, len(legs), sum(legs))
 
 
