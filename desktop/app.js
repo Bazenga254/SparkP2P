@@ -4369,6 +4369,11 @@ async function idleScan(page) {
         // while the same number buried in a paragraph has to be hand-typed (and
         // mistyped). The 👇 points at those copy-paste messages.
         const _nameLine = _accName ? `\nAccount Name: ${_accName}` : '';
+        // NB: the buyer never has to type a confirmation code. Choice Bank matches
+        // the payment by trader + amount and auto-releases, so the old "type your
+        // code/reference here" message was busywork that made buyers think they
+        // had a manual step — removed from every variant. Each flow closes on the
+        // two copy-paste values (account number, then paybill) and a friendly note.
         let _payMsgs = [];
         if (_isPesaLink) {
           _payMsgs = [
@@ -4376,9 +4381,12 @@ async function idleScan(page) {
             `Payment details are as follows:\n\n` +
             `Bank: Choice Microfinance Bank\n` +
             `Account number: ${_choiceAccNum}${_nameLine}\n\n` +
-            `Copy paste 👇`,
+            `Mode: M-Pesa Paybill\n` +
+            `Paybill: ${_PAYBILL}\n` +
+            `Account number: ${_choiceAccNum}\n\n` +
+            `Copy paste 👇👇`,
             `${_choiceAccNum}`,
-            `Once sent, please type your bank reference number here so we can verify your payment. Thank you! 🙏`,
+            `${_PAYBILL}`,
             `Hi 👋\nPlease proceed, I'm online for fast release.`,
           ];
         } else if (_orderAmount > 250000) {
@@ -4396,7 +4404,6 @@ async function idleScan(page) {
             `Copy paste 👇👇`,
             `${_choiceAccNum}`,
             `${_PAYBILL}`,
-            `Once done, please type BOTH M-Pesa confirmation codes here (e.g. SAX1234567). Thank you! 🙏`,
             `Hi 👋\nPlease proceed, I'm online for fast release.`,
           ];
         } else {
@@ -4411,7 +4418,6 @@ async function idleScan(page) {
             `Copy paste 👇👇`,
             `${_choiceAccNum}`,
             `${_PAYBILL}`,
-            `Once sent, please type your M-Pesa confirmation code (e.g. SAX1234567) here. Thank you! 🙏`,
             `Hi 👋\nPlease proceed, I'm online for fast release.`,
           ];
         }
