@@ -2477,6 +2477,10 @@ async def request_withdrawal_otp(
 
 class CbWithdrawInitiateBody(BaseModel):
     amount: float
+    # Set by the auto-withdraw poller when sweeping a large balance in several
+    # PesaLink legs — each leg is a deliberate second withdrawal, so it must skip
+    # the "one withdrawal already processing" guard that protects manual users.
+    skip_pending_guard: bool = False
 
 @router.post("/cb-withdraw-to-bank/initiate")
 async def cb_withdraw_initiate(
@@ -2503,23 +2507,25 @@ async def cb_withdraw_initiate(
     from app.services.outbound_fees import outbound_fee as _outbound_fee
     _fee = _outbound_fee("BANK", body.amount)
 
-    # Block if there's already a PENDING withdrawal in the last 2 hours
+    # Block if there's already a PENDING withdrawal in the last 2 hours — unless
+    # this is a poller leg of a larger sweep (each leg is intentional).
     from datetime import datetime, timezone, timedelta
     from app.models import Payment, PaymentStatus
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
-    existing = (await db.execute(
-        select(Payment).where(
-            Payment.trader_id == trader.id,
-            Payment.transaction_type == "CHOICE_OUTBOUND",
-            Payment.status == PaymentStatus.PENDING,
-            Payment.created_at > cutoff,
-        )
-    )).scalar_one_or_none()
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"You have a withdrawal already processing (Ref: {existing.mpesa_transaction_id}). Please wait for it to complete before initiating another.",
-        )
+    if not body.skip_pending_guard:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        existing = (await db.execute(
+            select(Payment).where(
+                Payment.trader_id == trader.id,
+                Payment.transaction_type == "CHOICE_OUTBOUND",
+                Payment.status == PaymentStatus.PENDING,
+                Payment.created_at > cutoff,
+            )
+        )).scalar_one_or_none()
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You have a withdrawal already processing (Ref: {existing.mpesa_transaction_id}). Please wait for it to complete before initiating another.",
+            )
 
     remark = "".join(
         c for c in f"SparkP2P withdrawal to {trader.cb_withdrawal_bank_name or 'Bank'}"

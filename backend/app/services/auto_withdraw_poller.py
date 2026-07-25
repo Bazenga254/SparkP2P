@@ -40,6 +40,36 @@ _in_flight: set[int] = set()
 # cycle and pile up unconfirmed Choice-side pending transfers.
 _retry_after: dict[int, float] = {}
 
+# PesaLink settles INSTANTLY only up to ~1M per transfer; above that a Choice
+# withdrawal routes to RTGS (slow / next-day), which is exactly what a merchant
+# does NOT want. So a sweep bigger than this cap is split into several instant
+# PesaLink legs, a minute apart. 900k (below the ~1M ceiling) leaves headroom.
+_LEG_CAP = 900_000
+_LEG_GAP_S = 60          # wait between legs (let the previous one settle + OTP)
+
+
+def _plan_legs(balance: int):
+    """Split a balance into PesaLink legs that each stay instant, draining the
+    whole account. Each leg's amount + Choice's withheld fee never exceeds the
+    money left, so a leg can't fail for insufficient funds.
+
+    590,000   -> [589,970]                 (one leg — under the cap)
+    1,800,000 -> [900,000, 899,945]        (two legs, ~900k each)
+    """
+    from app.services.outbound_fees import outbound_fee
+    legs, remaining = [], int(balance)
+    while remaining >= MIN_SWEEP and len(legs) < 12:
+        gross = min(_LEG_CAP, remaining)
+        fee = int(outbound_fee("BANK", gross))
+        # Full-cap leg: send the cap, fee comes out of the balance on top.
+        # Final/only leg: leave room for the fee (and a tiny buffer).
+        amount = (gross - fee - FEE_BUFFER) if gross == remaining else gross
+        if amount < MIN_SWEEP:
+            break
+        legs.append(amount)
+        remaining -= (amount + fee)
+    return legs
+
 
 async def _sweep_one(trader_id: int):
     """Run one sweep for a trader that is over threshold. Own DB session."""
@@ -71,45 +101,49 @@ async def _sweep_one(trader_id: int):
         if balance < threshold:
             return  # not yet
 
-        # Sweep the whole balance, less the fee Choice withholds on top (so
-        # amount + fee never exceeds what's in the account) and a tiny buffer.
-        fee = outbound_fee("BANK", balance)
-        amount = int(balance) - int(fee) - FEE_BUFFER
-        if amount < MIN_SWEEP:
-            logger.info("[auto-withdraw] trader %s over threshold but sweepable amount %s < %s — skip",
-                        trader_id, amount, MIN_SWEEP)
+        # Plan the sweep as instant PesaLink legs (≤ ~1M each) that drain the
+        # WHOLE balance — so a large balance goes out instantly, not via RTGS.
+        legs = _plan_legs(int(balance))
+        if not legs:
+            logger.info("[auto-withdraw] trader %s over threshold but nothing sweepable — skip", trader_id)
             return
 
-        logger.info("[auto-withdraw] trader %s: balance %.0f >= threshold %.0f -> sweeping KES %s to %s (PesaLink)",
-                    trader_id, balance, threshold, amount, trader.cb_withdrawal_bank_name)
+        logger.info("[auto-withdraw] trader %s: balance %.0f >= threshold %.0f -> sweeping KES %s in %d leg(s) %s to %s (PesaLink)",
+                    trader_id, balance, threshold, sum(legs), len(legs), legs, trader.cb_withdrawal_bank_name)
 
-        # Step 1 — create the PesaLink transfer + trigger the OTP SMS. The initiate
-        # handler itself refuses if a withdrawal is already pending (2h), which is
-        # our cross-restart double-fire guard.
-        try:
-            await cb_withdraw_initiate(CbWithdrawInitiateBody(amount=float(amount)), trader, db)
-        except HTTPException as e:
-            logger.info("[auto-withdraw] trader %s initiate declined: %s", trader_id, e.detail)
-            _retry_after[trader_id] = time.time() + FAIL_BACKOFF
-            return
-        except Exception as e:
-            logger.warning("[auto-withdraw] trader %s initiate error: %s", trader_id, e)
-            _retry_after[trader_id] = time.time() + FAIL_BACKOFF
-            return
+        for i, amount in enumerate(legs):
+            # Leg 1 respects the "one withdrawal at a time" guard (cross-restart
+            # protection); later legs skip it — they are deliberate continuations.
+            body = CbWithdrawInitiateBody(amount=float(amount), skip_pending_guard=(i > 0))
+            try:
+                await cb_withdraw_initiate(body, trader, db)
+            except HTTPException as e:
+                logger.info("[auto-withdraw] trader %s leg %d initiate declined: %s", trader_id, i + 1, e.detail)
+                _retry_after[trader_id] = time.time() + FAIL_BACKOFF
+                return
+            except Exception as e:
+                logger.warning("[auto-withdraw] trader %s leg %d initiate error: %s", trader_id, i + 1, e)
+                _retry_after[trader_id] = time.time() + FAIL_BACKOFF
+                return
 
-        # Step 2 — wait on the SMS relay for the OTP and confirm. Same handler the
-        # manual "Auto-confirm from SMS" button calls.
-        try:
-            await cb_withdraw_to_bank_auto(trader, db)
-            logger.info("[auto-withdraw] trader %s: swept KES %s successfully", trader_id, amount)
-            _retry_after.pop(trader_id, None)
-        except HTTPException as e:
-            logger.warning("[auto-withdraw] trader %s confirm failed (%s) — balance left in place, backing off",
-                           trader_id, e.detail)
-            _retry_after[trader_id] = time.time() + FAIL_BACKOFF
-        except Exception as e:
-            logger.warning("[auto-withdraw] trader %s confirm error: %s", trader_id, e)
-            _retry_after[trader_id] = time.time() + FAIL_BACKOFF
+            try:
+                await cb_withdraw_to_bank_auto(trader, db)
+                logger.info("[auto-withdraw] trader %s: leg %d/%d KES %s swept", trader_id, i + 1, len(legs), amount)
+            except HTTPException as e:
+                logger.warning("[auto-withdraw] trader %s leg %d confirm failed (%s) — stopping; rest stays for next cycle",
+                               trader_id, i + 1, e.detail)
+                _retry_after[trader_id] = time.time() + FAIL_BACKOFF
+                return
+            except Exception as e:
+                logger.warning("[auto-withdraw] trader %s leg %d confirm error: %s — stopping", trader_id, i + 1, e)
+                _retry_after[trader_id] = time.time() + FAIL_BACKOFF
+                return
+
+            if i < len(legs) - 1:
+                await asyncio.sleep(_LEG_GAP_S)   # let the leg settle before the next
+
+        _retry_after.pop(trader_id, None)
+        logger.info("[auto-withdraw] trader %s: sweep complete (%d leg(s), KES %s)", trader_id, len(legs), sum(legs))
 
 
 async def _cycle():
