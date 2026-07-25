@@ -4384,6 +4384,11 @@ async function idleScan(page) {
             `Mode: M-Pesa Paybill\n` +
             `Paybill: ${_PAYBILL}\n` +
             `Account number: ${_choiceAccNum}\n\n` +
+            // This order is being paid over PesaLink (a direct bank transfer), so
+            // the paybill above is only for buyers who'd rather use M-Pesa. Tell a
+            // PesaLink payer to ignore it — the paybill also can't take amounts
+            // over KES 250,000, which large PesaLink orders exceed.
+            `📌 Paying via PesaLink? Please use the account number below and ignore the Paybill.\n\n` +
             `Copy paste 👇👇`,
             `${_choiceAccNum}`,
             `${_PAYBILL}`,
